@@ -7,6 +7,8 @@ on:
 jobs:
   build:
     runs-on: ${{matrix.os}}
+    permissions:
+      packages: write
     strategy:
       fail-fast: false
       matrix:
