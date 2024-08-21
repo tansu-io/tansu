@@ -22,7 +22,7 @@ jobs:
         with:
           buildkitd-flags: --debug
       - run: |
-          echo "RUSTFLAGS=''" >> $GITHUB_ENV
+          echo "RUSTFLAGS=-D errors" >> $GITHUB_ENV
       - run: "echo \"DOCKER_IMAGE_TAGS=\
           ${{inputs.registry}}/${{github.repository}}:latest\"
           >> $GITHUB_ENV"
