@@ -6,9 +6,6 @@ members = ["tansu-*"]
 edition = "2021"
 version = "0.1.0"
 
-[build]
-rustflags = ""
-
 [workspace.dependencies]
 anyhow = "1.0.79"
 async-trait = "0.1.77"
