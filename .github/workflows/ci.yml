@@ -24,7 +24,7 @@ jobs:
       - run: |
           echo "RUSTFLAGS=-D errors" >> $GITHUB_ENV
       - run: "echo \"DOCKER_IMAGE_TAGS=\
-          ${{inputs.registry}}/${{github.repository}}:latest\"
+          ghcr.io/${{github.repository}}:latest\"
           >> $GITHUB_ENV"
       - run: cargo build
       - run: cargo test
