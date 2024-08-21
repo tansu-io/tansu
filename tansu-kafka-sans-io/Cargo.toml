@@ -1,0 +1,36 @@
+[package]
+name = "tansu-kafka-sans-io"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+bytes.workspace = true
+crc.workspace = true
+serde.workspace = true
+tansu-kafka-model = { path = "../tansu-kafka-model" }
+tracing.workspace = true
+
+[build-dependencies]
+bytes.workspace = true
+convert_case.workspace = true
+glob.workspace = true
+prettyplease.workspace = true
+proc-macro2.workspace = true
+quote.workspace = true
+serde_json.workspace = true
+syn.workspace = true
+tansu-kafka-model = { path = "../tansu-kafka-model" }
+thiserror.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+tracing-subscriber.workspace = true
+
+[features]
+diagnostics = []
+
+
+[[bench]]
+name = "decode_bench"
+harness = false

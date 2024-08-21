@@ -1,0 +1,25 @@
+[package]
+name = "tansu-raft"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+async-trait.workspace = true
+bytes.workspace = true
+clap.workspace = true
+crc.workspace = true
+futures.workspace = true
+opentelemetry.workspace = true
+opentelemetry_sdk.workspace = true
+opentelemetry-jaeger.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tansu-varint = { path = "../tansu-varint" }
+tarpc.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-core.workspace = true
+tracing-subscriber.workspace = true
+typetag.workspace = true
+url.workspace = true

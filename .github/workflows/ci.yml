@@ -1,0 +1,21 @@
+---
+name: ci
+on:
+  push:
+    branches:
+      - main
+jobs:
+  build:
+    runs-on: ${{matrix.os}}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: clippy, rustfmt
+      - run: cargo build
+      - run: cargo test
