@@ -35,7 +35,77 @@ use tracing::{debug, instrument};
 
 use crate::{Error, Result};
 
-use super::{typestate::Group, Coordinator};
+use super::Coordinator;
+
+pub trait Group: Debug + Send {
+    type JoinState;
+    type SyncState;
+    type HeartbeatState;
+    type LeaveState;
+    type OffsetCommitState;
+    type OffsetFetchState;
+
+    fn join(
+        self,
+        now: Instant,
+        group_id: &str,
+        session_timeout_ms: i32,
+        rebalance_timeout_ms: Option<i32>,
+        member_id: &str,
+        group_instance_id: Option<&str>,
+        protocol_type: &str,
+        protocols: Option<&[JoinGroupRequestProtocol]>,
+        reason: Option<&str>,
+    ) -> (Self::JoinState, Body);
+
+    fn sync(
+        self,
+        now: Instant,
+        group_id: &str,
+        generation_id: i32,
+        member_id: &str,
+        group_instance_id: Option<&str>,
+        protocol_name: Option<&str>,
+        assignments: Option<&[SyncGroupRequestAssignment]>,
+    ) -> (Self::SyncState, Body);
+
+    fn heartbeat(
+        self,
+        now: Instant,
+        group_id: &str,
+        generation_id: i32,
+        member_id: &str,
+        group_instance_id: Option<&str>,
+    ) -> (Self::HeartbeatState, Body);
+
+    fn leave(
+        self,
+        now: Instant,
+        group_id: &str,
+        member_id: Option<&str>,
+        members: Option<&[MemberIdentity]>,
+    ) -> (Self::LeaveState, Body);
+
+    fn offset_commit(
+        self,
+        now: Instant,
+        group_id: &str,
+        generation_id_or_member_epoch: Option<i32>,
+        member_id: Option<&str>,
+        group_instance_id: Option<&str>,
+        retention_time_ms: Option<i64>,
+        topics: Option<&[OffsetCommitRequestTopic]>,
+    ) -> (Self::OffsetCommitState, Body);
+
+    fn offset_fetch(
+        self,
+        now: Instant,
+        group_id: Option<&str>,
+        topics: Option<&[OffsetFetchRequestTopic]>,
+        groups: Option<&[OffsetFetchRequestGroup]>,
+        require_stable: Option<bool>,
+    ) -> (Self::OffsetFetchState, Body);
+}
 
 #[derive(Debug)]
 pub enum Wrapper {
@@ -455,11 +525,11 @@ impl Wrapper {
 }
 
 #[derive(Debug)]
-pub struct RoundRobin {
+pub struct Controller {
     wrapper: Option<Wrapper>,
 }
 
-impl RoundRobin {
+impl Controller {
     pub fn new(wrapper: Wrapper) -> Self {
         Self {
             wrapper: Some(wrapper),
@@ -467,7 +537,7 @@ impl RoundRobin {
     }
 }
 
-impl Coordinator for RoundRobin {
+impl Coordinator for Controller {
     fn join(
         &mut self,
         group_id: &str,
@@ -635,26 +705,6 @@ pub struct Forming {
     protocol_name: String,
     leader: Option<String>,
 }
-
-// impl From<Syncing> for Forming {
-//     fn from(value: Syncing) -> Self {
-//         Self {
-//             protocol_type: value.protocol_type,
-//             protocol_name: value.protocol_name,
-//             leader: Some(value.leader),
-//         }
-//     }
-// }
-
-// impl From<Formed> for Forming {
-//     fn from(value: Formed) -> Self {
-//         Self {
-//             protocol_type: value.protocol_type,
-//             protocol_name: value.protocol_name,
-//             leader: Some(value.leader),
-//         }
-//     }
-// }
 
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Syncing {

@@ -13,14 +13,11 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+pub mod administrator;
 pub mod consumer;
-pub mod cooperative_sticky;
-pub mod range;
-pub mod round_robin;
-pub mod typestate;
 
 use crate::Result;
-use round_robin::{Fresh, Inner, RoundRobin, Wrapper};
+use administrator::{Controller, Fresh, Inner, Wrapper};
 use std::{collections::BTreeMap, fmt::Debug};
 use tansu_kafka_sans_io::{
     join_group_request::JoinGroupRequestProtocol,
@@ -193,7 +190,7 @@ pub struct GroupProvider;
 impl ProvideCoordinator for GroupProvider {
     fn provide_coordinator(&mut self) -> Result<Box<dyn Coordinator>> {
         let wrapper: Wrapper = Inner::<Fresh>::default().into();
-        Ok(Box::new(RoundRobin::new(wrapper)) as Box<dyn Coordinator>)
+        Ok(Box::new(Controller::new(wrapper)) as Box<dyn Coordinator>)
     }
 }
 
