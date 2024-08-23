@@ -16,6 +16,7 @@
 use std::{
     fmt,
     io::{self, ErrorKind},
+    net::SocketAddr,
     result,
     sync::Arc,
 };
@@ -73,7 +74,7 @@ impl Proxy {
             let (stream, addr) = listener.accept().await?;
             info!(?addr);
 
-            let mut connection = Connection::open(&self.origin, stream).await?;
+            let mut connection = Connection::open(&self.origin, stream, addr).await?;
 
             _ = tokio::spawn(async move {
                 match connection.stream_handler().await {
@@ -93,19 +94,24 @@ impl Proxy {
 }
 
 struct Connection {
+    addr: SocketAddr,
     proxy: TcpStream,
     origin: TcpStream,
 }
 
 impl Connection {
-    async fn open(origin: &Url, proxy: TcpStream) -> Result<Self> {
+    async fn open(origin: &Url, proxy: TcpStream, addr: SocketAddr) -> Result<Self> {
         TcpStream::connect(format!(
             "{}:{}",
             origin.host_str().unwrap(),
             origin.port().unwrap()
         ))
         .await
-        .map(|origin| Self { proxy, origin })
+        .map(|origin| Self {
+            addr,
+            proxy,
+            origin,
+        })
         .map_err(Into::into)
     }
 
@@ -120,7 +126,7 @@ impl Connection {
             _ = self.proxy.read_exact(&mut buffer[4..]).await?;
 
             let request = Frame::request_from_bytes(&buffer)?;
-            debug!(?request);
+            debug!(?self.addr, ?request);
 
             match request {
                 Frame {
@@ -143,7 +149,7 @@ impl Connection {
 
                     let response = Frame::response_from_bytes(&buffer, api_key, api_version)?;
 
-                    debug!(?response);
+                    debug!(?self.addr, ?response);
 
                     self.proxy.write_all(&buffer).await?;
                 }
