@@ -1,7 +1,11 @@
 [package]
 name = "tansu-raft"
-version = "0.1.0"
-edition = "2021"
+edition.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true
+
 
 [dependencies]
 async-trait.workspace = true

@@ -1,10 +1,12 @@
 [package]
 name = "tansu-server"
-version = "0.1.0"
-edition = "2021"
+edition.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true
 
 [dependencies]
-ulid.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 bytes.workspace = true
@@ -26,5 +28,6 @@ tokio.workspace = true
 tracing-subscriber.workspace = true
 tracing.workspace = true
 typetag.workspace = true
+ulid.workspace = true
 url.workspace = true
 uuid.workspace = true

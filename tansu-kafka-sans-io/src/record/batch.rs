@@ -74,7 +74,7 @@ impl Batch {
             .iter()
             .fold(BTreeSet::new(), |mut acc, record| {
                 if let Some(key) = record.key() {
-                    acc.insert(key);
+                    _ = acc.insert(key);
                 }
 
                 acc

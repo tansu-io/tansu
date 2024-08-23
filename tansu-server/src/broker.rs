@@ -202,7 +202,7 @@ impl Broker {
                 ..
             } => {
                 debug!(?api_key, ?api_version, ?correlation_id);
-                let body = self.response_for(body).await?;
+                let body = self.response_for(body, correlation_id).await?;
                 debug!(?body, ?correlation_id);
                 Frame::response(
                     Header::Response { correlation_id },
@@ -237,8 +237,8 @@ impl Broker {
         Ok(self.applicator.when_applied(id).await)
     }
 
-    pub async fn response_for(&mut self, body: Body) -> Result<Body> {
-        debug!(?body);
+    pub async fn response_for(&mut self, body: Body, correlation_id: i32) -> Result<Body> {
+        debug!(?body, ?correlation_id);
 
         match body {
             Body::ApiVersionsRequest {

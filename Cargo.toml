@@ -6,11 +6,37 @@ members = ["tansu-*"]
 edition = "2021"
 version = "0.1.0"
 
+[workspace.lints.clippy]
+# all = "warn"
+#pedantic = "warn"
+
+[workspace.lints.rust]
+# deprecated_in_future = "warn"
+# elided_lifetimes_in_paths = "deny"
+# missing_copy_implementations = "warn"
+# missing_debug_implementations = "warn"
+# non_ascii_idents = "forbid"
+# nonstandard_style = "deny"
+# rust_2018_idioms = "deny"
+# unreachable_pub = "warn"
+# unsafe_code = "forbid"
+# unused_crate_dependencies = "warn"
+# unused_import_braces = "warn"
+# unused_labels = "warn"
+# unused_lifetimes = "warn"
+# unused_qualifications = "warn"
+# unused_results = "warn"
+
+[workspace.lints.rustdoc]
+# broken_intra_doc_links = "deny"
+#private_intra_doc_links = "deny"
+
 [workspace.dependencies]
 anyhow = "1.0.79"
 async-trait = "0.1.77"
 bytes = { version = "1", features = ["serde"] }
 clap = { version = "4.5.0", features = ["derive", "env"] }
+condtype = "1.3.0"
 convert_case = "0.6.0"
 crc = "3.0.1"
 criterion = { version = "0.5.1", features = ["html_reports"] }

@@ -17,7 +17,7 @@ use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use tansu_kafka_sans_io::Frame;
 
 fn api_versions_request_v3_000(c: &mut Criterion) {
-    c.bench_function("api_versions_request_v3_000", |b| {
+    _ = c.bench_function("api_versions_request_v3_000", |b| {
         b.iter(|| {
             Frame::request_from_bytes(black_box(&[
                 0, 0, 0, 52, 0, 18, 0, 3, 0, 0, 0, 3, 0, 16, 99, 111, 110, 115, 111, 108, 101, 45,

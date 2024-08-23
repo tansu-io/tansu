@@ -1,7 +1,10 @@
 [package]
 name = "tansu-kafka-model"
-version = "0.1.0"
-edition = "2021"
+edition.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true
 
 [dependencies]
 convert_case.workspace = true

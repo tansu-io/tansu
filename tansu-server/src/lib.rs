@@ -13,29 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-#![deny(
-    nonstandard_style,
-    rust_2018_idioms,
-    rustdoc::broken_intra_doc_links,
-    rustdoc::private_intra_doc_links,
-    elided_lifetimes_in_paths
-)]
-#![forbid(non_ascii_idents, unsafe_code)]
-#![warn(
-    deprecated_in_future,
-    missing_copy_implementations,
-    missing_debug_implementations,
-    unreachable_pub,
-    unused_import_braces,
-    unused_labels,
-    unused_lifetimes,
-    unused_qualifications,
-    unused_results,
-    clippy::all,
-    clippy::pedantic
-)]
-#![allow(clippy::missing_docs_in_private_items, clippy::missing_errors_doc)]
-
 use std::{
     collections::BTreeMap,
     fmt, io,

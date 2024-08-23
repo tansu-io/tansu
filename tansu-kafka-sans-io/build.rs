@@ -23,7 +23,7 @@ use std::{
     fmt::{self, Display},
     fs,
     io::{self, BufRead, BufReader, Cursor, Seek, Write},
-    path::{self, Path},
+    path::Path,
 };
 use syn::{Expr, Type};
 use tansu_kafka_model::{wv::Wv, CommonStruct, Field, Message};
@@ -91,7 +91,7 @@ type Result<T, E = Error> = std::result::Result<T, E>;
 
 fn read_value<P>(filename: P) -> Result<Value>
 where
-    P: AsRef<path::Path>,
+    P: AsRef<Path>,
 {
     fs::File::open(filename)
         .map(BufReader::new)

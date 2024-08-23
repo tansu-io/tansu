@@ -1,7 +1,10 @@
 [package]
 name = "tansu-storage"
-version.workspace = true
 edition.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true
 
 [dependencies]
 async-trait.workspace = true

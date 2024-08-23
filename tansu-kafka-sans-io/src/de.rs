@@ -1162,7 +1162,7 @@ impl<'de, 'a> VariantAccess<'de> for Enum<'de, 'a> {
 
     fn tuple_variant<V>(self, len: usize, visitor: V) -> Result<V::Value, Self::Error>
     where
-        V: serde::de::Visitor<'de>,
+        V: Visitor<'de>,
     {
         debug!("len: {len}, visitor: {}", type_name_of_val(&visitor));
         todo!()
@@ -1174,7 +1174,7 @@ impl<'de, 'a> VariantAccess<'de> for Enum<'de, 'a> {
         visitor: V,
     ) -> Result<V::Value, Self::Error>
     where
-        V: serde::de::Visitor<'de>,
+        V: Visitor<'de>,
     {
         debug!("fields: {fields:?}",);
 

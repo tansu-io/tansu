@@ -1342,9 +1342,23 @@ dependencies = [
  "serde_json",
  "syn 2.0.72",
  "tansu-kafka-model",
- "thiserror",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "tansu-proxy"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "clap",
+ "tansu-kafka-model",
+ "tansu-kafka-sans-io",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
 ]
 
 [[package]]

@@ -3,6 +3,9 @@ name = "tansu-proxy"
 edition.workspace = true
 version.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 bytes.workspace = true
 clap.workspace = true

@@ -25,7 +25,7 @@ use crate::{
 };
 
 #[derive(Debug)]
-pub struct Situation {
+pub(crate) struct Situation {
     persistent_state: Box<dyn PersistentState>,
     server: Box<dyn Server>,
     kv_store: Box<dyn KvStore>,
