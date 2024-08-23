@@ -58,7 +58,7 @@ impl FromStr for ElectionTimeout {
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Cli {
-    #[arg(long, default_value = "tcp:://localhost:4567")]
+    #[arg(long, default_value = "tcp://localhost:4567")]
     raft_listener_url: Url,
 
     #[arg(long, default_value = "10000")]
@@ -76,7 +76,7 @@ struct Cli {
     #[arg(long, default_value = "100")]
     kafka_node_id: i32,
 
-    #[arg(long, default_value = "tcp:://localhost:9092")]
+    #[arg(long, default_value = "tcp://localhost:9092")]
     kafka_listener_url: Url,
 
     #[arg(long, default_value = ".")]
