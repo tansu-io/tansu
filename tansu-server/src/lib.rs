@@ -243,6 +243,7 @@ pub enum Error {
     TryFromInt(#[from] TryFromIntError),
     Url(#[from] url::ParseError),
     Utf8(#[from] Utf8Error),
+    Uuid(#[from] uuid::Error),
 }
 
 impl From<Error> for tansu_raft::Error {

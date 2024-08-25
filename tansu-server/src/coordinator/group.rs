@@ -31,6 +31,7 @@ use tansu_kafka_sans_io::{
 pub trait Coordinator: Debug + Send + Sync {
     fn join(
         &mut self,
+        client_id: Option<&str>,
         group_id: &str,
         session_timeout_ms: i32,
         rebalance_timeout_ms: Option<i32>,
@@ -89,6 +90,7 @@ pub trait Coordinator: Debug + Send + Sync {
 impl<T: Coordinator + ?Sized> Coordinator for Box<T> {
     fn join(
         &mut self,
+        client_id: Option<&str>,
         group_id: &str,
         session_timeout_ms: i32,
         rebalance_timeout_ms: Option<i32>,
@@ -99,6 +101,7 @@ impl<T: Coordinator + ?Sized> Coordinator for Box<T> {
         reason: Option<&str>,
     ) -> Result<Body> {
         (**self).join(
+            client_id,
             group_id,
             session_timeout_ms,
             rebalance_timeout_ms,
@@ -212,6 +215,7 @@ impl Manager {
 impl Coordinator for Manager {
     fn join(
         &mut self,
+        client_id: Option<&str>,
         group_id: &str,
         session_timeout_ms: i32,
         rebalance_timeout_ms: Option<i32>,
@@ -225,6 +229,7 @@ impl Coordinator for Manager {
             .entry(Some(group_id.to_owned()))
             .or_insert(self.provider.provide_coordinator()?)
             .join(
+                client_id,
                 group_id,
                 session_timeout_ms,
                 rebalance_timeout_ms,

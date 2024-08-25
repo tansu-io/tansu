@@ -33,6 +33,7 @@ impl JoinRequest {
 impl JoinRequest {
     pub fn response(
         &self,
+        client_id: Option<&str>,
         group_id: &str,
         session_timeout_ms: i32,
         rebalance_timeout_ms: Option<i32>,
@@ -44,6 +45,7 @@ impl JoinRequest {
     ) -> Result<Body> {
         self.groups_lock().and_then(|mut coordinator| {
             coordinator.join(
+                client_id,
                 group_id,
                 session_timeout_ms,
                 rebalance_timeout_ms,

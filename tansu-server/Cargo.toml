@@ -32,3 +32,6 @@ typetag.workspace = true
 ulid.workspace = true
 url.workspace = true
 uuid.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true

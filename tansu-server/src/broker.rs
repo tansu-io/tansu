@@ -196,13 +196,16 @@ impl Broker {
                         api_key,
                         api_version,
                         correlation_id,
+                        client_id,
                         ..
                     },
                 body,
                 ..
             } => {
                 debug!(?api_key, ?api_version, ?correlation_id);
-                let body = self.response_for(body, correlation_id).await?;
+                let body = self
+                    .response_for(client_id.as_ref().map(|s| s.as_str()), body, correlation_id)
+                    .await?;
                 debug!(?body, ?correlation_id);
                 Frame::response(
                     Header::Response { correlation_id },
@@ -237,7 +240,12 @@ impl Broker {
         Ok(self.applicator.when_applied(id).await)
     }
 
-    pub async fn response_for(&mut self, body: Body, correlation_id: i32) -> Result<Body> {
+    pub async fn response_for(
+        &mut self,
+        client_id: Option<&str>,
+        body: Body,
+        correlation_id: i32,
+    ) -> Result<Body> {
         debug!(?body, ?correlation_id);
 
         match body {
@@ -386,6 +394,7 @@ impl Broker {
                 };
 
                 join.response(
+                    client_id,
                     &group_id,
                     session_timeout_ms,
                     rebalance_timeout_ms,
