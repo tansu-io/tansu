@@ -118,7 +118,7 @@ where
     }
 
     fn recover(id: Url, mut inner: T) -> Result<Self> {
-        inner.seek(SeekFrom::Start(0))?;
+        _ = inner.seek(SeekFrom::Start(0))?;
 
         let mut ident = BytesMut::zeroed(IDENT.len());
 

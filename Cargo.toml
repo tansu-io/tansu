@@ -10,7 +10,7 @@ license-file = "LICENSE"
 
 [workspace.lints.clippy]
 # all = "warn"
-#pedantic = "warn"
+# pedantic = "warn"
 
 [workspace.lints.rust]
 # deprecated_in_future = "warn"
