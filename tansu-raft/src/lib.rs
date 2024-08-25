@@ -91,28 +91,28 @@ pub async fn main(raft: Raft) -> Result<()> {
 
     {
         let raft = raft.clone();
-        set.spawn(async move {
+        _ = set.spawn(async move {
             election_timeout_handler(raft).await.unwrap();
         });
     }
 
     {
         let raft = raft.clone();
-        set.spawn(async move {
+        _ = set.spawn(async move {
             heartbeat_timeout_handler(raft).await.unwrap();
         });
     }
 
     {
         let raft = raft.clone();
-        set.spawn(async move {
+        _ = set.spawn(async move {
             replication_timeout_handler(raft).await.unwrap();
         });
     }
 
     {
         let raft = raft.clone();
-        set.spawn(async move { tarpc::server(raft).await.unwrap() });
+        _ = set.spawn(async move { tarpc::server(raft).await.unwrap() });
     }
 
     loop {
@@ -131,7 +131,7 @@ async fn election_timeout_handler(mut raft: Raft) -> Result<()> {
         .map(tokio::time::interval)?;
 
     loop {
-        interval.tick().await;
+        _ = interval.tick().await;
 
         if raft
             .configuration
@@ -152,7 +152,7 @@ async fn heartbeat_timeout_handler(raft: Raft) -> Result<()> {
         .map(tokio::time::interval)?;
 
     loop {
-        interval.tick().await;
+        _ = interval.tick().await;
 
         if raft
             .configuration
@@ -173,7 +173,7 @@ async fn replication_timeout_handler(mut raft: Raft) -> Result<()> {
         .map(tokio::time::interval)?;
 
     loop {
-        interval.tick().await;
+        _ = interval.tick().await;
 
         if raft
             .configuration

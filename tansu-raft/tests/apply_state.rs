@@ -72,7 +72,7 @@ impl Command for Sum {
     }
 }
 
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq, Ord, PartialOrd)]
 pub struct Applicator;
 
 impl ApplyState for Applicator {
@@ -87,7 +87,7 @@ impl ApplyState for Applicator {
     }
 }
 
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Default)]
+#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Default)]
 pub struct ApplyStateFactory;
 
 impl ProvideApplyState for ApplyStateFactory {

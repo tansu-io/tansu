@@ -184,7 +184,7 @@ impl<'de> Deserialize<'de> for Octets {
 }
 
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct VarIntSequence<T>(pub Vec<T>);
+pub(crate) struct VarIntSequence<T>(pub Vec<T>);
 
 impl<T> IntoIterator for VarIntSequence<T> {
     type Item = T;
@@ -228,7 +228,7 @@ where
 }
 
 impl<T> VarIntSequence<T> {
-    pub fn serialize<S>(v: &Vec<T>, serializer: S) -> Result<S::Ok, S::Error>
+    pub(crate) fn serialize<S>(v: &Vec<T>, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
         T: Serialize,
@@ -251,7 +251,7 @@ impl<T> VarIntSequence<T>
 where
     T: Serialize,
 {
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<T>, D::Error>
+    pub(crate) fn deserialize<'de, D>(deserializer: D) -> Result<Vec<T>, D::Error>
     where
         D: Deserializer<'de>,
         T: Deserialize<'de>,
@@ -310,7 +310,7 @@ impl<T: Serialize> Serialize for VarIntSequence<T> {
 }
 
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct Sequence<T>(pub Vec<T>);
+pub(crate) struct Sequence<T>(pub Vec<T>);
 
 impl<T> IntoIterator for Sequence<T> {
     type Item = T;
@@ -339,7 +339,7 @@ impl<T> From<Vec<T>> for Sequence<T> {
 }
 
 impl<T: Serialize> Sequence<T> {
-    pub fn serialize<S>(v: &Vec<T>, serializer: S) -> Result<S::Ok, S::Error>
+    pub(crate) fn serialize<S>(v: &Vec<T>, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
@@ -357,7 +357,7 @@ impl<T: Serialize> Sequence<T> {
 }
 
 impl<T> Sequence<T> {
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<T>, D::Error>
+    pub(crate) fn deserialize<'de, D>(deserializer: D) -> Result<Vec<T>, D::Error>
     where
         D: Deserializer<'de>,
         T: Deserialize<'de>,

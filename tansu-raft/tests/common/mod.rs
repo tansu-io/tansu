@@ -35,7 +35,7 @@ use tansu_raft::{
 use url::Url;
 
 #[derive(Default)]
-pub struct RaftBuilder {
+pub(crate) struct RaftBuilder {
     id: Option<Url>,
     initial_persistent_state: Vec<u8>,
     prev_log_index: Index,
@@ -49,78 +49,78 @@ pub struct RaftBuilder {
 }
 
 impl RaftBuilder {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Default::default()
     }
 
-    pub fn id(self, id: Url) -> Self {
+    pub(crate) fn id(self, id: Url) -> Self {
         Self {
             id: Some(id),
             ..self
         }
     }
 
-    pub fn voters(self, voters: BTreeSet<Url>) -> Self {
+    pub(crate) fn voters(self, voters: BTreeSet<Url>) -> Self {
         Self { voters, ..self }
     }
 
-    pub fn initial_persistent_state(self, initial_persistent_state: Vec<u8>) -> Self {
+    pub(crate) fn initial_persistent_state(self, initial_persistent_state: Vec<u8>) -> Self {
         Self {
             initial_persistent_state,
             ..self
         }
     }
 
-    pub fn prev_log_index(self, prev_log_index: Index) -> Self {
+    pub(crate) fn prev_log_index(self, prev_log_index: Index) -> Self {
         Self {
             prev_log_index,
             ..self
         }
     }
 
-    pub fn log_entries(self, log_entries: Vec<LogEntry>) -> Self {
+    pub(crate) fn log_entries(self, log_entries: Vec<LogEntry>) -> Self {
         Self {
             log_entries,
             ..self
         }
     }
 
-    pub fn request_vote_outcome(mut self, recipient: Url, outcome: Outcome) -> Self {
-        self.request_vote_outcome.insert(recipient, outcome);
+    pub(crate) fn request_vote_outcome(mut self, recipient: Url, outcome: Outcome) -> Self {
+        _ = self.request_vote_outcome.insert(recipient, outcome);
         self
     }
 
-    pub fn append_entries_outcome(
+    pub(crate) fn append_entries_outcome(
         mut self,
         recipient: Url,
         outcome: ArcDynFnAppendEntryDetail,
     ) -> Self {
-        self.append_entries_outcome.insert(recipient, outcome);
+        _ = self.append_entries_outcome.insert(recipient, outcome);
         self
     }
 
-    pub fn with_kv_store(self, provider: Box<dyn ProvideKvStore>) -> Self {
+    pub(crate) fn with_kv_store(self, provider: Box<dyn ProvideKvStore>) -> Self {
         Self {
             kv_store: Some(provider),
             ..self
         }
     }
 
-    pub fn with_apply_state(self, provider: Box<dyn ProvideApplyState>) -> Self {
+    pub(crate) fn with_apply_state(self, provider: Box<dyn ProvideApplyState>) -> Self {
         Self {
             apply_state: Some(provider),
             ..self
         }
     }
 
-    pub fn with_raft_rpc(self, provider: Box<dyn ProvideRaftRpc>) -> Self {
+    pub(crate) fn with_raft_rpc(self, provider: Box<dyn ProvideRaftRpc>) -> Self {
         Self {
             raft_rpc: Some(provider),
             ..self
         }
     }
 
-    pub async fn build(self) -> Result<Raft> {
+    pub(crate) async fn build(self) -> Result<Raft> {
         Raft::builder()
             .configuration(Box::new(ConfigurationFactory))
             .with_voters(self.voters)
@@ -149,7 +149,7 @@ impl RaftBuilder {
 }
 
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Serialize, Deserialize, Default)]
-pub struct ConfigurationFactory;
+pub(crate) struct ConfigurationFactory;
 
 impl ProvideConfiguration for ConfigurationFactory {
     fn provide_configuration(&self) -> Result<Box<dyn Configuration>> {
@@ -171,7 +171,7 @@ impl ProvideConfiguration for ConfigurationFactory {
 }
 
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Default)]
-pub struct ServerFactory {
+pub(crate) struct ServerFactory {
     pub commit_index: Index,
     pub last_applied: Index,
 }
@@ -188,7 +188,7 @@ impl ProvideServer for ServerFactory {
 }
 
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Default)]
-pub struct Applicator;
+pub(crate) struct Applicator;
 
 impl ApplyState for Applicator {
     fn apply(&self, _index: Index, state: Option<Bytes>, command: Bytes) -> Result<Bytes> {
@@ -206,7 +206,7 @@ impl ApplyState for Applicator {
 }
 
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Default)]
-pub struct ApplyStateFactory;
+pub(crate) struct ApplyStateFactory;
 
 impl ProvideApplyState for ApplyStateFactory {
     fn provide_apply_state(&self) -> Result<Box<dyn ApplyState>> {
@@ -215,7 +215,7 @@ impl ProvideApplyState for ApplyStateFactory {
 }
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct AppendEntryDetail {
+pub(crate) struct AppendEntryDetail {
     pub recipient: Url,
     pub leaders_term: Term,
     pub leader_id: Url,
@@ -225,8 +225,8 @@ pub struct AppendEntryDetail {
     pub leader_commit: Index,
 }
 
-pub type DynFnAppendEntryDetail = dyn Fn(AppendEntryDetail) -> Outcome + Send + Sync;
-pub type ArcDynFnAppendEntryDetail = Arc<DynFnAppendEntryDetail>;
+pub(crate) type DynFnAppendEntryDetail = dyn Fn(AppendEntryDetail) -> Outcome + Send + Sync;
+pub(crate) type ArcDynFnAppendEntryDetail = Arc<DynFnAppendEntryDetail>;
 
 #[derive(Clone, Default)]
 struct MockRaftRpc {
@@ -296,7 +296,7 @@ impl RaftRpc for MockRaftRpc {
 }
 
 #[derive(Clone, Default)]
-pub struct RaftRpcFactory {
+pub(crate) struct RaftRpcFactory {
     pub appended_entries: Arc<Mutex<Vec<AppendEntryDetail>>>,
     pub append_entries_outcome: BTreeMap<Url, ArcDynFnAppendEntryDetail>,
     pub request_votes_outcome: BTreeMap<Url, Outcome>,
@@ -314,7 +314,7 @@ impl ProvideRaftRpc for RaftRpcFactory {
 }
 
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
-pub struct PersistentStateFactory {
+pub(crate) struct PersistentStateFactory {
     pub id: Url,
     pub initial_persistent_state: Vec<u8>,
 }
@@ -353,7 +353,7 @@ impl KvStore for BTreeMapKv {
 }
 
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Default)]
-pub struct BTreeMapKvFactory {
+pub(crate) struct BTreeMapKvFactory {
     pub prev_log_index: Index,
     pub log_entries: Vec<LogEntry>,
 }
@@ -364,7 +364,7 @@ impl ProvideKvStore for BTreeMapKvFactory {
         let mut db = BTreeMap::new();
         for entry in &self.log_entries {
             index += 1;
-            db.insert(log_key_for_index(index)?, Bytes::from(entry));
+            _ = db.insert(log_key_for_index(index)?, Bytes::from(entry));
         }
 
         Ok(Box::new(BTreeMapKv { db }))

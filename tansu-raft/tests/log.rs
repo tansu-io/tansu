@@ -53,12 +53,12 @@ impl Applicator {
         }
     }
 
-    pub fn when_applied(
+    pub(crate) fn when_applied(
         &self,
         index: Index,
         callback: impl Fn(&u32) + Send + Sync + 'static,
     ) -> Result<()> {
-        self.when_applied
+        _ = self.when_applied
             .lock()
             .map(|mut when_applied| when_applied.insert(index, Box::new(callback)))?;
         Ok(())
@@ -78,7 +78,7 @@ impl ApplyState for Applicator {
             .inspect(|state| _ = dbg!(state))
             .unwrap();
 
-        self.when_applied
+        _ = self.when_applied
             .lock()
             .map(|mut context| context.remove(&index).map(|callback| callback(&state)))?;
 
@@ -86,7 +86,7 @@ impl ApplyState for Applicator {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct ApplyStateFactory {
     applicator: Applicator,
 }

@@ -9,29 +9,27 @@ license = "AGPL-3.0-or-later"
 license-file = "LICENSE"
 
 [workspace.lints.clippy]
-# all = "warn"
-# pedantic = "warn"
+all = "warn"
 
 [workspace.lints.rust]
-# deprecated_in_future = "warn"
-# elided_lifetimes_in_paths = "deny"
-# missing_copy_implementations = "warn"
-# missing_debug_implementations = "warn"
-# non_ascii_idents = "forbid"
-# nonstandard_style = "deny"
-# rust_2018_idioms = "deny"
-# unreachable_pub = "warn"
-# unsafe_code = "forbid"
-# unused_crate_dependencies = "warn"
-# unused_import_braces = "warn"
-# unused_labels = "warn"
-# unused_lifetimes = "warn"
-# unused_qualifications = "warn"
-# unused_results = "warn"
+deprecated_in_future = "warn"
+elided_lifetimes_in_paths = "deny"
+missing_copy_implementations = "warn"
+missing_debug_implementations = "warn"
+non_ascii_idents = "forbid"
+nonstandard_style = { level = "deny", priority = -1 }
+rust_2018_idioms = { level = "deny", priority = -1 }
+unreachable_pub = "warn"
+unsafe_code = "forbid"
+unused_import_braces = "warn"
+unused_labels = "warn"
+unused_lifetimes = "warn"
+unused_qualifications = "warn"
+unused_results = "warn"
 
 [workspace.lints.rustdoc]
-# broken_intra_doc_links = "deny"
-#private_intra_doc_links = "deny"
+broken_intra_doc_links = "deny"
+private_intra_doc_links = "deny"
 
 [workspace.dependencies]
 anyhow = "1.0.79"

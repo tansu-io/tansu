@@ -13,6 +13,8 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+use tansu_kafka_sans_io as _;
+use thiserror as _;
 use clap::Parser;
 use tansu_proxy::Result;
 use tokio::task::JoinSet;
@@ -53,7 +55,7 @@ async fn main() -> Result<()> {
         let proxy = tansu_proxy::Proxy::new(args.listener_url, args.origin_url);
         debug!(?proxy);
 
-        set.spawn(async move { proxy.listen().await.unwrap() });
+        _ = set.spawn(async move { proxy.listen().await.unwrap() });
     }
 
     loop {

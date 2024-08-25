@@ -1758,7 +1758,7 @@ fn fetch_response_v12_002() -> Result<()> {
                                     aborted_transactions: None,
                                     preferred_read_replica: Some(-1),
                                     records: Some(record::Frame {
-                                        batches: [record::Batch {
+                                        batches: [Batch {
                                             base_offset: 0,
                                             batch_length: 172,
                                             partition_leader_epoch: 0,
@@ -2984,7 +2984,7 @@ fn produce_request_v9_001() -> Result<()> {
                             [PartitionProduceData {
                                 index: 0,
                                 records: Some(record::Frame {
-                                    batches: [record::Batch {
+                                    batches: [Batch {
                                         base_offset: 0,
                                         batch_length: 172,
                                         partition_leader_epoch: -1,
@@ -3168,7 +3168,7 @@ fn produce_request_v10_000() -> Result<()> {
                                         producer_id: 1,
                                         producer_epoch: 0,
                                         base_sequence: 0,
-                                        records: [record::Record {
+                                        records: [Record {
                                             length: 38,
                                             attributes: 0,
                                             timestamp_delta: 0,
@@ -3282,7 +3282,7 @@ fn produce_request_v10_001() -> Result<()> {
                                         producer_epoch: 0,
                                         base_sequence: 0,
                                         records: [
-                                            record::Record {
+                                            Record {
                                                 length: 38,
                                                 attributes: 0,
                                                 timestamp_delta: 0,
@@ -3315,7 +3315,7 @@ fn produce_request_v10_001() -> Result<()> {
                                                 ]
                                                 .into()
                                             },
-                                            record::Record {
+                                            Record {
                                                 length: 38,
                                                 attributes: 0,
                                                 timestamp_delta: 8,
@@ -3348,7 +3348,7 @@ fn produce_request_v10_001() -> Result<()> {
                                                 ]
                                                 .into()
                                             },
-                                            record::Record {
+                                            Record {
                                                 length: 38,
                                                 attributes: 0,
                                                 timestamp_delta: 8,
@@ -3381,7 +3381,7 @@ fn produce_request_v10_001() -> Result<()> {
                                                 ]
                                                 .into()
                                             },
-                                            record::Record {
+                                            Record {
                                                 length: 42,
                                                 attributes: 0,
                                                 timestamp_delta: 8,
@@ -3414,7 +3414,7 @@ fn produce_request_v10_001() -> Result<()> {
                                                 ]
                                                 .into()
                                             },
-                                            record::Record {
+                                            Record {
                                                 length: 67,
                                                 attributes: 0,
                                                 timestamp_delta: 8,

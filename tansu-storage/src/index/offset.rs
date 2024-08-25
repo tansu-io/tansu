@@ -25,15 +25,9 @@ use std::{
 };
 use tracing::debug;
 
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct MemoryOffsetProvider<'data> {
     data: &'data [u8],
-}
-
-impl<'data> Default for MemoryOffsetProvider<'data> {
-    fn default() -> Self {
-        Self { data: &[] }
-    }
 }
 
 impl<'data> MemoryOffsetProvider<'data> {

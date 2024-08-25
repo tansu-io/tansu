@@ -32,7 +32,7 @@ pub struct Leader {
 }
 
 #[derive(Clone, Default, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
-pub struct LeaderBuilder<T = PhantomData<BTreeMap<Url, Index>>> {
+pub(crate) struct LeaderBuilder<T = PhantomData<BTreeMap<Url, Index>>> {
     commit_index: Index,
     last_applied: Index,
     next_index: T,
@@ -40,7 +40,7 @@ pub struct LeaderBuilder<T = PhantomData<BTreeMap<Url, Index>>> {
 }
 
 impl LeaderBuilder<BTreeMap<Url, Index>> {
-    pub fn build(self) -> Leader {
+    pub(crate) fn build(self) -> Leader {
         Leader {
             commit_index: self.commit_index,
             last_applied: self.last_applied,
@@ -51,7 +51,7 @@ impl LeaderBuilder<BTreeMap<Url, Index>> {
 }
 
 impl<T> LeaderBuilder<T> {
-    pub fn with_voters(self, voters: &[Url]) -> LeaderBuilder<BTreeMap<Url, Index>> {
+    pub(crate) fn with_voters(self, voters: &[Url]) -> LeaderBuilder<BTreeMap<Url, Index>> {
         LeaderBuilder {
             commit_index: self.commit_index,
             last_applied: self.last_applied,
@@ -154,7 +154,7 @@ impl Server for Leader {
             .cloned()
             .fold(BTreeMap::new(), |mut acc, node| {
                 if let Some(index) = self.next_index.get(&node) {
-                    acc.insert(node, *index);
+                    _ = acc.insert(node, *index);
                     acc
                 } else {
                     acc
@@ -201,7 +201,7 @@ mod tests {
         let mut leader = Leader::default();
 
         ni.iter().cloned().for_each(|(node, index)| {
-            leader.next_index.insert(node, index);
+            _  = leader.next_index.insert(node, index);
         });
 
         assert_eq!(

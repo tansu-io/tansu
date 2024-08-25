@@ -160,9 +160,9 @@ impl TryFrom<&DirEntry> for Topition {
                 value
                     .file_name()
                     .into_string()
-                    .map_err(|str| Error::OsString(str))
+                    .map_err(Error::OsString)
                     .and_then(|ref file_name| {
-                        re.captures(&file_name)
+                        re.captures(file_name)
                             .ok_or(Error::Message(format!("no captures for {file_name}")))
                             .and_then(|ref captures| {
                                 let topic = captures
@@ -303,24 +303,6 @@ impl Storage {
                 topition: topition.to_owned(),
                 offset: None,
             }
-        })
-    }
-
-    #[allow(dead_code)]
-    fn segment(&self, topition: &'_ Topition, offset: i64) -> Result<&Box<dyn Segment>> {
-        self.segments(topition).and_then(|segments| {
-            segments
-                .range(..=offset)
-                .last()
-                .ok_or_else(|| {
-                    debug!(?topition, ?offset);
-
-                    Error::SegmentMissing {
-                        topition: topition.to_owned(),
-                        offset: Some(offset),
-                    }
-                })
-                .map(|(_, segment)| segment)
         })
     }
 

@@ -102,7 +102,7 @@ where
                         if let Some(position) = line.find("//") {
                             line.truncate(position);
                         }
-                        acc.write_all(line.as_bytes())?
+                        acc.write_all(line.as_bytes())?;
                     }
                     Ok(acc)
                 })
@@ -173,7 +173,7 @@ fn kind(
 
         if f.nullable().is_none()
             && f.versions()
-                .is_mandatory(parent.map(|parent| parent.versions()))
+                .is_mandatory(parent.map(Field::versions))
         {
             quote! {
                 #t
@@ -187,7 +187,7 @@ fn kind(
         let t = f.kind().type_name();
         if f.nullable().is_none()
             && f.versions()
-                .is_mandatory(parent.map(|parent| parent.versions()))
+                .is_mandatory(parent.map(Field::versions))
         {
             if parent.is_none() && dependencies.contains(&t) {
                 quote! {
@@ -243,6 +243,7 @@ fn tag_kind(
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn body_enum(messages: &[Message], include_tag: bool) -> TokenStream {
     let variants: Vec<TokenStream> = messages
         .iter()
@@ -263,7 +264,7 @@ fn body_enum(messages: &[Message], include_tag: bool) -> TokenStream {
                         .common_structs()
                         .unwrap_or(&[][..])
                         .iter()
-                        .map(|cs| cs.type_name()),
+                        .map(CommonStruct::type_name),
                 )
                 .collect();
 
@@ -307,7 +308,7 @@ fn body_enum(messages: &[Message], include_tag: bool) -> TokenStream {
                     .fields()
                     .iter()
                     .filter(|field| field.tag().is_none())
-                    .map(|field| field.ident());
+                    .map(Field::ident);
 
                 let conversions = message.fields().iter().map(|field| {
                     if field.tag().is_some() {
@@ -389,7 +390,7 @@ fn body_enum(messages: &[Message], include_tag: bool) -> TokenStream {
                 ))
                 .unwrap();
 
-                let to_idents = message.fields().iter().map(|field| field.ident());
+                let to_idents = message.fields().iter().map(Field::ident);
 
                 if message.has_tags() {
                     quote! {
@@ -453,7 +454,7 @@ fn body_enum(messages: &[Message], include_tag: bool) -> TokenStream {
                     ))
                     .unwrap();
 
-                    let from_idents = message.fields().iter().map(|field| field.ident());
+                    let from_idents = message.fields().iter().map(Field::ident);
 
                     let conversions = message.fields().iter().map(|field| {
                     if field.tag().is_some() {
@@ -534,7 +535,7 @@ fn body_enum(messages: &[Message], include_tag: bool) -> TokenStream {
                         .fields()
                         .iter()
                         .filter(|field| field.tag().is_none())
-                        .map(|field| field.ident());
+                        .map(Field::ident);
 
                     quote! {
                         #from {
@@ -572,7 +573,7 @@ fn body_enum(messages: &[Message], include_tag: bool) -> TokenStream {
 
 fn pfk(
     parent: Option<&Field>,
-    visibility: Option<TokenStream>,
+    visibility: Option<&TokenStream>,
     fields: &[Field],
     module: &syn::Path,
     dependencies: &[Type],
@@ -594,7 +595,7 @@ fn pfk(
 fn root_message_struct(
     name: &Type,
     fields: &[Field],
-    common_structs: &Option<&[CommonStruct]>,
+    common_structs: Option<&[CommonStruct]>,
     include_tag: bool,
 ) -> TokenStream {
     message_struct(
@@ -608,12 +609,13 @@ fn root_message_struct(
     )
 }
 
+#[allow(clippy::too_many_lines)]
 fn message_struct(
     module: &syn::Path,
     parent: Option<&Field>,
     name: &Type,
     fields: &[Field],
-    common_structs: &Option<&[CommonStruct]>,
+    common_structs: Option<&[CommonStruct]>,
     include_tag: bool,
 ) -> TokenStream {
     let dependencies: Vec<Type> = fields
@@ -624,7 +626,7 @@ fn message_struct(
             common_structs
                 .unwrap_or(&[][..])
                 .iter()
-                .map(|cs| cs.type_name()),
+                .map(CommonStruct::type_name),
         )
         .collect();
 
@@ -637,9 +639,9 @@ fn message_struct(
                     Some(f),
                     &f.kind().type_name(),
                     children,
-                    &None,
+                    None,
                     include_tag,
-                ))
+                ));
             }
             acc
         })
@@ -648,13 +650,15 @@ fn message_struct(
             common_structs
                 .unwrap_or(&[][..])
                 .iter()
-                .map(|cs| common_struct(parent, module, cs.type_name(), cs.fields(), include_tag)),
+                .map(|cs| common_struct(parent, module, &cs.type_name(), cs.fields(), include_tag)),
         )
         .collect();
 
+    let vis = quote!(pub);
+
     let pfk = pfk(
         parent,
-        Some(quote!(pub)),
+        Some(&vis),
         fields,
         module,
         &dependencies,
@@ -741,7 +745,7 @@ fn message_struct(
         ))
         .unwrap();
 
-        let derived = if fields.iter().any(|field| field.has_float()) {
+        let derived = if fields.iter().any(Field::has_float) {
             quote! {
                 #[derive(Clone, Debug, Default, PartialEq, PartialOrd, serde::Deserialize, serde::Serialize)]
             }
@@ -864,7 +868,7 @@ fn message_struct(
         ))
         .unwrap();
 
-        let derived = if fields.iter().any(|field| field.has_float()) {
+        let derived = if fields.iter().any(Field::has_float) {
             quote! {
                 #[derive(Clone, Debug, Default, PartialEq, PartialOrd, serde::Deserialize, serde::Serialize)]
             }
@@ -900,14 +904,16 @@ fn message_struct(
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn common_struct(
     parent: Option<&Field>,
     module: &syn::Path,
-    name: Type,
+    name: &Type,
     fields: &[Field],
     include_tag: bool,
 ) -> TokenStream {
-    let pfk = pfk(parent, Some(quote!(pub)), fields, module, &[], include_tag);
+    let vis = quote!(pub);
+    let pfk = pfk(parent, Some(&vis), fields, module, &[], include_tag);
 
     if include_tag {
         let assignments: Vec<TokenStream> = fields
@@ -939,7 +945,7 @@ fn common_struct(
         ))
         .unwrap();
 
-        let derived = if fields.iter().any(|field| field.has_float()) {
+        let derived = if fields.iter().any(Field::has_float) {
             quote! {
                 #[derive(Clone, Debug, Default, PartialEq, PartialOrd, serde::Deserialize, serde::Serialize)]
             }
@@ -1051,7 +1057,7 @@ fn common_struct(
         ))
         .unwrap();
 
-        let derived = if fields.iter().any(|field| field.has_float()) {
+        let derived = if fields.iter().any(Field::has_float) {
             quote! {
                 #[derive(Clone, Debug, Default, PartialEq, PartialOrd, serde::Deserialize, serde::Serialize)]
             }
@@ -1093,7 +1099,7 @@ fn root(messages: &[Message], include_tag: bool) -> Vec<TokenStream> {
             root_message_struct(
                 &message.type_name(),
                 message.fields(),
-                &message.common_structs(),
+                message.common_structs(),
                 include_tag,
             )
         })
@@ -1123,13 +1129,13 @@ fn process(messages: &[Message], include_tag: bool) -> TokenStream {
 
 fn all(pattern: &str) -> Result<Vec<Message>> {
     glob::glob(pattern)
-        .map_err(|error| error.into())
+        .map_err(Into::into)
         .and_then(|mut paths| {
             paths.try_fold(Vec::new(), |mut acc, p| {
-                p.map_err(|error| error.into())
+                p.map_err(Into::into)
                     // .inspect(|path| eprintln!("path: {path:?}"))
                     .and_then(read_value)
-                    .and_then(|v| Message::try_from(&Wv::from(&v)).map_err(|error| error.into()))
+                    .and_then(|v| Message::try_from(&Wv::from(&v)).map_err(Into::into))
                     .map(|m| {
                         acc.push(m);
                         acc
@@ -1259,11 +1265,11 @@ impl<T: ToTokens> ToTokens for OptionWrapper<T> {
         if let Some(ref v) = self.0 {
             tokens.extend(quote! {
                 Some(#v)
-            })
+            });
         } else {
             tokens.extend(quote! {
                 None
-            })
+            });
         }
     }
 }

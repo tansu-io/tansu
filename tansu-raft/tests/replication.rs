@@ -66,7 +66,7 @@ async fn check_replication() -> Result<()> {
     let b = Url::parse("tcp://localhost/78987")?;
 
     let mut request_votes_outcome = BTreeMap::new();
-    request_votes_outcome.insert(
+    _ = request_votes_outcome.insert(
         a.clone(),
         Outcome::builder()
             .result(true)
@@ -74,7 +74,7 @@ async fn check_replication() -> Result<()> {
             .from(a.clone())
             .build(),
     );
-    request_votes_outcome.insert(
+    _ = request_votes_outcome.insert(
         b.clone(),
         Outcome::builder()
             .result(false)
@@ -84,7 +84,7 @@ async fn check_replication() -> Result<()> {
     );
 
     let mut append_entries_outcome = BTreeMap::new();
-    append_entries_outcome.insert(
+    _ = append_entries_outcome.insert(
         a.clone(),
         Arc::new(move |detail: AppendEntryDetail| {
             Outcome::builder()
@@ -95,7 +95,7 @@ async fn check_replication() -> Result<()> {
         }) as Arc<dyn Fn(AppendEntryDetail) -> Outcome + Send + Sync>,
     );
 
-    append_entries_outcome.insert(
+    _ = append_entries_outcome.insert(
         b.clone(),
         Arc::new(|detail: AppendEntryDetail| {
             Outcome::builder()

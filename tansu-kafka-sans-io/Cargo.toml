@@ -4,9 +4,29 @@ edition.workspace = true
 version.workspace = true
 license.workspace = true
 
-[lints]
-workspace = true
+[lints.clippy]
+all = "warn"
 
+[lints.rust]
+deprecated_in_future = "warn"
+elided_lifetimes_in_paths = "deny"
+missing_copy_implementations = "allow"
+missing_debug_implementations = "allow"
+non_ascii_idents = "forbid"
+nonstandard_style = "deny"
+rust_2018_idioms = "deny"
+unreachable_pub = "allow"
+unsafe_code = "forbid"
+unused_import_braces = "warn"
+unused_labels = "warn"
+unused_lifetimes = "warn"
+unused_qualifications = "allow"
+unused_results = "warn"
+unused_variables = "allow"
+
+[lints.rustdoc]
+broken_intra_doc_links = "deny"
+private_intra_doc_links = "deny"
 
 [dependencies]
 bytes.workspace = true

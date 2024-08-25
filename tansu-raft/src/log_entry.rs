@@ -78,7 +78,7 @@ impl<T, V> LogEntryBuilder<T, V> {
 impl From<LogEntry> for Bytes {
     fn from(log_entry: LogEntry) -> Self {
         let mut encoded = BytesMut::new();
-        tansu_varint::put_u64_into(log_entry.term, &mut encoded);
+        _ = tansu_varint::put_u64_into(log_entry.term, &mut encoded);
         encoded.put(log_entry.value);
         Bytes::from(encoded)
     }
@@ -87,7 +87,7 @@ impl From<LogEntry> for Bytes {
 impl From<&LogEntry> for Bytes {
     fn from(log_entry: &LogEntry) -> Self {
         let mut encoded = BytesMut::new();
-        tansu_varint::put_u64_into(log_entry.term, &mut encoded);
+        _ = tansu_varint::put_u64_into(log_entry.term, &mut encoded);
         encoded.put(log_entry.value.clone());
         Bytes::from(encoded)
     }

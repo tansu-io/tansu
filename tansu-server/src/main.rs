@@ -107,7 +107,7 @@ async fn main() -> Result<()> {
         .raft_peers
         .iter()
         .fold(BTreeSet::new(), |mut acc, url| {
-            acc.insert(url.clone());
+            _ = acc.insert(url.clone());
             acc
         });
 
@@ -146,7 +146,7 @@ async fn main() -> Result<()> {
     {
         let raft = raft.clone();
 
-        set.spawn(async move {
+        _ = set.spawn(async move {
             tansu_raft::main(raft).await.unwrap();
         });
     }
@@ -168,7 +168,7 @@ async fn main() -> Result<()> {
 
         debug!(?broker);
 
-        set.spawn(async move {
+        _ = set.spawn(async move {
             broker.serve().await.unwrap();
         });
     }

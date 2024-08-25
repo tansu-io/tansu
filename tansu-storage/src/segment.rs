@@ -280,7 +280,7 @@ where
     }
 
     fn check(&mut self) -> Result<Option<u64>> {
-        _ = self.storage.rewind()?;
+        self.storage.rewind()?;
 
         let mut decoder = Decoder::new(&mut self.storage);
         let mut position = None;
@@ -675,7 +675,7 @@ where
         entry
             .file_name()
             .into_string()
-            .map_err(|str| Error::OsString(str))
+            .map_err(Error::OsString)
             .map(|s| s.ends_with(".log"))
     }
 
@@ -686,9 +686,9 @@ where
                 entry
                     .file_name()
                     .into_string()
-                    .map_err(|str| Error::OsString(str))
+                    .map_err(Error::OsString)
                     .and_then(|ref file_name| {
-                        re.captures(&file_name)
+                        re.captures(file_name)
                             .ok_or(Error::Message(format!("no captures for {file_name}")))
                             .and_then(|ref captures| {
                                 captures

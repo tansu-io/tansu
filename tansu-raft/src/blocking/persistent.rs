@@ -156,6 +156,7 @@ where
     }
 }
 
+#[derive(Debug)]
 pub struct PersistentManagerBuilder<T, U, V> {
     inner: T,
     id: U,

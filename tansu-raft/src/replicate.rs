@@ -100,7 +100,7 @@ fn node_log_entries(context: &mut MutexGuard<'_, Box<dyn Context>>) -> Result<Op
                         .try_fold(BTreeMap::new(), |mut acc, (node, index)| {
                             if *index <= commit_index {
                                 replication_entry_for_index(context, *index).map(|entry| {
-                                    acc.insert(node.clone(), entry);
+                                    _ = acc.insert(node.clone(), entry);
                                     acc
                                 })
                             } else {
@@ -224,7 +224,7 @@ mod tests {
     };
 
     #[derive(Default)]
-    pub struct RaftBuilder {
+    pub(crate) struct RaftBuilder {
         id: Option<Url>,
         initial_persistent_state: Vec<u8>,
         prev_log_index: Index,
@@ -237,62 +237,62 @@ mod tests {
     }
 
     impl RaftBuilder {
-        pub fn new() -> Self {
+        pub(crate) fn new() -> Self {
             Self {
                 ..Default::default()
             }
         }
 
-        pub fn id(self, id: Url) -> Self {
+        pub(crate) fn id(self, id: Url) -> Self {
             Self {
                 id: Some(id),
                 ..self
             }
         }
 
-        pub fn voters(self, voters: BTreeSet<Url>) -> Self {
+        pub(crate) fn voters(self, voters: BTreeSet<Url>) -> Self {
             Self { voters, ..self }
         }
 
-        pub fn initial_persistent_state(self, initial_persistent_state: Vec<u8>) -> Self {
+        pub(crate) fn initial_persistent_state(self, initial_persistent_state: Vec<u8>) -> Self {
             Self {
                 initial_persistent_state,
                 ..self
             }
         }
 
-        pub fn prev_log_index(self, prev_log_index: Index) -> Self {
+        pub(crate) fn prev_log_index(self, prev_log_index: Index) -> Self {
             Self {
                 prev_log_index,
                 ..self
             }
         }
 
-        pub fn log_entries(self, log_entries: Vec<LogEntry>) -> Self {
+        pub(crate) fn log_entries(self, log_entries: Vec<LogEntry>) -> Self {
             Self {
                 log_entries,
                 ..self
             }
         }
 
-        pub fn request_vote_outcome(mut self, recipient: Url, outcome: Outcome) -> Self {
-            self.request_vote_outcome.insert(recipient, outcome);
+        pub(crate) fn request_vote_outcome(mut self, recipient: Url, outcome: Outcome) -> Self {
+            _ = self.request_vote_outcome.insert(recipient, outcome);
             self
         }
 
-        pub fn append_entries_outcome(mut self, recipient: Url, outcome: Outcome) -> Self {
-            self.append_entries_outcome.insert(recipient, outcome);
+        pub(crate) fn append_entries_outcome(mut self, recipient: Url, outcome: Outcome) -> Self {
+            _ = self.append_entries_outcome.insert(recipient, outcome);
             self
         }
 
-        pub fn with_apply_state(self, provider: Box<dyn ProvideApplyState>) -> Self {
+        pub(crate) fn with_apply_state(self, provider: Box<dyn ProvideApplyState>) -> Self {
             Self {
                 apply_state: Some(provider),
                 ..self
             }
         }
 
-        pub async fn build(self) -> Result<Raft> {
+        pub(crate) async fn build(self) -> Result<Raft> {
             Raft::builder()
                 .configuration(Box::new(ConfigurationFactory))
                 .with_voters(self.voters)
@@ -326,7 +326,7 @@ mod tests {
     struct ConfigurationFactory;
 
     impl ProvideConfiguration for ConfigurationFactory {
-        fn provide_configuration(&self) -> Result<Box<dyn crate::Configuration>> {
+        fn provide_configuration(&self) -> Result<Box<dyn Configuration>> {
             #[derive(Debug)]
             struct Config;
 
@@ -362,7 +362,7 @@ mod tests {
     }
 
     #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Default)]
-    pub struct Applicator;
+    pub(crate) struct Applicator;
 
     impl ApplyState for Applicator {
         fn apply(&self, _index: Index, state: Option<Bytes>, command: Bytes) -> Result<Bytes> {
@@ -380,10 +380,10 @@ mod tests {
     }
 
     #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Default)]
-    pub struct ApplyStateFactory;
+    pub(crate) struct ApplyStateFactory;
 
     impl ApplyStateFactory {
-        pub fn new() -> Self {
+        pub(crate) fn new() -> Self {
             Self
         }
     }
@@ -530,7 +530,7 @@ mod tests {
             let mut db = BTreeMap::new();
             for entry in &self.log_entries {
                 index += 1;
-                db.insert(log_key_for_index(index)?, Bytes::from(entry));
+                _ = db.insert(log_key_for_index(index)?, Bytes::from(entry));
             }
 
             Ok(Box::new(BTreeMapKv { db }))

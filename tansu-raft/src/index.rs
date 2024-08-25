@@ -40,10 +40,10 @@ struct Entry {
 
 impl Entry {
     fn size_of() -> usize {
-        std::mem::size_of::<u64>()
-            + std::mem::size_of::<u64>()
-            + std::mem::size_of::<u64>()
-            + std::mem::size_of::<u8>()
+        size_of::<u64>()
+            + size_of::<u64>()
+            + size_of::<u64>()
+            + size_of::<u8>()
     }
 }
 
@@ -90,14 +90,14 @@ where
         dbg!(position);
         dbg!(&entry);
 
-        self.inner.seek(SeekFrom::Start(position))?;
+        _ = self.inner.seek(SeekFrom::Start(position))?;
         self.inner.write_all(&Bytes::from(entry))?;
         self.inner.flush()?;
         Ok(())
     }
 
     fn read(&mut self, position: u64) -> Result<Entry> {
-        self.inner.seek(SeekFrom::Start(position))?;
+        _ = self.inner.seek(SeekFrom::Start(position))?;
 
         dbg!(position);
         dbg!(&self.inner);

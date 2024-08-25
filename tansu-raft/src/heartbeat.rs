@@ -58,7 +58,7 @@ impl Raft {
                 info!("voter={} prev_log_index={}", voter, prev_log_index);
 
                 if prev_log_index == 0 {
-                    details.insert(
+                    _ = details.insert(
                         voter,
                         Detail {
                             leader_id: leader_id.clone(),
@@ -87,7 +87,7 @@ impl Raft {
                         voter, prev_log_index, log_entry
                     );
 
-                    details.insert(
+                    _ = details.insert(
                         voter,
                         Detail {
                             leader_id: leader_id.clone(),

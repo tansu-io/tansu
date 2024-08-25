@@ -28,7 +28,7 @@ use crate::{
     Raft, Result,
 };
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct Builder<
     N = PhantomData<Box<dyn ProvideConfiguration>>,
     O = PhantomData<Box<dyn ProvideServer>>,

@@ -34,7 +34,7 @@ pub(crate) struct Situation {
 }
 
 impl Situation {
-    pub fn builder() -> SituationBuilder {
+    pub(crate) fn builder() -> SituationBuilder {
         SituationBuilder {
             ..Default::default()
         }
@@ -42,7 +42,7 @@ impl Situation {
 }
 
 #[derive(Default)]
-pub struct SituationBuilder<
+pub(crate) struct SituationBuilder<
     R = PhantomData<Box<dyn PersistentState>>,
     S = PhantomData<Box<dyn Server>>,
     T = PhantomData<Box<dyn KvStore>>,
@@ -55,7 +55,7 @@ pub struct SituationBuilder<
 }
 
 impl SituationBuilder<Box<dyn PersistentState>, Box<dyn Server>, Box<dyn KvStore>, BTreeSet<Url>> {
-    pub fn build(self) -> Result<Situation> {
+    pub(crate) fn build(self) -> Result<Situation> {
         Ok(Situation {
             persistent_state: self.persistent_state,
             server: self.server,
@@ -67,7 +67,7 @@ impl SituationBuilder<Box<dyn PersistentState>, Box<dyn Server>, Box<dyn KvStore
 }
 
 impl<R, S, T, U> SituationBuilder<R, S, T, U> {
-    pub fn persistent_state(
+    pub(crate) fn persistent_state(
         self,
         persistent_state: Box<dyn PersistentState>,
     ) -> SituationBuilder<Box<dyn PersistentState>, S, T, U> {
@@ -79,7 +79,7 @@ impl<R, S, T, U> SituationBuilder<R, S, T, U> {
         }
     }
 
-    pub fn server(self, server: Box<dyn Server>) -> SituationBuilder<R, Box<dyn Server>, T, U> {
+    pub(crate) fn server(self, server: Box<dyn Server>) -> SituationBuilder<R, Box<dyn Server>, T, U> {
         SituationBuilder {
             persistent_state: self.persistent_state,
             server,
@@ -88,7 +88,7 @@ impl<R, S, T, U> SituationBuilder<R, S, T, U> {
         }
     }
 
-    pub fn kv_store(
+    pub(crate) fn kv_store(
         self,
         kv_store: Box<dyn KvStore>,
     ) -> SituationBuilder<R, S, Box<dyn KvStore>, U> {
@@ -100,7 +100,7 @@ impl<R, S, T, U> SituationBuilder<R, S, T, U> {
         }
     }
 
-    pub fn voters(self, voters: BTreeSet<Url>) -> SituationBuilder<R, S, T, BTreeSet<Url>> {
+    pub(crate) fn voters(self, voters: BTreeSet<Url>) -> SituationBuilder<R, S, T, BTreeSet<Url>> {
         SituationBuilder {
             persistent_state: self.persistent_state,
             server: self.server,
@@ -412,13 +412,13 @@ mod tests {
             .voters(BTreeSet::new())
             .build()?;
 
-        situation.transition_to_follower_with_newer_term(&[])?;
+        _ = situation.transition_to_follower_with_newer_term(&[])?;
 
         let post = situation.persistent_state_mut().read()?;
         assert_eq!(current_term, post.current_term());
         assert_eq!(voted_for, post.voted_for());
 
-        situation.transition_to_follower_with_newer_term(&[
+        _ = situation.transition_to_follower_with_newer_term(&[
             Outcome::builder()
                 .term(current_term - 1)
                 .result(false)
@@ -435,7 +435,7 @@ mod tests {
         assert_eq!(current_term, post.current_term());
         assert_eq!(voted_for, post.voted_for());
 
-        situation.transition_to_follower_with_newer_term(&[
+        _ = situation.transition_to_follower_with_newer_term(&[
             Outcome::builder()
                 .term(current_term - 1)
                 .result(false)

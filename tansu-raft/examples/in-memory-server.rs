@@ -19,9 +19,10 @@ use std::{
     ops::RangeFrom,
     time::Duration,
 };
-
+use clap::Command;
+use clap::Arg;
+use clap::ArgAction;
 use bytes::{BufMut, Bytes, BytesMut};
-use clap::{Arg, ArgAction, Command};
 use tansu_raft::{
     blocking::{persistent::PersistentManager, PersistentState, ProvidePersistentState},
     log_key_for_index,
@@ -77,7 +78,7 @@ async fn main() -> Result<()> {
             .with_voters(m.get_many::<Url>("peers").unwrap().fold(
                 BTreeSet::new(),
                 |mut acc, url| {
-                    acc.insert(url.clone());
+                    _ = acc.insert(url.clone());
                     acc
                 },
             ))
@@ -102,7 +103,7 @@ struct Config {
 }
 
 impl Config {
-    pub fn new(election_timeout: Duration, listener: Url) -> Self {
+    pub(crate) fn new(election_timeout: Duration, listener: Url) -> Self {
         Self {
             election_timeout,
             listener,
@@ -111,7 +112,7 @@ impl Config {
 }
 
 impl Configuration for Config {
-    fn election_timeout(&self) -> Result<std::time::Duration> {
+    fn election_timeout(&self) -> Result<Duration> {
         Ok(self.election_timeout)
     }
 
@@ -138,7 +139,7 @@ impl ProvideKvStore for BTreeMapKvFactory {
         let mut db = BTreeMap::new();
         for entry in &self.log_entries {
             index += 1;
-            db.insert(log_key_for_index(index)?, Bytes::from(entry));
+            _ = db.insert(log_key_for_index(index)?, Bytes::from(entry));
         }
 
         Ok(Box::new(BTreeMapKv { db }))
@@ -184,7 +185,7 @@ impl ApplyState for Applicator {
     }
 }
 
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Default)]
+#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Default)]
 pub struct ApplyStateFactory;
 
 impl ProvideApplyState for ApplyStateFactory {
@@ -211,7 +212,7 @@ impl ProvidePersistentState for PersistentStateFactory {
     }
 }
 
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Default)]
+#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Default)]
 pub struct ServerFactory {
     pub commit_index: Index,
     pub last_applied: Index,

@@ -106,7 +106,7 @@ pub async fn server(raft: Raft) -> Result<()> {
 
     let mut listener = tarpc::serde_transport::tcp::listen(&server_address, Json::default).await?;
 
-    listener.config_mut().max_frame_length(usize::MAX);
+    _ = listener.config_mut().max_frame_length(usize::MAX);
     listener
         .filter_map(|r| future::ready(r.ok()))
         .map(tarpc::server::BaseChannel::with_defaults)
@@ -125,10 +125,10 @@ pub async fn server(raft: Raft) -> Result<()> {
 }
 
 async fn spawn(fut: impl Future<Output = ()> + Send + 'static) {
-    tokio::spawn(fut);
+    _ = tokio::spawn(fut);
 }
 
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Default)]
+#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Default)]
 pub struct RaftTcpTarpcClientFactory;
 
 #[async_trait::async_trait]
@@ -211,7 +211,7 @@ impl RaftTcpTarpcClient {
 
     async fn client(hostname: &str, port: u16) -> Result<TarpcRaftClient> {
         let mut transport = tarpc::serde_transport::tcp::connect((hostname, port), Json::default);
-        transport.config_mut().max_frame_length(usize::MAX);
+        _ = transport.config_mut().max_frame_length(usize::MAX);
 
         transport
             .await

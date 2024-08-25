@@ -30,7 +30,7 @@ use url::Url;
 
 use crate::common::AppendEntryDetail;
 
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Default)]
+#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Default)]
 pub struct Applicator;
 
 impl ApplyState for Applicator {
@@ -48,7 +48,7 @@ impl ApplyState for Applicator {
     }
 }
 
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Default)]
+#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Default)]
 pub struct ApplyStateFactory;
 
 impl ProvideApplyState for ApplyStateFactory {
@@ -440,7 +440,7 @@ async fn call_election_leader_by_simple_majority() -> Result<()> {
     let b = Url::parse("tcp://localhost/78987")?;
 
     let mut append_entries_outcome = BTreeMap::new();
-    append_entries_outcome.insert(
+    _ = append_entries_outcome.insert(
         a.clone(),
         Arc::new(|detail: AppendEntryDetail| {
             Outcome::builder()
@@ -451,7 +451,7 @@ async fn call_election_leader_by_simple_majority() -> Result<()> {
         }) as Arc<dyn Fn(AppendEntryDetail) -> Outcome + Send + Sync>,
     );
 
-    append_entries_outcome.insert(
+    _ = append_entries_outcome.insert(
         b.clone(),
         Arc::new(|detail: AppendEntryDetail| {
             Outcome::builder()

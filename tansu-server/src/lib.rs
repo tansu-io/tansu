@@ -13,6 +13,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+
 use std::{
     collections::BTreeMap,
     fmt, io,
@@ -42,8 +43,8 @@ pub mod command;
 pub mod coordinator;
 pub mod raft;
 
-static RAFT_LOG: &'static str = "raft_log";
-static RAFT_STATE: &'static str = "raft_state";
+static RAFT_LOG: &str = "raft_log";
+static RAFT_STATE: &str = "raft_state";
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct State {

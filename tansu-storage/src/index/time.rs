@@ -26,15 +26,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct MemoryTimeProvider<'data> {
     data: &'data [u8],
-}
-
-impl<'data> Default for MemoryTimeProvider<'data> {
-    fn default() -> Self {
-        Self { data: &[] }
-    }
 }
 
 impl<'data> MemoryTimeProvider<'data> {
@@ -240,7 +234,7 @@ where
     S: Read + Seek + Write,
 {
     fn search(&mut self, time: i64, begin: u32, end: u32) -> Result<i64> {
-        let midpoint = begin + end + 1 >> 1;
+        let midpoint = (begin + end + 1) >> 1;
         debug!(?time, ?begin, ?end);
 
         self.entry_at(midpoint)

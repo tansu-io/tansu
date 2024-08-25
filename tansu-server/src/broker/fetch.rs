@@ -108,7 +108,7 @@ impl FetchRequest {
         })
     }
 
-    fn unknown_topic_response<'a>(&self, fetch: &'a FetchTopic) -> Result<FetchableTopicResponse> {
+    fn unknown_topic_response(&self, fetch: &FetchTopic) -> Result<FetchableTopicResponse> {
         Ok(FetchableTopicResponse {
             topic: fetch.topic.clone(),
             topic_id: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
@@ -168,7 +168,7 @@ impl FetchRequest {
                             max_bytes,
                             isolation,
                             detail.name(),
-                            &fetch_partition,
+                            fetch_partition,
                         )
                         .await?;
 

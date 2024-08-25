@@ -1366,9 +1366,7 @@ dependencies = [
 name = "tansu-proxy"
 version = "0.1.0"
 dependencies = [
- "bytes",
  "clap",
- "tansu-kafka-model",
  "tansu-kafka-sans-io",
  "thiserror",
  "tokio",
@@ -1386,9 +1384,6 @@ dependencies = [
  "clap",
  "crc",
  "futures",
- "opentelemetry 0.21.0",
- "opentelemetry-jaeger",
- "opentelemetry_sdk 0.21.2",
  "serde",
  "serde_json",
  "tansu-varint",
@@ -1396,7 +1391,6 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
- "tracing-core",
  "tracing-subscriber",
  "typetag",
  "url",
@@ -1406,8 +1400,6 @@ dependencies = [
 name = "tansu-server"
 version = "0.1.0"
 dependencies = [
- "anyhow",
- "async-trait",
  "bytes",
  "clap",
  "futures",
@@ -1437,7 +1429,6 @@ dependencies = [
 name = "tansu-storage"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "bytes",
  "criterion",
  "glob",
@@ -1449,7 +1440,6 @@ dependencies = [
  "time",
  "tracing",
  "tracing-subscriber",
- "uuid",
 ]
 
 [[package]]
