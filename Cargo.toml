@@ -1,6 +1,14 @@
 [workspace]
 resolver = "2"
-members = ["tansu-*"]
+members = [
+    "tansu-kafka-model",
+    "tansu-kafka-sans-io",
+    "tansu-proxy",
+    "tansu-raft",
+    "tansu-server",
+    "tansu-storage",
+    "tansu-varint",
+]
 
 [workspace.package]
 edition = "2021"
