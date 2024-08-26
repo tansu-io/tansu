@@ -592,6 +592,42 @@ pub struct Inner<S: Debug> {
     state: S,
 }
 
+impl<S> Inner<S>
+where
+    S: Debug,
+{
+    fn missed_heartbeat(&mut self, group_id: &str, now: Instant) -> bool {
+        let original = self.members.len();
+
+        self.members.retain(|member_id, member| {
+            member
+                .last_contact
+                .and_then(|last_contact| now.checked_duration_since(last_contact))
+                .inspect(|duration| {
+                    debug!(
+                        "{member_id}, since last contact: {}ms",
+                        duration.as_millis()
+                    )
+                })
+                .is_some_and(|duration| {
+                    if duration.as_millis()
+                        > u128::try_from(self.session_timeout_ms).unwrap_or(30_000)
+                    {
+                        info!(
+                            "missed heartbeat for {member_id} for {group_id} in generation: {}, after {}ms",
+                            self.generation_id, duration.as_millis()
+                        );
+                        false
+                    } else {
+                        true
+                    }
+                })
+        });
+
+        original > self.members.len()
+    }
+}
+
 impl Default for Inner<Forming> {
     fn default() -> Self {
         Self {
@@ -933,7 +969,12 @@ impl Group for Inner<Forming> {
             );
         }
 
-        if generation_id < self.generation_id {
+        _ = self
+            .members
+            .entry(member_id.to_owned())
+            .and_modify(|member| _ = member.last_contact.replace(now));
+
+        if self.missed_heartbeat(group_id, now) || (generation_id < self.generation_id) {
             return (
                 self,
                 Body::HeartbeatResponse {
@@ -942,11 +983,6 @@ impl Group for Inner<Forming> {
                 },
             );
         }
-
-        _ = self
-            .members
-            .entry(member_id.to_owned())
-            .and_modify(|member| _ = member.last_contact.replace(now));
 
         let body = Body::HeartbeatResponse {
             throttle_time_ms: Some(0),
@@ -1371,7 +1407,7 @@ impl Group for Inner<Formed> {
             );
         }
 
-        if generation_id < self.generation_id {
+        if self.missed_heartbeat(group_id, now) || (generation_id < self.generation_id) {
             return (
                 self,
                 Body::HeartbeatResponse {
@@ -1562,6 +1598,8 @@ impl Group for Inner<Formed> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
     use pretty_assertions::assert_eq;
     use tansu_kafka_sans_io::{
@@ -2687,6 +2725,593 @@ mod tests {
                     assert_eq!(RANGE, protocol_name);
                     assert_eq!(second_member_assignment_03, assignment);
 
+                    s
+                }
+
+                otherwise => panic!("{otherwise:?}"),
+            }
+        };
+
+        let _ = s;
+
+        Ok(())
+    }
+
+    #[test]
+    fn missed_heartbeat() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let s: Wrapper = Inner::<Forming>::default().into();
+
+        let session_timeout_ms = 45_000;
+        let rebalance_timeout_ms = Some(300_000);
+        let group_instance_id = None;
+        let reason = None;
+
+        const CLIENT_ID: &str = "console-consumer";
+        const GROUP_ID: &str = "test-consumer-group";
+        const TOPIC: &str = "test";
+        const RANGE: &str = "range";
+        const COOPERATIVE_STICKY: &str = "cooperative-sticky";
+
+        const PROTOCOL_TYPE: &str = "consumer";
+
+        let first_member_range_meta = Bytes::from_static(b"first_member_range_meta_01");
+        let first_member_sticky_meta = Bytes::from_static(b"first_member_sticky_meta_01");
+
+        let protocols = [
+            JoinGroupRequestProtocol {
+                name: RANGE.into(),
+                metadata: first_member_range_meta.clone(),
+            },
+            JoinGroupRequestProtocol {
+                name: COOPERATIVE_STICKY.into(),
+                metadata: first_member_sticky_meta,
+            },
+        ];
+
+        let now = Instant::now();
+
+        let (s, first_member_id) = match s.join(
+            now,
+            Some(CLIENT_ID),
+            GROUP_ID,
+            session_timeout_ms,
+            rebalance_timeout_ms,
+            "",
+            group_instance_id,
+            PROTOCOL_TYPE,
+            Some(&protocols[..]),
+            reason,
+        ) {
+            (
+                s,
+                Body::JoinGroupResponse {
+                    throttle_time_ms: Some(0),
+                    error_code,
+                    generation_id: -1,
+                    protocol_type: None,
+                    protocol_name: None,
+                    leader,
+                    skip_assignment: Some(false),
+                    members: Some(members),
+                    member_id,
+                },
+            ) => {
+                assert_eq!(error_code, i16::from(ErrorCode::MemberIdRequired));
+                assert!(leader.is_empty());
+                assert!(member_id.starts_with(CLIENT_ID));
+                assert_eq!(0, members.len());
+
+                let (s, join_response) = s.join(
+                    now,
+                    Some(CLIENT_ID),
+                    GROUP_ID,
+                    session_timeout_ms,
+                    rebalance_timeout_ms,
+                    &member_id,
+                    group_instance_id,
+                    PROTOCOL_TYPE,
+                    Some(&protocols[..]),
+                    reason,
+                );
+
+                assert_eq!(session_timeout_ms, s.session_timeout_ms());
+                assert_eq!(rebalance_timeout_ms, s.rebalance_timeout_ms());
+                assert_eq!(Some(PROTOCOL_TYPE), s.protocol_type());
+                assert_eq!(Some(RANGE), s.protocol_name());
+
+                let join_response_expected = Body::JoinGroupResponse {
+                    throttle_time_ms: Some(0),
+                    error_code: ErrorCode::None.into(),
+                    generation_id: 0,
+                    protocol_type: Some(PROTOCOL_TYPE.into()),
+                    protocol_name: Some(RANGE.into()),
+                    leader: member_id.clone(),
+                    skip_assignment: Some(false),
+                    member_id: member_id.clone(),
+                    members: Some(
+                        [JoinGroupResponseMember {
+                            member_id: member_id.clone(),
+                            group_instance_id: None,
+                            metadata: first_member_range_meta.clone(),
+                        }]
+                        .into(),
+                    ),
+                };
+
+                assert_eq!(join_response_expected, join_response);
+
+                (s, member_id)
+            }
+
+            otherwise => panic!("{otherwise:?}"),
+        };
+
+        assert_eq!(1, s.members().len());
+
+        let s = {
+            let first_member_assignment_01 = Bytes::from_static(b"assignment_01");
+
+            let assignments = [SyncGroupRequestAssignment {
+                member_id: first_member_id.clone(),
+                assignment: first_member_assignment_01.clone(),
+            }];
+
+            let generation_id = s.generation_id();
+
+            let (s, sync_response) = s.sync(
+                now,
+                GROUP_ID,
+                generation_id,
+                &first_member_id,
+                group_instance_id,
+                Some(PROTOCOL_TYPE),
+                Some(RANGE),
+                Some(&assignments),
+            );
+
+            let sync_response_expected = Body::SyncGroupResponse {
+                throttle_time_ms: Some(0),
+                error_code: 0,
+                protocol_type: Some(PROTOCOL_TYPE.into()),
+                protocol_name: Some(RANGE.into()),
+                assignment: first_member_assignment_01,
+            };
+
+            assert_eq!(sync_response_expected, sync_response);
+
+            s
+        };
+
+        let s = {
+            let generation_id = s.generation_id();
+
+            let (s, heartbeat_response) = s.heartbeat(
+                now,
+                GROUP_ID,
+                generation_id,
+                &first_member_id,
+                group_instance_id,
+            );
+
+            let heartbeat_response_expected = Body::HeartbeatResponse {
+                throttle_time_ms: Some(0),
+                error_code: ErrorCode::None.into(),
+            };
+
+            assert_eq!(heartbeat_response_expected, heartbeat_response);
+
+            s
+        };
+
+        let second_member_range_meta = Bytes::from_static(b"second_member_range_meta_01");
+        let second_member_sticky_meta = Bytes::from_static(b"second_member_sticky_meta_01");
+
+        let protocols = [
+            JoinGroupRequestProtocol {
+                name: RANGE.into(),
+                metadata: second_member_range_meta.clone(),
+            },
+            JoinGroupRequestProtocol {
+                name: COOPERATIVE_STICKY.into(),
+                metadata: second_member_sticky_meta.clone(),
+            },
+        ];
+
+        let (s, second_member_id, previous_generation) = match s.join(
+            now,
+            Some(CLIENT_ID),
+            GROUP_ID,
+            session_timeout_ms,
+            rebalance_timeout_ms,
+            "",
+            group_instance_id,
+            PROTOCOL_TYPE,
+            Some(&protocols[..]),
+            reason,
+        ) {
+            (
+                s,
+                Body::JoinGroupResponse {
+                    throttle_time_ms: Some(0),
+                    error_code,
+                    generation_id: -1,
+                    protocol_type: None,
+                    protocol_name: None,
+                    leader,
+                    skip_assignment: Some(false),
+                    members: Some(members),
+                    member_id,
+                },
+            ) => {
+                assert_eq!(error_code, i16::from(ErrorCode::MemberIdRequired));
+                assert!(leader.is_empty());
+                assert!(member_id.starts_with(CLIENT_ID));
+                assert_eq!(0, members.len());
+
+                let previous_generation = s.generation_id();
+
+                let (s, join_response) = s.join(
+                    now,
+                    Some(CLIENT_ID),
+                    GROUP_ID,
+                    session_timeout_ms,
+                    rebalance_timeout_ms,
+                    &member_id,
+                    group_instance_id,
+                    PROTOCOL_TYPE,
+                    Some(&protocols[..]),
+                    reason,
+                );
+
+                assert_eq!(s.generation_id(), previous_generation + 1);
+
+                assert_eq!(session_timeout_ms, s.session_timeout_ms());
+                assert_eq!(rebalance_timeout_ms, s.rebalance_timeout_ms());
+                assert_eq!(Some(PROTOCOL_TYPE), s.protocol_type());
+                assert_eq!(Some(RANGE), s.protocol_name());
+
+                let join_response_expected = Body::JoinGroupResponse {
+                    throttle_time_ms: Some(0),
+                    error_code: ErrorCode::None.into(),
+                    generation_id: s.generation_id(),
+                    protocol_type: Some(PROTOCOL_TYPE.into()),
+                    protocol_name: Some(RANGE.into()),
+                    leader: first_member_id.clone(),
+                    skip_assignment: Some(false),
+                    member_id: member_id.clone(),
+                    members: Some([].into()),
+                };
+
+                assert_eq!(join_response_expected, join_response);
+
+                (s, member_id, previous_generation)
+            }
+
+            otherwise => panic!("{otherwise:?}"),
+        };
+
+        assert_eq!(2, s.members().len());
+
+        let s = match s.heartbeat(
+            now,
+            GROUP_ID,
+            previous_generation,
+            &first_member_id,
+            group_instance_id,
+        ) {
+            (
+                s,
+                Body::HeartbeatResponse {
+                    throttle_time_ms: Some(0),
+                    error_code,
+                },
+            ) if error_code == i16::from(ErrorCode::RebalanceInProgress) => s,
+
+            otherwise => panic!("{otherwise:?}"),
+        };
+
+        let s = match s.offset_commit(
+            now,
+            GROUP_ID,
+            Some(previous_generation),
+            Some(&first_member_id),
+            group_instance_id,
+            None,
+            Some(&[OffsetCommitRequestTopic {
+                name: TOPIC.into(),
+                partitions: Some(
+                    (0..=2)
+                        .map(|partition_index| OffsetCommitRequestPartition {
+                            partition_index,
+                            committed_offset: 1,
+                            committed_leader_epoch: Some(0),
+                            commit_timestamp: None,
+                            committed_metadata: Some("".into()),
+                        })
+                        .collect(),
+                ),
+            }]),
+        ) {
+            (
+                s,
+                Body::OffsetCommitResponse {
+                    throttle_time_ms: Some(0),
+                    topics: Some(topics),
+                },
+            ) if topics
+                == [OffsetCommitResponseTopic {
+                    name: TOPIC.into(),
+                    partitions: Some(
+                        (0..=2)
+                            .map(|partition_index| OffsetCommitResponsePartition {
+                                partition_index,
+                                error_code: ErrorCode::None.into(),
+                            })
+                            .collect(),
+                    ),
+                }] =>
+            {
+                s
+            }
+
+            otherwise => panic!("{otherwise:?}"),
+        };
+
+        let s = {
+            let first_member_range_meta = Bytes::from_static(b"first_member_range_meta_02");
+            let first_member_sticky_meta = Bytes::from_static(b"first_member_sticky_meta_02");
+
+            let protocols = [
+                JoinGroupRequestProtocol {
+                    name: RANGE.into(),
+                    metadata: first_member_range_meta.clone(),
+                },
+                JoinGroupRequestProtocol {
+                    name: COOPERATIVE_STICKY.into(),
+                    metadata: first_member_sticky_meta,
+                },
+            ];
+
+            let previous_generation = s.generation_id();
+
+            match s.join(
+                now,
+                Some(CLIENT_ID),
+                GROUP_ID,
+                session_timeout_ms,
+                rebalance_timeout_ms,
+                &first_member_id,
+                group_instance_id,
+                PROTOCOL_TYPE,
+                Some(&protocols),
+                reason,
+            ) {
+                (
+                    s,
+                    Body::JoinGroupResponse {
+                        throttle_time_ms: Some(0),
+                        error_code,
+                        generation_id,
+                        protocol_type,
+                        protocol_name,
+                        leader,
+                        skip_assignment: Some(false),
+                        member_id,
+                        members: Some(members),
+                    },
+                ) => {
+                    assert_eq!(i16::from(ErrorCode::None), error_code);
+                    assert_eq!(previous_generation + 1, generation_id);
+                    assert_eq!(Some(PROTOCOL_TYPE.into()), protocol_type);
+                    assert_eq!(Some(RANGE.into()), protocol_name);
+                    assert_eq!(first_member_id, leader);
+                    assert_eq!(first_member_id, member_id);
+
+                    assert_eq!(
+                        Some(first_member_range_meta),
+                        members
+                            .iter()
+                            .find(|member| member.member_id == first_member_id)
+                            .map(|member| member.metadata.clone())
+                    );
+
+                    assert_eq!(
+                        Some(second_member_range_meta.clone()),
+                        members
+                            .iter()
+                            .find(|member| member.member_id == second_member_id)
+                            .map(|member| member.metadata.clone())
+                    );
+
+                    s
+                }
+
+                otherwise => panic!("{otherwise:?}"),
+            }
+        };
+
+        let s = {
+            let protocols = [
+                JoinGroupRequestProtocol {
+                    name: RANGE.into(),
+                    metadata: second_member_range_meta.clone(),
+                },
+                JoinGroupRequestProtocol {
+                    name: COOPERATIVE_STICKY.into(),
+                    metadata: second_member_sticky_meta.clone(),
+                },
+            ];
+            let unchanged_generation_id = s.generation_id();
+
+            match s.join(
+                now,
+                Some(CLIENT_ID),
+                GROUP_ID,
+                session_timeout_ms,
+                rebalance_timeout_ms,
+                &second_member_id,
+                group_instance_id,
+                PROTOCOL_TYPE,
+                Some(&protocols),
+                reason,
+            ) {
+                (
+                    s,
+                    Body::JoinGroupResponse {
+                        throttle_time_ms: Some(0),
+                        error_code,
+                        generation_id,
+                        protocol_type: Some(protocol_type),
+                        protocol_name: Some(protocol_name),
+                        leader,
+                        skip_assignment: Some(false),
+                        member_id,
+                        members: Some(members),
+                    },
+                ) => {
+                    assert_eq!(i16::from(ErrorCode::None), error_code);
+                    assert_eq!(unchanged_generation_id, generation_id);
+                    assert_eq!(PROTOCOL_TYPE, protocol_type);
+                    assert_eq!(RANGE, protocol_name);
+                    assert_eq!(first_member_id, leader);
+                    assert_eq!(second_member_id, member_id);
+                    assert_eq!(0, members.len());
+
+                    s
+                }
+
+                otherwise => panic!("{otherwise:?}"),
+            }
+        };
+
+        let second_member_assignment_02 = Bytes::from_static(b"second_member_assignment_02");
+
+        let s = {
+            let first_member_assignment_02 = Bytes::from_static(b"first_member_assignment_02");
+
+            let assignments = [
+                SyncGroupRequestAssignment {
+                    member_id: first_member_id.clone(),
+                    assignment: first_member_assignment_02.clone(),
+                },
+                SyncGroupRequestAssignment {
+                    member_id: second_member_id.clone(),
+                    assignment: second_member_assignment_02.clone(),
+                },
+            ];
+
+            let generation_id = s.generation_id();
+
+            let (s, sync_response) = s.sync(
+                now,
+                GROUP_ID,
+                generation_id,
+                &first_member_id,
+                group_instance_id,
+                Some(PROTOCOL_TYPE),
+                Some(RANGE),
+                Some(&assignments),
+            );
+
+            let sync_response_expected = Body::SyncGroupResponse {
+                throttle_time_ms: Some(0),
+                error_code: 0,
+                protocol_type: Some(PROTOCOL_TYPE.into()),
+                protocol_name: Some(RANGE.into()),
+                assignment: first_member_assignment_02,
+            };
+
+            assert_eq!(sync_response_expected, sync_response);
+
+            s
+        };
+
+        let s = {
+            let generation_id = s.generation_id();
+
+            let assignments = [];
+
+            let (s, sync_response) = s.sync(
+                now,
+                GROUP_ID,
+                generation_id,
+                &second_member_id,
+                group_instance_id,
+                Some(PROTOCOL_TYPE),
+                Some(RANGE),
+                Some(&assignments),
+            );
+
+            let sync_response_expected = Body::SyncGroupResponse {
+                throttle_time_ms: Some(0),
+                error_code: 0,
+                protocol_type: Some(PROTOCOL_TYPE.into()),
+                protocol_name: Some(RANGE.into()),
+                assignment: second_member_assignment_02,
+            };
+
+            assert_eq!(sync_response_expected, sync_response);
+
+            s
+        };
+
+        let s = {
+            let now = now
+                .checked_add(Duration::from_millis(
+                    u64::try_from(session_timeout_ms).expect("session_time_ms") - 1,
+                ))
+                .expect("now");
+
+            let generation_id = s.generation_id();
+
+            match s.heartbeat(
+                now,
+                GROUP_ID,
+                generation_id,
+                &first_member_id,
+                group_instance_id,
+            ) {
+                (
+                    s,
+                    Body::HeartbeatResponse {
+                        throttle_time_ms: Some(0),
+                        error_code,
+                    },
+                ) => {
+                    assert_eq!(i16::from(ErrorCode::None), error_code);
+                    s
+                }
+
+                otherwise => panic!("{otherwise:?}"),
+            }
+        };
+
+        let s = {
+            let now = now
+                .checked_add(Duration::from_millis(
+                    u64::try_from(session_timeout_ms).expect("session_time_ms") + 1,
+                ))
+                .expect("now");
+
+            let generation_id = s.generation_id();
+
+            match s.heartbeat(
+                now,
+                GROUP_ID,
+                generation_id,
+                &second_member_id,
+                group_instance_id,
+            ) {
+                (
+                    s,
+                    Body::HeartbeatResponse {
+                        throttle_time_ms: Some(0),
+                        error_code,
+                    },
+                ) => {
+                    assert_eq!(i16::from(ErrorCode::RebalanceInProgress), error_code);
                     s
                 }
 
