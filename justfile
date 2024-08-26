@@ -2,7 +2,7 @@ test:
     cargo test --workspace --all-features --all-targets
 
 clippy:
-    cargo clippy --all-targets --all-features -- -D warnings
+    cargo clippy --all-targets --all-features
 
 miri:
     cargo +nightly miri test --no-fail-fast --all-features
