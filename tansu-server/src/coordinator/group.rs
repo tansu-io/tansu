@@ -17,7 +17,7 @@ pub mod administrator;
 pub mod consumer;
 
 use crate::Result;
-use administrator::{Controller, Fresh, Inner, Wrapper};
+use administrator::{Controller, Forming, Inner, Wrapper};
 use std::{collections::BTreeMap, fmt::Debug};
 use tansu_kafka_sans_io::{
     join_group_request::JoinGroupRequestProtocol,
@@ -194,7 +194,7 @@ pub struct GroupProvider;
 
 impl ProvideCoordinator for GroupProvider {
     fn provide_coordinator(&mut self) -> Result<Box<dyn Coordinator>> {
-        let wrapper: Wrapper = Inner::<Fresh>::default().into();
+        let wrapper: Wrapper = Inner::<Forming>::default().into();
         Ok(Box::new(Controller::new(wrapper)) as Box<dyn Coordinator>)
     }
 }

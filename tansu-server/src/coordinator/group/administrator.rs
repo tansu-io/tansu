@@ -25,8 +25,7 @@ use tansu_kafka_sans_io::{
     offset_commit_response::{OffsetCommitResponsePartition, OffsetCommitResponseTopic},
     offset_fetch_request::{OffsetFetchRequestGroup, OffsetFetchRequestTopic},
     offset_fetch_response::{
-        OffsetFetchResponseGroup, OffsetFetchResponsePartition, OffsetFetchResponsePartitions,
-        OffsetFetchResponseTopic, OffsetFetchResponseTopics,
+        OffsetFetchResponseGroup, OffsetFetchResponsePartitions, OffsetFetchResponseTopics,
     },
     sync_group_request::SyncGroupRequestAssignment,
     Body, ErrorCode,
@@ -114,27 +113,13 @@ pub trait Group: Debug + Send {
 
 #[derive(Debug)]
 pub enum Wrapper {
-    Fresh(Inner<Fresh>),
     Forming(Inner<Forming>),
-    Syncing(Inner<Syncing>),
     Formed(Inner<Formed>),
-}
-
-impl From<Inner<Fresh>> for Wrapper {
-    fn from(value: Inner<Fresh>) -> Self {
-        Self::Fresh(value)
-    }
 }
 
 impl From<Inner<Forming>> for Wrapper {
     fn from(value: Inner<Forming>) -> Self {
         Self::Forming(value)
-    }
-}
-
-impl From<Inner<Syncing>> for Wrapper {
-    fn from(value: Inner<Syncing>) -> Self {
-        Self::Syncing(value)
     }
 }
 
@@ -147,70 +132,49 @@ impl From<Inner<Formed>> for Wrapper {
 impl Wrapper {
     pub fn generation_id(&self) -> i32 {
         match self {
-            Self::Fresh(inner) => inner.generation_id,
             Self::Forming(inner) => inner.generation_id,
-            Self::Syncing(inner) => inner.generation_id,
             Self::Formed(inner) => inner.generation_id,
         }
     }
 
     pub fn session_timeout_ms(&self) -> i32 {
         match self {
-            Self::Fresh(inner) => inner.session_timeout_ms,
             Self::Forming(inner) => inner.session_timeout_ms,
-            Self::Syncing(inner) => inner.session_timeout_ms,
             Self::Formed(inner) => inner.session_timeout_ms,
         }
     }
 
     pub fn rebalance_timeout_ms(&self) -> Option<i32> {
         match self {
-            Self::Fresh(inner) => inner.rebalance_timeout_ms,
             Self::Forming(inner) => inner.rebalance_timeout_ms,
-            Self::Syncing(inner) => inner.rebalance_timeout_ms,
             Self::Formed(inner) => inner.rebalance_timeout_ms,
         }
     }
 
     pub fn protocol_type(&self) -> Option<&str> {
         match self {
-            Self::Fresh(_inner) => None,
-            Self::Forming(inner) => Some(inner.state.protocol_type.as_str()),
-            Self::Syncing(inner) => Some(inner.state.protocol_type.as_str()),
+            Self::Forming(inner) => inner.state.protocol_type.as_deref(),
             Self::Formed(inner) => Some(inner.state.protocol_type.as_str()),
         }
     }
 
     pub fn protocol_name(&self) -> Option<&str> {
         match self {
-            Self::Fresh(_inner) => None,
-            Self::Forming(inner) => Some(inner.state.protocol_name.as_str()),
-            Self::Syncing(inner) => Some(inner.state.protocol_name.as_str()),
+            Self::Forming(inner) => inner.state.protocol_name.as_deref(),
             Self::Formed(inner) => Some(inner.state.protocol_name.as_str()),
         }
     }
 
     pub fn leader(&self) -> Option<&str> {
         match self {
-            Self::Fresh(_inner) => None,
             Self::Forming(inner) => inner.state.leader.as_deref(),
-            Self::Syncing(inner) => Some(inner.state.leader.as_str()),
             Self::Formed(inner) => Some(inner.state.leader.as_str()),
         }
     }
 
     fn members(&self) -> Vec<JoinGroupResponseMember> {
         match self {
-            Wrapper::Fresh(_) => vec![],
-
             Wrapper::Forming(inner) => inner
-                .members
-                .values()
-                .cloned()
-                .map(|member| member.join_response)
-                .collect(),
-
-            Wrapper::Syncing(inner) => inner
                 .members
                 .values()
                 .cloned()
@@ -242,22 +206,6 @@ impl Wrapper {
         reason: Option<&str>,
     ) -> (Wrapper, Body) {
         match self {
-            Self::Fresh(inner) => {
-                let (state, body) = inner.join(
-                    now,
-                    client_id,
-                    group_id,
-                    session_timeout_ms,
-                    rebalance_timeout_ms,
-                    member_id,
-                    group_instance_id,
-                    protocol_type,
-                    protocols,
-                    reason,
-                );
-                (state, body)
-            }
-
             Self::Forming(inner) => {
                 let (state, body) = inner.join(
                     now,
@@ -272,22 +220,6 @@ impl Wrapper {
                     reason,
                 );
                 (state.into(), body)
-            }
-
-            Self::Syncing(inner) => {
-                let (state, body) = inner.join(
-                    now,
-                    client_id,
-                    group_id,
-                    session_timeout_ms,
-                    rebalance_timeout_ms,
-                    member_id,
-                    group_instance_id,
-                    protocol_type,
-                    protocols,
-                    reason,
-                );
-                (state, body)
             }
 
             Self::Formed(inner) => {
@@ -322,19 +254,6 @@ impl Wrapper {
         assignments: Option<&[SyncGroupRequestAssignment]>,
     ) -> (Wrapper, Body) {
         match self {
-            Wrapper::Fresh(inner) => {
-                let (state, body) = inner.sync(
-                    now,
-                    group_id,
-                    generation_id,
-                    member_id,
-                    group_instance_id,
-                    protocol_name,
-                    assignments,
-                );
-                (state.into(), body)
-            }
-
             Wrapper::Forming(inner) => {
                 let (state, body) = inner.sync(
                     now,
@@ -346,19 +265,6 @@ impl Wrapper {
                     assignments,
                 );
                 (state, body)
-            }
-
-            Wrapper::Syncing(inner) => {
-                let (state, body) = inner.sync(
-                    now,
-                    group_id,
-                    generation_id,
-                    member_id,
-                    group_instance_id,
-                    protocol_name,
-                    assignments,
-                );
-                (state.into(), body)
             }
 
             Wrapper::Formed(inner) => {
@@ -385,19 +291,9 @@ impl Wrapper {
         members: Option<&[MemberIdentity]>,
     ) -> (Wrapper, Body) {
         match self {
-            Wrapper::Fresh(inner) => {
-                let (state, body) = inner.leave(now, group_id, member_id, members);
-                (state.into(), body)
-            }
-
             Wrapper::Forming(inner) => {
                 let (state, body) = inner.leave(now, group_id, member_id, members);
                 (state.into(), body)
-            }
-
-            Wrapper::Syncing(inner) => {
-                let (state, body) = inner.leave(now, group_id, member_id, members);
-                (state, body)
             }
 
             Wrapper::Formed(inner) => {
@@ -420,33 +316,7 @@ impl Wrapper {
         topics: Option<&[OffsetCommitRequestTopic]>,
     ) -> (Wrapper, Body) {
         match self {
-            Wrapper::Fresh(inner) => {
-                let (state, body) = inner.offset_commit(
-                    now,
-                    group_id,
-                    generation_id_or_member_epoch,
-                    member_id,
-                    group_instance_id,
-                    retention_time_ms,
-                    topics,
-                );
-                (state.into(), body)
-            }
-
             Wrapper::Forming(inner) => {
-                let (state, body) = inner.offset_commit(
-                    now,
-                    group_id,
-                    generation_id_or_member_epoch,
-                    member_id,
-                    group_instance_id,
-                    retention_time_ms,
-                    topics,
-                );
-                (state.into(), body)
-            }
-
-            Wrapper::Syncing(inner) => {
                 let (state, body) = inner.offset_commit(
                     now,
                     group_id,
@@ -484,19 +354,7 @@ impl Wrapper {
         require_stable: Option<bool>,
     ) -> (Wrapper, Body) {
         match self {
-            Wrapper::Fresh(inner) => {
-                let (state, body) =
-                    inner.offset_fetch(now, group_id, topics, groups, require_stable);
-                (state.into(), body)
-            }
-
             Wrapper::Forming(inner) => {
-                let (state, body) =
-                    inner.offset_fetch(now, group_id, topics, groups, require_stable);
-                (state.into(), body)
-            }
-
-            Wrapper::Syncing(inner) => {
                 let (state, body) =
                     inner.offset_fetch(now, group_id, topics, groups, require_stable);
                 (state.into(), body)
@@ -520,19 +378,7 @@ impl Wrapper {
         group_instance_id: Option<&str>,
     ) -> (Wrapper, Body) {
         match self {
-            Wrapper::Fresh(inner) => {
-                let (state, body) =
-                    inner.heartbeat(now, group_id, generation_id, member_id, group_instance_id);
-                (state.into(), body)
-            }
-
             Wrapper::Forming(inner) => {
-                let (state, body) =
-                    inner.heartbeat(now, group_id, generation_id, member_id, group_instance_id);
-                (state.into(), body)
-            }
-
-            Wrapper::Syncing(inner) => {
                 let (state, body) =
                     inner.heartbeat(now, group_id, generation_id, member_id, group_instance_id);
                 (state.into(), body)
@@ -721,22 +567,11 @@ impl Coordinator for Controller {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct Fresh;
-
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Forming {
-    protocol_type: String,
-    protocol_name: String,
+    protocol_type: Option<String>,
+    protocol_name: Option<String>,
     leader: Option<String>,
-}
-
-#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct Syncing {
-    protocol_type: String,
-    protocol_name: String,
-    leader: String,
-    assignments: BTreeMap<String, Bytes>,
 }
 
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -757,15 +592,15 @@ pub struct Inner<S: Debug> {
     state: S,
 }
 
-impl Default for Inner<Fresh> {
+impl Default for Inner<Forming> {
     fn default() -> Self {
         Self {
             session_timeout_ms: 0,
             rebalance_timeout_ms: None,
             group_instance_id: None,
             members: BTreeMap::new(),
-            generation_id: 0,
-            state: Fresh,
+            generation_id: -1,
+            state: Forming::default(),
         }
     }
 }
@@ -774,253 +609,6 @@ impl Default for Inner<Fresh> {
 pub struct Member {
     join_response: JoinGroupResponseMember,
     last_contact: Option<Instant>,
-}
-
-impl Group for Inner<Fresh> {
-    type JoinState = Wrapper;
-    type SyncState = Inner<Fresh>;
-    type HeartbeatState = Inner<Fresh>;
-    type LeaveState = Inner<Fresh>;
-    type OffsetCommitState = Inner<Fresh>;
-    type OffsetFetchState = Inner<Fresh>;
-
-    #[instrument]
-    fn join(
-        self,
-        now: Instant,
-        client_id: Option<&str>,
-        group_id: &str,
-        session_timeout_ms: i32,
-        rebalance_timeout_ms: Option<i32>,
-        member_id: &str,
-        group_instance_id: Option<&str>,
-        protocol_type: &str,
-        protocols: Option<&[JoinGroupRequestProtocol]>,
-        reason: Option<&str>,
-    ) -> (Self::JoinState, Body) {
-        if let Some(client_id) = client_id {
-            debug!(?client_id);
-
-            if member_id.is_empty() {
-                let member_id = format!("{client_id}-{}", Uuid::new_v4());
-
-                let body = Body::JoinGroupResponse {
-                    throttle_time_ms: Some(0),
-                    error_code: ErrorCode::MemberIdRequired.into(),
-                    generation_id: -1,
-                    protocol_type: None,
-                    protocol_name: None,
-                    leader: String::from(""),
-                    skip_assignment: Some(false),
-                    member_id,
-                    members: Some([].into()),
-                };
-
-                return (self.into(), body);
-            }
-        }
-
-        let generation_id = 0;
-
-        let Some(protocols) = protocols else {
-            let body = Body::JoinGroupResponse {
-                throttle_time_ms: Some(0),
-                error_code: ErrorCode::InvalidRequest.into(),
-                generation_id,
-                protocol_type: Some(String::from(protocol_type)),
-                protocol_name: None,
-                leader: String::from(""),
-                skip_assignment: None,
-                member_id: String::from(""),
-                members: Some([].into()),
-            };
-
-            return (self.into(), body);
-        };
-
-        let protocol = &protocols[0];
-        debug!(?protocol);
-
-        let join_response = JoinGroupResponseMember {
-            member_id: member_id.to_string(),
-            group_instance_id: group_instance_id
-                .map(|group_instance_id| group_instance_id.to_owned()),
-            metadata: protocol.metadata.clone(),
-        };
-
-        let state = {
-            let mut members = BTreeMap::new();
-            _ = members.insert(
-                member_id.to_owned(),
-                Member {
-                    join_response: join_response.clone(),
-                    last_contact: Some(now),
-                },
-            );
-
-            debug!(?members);
-
-            Inner {
-                generation_id: 0,
-                session_timeout_ms,
-                rebalance_timeout_ms,
-                group_instance_id: None,
-                members,
-                state: Forming {
-                    protocol_name: protocol.name.as_str().to_owned(),
-                    protocol_type: protocol_type.to_owned(),
-                    leader: Some(member_id.to_owned()),
-                },
-            }
-        };
-
-        let body = {
-            let members = Some(vec![join_response]);
-
-            Body::JoinGroupResponse {
-                throttle_time_ms: Some(0),
-                error_code: ErrorCode::None.into(),
-                generation_id,
-                protocol_name: Some(protocol.name.clone()),
-                protocol_type: Some(protocol_type.to_owned()),
-                leader: member_id.to_owned(),
-                skip_assignment: Some(false),
-                member_id: member_id.to_owned(),
-                members,
-            }
-        };
-
-        (state.into(), body)
-    }
-
-    #[instrument]
-    fn sync(
-        self,
-        now: Instant,
-        group_id: &str,
-        generation_id: i32,
-        member_id: &str,
-        group_instance_id: Option<&str>,
-        protocol_name: Option<&str>,
-        assignments: Option<&[SyncGroupRequestAssignment]>,
-    ) -> (Self::SyncState, Body) {
-        let body = Body::SyncGroupResponse {
-            throttle_time_ms: Some(0),
-            error_code: ErrorCode::UnknownMemberId.into(),
-            protocol_name: protocol_name.map(|protocol_name| protocol_name.to_owned()),
-            protocol_type: None,
-            assignment: Bytes::new(),
-        };
-
-        (self, body)
-    }
-
-    #[instrument]
-    fn heartbeat(
-        self,
-        now: Instant,
-        group_id: &str,
-        generation_id: i32,
-        member_id: &str,
-        group_instance_id: Option<&str>,
-    ) -> (Self::HeartbeatState, Body) {
-        let body = Body::HeartbeatResponse {
-            throttle_time_ms: Some(0),
-            error_code: ErrorCode::UnknownMemberId.into(),
-        };
-
-        (self, body)
-    }
-
-    #[instrument]
-    fn leave(
-        self,
-        now: Instant,
-        group_id: &str,
-        member_id: Option<&str>,
-        members: Option<&[MemberIdentity]>,
-    ) -> (Self::LeaveState, Body) {
-        let body = Body::LeaveGroupResponse {
-            throttle_time_ms: Some(0),
-            error_code: ErrorCode::UnknownMemberId.into(),
-            members: Some([].into()),
-        };
-
-        (self, body)
-    }
-
-    #[instrument]
-    fn offset_commit(
-        self,
-        now: Instant,
-        group_id: &str,
-        generation_id_or_member_epoch: Option<i32>,
-        member_id: Option<&str>,
-        group_instance_id: Option<&str>,
-        retention_time_ms: Option<i64>,
-        topics: Option<&[OffsetCommitRequestTopic]>,
-    ) -> (Self::OffsetCommitState, Body) {
-        let body = Body::OffsetCommitResponse {
-            throttle_time_ms: Some(0),
-            topics: topics.map(|topics| {
-                topics
-                    .iter()
-                    .map(|topic| OffsetCommitResponseTopic {
-                        name: topic.name.clone(),
-                        partitions: topic.partitions.as_ref().map(|partitions| {
-                            partitions
-                                .iter()
-                                .map(|partition| OffsetCommitResponsePartition {
-                                    partition_index: partition.partition_index,
-                                    error_code: ErrorCode::UnknownMemberId.into(),
-                                })
-                                .collect()
-                        }),
-                    })
-                    .collect()
-            }),
-        };
-
-        (self, body)
-    }
-
-    #[instrument]
-    fn offset_fetch(
-        self,
-        now: Instant,
-        group_id: Option<&str>,
-        topics: Option<&[OffsetFetchRequestTopic]>,
-        groups: Option<&[OffsetFetchRequestGroup]>,
-        require_stable: Option<bool>,
-    ) -> (Self::OffsetFetchState, Body) {
-        let body = Body::OffsetFetchResponse {
-            throttle_time_ms: Some(0),
-            topics: topics.map(|topics| {
-                topics
-                    .iter()
-                    .map(|topic| OffsetFetchResponseTopic {
-                        name: topic.name.clone(),
-                        partitions: topic.partition_indexes.as_ref().map(|partition_indexes| {
-                            partition_indexes
-                                .iter()
-                                .map(|partition_index| OffsetFetchResponsePartition {
-                                    partition_index: *partition_index,
-                                    committed_offset: -1,
-                                    committed_leader_epoch: None,
-                                    metadata: None,
-                                    error_code: ErrorCode::UnknownMemberId.into(),
-                                })
-                                .collect()
-                        }),
-                    })
-                    .collect()
-            }),
-            error_code: Some(ErrorCode::UnknownMemberId.into()),
-            groups: None,
-        };
-
-        (self, body)
-    }
 }
 
 impl Group for Inner<Forming> {
@@ -1082,26 +670,37 @@ impl Group for Inner<Forming> {
             return (self, body);
         };
 
-        let Some(protocol) = protocols
-            .iter()
-            .find(|protocol| protocol.name == self.state.protocol_name)
-        else {
-            let body = Body::JoinGroupResponse {
-                throttle_time_ms: Some(0),
-                error_code: ErrorCode::InconsistentGroupProtocol.into(),
-                generation_id: self.generation_id,
-                protocol_type: Some(String::from(protocol_type)),
-                protocol_name: Some(self.state.protocol_name.clone()),
-                leader: String::from(""),
-                skip_assignment: None,
-                member_id: String::from(""),
-                members: Some([].into()),
-            };
+        let protocol = if let Some(protocol_name) = self.state.protocol_name.as_deref() {
+            if let Some(protocol) = protocols
+                .iter()
+                .find(|protocol| protocol.name == protocol_name)
+            {
+                protocol
+            } else {
+                let body = Body::JoinGroupResponse {
+                    throttle_time_ms: Some(0),
+                    error_code: ErrorCode::InconsistentGroupProtocol.into(),
+                    generation_id: self.generation_id,
+                    protocol_type: Some(protocol_type.to_owned()),
+                    protocol_name: self.state.protocol_name.clone(),
+                    leader: String::from(""),
+                    skip_assignment: None,
+                    member_id: String::from(""),
+                    members: Some([].into()),
+                };
 
-            return (self, body);
+                return (self, body);
+            }
+        } else {
+            self.state.protocol_type = Some(protocol_type.to_owned());
+            self.state.protocol_name = Some(protocols[0].name.as_str().to_owned());
+
+            self.session_timeout_ms = session_timeout_ms;
+            self.rebalance_timeout_ms = rebalance_timeout_ms;
+
+            &protocols[0]
         };
 
-        debug!(?protocol);
         debug!(?member_id, ?self.members);
 
         match self.members.insert(
@@ -1148,8 +747,8 @@ impl Group for Inner<Forming> {
                 throttle_time_ms: Some(0),
                 error_code: ErrorCode::None.into(),
                 generation_id: self.generation_id,
-                protocol_type: Some(self.state.protocol_type.clone()),
-                protocol_name: Some(self.state.protocol_name.clone()),
+                protocol_type: self.state.protocol_type.clone(),
+                protocol_name: self.state.protocol_name.clone(),
                 leader: self
                     .state
                     .leader
@@ -1194,8 +793,8 @@ impl Group for Inner<Forming> {
             let body = Body::SyncGroupResponse {
                 throttle_time_ms: Some(0),
                 error_code: ErrorCode::UnknownMemberId.into(),
-                protocol_type: Some(self.state.protocol_type.clone()),
-                protocol_name: Some(self.state.protocol_name.clone()),
+                protocol_type: self.state.protocol_type.clone(),
+                protocol_name: self.state.protocol_name.clone(),
                 assignment: Bytes::from_static(b""),
             };
 
@@ -1208,8 +807,8 @@ impl Group for Inner<Forming> {
             let body = Body::SyncGroupResponse {
                 throttle_time_ms: Some(0),
                 error_code: ErrorCode::IllegalGeneration.into(),
-                protocol_type: Some(self.state.protocol_type.clone()),
-                protocol_name: Some(self.state.protocol_name.clone()),
+                protocol_type: self.state.protocol_type.clone(),
+                protocol_name: self.state.protocol_name.clone(),
                 assignment: Bytes::from_static(b""),
             };
 
@@ -1220,8 +819,8 @@ impl Group for Inner<Forming> {
             let body = Body::SyncGroupResponse {
                 throttle_time_ms: Some(0),
                 error_code: ErrorCode::RebalanceInProgress.into(),
-                protocol_type: Some(self.state.protocol_type.clone()),
-                protocol_name: Some(self.state.protocol_name.clone()),
+                protocol_type: self.state.protocol_type.clone(),
+                protocol_name: self.state.protocol_name.clone(),
                 assignment: Bytes::from_static(b""),
             };
 
@@ -1242,8 +841,8 @@ impl Group for Inner<Forming> {
             let body = Body::SyncGroupResponse {
                 throttle_time_ms: Some(0),
                 error_code: ErrorCode::RebalanceInProgress.into(),
-                protocol_type: Some(self.state.protocol_type.clone()),
-                protocol_name: Some(self.state.protocol_name.clone()),
+                protocol_type: self.state.protocol_type.clone(),
+                protocol_name: self.state.protocol_name.clone(),
                 assignment: Bytes::from_static(b""),
             };
 
@@ -1254,8 +853,8 @@ impl Group for Inner<Forming> {
             let body = Body::SyncGroupResponse {
                 throttle_time_ms: Some(0),
                 error_code: ErrorCode::RebalanceInProgress.into(),
-                protocol_type: Some(self.state.protocol_type.clone()),
-                protocol_name: Some(self.state.protocol_name.clone()),
+                protocol_type: self.state.protocol_type.clone(),
+                protocol_name: self.state.protocol_name.clone(),
                 assignment: Bytes::from_static(b""),
             };
 
@@ -1276,8 +875,8 @@ impl Group for Inner<Forming> {
         let body = Body::SyncGroupResponse {
             throttle_time_ms: Some(0),
             error_code: ErrorCode::None.into(),
-            protocol_type: Some(self.state.protocol_type.clone()),
-            protocol_name: Some(self.state.protocol_name.clone()),
+            protocol_type: self.state.protocol_type.clone(),
+            protocol_name: self.state.protocol_name.clone(),
             assignment: assignments
                 .get(member_id)
                 .cloned()
@@ -1293,8 +892,8 @@ impl Group for Inner<Forming> {
             members: self.members,
             generation_id: self.generation_id,
             state: Formed {
-                protocol_name: self.state.protocol_name,
-                protocol_type: self.state.protocol_type,
+                protocol_name: self.state.protocol_name.expect("protocol_name"),
+                protocol_type: self.state.protocol_type.expect("protocol_type"),
                 leader: member_id.to_owned(),
                 assignments,
             },
@@ -1474,285 +1073,6 @@ impl Group for Inner<Forming> {
     }
 }
 
-impl Group for Inner<Syncing> {
-    type JoinState = Wrapper;
-    type SyncState = Inner<Syncing>;
-    type HeartbeatState = Inner<Formed>;
-    type LeaveState = Wrapper;
-    type OffsetCommitState = Inner<Syncing>;
-    type OffsetFetchState = Inner<Syncing>;
-
-    #[instrument]
-    fn join(
-        mut self,
-        now: Instant,
-        client_id: Option<&str>,
-        group_id: &str,
-        session_timeout_ms: i32,
-        rebalance_timeout_ms: Option<i32>,
-        member_id: &str,
-        group_instance_id: Option<&str>,
-        protocol_type: &str,
-        protocols: Option<&[JoinGroupRequestProtocol]>,
-        reason: Option<&str>,
-    ) -> (Self::JoinState, Body) {
-        if let Some(client_id) = client_id {
-            if member_id.is_empty() {
-                let member_id = format!("{client_id}-{}", Uuid::new_v4());
-
-                let body = Body::JoinGroupResponse {
-                    throttle_time_ms: Some(0),
-                    error_code: ErrorCode::MemberIdRequired.into(),
-                    generation_id: -1,
-                    protocol_type: None,
-                    protocol_name: None,
-                    leader: String::from(""),
-                    skip_assignment: Some(false),
-                    member_id,
-                    members: Some([].into()),
-                };
-
-                return (self.into(), body);
-            }
-        }
-
-        let Some(protocols) = protocols else {
-            let body = Body::JoinGroupResponse {
-                throttle_time_ms: Some(0),
-                error_code: ErrorCode::InvalidRequest.into(),
-                generation_id: self.generation_id,
-                protocol_type: Some(String::from(protocol_type)),
-                protocol_name: None,
-                leader: String::from(""),
-                skip_assignment: None,
-                member_id: String::from(""),
-                members: Some([].into()),
-            };
-
-            return (self.into(), body);
-        };
-
-        let Some(protocol) = protocols
-            .iter()
-            .find(|protocol| protocol.name == self.state.protocol_name)
-        else {
-            let body = Body::JoinGroupResponse {
-                throttle_time_ms: Some(0),
-                error_code: ErrorCode::InconsistentGroupProtocol.into(),
-                generation_id: self.generation_id,
-                protocol_type: Some(String::from(protocol_type)),
-                protocol_name: Some(self.state.protocol_name.clone()),
-                leader: String::from(""),
-                skip_assignment: None,
-                member_id: String::from(""),
-                members: Some([].into()),
-            };
-
-            return (self.into(), body);
-        };
-
-        let protocol_type = self.state.protocol_type.clone();
-        let protocol_name = self.state.protocol_name.clone();
-
-        let state: Wrapper = match self.members.insert(
-            member_id.to_owned(),
-            Member {
-                join_response: JoinGroupResponseMember {
-                    member_id: member_id.to_string(),
-                    group_instance_id: group_instance_id.map(|s| s.to_owned()),
-                    metadata: protocol.metadata.clone(),
-                },
-                last_contact: Some(now),
-            },
-        ) {
-            Some(Member {
-                join_response: JoinGroupResponseMember { metadata, .. },
-                ..
-            }) => {
-                if metadata == protocol.metadata {
-                    self.into()
-                } else {
-                    Inner {
-                        generation_id: self.generation_id + 1,
-                        session_timeout_ms: self.session_timeout_ms,
-                        rebalance_timeout_ms: self.rebalance_timeout_ms,
-                        group_instance_id: self.group_instance_id,
-                        members: self.members,
-                        state: Forming {
-                            protocol_type: self.state.protocol_type,
-                            protocol_name: self.state.protocol_name,
-                            leader: Some(self.state.leader),
-                        },
-                    }
-                    .into()
-                }
-            }
-
-            None => Inner {
-                generation_id: self.generation_id + 1,
-                session_timeout_ms: self.session_timeout_ms,
-                rebalance_timeout_ms: self.rebalance_timeout_ms,
-                group_instance_id: self.group_instance_id,
-                members: self.members,
-                state: Forming {
-                    protocol_type: self.state.protocol_type,
-                    protocol_name: self.state.protocol_name,
-                    leader: Some(self.state.leader),
-                },
-            }
-            .into(),
-        };
-
-        let body = {
-            let members = state.members();
-
-            Body::JoinGroupResponse {
-                throttle_time_ms: Some(0),
-                error_code: ErrorCode::None.into(),
-                generation_id: state.generation_id(),
-                protocol_type: Some(protocol_type),
-                protocol_name: Some(protocol_name),
-                leader: String::from(""),
-                skip_assignment: None,
-                member_id: member_id.to_string(),
-                members: Some(members),
-            }
-        };
-
-        (state, body)
-    }
-
-    #[instrument]
-    fn sync(
-        self,
-        now: Instant,
-        group_id: &str,
-        generation_id: i32,
-        member_id: &str,
-        group_instance_id: Option<&str>,
-        protocol_name: Option<&str>,
-        assignments: Option<&[SyncGroupRequestAssignment]>,
-    ) -> (Self::SyncState, Body) {
-        todo!()
-    }
-
-    #[instrument]
-    fn heartbeat(
-        self,
-        now: Instant,
-        group_id: &str,
-        generation_id: i32,
-        member_id: &str,
-        group_instance_id: Option<&str>,
-    ) -> (Self::HeartbeatState, Body) {
-        todo!()
-    }
-
-    #[instrument]
-    fn leave(
-        mut self,
-        now: Instant,
-        group_id: &str,
-        member_id: Option<&str>,
-        members: Option<&[MemberIdentity]>,
-    ) -> (Self::LeaveState, Body) {
-        let members = if let Some(member_id) = member_id {
-            vec![MemberResponse {
-                member_id: member_id.to_owned(),
-                group_instance_id: None,
-                error_code: {
-                    if self.members.remove(member_id).is_some() {
-                        ErrorCode::None.into()
-                    } else {
-                        ErrorCode::UnknownMemberId.into()
-                    }
-                },
-            }]
-        } else {
-            members.map_or(vec![], |members| {
-                members
-                    .iter()
-                    .map(|member| MemberResponse {
-                        member_id: member.member_id.clone(),
-                        group_instance_id: member.group_instance_id.clone(),
-                        error_code: {
-                            if self.members.remove(&member.member_id).is_some() {
-                                ErrorCode::None.into()
-                            } else {
-                                ErrorCode::UnknownMemberId.into()
-                            }
-                        },
-                    })
-                    .collect::<Vec<MemberResponse>>()
-            })
-        };
-
-        let state: Wrapper = if members.iter().any(|member| {
-            let error_code = i16::from(ErrorCode::None);
-
-            member.error_code == error_code
-        }) {
-            let leader = if self.members.contains_key(&self.state.leader) {
-                Some(self.state.leader)
-            } else {
-                None
-            };
-
-            Inner {
-                generation_id: self.generation_id + 1,
-                session_timeout_ms: self.session_timeout_ms,
-                rebalance_timeout_ms: self.rebalance_timeout_ms,
-                group_instance_id: self.group_instance_id,
-                members: self.members,
-                state: Forming {
-                    protocol_type: self.state.protocol_type,
-                    protocol_name: self.state.protocol_name,
-                    leader,
-                },
-            }
-            .into()
-        } else {
-            self.into()
-        };
-
-        let body = {
-            Body::LeaveGroupResponse {
-                throttle_time_ms: Some(0),
-                error_code: ErrorCode::None.into(),
-                members: Some(members),
-            }
-        };
-
-        (state, body)
-    }
-
-    #[instrument]
-    fn offset_commit(
-        self,
-        now: Instant,
-        group_id: &str,
-        generation_id_or_member_epoch: Option<i32>,
-        member_id: Option<&str>,
-        group_instance_id: Option<&str>,
-        retention_time_ms: Option<i64>,
-        topics: Option<&[OffsetCommitRequestTopic]>,
-    ) -> (Self::OffsetCommitState, Body) {
-        todo!()
-    }
-
-    #[instrument]
-    fn offset_fetch(
-        self,
-        now: Instant,
-        group_id: Option<&str>,
-        topics: Option<&[OffsetFetchRequestTopic]>,
-        groups: Option<&[OffsetFetchRequestGroup]>,
-        require_stable: Option<bool>,
-    ) -> (Self::OffsetFetchState, Body) {
-        todo!()
-    }
-}
-
 impl Group for Inner<Formed> {
     type JoinState = Wrapper;
     type SyncState = Inner<Formed>;
@@ -1878,8 +1198,8 @@ impl Group for Inner<Formed> {
                         group_instance_id: self.group_instance_id,
                         members: self.members,
                         state: Forming {
-                            protocol_type: self.state.protocol_type,
-                            protocol_name: self.state.protocol_name,
+                            protocol_type: Some(self.state.protocol_type),
+                            protocol_name: Some(self.state.protocol_name),
                             leader: Some(self.state.leader),
                         },
                     }
@@ -1918,8 +1238,8 @@ impl Group for Inner<Formed> {
                     group_instance_id: self.group_instance_id,
                     members: self.members,
                     state: Forming {
-                        protocol_type: self.state.protocol_type,
-                        protocol_name: self.state.protocol_name,
+                        protocol_type: Some(self.state.protocol_type),
+                        protocol_name: Some(self.state.protocol_name),
                         leader: Some(self.state.leader),
                     },
                 }
@@ -2130,8 +1450,8 @@ impl Group for Inner<Formed> {
                 group_instance_id: self.group_instance_id,
                 members: self.members,
                 state: Forming {
-                    protocol_type: self.state.protocol_type,
-                    protocol_name: self.state.protocol_name,
+                    protocol_type: Some(self.state.protocol_type),
+                    protocol_name: Some(self.state.protocol_name),
                     leader,
                 },
             }
@@ -2289,7 +1609,7 @@ mod tests {
     fn join_requires_member_id() -> Result<()> {
         let _guard = init_tracing()?;
 
-        let s: Wrapper = Inner::<Fresh>::default().into();
+        let s: Wrapper = Inner::<Forming>::default().into();
 
         let client_id = "console-consumer";
         let group_id = "test-consumer-group";
@@ -2399,7 +1719,7 @@ mod tests {
     fn fresh_join() -> Result<()> {
         let _guard = init_tracing()?;
 
-        let s: Wrapper = Inner::<Fresh>::default().into();
+        let s: Wrapper = Inner::<Forming>::default().into();
 
         let client_id = "console-consumer";
         let group_id = "test-consumer-group";
@@ -2651,7 +1971,7 @@ mod tests {
     fn lifecycle() -> Result<()> {
         let _guard = init_tracing()?;
 
-        let s: Wrapper = Inner::<Fresh>::default().into();
+        let s: Wrapper = Inner::<Forming>::default().into();
 
         let session_timeout_ms = 45_000;
         let rebalance_timeout_ms = Some(300_000);
