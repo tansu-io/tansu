@@ -201,7 +201,7 @@ mod tests {
         let mut leader = Leader::default();
 
         ni.iter().cloned().for_each(|(node, index)| {
-            _  = leader.next_index.insert(node, index);
+            _ = leader.next_index.insert(node, index);
         });
 
         assert_eq!(

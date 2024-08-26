@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 use std::{
     collections::BTreeMap,
     fmt, io,
@@ -204,10 +203,7 @@ impl TopicDetail {
     }
 
     pub fn replica_assignments(&self) -> Option<&[CreatableReplicaAssignment]> {
-        self.creatable_topic
-            .assignments
-            .as_ref()
-            .map(|v| v.as_slice())
+        self.creatable_topic.assignments.as_deref()
     }
 }
 

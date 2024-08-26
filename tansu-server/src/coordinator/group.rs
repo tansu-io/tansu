@@ -29,6 +29,7 @@ use tansu_kafka_sans_io::{
 };
 
 pub trait Coordinator: Debug + Send + Sync {
+    #[allow(clippy::too_many_arguments)]
     fn join(
         &mut self,
         client_id: Option<&str>,
@@ -42,6 +43,7 @@ pub trait Coordinator: Debug + Send + Sync {
         reason: Option<&str>,
     ) -> Result<Body>;
 
+    #[allow(clippy::too_many_arguments)]
     fn sync(
         &mut self,
         group_id: &str,

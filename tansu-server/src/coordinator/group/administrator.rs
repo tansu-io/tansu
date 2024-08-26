@@ -46,6 +46,7 @@ pub trait Group: Debug + Send {
     type OffsetCommitState;
     type OffsetFetchState;
 
+    #[allow(clippy::too_many_arguments)]
     fn join(
         self,
         now: Instant,
@@ -60,6 +61,7 @@ pub trait Group: Debug + Send {
         reason: Option<&str>,
     ) -> (Self::JoinState, Body);
 
+    #[allow(clippy::too_many_arguments)]
     fn sync(
         self,
         now: Instant,
@@ -88,6 +90,7 @@ pub trait Group: Debug + Send {
         members: Option<&[MemberIdentity]>,
     ) -> (Self::LeaveState, Body);
 
+    #[allow(clippy::too_many_arguments)]
     fn offset_commit(
         self,
         now: Instant,
@@ -190,7 +193,7 @@ impl Wrapper {
     pub fn leader(&self) -> Option<&str> {
         match self {
             Self::Fresh(_inner) => None,
-            Self::Forming(inner) => inner.state.leader.as_ref().map(|s| s.as_str()),
+            Self::Forming(inner) => inner.state.leader.as_deref(),
             Self::Syncing(inner) => Some(inner.state.leader.as_str()),
             Self::Formed(inner) => Some(inner.state.leader.as_str()),
         }
@@ -223,6 +226,7 @@ impl Wrapper {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     #[instrument]
     fn join(
         self,
@@ -251,7 +255,7 @@ impl Wrapper {
                     protocols,
                     reason,
                 );
-                (state.into(), body)
+                (state, body)
             }
 
             Self::Forming(inner) => {
@@ -283,7 +287,7 @@ impl Wrapper {
                     protocols,
                     reason,
                 );
-                (state.into(), body)
+                (state, body)
             }
 
             Self::Formed(inner) => {
@@ -299,11 +303,12 @@ impl Wrapper {
                     protocols,
                     reason,
                 );
-                (state.into(), body)
+                (state, body)
             }
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     #[instrument]
     fn sync(
         self,
@@ -340,7 +345,7 @@ impl Wrapper {
                     protocol_name,
                     assignments,
                 );
-                (state.into(), body)
+                (state, body)
             }
 
             Wrapper::Syncing(inner) => {
@@ -392,16 +397,17 @@ impl Wrapper {
 
             Wrapper::Syncing(inner) => {
                 let (state, body) = inner.leave(now, group_id, member_id, members);
-                (state.into(), body)
+                (state, body)
             }
 
             Wrapper::Formed(inner) => {
                 let (state, body) = inner.leave(now, group_id, member_id, members);
-                (state.into(), body)
+                (state, body)
             }
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     #[instrument]
     fn offset_commit(
         self,
@@ -809,7 +815,7 @@ impl Group for Inner<Fresh> {
                     leader: String::from(""),
                     skip_assignment: Some(false),
                     member_id,
-                    members: None,
+                    members: Some([].into()),
                 };
 
                 return (self.into(), body);
@@ -828,7 +834,7 @@ impl Group for Inner<Fresh> {
                 leader: String::from(""),
                 skip_assignment: None,
                 member_id: String::from(""),
-                members: None,
+                members: Some([].into()),
             };
 
             return (self.into(), body);
@@ -940,7 +946,7 @@ impl Group for Inner<Fresh> {
         let body = Body::LeaveGroupResponse {
             throttle_time_ms: Some(0),
             error_code: ErrorCode::UnknownMemberId.into(),
-            members: None,
+            members: Some([].into()),
         };
 
         (self, body)
@@ -1056,10 +1062,10 @@ impl Group for Inner<Forming> {
                     leader: String::from(""),
                     skip_assignment: Some(false),
                     member_id,
-                    members: None,
+                    members: Some([].into()),
                 };
 
-                return (self.into(), body);
+                return (self, body);
             }
         }
 
@@ -1073,10 +1079,10 @@ impl Group for Inner<Forming> {
                 leader: String::from(""),
                 skip_assignment: None,
                 member_id: String::from(""),
-                members: None,
+                members: Some([].into()),
             };
 
-            return (self.into(), body);
+            return (self, body);
         };
 
         let Some(protocol) = protocols
@@ -1092,10 +1098,10 @@ impl Group for Inner<Forming> {
                 leader: String::from(""),
                 skip_assignment: None,
                 member_id: String::from(""),
-                members: None,
+                members: Some([].into()),
             };
 
-            return (self.into(), body);
+            return (self, body);
         };
 
         debug!(?protocol);
@@ -1305,7 +1311,7 @@ impl Group for Inner<Forming> {
     ) -> (Self::HeartbeatState, Body) {
         if !self.members.contains_key(member_id) {
             return (
-                self.into(),
+                self,
                 Body::HeartbeatResponse {
                     throttle_time_ms: Some(0),
                     error_code: ErrorCode::UnknownMemberId.into(),
@@ -1315,7 +1321,7 @@ impl Group for Inner<Forming> {
 
         if generation_id > self.generation_id {
             return (
-                self.into(),
+                self,
                 Body::HeartbeatResponse {
                     throttle_time_ms: Some(0),
                     error_code: ErrorCode::IllegalGeneration.into(),
@@ -1325,7 +1331,7 @@ impl Group for Inner<Forming> {
 
         if generation_id < self.generation_id {
             return (
-                self.into(),
+                self,
                 Body::HeartbeatResponse {
                     throttle_time_ms: Some(0),
                     error_code: ErrorCode::RebalanceInProgress.into(),
@@ -1498,7 +1504,7 @@ impl Group for Inner<Syncing> {
                     leader: String::from(""),
                     skip_assignment: Some(false),
                     member_id,
-                    members: None,
+                    members: Some([].into()),
                 };
 
                 return (self.into(), body);
@@ -1515,7 +1521,7 @@ impl Group for Inner<Syncing> {
                 leader: String::from(""),
                 skip_assignment: None,
                 member_id: String::from(""),
-                members: None,
+                members: Some([].into()),
             };
 
             return (self.into(), body);
@@ -1534,7 +1540,7 @@ impl Group for Inner<Syncing> {
                 leader: String::from(""),
                 skip_assignment: None,
                 member_id: String::from(""),
-                members: None,
+                members: Some([].into()),
             };
 
             return (self.into(), body);
@@ -1780,7 +1786,7 @@ impl Group for Inner<Formed> {
                     leader: String::from(""),
                     skip_assignment: Some(false),
                     member_id,
-                    members: None,
+                    members: Some([].into()),
                 };
 
                 return (self.into(), body);
@@ -1797,7 +1803,7 @@ impl Group for Inner<Formed> {
                 leader: String::from(""),
                 skip_assignment: None,
                 member_id: String::from(""),
-                members: None,
+                members: Some([].into()),
             };
 
             return (self.into(), body);
@@ -1816,7 +1822,7 @@ impl Group for Inner<Formed> {
                 leader: String::from(""),
                 skip_assignment: None,
                 member_id: String::from(""),
-                members: None,
+                members: Some([].into()),
             };
 
             return (self.into(), body);
@@ -2027,7 +2033,7 @@ impl Group for Inner<Formed> {
     ) -> (Self::HeartbeatState, Body) {
         if !self.members.contains_key(member_id) {
             return (
-                self.into(),
+                self,
                 Body::HeartbeatResponse {
                     throttle_time_ms: Some(0),
                     error_code: ErrorCode::UnknownMemberId.into(),
@@ -2037,7 +2043,7 @@ impl Group for Inner<Formed> {
 
         if generation_id > self.generation_id {
             return (
-                self.into(),
+                self,
                 Body::HeartbeatResponse {
                     throttle_time_ms: Some(0),
                     error_code: ErrorCode::IllegalGeneration.into(),
@@ -2047,7 +2053,7 @@ impl Group for Inner<Formed> {
 
         if generation_id < self.generation_id {
             return (
-                self.into(),
+                self,
                 Body::HeartbeatResponse {
                     throttle_time_ms: Some(0),
                     error_code: ErrorCode::RebalanceInProgress.into(),
@@ -2287,7 +2293,7 @@ mod tests {
 
         let s: Wrapper = Inner::<Fresh>::default().into();
 
-        let client_id = Some("console-consumer");
+        let client_id = "console-consumer";
         let group_id = "test-consumer-group";
         let _topic = "test";
         let session_timeout_ms = 45_000;
@@ -2320,7 +2326,7 @@ mod tests {
 
         let (s, join_response) = s.join(
             now,
-            client_id,
+            Some(client_id),
             group_id,
             session_timeout_ms,
             rebalance_timeout_ms,
@@ -2340,18 +2346,19 @@ mod tests {
                 protocol_name: None,
                 leader,
                 skip_assignment: Some(false),
-                members: None,
+                members,
                 member_id,
             } => {
                 assert_eq!(error_code, i16::from(ErrorCode::MemberIdRequired));
                 assert!(leader.is_empty());
-                assert!(member_id.starts_with(client_id.unwrap()));
+                assert!(member_id.starts_with(client_id));
+                assert_eq!(Some(0), members.map(|members| members.len()));
 
-                _ = Uuid::parse_str(&member_id[client_id.unwrap().len() + 1..])?;
+                _ = Uuid::parse_str(&member_id[client_id.len() + 1..])?;
 
                 let (_, join_response) = s.join(
                     now,
-                    client_id,
+                    Some(client_id),
                     group_id,
                     session_timeout_ms,
                     rebalance_timeout_ms,
@@ -2396,7 +2403,7 @@ mod tests {
 
         let s: Wrapper = Inner::<Fresh>::default().into();
 
-        let client_id = Some("console-consumer");
+        let client_id = "console-consumer";
         let group_id = "test-consumer-group";
         let topic = "test";
         let session_timeout_ms = 45_000;
@@ -2429,7 +2436,7 @@ mod tests {
 
         let (s, member_id) = match s.join(
             now,
-            client_id,
+            Some(client_id),
             group_id,
             session_timeout_ms,
             rebalance_timeout_ms,
@@ -2449,17 +2456,18 @@ mod tests {
                     protocol_name: None,
                     leader,
                     skip_assignment: Some(false),
-                    members: None,
+                    members,
                     member_id,
                 },
             ) => {
                 assert_eq!(error_code, i16::from(ErrorCode::MemberIdRequired));
                 assert!(leader.is_empty());
-                assert!(member_id.starts_with(client_id.unwrap()));
+                assert!(member_id.starts_with(client_id));
+                assert_eq!(Some(0), members.map(|members| members.len()));
 
                 let (s, join_response) = s.join(
                     now,
-                    client_id,
+                    Some(client_id),
                     group_id,
                     session_timeout_ms,
                     rebalance_timeout_ms,
@@ -2521,8 +2529,8 @@ mod tests {
             generation_id,
             &member_id,
             group_instance_id,
-            protocol_type.as_ref().map(|s| s.as_str()),
-            protocol_name.as_ref().map(|s| s.as_str()),
+            protocol_type.as_deref(),
+            protocol_name.as_deref(),
             Some(&assignments),
         );
 
@@ -2652,13 +2660,13 @@ mod tests {
         let group_instance_id = None;
         let reason = None;
 
-        const CLIENT_ID: Option<&'static str> = Some("console-consumer");
-        const GROUP_ID: &'static str = "test-consumer-group";
-        const TOPIC: &'static str = "test";
-        const RANGE: &'static str = "range";
-        const COOPERATIVE_STICKY: &'static str = "cooperative-sticky";
+        const CLIENT_ID: &str = "console-consumer";
+        const GROUP_ID: &str = "test-consumer-group";
+        const TOPIC: &str = "test";
+        const RANGE: &str = "range";
+        const COOPERATIVE_STICKY: &str = "cooperative-sticky";
 
-        const PROTOCOL_TYPE: &'static str = "consumer";
+        const PROTOCOL_TYPE: &str = "consumer";
 
         let first_member_range_meta = Bytes::from_static(b"first_member_range_meta_01");
         let first_member_sticky_meta = Bytes::from_static(b"first_member_sticky_meta_01");
@@ -2678,7 +2686,7 @@ mod tests {
 
         let (s, first_member_id) = match s.join(
             now,
-            CLIENT_ID,
+            Some(CLIENT_ID),
             GROUP_ID,
             session_timeout_ms,
             rebalance_timeout_ms,
@@ -2698,17 +2706,18 @@ mod tests {
                     protocol_name: None,
                     leader,
                     skip_assignment: Some(false),
-                    members: None,
+                    members,
                     member_id,
                 },
             ) => {
                 assert_eq!(error_code, i16::from(ErrorCode::MemberIdRequired));
                 assert!(leader.is_empty());
-                assert!(member_id.starts_with(CLIENT_ID.unwrap()));
+                assert!(member_id.starts_with(CLIENT_ID));
+                assert_eq!(Some(0), members.map(|members| members.len()));
 
                 let (s, join_response) = s.join(
                     now,
-                    CLIENT_ID,
+                    Some(CLIENT_ID),
                     GROUP_ID,
                     session_timeout_ms,
                     rebalance_timeout_ms,
@@ -2824,7 +2833,7 @@ mod tests {
 
         let (s, second_member_id, previous_generation) = match s.join(
             now,
-            CLIENT_ID,
+            Some(CLIENT_ID),
             GROUP_ID,
             session_timeout_ms,
             rebalance_timeout_ms,
@@ -2844,19 +2853,20 @@ mod tests {
                     protocol_name: None,
                     leader,
                     skip_assignment: Some(false),
-                    members: None,
+                    members,
                     member_id,
                 },
             ) => {
                 assert_eq!(error_code, i16::from(ErrorCode::MemberIdRequired));
                 assert!(leader.is_empty());
-                assert!(member_id.starts_with(CLIENT_ID.unwrap()));
+                assert!(member_id.starts_with(CLIENT_ID));
+                assert_eq!(Some(0), members.map(|members| members.len()));
 
                 let previous_generation = s.generation_id();
 
                 let (s, join_response) = s.join(
                     now,
-                    CLIENT_ID,
+                    Some(CLIENT_ID),
                     GROUP_ID,
                     session_timeout_ms,
                     rebalance_timeout_ms,
@@ -2980,7 +2990,7 @@ mod tests {
 
             match s.join(
                 now,
-                CLIENT_ID,
+                Some(CLIENT_ID),
                 GROUP_ID,
                 session_timeout_ms,
                 rebalance_timeout_ms,
@@ -3060,7 +3070,7 @@ mod tests {
 
             let (s, join_group_response) = s.join(
                 now,
-                CLIENT_ID,
+                Some(CLIENT_ID),
                 GROUP_ID,
                 session_timeout_ms,
                 rebalance_timeout_ms,

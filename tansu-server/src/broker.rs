@@ -75,9 +75,10 @@ pub struct Broker {
 }
 
 impl Broker {
-    pub fn new<'a>(
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
         node_id: i32,
-        cluster_id: &'a str,
+        cluster_id: &str,
         context: Raft,
         applicator: Applicator,
         listener: Url,
@@ -115,7 +116,7 @@ impl Broker {
         self.when_applied(Body::BrokerRegistrationRequest {
             broker_id: self.node_id,
             cluster_id: self.cluster_id.clone(),
-            incarnation_id: self.incarnation_id.as_bytes().clone(),
+            incarnation_id: *self.incarnation_id.as_bytes(),
             listeners: Some(vec![Listener {
                 name: "broker".into(),
                 host: self.listener.host_str().unwrap_or("localhost").to_owned(),
@@ -181,10 +182,10 @@ impl Broker {
             _ = stream.read_exact(&mut request[4..]).await?;
             debug!(?request);
 
-            let mut response = self.process_request(&request).await?;
+            let response = self.process_request(&request).await?;
             debug!(?response);
 
-            stream.write_all(&mut response).await?;
+            stream.write_all(&response).await?;
         }
     }
 
@@ -204,7 +205,7 @@ impl Broker {
             } => {
                 debug!(?api_key, ?api_version, ?correlation_id);
                 let body = self
-                    .response_for(client_id.as_ref().map(|s| s.as_str()), body, correlation_id)
+                    .response_for(client_id.as_deref(), body, correlation_id)
                     .await?;
                 debug!(?body, ?correlation_id);
                 Frame::response(
@@ -224,7 +225,7 @@ impl Broker {
         debug!(?self, ?body);
 
         let id = Uuid::new_v4();
-        let request = Request::new(id.clone(), body);
+        let request = Request::new(id, body);
         let command = &request as &dyn Command;
 
         let json = serde_json::to_string(command)?;
@@ -255,12 +256,8 @@ impl Broker {
             } => {
                 let api_versions = ApiVersionsRequest;
                 Ok(api_versions.response(
-                    client_software_name
-                        .as_ref()
-                        .map(|client_software_name| client_software_name.as_str()),
-                    client_software_version
-                        .as_ref()
-                        .map(|client_software_version| client_software_version.as_str()),
+                    client_software_name.as_deref(),
+                    client_software_version.as_deref(),
                 ))
             }
 
@@ -290,7 +287,7 @@ impl Broker {
             } => {
                 let describe_configs = DescribeConfigsRequest;
                 Ok(describe_configs.response(
-                    resources.as_ref().map(|resources| resources.as_slice()),
+                    resources.as_deref(),
                     include_synonyms,
                     include_documentation,
                 ))
@@ -313,7 +310,7 @@ impl Broker {
                         min_bytes,
                         max_bytes,
                         isolation_level,
-                        topics.as_ref().map(|topics| topics.as_slice()),
+                        topics.as_deref(),
                         &state,
                     )
                     .await
@@ -327,11 +324,9 @@ impl Broker {
                 let find_coordinator = FindCoordinatorRequest;
 
                 Ok(find_coordinator.response(
-                    key.as_ref().map(|key| key.as_str()),
+                    key.as_deref(),
                     key_type,
-                    coordinator_keys
-                        .as_ref()
-                        .map(|coordinator_keys| coordinator_keys.as_slice()),
+                    coordinator_keys.as_deref(),
                     self.node_id,
                     &self.listener,
                 ))
@@ -356,9 +351,7 @@ impl Broker {
                     &group_id,
                     generation_id,
                     &member_id,
-                    group_instance_id
-                        .as_ref()
-                        .map(|group_instance_id| group_instance_id.as_str()),
+                    group_instance_id.as_deref(),
                 )
             }
 
@@ -370,9 +363,7 @@ impl Broker {
             } => {
                 let init_producer_id = InitProducerIdRequest;
                 Ok(init_producer_id.response(
-                    transactional_id
-                        .as_ref()
-                        .map(|transaction_id| transaction_id.as_str()),
+                    transactional_id.as_deref(),
                     transaction_timeout_ms,
                     producer_id,
                     producer_epoch,
@@ -399,12 +390,10 @@ impl Broker {
                     session_timeout_ms,
                     rebalance_timeout_ms,
                     &member_id,
-                    group_instance_id
-                        .as_ref()
-                        .map(|group_instance_id| group_instance_id.as_str()),
+                    group_instance_id.as_deref(),
                     &protocol_type,
-                    protocols.as_ref().map(|protocols| protocols.as_slice()),
-                    reason.as_ref().map(|reason| reason.as_str()),
+                    protocols.as_deref(),
+                    reason.as_deref(),
                 )
             }
 
@@ -417,25 +406,20 @@ impl Broker {
                     groups: self.groups.clone(),
                 };
 
-                leave.response(
-                    &group_id,
-                    member_id.as_ref().map(|member_id| member_id.as_str()),
-                    members.as_ref().map(|members| members.as_slice()),
-                )
+                leave.response(&group_id, member_id.as_deref(), members.as_deref())
             }
 
             Body::ListPartitionReassignmentsRequest { topics, .. } => {
                 let state = self.applicator.with_current_state().await;
                 let list_partition_reassignments = ListPartitionReassignmentsRequest;
-                Ok(list_partition_reassignments
-                    .response(topics.as_ref().map(|topics| topics.as_slice()), &state))
+                Ok(list_partition_reassignments.response(topics.as_deref(), &state))
             }
 
             Body::MetadataRequest { topics, .. } => {
                 let controller_id = Some(self.node_id);
                 let state = self.applicator.with_current_state().await;
 
-                let topics = topics.as_ref().map(|topics| topics.as_slice());
+                let topics = topics.as_deref();
 
                 let request = MetadataRequest;
                 Ok(request.response(controller_id, topics, &state))
@@ -456,10 +440,10 @@ impl Broker {
                 offset_commit.response(
                     &group_id,
                     generation_id_or_member_epoch,
-                    member_id.as_ref().map(|s| s.as_str()),
-                    group_instance_id.as_ref().map(|s| s.as_str()),
+                    member_id.as_deref(),
+                    group_instance_id.as_deref(),
                     retention_time_ms,
-                    topics.as_ref().map(|topics| topics.as_slice()),
+                    topics.as_deref(),
                 )
             }
 
@@ -474,9 +458,9 @@ impl Broker {
                 };
 
                 offset_fetch.response(
-                    group_id.as_ref().map(|group_id| group_id.as_str()),
-                    topics.as_ref().map(|topics| topics.as_slice()),
-                    groups.as_ref().map(|groups| groups.as_slice()),
+                    group_id.as_deref(),
+                    topics.as_deref(),
+                    groups.as_deref(),
                     require_stable,
                 )
             }
@@ -518,18 +502,10 @@ impl Broker {
                     &group_id,
                     generation_id,
                     &member_id,
-                    group_instance_id
-                        .as_ref()
-                        .map(|group_instance_id| group_instance_id.as_str()),
-                    protocol_type
-                        .as_ref()
-                        .map(|protocol_type| protocol_type.as_str()),
-                    protocol_name
-                        .as_ref()
-                        .map(|protocol_name| protocol_name.as_str()),
-                    assignments
-                        .as_ref()
-                        .map(|assignments| assignments.as_slice()),
+                    group_instance_id.as_deref(),
+                    protocol_type.as_deref(),
+                    protocol_name.as_deref(),
+                    assignments.as_deref(),
                 )
             }
 

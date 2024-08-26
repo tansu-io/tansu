@@ -40,10 +40,7 @@ struct Entry {
 
 impl Entry {
     fn size_of() -> usize {
-        size_of::<u64>()
-            + size_of::<u64>()
-            + size_of::<u64>()
-            + size_of::<u8>()
+        size_of::<u64>() + size_of::<u64>() + size_of::<u64>() + size_of::<u8>()
     }
 }
 

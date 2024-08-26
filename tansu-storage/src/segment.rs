@@ -81,6 +81,7 @@ impl<T: Segment + ?Sized> Segment for Box<T> {
 }
 
 pub trait SegmentProvider: Debug + Send {
+    #[allow(clippy::type_complexity)]
     fn init(&self) -> Result<BTreeMap<Topition, BTreeMap<i64, Box<dyn Segment>>>>;
 
     fn provide_segment(&self, tpo: &TopitionOffset) -> Result<Box<dyn Segment>>;
@@ -320,7 +321,7 @@ where
         let mut records = 0;
         debug!(?offset);
 
-        while let Some(batch) = self.read(offset).ok() {
+        while let Ok(batch) = self.read(offset) {
             offset += i64::from(batch.last_offset_delta) + 1;
 
             _ = batch
@@ -858,7 +859,7 @@ mod tests {
         assert_eq!(
             Some(def.into()),
             segment
-                .read(base_offset + 0)
+                .read(base_offset)
                 .map(|batch| batch.records[0].value.clone())?
         );
 
@@ -922,7 +923,7 @@ mod tests {
         assert_eq!(
             Some(def.into()),
             segment
-                .read(base_offset + 0)
+                .read(base_offset)
                 .map(|batch| batch.records[0].value.clone())?
         );
 
@@ -983,7 +984,7 @@ mod tests {
         assert_eq!(
             Some(def.into()),
             segment
-                .read(base_offset + 0)
+                .read(base_offset)
                 .map(|batch| batch.records[0].value.clone())?
         );
 
@@ -1250,7 +1251,7 @@ mod tests {
 
         let provider = Box::new(MemorySegmentProvider {
             index_interval_bytes,
-            data: &data,
+            data,
         }) as Box<dyn SegmentProvider>;
         assert!(provider.init()?.is_empty());
 

@@ -13,10 +13,10 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use tansu_kafka_sans_io as _;
-use thiserror as _;
 use clap::Parser;
+use tansu_kafka_sans_io as _;
 use tansu_proxy::Result;
+use thiserror as _;
 use tokio::task::JoinSet;
 use tracing::{debug, Level};
 use tracing_subscriber::{filter::Targets, fmt::format::FmtSpan, prelude::*};

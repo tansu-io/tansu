@@ -142,6 +142,7 @@ impl FetchRequest {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn fetch_topic<'a>(
         &mut self,
         state: &'a State,
@@ -205,13 +206,13 @@ impl FetchRequest {
             let mut bytes = 0;
 
             while elapsed < max_wait && bytes < min_bytes {
-                let mut enumerate = topics.iter().enumerate();
+                let enumerate = topics.iter().enumerate();
                 responses.clear();
 
-                while let Some((i, fetch)) = enumerate.next() {
+                for (i, fetch) in enumerate {
                     let fetch_response = self
                         .fetch_topic(
-                            &state,
+                            state,
                             max_wait,
                             min_bytes,
                             max_bytes,
@@ -267,8 +268,7 @@ impl FetchRequest {
                 IsolationLevel::try_from(isolation).map(Some)
             })?;
 
-            let max_wait_ms =
-                u64::try_from(max_wait_ms).map(|max_wait_ms| Duration::from_millis(max_wait_ms))?;
+            let max_wait_ms = u64::try_from(max_wait_ms).map(Duration::from_millis)?;
 
             let min_bytes = u64::try_from(min_bytes)?;
 
@@ -276,12 +276,12 @@ impl FetchRequest {
                 max_bytes.map_or(Ok(None), |max_bytes| u64::try_from(max_bytes).map(Some))?;
 
             self.fetch(
-                &state,
+                state,
                 max_wait_ms,
                 min_bytes,
                 max_bytes,
                 isolation_level,
-                &topics,
+                topics,
             )
             .await?
         } else {

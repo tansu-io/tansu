@@ -28,9 +28,9 @@ fn append_in_memory(c: &mut Criterion) {
     let mut group = c.benchmark_group("append_in_memory");
 
     for size in [KB, 2 * KB, 4 * KB, 8 * KB, 16 * KB].iter() {
-        group.throughput(Throughput::Bytes(*size as u64));
+        _ = group.throughput(Throughput::Bytes(*size as u64));
 
-        group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, &size| {
+        _ = group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, &size| {
             b.iter(|| {
                 let base_offset = 32123;
                 let index_interval_bytes = 48;
@@ -46,7 +46,7 @@ fn append_in_memory(c: &mut Criterion) {
 
                 let value = iter::repeat(0u8).take(size).collect::<Vec<_>>();
 
-                segment
+                _ = segment
                     .append(
                         Batch::builder()
                             .record(Record::builder().value(value.into()))
@@ -67,9 +67,9 @@ fn append_in_memory_provider(c: &mut Criterion) {
     let mut group = c.benchmark_group("append_in_memory_provider");
 
     for size in [KB, 2 * KB, 4 * KB, 8 * KB, 16 * KB].iter() {
-        group.throughput(Throughput::Bytes(*size as u64));
+        _ = group.throughput(Throughput::Bytes(*size as u64));
 
-        group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, &size| {
+        _ = group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, &size| {
             b.iter(|| {
                 let base_offset = 32123;
                 let index_interval_bytes = 48;
@@ -89,7 +89,7 @@ fn append_in_memory_provider(c: &mut Criterion) {
 
                 let value = iter::repeat(0u8).take(size).collect::<Vec<_>>();
 
-                segment
+                _ = segment
                     .append(
                         Batch::builder()
                             .record(Record::builder().value(value.into()))

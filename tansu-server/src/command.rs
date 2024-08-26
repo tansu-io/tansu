@@ -260,18 +260,18 @@ impl Response for CreatableTopic {
             _ = state.topics.insert(
                 self.name.as_str().into(),
                 TopicDetail {
-                    id: id.as_bytes().clone(),
+                    id: *id.as_bytes(),
                     creatable_topic: self.clone(),
                 },
             );
 
             _ = state
                 .topic_uuid_to_name
-                .insert(id.clone(), self.name.as_str().into());
+                .insert(id, self.name.as_str().into());
 
             CreatableTopicResult {
                 name: self.name.clone(),
-                topic_id: Some(id.as_bytes().clone()),
+                topic_id: Some(*id.as_bytes()),
                 error_code: ErrorCode::None.into(),
                 error_message: None,
                 topic_config_error_code: None,

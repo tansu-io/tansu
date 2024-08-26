@@ -31,6 +31,7 @@ impl SyncGroupRequest {
 }
 
 impl SyncGroupRequest {
+    #[allow(clippy::too_many_arguments)]
     pub fn response(
         &self,
         group_id: &str,

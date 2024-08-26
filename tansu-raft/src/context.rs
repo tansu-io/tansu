@@ -79,7 +79,10 @@ impl<R, S, T, U> SituationBuilder<R, S, T, U> {
         }
     }
 
-    pub(crate) fn server(self, server: Box<dyn Server>) -> SituationBuilder<R, Box<dyn Server>, T, U> {
+    pub(crate) fn server(
+        self,
+        server: Box<dyn Server>,
+    ) -> SituationBuilder<R, Box<dyn Server>, T, U> {
         SituationBuilder {
             persistent_state: self.persistent_state,
             server,

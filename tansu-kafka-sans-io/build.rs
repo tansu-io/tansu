@@ -171,10 +171,7 @@ fn kind(
     } else if f.kind().is_primitive() {
         let t = f.kind().type_name();
 
-        if f.nullable().is_none()
-            && f.versions()
-                .is_mandatory(parent.map(Field::versions))
-        {
+        if f.nullable().is_none() && f.versions().is_mandatory(parent.map(Field::versions)) {
             quote! {
                 #t
             }
@@ -185,10 +182,7 @@ fn kind(
         }
     } else {
         let t = f.kind().type_name();
-        if f.nullable().is_none()
-            && f.versions()
-                .is_mandatory(parent.map(Field::versions))
-        {
+        if f.nullable().is_none() && f.versions().is_mandatory(parent.map(Field::versions)) {
             if parent.is_none() && dependencies.contains(&t) {
                 quote! {
                     #module::#t

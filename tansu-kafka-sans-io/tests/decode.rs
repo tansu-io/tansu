@@ -1432,13 +1432,9 @@ fn fetch_request_v16_001() -> Result<()> {
                 topics: Some(
                     [FetchTopic {
                         topic: None,
-                        topic_id: Some(
-                            [
-                                246, 177, 3, 16, 190, 12, 74, 195, 190, 197, 130, 25, 106, 235,
-                                221, 30
-                            ]
-                            .into()
-                        ),
+                        topic_id: Some([
+                            246, 177, 3, 16, 190, 12, 74, 195, 190, 197, 130, 25, 106, 235, 221, 30
+                        ]),
                         partitions: Some(
                             [FetchPartition {
                                 partition: 0,
@@ -1954,13 +1950,9 @@ fn fetch_response_v16_001() -> Result<()> {
                 responses: Some(
                     [FetchableTopicResponse {
                         topic: None,
-                        topic_id: Some(
-                            [
-                                28, 205, 172, 195, 142, 19, 71, 71, 182, 128, 13, 18, 65, 142, 210,
-                                222
-                            ]
-                            .into()
-                        ),
+                        topic_id: Some([
+                            28, 205, 172, 195, 142, 19, 71, 71, 182, 128, 13, 18, 65, 142, 210, 222
+                        ]),
                         partitions: Some(
                             [PartitionData {
                                 partition_index: 0,

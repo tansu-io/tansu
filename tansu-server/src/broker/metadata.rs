@@ -135,7 +135,7 @@ impl MetadataRequest {
         state
             .brokers
             .iter()
-            .map(|(node_id, broker)| {
+            .flat_map(|(node_id, broker)| {
                 broker
                     .listeners
                     .as_ref()
@@ -159,7 +159,6 @@ impl MetadataRequest {
                     })
                     .unwrap_or(vec![])
             })
-            .flatten()
             .collect()
     }
 

@@ -426,7 +426,7 @@ mod tests {
             .in_memory(vec![])
             .build();
 
-        index.append(base_offset + 0, u32::MAX as u64)?;
+        index.append(base_offset, u32::MAX as u64)?;
 
         assert!(matches!(
             index.append(base_offset + 1, (u32::MAX as u64) + 1),

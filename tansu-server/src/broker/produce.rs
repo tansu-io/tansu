@@ -48,7 +48,7 @@ impl ProduceRequest {
             Some(mut records) if records.batches.len() == 1 => {
                 let batch = records.batches.remove(0);
 
-                let tp = Topition::new(name.into(), partition.index);
+                let tp = Topition::new(name, partition.index);
 
                 let base_offset = manager.produce(&tp, batch).unwrap();
 
@@ -68,9 +68,9 @@ impl ProduceRequest {
         }
     }
 
-    fn topic<'a>(
+    fn topic(
         topic: TopicProduceData,
-        manager: &'a mut MutexGuard<'_, Storage>,
+        manager: &mut MutexGuard<'_, Storage>,
         state: &State,
     ) -> TopicProduceResponse {
         let partition_responses = if state.topics().contains_key(&topic.name) {
@@ -97,12 +97,12 @@ impl ProduceRequest {
         }
     }
 
-    pub(crate) fn response<'a>(
+    pub(crate) fn response(
         _transactional_id: Option<String>,
         _acks: i16,
         _timeout_ms: i32,
         topic_data: Option<Vec<TopicProduceData>>,
-        manager: &'a mut MutexGuard<'_, Storage>,
+        manager: &mut MutexGuard<'_, Storage>,
         state: &State,
     ) -> Body {
         let responses = topic_data.map(|topics| {

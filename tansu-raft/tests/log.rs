@@ -58,7 +58,8 @@ impl Applicator {
         index: Index,
         callback: impl Fn(&u32) + Send + Sync + 'static,
     ) -> Result<()> {
-        _ = self.when_applied
+        _ = self
+            .when_applied
             .lock()
             .map(|mut when_applied| when_applied.insert(index, Box::new(callback)))?;
         Ok(())
@@ -78,7 +79,8 @@ impl ApplyState for Applicator {
             .inspect(|state| _ = dbg!(state))
             .unwrap();
 
-        _ = self.when_applied
+        _ = self
+            .when_applied
             .lock()
             .map(|mut context| context.remove(&index).map(|callback| callback(&state)))?;
 

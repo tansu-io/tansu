@@ -31,6 +31,7 @@ impl JoinRequest {
 }
 
 impl JoinRequest {
+    #[allow(clippy::too_many_arguments)]
     pub fn response(
         &self,
         client_id: Option<&str>,
