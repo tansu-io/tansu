@@ -56,7 +56,7 @@ opentelemetry = { version = "0.21.0" }
 opentelemetry-jaeger = { version = "0.20.0", features = ["rt-tokio"] }
 opentelemetry_sdk = "0.21.2"
 pretty_assertions = "1"
-prettyplease = "0.2.20"
+prettyplease = "0.2.22"
 proc-macro2 = "1.0.81"
 quote = "1.0"
 rand = "0.8"
