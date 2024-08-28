@@ -13,7 +13,13 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::{collections::BTreeMap, fmt::Debug, time::Instant};
+use std::{
+    collections::BTreeMap,
+    fmt::Debug,
+    hash::{DefaultHasher, Hash, Hasher},
+    sync::{Arc, Mutex, MutexGuard},
+    time::{Instant, SystemTime},
+};
 
 use bytes::Bytes;
 use tansu_kafka_sans_io::{
@@ -21,21 +27,22 @@ use tansu_kafka_sans_io::{
     join_group_response::JoinGroupResponseMember,
     leave_group_request::MemberIdentity,
     leave_group_response::MemberResponse,
-    offset_commit_request::OffsetCommitRequestTopic,
     offset_commit_response::{OffsetCommitResponsePartition, OffsetCommitResponseTopic},
     offset_fetch_request::{OffsetFetchRequestGroup, OffsetFetchRequestTopic},
     offset_fetch_response::{
         OffsetFetchResponseGroup, OffsetFetchResponsePartitions, OffsetFetchResponseTopics,
     },
+    record::{Batch, Record},
     sync_group_request::SyncGroupRequestAssignment,
-    Body, ErrorCode,
+    to_timestamp, Body, ErrorCode,
 };
+use tansu_storage::{Storage, Topition};
 use tracing::{debug, info, instrument};
 use uuid::Uuid;
 
-use crate::{Error, Result};
+use crate::{Error, Result, CONSUMER_OFFSETS};
 
-use super::Coordinator;
+use super::{Coordinator, GroupTopition, OffsetCommit, OffsetCommitKey, OffsetCommitValue};
 
 pub trait Group: Debug + Send {
     type JoinState;
@@ -93,12 +100,7 @@ pub trait Group: Debug + Send {
     fn offset_commit(
         self,
         now: Instant,
-        group_id: &str,
-        generation_id_or_member_epoch: Option<i32>,
-        member_id: Option<&str>,
-        group_instance_id: Option<&str>,
-        retention_time_ms: Option<i64>,
-        topics: Option<&[OffsetCommitRequestTopic]>,
+        detail: OffsetCommit<'_>,
     ) -> (Self::OffsetCommitState, Body);
 
     fn offset_fetch(
@@ -305,40 +307,15 @@ impl Wrapper {
 
     #[allow(clippy::too_many_arguments)]
     #[instrument]
-    fn offset_commit(
-        self,
-        now: Instant,
-        group_id: &str,
-        generation_id_or_member_epoch: Option<i32>,
-        member_id: Option<&str>,
-        group_instance_id: Option<&str>,
-        retention_time_ms: Option<i64>,
-        topics: Option<&[OffsetCommitRequestTopic]>,
-    ) -> (Wrapper, Body) {
+    fn offset_commit(self, now: Instant, detail: OffsetCommit<'_>) -> (Wrapper, Body) {
         match self {
             Wrapper::Forming(inner) => {
-                let (state, body) = inner.offset_commit(
-                    now,
-                    group_id,
-                    generation_id_or_member_epoch,
-                    member_id,
-                    group_instance_id,
-                    retention_time_ms,
-                    topics,
-                );
+                let (state, body) = inner.offset_commit(now, detail);
                 (state.into(), body)
             }
 
             Wrapper::Formed(inner) => {
-                let (state, body) = inner.offset_commit(
-                    now,
-                    group_id,
-                    generation_id_or_member_epoch,
-                    member_id,
-                    group_instance_id,
-                    retention_time_ms,
-                    topics,
-                );
+                let (state, body) = inner.offset_commit(now, detail);
                 (state.into(), body)
             }
         }
@@ -495,31 +472,13 @@ impl Coordinator for Controller {
             })
     }
 
-    fn offset_commit(
-        &mut self,
-        group_id: &str,
-        generation_id_or_member_epoch: Option<i32>,
-        member_id: Option<&str>,
-        group_instance_id: Option<&str>,
-        retention_time_ms: Option<i64>,
-        topics: Option<&[OffsetCommitRequestTopic]>,
-    ) -> Result<Body> {
+    fn offset_commit(&mut self, detail: OffsetCommit<'_>) -> Result<Body> {
         let now = Instant::now();
 
         self.wrapper
             .take()
             .ok_or(Error::EmptyCoordinatorWrapper)
-            .map(|wrapper| {
-                wrapper.offset_commit(
-                    now,
-                    group_id,
-                    generation_id_or_member_epoch,
-                    member_id,
-                    group_instance_id,
-                    retention_time_ms,
-                    topics,
-                )
-            })
+            .map(|wrapper| wrapper.offset_commit(now, detail))
             .map(|(wrapper, body)| {
                 _ = self.wrapper.replace(wrapper);
                 body
@@ -582,7 +541,7 @@ pub struct Formed {
     assignments: BTreeMap<String, Bytes>,
 }
 
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug)]
 pub struct Inner<S: Debug> {
     session_timeout_ms: i32,
     rebalance_timeout_ms: Option<i32>,
@@ -590,12 +549,23 @@ pub struct Inner<S: Debug> {
     members: BTreeMap<String, Member>,
     generation_id: i32,
     state: S,
+    storage: Arc<Mutex<Storage>>,
+    offsets: Arc<Mutex<BTreeMap<GroupTopition, OffsetCommitValue>>>,
+    partitions: i32,
 }
 
 impl<S> Inner<S>
 where
     S: Debug,
 {
+    fn storage_lock(&self) -> Result<MutexGuard<'_, Storage>> {
+        self.storage.lock().map_err(Into::into)
+    }
+
+    fn offsets_lock(&self) -> Result<MutexGuard<'_, BTreeMap<GroupTopition, OffsetCommitValue>>> {
+        self.offsets.lock().map_err(Into::into)
+    }
+
     fn missed_heartbeat(&mut self, group_id: &str, now: Instant) -> bool {
         let original = self.members.len();
 
@@ -626,18 +596,183 @@ where
 
         original > self.members.len()
     }
+
+    fn partition_for(&self, key: Bytes) -> Result<i32> {
+        let mut hasher = DefaultHasher::new();
+        key.hash(&mut hasher);
+        u64::try_from(self.partitions)
+            .map_err(Into::into)
+            .and_then(|partitions| i32::try_from(hasher.finish() % partitions).map_err(Into::into))
+    }
+
+    fn commit_offset(&mut self, detail: OffsetCommit<'_>) -> Body {
+        if detail
+            .member_id
+            .is_some_and(|member_id| self.members.contains_key(member_id))
+        {
+            Body::OffsetCommitResponse {
+                throttle_time_ms: Some(0),
+                topics: detail.topics.map(|topics| {
+                    topics
+                        .as_ref()
+                        .iter()
+                        .map(|topic| OffsetCommitResponseTopic {
+                            name: topic.name.clone(),
+                            partitions: topic.partitions.as_ref().map(|partitions| {
+                                partitions
+                                    .iter()
+                                    .map(|partition| {
+                                        let Ok(key) = Bytes::try_from(OffsetCommitKey {
+                                            group: detail.group_id.to_owned(),
+                                            topic: topic.name.clone(),
+                                            partition: partition.partition_index,
+                                        }) else {
+                                            return OffsetCommitResponsePartition {
+                                                partition_index: partition.partition_index,
+                                                error_code: ErrorCode::UnknownServerError.into(),
+                                            };
+                                        };
+
+                                        let Ok(commit_timestamp) = to_timestamp(SystemTime::now())
+                                        else {
+                                            return OffsetCommitResponsePartition {
+                                                partition_index: partition.partition_index,
+                                                error_code: ErrorCode::UnknownServerError.into(),
+                                            };
+                                        };
+
+                                        let expire_timestamp = detail
+                                            .retention_time_ms
+                                            .map(|retention_time_ms| {
+                                                commit_timestamp + retention_time_ms
+                                            })
+                                            .unwrap_or(-1);
+
+                                        let offset_commit_value = OffsetCommitValue {
+                                            offset: partition.committed_offset,
+                                            leader_epoch: -1,
+                                            metadata: "".to_owned(),
+                                            commit_timestamp,
+                                            expire_timestamp,
+                                        };
+
+                                        let Ok(value) =
+                                            Bytes::try_from(offset_commit_value.clone())
+                                        else {
+                                            return OffsetCommitResponsePartition {
+                                                partition_index: partition.partition_index,
+                                                error_code: ErrorCode::UnknownServerError.into(),
+                                            };
+                                        };
+
+                                        let Ok(consumer_offsets_partition) =
+                                            self.partition_for(key.clone())
+                                        else {
+                                            return OffsetCommitResponsePartition {
+                                                partition_index: partition.partition_index,
+                                                error_code: ErrorCode::UnknownServerError.into(),
+                                            };
+                                        };
+
+                                        let topition = Topition::new(
+                                            CONSUMER_OFFSETS,
+                                            consumer_offsets_partition,
+                                        );
+
+                                        if let Ok(_offset) = Batch::builder()
+                                            .record(
+                                                Record::builder()
+                                                    .key(key.into())
+                                                    .value(value.into()),
+                                            )
+                                            .build()
+                                            .map_err(Into::into)
+                                            .and_then(|batch| {
+                                                self.storage_lock().and_then(|mut storage| {
+                                                    storage
+                                                        .produce(&topition, batch)
+                                                        .map_err(Into::into)
+                                                })
+                                            })
+                                        {
+                                            let gtp = GroupTopition {
+                                                group: detail.group_id.to_owned(),
+                                                topition: Topition::new(
+                                                    topic.name.as_str(),
+                                                    partition.partition_index,
+                                                ),
+                                            };
+
+                                            if let Ok(mut offsets) = self.offsets_lock() {
+                                                _ = offsets.insert(gtp, offset_commit_value);
+
+                                                OffsetCommitResponsePartition {
+                                                    partition_index: partition.partition_index,
+                                                    error_code: ErrorCode::None.into(),
+                                                }
+                                            } else {
+                                                OffsetCommitResponsePartition {
+                                                    partition_index: partition.partition_index,
+                                                    error_code: ErrorCode::UnknownServerError
+                                                        .into(),
+                                                }
+                                            }
+                                        } else {
+                                            OffsetCommitResponsePartition {
+                                                partition_index: partition.partition_index,
+                                                error_code: ErrorCode::UnknownServerError.into(),
+                                            }
+                                        }
+                                    })
+                                    .collect()
+                            }),
+                        })
+                        .collect()
+                }),
+            }
+        } else {
+            Body::OffsetCommitResponse {
+                throttle_time_ms: Some(0),
+                topics: detail.topics.map(|topics| {
+                    topics
+                        .as_ref()
+                        .iter()
+                        .map(|topic| OffsetCommitResponseTopic {
+                            name: topic.name.clone(),
+                            partitions: topic.partitions.as_ref().map(|partitions| {
+                                partitions
+                                    .iter()
+                                    .map(|partition| OffsetCommitResponsePartition {
+                                        partition_index: partition.partition_index,
+                                        error_code: ErrorCode::UnknownMemberId.into(),
+                                    })
+                                    .collect()
+                            }),
+                        })
+                        .collect()
+                }),
+            }
+        }
+    }
 }
 
-impl Default for Inner<Forming> {
-    fn default() -> Self {
-        Self {
+impl Inner<Forming> {
+    pub fn with_storage(
+        storage: Arc<Mutex<Storage>>,
+        partitions: i32,
+        offsets: Arc<Mutex<BTreeMap<GroupTopition, OffsetCommitValue>>>,
+    ) -> Result<Self> {
+        Ok(Self {
             session_timeout_ms: 0,
             rebalance_timeout_ms: None,
             group_instance_id: None,
             members: BTreeMap::new(),
             generation_id: -1,
             state: Forming::default(),
-        }
+            storage,
+            offsets,
+            partitions,
+        })
     }
 }
 
@@ -771,7 +906,7 @@ impl Group for Inner<Forming> {
 
         if self.state.leader.is_none() {
             info!(
-                "{member_id} is leader of: {group_id} in generation: {}",
+                "{member_id} is now leader of: {group_id} in generation: {}",
                 self.generation_id
             );
 
@@ -933,6 +1068,9 @@ impl Group for Inner<Forming> {
                 leader: member_id.to_owned(),
                 assignments,
             },
+            storage: self.storage,
+            offsets: self.offsets,
+            partitions: self.partitions,
         };
 
         debug!(?state);
@@ -1055,44 +1193,11 @@ impl Group for Inner<Forming> {
 
     #[instrument]
     fn offset_commit(
-        self,
+        mut self,
         now: Instant,
-        group_id: &str,
-        generation_id_or_member_epoch: Option<i32>,
-        member_id: Option<&str>,
-        group_instance_id: Option<&str>,
-        retention_time_ms: Option<i64>,
-        topics: Option<&[OffsetCommitRequestTopic]>,
+        detail: OffsetCommit<'_>,
     ) -> (Self::OffsetCommitState, Body) {
-        let error_code = member_id.map_or(ErrorCode::UnknownMemberId, |member_id| {
-            if self.members.contains_key(member_id) {
-                ErrorCode::None
-            } else {
-                ErrorCode::UnknownMemberId
-            }
-        });
-
-        let body = Body::OffsetCommitResponse {
-            throttle_time_ms: Some(0),
-            topics: topics.map(|topics| {
-                topics
-                    .as_ref()
-                    .iter()
-                    .map(|topic| OffsetCommitResponseTopic {
-                        name: topic.name.clone(),
-                        partitions: topic.partitions.as_ref().map(|partitions| {
-                            partitions
-                                .iter()
-                                .map(|partition| OffsetCommitResponsePartition {
-                                    partition_index: partition.partition_index,
-                                    error_code: error_code.into(),
-                                })
-                                .collect()
-                        }),
-                    })
-                    .collect()
-            }),
-        };
+        let body = self.commit_offset(detail);
         (self, body)
     }
 
@@ -1156,11 +1261,11 @@ impl Group for Inner<Formed> {
                 throttle_time_ms: Some(0),
                 error_code: ErrorCode::InvalidRequest.into(),
                 generation_id: self.generation_id,
-                protocol_type: Some(String::from(protocol_type)),
+                protocol_type: Some(protocol_type.to_owned()),
                 protocol_name: None,
-                leader: String::from(""),
+                leader: "".to_owned(),
                 skip_assignment: None,
-                member_id: String::from(""),
+                member_id: "".to_owned(),
                 members: Some([].into()),
             };
 
@@ -1175,11 +1280,11 @@ impl Group for Inner<Formed> {
                 throttle_time_ms: Some(0),
                 error_code: ErrorCode::InconsistentGroupProtocol.into(),
                 generation_id: self.generation_id,
-                protocol_type: Some(String::from(protocol_type)),
+                protocol_type: Some(protocol_type.to_owned()),
                 protocol_name: Some(self.state.protocol_name.clone()),
-                leader: String::from(""),
+                leader: "".to_owned(),
                 skip_assignment: None,
-                member_id: String::from(""),
+                member_id: "".to_owned(),
                 members: Some([].into()),
             };
 
@@ -1218,7 +1323,7 @@ impl Group for Inner<Formed> {
                             leader: state
                                 .leader()
                                 .map(|s| s.to_owned())
-                                .unwrap_or(String::from("")),
+                                .unwrap_or("".to_owned()),
                             skip_assignment: Some(false),
                             member_id: member_id.to_string(),
                             members: Some(members),
@@ -1238,6 +1343,9 @@ impl Group for Inner<Formed> {
                             protocol_name: Some(self.state.protocol_name),
                             leader: Some(self.state.leader),
                         },
+                        storage: self.storage,
+                        offsets: self.offsets,
+                        partitions: self.partitions,
                     }
                     .into();
 
@@ -1278,6 +1386,9 @@ impl Group for Inner<Formed> {
                         protocol_name: Some(self.state.protocol_name),
                         leader: Some(self.state.leader),
                     },
+                    storage: self.storage,
+                    offsets: self.offsets,
+                    partitions: self.partitions,
                 }
                 .into();
 
@@ -1294,7 +1405,7 @@ impl Group for Inner<Formed> {
                         leader: state
                             .leader()
                             .map(|s| s.to_owned())
-                            .unwrap_or(String::from("")),
+                            .unwrap_or("".to_owned()),
                         skip_assignment: Some(false),
                         member_id: member_id.to_string(),
                         members: Some([].into()),
@@ -1490,6 +1601,9 @@ impl Group for Inner<Formed> {
                     protocol_name: Some(self.state.protocol_name),
                     leader,
                 },
+                storage: self.storage,
+                offsets: self.offsets,
+                partitions: self.partitions,
             }
             .into()
         } else {
@@ -1509,37 +1623,11 @@ impl Group for Inner<Formed> {
 
     #[instrument]
     fn offset_commit(
-        self,
+        mut self,
         now: Instant,
-        group_id: &str,
-        generation_id_or_member_epoch: Option<i32>,
-        member_id: Option<&str>,
-        group_instance_id: Option<&str>,
-        retention_time_ms: Option<i64>,
-        topics: Option<&[OffsetCommitRequestTopic]>,
+        detail: OffsetCommit<'_>,
     ) -> (Self::OffsetCommitState, Body) {
-        let body = Body::OffsetCommitResponse {
-            throttle_time_ms: Some(0),
-            topics: topics.map(|topics| {
-                topics
-                    .as_ref()
-                    .iter()
-                    .map(|topic| OffsetCommitResponseTopic {
-                        name: topic.name.clone(),
-                        partitions: topic.partitions.as_ref().map(|partitions| {
-                            partitions
-                                .iter()
-                                .map(|partition| OffsetCommitResponsePartition {
-                                    partition_index: partition.partition_index,
-                                    error_code: ErrorCode::None.into(),
-                                })
-                                .collect()
-                        }),
-                    })
-                    .collect()
-            }),
-        };
-
+        let body = self.commit_offset(detail);
         (self, body)
     }
 
@@ -1567,12 +1655,52 @@ impl Group for Inner<Formed> {
                                     |partition_indexes| {
                                         partition_indexes
                                             .iter()
-                                            .map(|partition_index| OffsetFetchResponsePartitions {
-                                                partition_index: *partition_index,
-                                                committed_offset: 0,
-                                                committed_leader_epoch: 0,
-                                                metadata: None,
-                                                error_code: 0,
+                                            .map(|partition_index| {
+                                                let gtp = GroupTopition {
+                                                    group: group.group_id.clone(),
+                                                    topition: Topition::new(
+                                                        topic.name.as_str(),
+                                                        *partition_index,
+                                                    ),
+                                                };
+
+                                                if let Ok(offsets) = self.offsets_lock() {
+                                                    debug!(?offsets, ?gtp);
+
+                                                    offsets.get(&gtp).map_or(
+                                                        OffsetFetchResponsePartitions {
+                                                            partition_index: *partition_index,
+                                                            committed_offset: 0,
+                                                            committed_leader_epoch: 0,
+                                                            metadata: None,
+                                                            error_code: ErrorCode::None.into(),
+                                                        },
+                                                        |offset_commit| {
+                                                            debug!(?gtp, ?offset_commit);
+
+                                                            OffsetFetchResponsePartitions {
+                                                                partition_index: *partition_index,
+                                                                committed_offset: offset_commit
+                                                                    .offset,
+                                                                committed_leader_epoch:
+                                                                    offset_commit.leader_epoch,
+                                                                metadata: Some(
+                                                                    offset_commit.metadata.clone(),
+                                                                ),
+                                                                error_code: ErrorCode::None.into(),
+                                                            }
+                                                        },
+                                                    )
+                                                } else {
+                                                    OffsetFetchResponsePartitions {
+                                                        partition_index: *partition_index,
+                                                        committed_offset: 0,
+                                                        committed_leader_epoch: 0,
+                                                        metadata: None,
+                                                        error_code: ErrorCode::UnknownServerError
+                                                            .into(),
+                                                    }
+                                                }
                                             })
                                             .collect()
                                     },
@@ -1600,15 +1728,18 @@ impl Group for Inner<Formed> {
 mod tests {
     use std::time::Duration;
 
+    use crate::NUM_CONSUMER_OFFSETS_PARTITIONS;
+
     use super::*;
     use pretty_assertions::assert_eq;
     use tansu_kafka_sans_io::{
-        offset_commit_request::OffsetCommitRequestPartition,
+        offset_commit_request::{OffsetCommitRequestPartition, OffsetCommitRequestTopic},
         offset_fetch_request::OffsetFetchRequestTopics,
         offset_fetch_response::{
             OffsetFetchResponseGroup, OffsetFetchResponsePartitions, OffsetFetchResponseTopics,
         },
     };
+    use tansu_storage::segment::MemorySegmentProvider;
     use tracing::subscriber::DefaultGuard;
 
     #[cfg(miri)]
@@ -1647,7 +1778,15 @@ mod tests {
     fn join_requires_member_id() -> Result<()> {
         let _guard = init_tracing()?;
 
-        let s: Wrapper = Inner::<Forming>::default().into();
+        let storage = Storage::with_segment_provider(Box::new(MemorySegmentProvider::default()))
+            .map(Mutex::new)
+            .map(Arc::new)?;
+
+        let offsets = Arc::new(Mutex::new(BTreeMap::new()));
+
+        let s: Wrapper =
+            Inner::<Forming>::with_storage(storage, NUM_CONSUMER_OFFSETS_PARTITIONS, offsets)?
+                .into();
 
         let client_id = "console-consumer";
         let group_id = "test-consumer-group";
@@ -1757,7 +1896,15 @@ mod tests {
     fn fresh_join() -> Result<()> {
         let _guard = init_tracing()?;
 
-        let s: Wrapper = Inner::<Forming>::default().into();
+        let storage = Storage::with_segment_provider(Box::new(MemorySegmentProvider::default()))
+            .map(Mutex::new)
+            .map(Arc::new)?;
+
+        let offsets = Arc::new(Mutex::new(BTreeMap::new()));
+
+        let s: Wrapper =
+            Inner::<Forming>::with_storage(storage, NUM_CONSUMER_OFFSETS_PARTITIONS, offsets)?
+                .into();
 
         let client_id = "console-consumer";
         let group_id = "test-consumer-group";
@@ -1975,12 +2122,14 @@ mod tests {
 
         let (_s, offset_commit_response) = s.offset_commit(
             now,
-            group_id,
-            generation_id_or_member_epoch,
-            Some(&member_id),
-            group_instance_id,
-            retention_time_ms,
-            Some(&topics[..]),
+            OffsetCommit {
+                group_id,
+                generation_id_or_member_epoch,
+                member_id: Some(&member_id),
+                group_instance_id,
+                retention_time_ms,
+                topics: Some(&topics[..]),
+            },
         );
 
         let offset_commit_response_expected = Body::OffsetCommitResponse {
@@ -2009,7 +2158,15 @@ mod tests {
     fn lifecycle() -> Result<()> {
         let _guard = init_tracing()?;
 
-        let s: Wrapper = Inner::<Forming>::default().into();
+        let storage = Storage::with_segment_provider(Box::new(MemorySegmentProvider::default()))
+            .map(Mutex::new)
+            .map(Arc::new)?;
+
+        let offsets = Arc::new(Mutex::new(BTreeMap::new()));
+
+        let s: Wrapper =
+            Inner::<Forming>::with_storage(storage, NUM_CONSUMER_OFFSETS_PARTITIONS, offsets)?
+                .into();
 
         let session_timeout_ms = 45_000;
         let rebalance_timeout_ms = Some(300_000);
@@ -2282,25 +2439,27 @@ mod tests {
 
         let s = match s.offset_commit(
             now,
-            GROUP_ID,
-            Some(previous_generation),
-            Some(&first_member_id),
-            group_instance_id,
-            None,
-            Some(&[OffsetCommitRequestTopic {
-                name: TOPIC.into(),
-                partitions: Some(
-                    (0..=2)
-                        .map(|partition_index| OffsetCommitRequestPartition {
-                            partition_index,
-                            committed_offset: 1,
-                            committed_leader_epoch: Some(0),
-                            commit_timestamp: None,
-                            committed_metadata: Some("".into()),
-                        })
-                        .collect(),
-                ),
-            }]),
+            OffsetCommit {
+                group_id: GROUP_ID,
+                generation_id_or_member_epoch: Some(previous_generation),
+                member_id: Some(&first_member_id),
+                group_instance_id,
+                retention_time_ms: None,
+                topics: Some(&[OffsetCommitRequestTopic {
+                    name: TOPIC.into(),
+                    partitions: Some(
+                        (0..=2)
+                            .map(|partition_index| OffsetCommitRequestPartition {
+                                partition_index,
+                                committed_offset: 1,
+                                committed_leader_epoch: Some(0),
+                                commit_timestamp: None,
+                                committed_metadata: Some("".into()),
+                            })
+                            .collect(),
+                    ),
+                }]),
+            },
         ) {
             (
                 s,
@@ -2741,7 +2900,15 @@ mod tests {
     fn missed_heartbeat() -> Result<()> {
         let _guard = init_tracing()?;
 
-        let s: Wrapper = Inner::<Forming>::default().into();
+        let storage = Storage::with_segment_provider(Box::new(MemorySegmentProvider::default()))
+            .map(Mutex::new)
+            .map(Arc::new)?;
+
+        let offsets = Arc::new(Mutex::new(BTreeMap::new()));
+
+        let s: Wrapper =
+            Inner::<Forming>::with_storage(storage, NUM_CONSUMER_OFFSETS_PARTITIONS, offsets)?
+                .into();
 
         let session_timeout_ms = 45_000;
         let rebalance_timeout_ms = Some(300_000);
@@ -3014,25 +3181,27 @@ mod tests {
 
         let s = match s.offset_commit(
             now,
-            GROUP_ID,
-            Some(previous_generation),
-            Some(&first_member_id),
-            group_instance_id,
-            None,
-            Some(&[OffsetCommitRequestTopic {
-                name: TOPIC.into(),
-                partitions: Some(
-                    (0..=2)
-                        .map(|partition_index| OffsetCommitRequestPartition {
-                            partition_index,
-                            committed_offset: 1,
-                            committed_leader_epoch: Some(0),
-                            commit_timestamp: None,
-                            committed_metadata: Some("".into()),
-                        })
-                        .collect(),
-                ),
-            }]),
+            OffsetCommit {
+                group_id: GROUP_ID,
+                generation_id_or_member_epoch: Some(previous_generation),
+                member_id: Some(&first_member_id),
+                group_instance_id,
+                retention_time_ms: None,
+                topics: Some(&[OffsetCommitRequestTopic {
+                    name: TOPIC.into(),
+                    partitions: Some(
+                        (0..=2)
+                            .map(|partition_index| OffsetCommitRequestPartition {
+                                partition_index,
+                                committed_offset: 1,
+                                committed_leader_epoch: Some(0),
+                                commit_timestamp: None,
+                                committed_metadata: Some("".into()),
+                            })
+                            .collect(),
+                    ),
+                }]),
+            },
         ) {
             (
                 s,

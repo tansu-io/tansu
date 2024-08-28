@@ -30,7 +30,7 @@ use std::{
     io::{self, Cursor, Write},
     num, str, string,
     sync::OnceLock,
-    time::{SystemTime, SystemTimeError},
+    time::{Duration, SystemTime, SystemTimeError},
 };
 use tansu_kafka_model::{MessageKind, MessageMeta};
 use tracing::debug;
@@ -1133,6 +1133,12 @@ impl TryFrom<i16> for Ack {
             _ => Err(Error::InvalidAckValue(value)),
         }
     }
+}
+
+pub fn to_system_time(timestamp: i64) -> Result<SystemTime> {
+    u64::try_from(timestamp)
+        .map(|timestamp| SystemTime::UNIX_EPOCH + Duration::from_millis(timestamp))
+        .map_err(Into::into)
 }
 
 pub fn to_timestamp(system_time: SystemTime) -> Result<i64> {

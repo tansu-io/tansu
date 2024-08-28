@@ -28,7 +28,7 @@ use std::{
     str::FromStr,
     sync::PoisonError,
     task::Waker,
-    time::{Duration, SystemTime, SystemTimeError},
+    time::SystemTimeError,
 };
 use tansu_kafka_sans_io::record::Batch;
 use tracing::{debug, instrument};
@@ -112,22 +112,6 @@ impl<T> From<PoisonError<T>> for Error {
 }
 
 pub type Result<T, E = Error> = result::Result<T, E>;
-
-#[allow(dead_code)]
-fn to_system_time(timestamp: i64) -> Result<SystemTime> {
-    u64::try_from(timestamp)
-        .map(|timestamp| SystemTime::UNIX_EPOCH + Duration::from_millis(timestamp))
-        .map_err(Into::into)
-}
-
-#[allow(dead_code)]
-fn to_timestamp(system_time: SystemTime) -> Result<i64> {
-    system_time
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map_err(Into::into)
-        .map(|since_epoch| since_epoch.as_millis())
-        .and_then(|since_epoch| i64::try_from(since_epoch).map_err(Into::into))
-}
 
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Topition {
@@ -365,7 +349,6 @@ mod tests {
     use crate::segment::MemorySegmentProvider;
     use bytes::Bytes;
     use tansu_kafka_sans_io::record::{Batch, Record};
-    use time::OffsetDateTime;
 
     #[test]
     fn produce_fetch() -> Result<()> {
@@ -424,35 +407,6 @@ mod tests {
         let topition = Topition::from_str("qwerty-2147483647")?;
         assert_eq!("qwerty", topition.topic());
         assert_eq!(i32::MAX, topition.partition());
-        Ok(())
-    }
-
-    #[test]
-    fn to_system_time_and_back() -> Result<()> {
-        let timestamp = 1_707_058_170_165;
-
-        assert_eq!(timestamp, to_system_time(timestamp).and_then(to_timestamp)?);
-        Ok(())
-    }
-
-    #[test]
-    fn base_timestamp() -> Result<()> {
-        let t = to_system_time(1_707_058_170_165).map(OffsetDateTime::from)?;
-
-        assert_eq!(
-            "2024-02-04T14:49:30.165Z",
-            format!(
-                "{:0>4}-{:0>2}-{:0>2}T{:0>2}:{:0>2}:{:0>2}.{:0>3}Z",
-                t.year(),
-                t.month() as u8,
-                t.day(),
-                t.hour(),
-                t.minute(),
-                t.second(),
-                t.millisecond()
-            )
-        );
-
         Ok(())
     }
 }

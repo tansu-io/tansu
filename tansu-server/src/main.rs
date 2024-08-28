@@ -30,7 +30,7 @@ use tansu_server::{
         Applicator, ApplyStateFactory, Config, ServerFactory, StorageFactory,
         StoragePersistentStateFactory,
     },
-    Error, Result,
+    Error, Result, NUM_CONSUMER_OFFSETS_PARTITIONS,
 };
 use tansu_storage::{
     segment::{FileSystemSegmentProvider, SegmentProvider},
@@ -152,8 +152,12 @@ async fn main() -> Result<()> {
     }
 
     {
-        let group_provider = Box::new(GroupProvider) as Box<dyn ProvideCoordinator>;
-        let manager = Box::new(Manager::new(group_provider)) as Box<dyn Coordinator>;
+        let groups = GroupProvider::new(storage.clone(), NUM_CONSUMER_OFFSETS_PARTITIONS)
+            .map(|group_provider| Box::new(group_provider) as Box<dyn ProvideCoordinator>)
+            .map(|provide_coordinator| Manager::new(provide_coordinator))
+            .map(|manager| Box::new(manager) as Box<dyn Coordinator>)
+            .map(Mutex::new)
+            .map(Arc::new)?;
 
         let mut broker = Broker::new(
             args.kafka_node_id,
@@ -163,7 +167,7 @@ async fn main() -> Result<()> {
             args.kafka_listener_url,
             args.kafka_rack,
             storage,
-            Arc::new(Mutex::new(manager)),
+            groups,
         );
 
         debug!(?broker);

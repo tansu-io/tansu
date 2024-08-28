@@ -19,6 +19,7 @@ use std::{
     num::TryFromIntError,
     result,
     str::{FromStr, Utf8Error},
+    string::FromUtf8Error,
     sync::{Arc, PoisonError},
 };
 
@@ -44,6 +45,8 @@ pub mod raft;
 
 static RAFT_LOG: &str = "raft_log";
 static RAFT_STATE: &str = "raft_state";
+static CONSUMER_OFFSETS: &str = "consumer_offsets";
+pub static NUM_CONSUMER_OFFSETS_PARTITIONS: i32 = 3;
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct State {
@@ -56,7 +59,52 @@ pub struct State {
 
 impl State {
     fn new() -> Self {
+        let mut topics = BTreeMap::new();
+
+        _ = topics.insert(
+            RAFT_LOG.to_owned(),
+            TopicDetail {
+                id: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                creatable_topic: CreatableTopic {
+                    name: RAFT_LOG.to_owned(),
+                    num_partitions: 1,
+                    replication_factor: 0,
+                    assignments: Some([].into()),
+                    configs: Some([].into()),
+                },
+            },
+        );
+
+        _ = topics.insert(
+            RAFT_STATE.to_owned(),
+            TopicDetail {
+                id: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                creatable_topic: CreatableTopic {
+                    name: RAFT_STATE.to_owned(),
+                    num_partitions: 1,
+                    replication_factor: 0,
+                    assignments: Some([].into()),
+                    configs: Some([].into()),
+                },
+            },
+        );
+
+        _ = topics.insert(
+            CONSUMER_OFFSETS.to_owned(),
+            TopicDetail {
+                id: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                creatable_topic: CreatableTopic {
+                    name: CONSUMER_OFFSETS.to_owned(),
+                    num_partitions: 1,
+                    replication_factor: 0,
+                    assignments: Some([].into()),
+                    configs: Some([].into()),
+                },
+            },
+        );
+
         Self {
+            topics,
             ..Default::default()
         }
     }
@@ -236,6 +284,7 @@ pub enum Error {
     ParseInt(#[from] std::num::ParseIntError),
     Poison,
     Raft(#[from] tansu_raft::Error),
+    StringUtf8(#[from] FromUtf8Error),
     Storage(#[from] tansu_storage::Error),
     TryFromInt(#[from] TryFromIntError),
     Url(#[from] url::ParseError),

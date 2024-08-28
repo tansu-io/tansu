@@ -17,7 +17,10 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use tansu_kafka_sans_io::{offset_commit_request::OffsetCommitRequestTopic, Body};
 
-use crate::{coordinator::group::Coordinator, Result};
+use crate::{
+    coordinator::group::{Coordinator, OffsetCommit},
+    Result,
+};
 
 #[derive(Debug)]
 pub struct OffsetCommitRequest {
@@ -41,14 +44,14 @@ impl OffsetCommitRequest {
         topics: Option<&[OffsetCommitRequestTopic]>,
     ) -> Result<Body> {
         self.groups_lock().and_then(|mut coordinator| {
-            coordinator.offset_commit(
+            coordinator.offset_commit(OffsetCommit {
                 group_id,
                 generation_id_or_member_epoch,
                 member_id,
                 group_instance_id,
                 retention_time_ms,
                 topics,
-            )
+            })
         })
     }
 }
