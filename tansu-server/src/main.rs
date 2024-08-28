@@ -154,7 +154,7 @@ async fn main() -> Result<()> {
     {
         let groups = GroupProvider::new(storage.clone(), NUM_CONSUMER_OFFSETS_PARTITIONS)
             .map(|group_provider| Box::new(group_provider) as Box<dyn ProvideCoordinator>)
-            .map(|provide_coordinator| Manager::new(provide_coordinator))
+            .map(Manager::new)
             .map(|manager| Box::new(manager) as Box<dyn Coordinator>)
             .map(Mutex::new)
             .map(Arc::new)?;
