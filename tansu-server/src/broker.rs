@@ -20,6 +20,7 @@ pub mod fetch;
 pub mod find_coordinator;
 pub mod group;
 pub mod init_producer_id;
+pub mod list_offsets;
 pub mod list_partition_reassignments;
 pub mod metadata;
 pub mod produce;
@@ -42,6 +43,7 @@ use group::{
     offset_commit::OffsetCommitRequest, offset_fetch::OffsetFetchRequest, sync::SyncGroupRequest,
 };
 use init_producer_id::InitProducerIdRequest;
+use list_offsets::ListOffsetsRequest;
 use list_partition_reassignments::ListPartitionReassignmentsRequest;
 use metadata::MetadataRequest;
 use produce::ProduceRequest;
@@ -407,6 +409,16 @@ impl Broker {
                 };
 
                 leave.response(&group_id, member_id.as_deref(), members.as_deref())
+            }
+
+            Body::ListOffsetsRequest {
+                replica_id,
+                isolation_level,
+                topics,
+            } => {
+                let state = self.applicator.with_current_state().await;
+                let list_offsets = ListOffsetsRequest;
+                Ok(list_offsets.response(replica_id, isolation_level, topics.as_deref(), &state))
             }
 
             Body::ListPartitionReassignmentsRequest { topics, .. } => {

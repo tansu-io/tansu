@@ -42,14 +42,14 @@ impl FetchRequest {
         self.storage.lock().map_err(|error| error.into())
     }
 
-    async fn fetch_partition<'a>(
+    async fn fetch_partition(
         &mut self,
         max_wait_ms: Duration,
         min_bytes: u64,
         max_bytes: Option<u64>,
         isolation: Option<IsolationLevel>,
-        topic: &'a str,
-        fetch_partition: &'a FetchPartition,
+        topic: &str,
+        fetch_partition: &FetchPartition,
     ) -> Result<PartitionData> {
         debug!(
             ?max_wait_ms,
@@ -89,21 +89,16 @@ impl FetchRequest {
                 high_watermark,
                 last_stable_offset: Some(last_stable_offset),
                 log_start_offset: Some(-1),
-                diverging_epoch: Some(EpochEndOffset {
-                    epoch: -1,
-                    end_offset: -1,
-                }),
-                current_leader: Some(LeaderIdAndEpoch {
-                    leader_id: 0,
-                    leader_epoch: 0,
-                }),
-                snapshot_id: Some(SnapshotId {
-                    end_offset: -1,
-                    epoch: -1,
-                }),
+                diverging_epoch: None,
+                current_leader: None,
+                snapshot_id: None,
                 aborted_transactions: Some([].into()),
-                preferred_read_replica: Some(0),
-                records: Some(Frame { batches }),
+                preferred_read_replica: Some(-1),
+                records: if batches.is_empty() {
+                    None
+                } else {
+                    Some(Frame { batches })
+                },
             })
         })
     }
@@ -134,7 +129,7 @@ impl FetchRequest {
                             epoch: -1,
                         }),
                         aborted_transactions: Some([].into()),
-                        preferred_read_replica: Some(0),
+                        preferred_read_replica: Some(-1),
                         records: None,
                     })
                     .collect()

@@ -101,6 +101,8 @@ struct Connection {
 
 impl Connection {
     async fn open(origin: &Url, proxy: TcpStream, addr: SocketAddr) -> Result<Self> {
+        debug!("origin: {origin}, proxy: {proxy:?}, addr: {addr}");
+
         TcpStream::connect(format!(
             "{}:{}",
             origin.host_str().unwrap(),
@@ -115,21 +117,38 @@ impl Connection {
         .map_err(Into::into)
     }
 
+    fn frame_length(encoded: [u8; 4]) -> usize {
+        i32::from_be_bytes(encoded) as usize + encoded.len()
+    }
+
     async fn stream_handler(&mut self) -> Result<()> {
         let mut size = [0u8; 4];
 
         loop {
             _ = self.proxy.read_exact(&mut size).await?;
 
-            let mut buffer: Vec<u8> = vec![0u8; i32::from_be_bytes(size) as usize + size.len()];
-            buffer[0..4].copy_from_slice(&size[..]);
-            _ = self.proxy.read_exact(&mut buffer[4..]).await?;
+            let mut request_buffer: Vec<u8> = vec![0u8; Self::frame_length(size)];
+            request_buffer[0..size.len()].copy_from_slice(&size[..]);
+            _ = self.proxy.read_exact(&mut request_buffer[4..]).await?;
 
-            let request = Frame::request_from_bytes(&buffer)?;
-            debug!(?self.addr, ?request);
+            debug!(?self.addr, ?request_buffer);
 
-            match request {
-                Frame {
+            self.origin.write_all(&request_buffer).await?;
+
+            _ = self.origin.read_exact(&mut size).await?;
+
+            let mut response_buffer: Vec<u8> = vec![0u8; Self::frame_length(size)];
+            response_buffer[0..size.len()].copy_from_slice(&size[..]);
+            _ = self
+                .origin
+                .read_exact(&mut response_buffer[size.len()..])
+                .await?;
+            debug!(?self.addr, ?response_buffer);
+
+            self.proxy.write_all(&response_buffer).await?;
+
+            if let Ok(
+                request @ Frame {
                     header:
                         Header::Request {
                             api_key,
@@ -137,25 +156,14 @@ impl Connection {
                             ..
                         },
                     ..
-                } => {
-                    self.origin.write_all(&buffer).await?;
+                },
+            ) = Frame::request_from_bytes(&request_buffer)
+            {
+                debug!(?self.addr, ?request);
 
-                    _ = self.origin.read_exact(&mut size).await?;
-
-                    let mut buffer: Vec<u8> =
-                        vec![0u8; i32::from_be_bytes(size) as usize + size.len()];
-                    buffer[0..4].copy_from_slice(&size[..]);
-                    _ = self.origin.read_exact(&mut buffer[4..]).await?;
-
-                    let response = Frame::response_from_bytes(&buffer, api_key, api_version)?;
-
-                    debug!(?self.addr, ?response);
-
-                    self.proxy.write_all(&buffer).await?;
-                }
-
-                _ => unreachable!(),
-            };
+                let response = Frame::response_from_bytes(&response_buffer, api_key, api_version)?;
+                debug!(?self.addr, ?response);
+            }
         }
     }
 }

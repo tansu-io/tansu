@@ -37,14 +37,19 @@ impl MetadataRequest {
                 .broker_ids
                 .as_ref()
                 .map_or(-1, |broker_ids| broker_ids[0]),
-            leader_epoch: Some(-1),
+            leader_epoch: Some(0),
             replica_nodes: Some(
                 assignment
                     .broker_ids
                     .as_ref()
                     .map_or(vec![], |broker_ids| broker_ids.clone()),
             ),
-            isr_nodes: Some(vec![]),
+            isr_nodes: Some(
+                assignment
+                    .broker_ids
+                    .as_ref()
+                    .map_or(vec![], |broker_ids| broker_ids.clone()),
+            ),
             offline_replicas: Some(vec![]),
         }
     }
@@ -168,10 +173,10 @@ impl MetadataRequest {
         topics: Option<&[MetadataRequestTopic]>,
         state: &State,
     ) -> Body {
-        let topics = Some(self.topics(topics, state));
-        let brokers = Some(self.brokers(state));
         let throttle_time_ms = Some(0);
+        let brokers = Some(self.brokers(state));
         let cluster_id = state.cluster_id.clone();
+        let topics = Some(self.topics(topics, state));
         let cluster_authorized_operations = None;
 
         Body::MetadataResponse {

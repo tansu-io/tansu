@@ -155,15 +155,16 @@ impl<'a> Encoder<'a> {
 
     fn field_meta(&self, name: &str) -> Option<&'static FieldMeta> {
         debug!(
-            "name: {name}, parse.front: {:?}",
-            self.meta.parse.front().and_then(|front| front.field(name))
+            "name: {name}, parse.front: {:?}, meta: {:?}",
+            self.meta.parse.front().and_then(|front| front.field(name)),
+            self.meta.message.and_then(|mm| mm.field(name))
         );
 
         self.meta
             .parse
             .front()
             .and_then(|front| front.field(name))
-            .or_else(|| self.meta.message.and_then(|mm| mm.field(name)))
+            .or(self.meta.message.and_then(|mm| mm.field(name)))
     }
 
     fn field_name(&self) -> String {
@@ -435,9 +436,10 @@ impl<'a> Serializer for &'a mut Encoder<'_> {
 
     fn serialize_str(self, v: &str) -> Result<Self::Ok, Self::Error> {
         debug!(
-            "name: {}, v: {v:?}:{}",
+            "name: {}, v: {v:?}:{}, valid: {}",
             self.field_name(),
-            type_name_of_val(&v)
+            type_name_of_val(&v),
+            self.is_valid()
         );
 
         if self.in_header()
@@ -864,17 +866,31 @@ impl<'a> SerializeStructVariant for &'a mut Encoder<'_> {
         T: Serialize,
         T: ?Sized,
     {
+        debug!(?key);
+
         _ = self.field.replace(key);
 
         if let Some(fm) = self.field_meta(key) {
-            debug!("field name: {}, meta: {fm:?}", self.field_name());
+            if self
+                .api_version
+                .map_or(false, |api_version| fm.version.within(api_version))
+            {
+                debug!("field name: {}, meta: {fm:?}", self.field_name());
 
-            _ = self.meta.field.replace(fm);
-            self.meta.parse.push_front(fm.fields.into());
-            let outcome = value.serialize(&mut **self);
-            _ = self.meta.parse.pop_front();
-            _ = self.meta.field.take();
-            outcome
+                _ = self.meta.field.replace(fm);
+                self.meta.parse.push_front(fm.fields.into());
+                let outcome = value.serialize(&mut **self);
+                _ = self.meta.parse.pop_front();
+                _ = self.meta.field.take();
+                outcome
+            } else {
+                debug!(
+                    "field name: {}, meta: {fm:?}, is not required in v: {:?}",
+                    self.field_name(),
+                    self.api_version
+                );
+                Ok(())
+            }
         } else {
             warn!("field name: {}, has no field meta", self.field_name());
 

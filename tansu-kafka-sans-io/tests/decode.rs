@@ -14,14 +14,20 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use bytes::Bytes;
+use pretty_assertions::assert_eq;
 use serde::Deserialize;
 use std::{fs::File, io::Cursor, sync::Arc, thread};
 use tansu_kafka_sans_io::{
     de::Decoder,
+    join_group_response::JoinGroupResponseMember,
+    metadata_request::MetadataRequestTopic,
+    metadata_response::{MetadataResponseBroker, MetadataResponsePartition, MetadataResponseTopic},
+    offset_fetch_response::{OffsetFetchResponsePartition, OffsetFetchResponseTopic},
     record::{self, Batch, Record},
-    Body, Error, Frame, Header, Result,
+    Body, Error, ErrorCode, Frame, Header, Result,
 };
 use tracing::{debug, subscriber::DefaultGuard};
+use tracing_subscriber::fmt::format::FmtSpan;
 
 #[cfg(miri)]
 fn init_tracing() -> Result<()> {
@@ -30,23 +36,28 @@ fn init_tracing() -> Result<()> {
 
 #[cfg(not(miri))]
 fn init_tracing() -> Result<DefaultGuard> {
-    let subscriber = tracing_subscriber::fmt()
-        .with_level(true)
-        .with_line_number(true)
-        .with_thread_names(false)
-        .with_max_level(tracing::Level::DEBUG)
-        .with_writer(
-            thread::current()
-                .name()
-                .ok_or(Error::Message(String::from("unnamed thread")))
-                .and_then(|name| {
-                    File::create(format!("tests/decode-{}.log", name)).map_err(Into::into)
-                })
-                .map(Arc::new)?,
-        )
-        .finish();
-
-    Ok(tracing::subscriber::set_default(subscriber))
+    Ok(tracing::subscriber::set_default(
+        tracing_subscriber::fmt()
+            .with_level(true)
+            .with_line_number(true)
+            .with_thread_names(false)
+            .with_max_level(tracing::Level::DEBUG)
+            .with_span_events(FmtSpan::ACTIVE)
+            .with_writer(
+                thread::current()
+                    .name()
+                    .ok_or(Error::Message(String::from("unnamed thread")))
+                    .and_then(|name| {
+                        File::create(format!(
+                            "../logs/{}/decode-{name}.log",
+                            env!("CARGO_PKG_NAME")
+                        ))
+                        .map_err(Into::into)
+                    })
+                    .map(Arc::new)?,
+            )
+            .finish(),
+    ))
 }
 
 #[test]
@@ -2155,6 +2166,40 @@ fn find_coordinator_request_v1_000() -> Result<()> {
 }
 
 #[test]
+fn find_coordinator_request_v2_000() -> Result<()> {
+    let _guard = init_tracing()?;
+
+    let v = vec![
+        0, 0, 0, 45, 0, 10, 0, 2, 0, 0, 0, 3, 0, 7, 114, 100, 107, 97, 102, 107, 97, 0, 25, 101,
+        120, 97, 109, 112, 108, 101, 95, 99, 111, 110, 115, 117, 109, 101, 114, 95, 103, 114, 111,
+        117, 112, 95, 105, 100, 0,
+    ];
+
+    let mut c = Cursor::new(v);
+    let mut deserializer = Decoder::request(&mut c);
+
+    assert_eq!(
+        Frame {
+            size: 45,
+            header: Header::Request {
+                api_key: 10,
+                api_version: 2,
+                correlation_id: 3,
+                client_id: Some("rdkafka".into())
+            },
+            body: Body::FindCoordinatorRequest {
+                key: Some("example_consumer_group_id".into()),
+                key_type: Some(0),
+                coordinator_keys: None
+            }
+        },
+        Frame::deserialize(&mut deserializer)?
+    );
+
+    Ok(())
+}
+
+#[test]
 fn find_coordinator_response_v1_000() -> Result<()> {
     let _guard = init_tracing()?;
 
@@ -2292,6 +2337,118 @@ fn init_producer_id_request_v4_000() -> Result<()> {
 }
 
 #[test]
+fn join_group_request_v5_000() -> Result<()> {
+    use tansu_kafka_sans_io::join_group_request::JoinGroupRequestProtocol;
+
+    let _guard = init_tracing()?;
+
+    let v = vec![
+        0, 0, 0, 159, 0, 11, 0, 5, 0, 0, 0, 3, 0, 7, 114, 100, 107, 97, 102, 107, 97, 0, 25, 101,
+        120, 97, 109, 112, 108, 101, 95, 99, 111, 110, 115, 117, 109, 101, 114, 95, 103, 114, 111,
+        117, 112, 95, 105, 100, 0, 0, 23, 112, 0, 4, 147, 224, 0, 0, 255, 255, 0, 8, 99, 111, 110,
+        115, 117, 109, 101, 114, 0, 0, 0, 2, 0, 5, 114, 97, 110, 103, 101, 0, 0, 0, 31, 0, 3, 0, 0,
+        0, 1, 0, 9, 98, 101, 110, 99, 104, 109, 97, 114, 107, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255,
+        255, 255, 0, 0, 0, 10, 114, 111, 117, 110, 100, 114, 111, 98, 105, 110, 0, 0, 0, 31, 0, 3,
+        0, 0, 0, 1, 0, 9, 98, 101, 110, 99, 104, 109, 97, 114, 107, 0, 0, 0, 0, 0, 0, 0, 0, 255,
+        255, 255, 255, 0, 0,
+    ];
+
+    let range_metadata =
+        Bytes::from_static(b"\0\x03\0\0\0\x01\0\tbenchmark\0\0\0\0\0\0\0\0\xff\xff\xff\xff\0\0");
+    let roundrobin_metadata =
+        Bytes::from_static(b"\0\x03\0\0\0\x01\0\tbenchmark\0\0\0\0\0\0\0\0\xff\xff\xff\xff\0\0");
+
+    assert_eq!(
+        Frame {
+            size: 159,
+            header: Header::Request {
+                api_key: 11,
+                api_version: 5,
+                correlation_id: 3,
+                client_id: Some("rdkafka".into())
+            },
+            body: Body::JoinGroupRequest {
+                group_id: "example_consumer_group_id".into(),
+                session_timeout_ms: 6000,
+                rebalance_timeout_ms: Some(300000),
+                member_id: "".into(),
+                group_instance_id: None,
+                protocol_type: "consumer".into(),
+                protocols: Some(
+                    [
+                        JoinGroupRequestProtocol {
+                            name: "range".into(),
+                            metadata: range_metadata
+                        },
+                        JoinGroupRequestProtocol {
+                            name: "roundrobin".into(),
+                            metadata: roundrobin_metadata
+                        }
+                    ]
+                    .into()
+                ),
+                reason: None
+            }
+        },
+        Frame::request_from_bytes(&v)?
+    );
+
+    Ok(())
+}
+
+#[test]
+fn join_group_response_v5_000() -> Result<()> {
+    let _guard = init_tracing()?;
+
+    let v = vec![
+        0, 0, 0, 200, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 5, 114, 97, 110, 103, 101, 0,
+        44, 114, 100, 107, 97, 102, 107, 97, 45, 52, 57, 57, 101, 53, 55, 55, 48, 45, 51, 55, 53,
+        101, 45, 52, 57, 57, 48, 45, 98, 102, 56, 52, 45, 97, 51, 57, 54, 51, 52, 101, 51, 98, 102,
+        101, 52, 0, 44, 114, 100, 107, 97, 102, 107, 97, 45, 52, 57, 57, 101, 53, 55, 55, 48, 45,
+        51, 55, 53, 101, 45, 52, 57, 57, 48, 45, 98, 102, 56, 52, 45, 97, 51, 57, 54, 51, 52, 101,
+        51, 98, 102, 101, 52, 0, 0, 0, 1, 0, 44, 114, 100, 107, 97, 102, 107, 97, 45, 52, 57, 57,
+        101, 53, 55, 55, 48, 45, 51, 55, 53, 101, 45, 52, 57, 57, 48, 45, 98, 102, 56, 52, 45, 97,
+        51, 57, 54, 51, 52, 101, 51, 98, 102, 101, 52, 255, 255, 0, 0, 0, 31, 0, 3, 0, 0, 0, 1, 0,
+        9, 98, 101, 110, 99, 104, 109, 97, 114, 107, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255, 0,
+        0,
+    ];
+
+    let api_key = 11;
+    let api_version = 5;
+
+    let metadata =
+        Bytes::from_static(b"\0\x03\0\0\0\x01\0\tbenchmark\0\0\0\0\0\0\0\0\xff\xff\xff\xff\0\0");
+
+    assert_eq!(
+        Frame {
+            size: 200,
+            header: Header::Response { correlation_id: 4 },
+            body: Body::JoinGroupResponse {
+                throttle_time_ms: Some(0),
+                error_code: 0,
+                generation_id: 1,
+                protocol_type: None,
+                protocol_name: Some("range".into()),
+                leader: "rdkafka-499e5770-375e-4990-bf84-a39634e3bfe4".into(),
+                skip_assignment: None,
+                member_id: "rdkafka-499e5770-375e-4990-bf84-a39634e3bfe4".into(),
+                members: Some(
+                    [JoinGroupResponseMember {
+                        member_id: "rdkafka-499e5770-375e-4990-bf84-a39634e3bfe4".into(),
+                        group_instance_id: None,
+                        metadata
+                    }]
+                    .into()
+                )
+            }
+        },
+        Frame::response_from_bytes(&v, api_key, api_version)?
+    );
+
+    Ok(())
+}
+
+#[test]
 fn join_group_request_v9_000() -> Result<()> {
     use tansu_kafka_sans_io::join_group_request::JoinGroupRequestProtocol;
 
@@ -2307,9 +2464,6 @@ fn join_group_request_v9_000() -> Result<()> {
         0, 3, 0, 0, 0, 1, 0, 4, 116, 101, 115, 116, 0, 0, 0, 4, 255, 255, 255, 255, 0, 0, 0, 0,
         255, 255, 255, 255, 255, 255, 0, 1, 0,
     ];
-
-    let mut c = Cursor::new(v);
-    let mut deserializer = Decoder::request(&mut c);
 
     assert_eq!(
         Frame {
@@ -2340,7 +2494,7 @@ fn join_group_request_v9_000() -> Result<()> {
                 reason: Some("".into())
             }
         },
-        Frame::deserialize(&mut deserializer)?
+        Frame::request_from_bytes(&v)?
     );
 
     Ok(())
@@ -2512,6 +2666,168 @@ fn list_partition_reassignments_request_v0_000() -> Result<()> {
 }
 
 #[test]
+fn metadata_request_v1_000() -> Result<()> {
+    use tansu_kafka_sans_io::metadata_request::MetadataRequestTopic;
+
+    let _guard = init_tracing()?;
+
+    let v = vec![
+        0, 0, 0, 30, 0, 3, 0, 1, 0, 0, 0, 1, 0, 5, 115, 97, 109, 115, 97, 0, 0, 0, 1, 0, 9, 98,
+        101, 110, 99, 104, 109, 97, 114, 107,
+    ];
+
+    assert_eq!(
+        Frame {
+            size: 30,
+            header: Header::Request {
+                api_key: 3,
+                api_version: 1,
+                correlation_id: 1,
+                client_id: Some("samsa".into())
+            },
+            body: Body::MetadataRequest {
+                topics: Some(
+                    [MetadataRequestTopic {
+                        topic_id: None,
+                        name: Some("benchmark".into())
+                    }]
+                    .into()
+                ),
+                allow_auto_topic_creation: None,
+                include_cluster_authorized_operations: None,
+                include_topic_authorized_operations: None
+            }
+        },
+        Frame::request_from_bytes(&v)?
+    );
+
+    Ok(())
+}
+
+#[test]
+fn metadata_response_v1_000() -> Result<()> {
+    let _guard = init_tracing()?;
+
+    let api_key = 3;
+    let api_version = 1;
+
+    let v = vec![
+        0, 0, 0, 237, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 9, 108, 111, 99, 97, 108, 104, 111,
+        115, 116, 0, 0, 35, 132, 255, 255, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 9, 98, 101, 110, 99,
+        104, 109, 97, 114, 107, 0, 0, 0, 0, 7, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0,
+        1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 3, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0,
+        1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 6, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0,
+        1, 0, 0, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0,
+        0, 0, 5, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 4, 0, 0, 0, 1, 0,
+        0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1,
+    ];
+
+    assert_eq!(
+        Frame {
+            size: 237,
+            header: Header::Response { correlation_id: 1 },
+            body: Body::MetadataResponse {
+                throttle_time_ms: None,
+                brokers: Some(
+                    [MetadataResponseBroker {
+                        node_id: 1,
+                        host: "localhost".into(),
+                        port: 9092,
+                        rack: None
+                    }]
+                    .into()
+                ),
+                cluster_id: None,
+                controller_id: Some(1),
+                topics: Some(
+                    [MetadataResponseTopic {
+                        error_code: 0,
+                        name: Some("benchmark".into()),
+                        topic_id: None,
+                        is_internal: Some(false),
+                        partitions: Some(
+                            [
+                                MetadataResponsePartition {
+                                    error_code: 0,
+                                    partition_index: 1,
+                                    leader_id: 1,
+                                    leader_epoch: None,
+                                    replica_nodes: Some([1].into()),
+                                    isr_nodes: Some([1].into()),
+                                    offline_replicas: None
+                                },
+                                MetadataResponsePartition {
+                                    error_code: 0,
+                                    partition_index: 3,
+                                    leader_id: 1,
+                                    leader_epoch: None,
+                                    replica_nodes: Some([1].into()),
+                                    isr_nodes: Some([1].into()),
+                                    offline_replicas: None
+                                },
+                                MetadataResponsePartition {
+                                    error_code: 0,
+                                    partition_index: 6,
+                                    leader_id: 1,
+                                    leader_epoch: None,
+                                    replica_nodes: Some([1].into()),
+                                    isr_nodes: Some([1].into()),
+                                    offline_replicas: None
+                                },
+                                MetadataResponsePartition {
+                                    error_code: 0,
+                                    partition_index: 2,
+                                    leader_id: 1,
+                                    leader_epoch: None,
+                                    replica_nodes: Some([1].into()),
+                                    isr_nodes: Some([1].into()),
+                                    offline_replicas: None
+                                },
+                                MetadataResponsePartition {
+                                    error_code: 0,
+                                    partition_index: 5,
+                                    leader_id: 1,
+                                    leader_epoch: None,
+                                    replica_nodes: Some([1].into()),
+                                    isr_nodes: Some([1].into()),
+                                    offline_replicas: None
+                                },
+                                MetadataResponsePartition {
+                                    error_code: 0,
+                                    partition_index: 0,
+                                    leader_id: 1,
+                                    leader_epoch: None,
+                                    replica_nodes: Some([1].into()),
+                                    isr_nodes: Some([1].into()),
+                                    offline_replicas: None
+                                },
+                                MetadataResponsePartition {
+                                    error_code: 0,
+                                    partition_index: 4,
+                                    leader_id: 1,
+                                    leader_epoch: None,
+                                    replica_nodes: Some([1].into()),
+                                    isr_nodes: Some([1].into()),
+                                    offline_replicas: None
+                                }
+                            ]
+                            .into()
+                        ),
+                        topic_authorized_operations: None
+                    }]
+                    .into()
+                ),
+                cluster_authorized_operations: None
+            }
+        },
+        Frame::response_from_bytes(&v, api_key, api_version)?
+    );
+
+    Ok(())
+}
+
+#[test]
 fn metadata_request_v12_000() -> Result<()> {
     use tansu_kafka_sans_io::metadata_request::MetadataRequestTopic;
 
@@ -2522,9 +2838,6 @@ fn metadata_request_v12_000() -> Result<()> {
         114, 111, 100, 117, 99, 101, 114, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5,
         116, 101, 115, 116, 0, 1, 0, 0,
     ];
-
-    let mut c = Cursor::new(v);
-    let mut deserializer = Decoder::request(&mut c);
 
     assert_eq!(
         Frame {
@@ -2548,48 +2861,14 @@ fn metadata_request_v12_000() -> Result<()> {
                 include_topic_authorized_operations: Some(false),
             }
         },
-        Frame::deserialize(&mut deserializer)?
+        Frame::request_from_bytes(&v)?
     );
 
     Ok(())
 }
 
 #[test]
-fn metadata_request_v12_001() -> Result<()> {
-    let _guard = init_tracing()?;
-
-    let v = vec![
-        0, 0, 0, 31, 0, 3, 0, 12, 0, 0, 0, 1, 0, 16, 99, 111, 110, 115, 111, 108, 101, 45, 112,
-        114, 111, 100, 117, 99, 101, 114, 0, 1, 1, 0, 0,
-    ];
-
-    let mut c = Cursor::new(v);
-    let mut deserializer = Decoder::request(&mut c);
-
-    assert_eq!(
-        Frame {
-            size: 31,
-            header: Header::Request {
-                api_key: 3,
-                api_version: 12,
-                correlation_id: 1,
-                client_id: Some("console-producer".into()),
-            },
-            body: Body::MetadataRequest {
-                topics: Some([].into()),
-                allow_auto_topic_creation: Some(true),
-                include_cluster_authorized_operations: None,
-                include_topic_authorized_operations: Some(false),
-            }
-        },
-        Frame::deserialize(&mut deserializer)?
-    );
-
-    Ok(())
-}
-
-#[test]
-fn metadata_response_v12_0000() -> Result<()> {
+fn metadata_response_v12_000() -> Result<()> {
     use tansu_kafka_sans_io::metadata_response::{MetadataResponseBroker, MetadataResponseTopic};
 
     let _guard = init_tracing()?;
@@ -2639,6 +2918,203 @@ fn metadata_response_v12_0000() -> Result<()> {
 }
 
 #[test]
+fn metadata_request_v12_001() -> Result<()> {
+    let _guard = init_tracing()?;
+
+    let v = vec![
+        0, 0, 0, 31, 0, 3, 0, 12, 0, 0, 0, 1, 0, 16, 99, 111, 110, 115, 111, 108, 101, 45, 112,
+        114, 111, 100, 117, 99, 101, 114, 0, 1, 1, 0, 0,
+    ];
+
+    assert_eq!(
+        Frame {
+            size: 31,
+            header: Header::Request {
+                api_key: 3,
+                api_version: 12,
+                correlation_id: 1,
+                client_id: Some("console-producer".into()),
+            },
+            body: Body::MetadataRequest {
+                topics: Some([].into()),
+                allow_auto_topic_creation: Some(true),
+                include_cluster_authorized_operations: None,
+                include_topic_authorized_operations: Some(false),
+            }
+        },
+        Frame::request_from_bytes(&v)?
+    );
+
+    Ok(())
+}
+
+#[test]
+fn metadata_request_v12_002() -> Result<()> {
+    let _guard = init_tracing()?;
+
+    let v = vec![
+        0, 0, 0, 49, 0, 3, 0, 12, 0, 0, 0, 2, 0, 7, 114, 100, 107, 97, 102, 107, 97, 0, 2, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10, 98, 101, 110, 99, 104, 109, 97, 114, 107, 0, 1,
+        0, 0,
+    ];
+
+    assert_eq!(
+        Frame {
+            size: 49,
+            header: Header::Request {
+                api_key: 3,
+                api_version: 12,
+                correlation_id: 2,
+                client_id: Some("rdkafka".into())
+            },
+            body: Body::MetadataRequest {
+                topics: Some(
+                    [MetadataRequestTopic {
+                        topic_id: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+                        name: Some("benchmark".into())
+                    }]
+                    .into()
+                ),
+                allow_auto_topic_creation: Some(true),
+                include_cluster_authorized_operations: None,
+                include_topic_authorized_operations: Some(false)
+            }
+        },
+        Frame::request_from_bytes(&v)?
+    );
+
+    Ok(())
+}
+
+#[test]
+fn metadata_response_v12_002() -> Result<()> {
+    let _guard = init_tracing()?;
+
+    let v = vec![
+        0, 0, 1, 20, 0, 0, 0, 2, 0, 0, 0, 0, 0, 2, 0, 0, 0, 1, 10, 108, 111, 99, 97, 108, 104, 111,
+        115, 116, 0, 0, 35, 132, 0, 0, 23, 53, 76, 54, 103, 51, 110, 83, 104, 84, 45, 101, 77, 67,
+        116, 75, 45, 45, 88, 56, 54, 115, 119, 0, 0, 0, 1, 2, 0, 0, 10, 98, 101, 110, 99, 104, 109,
+        97, 114, 107, 177, 248, 14, 236, 65, 78, 72, 57, 179, 196, 215, 75, 145, 238, 120, 241, 0,
+        8, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 2, 0, 0, 0, 1, 2, 0, 0, 0, 1, 1, 0, 0, 0, 0,
+        0, 0, 3, 0, 0, 0, 1, 0, 0, 0, 0, 2, 0, 0, 0, 1, 2, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 6, 0,
+        0, 0, 1, 0, 0, 0, 0, 2, 0, 0, 0, 1, 2, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 1, 0,
+        0, 0, 0, 2, 0, 0, 0, 1, 2, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 1, 0, 0, 0, 0, 2,
+        0, 0, 0, 1, 2, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 2, 0, 0, 0, 1,
+        2, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 1, 0, 0, 0, 0, 2, 0, 0, 0, 1, 2, 0, 0, 0,
+        1, 1, 0, 128, 0, 0, 0, 0, 0,
+    ];
+
+    let api_key = 3;
+    let api_version = 12;
+
+    assert_eq!(
+        Frame {
+            size: 276,
+            header: Header::Response { correlation_id: 2 },
+            body: Body::MetadataResponse {
+                throttle_time_ms: Some(0),
+                brokers: Some(
+                    [MetadataResponseBroker {
+                        node_id: 1,
+                        host: "localhost".into(),
+                        port: 9092,
+                        rack: None
+                    }]
+                    .into()
+                ),
+                cluster_id: Some("5L6g3nShT-eMCtK--X86sw".into()),
+                controller_id: Some(1),
+                topics: Some(
+                    [MetadataResponseTopic {
+                        error_code: 0,
+                        name: Some("benchmark".into()),
+                        topic_id: Some([
+                            177, 248, 14, 236, 65, 78, 72, 57, 179, 196, 215, 75, 145, 238, 120,
+                            241
+                        ]),
+                        is_internal: Some(false),
+                        partitions: Some(
+                            [
+                                MetadataResponsePartition {
+                                    error_code: 0,
+                                    partition_index: 1,
+                                    leader_id: 1,
+                                    leader_epoch: Some(0),
+                                    replica_nodes: Some([1].into()),
+                                    isr_nodes: Some([1].into()),
+                                    offline_replicas: Some([].into())
+                                },
+                                MetadataResponsePartition {
+                                    error_code: 0,
+                                    partition_index: 3,
+                                    leader_id: 1,
+                                    leader_epoch: Some(0),
+                                    replica_nodes: Some([1].into()),
+                                    isr_nodes: Some([1].into()),
+                                    offline_replicas: Some([].into())
+                                },
+                                MetadataResponsePartition {
+                                    error_code: 0,
+                                    partition_index: 6,
+                                    leader_id: 1,
+                                    leader_epoch: Some(0),
+                                    replica_nodes: Some([1].into()),
+                                    isr_nodes: Some([1].into()),
+                                    offline_replicas: Some([].into())
+                                },
+                                MetadataResponsePartition {
+                                    error_code: 0,
+                                    partition_index: 2,
+                                    leader_id: 1,
+                                    leader_epoch: Some(0),
+                                    replica_nodes: Some([1].into()),
+                                    isr_nodes: Some([1].into()),
+                                    offline_replicas: Some([].into())
+                                },
+                                MetadataResponsePartition {
+                                    error_code: 0,
+                                    partition_index: 5,
+                                    leader_id: 1,
+                                    leader_epoch: Some(0),
+                                    replica_nodes: Some([1].into()),
+                                    isr_nodes: Some([1].into()),
+                                    offline_replicas: Some([].into())
+                                },
+                                MetadataResponsePartition {
+                                    error_code: 0,
+                                    partition_index: 0,
+                                    leader_id: 1,
+                                    leader_epoch: Some(0),
+                                    replica_nodes: Some([1].into()),
+                                    isr_nodes: Some([1].into()),
+                                    offline_replicas: Some([].into())
+                                },
+                                MetadataResponsePartition {
+                                    error_code: 0,
+                                    partition_index: 4,
+                                    leader_id: 1,
+                                    leader_epoch: Some(0),
+                                    replica_nodes: Some([1].into()),
+                                    isr_nodes: Some([1].into()),
+                                    offline_replicas: Some([].into())
+                                }
+                            ]
+                            .into()
+                        ),
+                        topic_authorized_operations: Some(-2147483648)
+                    }]
+                    .into()
+                ),
+                cluster_authorized_operations: None
+            }
+        },
+        Frame::response_from_bytes(&v, api_key, api_version)?
+    );
+
+    Ok(())
+}
+
+#[test]
 fn offset_fetch_request_v3_000() -> Result<()> {
     use tansu_kafka_sans_io::offset_fetch_request::OffsetFetchRequestTopic;
 
@@ -2682,6 +3158,101 @@ fn offset_fetch_request_v3_000() -> Result<()> {
             }
         },
         Frame::deserialize(&mut deserializer)?
+    );
+
+    Ok(())
+}
+
+#[test]
+fn offset_fetch_request_v7_000() -> Result<()> {
+    use tansu_kafka_sans_io::offset_fetch_request::OffsetFetchRequestTopic;
+
+    let _guard = init_tracing()?;
+
+    let v = vec![
+        0, 0, 0, 87, 0, 9, 0, 7, 0, 0, 0, 8, 0, 7, 114, 100, 107, 97, 102, 107, 97, 0, 26, 101,
+        120, 97, 109, 112, 108, 101, 95, 99, 111, 110, 115, 117, 109, 101, 114, 95, 103, 114, 111,
+        117, 112, 95, 105, 100, 2, 10, 98, 101, 110, 99, 104, 109, 97, 114, 107, 8, 0, 0, 0, 0, 0,
+        0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 4, 0, 0, 0, 5, 0, 0, 0, 6, 0, 1, 0,
+    ];
+
+    assert_eq!(
+        Frame {
+            size: 87,
+            header: Header::Request {
+                api_key: 9,
+                api_version: 7,
+                correlation_id: 8,
+                client_id: Some("rdkafka".into()),
+            },
+            body: Body::OffsetFetchRequest {
+                group_id: Some("example_consumer_group_id".into()),
+                topics: Some(
+                    [OffsetFetchRequestTopic {
+                        name: "benchmark".into(),
+                        partition_indexes: Some((0..7).collect()),
+                    }]
+                    .into()
+                ),
+                groups: None,
+                require_stable: Some(true),
+            }
+        },
+        Frame::request_from_bytes(&v)?
+    );
+
+    Ok(())
+}
+
+#[test]
+fn offset_fetch_response_v7_000() -> Result<()> {
+    let _guard = init_tracing()?;
+
+    let v = vec![
+        0, 0, 0, 165, 0, 0, 0, 8, 0, 0, 0, 0, 0, 2, 10, 98, 101, 110, 99, 104, 109, 97, 114, 107,
+        8, 0, 0, 0, 1, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 1, 0, 0, 0, 0,
+        0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 1, 0, 0, 0, 0, 0, 0,
+        6, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 1, 0, 0, 0, 0, 0, 0, 5, 255,
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 1, 0, 0, 0, 0, 0, 0, 4, 255, 255,
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 1, 0, 0, 0, 0, 0, 0, 3, 255, 255, 255,
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 1, 0, 0, 0, 0, 0, 0, 2, 255, 255, 255, 255,
+        255, 255, 255, 255, 255, 255, 255, 255, 1, 0, 0, 0, 0, 0, 0, 0,
+    ];
+
+    let api_key = 9;
+    let api_version = 7;
+
+    assert_eq!(
+        Frame {
+            size: 165,
+            header: Header::Response { correlation_id: 8 },
+            body: Body::OffsetFetchResponse {
+                throttle_time_ms: Some(0),
+                error_code: Some(ErrorCode::None.into()),
+                groups: None,
+                topics: Some(
+                    [OffsetFetchResponseTopic {
+                        name: "benchmark".into(),
+                        partitions: Some(
+                            [1, 0, 6, 5, 4, 3, 2]
+                                .into_iter()
+                                .map(|partition_index| {
+                                    OffsetFetchResponsePartition {
+                                        partition_index,
+                                        committed_offset: -1,
+                                        committed_leader_epoch: Some(-1),
+                                        metadata: Some("".into()),
+                                        error_code: ErrorCode::None.into(),
+                                    }
+                                })
+                                .collect()
+                        )
+                    }]
+                    .into()
+                )
+            }
+        },
+        Frame::response_from_bytes(&v, api_key, api_version)?
     );
 
     Ok(())
@@ -2851,6 +3422,203 @@ fn offset_for_leader_request_v0_000() -> Result<()> {
             }
         },
         Frame::deserialize(&mut deserializer)?
+    );
+
+    Ok(())
+}
+
+#[test]
+fn produce_request_v3_000() -> Result<()> {
+    use tansu_kafka_sans_io::produce_request::{PartitionProduceData, TopicProduceData};
+
+    let _guard = init_tracing()?;
+
+    let v = vec![
+        0, 0, 0, 196, 0, 0, 0, 3, 0, 0, 0, 1, 0, 5, 115, 97, 109, 115, 97, 255, 255, 0, 0, 0, 0, 3,
+        232, 0, 0, 0, 1, 0, 9, 98, 101, 110, 99, 104, 109, 97, 114, 107, 0, 0, 0, 1, 0, 0, 0, 0, 0,
+        0, 0, 146, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 134, 255, 255, 255, 255, 2, 194, 19, 88, 191,
+        0, 0, 0, 0, 0, 4, 0, 0, 1, 145, 158, 51, 63, 130, 0, 0, 1, 145, 158, 51, 63, 130, 255, 255,
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 5, 32, 0, 0, 0, 0, 20,
+        48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 0, 32, 0, 0, 2, 0, 20, 48, 49, 50, 51, 52, 53, 54,
+        55, 56, 57, 0, 32, 0, 0, 4, 0, 20, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 0, 32, 0, 0, 6,
+        0, 20, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 0, 32, 0, 0, 8, 0, 20, 48, 49, 50, 51, 52,
+        53, 54, 55, 56, 57, 0,
+    ];
+
+    assert_eq!(
+        Frame {
+            size: 196,
+            header: Header::Request {
+                api_key: 0,
+                api_version: 3,
+                correlation_id: 1,
+                client_id: Some("samsa".into())
+            },
+            body: Body::ProduceRequest {
+                transactional_id: None,
+                acks: 0,
+                timeout_ms: 1000,
+                topic_data: Some(
+                    [TopicProduceData {
+                        name: "benchmark".into(),
+                        partition_data: Some(
+                            [PartitionProduceData {
+                                index: 0,
+                                records: Some(record::Frame {
+                                    batches: [record::Batch {
+                                        base_offset: 0,
+                                        batch_length: 134,
+                                        partition_leader_epoch: -1,
+                                        magic: 2,
+                                        crc: 3256047807,
+                                        attributes: 0,
+                                        last_offset_delta: 4,
+                                        base_timestamp: 1724936044418,
+                                        max_timestamp: 1724936044418,
+                                        producer_id: -1,
+                                        producer_epoch: -1,
+                                        base_sequence: -1,
+                                        records: [
+                                            Record {
+                                                length: 16,
+                                                attributes: 0,
+                                                timestamp_delta: 0,
+                                                offset_delta: 0,
+                                                key: Some(Bytes::from_static(b"")),
+                                                value: Some(Bytes::from_static(b"0123456789")),
+                                                headers: [].into()
+                                            },
+                                            Record {
+                                                length: 16,
+                                                attributes: 0,
+                                                timestamp_delta: 0,
+                                                offset_delta: 1,
+                                                key: Some(Bytes::from_static(b"")),
+                                                value: Some(Bytes::from_static(b"0123456789")),
+                                                headers: [].into()
+                                            },
+                                            Record {
+                                                length: 16,
+                                                attributes: 0,
+                                                timestamp_delta: 0,
+                                                offset_delta: 2,
+                                                key: Some(Bytes::from_static(b"")),
+                                                value: Some(Bytes::from_static(b"0123456789")),
+                                                headers: [].into()
+                                            },
+                                            Record {
+                                                length: 16,
+                                                attributes: 0,
+                                                timestamp_delta: 0,
+                                                offset_delta: 3,
+                                                key: Some(Bytes::from_static(b"")),
+                                                value: Some(Bytes::from_static(b"0123456789")),
+                                                headers: [].into()
+                                            },
+                                            Record {
+                                                length: 16,
+                                                attributes: 0,
+                                                timestamp_delta: 0,
+                                                offset_delta: 4,
+                                                key: Some(Bytes::from_static(b"")),
+                                                value: Some(Bytes::from_static(b"0123456789")),
+                                                headers: [].into()
+                                            }
+                                        ]
+                                        .into()
+                                    }]
+                                    .into()
+                                })
+                            }]
+                            .into()
+                        )
+                    }]
+                    .into()
+                )
+            }
+        },
+        Frame::request_from_bytes(&v)?
+    );
+
+    Ok(())
+}
+
+#[test]
+fn produce_request_v7_000() -> Result<()> {
+    use tansu_kafka_sans_io::produce_request::{PartitionProduceData, TopicProduceData};
+
+    let _guard = init_tracing()?;
+
+    let v = vec![
+        0, 0, 0, 158, 0, 0, 0, 7, 0, 0, 0, 3, 0, 7, 114, 100, 107, 97, 102, 107, 97, 255, 255, 255,
+        255, 0, 0, 117, 48, 0, 0, 0, 1, 0, 9, 98, 101, 110, 99, 104, 109, 97, 114, 107, 0, 0, 0, 1,
+        0, 0, 0, 0, 0, 0, 0, 106, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 94, 0, 0, 0, 0, 2, 178, 166,
+        246, 227, 0, 0, 0, 0, 0, 0, 0, 0, 1, 145, 158, 83, 211, 188, 0, 0, 1, 145, 158, 83, 211,
+        188, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 1, 88,
+        0, 0, 0, 10, 75, 101, 121, 32, 48, 18, 77, 101, 115, 115, 97, 103, 101, 32, 48, 2, 20, 104,
+        101, 97, 100, 101, 114, 95, 107, 101, 121, 24, 104, 101, 97, 100, 101, 114, 95, 118, 97,
+        108, 117, 101,
+    ];
+
+    assert_eq!(
+        Frame {
+            size: 158,
+            header: Header::Request {
+                api_key: 0,
+                api_version: 7,
+                correlation_id: 3,
+                client_id: Some("rdkafka".into())
+            },
+            body: Body::ProduceRequest {
+                transactional_id: None,
+                acks: -1,
+                timeout_ms: 30000,
+                topic_data: Some(
+                    [TopicProduceData {
+                        name: "benchmark".into(),
+                        partition_data: Some(
+                            [PartitionProduceData {
+                                index: 0,
+                                records: Some(record::Frame {
+                                    batches: [record::Batch {
+                                        base_offset: 0,
+                                        batch_length: 94,
+                                        partition_leader_epoch: 0,
+                                        magic: 2,
+                                        crc: 2997286627,
+                                        attributes: 0,
+                                        last_offset_delta: 0,
+                                        base_timestamp: 1724938179516,
+                                        max_timestamp: 1724938179516,
+                                        producer_id: -1,
+                                        producer_epoch: -1,
+                                        base_sequence: -1,
+                                        records: [Record {
+                                            length: 44,
+                                            attributes: 0,
+                                            timestamp_delta: 0,
+                                            offset_delta: 0,
+                                            key: Some(Bytes::from_static(b"Key 0")),
+                                            value: Some(Bytes::from_static(b"Message 0")),
+                                            headers: [record::Header {
+                                                key: Some(Bytes::from_static(b"header_key")),
+                                                value: Some(Bytes::from_static(b"header_value"))
+                                            }]
+                                            .into()
+                                        }]
+                                        .into()
+                                    }]
+                                    .into()
+                                })
+                            }]
+                            .into()
+                        )
+                    }]
+                    .into()
+                )
+            }
+        },
+        Frame::request_from_bytes(&v)?
     );
 
     Ok(())

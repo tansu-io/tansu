@@ -30,7 +30,8 @@ use tansu_kafka_sans_io::{
     offset_commit_response::{OffsetCommitResponsePartition, OffsetCommitResponseTopic},
     offset_fetch_request::{OffsetFetchRequestGroup, OffsetFetchRequestTopic},
     offset_fetch_response::{
-        OffsetFetchResponseGroup, OffsetFetchResponsePartitions, OffsetFetchResponseTopics,
+        OffsetFetchResponseGroup, OffsetFetchResponsePartition, OffsetFetchResponsePartitions,
+        OffsetFetchResponseTopic, OffsetFetchResponseTopics,
     },
     record::{Batch, Record},
     sync_group_request::SyncGroupRequestAssignment,
@@ -813,10 +814,10 @@ impl Group for Inner<Forming> {
                     throttle_time_ms: Some(0),
                     error_code: ErrorCode::MemberIdRequired.into(),
                     generation_id: -1,
-                    protocol_type: None,
-                    protocol_name: None,
-                    leader: String::from(""),
-                    skip_assignment: Some(false),
+                    protocol_type: self.state.protocol_type.clone(),
+                    protocol_name: Some("".into()),
+                    leader: "".into(),
+                    skip_assignment: None,
                     member_id,
                     members: Some([].into()),
                 };
@@ -830,11 +831,11 @@ impl Group for Inner<Forming> {
                 throttle_time_ms: Some(0),
                 error_code: ErrorCode::InvalidRequest.into(),
                 generation_id: self.generation_id,
-                protocol_type: Some(String::from(protocol_type)),
-                protocol_name: None,
-                leader: String::from(""),
+                protocol_type: self.state.protocol_type.clone(),
+                protocol_name: Some("".into()),
+                leader: "".into(),
                 skip_assignment: None,
-                member_id: String::from(""),
+                member_id: "".into(),
                 members: Some([].into()),
             };
 
@@ -852,11 +853,11 @@ impl Group for Inner<Forming> {
                     throttle_time_ms: Some(0),
                     error_code: ErrorCode::InconsistentGroupProtocol.into(),
                     generation_id: self.generation_id,
-                    protocol_type: Some(protocol_type.to_owned()),
+                    protocol_type: Some(protocol_type.into()),
                     protocol_name: self.state.protocol_name.clone(),
-                    leader: String::from(""),
+                    leader: "".into(),
                     skip_assignment: None,
-                    member_id: String::from(""),
+                    member_id: "".into(),
                     members: Some([].into()),
                 };
 
@@ -926,7 +927,7 @@ impl Group for Inner<Forming> {
                     .as_ref()
                     .map_or(String::from(""), |leader| leader.clone()),
                 skip_assignment: Some(false),
-                member_id: member_id.to_string(),
+                member_id: member_id.into(),
                 members: Some(
                     if self
                         .state
@@ -1245,9 +1246,9 @@ impl Group for Inner<Formed> {
                     error_code: ErrorCode::MemberIdRequired.into(),
                     generation_id: -1,
                     protocol_type: None,
-                    protocol_name: None,
-                    leader: String::from(""),
-                    skip_assignment: Some(false),
+                    protocol_name: Some("".into()),
+                    leader: "".into(),
+                    skip_assignment: None,
                     member_id,
                     members: Some([].into()),
                 };
@@ -1261,11 +1262,11 @@ impl Group for Inner<Formed> {
                 throttle_time_ms: Some(0),
                 error_code: ErrorCode::InvalidRequest.into(),
                 generation_id: self.generation_id,
-                protocol_type: Some(protocol_type.to_owned()),
-                protocol_name: None,
-                leader: "".to_owned(),
+                protocol_type: Some(protocol_type.into()),
+                protocol_name: Some("".into()),
+                leader: "".into(),
                 skip_assignment: None,
-                member_id: "".to_owned(),
+                member_id: "".into(),
                 members: Some([].into()),
             };
 
@@ -1280,11 +1281,11 @@ impl Group for Inner<Formed> {
                 throttle_time_ms: Some(0),
                 error_code: ErrorCode::InconsistentGroupProtocol.into(),
                 generation_id: self.generation_id,
-                protocol_type: Some(protocol_type.to_owned()),
+                protocol_type: Some(protocol_type.into()),
                 protocol_name: Some(self.state.protocol_name.clone()),
-                leader: "".to_owned(),
+                leader: "".into(),
                 skip_assignment: None,
-                member_id: "".to_owned(),
+                member_id: "".into(),
                 members: Some([].into()),
             };
 
@@ -1325,7 +1326,7 @@ impl Group for Inner<Formed> {
                                 .map(|s| s.to_owned())
                                 .unwrap_or("".to_owned()),
                             skip_assignment: Some(false),
-                            member_id: member_id.to_string(),
+                            member_id: member_id.into(),
                             members: Some(members),
                         }
                     };
@@ -1365,7 +1366,7 @@ impl Group for Inner<Formed> {
                                 .map(|s| s.to_owned())
                                 .unwrap_or("".to_owned()),
                             skip_assignment: Some(false),
-                            member_id: member_id.to_string(),
+                            member_id: member_id.into(),
                             members: Some(members),
                         }
                     };
@@ -1407,7 +1408,7 @@ impl Group for Inner<Formed> {
                             .map(|s| s.to_owned())
                             .unwrap_or("".to_owned()),
                         skip_assignment: Some(false),
-                        member_id: member_id.to_string(),
+                        member_id: member_id.into(),
                         members: Some([].into()),
                     }
                 };
@@ -1640,6 +1641,69 @@ impl Group for Inner<Formed> {
         groups: Option<&[OffsetFetchRequestGroup]>,
         require_stable: Option<bool>,
     ) -> (Self::OffsetFetchState, Body) {
+        let topics = if let Some(group_id) = group_id {
+            topics.map(|topics| {
+                topics
+                    .as_ref()
+                    .iter()
+                    .map(|topic| OffsetFetchResponseTopic {
+                        name: topic.name.clone(),
+                        partitions: topic.partition_indexes.as_ref().map(|partition_indexes| {
+                            partition_indexes
+                                .iter()
+                                .map(|partition_index| {
+                                    let gtp = GroupTopition {
+                                        group: group_id.into(),
+                                        topition: Topition::new(
+                                            topic.name.as_str(),
+                                            *partition_index,
+                                        ),
+                                    };
+
+                                    if let Ok(offsets) = self.offsets_lock() {
+                                        debug!(?offsets, ?gtp);
+
+                                        offsets.get(&gtp).map_or(
+                                            OffsetFetchResponsePartition {
+                                                partition_index: *partition_index,
+                                                committed_offset: -1,
+                                                committed_leader_epoch: Some(-1),
+                                                metadata: Some("".into()),
+                                                error_code: ErrorCode::None.into(),
+                                            },
+                                            |offset_commit| {
+                                                debug!(?gtp, ?offset_commit);
+
+                                                OffsetFetchResponsePartition {
+                                                    partition_index: *partition_index,
+                                                    committed_offset: offset_commit.offset,
+                                                    committed_leader_epoch: Some(
+                                                        offset_commit.leader_epoch,
+                                                    ),
+                                                    metadata: Some(offset_commit.metadata.clone()),
+                                                    error_code: ErrorCode::None.into(),
+                                                }
+                                            },
+                                        )
+                                    } else {
+                                        OffsetFetchResponsePartition {
+                                            partition_index: *partition_index,
+                                            committed_offset: -1,
+                                            committed_leader_epoch: Some(-1),
+                                            metadata: Some("".into()),
+                                            error_code: ErrorCode::UnknownServerError.into(),
+                                        }
+                                    }
+                                })
+                                .collect()
+                        }),
+                    })
+                    .collect()
+            })
+        } else {
+            None
+        };
+
         let groups = groups.map(|groups| {
             groups
                 .as_ref()
@@ -1670,9 +1734,9 @@ impl Group for Inner<Formed> {
                                                     offsets.get(&gtp).map_or(
                                                         OffsetFetchResponsePartitions {
                                                             partition_index: *partition_index,
-                                                            committed_offset: 0,
-                                                            committed_leader_epoch: 0,
-                                                            metadata: None,
+                                                            committed_offset: -1,
+                                                            committed_leader_epoch: -1,
+                                                            metadata: Some("".into()),
                                                             error_code: ErrorCode::None.into(),
                                                         },
                                                         |offset_commit| {
@@ -1694,9 +1758,9 @@ impl Group for Inner<Formed> {
                                                 } else {
                                                     OffsetFetchResponsePartitions {
                                                         partition_index: *partition_index,
-                                                        committed_offset: 0,
-                                                        committed_leader_epoch: 0,
-                                                        metadata: None,
+                                                        committed_offset: -1,
+                                                        committed_leader_epoch: -1,
+                                                        metadata: Some("".into()),
                                                         error_code: ErrorCode::UnknownServerError
                                                             .into(),
                                                     }
@@ -1715,8 +1779,8 @@ impl Group for Inner<Formed> {
 
         let body = Body::OffsetFetchResponse {
             throttle_time_ms: Some(0),
-            topics: None,
-            error_code: None,
+            topics,
+            error_code: Some(ErrorCode::None.into()),
             groups,
         };
 
@@ -1838,13 +1902,14 @@ mod tests {
                 error_code,
                 generation_id: -1,
                 protocol_type: None,
-                protocol_name: None,
+                protocol_name: Some(protocol_name),
                 leader,
-                skip_assignment: Some(false),
+                skip_assignment: None,
                 members,
                 member_id,
             } => {
                 assert_eq!(error_code, i16::from(ErrorCode::MemberIdRequired));
+                assert_eq!("", protocol_name);
                 assert!(leader.is_empty());
                 assert!(member_id.starts_with(client_id));
                 assert_eq!(Some(0), members.map(|members| members.len()));
@@ -1868,8 +1933,8 @@ mod tests {
                     throttle_time_ms: Some(0),
                     error_code: ErrorCode::None.into(),
                     generation_id: 0,
-                    protocol_type: Some(protocol_type.to_owned()),
-                    protocol_name: Some(String::from("range")),
+                    protocol_type: Some("consumer".into()),
+                    protocol_name: Some("range".into()),
                     leader: member_id.clone(),
                     skip_assignment: Some(false),
                     member_id: member_id.clone(),
@@ -1956,14 +2021,15 @@ mod tests {
                     error_code,
                     generation_id: -1,
                     protocol_type: None,
-                    protocol_name: None,
+                    protocol_name: Some(protocol_name),
                     leader,
-                    skip_assignment: Some(false),
+                    skip_assignment: None,
                     members,
                     member_id,
                 },
             ) => {
                 assert_eq!(error_code, i16::from(ErrorCode::MemberIdRequired));
+                assert_eq!("", protocol_name);
                 assert!(leader.is_empty());
                 assert!(member_id.starts_with(client_id));
                 assert_eq!(Some(0), members.map(|members| members.len()));
@@ -2065,7 +2131,7 @@ mod tests {
         let offset_fetch_response_expected = Body::OffsetFetchResponse {
             throttle_time_ms: Some(0),
             topics: None,
-            error_code: None,
+            error_code: Some(0),
             groups: Some(
                 [OffsetFetchResponseGroup {
                     group_id: group_id.into(),
@@ -2075,9 +2141,9 @@ mod tests {
                             partitions: Some(
                                 [OffsetFetchResponsePartitions {
                                     partition_index: 0,
-                                    committed_offset: 0,
-                                    committed_leader_epoch: 0,
-                                    metadata: None,
+                                    committed_offset: -1,
+                                    committed_leader_epoch: -1,
+                                    metadata: Some("".into()),
                                     error_code: 0,
                                 }]
                                 .into(),
@@ -2216,14 +2282,15 @@ mod tests {
                     error_code,
                     generation_id: -1,
                     protocol_type: None,
-                    protocol_name: None,
+                    protocol_name: Some(protocol_name),
                     leader,
-                    skip_assignment: Some(false),
+                    skip_assignment: None,
                     members: Some(members),
                     member_id,
                 },
             ) => {
                 assert_eq!(error_code, i16::from(ErrorCode::MemberIdRequired));
+                assert_eq!("", protocol_name);
                 assert!(leader.is_empty());
                 assert!(member_id.starts_with(CLIENT_ID));
                 assert_eq!(0, members.len());
@@ -2363,14 +2430,15 @@ mod tests {
                     error_code,
                     generation_id: -1,
                     protocol_type: None,
-                    protocol_name: None,
+                    protocol_name: Some(protocol_name),
                     leader,
-                    skip_assignment: Some(false),
+                    skip_assignment: None,
                     members: Some(members),
                     member_id,
                 },
             ) => {
                 assert_eq!(error_code, i16::from(ErrorCode::MemberIdRequired));
+                assert_eq!("", protocol_name);
                 assert!(leader.is_empty());
                 assert!(member_id.starts_with(CLIENT_ID));
                 assert_eq!(0, members.len());
@@ -2958,14 +3026,15 @@ mod tests {
                     error_code,
                     generation_id: -1,
                     protocol_type: None,
-                    protocol_name: None,
+                    protocol_name: Some(protocol_name),
                     leader,
-                    skip_assignment: Some(false),
+                    skip_assignment: None,
                     members: Some(members),
                     member_id,
                 },
             ) => {
                 assert_eq!(error_code, i16::from(ErrorCode::MemberIdRequired));
+                assert_eq!("", protocol_name);
                 assert!(leader.is_empty());
                 assert!(member_id.starts_with(CLIENT_ID));
                 assert_eq!(0, members.len());
@@ -3105,14 +3174,15 @@ mod tests {
                     error_code,
                     generation_id: -1,
                     protocol_type: None,
-                    protocol_name: None,
+                    protocol_name: Some(protocol_name),
                     leader,
-                    skip_assignment: Some(false),
+                    skip_assignment: None,
                     members: Some(members),
                     member_id,
                 },
             ) => {
                 assert_eq!(error_code, i16::from(ErrorCode::MemberIdRequired));
+                assert_eq!("", protocol_name);
                 assert!(leader.is_empty());
                 assert!(member_id.starts_with(CLIENT_ID));
                 assert_eq!(0, members.len());

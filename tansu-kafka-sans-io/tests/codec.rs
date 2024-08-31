@@ -16,6 +16,7 @@
 use std::{fs::File, sync::Arc, thread};
 use tansu_kafka_sans_io::{Error, Frame, Result};
 use tracing::subscriber::DefaultGuard;
+use tracing_subscriber::fmt::format::FmtSpan;
 
 #[cfg(miri)]
 fn init_tracing() -> Result<()> {
@@ -30,12 +31,17 @@ fn init_tracing() -> Result<DefaultGuard> {
             .with_line_number(true)
             .with_thread_names(false)
             .with_max_level(tracing::Level::DEBUG)
+            .with_span_events(FmtSpan::ACTIVE)
             .with_writer(
                 thread::current()
                     .name()
                     .ok_or(Error::Message(String::from("unnamed thread")))
                     .and_then(|name| {
-                        File::create(format!("tests/codec-{}.log", name)).map_err(Into::into)
+                        File::create(format!(
+                            "../logs/{}/codec-{name}.log",
+                            env!("CARGO_PKG_NAME")
+                        ))
+                        .map_err(Into::into)
                     })
                     .map(Arc::new)?,
             )
@@ -481,6 +487,25 @@ fn find_coordinator_request_v1_000() -> Result<()> {
 }
 
 #[test]
+fn find_coordinator_request_v2_000() -> Result<()> {
+    let _guard = init_tracing()?;
+
+    let expected = vec![
+        0, 0, 0, 45, 0, 10, 0, 2, 0, 0, 0, 3, 0, 7, 114, 100, 107, 97, 102, 107, 97, 0, 25, 101,
+        120, 97, 109, 112, 108, 101, 95, 99, 111, 110, 115, 117, 109, 101, 114, 95, 103, 114, 111,
+        117, 112, 95, 105, 100, 0,
+    ];
+
+    assert_eq!(
+        expected,
+        Frame::request_from_bytes(&expected)
+            .and_then(|frame| Frame::request(frame.header, frame.body))?
+    );
+
+    Ok(())
+}
+
+#[test]
 fn find_coordinator_request_v4_000() -> Result<()> {
     let _guard = init_tracing()?;
 
@@ -511,6 +536,27 @@ fn find_coordinator_response_v1_000() -> Result<()> {
 
     let api_key = 10;
     let api_version = 1;
+
+    assert_eq!(
+        expected,
+        Frame::response_from_bytes(&expected, api_key, api_version)
+            .and_then(|frame| Frame::response(frame.header, frame.body, api_key, api_version))?
+    );
+
+    Ok(())
+}
+
+#[test]
+fn find_coordinator_response_v2_000() -> Result<()> {
+    let _guard = init_tracing()?;
+
+    let expected = vec![
+        0, 0, 0, 31, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 255, 255, 0, 0, 16, 247, 0, 9, 49, 50, 55, 46,
+        48, 46, 48, 46, 49, 0, 0, 35, 132,
+    ];
+
+    let api_key = 10;
+    let api_version = 2;
 
     assert_eq!(
         expected,
@@ -554,6 +600,59 @@ fn init_producer_id_request_v4_000() -> Result<()> {
         expected,
         Frame::request_from_bytes(&expected)
             .and_then(|frame| Frame::request(frame.header, frame.body))?
+    );
+
+    Ok(())
+}
+
+#[test]
+fn join_group_request_v5_000() -> Result<()> {
+    let _guard = init_tracing()?;
+
+    let expected = vec![
+        0, 0, 0, 159, 0, 11, 0, 5, 0, 0, 0, 3, 0, 7, 114, 100, 107, 97, 102, 107, 97, 0, 25, 101,
+        120, 97, 109, 112, 108, 101, 95, 99, 111, 110, 115, 117, 109, 101, 114, 95, 103, 114, 111,
+        117, 112, 95, 105, 100, 0, 0, 23, 112, 0, 4, 147, 224, 0, 0, 255, 255, 0, 8, 99, 111, 110,
+        115, 117, 109, 101, 114, 0, 0, 0, 2, 0, 5, 114, 97, 110, 103, 101, 0, 0, 0, 31, 0, 3, 0, 0,
+        0, 1, 0, 9, 98, 101, 110, 99, 104, 109, 97, 114, 107, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255,
+        255, 255, 0, 0, 0, 10, 114, 111, 117, 110, 100, 114, 111, 98, 105, 110, 0, 0, 0, 31, 0, 3,
+        0, 0, 0, 1, 0, 9, 98, 101, 110, 99, 104, 109, 97, 114, 107, 0, 0, 0, 0, 0, 0, 0, 0, 255,
+        255, 255, 255, 0, 0,
+    ];
+
+    assert_eq!(
+        expected,
+        Frame::request_from_bytes(&expected)
+            .and_then(|frame| Frame::request(frame.header, frame.body))?
+    );
+
+    Ok(())
+}
+
+#[test]
+fn join_group_response_v5_000() -> Result<()> {
+    let _guard = init_tracing()?;
+
+    let expected = vec![
+        0, 0, 0, 200, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 5, 114, 97, 110, 103, 101, 0,
+        44, 114, 100, 107, 97, 102, 107, 97, 45, 52, 57, 57, 101, 53, 55, 55, 48, 45, 51, 55, 53,
+        101, 45, 52, 57, 57, 48, 45, 98, 102, 56, 52, 45, 97, 51, 57, 54, 51, 52, 101, 51, 98, 102,
+        101, 52, 0, 44, 114, 100, 107, 97, 102, 107, 97, 45, 52, 57, 57, 101, 53, 55, 55, 48, 45,
+        51, 55, 53, 101, 45, 52, 57, 57, 48, 45, 98, 102, 56, 52, 45, 97, 51, 57, 54, 51, 52, 101,
+        51, 98, 102, 101, 52, 0, 0, 0, 1, 0, 44, 114, 100, 107, 97, 102, 107, 97, 45, 52, 57, 57,
+        101, 53, 55, 55, 48, 45, 51, 55, 53, 101, 45, 52, 57, 57, 48, 45, 98, 102, 56, 52, 45, 97,
+        51, 57, 54, 51, 52, 101, 51, 98, 102, 101, 52, 255, 255, 0, 0, 0, 31, 0, 3, 0, 0, 0, 1, 0,
+        9, 98, 101, 110, 99, 104, 109, 97, 114, 107, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255, 0,
+        0,
+    ];
+
+    let api_key = 11;
+    let api_version = 5;
+
+    assert_eq!(
+        expected,
+        Frame::response_from_bytes(&expected, api_key, api_version)
+            .and_then(|frame| Frame::response(frame.header, frame.body, api_key, api_version))?
     );
 
     Ok(())
@@ -658,6 +757,52 @@ fn list_partition_reassignments_request_v0_000() -> Result<()> {
         expected,
         Frame::request_from_bytes(&expected)
             .and_then(|frame| Frame::request(frame.header, frame.body))?
+    );
+
+    Ok(())
+}
+
+#[test]
+fn metadata_request_v1_000() -> Result<()> {
+    let _guard = init_tracing()?;
+
+    let expected = vec![
+        0, 0, 0, 30, 0, 3, 0, 1, 0, 0, 0, 1, 0, 5, 115, 97, 109, 115, 97, 0, 0, 0, 1, 0, 9, 98,
+        101, 110, 99, 104, 109, 97, 114, 107,
+    ];
+
+    assert_eq!(
+        expected,
+        Frame::request_from_bytes(&expected)
+            .and_then(|frame| Frame::request(frame.header, frame.body))?
+    );
+
+    Ok(())
+}
+
+#[test]
+fn metadata_response_v1_0000() -> Result<()> {
+    let _guard = init_tracing()?;
+
+    let expected = vec![
+        0, 0, 0, 237, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 9, 108, 111, 99, 97, 108, 104, 111,
+        115, 116, 0, 0, 35, 132, 255, 255, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 9, 98, 101, 110, 99,
+        104, 109, 97, 114, 107, 0, 0, 0, 0, 7, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0,
+        1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 3, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0,
+        1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 6, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0,
+        1, 0, 0, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0,
+        0, 0, 5, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 4, 0, 0, 0, 1, 0,
+        0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1,
+    ];
+
+    let api_key = 3;
+    let api_version = 1;
+
+    assert_eq!(
+        expected,
+        Frame::response_from_bytes(&expected, api_key, api_version)
+            .and_then(|frame| Frame::response(frame.header, frame.body, api_key, api_version))?
     );
 
     Ok(())
@@ -785,12 +930,64 @@ fn offset_fetch_request_v9_000() -> Result<()> {
 }
 
 #[test]
+fn offset_fetch_response_v7_000() -> Result<()> {
+    let _guard = init_tracing()?;
+
+    let expected = vec![
+        0, 0, 0, 165, 0, 0, 0, 8, 0, 0, 0, 0, 0, 2, 10, 98, 101, 110, 99, 104, 109, 97, 114, 107,
+        8, 0, 0, 0, 1, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 1, 0, 0, 0, 0,
+        0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 1, 0, 0, 0, 0, 0, 0,
+        6, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 1, 0, 0, 0, 0, 0, 0, 5, 255,
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 1, 0, 0, 0, 0, 0, 0, 4, 255, 255,
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 1, 0, 0, 0, 0, 0, 0, 3, 255, 255, 255,
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 1, 0, 0, 0, 0, 0, 0, 2, 255, 255, 255, 255,
+        255, 255, 255, 255, 255, 255, 255, 255, 1, 0, 0, 0, 0, 0, 0, 0,
+    ];
+
+    let api_key = 9;
+    let api_version = 7;
+
+    assert_eq!(
+        expected,
+        Frame::response_from_bytes(&expected, api_key, api_version)
+            .and_then(|frame| Frame::response(frame.header, frame.body, api_key, api_version))?
+    );
+
+    Ok(())
+}
+
+#[test]
 fn offset_for_leader_request_v0_000() -> Result<()> {
     let _guard = init_tracing()?;
 
     let expected = vec![
         0, 0, 0, 31, 0, 23, 0, 0, 0, 0, 0, 0, 255, 255, 0, 0, 0, 1, 0, 11, 97, 98, 99, 97, 98, 99,
         97, 98, 99, 97, 98, 0, 0, 0, 0,
+    ];
+
+    assert_eq!(
+        expected,
+        Frame::request_from_bytes(&expected)
+            .and_then(|frame| Frame::request(frame.header, frame.body))?
+    );
+
+    Ok(())
+}
+
+#[test]
+fn produce_request_v3_000() -> Result<()> {
+    let _guard = init_tracing()?;
+
+    let expected = vec![
+        0, 0, 0, 196, 0, 0, 0, 3, 0, 0, 0, 1, 0, 5, 115, 97, 109, 115, 97, 255, 255, 0, 0, 0, 0, 3,
+        232, 0, 0, 0, 1, 0, 9, 98, 101, 110, 99, 104, 109, 97, 114, 107, 0, 0, 0, 1, 0, 0, 0, 0, 0,
+        0, 0, 146, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 134, 255, 255, 255, 255, 2, 194, 19, 88, 191,
+        0, 0, 0, 0, 0, 4, 0, 0, 1, 145, 158, 51, 63, 130, 0, 0, 1, 145, 158, 51, 63, 130, 255, 255,
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 5, 32, 0, 0, 0, 0, 20,
+        48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 0, 32, 0, 0, 2, 0, 20, 48, 49, 50, 51, 52, 53, 54,
+        55, 56, 57, 0, 32, 0, 0, 4, 0, 20, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 0, 32, 0, 0, 6,
+        0, 20, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 0, 32, 0, 0, 8, 0, 20, 48, 49, 50, 51, 52,
+        53, 54, 55, 56, 57, 0,
     ];
 
     assert_eq!(

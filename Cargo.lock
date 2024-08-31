@@ -1351,6 +1351,7 @@ dependencies = [
  "crc",
  "criterion",
  "glob",
+ "pretty_assertions",
  "prettyplease",
  "proc-macro2",
  "quote",

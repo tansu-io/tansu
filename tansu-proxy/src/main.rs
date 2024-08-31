@@ -14,11 +14,9 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use clap::Parser;
-use tansu_kafka_sans_io as _;
 use tansu_proxy::Result;
-use thiserror as _;
 use tokio::task::JoinSet;
-use tracing::{debug, Level};
+use tracing::Level;
 use tracing_subscriber::{filter::Targets, fmt::format::FmtSpan, prelude::*};
 use url::Url;
 
@@ -53,8 +51,6 @@ async fn main() -> Result<()> {
 
     {
         let proxy = tansu_proxy::Proxy::new(args.listener_url, args.origin_url);
-        debug!(?proxy);
-
         _ = set.spawn(async move { proxy.listen().await.unwrap() });
     }
 

@@ -14,14 +14,18 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use bytes::Bytes;
+use pretty_assertions::assert_eq;
 use serde::Serialize;
 use std::{fs::File, io::Cursor, sync::Arc, thread};
 use tansu_kafka_sans_io::{
+    join_group_request::JoinGroupRequestProtocol,
+    join_group_response::JoinGroupResponseMember,
     record::{self, Batch, Record},
     ser::Encoder,
     Body, Error, Frame, Header, Result,
 };
 use tracing::subscriber::DefaultGuard;
+use tracing_subscriber::fmt::format::FmtSpan;
 
 #[cfg(miri)]
 fn init_tracing() -> Result<()> {
@@ -30,23 +34,28 @@ fn init_tracing() -> Result<()> {
 
 #[cfg(not(miri))]
 fn init_tracing() -> Result<DefaultGuard> {
-    let subscriber = tracing_subscriber::fmt()
-        .with_level(true)
-        .with_line_number(true)
-        .with_thread_names(false)
-        .with_max_level(tracing::Level::DEBUG)
-        .with_writer(
-            thread::current()
-                .name()
-                .ok_or(Error::Message(String::from("unnamed thread")))
-                .and_then(|name| {
-                    File::create(format!("tests/encode-{}.log", name)).map_err(Into::into)
-                })
-                .map(Arc::new)?,
-        )
-        .finish();
-
-    Ok(tracing::subscriber::set_default(subscriber))
+    Ok(tracing::subscriber::set_default(
+        tracing_subscriber::fmt()
+            .with_level(true)
+            .with_line_number(true)
+            .with_thread_names(false)
+            .with_max_level(tracing::Level::DEBUG)
+            .with_span_events(FmtSpan::ACTIVE)
+            .with_writer(
+                thread::current()
+                    .name()
+                    .ok_or(Error::Message(String::from("unnamed thread")))
+                    .and_then(|name| {
+                        File::create(format!(
+                            "../logs/{}/encode-{name}.log",
+                            env!("CARGO_PKG_NAME")
+                        ))
+                        .map_err(Into::into)
+                    })
+                    .map(Arc::new)?,
+            )
+            .finish(),
+    ))
 }
 
 #[test]
@@ -1872,6 +1881,124 @@ fn init_producer_id_request_v4_000() -> Result<()> {
             0, 0, 0, 43, 0, 22, 0, 4, 0, 0, 0, 2, 0, 16, 99, 111, 110, 115, 111, 108, 101, 45, 112,
             114, 111, 100, 117, 99, 101, 114, 0, 0, 127, 255, 255, 255, 255, 255, 255, 255, 255,
             255, 255, 255, 255, 255, 0,
+        ],
+        c.into_inner(),
+    );
+
+    Ok(())
+}
+
+#[test]
+fn join_group_request_v5_000() -> Result<()> {
+    let _guard = init_tracing()?;
+
+    let range_metadata =
+        Bytes::from_static(b"\0\x03\0\0\0\x01\0\tbenchmark\0\0\0\0\0\0\0\0\xff\xff\xff\xff\0\0");
+    let roundrobin_metadata =
+        Bytes::from_static(b"\0\x03\0\0\0\x01\0\tbenchmark\0\0\0\0\0\0\0\0\xff\xff\xff\xff\0\0");
+
+    let frame = Frame {
+        size: 159,
+        header: Header::Request {
+            api_key: 11,
+            api_version: 5,
+            correlation_id: 3,
+            client_id: Some("rdkafka".into()),
+        },
+        body: Body::JoinGroupRequest {
+            group_id: "example_consumer_group_id".into(),
+            session_timeout_ms: 6000,
+            rebalance_timeout_ms: Some(300000),
+            member_id: "".into(),
+            group_instance_id: None,
+            protocol_type: "consumer".into(),
+            protocols: Some(
+                [
+                    JoinGroupRequestProtocol {
+                        name: "range".into(),
+                        metadata: range_metadata,
+                    },
+                    JoinGroupRequestProtocol {
+                        name: "roundrobin".into(),
+                        metadata: roundrobin_metadata,
+                    },
+                ]
+                .into(),
+            ),
+            reason: None,
+        },
+    };
+
+    let mut c = Cursor::new(vec![]);
+    let mut serializer = Encoder::request(&mut c);
+    frame.serialize(&mut serializer)?;
+
+    assert_eq!(
+        vec![
+            0, 0, 0, 159, 0, 11, 0, 5, 0, 0, 0, 3, 0, 7, 114, 100, 107, 97, 102, 107, 97, 0, 25,
+            101, 120, 97, 109, 112, 108, 101, 95, 99, 111, 110, 115, 117, 109, 101, 114, 95, 103,
+            114, 111, 117, 112, 95, 105, 100, 0, 0, 23, 112, 0, 4, 147, 224, 0, 0, 255, 255, 0, 8,
+            99, 111, 110, 115, 117, 109, 101, 114, 0, 0, 0, 2, 0, 5, 114, 97, 110, 103, 101, 0, 0,
+            0, 31, 0, 3, 0, 0, 0, 1, 0, 9, 98, 101, 110, 99, 104, 109, 97, 114, 107, 0, 0, 0, 0, 0,
+            0, 0, 0, 255, 255, 255, 255, 0, 0, 0, 10, 114, 111, 117, 110, 100, 114, 111, 98, 105,
+            110, 0, 0, 0, 31, 0, 3, 0, 0, 0, 1, 0, 9, 98, 101, 110, 99, 104, 109, 97, 114, 107, 0,
+            0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255, 0, 0,
+        ],
+        c.into_inner(),
+    );
+
+    Ok(())
+}
+
+#[test]
+fn join_group_response_v5_000() -> Result<()> {
+    let _guard = init_tracing()?;
+
+    let api_key = 11;
+    let api_version = 5;
+
+    let metadata =
+        Bytes::from_static(b"\0\x03\0\0\0\x01\0\tbenchmark\0\0\0\0\0\0\0\0\xff\xff\xff\xff\0\0");
+
+    let frame = Frame {
+        size: 200,
+        header: Header::Response { correlation_id: 4 },
+        body: Body::JoinGroupResponse {
+            throttle_time_ms: Some(0),
+            error_code: 0,
+            generation_id: 1,
+            protocol_type: None,
+            protocol_name: Some("range".into()),
+            leader: "rdkafka-499e5770-375e-4990-bf84-a39634e3bfe4".into(),
+            skip_assignment: None,
+            member_id: "rdkafka-499e5770-375e-4990-bf84-a39634e3bfe4".into(),
+            members: Some(
+                [JoinGroupResponseMember {
+                    member_id: "rdkafka-499e5770-375e-4990-bf84-a39634e3bfe4".into(),
+                    group_instance_id: None,
+                    metadata,
+                }]
+                .into(),
+            ),
+        },
+    };
+
+    let mut c = Cursor::new(vec![]);
+    let mut serializer = Encoder::response(&mut c, api_key, api_version);
+    frame.serialize(&mut serializer)?;
+
+    assert_eq!(
+        vec![
+            0, 0, 0, 200, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 5, 114, 97, 110, 103, 101,
+            0, 44, 114, 100, 107, 97, 102, 107, 97, 45, 52, 57, 57, 101, 53, 55, 55, 48, 45, 51,
+            55, 53, 101, 45, 52, 57, 57, 48, 45, 98, 102, 56, 52, 45, 97, 51, 57, 54, 51, 52, 101,
+            51, 98, 102, 101, 52, 0, 44, 114, 100, 107, 97, 102, 107, 97, 45, 52, 57, 57, 101, 53,
+            55, 55, 48, 45, 51, 55, 53, 101, 45, 52, 57, 57, 48, 45, 98, 102, 56, 52, 45, 97, 51,
+            57, 54, 51, 52, 101, 51, 98, 102, 101, 52, 0, 0, 0, 1, 0, 44, 114, 100, 107, 97, 102,
+            107, 97, 45, 52, 57, 57, 101, 53, 55, 55, 48, 45, 51, 55, 53, 101, 45, 52, 57, 57, 48,
+            45, 98, 102, 56, 52, 45, 97, 51, 57, 54, 51, 52, 101, 51, 98, 102, 101, 52, 255, 255,
+            0, 0, 0, 31, 0, 3, 0, 0, 0, 1, 0, 9, 98, 101, 110, 99, 104, 109, 97, 114, 107, 0, 0, 0,
+            0, 0, 0, 0, 0, 255, 255, 255, 255, 0, 0,
         ],
         c.into_inner(),
     );

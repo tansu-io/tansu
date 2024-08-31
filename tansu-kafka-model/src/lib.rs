@@ -554,7 +554,7 @@ fn is_reserved_keyword(s: &str) -> bool {
 }
 
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct Header {
+struct Header {
     name: String,
     valid: VersionRange,
     flexible: VersionRange,

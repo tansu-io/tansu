@@ -30,20 +30,23 @@ impl FindCoordinatorRequest {
         let _ = key;
         let _ = key_type;
 
+        let host = listener.host_str().unwrap_or("localhost");
+        let port = i32::from(listener.port().unwrap_or(9092));
+
         Body::FindCoordinatorResponse {
             throttle_time_ms: Some(0),
-            error_code: None,
-            error_message: None,
-            node_id: None,
-            host: None,
-            port: None,
+            error_code: Some(ErrorCode::None.into()),
+            error_message: Some("NONE".into()),
+            node_id: Some(node_id),
+            host: Some(host.into()),
+            port: Some(port),
             coordinators: coordinator_keys.map(|keys| {
                 keys.iter()
                     .map(|key| Coordinator {
                         key: key.to_string(),
                         node_id,
-                        host: listener.host_str().unwrap_or("localhost").into(),
-                        port: i32::from(listener.port().unwrap_or(9092)),
+                        host: host.into(),
+                        port,
                         error_code: ErrorCode::None.into(),
                         error_message: None,
                     })
