@@ -236,15 +236,6 @@ where
     }
 }
 
-impl<S, O> LogSegment<S, O>
-where
-    O: Offset,
-{
-    fn pending_current_state_lock(&self) -> Result<MutexGuard<'_, Vec<Waker>>> {
-        self.pending_offset.lock().map_err(|error| error.into())
-    }
-}
-
 pub trait Truncate {
     fn truncate_from(&mut self, position: u64) -> Result<()>;
 }
@@ -268,6 +259,20 @@ where
     S: Read + Seek + Send + Truncate + Write,
     O: Offset,
 {
+    fn batch_serialize(&mut self, batch: &Batch) -> Result<()> {
+        let mut encoder = Encoder::new(&mut self.storage);
+        batch.serialize(&mut encoder).map_err(Into::into)
+    }
+
+    fn batch_deserialize(&mut self) -> Result<Batch> {
+        let mut decoder = Decoder::new(&mut self.storage);
+        Batch::deserialize(&mut decoder).map_err(Into::into)
+    }
+
+    fn pending_current_state_lock(&self) -> Result<MutexGuard<'_, Vec<Waker>>> {
+        self.pending_offset.lock().map_err(|error| error.into())
+    }
+
     #[instrument]
     fn recover(&mut self) -> Result<()> {
         self.check().and_then(|position| {
@@ -446,9 +451,11 @@ where
         .seek(SeekFrom::End(0))
         .map_err(Into::into)
         .and_then(|start| {
-            batch.base_offset =  self.max_offset.map_or(self.base_offset, |max_offset|max_offset + 1);
-            let mut encoder = Encoder::new(&mut self.storage);
-            batch.serialize(&mut encoder)?;
+            batch.base_offset = self
+                .max_offset
+                .map_or(self.base_offset, |max_offset| max_offset + 1);
+
+            self.batch_serialize(&batch)?;
 
             let delta = i64::from(batch.last_offset_delta);
             _ = self.max_offset.replace(
@@ -495,11 +502,10 @@ where
                         .and_then(|start| {
                             debug!(?start);
 
-                            let mut decoder = Decoder::new(&mut self.storage);
-                            let mut batch = Batch::deserialize(&mut decoder)?;
+                            let mut batch = self.batch_deserialize()?;
 
                             while batch.max_offset() < starting_offset {
-                                batch = Batch::deserialize(&mut decoder)?;
+                                batch = self.batch_deserialize()?;
                             }
 
                             debug!(?batch);
