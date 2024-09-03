@@ -237,7 +237,7 @@ impl Storage {
     }
 
     #[instrument]
-    pub fn produce<'a>(&mut self, topition: &'a Topition, batch: Batch) -> Result<i64> {
+    pub fn produce(&mut self, topition: &'_ Topition, batch: Batch) -> Result<i64> {
         let base_offset = if let Some(segments) = self.segments.get_mut(topition) {
             segments
                 .last_entry()
@@ -318,7 +318,7 @@ impl Storage {
     }
 
     #[instrument]
-    pub fn last_stable_offset<'a>(&self, topition: &'a Topition) -> Result<i64> {
+    pub fn last_stable_offset(&self, topition: &'_ Topition) -> Result<i64> {
         self.segments(topition).map(|segments| {
             if segments.len() > 1 {
                 segments.last_key_value().map_or(0, |(_, segment)| {
@@ -333,7 +333,7 @@ impl Storage {
     }
 
     #[instrument]
-    pub fn high_watermark<'a>(&self, topition: &'a Topition) -> Result<i64> {
+    pub fn high_watermark(&self, topition: &'_ Topition) -> Result<i64> {
         self.last_stable_offset(topition)
     }
 
