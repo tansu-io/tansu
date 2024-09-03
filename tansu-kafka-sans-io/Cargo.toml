@@ -31,9 +31,13 @@ private_intra_doc_links = "deny"
 [dependencies]
 bytes.workspace = true
 crc.workspace = true
+flate2.workspace = true
+lz4.workspace = true
 serde.workspace = true
+snap.workspace = true
 tansu-kafka-model = { path = "../tansu-kafka-model" }
 tracing.workspace = true
+zstd.workspace = true
 
 [build-dependencies]
 convert_case.workspace = true

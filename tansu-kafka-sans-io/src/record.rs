@@ -15,6 +15,7 @@
 
 pub mod batch;
 pub(crate) mod codec;
+pub mod compression;
 pub mod header;
 
 use crate::{

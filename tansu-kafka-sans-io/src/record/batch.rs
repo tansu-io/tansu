@@ -14,7 +14,9 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use super::Record;
-use crate::{primitive::ByteSize, record::codec::Sequence, Encoder, Result};
+use crate::{
+    primitive::ByteSize, record::codec::Sequence, record::compression, Encoder, Error, Result,
+};
 use bytes::Bytes;
 use crc::{Crc, Digest, CRC_32_ISCSI};
 use serde::{Deserialize, Serialize};
@@ -30,6 +32,7 @@ pub struct Frame {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(try_from = "compression::Batch")]
 pub struct Batch {
     pub base_offset: i64,
     pub batch_length: i32,
@@ -45,8 +48,44 @@ pub struct Batch {
     pub base_sequence: i32,
 
     #[serde(serialize_with = "Sequence::<Record>::serialize")]
-    #[serde(deserialize_with = "Sequence::<Record>::deserialize")]
     pub records: Vec<Record>,
+}
+
+impl TryFrom<compression::Batch> for Batch {
+    type Error = Error;
+
+    fn try_from(value: compression::Batch) -> Result<Self, Self::Error> {
+        let base_offset = value.base_offset;
+        let batch_length = value.batch_length;
+        let partition_leader_epoch = value.partition_leader_epoch;
+        let magic = value.magic;
+        let crc = value.crc;
+        let attributes = value.attributes;
+        let last_offset_delta = value.last_offset_delta;
+        let base_timestamp = value.base_timestamp;
+        let max_timestamp = value.max_timestamp;
+        let producer_id = value.producer_id;
+        let producer_epoch = value.producer_epoch;
+        let base_sequence = value.base_sequence;
+
+        let records: Vec<Record> = value.try_into()?;
+
+        Ok(Self {
+            base_offset,
+            batch_length,
+            partition_leader_epoch,
+            magic,
+            crc,
+            attributes,
+            last_offset_delta,
+            base_timestamp,
+            max_timestamp,
+            producer_id,
+            producer_epoch,
+            base_sequence,
+            records,
+        })
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]

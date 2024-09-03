@@ -101,6 +101,7 @@ pub enum Error {
     TryFromInt(num::TryFromIntError),
     UnexpectedTaggedHeader(HeaderMezzanine),
     UnknownApiErrorCode(i16),
+    UnknownCompressionType(i16),
     Utf8(str::Utf8Error),
 }
 
