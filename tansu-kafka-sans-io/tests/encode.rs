@@ -21,7 +21,7 @@ use tansu_kafka_sans_io::{
     join_group_request::JoinGroupRequestProtocol,
     join_group_response::JoinGroupResponseMember,
     record::{
-        batch::{self, Batch},
+        inflated::{self, Batch},
         Record,
     },
     ser::Encoder,
@@ -1462,7 +1462,7 @@ fn fetch_response_v12_001() -> Result<()> {
                             aborted_transactions: None,
                             preferred_read_replica: Some(-1),
                             records: Some(
-                                batch::Frame {
+                                inflated::Frame {
                                     batches: [
                                         Batch {
                                             base_offset: 0,
@@ -1605,7 +1605,7 @@ fn fetch_response_v16_001() -> Result<()> {
                         aborted_transactions: Some([].into()),
                         preferred_read_replica: Some(0),
                         records: Some(
-                            batch::Frame {
+                            inflated::Frame {
                                 batches: [Batch {
                                     base_offset: 0,
                                     batch_length: 61,
@@ -1705,7 +1705,7 @@ fn fetch_response_v16_002() -> Result<()> {
                         aborted_transactions: Some([].into()),
                         preferred_read_replica: Some(0),
                         records: Some(
-                            batch::Frame {
+                            inflated::Frame {
                                 batches: [Batch {
                                     base_offset: 0,
                                     batch_length: 61,
@@ -2389,7 +2389,7 @@ fn produce_request_v9_000() -> Result<()> {
                         [PartitionProduceData {
                             index: 0,
                             records: Some(
-                                batch::Frame {
+                                inflated::Frame {
                                     batches: [Batch {
                                         base_offset: 0,
                                         batch_length: 59,

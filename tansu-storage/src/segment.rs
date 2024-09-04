@@ -38,7 +38,7 @@ use std::{
     time::Instant,
 };
 use tansu_kafka_sans_io::{
-    record::{batch, compression::Batch},
+    record::{deflated::Batch, inflated},
     Decoder, Encoder,
 };
 use tracing::{debug, instrument};
@@ -332,7 +332,7 @@ where
         while let Ok(batch) = self.read(offset) {
             offset += i64::from(batch.last_offset_delta) + 1;
 
-            _ = batch::Batch::try_from(batch)
+            _ = inflated::Batch::try_from(batch)
                 .map_err(Into::into)
                 .and_then(|inflated| inflated.compact(keys_to_be_removed_from_tail))
                 .map_err(Into::into)
@@ -864,7 +864,7 @@ mod tests {
 
         assert_eq!(
             segment.append(
-                batch::Batch::builder()
+                inflated::Batch::builder()
                     .record(Record::builder().value(def.into()))
                     .build()
                     .and_then(TryInto::try_into)?
@@ -878,7 +878,7 @@ mod tests {
             Some(def.into()),
             segment
                 .read(base_offset)
-                .and_then(|deflated| batch::Batch::try_from(deflated).map_err(Into::into))
+                .and_then(|deflated| inflated::Batch::try_from(deflated).map_err(Into::into))
                 .map(|batch| batch.records[0].value.clone())?
         );
 
@@ -886,7 +886,7 @@ mod tests {
 
         assert_eq!(
             segment.append(
-                batch::Batch::builder()
+                inflated::Batch::builder()
                     .record(Record::builder().value(efg.into()))
                     .build()
                     .and_then(TryInto::try_into)?
@@ -900,7 +900,7 @@ mod tests {
             Some(efg.into()),
             segment
                 .read(base_offset + 1)
-                .and_then(|deflated| batch::Batch::try_from(deflated).map_err(Into::into))
+                .and_then(|deflated| inflated::Batch::try_from(deflated).map_err(Into::into))
                 .map(|batch| batch.records[0].value.clone())?
         );
 
@@ -932,7 +932,7 @@ mod tests {
 
         assert_eq!(
             segment.append(
-                batch::Batch::builder()
+                inflated::Batch::builder()
                     .record(Record::builder().value(def.into()))
                     .build()
                     .and_then(TryInto::try_into)?
@@ -946,7 +946,7 @@ mod tests {
             Some(def.into()),
             segment
                 .read(base_offset)
-                .and_then(|deflated| batch::Batch::try_from(deflated).map_err(Into::into))
+                .and_then(|deflated| inflated::Batch::try_from(deflated).map_err(Into::into))
                 .map(|batch| batch.records[0].value.clone())?
         );
 
@@ -954,7 +954,7 @@ mod tests {
 
         assert_eq!(
             segment.append(
-                batch::Batch::builder()
+                inflated::Batch::builder()
                     .record(Record::builder().value(efg.into()))
                     .build()
                     .and_then(TryInto::try_into)?
@@ -968,7 +968,7 @@ mod tests {
             Some(efg.into()),
             segment
                 .read(base_offset + 1)
-                .and_then(|deflated| batch::Batch::try_from(deflated).map_err(Into::into))
+                .and_then(|deflated| inflated::Batch::try_from(deflated).map_err(Into::into))
                 .map(|batch| batch.records[0].value.clone())?
         );
 
@@ -993,7 +993,7 @@ mod tests {
 
         let def = &b"def"[..];
 
-        let offset = batch::Batch::builder()
+        let offset = inflated::Batch::builder()
             .record(Record::builder().value(def.into()))
             .build()
             .and_then(TryInto::try_into)
@@ -1011,13 +1011,13 @@ mod tests {
             Some(def.into()),
             segment
                 .read(base_offset)
-                .and_then(|deflated| batch::Batch::try_from(deflated).map_err(Into::into))
+                .and_then(|deflated| inflated::Batch::try_from(deflated).map_err(Into::into))
                 .map(|batch| batch.records[0].value.clone())?
         );
 
         let efg = &b"efg"[..];
 
-        let offset = batch::Batch::builder()
+        let offset = inflated::Batch::builder()
             .base_offset(1)
             .record(Record::builder().value(efg.into()))
             .build()
@@ -1034,7 +1034,7 @@ mod tests {
             Some(efg.into()),
             segment
                 .read(base_offset + 1)
-                .and_then(|deflated| batch::Batch::try_from(deflated).map_err(Into::into))
+                .and_then(|deflated| inflated::Batch::try_from(deflated).map_err(Into::into))
                 .map(|batch| batch.records[0].value.clone())?
         );
 
@@ -1113,7 +1113,7 @@ mod tests {
 
         let value = &b"abc"[..];
 
-        let offset = batch::Batch::builder()
+        let offset = inflated::Batch::builder()
             .record(Record::builder().value(value.into()))
             .build()
             .and_then(TryInto::try_into)
@@ -1143,7 +1143,7 @@ mod tests {
 
         let actual = segment
             .read(offset)
-            .and_then(|deflated| batch::Batch::try_from(deflated).map_err(Into::into))?;
+            .and_then(|deflated| inflated::Batch::try_from(deflated).map_err(Into::into))?;
         assert_eq!(Some(value.into()), actual.records[0].value);
 
         Ok(())
@@ -1169,7 +1169,7 @@ mod tests {
 
         let value = &b"abc"[..];
 
-        let offset = batch::Batch::builder()
+        let offset = inflated::Batch::builder()
             .record(Record::builder().value(value.into()))
             .build()
             .and_then(TryInto::try_into)
@@ -1206,7 +1206,7 @@ mod tests {
         assert_eq!(Some(base_offset), segment.max_offset());
         let actual = segment
             .read(offset)
-            .and_then(|deflated| batch::Batch::try_from(deflated).map_err(Into::into))?;
+            .and_then(|deflated| inflated::Batch::try_from(deflated).map_err(Into::into))?;
         assert_eq!(Some(value.into()), actual.records[0].value);
 
         Ok(())
@@ -1231,7 +1231,7 @@ mod tests {
 
         let first_value = Bytes::from("one");
 
-        let first_offset = batch::Batch::builder()
+        let first_offset = inflated::Batch::builder()
             .record(Record::builder().value(first_value.clone().into()))
             .build()
             .and_then(TryInto::try_into)
@@ -1242,7 +1242,7 @@ mod tests {
 
         let second_value = Bytes::from("two");
 
-        let second_offset = batch::Batch::builder()
+        let second_offset = inflated::Batch::builder()
             .record(Record::builder().value(second_value.clone().into()))
             .build()
             .and_then(TryInto::try_into)
@@ -1272,12 +1272,12 @@ mod tests {
 
         let actual = segment
             .read(first_offset)
-            .and_then(|deflated| batch::Batch::try_from(deflated).map_err(Into::into))?;
+            .and_then(|deflated| inflated::Batch::try_from(deflated).map_err(Into::into))?;
         assert_eq!(Some(first_value), actual.records[0].value);
 
         let actual = segment
             .read(second_offset)
-            .and_then(|deflated| batch::Batch::try_from(deflated).map_err(Into::into))?;
+            .and_then(|deflated| inflated::Batch::try_from(deflated).map_err(Into::into))?;
         assert_eq!(Some(second_value), actual.records[0].value);
 
         Ok(())
@@ -1342,7 +1342,7 @@ mod tests {
             (6, 11),
         ];
 
-        let mut builder = batch::Batch::builder()
+        let mut builder = inflated::Batch::builder()
             .base_offset(base_offset)
             .partition_leader_epoch(-1)
             .magic(2)
@@ -1379,12 +1379,12 @@ mod tests {
             Some(11),
             segment
                 .iter()
-                .map(|deflated| batch::Batch::try_from(deflated)
+                .map(|deflated| inflated::Batch::try_from(deflated)
                     .map_or(0, |inflated| inflated.records.len()))
                 .reduce(|acc, len| acc + len)
         );
 
-        let mut builder = batch::Batch::builder()
+        let mut builder = inflated::Batch::builder()
             .base_offset(base_offset + i64::try_from(indexes.len())?)
             .partition_leader_epoch(-1)
             .magic(2)
@@ -1420,7 +1420,7 @@ mod tests {
             Some(22),
             segment
                 .iter()
-                .map(|deflated| batch::Batch::try_from(deflated)
+                .map(|deflated| inflated::Batch::try_from(deflated)
                     .map_or(0, |inflated| inflated.records.len()))
                 .reduce(|acc, len| acc + len)
         );
@@ -1464,7 +1464,7 @@ mod tests {
             (6, 11),
         ];
 
-        let mut builder = batch::Batch::builder()
+        let mut builder = inflated::Batch::builder()
             .base_offset(base_offset)
             .partition_leader_epoch(-1)
             .magic(2)
@@ -1501,7 +1501,7 @@ mod tests {
             Some(11),
             segment
                 .iter()
-                .map(|deflated| batch::Batch::try_from(deflated)
+                .map(|deflated| inflated::Batch::try_from(deflated)
                     .map_or(0, |inflated| inflated.records.len()))
                 .reduce(|acc, len| acc + len)
         );
@@ -1521,7 +1521,7 @@ mod tests {
             Some(6),
             compacted
                 .iter()
-                .map(|deflated| batch::Batch::try_from(deflated)
+                .map(|deflated| inflated::Batch::try_from(deflated)
                     .map_or(0, |inflated| inflated.records.len()))
                 .reduce(|acc, len| acc + len)
         );
@@ -1555,7 +1555,7 @@ mod tests {
 
         assert_eq!(
             segment.append(
-                batch::Batch::builder()
+                inflated::Batch::builder()
                     .record(Record::builder().value(def.into()))
                     .build()
                     .and_then(TryInto::try_into)?
@@ -1568,7 +1568,7 @@ mod tests {
 
         assert_eq!(
             segment.append(
-                batch::Batch::builder()
+                inflated::Batch::builder()
                     .record(Record::builder().value(efg.into()))
                     .build()
                     .and_then(TryInto::try_into)?
@@ -1592,7 +1592,7 @@ mod tests {
             Some(def.into()),
             segment
                 .read(base_offset)
-                .and_then(|deflated| batch::Batch::try_from(deflated).map_err(Into::into))
+                .and_then(|deflated| inflated::Batch::try_from(deflated).map_err(Into::into))
                 .map(|batch| batch.records[0].value.clone())?
         );
 
@@ -1600,14 +1600,14 @@ mod tests {
             Some(efg.into()),
             segment
                 .read(base_offset + 1)
-                .and_then(|deflated| batch::Batch::try_from(deflated).map_err(Into::into))
+                .and_then(|deflated| inflated::Batch::try_from(deflated).map_err(Into::into))
                 .map(|batch| batch.records[0].value.clone())?
         );
 
         assert!(matches!(
             segment
                 .read(base_offset + 2)
-                .and_then(|deflated| batch::Batch::try_from(deflated).map_err(Into::into))
+                .and_then(|deflated| inflated::Batch::try_from(deflated).map_err(Into::into))
                 .map(|batch| batch.records[0].value.clone()),
             Err(Error::NoSuchOffset(_)),
         ));

@@ -13,10 +13,10 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-pub mod batch;
 pub(crate) mod codec;
-pub mod compression;
+pub mod deflated;
 pub mod header;
+pub mod inflated;
 
 use crate::{
     primitive::{

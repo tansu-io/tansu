@@ -29,7 +29,7 @@ use tansu_kafka_sans_io::{
     offset_fetch_response::{OffsetFetchResponsePartition, OffsetFetchResponseTopic},
     record::{
         self,
-        batch::{self, Batch},
+        inflated::{self, Batch},
         Record,
     },
     Body, Error, ErrorCode, Frame, Header, Result,
@@ -1629,9 +1629,9 @@ fn fetch_response_v12_001() -> Result<()> {
                                     aborted_transactions: None,
                                     preferred_read_replica: Some(-1),
                                     records: Some(
-                                        batch::Frame {
+                                        inflated::Frame {
                                             batches: [
-                                                batch::Batch {
+                                                inflated::Batch {
                                                     base_offset: 0,
                                                     batch_length: 62,
                                                     partition_leader_epoch: 0,
@@ -1659,7 +1659,7 @@ fn fetch_response_v12_001() -> Result<()> {
                                                     }]
                                                     .into()
                                                 },
-                                                batch::Batch {
+                                                inflated::Batch {
                                                     base_offset: 1,
                                                     batch_length: 62,
                                                     partition_leader_epoch: 0,
@@ -1774,8 +1774,8 @@ fn fetch_response_v12_002() -> Result<()> {
                                     aborted_transactions: None,
                                     preferred_read_replica: Some(-1),
                                     records: Some(
-                                        batch::Frame {
-                                            batches: [batch::Batch {
+                                        inflated::Frame {
+                                            batches: [inflated::Batch {
                                                 base_offset: 0,
                                                 batch_length: 172,
                                                 partition_leader_epoch: 0,
@@ -1998,7 +1998,7 @@ fn fetch_response_v16_001() -> Result<()> {
                                 aborted_transactions: Some([].into()),
                                 preferred_read_replica: Some(0),
                                 records: Some(
-                                    batch::Frame {
+                                    inflated::Frame {
                                         batches: [Batch {
                                             base_offset: 0,
                                             batch_length: 61,
@@ -2101,7 +2101,7 @@ fn fetch_response_v16_002() -> Result<()> {
                                 aborted_transactions: Some([].into()),
                                 preferred_read_replica: Some(0),
                                 records: Some(
-                                    batch::Frame {
+                                    inflated::Frame {
                                         batches: [Batch {
                                             base_offset: 0,
                                             batch_length: 61,
@@ -3479,8 +3479,8 @@ fn produce_request_v3_000() -> Result<()> {
                             [PartitionProduceData {
                                 index: 0,
                                 records: Some(
-                                    batch::Frame {
-                                        batches: [batch::Batch {
+                                    inflated::Frame {
+                                        batches: [inflated::Batch {
                                             base_offset: 0,
                                             batch_length: 134,
                                             partition_leader_epoch: -1,
@@ -3597,8 +3597,8 @@ fn produce_request_v7_000() -> Result<()> {
                             [PartitionProduceData {
                                 index: 0,
                                 records: Some(
-                                    batch::Frame {
-                                        batches: [batch::Batch {
+                                    inflated::Frame {
+                                        batches: [inflated::Batch {
                                             base_offset: 0,
                                             batch_length: 94,
                                             partition_leader_epoch: 0,
@@ -3684,7 +3684,7 @@ fn produce_request_v9_000() -> Result<()> {
                             [PartitionProduceData {
                                 index: 0,
                                 records: Some(
-                                    batch::Frame {
+                                    inflated::Frame {
                                         batches: [Batch {
                                             base_offset: 0,
                                             batch_length: 59,
@@ -3769,8 +3769,8 @@ fn produce_request_v9_001() -> Result<()> {
                             [PartitionProduceData {
                                 index: 0,
                                 records: Some(
-                                    batch::Frame {
-                                        batches: [batch::Batch {
+                                    inflated::Frame {
+                                        batches: [inflated::Batch {
                                             base_offset: 0,
                                             batch_length: 172,
                                             partition_leader_epoch: -1,
@@ -3943,8 +3943,8 @@ fn produce_request_v10_000() -> Result<()> {
                             [PartitionProduceData {
                                 index: 0,
                                 records: Some(
-                                    batch::Frame {
-                                        batches: [batch::Batch {
+                                    inflated::Frame {
+                                        batches: [inflated::Batch {
                                             base_offset: 0,
                                             batch_length: 88,
                                             partition_leader_epoch: -1,
@@ -4059,8 +4059,8 @@ fn produce_request_v10_001() -> Result<()> {
                             [PartitionProduceData {
                                 index: 0,
                                 records: Some(
-                                    batch::Frame {
-                                        batches: [batch::Batch {
+                                    inflated::Frame {
+                                        batches: [inflated::Batch {
                                             base_offset: 0,
                                             batch_length: 278,
                                             partition_leader_epoch: -1,

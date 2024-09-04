@@ -23,7 +23,7 @@ use tansu_kafka_sans_io::{
     fetch_response::{
         EpochEndOffset, FetchableTopicResponse, LeaderIdAndEpoch, PartitionData, SnapshotId,
     },
-    record::{compression::Batch, compression::Frame},
+    record::{deflated::Batch, deflated::Frame},
     Body, ErrorCode, IsolationLevel,
 };
 use tansu_storage::{Storage, Topition};

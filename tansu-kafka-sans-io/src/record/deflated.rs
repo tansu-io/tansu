@@ -31,10 +31,10 @@ pub struct Frame {
     pub batches: Vec<Batch>,
 }
 
-impl TryFrom<crate::record::batch::Frame> for Frame {
+impl TryFrom<crate::record::inflated::Frame> for Frame {
     type Error = Error;
 
-    fn try_from(inflated: crate::record::batch::Frame) -> Result<Self, Self::Error> {
+    fn try_from(inflated: crate::record::inflated::Frame) -> Result<Self, Self::Error> {
         inflated
             .batches
             .into_iter()
@@ -186,10 +186,10 @@ fn into_record_data(records: &[Record], compression: Compression) -> Result<Byte
     }
 }
 
-impl TryFrom<crate::record::batch::Batch> for Batch {
+impl TryFrom<crate::record::inflated::Batch> for Batch {
     type Error = Error;
 
-    fn try_from(batch: crate::record::batch::Batch) -> std::result::Result<Self, Self::Error> {
+    fn try_from(batch: crate::record::inflated::Batch) -> std::result::Result<Self, Self::Error> {
         CrcData {
             attributes: batch.attributes,
             last_offset_delta: batch.last_offset_delta,
@@ -451,7 +451,7 @@ mod tests {
             Compression::try_from(decoded.attributes)?
         );
 
-        let inflated = crate::record::batch::Batch::try_from(decoded.clone())?;
+        let inflated = crate::record::inflated::Batch::try_from(decoded.clone())?;
 
         assert_eq!(
             vec![Record {
@@ -531,7 +531,7 @@ mod tests {
             Compression::try_from(decoded.attributes)?
         );
 
-        let inflated = crate::record::batch::Batch::try_from(decoded.clone())?;
+        let inflated = crate::record::inflated::Batch::try_from(decoded.clone())?;
 
         assert_eq!(
             vec![Record {
@@ -616,7 +616,7 @@ mod tests {
         let decoded = Batch::deserialize(&mut decoder)?;
         assert_eq!(Compression::Lz4, Compression::try_from(decoded.attributes)?);
 
-        let inflated = crate::record::batch::Batch::try_from(decoded.clone())?;
+        let inflated = crate::record::inflated::Batch::try_from(decoded.clone())?;
 
         assert_eq!(
             vec![Record {

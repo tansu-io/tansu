@@ -33,7 +33,7 @@ use tansu_kafka_sans_io::{
         OffsetFetchResponseGroup, OffsetFetchResponsePartition, OffsetFetchResponsePartitions,
         OffsetFetchResponseTopic, OffsetFetchResponseTopics,
     },
-    record::{batch, Record},
+    record::{inflated, Record},
     sync_group_request::SyncGroupRequestAssignment,
     to_timestamp, Body, ErrorCode,
 };
@@ -680,7 +680,7 @@ where
                                             consumer_offsets_partition,
                                         );
 
-                                        if let Ok(_offset) = batch::Batch::builder()
+                                        if let Ok(_offset) = inflated::Batch::builder()
                                             .record(
                                                 Record::builder()
                                                     .key(key.into())

@@ -15,7 +15,7 @@
 
 use crate::{
     primitive::ByteSize,
-    record::{codec::Sequence, compression, Record},
+    record::{codec::Sequence, deflated, Record},
     Compression, Encoder, Error, Result,
 };
 use bytes::Bytes;
@@ -32,10 +32,10 @@ pub struct Frame {
     pub batches: Vec<Batch>,
 }
 
-impl TryFrom<compression::Frame> for Frame {
+impl TryFrom<deflated::Frame> for Frame {
     type Error = Error;
 
-    fn try_from(deflated: compression::Frame) -> Result<Self, Self::Error> {
+    fn try_from(deflated: deflated::Frame) -> Result<Self, Self::Error> {
         deflated
             .batches
             .into_iter()
@@ -50,7 +50,7 @@ impl TryFrom<compression::Frame> for Frame {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(try_from = "compression::Batch")]
+#[serde(try_from = "deflated::Batch")]
 pub struct Batch {
     pub base_offset: i64,
     pub batch_length: i32,
@@ -69,10 +69,10 @@ pub struct Batch {
     pub records: Vec<Record>,
 }
 
-impl TryFrom<compression::Batch> for Batch {
+impl TryFrom<deflated::Batch> for Batch {
     type Error = Error;
 
-    fn try_from(value: compression::Batch) -> Result<Self, Self::Error> {
+    fn try_from(value: deflated::Batch) -> Result<Self, Self::Error> {
         let base_offset = value.base_offset;
         let batch_length = value.batch_length;
         let partition_leader_epoch = value.partition_leader_epoch;
