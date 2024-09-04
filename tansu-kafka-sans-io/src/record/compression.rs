@@ -13,7 +13,10 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::{fmt::Formatter, io::Read};
+use std::{
+    fmt::Formatter,
+    io::{BufRead, Read},
+};
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use flate2::read::GzDecoder;
@@ -45,10 +48,16 @@ pub struct Batch {
     pub record_data: Bytes,
 }
 
+impl Batch {
+    fn compression(&self) -> Result<Compression> {
+        Compression::try_from(self.attributes)
+    }
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum Compression {
     #[default]
-    No,
+    None,
     Gzip,
     Snappy,
     Lz4,
@@ -60,7 +69,7 @@ impl TryFrom<i16> for Compression {
 
     fn try_from(value: i16) -> Result<Self, Self::Error> {
         match value & 0b111i16 {
-            0 => Ok(Self::No),
+            0 => Ok(Self::None),
             1 => Ok(Self::Gzip),
             2 => Ok(Self::Snappy),
             3 => Ok(Self::Lz4),
@@ -73,7 +82,7 @@ impl TryFrom<i16> for Compression {
 impl From<Compression> for i16 {
     fn from(value: Compression) -> Self {
         match value {
-            Compression::No => 0,
+            Compression::None => 0,
             Compression::Gzip => 1,
             Compression::Snappy => 2,
             Compression::Lz4 => 3,
@@ -82,25 +91,33 @@ impl From<Compression> for i16 {
     }
 }
 
+impl Compression {
+    fn inflator(&self, deflated: impl BufRead + 'static) -> Result<Box<dyn Read>> {
+        match self {
+            Compression::None => Ok(Box::new(deflated)),
+            Compression::Gzip => Ok(Box::new(GzDecoder::new(deflated))),
+            Compression::Snappy => Ok(Box::new(snap::read::FrameDecoder::new(deflated))),
+            Compression::Lz4 => lz4::Decoder::new(deflated)
+                .map(Box::new)
+                .map(|boxed| boxed as Box<dyn Read>)
+                .map_err(Into::into),
+            Compression::Zstd => zstd::stream::read::Decoder::with_buffer(deflated)
+                .map(Box::new)
+                .map(|boxed| boxed as Box<dyn Read>)
+                .map_err(Into::into),
+        }
+    }
+}
+
 impl TryFrom<Batch> for Vec<Record> {
     type Error = Error;
 
-    fn try_from(value: Batch) -> Result<Self, Self::Error> {
-        let record_count = usize::try_from(value.record_count)?;
+    fn try_from(batch: Batch) -> Result<Self, Self::Error> {
+        let record_count = usize::try_from(batch.record_count)?;
 
-        let mut record_data = value.record_data.reader();
-
-        let mut reader = match Compression::try_from(value.attributes)? {
-            Compression::No => &mut record_data as &mut dyn Read,
-            Compression::Gzip => &mut GzDecoder::new(&mut record_data) as &mut dyn Read,
-            Compression::Snappy => {
-                &mut snap::read::FrameDecoder::new(&mut record_data) as &mut dyn Read
-            }
-            Compression::Lz4 => &mut lz4::Decoder::new(&mut record_data)? as &mut dyn Read,
-            Compression::Zstd => {
-                &mut zstd::stream::read::Decoder::with_buffer(&mut record_data)? as &mut dyn Read
-            }
-        };
+        let mut reader = batch
+            .compression()
+            .and_then(|compression| compression.inflator(batch.record_data.reader()))?;
 
         let mut decoder = Decoder::new(&mut reader);
         let mut records = Vec::with_capacity(record_count);
