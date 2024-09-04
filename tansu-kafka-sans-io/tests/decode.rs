@@ -19,11 +19,19 @@ use serde::Deserialize;
 use std::{fs::File, io::Cursor, sync::Arc, thread};
 use tansu_kafka_sans_io::{
     de::Decoder,
+    describe_groups_response::DescribedGroup,
+    fetch_response::{
+        EpochEndOffset, FetchableTopicResponse, LeaderIdAndEpoch, PartitionData, SnapshotId,
+    },
     join_group_response::JoinGroupResponseMember,
     metadata_request::MetadataRequestTopic,
     metadata_response::{MetadataResponseBroker, MetadataResponsePartition, MetadataResponseTopic},
     offset_fetch_response::{OffsetFetchResponsePartition, OffsetFetchResponseTopic},
-    record::{self, Batch, Record},
+    record::{
+        self,
+        batch::{self, Batch},
+        Record,
+    },
     Body, Error, ErrorCode, Frame, Header, Result,
 };
 use tracing::{debug, subscriber::DefaultGuard};
@@ -1183,8 +1191,6 @@ fn describe_groups_request_v1_000() -> Result<()> {
 
 #[test]
 fn describe_groups_response_v1_000() -> Result<()> {
-    use tansu_kafka_sans_io::describe_groups_response::DescribedGroup;
-
     let _guard = init_tracing()?;
 
     let v = vec![
@@ -1562,8 +1568,6 @@ fn fetch_response_v12_000() -> Result<()> {
 
 #[test]
 fn fetch_response_v12_001() -> Result<()> {
-    use tansu_kafka_sans_io::fetch_response::{FetchableTopicResponse, PartitionData};
-
     let _guard = init_tracing()?;
 
     let api_key = 1;
@@ -1624,63 +1628,70 @@ fn fetch_response_v12_001() -> Result<()> {
                                     snapshot_id: None,
                                     aborted_transactions: None,
                                     preferred_read_replica: Some(-1),
-                                    records: Some(record::Frame {
-                                        batches: [
-                                            Batch {
-                                                base_offset: 0,
-                                                batch_length: 62,
-                                                partition_leader_epoch: 0,
-                                                magic: 2,
-                                                crc: 2915995653,
-                                                attributes: 0,
-                                                last_offset_delta: 0,
-                                                base_timestamp: 1707058170165,
-                                                max_timestamp: 1707058170165,
-                                                producer_id: 1,
-                                                producer_epoch: 0,
-                                                base_sequence: 1,
-                                                records: [Record {
-                                                    length: 12,
+                                    records: Some(
+                                        batch::Frame {
+                                            batches: [
+                                                batch::Batch {
+                                                    base_offset: 0,
+                                                    batch_length: 62,
+                                                    partition_leader_epoch: 0,
+                                                    magic: 2,
+                                                    crc: 2915995653,
                                                     attributes: 0,
-                                                    timestamp_delta: 0,
-                                                    offset_delta: 0,
-                                                    key: Some(Bytes::from_static(&[97, 98, 99])),
-                                                    value: Some(Bytes::from_static(&[
-                                                        112, 113, 114
-                                                    ])),
-                                                    headers: [].into()
-                                                }]
-                                                .into()
-                                            },
-                                            Batch {
-                                                base_offset: 1,
-                                                batch_length: 62,
-                                                partition_leader_epoch: 0,
-                                                magic: 2,
-                                                crc: 2915995653,
-                                                attributes: 0,
-                                                last_offset_delta: 0,
-                                                base_timestamp: 1707058170165,
-                                                max_timestamp: 1707058170165,
-                                                producer_id: 1,
-                                                producer_epoch: 0,
-                                                base_sequence: 1,
-                                                records: [Record {
-                                                    length: 12,
+                                                    last_offset_delta: 0,
+                                                    base_timestamp: 1707058170165,
+                                                    max_timestamp: 1707058170165,
+                                                    producer_id: 1,
+                                                    producer_epoch: 0,
+                                                    base_sequence: 1,
+                                                    records: [Record {
+                                                        length: 12,
+                                                        attributes: 0,
+                                                        timestamp_delta: 0,
+                                                        offset_delta: 0,
+                                                        key: Some(Bytes::from_static(&[
+                                                            97, 98, 99
+                                                        ])),
+                                                        value: Some(Bytes::from_static(&[
+                                                            112, 113, 114
+                                                        ])),
+                                                        headers: [].into()
+                                                    }]
+                                                    .into()
+                                                },
+                                                batch::Batch {
+                                                    base_offset: 1,
+                                                    batch_length: 62,
+                                                    partition_leader_epoch: 0,
+                                                    magic: 2,
+                                                    crc: 2915995653,
                                                     attributes: 0,
-                                                    timestamp_delta: 0,
-                                                    offset_delta: 0,
-                                                    key: Some(Bytes::from_static(&[97, 98, 99])),
-                                                    value: Some(Bytes::from_static(&[
-                                                        112, 113, 114
-                                                    ])),
-                                                    headers: [].into()
-                                                }]
-                                                .into()
-                                            }
-                                        ]
-                                        .into()
-                                    })
+                                                    last_offset_delta: 0,
+                                                    base_timestamp: 1707058170165,
+                                                    max_timestamp: 1707058170165,
+                                                    producer_id: 1,
+                                                    producer_epoch: 0,
+                                                    base_sequence: 1,
+                                                    records: [Record {
+                                                        length: 12,
+                                                        attributes: 0,
+                                                        timestamp_delta: 0,
+                                                        offset_delta: 0,
+                                                        key: Some(Bytes::from_static(&[
+                                                            97, 98, 99
+                                                        ])),
+                                                        value: Some(Bytes::from_static(&[
+                                                            112, 113, 114
+                                                        ])),
+                                                        headers: [].into()
+                                                    }]
+                                                    .into()
+                                                }
+                                            ]
+                                            .into()
+                                        }
+                                        .try_into()?
+                                    )
                                 },
                                 PartitionData {
                                     partition_index: 2,
@@ -1712,8 +1723,6 @@ fn fetch_response_v12_001() -> Result<()> {
 
 #[test]
 fn fetch_response_v12_002() -> Result<()> {
-    use tansu_kafka_sans_io::fetch_response::{FetchableTopicResponse, PartitionData};
-
     let _guard = init_tracing()?;
 
     let api_key = 1;
@@ -1764,125 +1773,132 @@ fn fetch_response_v12_002() -> Result<()> {
                                     snapshot_id: None,
                                     aborted_transactions: None,
                                     preferred_read_replica: Some(-1),
-                                    records: Some(record::Frame {
-                                        batches: [Batch {
-                                            base_offset: 0,
-                                            batch_length: 172,
-                                            partition_leader_epoch: 0,
-                                            magic: 2,
-                                            crc: 2415788772,
-                                            attributes: 0,
-                                            last_offset_delta: 10,
-                                            base_timestamp: 1707058170165,
-                                            max_timestamp: 1707058170165,
-                                            producer_id: 1,
-                                            producer_epoch: 0,
-                                            base_sequence: 1,
-                                            records: [
-                                                Record {
-                                                    length: 10,
-                                                    attributes: 0,
-                                                    timestamp_delta: 0,
-                                                    offset_delta: 0,
-                                                    key: Some(Bytes::from_static(&[107, 49])),
-                                                    value: Some(Bytes::from_static(&[118, 49])),
-                                                    headers: [].into()
-                                                },
-                                                Record {
-                                                    length: 10,
-                                                    attributes: 0,
-                                                    timestamp_delta: 0,
-                                                    offset_delta: 1,
-                                                    key: Some(Bytes::from_static(&[107, 50])),
-                                                    value: Some(Bytes::from_static(&[118, 50])),
-                                                    headers: [].into()
-                                                },
-                                                Record {
-                                                    length: 10,
-                                                    attributes: 0,
-                                                    timestamp_delta: 0,
-                                                    offset_delta: 2,
-                                                    key: Some(Bytes::from_static(&[107, 49])),
-                                                    value: Some(Bytes::from_static(&[118, 51])),
-                                                    headers: [].into()
-                                                },
-                                                Record {
-                                                    length: 10,
-                                                    attributes: 0,
-                                                    timestamp_delta: 0,
-                                                    offset_delta: 3,
-                                                    key: Some(Bytes::from_static(&[107, 49])),
-                                                    value: Some(Bytes::from_static(&[118, 52])),
-                                                    headers: [].into()
-                                                },
-                                                Record {
-                                                    length: 10,
-                                                    attributes: 0,
-                                                    timestamp_delta: 0,
-                                                    offset_delta: 4,
-                                                    key: Some(Bytes::from_static(&[107, 51])),
-                                                    value: Some(Bytes::from_static(&[118, 53])),
-                                                    headers: [].into()
-                                                },
-                                                Record {
-                                                    length: 10,
-                                                    attributes: 0,
-                                                    timestamp_delta: 0,
-                                                    offset_delta: 5,
-                                                    key: Some(Bytes::from_static(&[107, 50])),
-                                                    value: Some(Bytes::from_static(&[118, 54])),
-                                                    headers: [].into()
-                                                },
-                                                Record {
-                                                    length: 10,
-                                                    attributes: 0,
-                                                    timestamp_delta: 0,
-                                                    offset_delta: 6,
-                                                    key: Some(Bytes::from_static(&[107, 52])),
-                                                    value: Some(Bytes::from_static(&[118, 55])),
-                                                    headers: [].into()
-                                                },
-                                                Record {
-                                                    length: 10,
-                                                    attributes: 0,
-                                                    timestamp_delta: 0,
-                                                    offset_delta: 7,
-                                                    key: Some(Bytes::from_static(&[107, 53])),
-                                                    value: Some(Bytes::from_static(&[118, 56])),
-                                                    headers: [].into()
-                                                },
-                                                Record {
-                                                    length: 10,
-                                                    attributes: 0,
-                                                    timestamp_delta: 0,
-                                                    offset_delta: 8,
-                                                    key: Some(Bytes::from_static(&[107, 53])),
-                                                    value: Some(Bytes::from_static(&[118, 57])),
-                                                    headers: [].into()
-                                                },
-                                                Record {
-                                                    length: 11,
-                                                    attributes: 0,
-                                                    timestamp_delta: 0,
-                                                    offset_delta: 9,
-                                                    key: Some(Bytes::from_static(&[107, 50])),
-                                                    value: Some(Bytes::from_static(&[118, 49, 48])),
-                                                    headers: [].into()
-                                                },
-                                                Record {
-                                                    length: 11,
-                                                    attributes: 0,
-                                                    timestamp_delta: 0,
-                                                    offset_delta: 10,
-                                                    key: Some(Bytes::from_static(&[107, 54])),
-                                                    value: Some(Bytes::from_static(&[118, 49, 49])),
-                                                    headers: [].into()
-                                                }
-                                            ]
+                                    records: Some(
+                                        batch::Frame {
+                                            batches: [batch::Batch {
+                                                base_offset: 0,
+                                                batch_length: 172,
+                                                partition_leader_epoch: 0,
+                                                magic: 2,
+                                                crc: 2415788772,
+                                                attributes: 0,
+                                                last_offset_delta: 10,
+                                                base_timestamp: 1707058170165,
+                                                max_timestamp: 1707058170165,
+                                                producer_id: 1,
+                                                producer_epoch: 0,
+                                                base_sequence: 1,
+                                                records: [
+                                                    Record {
+                                                        length: 10,
+                                                        attributes: 0,
+                                                        timestamp_delta: 0,
+                                                        offset_delta: 0,
+                                                        key: Some(Bytes::from_static(&[107, 49])),
+                                                        value: Some(Bytes::from_static(&[118, 49])),
+                                                        headers: [].into()
+                                                    },
+                                                    Record {
+                                                        length: 10,
+                                                        attributes: 0,
+                                                        timestamp_delta: 0,
+                                                        offset_delta: 1,
+                                                        key: Some(Bytes::from_static(&[107, 50])),
+                                                        value: Some(Bytes::from_static(&[118, 50])),
+                                                        headers: [].into()
+                                                    },
+                                                    Record {
+                                                        length: 10,
+                                                        attributes: 0,
+                                                        timestamp_delta: 0,
+                                                        offset_delta: 2,
+                                                        key: Some(Bytes::from_static(&[107, 49])),
+                                                        value: Some(Bytes::from_static(&[118, 51])),
+                                                        headers: [].into()
+                                                    },
+                                                    Record {
+                                                        length: 10,
+                                                        attributes: 0,
+                                                        timestamp_delta: 0,
+                                                        offset_delta: 3,
+                                                        key: Some(Bytes::from_static(&[107, 49])),
+                                                        value: Some(Bytes::from_static(&[118, 52])),
+                                                        headers: [].into()
+                                                    },
+                                                    Record {
+                                                        length: 10,
+                                                        attributes: 0,
+                                                        timestamp_delta: 0,
+                                                        offset_delta: 4,
+                                                        key: Some(Bytes::from_static(&[107, 51])),
+                                                        value: Some(Bytes::from_static(&[118, 53])),
+                                                        headers: [].into()
+                                                    },
+                                                    Record {
+                                                        length: 10,
+                                                        attributes: 0,
+                                                        timestamp_delta: 0,
+                                                        offset_delta: 5,
+                                                        key: Some(Bytes::from_static(&[107, 50])),
+                                                        value: Some(Bytes::from_static(&[118, 54])),
+                                                        headers: [].into()
+                                                    },
+                                                    Record {
+                                                        length: 10,
+                                                        attributes: 0,
+                                                        timestamp_delta: 0,
+                                                        offset_delta: 6,
+                                                        key: Some(Bytes::from_static(&[107, 52])),
+                                                        value: Some(Bytes::from_static(&[118, 55])),
+                                                        headers: [].into()
+                                                    },
+                                                    Record {
+                                                        length: 10,
+                                                        attributes: 0,
+                                                        timestamp_delta: 0,
+                                                        offset_delta: 7,
+                                                        key: Some(Bytes::from_static(&[107, 53])),
+                                                        value: Some(Bytes::from_static(&[118, 56])),
+                                                        headers: [].into()
+                                                    },
+                                                    Record {
+                                                        length: 10,
+                                                        attributes: 0,
+                                                        timestamp_delta: 0,
+                                                        offset_delta: 8,
+                                                        key: Some(Bytes::from_static(&[107, 53])),
+                                                        value: Some(Bytes::from_static(&[118, 57])),
+                                                        headers: [].into()
+                                                    },
+                                                    Record {
+                                                        length: 11,
+                                                        attributes: 0,
+                                                        timestamp_delta: 0,
+                                                        offset_delta: 9,
+                                                        key: Some(Bytes::from_static(&[107, 50])),
+                                                        value: Some(Bytes::from_static(&[
+                                                            118, 49, 48
+                                                        ])),
+                                                        headers: [].into()
+                                                    },
+                                                    Record {
+                                                        length: 11,
+                                                        attributes: 0,
+                                                        timestamp_delta: 0,
+                                                        offset_delta: 10,
+                                                        key: Some(Bytes::from_static(&[107, 54])),
+                                                        value: Some(Bytes::from_static(&[
+                                                            118, 49, 49
+                                                        ])),
+                                                        headers: [].into()
+                                                    }
+                                                ]
+                                                .into()
+                                            }]
                                             .into()
-                                        }]
-                                        .into()
-                                    })
+                                        }
+                                        .try_into()?
+                                    )
                                 },
                                 PartitionData {
                                     partition_index: 1,
@@ -1927,10 +1943,6 @@ fn fetch_response_v12_002() -> Result<()> {
 
 #[test]
 fn fetch_response_v16_001() -> Result<()> {
-    use tansu_kafka_sans_io::fetch_response::{
-        EpochEndOffset, FetchableTopicResponse, LeaderIdAndEpoch, PartitionData, SnapshotId,
-    };
-
     let _guard = init_tracing()?;
 
     let api_key = 1;
@@ -1985,35 +1997,38 @@ fn fetch_response_v16_001() -> Result<()> {
                                 }),
                                 aborted_transactions: Some([].into()),
                                 preferred_read_replica: Some(0),
-                                records: Some(record::Frame {
-                                    batches: [Batch {
-                                        base_offset: 0,
-                                        batch_length: 61,
-                                        partition_leader_epoch: -1,
-                                        magic: 2,
-                                        crc: 2576291984,
-                                        attributes: 0,
-                                        last_offset_delta: 0,
-                                        base_timestamp: 1721989616694,
-                                        max_timestamp: 1721989616694,
-                                        producer_id: 1,
-                                        producer_epoch: 0,
-                                        base_sequence: 0,
-                                        records: [Record {
-                                            length: 11,
+                                records: Some(
+                                    batch::Frame {
+                                        batches: [Batch {
+                                            base_offset: 0,
+                                            batch_length: 61,
+                                            partition_leader_epoch: -1,
+                                            magic: 2,
+                                            crc: 2576291984,
                                             attributes: 0,
-                                            timestamp_delta: 0,
-                                            offset_delta: 0,
-                                            key: None,
-                                            value: Some(Bytes::from_static(&[
-                                                112, 111, 105, 117, 121
-                                            ])),
-                                            headers: [].into()
+                                            last_offset_delta: 0,
+                                            base_timestamp: 1721989616694,
+                                            max_timestamp: 1721989616694,
+                                            producer_id: 1,
+                                            producer_epoch: 0,
+                                            base_sequence: 0,
+                                            records: [Record {
+                                                length: 11,
+                                                attributes: 0,
+                                                timestamp_delta: 0,
+                                                offset_delta: 0,
+                                                key: None,
+                                                value: Some(Bytes::from_static(&[
+                                                    112, 111, 105, 117, 121
+                                                ])),
+                                                headers: [].into()
+                                            }]
+                                            .into()
                                         }]
                                         .into()
-                                    }]
-                                    .into()
-                                })
+                                    }
+                                    .try_into()?
+                                )
                             }]
                             .into()
                         )
@@ -2031,10 +2046,6 @@ fn fetch_response_v16_001() -> Result<()> {
 
 #[test]
 fn fetch_response_v16_002() -> Result<()> {
-    use tansu_kafka_sans_io::fetch_response::{
-        EpochEndOffset, FetchableTopicResponse, LeaderIdAndEpoch, PartitionData, SnapshotId,
-    };
-
     let _guard = init_tracing()?;
 
     let api_key = 1;
@@ -2089,35 +2100,38 @@ fn fetch_response_v16_002() -> Result<()> {
                                 }),
                                 aborted_transactions: Some([].into()),
                                 preferred_read_replica: Some(0),
-                                records: Some(record::Frame {
-                                    batches: [Batch {
-                                        base_offset: 0,
-                                        batch_length: 61,
-                                        partition_leader_epoch: -1,
-                                        magic: 2,
-                                        crc: 2576291984,
-                                        attributes: 0,
-                                        last_offset_delta: 0,
-                                        base_timestamp: 1721989616694,
-                                        max_timestamp: 1721989616694,
-                                        producer_id: 1,
-                                        producer_epoch: 0,
-                                        base_sequence: 0,
-                                        records: [Record {
-                                            length: 11,
+                                records: Some(
+                                    batch::Frame {
+                                        batches: [Batch {
+                                            base_offset: 0,
+                                            batch_length: 61,
+                                            partition_leader_epoch: -1,
+                                            magic: 2,
+                                            crc: 2576291984,
                                             attributes: 0,
-                                            timestamp_delta: 0,
-                                            offset_delta: 0,
-                                            key: None,
-                                            value: Some(Bytes::from_static(&[
-                                                112, 111, 105, 117, 121
-                                            ])),
-                                            headers: [].into()
+                                            last_offset_delta: 0,
+                                            base_timestamp: 1721989616694,
+                                            max_timestamp: 1721989616694,
+                                            producer_id: 1,
+                                            producer_epoch: 0,
+                                            base_sequence: 0,
+                                            records: [Record {
+                                                length: 11,
+                                                attributes: 0,
+                                                timestamp_delta: 0,
+                                                offset_delta: 0,
+                                                key: None,
+                                                value: Some(Bytes::from_static(&[
+                                                    112, 111, 105, 117, 121
+                                                ])),
+                                                headers: [].into()
+                                            }]
+                                            .into()
                                         }]
                                         .into()
-                                    }]
-                                    .into()
-                                })
+                                    }
+                                    .try_into()?
+                                )
                             }]
                             .into()
                         )
@@ -3464,71 +3478,74 @@ fn produce_request_v3_000() -> Result<()> {
                         partition_data: Some(
                             [PartitionProduceData {
                                 index: 0,
-                                records: Some(record::Frame {
-                                    batches: [record::Batch {
-                                        base_offset: 0,
-                                        batch_length: 134,
-                                        partition_leader_epoch: -1,
-                                        magic: 2,
-                                        crc: 3256047807,
-                                        attributes: 0,
-                                        last_offset_delta: 4,
-                                        base_timestamp: 1724936044418,
-                                        max_timestamp: 1724936044418,
-                                        producer_id: -1,
-                                        producer_epoch: -1,
-                                        base_sequence: -1,
-                                        records: [
-                                            Record {
-                                                length: 16,
-                                                attributes: 0,
-                                                timestamp_delta: 0,
-                                                offset_delta: 0,
-                                                key: Some(Bytes::from_static(b"")),
-                                                value: Some(Bytes::from_static(b"0123456789")),
-                                                headers: [].into()
-                                            },
-                                            Record {
-                                                length: 16,
-                                                attributes: 0,
-                                                timestamp_delta: 0,
-                                                offset_delta: 1,
-                                                key: Some(Bytes::from_static(b"")),
-                                                value: Some(Bytes::from_static(b"0123456789")),
-                                                headers: [].into()
-                                            },
-                                            Record {
-                                                length: 16,
-                                                attributes: 0,
-                                                timestamp_delta: 0,
-                                                offset_delta: 2,
-                                                key: Some(Bytes::from_static(b"")),
-                                                value: Some(Bytes::from_static(b"0123456789")),
-                                                headers: [].into()
-                                            },
-                                            Record {
-                                                length: 16,
-                                                attributes: 0,
-                                                timestamp_delta: 0,
-                                                offset_delta: 3,
-                                                key: Some(Bytes::from_static(b"")),
-                                                value: Some(Bytes::from_static(b"0123456789")),
-                                                headers: [].into()
-                                            },
-                                            Record {
-                                                length: 16,
-                                                attributes: 0,
-                                                timestamp_delta: 0,
-                                                offset_delta: 4,
-                                                key: Some(Bytes::from_static(b"")),
-                                                value: Some(Bytes::from_static(b"0123456789")),
-                                                headers: [].into()
-                                            }
-                                        ]
+                                records: Some(
+                                    batch::Frame {
+                                        batches: [batch::Batch {
+                                            base_offset: 0,
+                                            batch_length: 134,
+                                            partition_leader_epoch: -1,
+                                            magic: 2,
+                                            crc: 3256047807,
+                                            attributes: 0,
+                                            last_offset_delta: 4,
+                                            base_timestamp: 1724936044418,
+                                            max_timestamp: 1724936044418,
+                                            producer_id: -1,
+                                            producer_epoch: -1,
+                                            base_sequence: -1,
+                                            records: [
+                                                Record {
+                                                    length: 16,
+                                                    attributes: 0,
+                                                    timestamp_delta: 0,
+                                                    offset_delta: 0,
+                                                    key: Some(Bytes::from_static(b"")),
+                                                    value: Some(Bytes::from_static(b"0123456789")),
+                                                    headers: [].into()
+                                                },
+                                                Record {
+                                                    length: 16,
+                                                    attributes: 0,
+                                                    timestamp_delta: 0,
+                                                    offset_delta: 1,
+                                                    key: Some(Bytes::from_static(b"")),
+                                                    value: Some(Bytes::from_static(b"0123456789")),
+                                                    headers: [].into()
+                                                },
+                                                Record {
+                                                    length: 16,
+                                                    attributes: 0,
+                                                    timestamp_delta: 0,
+                                                    offset_delta: 2,
+                                                    key: Some(Bytes::from_static(b"")),
+                                                    value: Some(Bytes::from_static(b"0123456789")),
+                                                    headers: [].into()
+                                                },
+                                                Record {
+                                                    length: 16,
+                                                    attributes: 0,
+                                                    timestamp_delta: 0,
+                                                    offset_delta: 3,
+                                                    key: Some(Bytes::from_static(b"")),
+                                                    value: Some(Bytes::from_static(b"0123456789")),
+                                                    headers: [].into()
+                                                },
+                                                Record {
+                                                    length: 16,
+                                                    attributes: 0,
+                                                    timestamp_delta: 0,
+                                                    offset_delta: 4,
+                                                    key: Some(Bytes::from_static(b"")),
+                                                    value: Some(Bytes::from_static(b"0123456789")),
+                                                    headers: [].into()
+                                                }
+                                            ]
+                                            .into()
+                                        }]
                                         .into()
-                                    }]
-                                    .into()
-                                })
+                                    }
+                                    .try_into()?
+                                )
                             }]
                             .into()
                         )
@@ -3579,37 +3596,42 @@ fn produce_request_v7_000() -> Result<()> {
                         partition_data: Some(
                             [PartitionProduceData {
                                 index: 0,
-                                records: Some(record::Frame {
-                                    batches: [record::Batch {
-                                        base_offset: 0,
-                                        batch_length: 94,
-                                        partition_leader_epoch: 0,
-                                        magic: 2,
-                                        crc: 2997286627,
-                                        attributes: 0,
-                                        last_offset_delta: 0,
-                                        base_timestamp: 1724938179516,
-                                        max_timestamp: 1724938179516,
-                                        producer_id: -1,
-                                        producer_epoch: -1,
-                                        base_sequence: -1,
-                                        records: [Record {
-                                            length: 44,
+                                records: Some(
+                                    batch::Frame {
+                                        batches: [batch::Batch {
+                                            base_offset: 0,
+                                            batch_length: 94,
+                                            partition_leader_epoch: 0,
+                                            magic: 2,
+                                            crc: 2997286627,
                                             attributes: 0,
-                                            timestamp_delta: 0,
-                                            offset_delta: 0,
-                                            key: Some(Bytes::from_static(b"Key 0")),
-                                            value: Some(Bytes::from_static(b"Message 0")),
-                                            headers: [record::Header {
-                                                key: Some(Bytes::from_static(b"header_key")),
-                                                value: Some(Bytes::from_static(b"header_value"))
+                                            last_offset_delta: 0,
+                                            base_timestamp: 1724938179516,
+                                            max_timestamp: 1724938179516,
+                                            producer_id: -1,
+                                            producer_epoch: -1,
+                                            base_sequence: -1,
+                                            records: [Record {
+                                                length: 44,
+                                                attributes: 0,
+                                                timestamp_delta: 0,
+                                                offset_delta: 0,
+                                                key: Some(Bytes::from_static(b"Key 0")),
+                                                value: Some(Bytes::from_static(b"Message 0")),
+                                                headers: [record::Header {
+                                                    key: Some(Bytes::from_static(b"header_key")),
+                                                    value: Some(Bytes::from_static(
+                                                        b"header_value"
+                                                    ))
+                                                }]
+                                                .into()
                                             }]
                                             .into()
                                         }]
                                         .into()
-                                    }]
-                                    .into()
-                                })
+                                    }
+                                    .try_into()?
+                                )
                             }]
                             .into()
                         )
@@ -3661,33 +3683,36 @@ fn produce_request_v9_000() -> Result<()> {
                         partition_data: Some(
                             [PartitionProduceData {
                                 index: 0,
-                                records: Some(record::Frame {
-                                    batches: [Batch {
-                                        base_offset: 0,
-                                        batch_length: 59,
-                                        partition_leader_epoch: -1,
-                                        magic: 2,
-                                        crc: 1126819645,
-                                        attributes: 0,
-                                        last_offset_delta: 0,
-                                        base_timestamp: 1707058170165,
-                                        max_timestamp: 1707058170165,
-                                        producer_id: 1,
-                                        producer_epoch: 0,
-                                        base_sequence: 1,
-                                        records: [Record {
-                                            length: 9,
+                                records: Some(
+                                    batch::Frame {
+                                        batches: [Batch {
+                                            base_offset: 0,
+                                            batch_length: 59,
+                                            partition_leader_epoch: -1,
+                                            magic: 2,
+                                            crc: 1126819645,
                                             attributes: 0,
-                                            timestamp_delta: 0,
-                                            offset_delta: 0,
-                                            key: None,
-                                            value: Some(Bytes::from_static(&[100, 101, 102])),
-                                            headers: [].into()
+                                            last_offset_delta: 0,
+                                            base_timestamp: 1707058170165,
+                                            max_timestamp: 1707058170165,
+                                            producer_id: 1,
+                                            producer_epoch: 0,
+                                            base_sequence: 1,
+                                            records: [Record {
+                                                length: 9,
+                                                attributes: 0,
+                                                timestamp_delta: 0,
+                                                offset_delta: 0,
+                                                key: None,
+                                                value: Some(Bytes::from_static(&[100, 101, 102])),
+                                                headers: [].into()
+                                            }]
+                                            .into()
                                         }]
-                                        .into()
-                                    }]
-                                    .into(),
-                                }),
+                                        .into(),
+                                    }
+                                    .try_into()?
+                                ),
                             }]
                             .into()
                         )
@@ -3743,125 +3768,128 @@ fn produce_request_v9_001() -> Result<()> {
                         partition_data: Some(
                             [PartitionProduceData {
                                 index: 0,
-                                records: Some(record::Frame {
-                                    batches: [Batch {
-                                        base_offset: 0,
-                                        batch_length: 172,
-                                        partition_leader_epoch: -1,
-                                        magic: 2,
-                                        crc: 615630493,
-                                        attributes: 0,
-                                        last_offset_delta: 10,
-                                        base_timestamp: 1722943394358,
-                                        max_timestamp: 1722943394358,
-                                        producer_id: 1,
-                                        producer_epoch: 0,
-                                        base_sequence: 1,
-                                        records: [
-                                            Record {
-                                                length: 10,
-                                                attributes: 0,
-                                                timestamp_delta: 0,
-                                                offset_delta: 0,
-                                                key: Some(Bytes::from_static(&[107, 49])),
-                                                value: Some(Bytes::from_static(&[118, 49])),
-                                                headers: [].into()
-                                            },
-                                            Record {
-                                                length: 10,
-                                                attributes: 0,
-                                                timestamp_delta: 0,
-                                                offset_delta: 1,
-                                                key: Some(Bytes::from_static(&[107, 50])),
-                                                value: Some(Bytes::from_static(&[118, 50])),
-                                                headers: [].into()
-                                            },
-                                            Record {
-                                                length: 10,
-                                                attributes: 0,
-                                                timestamp_delta: 0,
-                                                offset_delta: 2,
-                                                key: Some(Bytes::from_static(&[107, 49])),
-                                                value: Some(Bytes::from_static(&[118, 51])),
-                                                headers: [].into()
-                                            },
-                                            Record {
-                                                length: 10,
-                                                attributes: 0,
-                                                timestamp_delta: 0,
-                                                offset_delta: 3,
-                                                key: Some(Bytes::from_static(&[107, 49])),
-                                                value: Some(Bytes::from_static(&[118, 52])),
-                                                headers: [].into()
-                                            },
-                                            Record {
-                                                length: 10,
-                                                attributes: 0,
-                                                timestamp_delta: 0,
-                                                offset_delta: 4,
-                                                key: Some(Bytes::from_static(&[107, 51])),
-                                                value: Some(Bytes::from_static(&[118, 53])),
-                                                headers: [].into()
-                                            },
-                                            Record {
-                                                length: 10,
-                                                attributes: 0,
-                                                timestamp_delta: 0,
-                                                offset_delta: 5,
-                                                key: Some(Bytes::from_static(&[107, 50])),
-                                                value: Some(Bytes::from_static(&[118, 54])),
-                                                headers: [].into()
-                                            },
-                                            Record {
-                                                length: 10,
-                                                attributes: 0,
-                                                timestamp_delta: 0,
-                                                offset_delta: 6,
-                                                key: Some(Bytes::from_static(&[107, 52])),
-                                                value: Some(Bytes::from_static(&[118, 55])),
-                                                headers: [].into()
-                                            },
-                                            Record {
-                                                length: 10,
-                                                attributes: 0,
-                                                timestamp_delta: 0,
-                                                offset_delta: 7,
-                                                key: Some(Bytes::from_static(&[107, 53])),
-                                                value: Some(Bytes::from_static(&[118, 56])),
-                                                headers: [].into()
-                                            },
-                                            Record {
-                                                length: 10,
-                                                attributes: 0,
-                                                timestamp_delta: 0,
-                                                offset_delta: 8,
-                                                key: Some(Bytes::from_static(&[107, 53])),
-                                                value: Some(Bytes::from_static(&[118, 57])),
-                                                headers: [].into()
-                                            },
-                                            Record {
-                                                length: 11,
-                                                attributes: 0,
-                                                timestamp_delta: 0,
-                                                offset_delta: 9,
-                                                key: Some(Bytes::from_static(&[107, 50])),
-                                                value: Some(Bytes::from_static(&[118, 49, 48])),
-                                                headers: [].into()
-                                            },
-                                            Record {
-                                                length: 11,
-                                                attributes: 0,
-                                                timestamp_delta: 0,
-                                                offset_delta: 10,
-                                                key: Some(Bytes::from_static(&[107, 54])),
-                                                value: Some(Bytes::from_static(&[118, 49, 49])),
-                                                headers: [].into()
-                                            }
-                                        ]
+                                records: Some(
+                                    batch::Frame {
+                                        batches: [batch::Batch {
+                                            base_offset: 0,
+                                            batch_length: 172,
+                                            partition_leader_epoch: -1,
+                                            magic: 2,
+                                            crc: 615630493,
+                                            attributes: 0,
+                                            last_offset_delta: 10,
+                                            base_timestamp: 1722943394358,
+                                            max_timestamp: 1722943394358,
+                                            producer_id: 1,
+                                            producer_epoch: 0,
+                                            base_sequence: 1,
+                                            records: [
+                                                Record {
+                                                    length: 10,
+                                                    attributes: 0,
+                                                    timestamp_delta: 0,
+                                                    offset_delta: 0,
+                                                    key: Some(Bytes::from_static(&[107, 49])),
+                                                    value: Some(Bytes::from_static(&[118, 49])),
+                                                    headers: [].into()
+                                                },
+                                                Record {
+                                                    length: 10,
+                                                    attributes: 0,
+                                                    timestamp_delta: 0,
+                                                    offset_delta: 1,
+                                                    key: Some(Bytes::from_static(&[107, 50])),
+                                                    value: Some(Bytes::from_static(&[118, 50])),
+                                                    headers: [].into()
+                                                },
+                                                Record {
+                                                    length: 10,
+                                                    attributes: 0,
+                                                    timestamp_delta: 0,
+                                                    offset_delta: 2,
+                                                    key: Some(Bytes::from_static(&[107, 49])),
+                                                    value: Some(Bytes::from_static(&[118, 51])),
+                                                    headers: [].into()
+                                                },
+                                                Record {
+                                                    length: 10,
+                                                    attributes: 0,
+                                                    timestamp_delta: 0,
+                                                    offset_delta: 3,
+                                                    key: Some(Bytes::from_static(&[107, 49])),
+                                                    value: Some(Bytes::from_static(&[118, 52])),
+                                                    headers: [].into()
+                                                },
+                                                Record {
+                                                    length: 10,
+                                                    attributes: 0,
+                                                    timestamp_delta: 0,
+                                                    offset_delta: 4,
+                                                    key: Some(Bytes::from_static(&[107, 51])),
+                                                    value: Some(Bytes::from_static(&[118, 53])),
+                                                    headers: [].into()
+                                                },
+                                                Record {
+                                                    length: 10,
+                                                    attributes: 0,
+                                                    timestamp_delta: 0,
+                                                    offset_delta: 5,
+                                                    key: Some(Bytes::from_static(&[107, 50])),
+                                                    value: Some(Bytes::from_static(&[118, 54])),
+                                                    headers: [].into()
+                                                },
+                                                Record {
+                                                    length: 10,
+                                                    attributes: 0,
+                                                    timestamp_delta: 0,
+                                                    offset_delta: 6,
+                                                    key: Some(Bytes::from_static(&[107, 52])),
+                                                    value: Some(Bytes::from_static(&[118, 55])),
+                                                    headers: [].into()
+                                                },
+                                                Record {
+                                                    length: 10,
+                                                    attributes: 0,
+                                                    timestamp_delta: 0,
+                                                    offset_delta: 7,
+                                                    key: Some(Bytes::from_static(&[107, 53])),
+                                                    value: Some(Bytes::from_static(&[118, 56])),
+                                                    headers: [].into()
+                                                },
+                                                Record {
+                                                    length: 10,
+                                                    attributes: 0,
+                                                    timestamp_delta: 0,
+                                                    offset_delta: 8,
+                                                    key: Some(Bytes::from_static(&[107, 53])),
+                                                    value: Some(Bytes::from_static(&[118, 57])),
+                                                    headers: [].into()
+                                                },
+                                                Record {
+                                                    length: 11,
+                                                    attributes: 0,
+                                                    timestamp_delta: 0,
+                                                    offset_delta: 9,
+                                                    key: Some(Bytes::from_static(&[107, 50])),
+                                                    value: Some(Bytes::from_static(&[118, 49, 48])),
+                                                    headers: [].into()
+                                                },
+                                                Record {
+                                                    length: 11,
+                                                    attributes: 0,
+                                                    timestamp_delta: 0,
+                                                    offset_delta: 10,
+                                                    key: Some(Bytes::from_static(&[107, 54])),
+                                                    value: Some(Bytes::from_static(&[118, 49, 49])),
+                                                    headers: [].into()
+                                                }
+                                            ]
+                                            .into()
+                                        }]
                                         .into()
-                                    }]
-                                    .into()
-                                })
+                                    }
+                                    .try_into()?
+                                )
                             }]
                             .into()
                         )
@@ -3914,57 +3942,60 @@ fn produce_request_v10_000() -> Result<()> {
                         partition_data: Some(
                             [PartitionProduceData {
                                 index: 0,
-                                records: Some(record::Frame {
-                                    batches: [Batch {
-                                        base_offset: 0,
-                                        batch_length: 88,
-                                        partition_leader_epoch: -1,
-                                        magic: 2,
-                                        crc: 1033980210,
-                                        attributes: 0,
-                                        last_offset_delta: 0,
-                                        base_timestamp: 1721977817089,
-                                        max_timestamp: 1721977817089,
-                                        producer_id: 1,
-                                        producer_epoch: 0,
-                                        base_sequence: 0,
-                                        records: [Record {
-                                            length: 38,
+                                records: Some(
+                                    batch::Frame {
+                                        batches: [batch::Batch {
+                                            base_offset: 0,
+                                            batch_length: 88,
+                                            partition_leader_epoch: -1,
+                                            magic: 2,
+                                            crc: 1033980210,
                                             attributes: 0,
-                                            timestamp_delta: 0,
-                                            offset_delta: 0,
-                                            key: Some(Bytes::from_static(&[
-                                                113, 119, 101, 114, 116, 121
-                                            ])),
-                                            value: Some(Bytes::from_static(&[
-                                                112, 111, 105, 117, 121
-                                            ])),
-                                            headers: [
-                                                record::Header {
-                                                    key: Some(Bytes::from_static(&[104, 49])),
-                                                    value: Some(Bytes::from_static(&[
-                                                        112, 113, 114
-                                                    ]))
-                                                },
-                                                record::Header {
-                                                    key: Some(Bytes::from_static(&[104, 50])),
-                                                    value: Some(Bytes::from_static(&[
-                                                        106, 107, 108
-                                                    ]))
-                                                },
-                                                record::Header {
-                                                    key: Some(Bytes::from_static(&[104, 51])),
-                                                    value: Some(Bytes::from_static(&[
-                                                        117, 105, 111
-                                                    ]))
-                                                }
-                                            ]
+                                            last_offset_delta: 0,
+                                            base_timestamp: 1721977817089,
+                                            max_timestamp: 1721977817089,
+                                            producer_id: 1,
+                                            producer_epoch: 0,
+                                            base_sequence: 0,
+                                            records: [Record {
+                                                length: 38,
+                                                attributes: 0,
+                                                timestamp_delta: 0,
+                                                offset_delta: 0,
+                                                key: Some(Bytes::from_static(&[
+                                                    113, 119, 101, 114, 116, 121
+                                                ])),
+                                                value: Some(Bytes::from_static(&[
+                                                    112, 111, 105, 117, 121
+                                                ])),
+                                                headers: [
+                                                    record::Header {
+                                                        key: Some(Bytes::from_static(&[104, 49])),
+                                                        value: Some(Bytes::from_static(&[
+                                                            112, 113, 114
+                                                        ]))
+                                                    },
+                                                    record::Header {
+                                                        key: Some(Bytes::from_static(&[104, 50])),
+                                                        value: Some(Bytes::from_static(&[
+                                                            106, 107, 108
+                                                        ]))
+                                                    },
+                                                    record::Header {
+                                                        key: Some(Bytes::from_static(&[104, 51])),
+                                                        value: Some(Bytes::from_static(&[
+                                                            117, 105, 111
+                                                        ]))
+                                                    }
+                                                ]
+                                                .into()
+                                            }]
                                             .into()
                                         }]
                                         .into()
-                                    }]
-                                    .into()
-                                })
+                                    }
+                                    .try_into()?
+                                )
                             }]
                             .into()
                         )
@@ -4027,194 +4058,227 @@ fn produce_request_v10_001() -> Result<()> {
                         partition_data: Some(
                             [PartitionProduceData {
                                 index: 0,
-                                records: Some(record::Frame {
-                                    batches: [Batch {
-                                        base_offset: 0,
-                                        batch_length: 278,
-                                        partition_leader_epoch: -1,
-                                        magic: 2,
-                                        crc: 3116562872,
-                                        attributes: 0,
-                                        last_offset_delta: 4,
-                                        base_timestamp: 1721978771334,
-                                        max_timestamp: 1721978771342,
-                                        producer_id: 1,
-                                        producer_epoch: 0,
-                                        base_sequence: 0,
-                                        records: [
-                                            Record {
-                                                length: 38,
-                                                attributes: 0,
-                                                timestamp_delta: 0,
-                                                offset_delta: 0,
-                                                key: Some(Bytes::from_static(&[
-                                                    113, 119, 101, 114, 116, 121
-                                                ])),
-                                                value: Some(Bytes::from_static(&[
-                                                    112, 111, 105, 117, 121
-                                                ])),
-                                                headers: [
-                                                    record::Header {
-                                                        key: Some(Bytes::from_static(&[104, 49])),
-                                                        value: Some(Bytes::from_static(&[
-                                                            112, 113, 114
-                                                        ]))
-                                                    },
-                                                    record::Header {
-                                                        key: Some(Bytes::from_static(&[104, 50])),
-                                                        value: Some(Bytes::from_static(&[
-                                                            106, 107, 108
-                                                        ]))
-                                                    },
-                                                    record::Header {
-                                                        key: Some(Bytes::from_static(&[104, 51])),
-                                                        value: Some(Bytes::from_static(&[
-                                                            117, 105, 111
-                                                        ]))
-                                                    }
-                                                ]
-                                                .into()
-                                            },
-                                            Record {
-                                                length: 38,
-                                                attributes: 0,
-                                                timestamp_delta: 8,
-                                                offset_delta: 1,
-                                                key: Some(Bytes::from_static(&[
-                                                    97, 115, 100, 102, 103, 104
-                                                ])),
-                                                value: Some(Bytes::from_static(&[
-                                                    108, 107, 106, 104, 103
-                                                ])),
-                                                headers: [
-                                                    record::Header {
-                                                        key: Some(Bytes::from_static(&[104, 49])),
-                                                        value: Some(Bytes::from_static(&[
-                                                            114, 116, 121
-                                                        ]))
-                                                    },
-                                                    record::Header {
-                                                        key: Some(Bytes::from_static(&[104, 50])),
-                                                        value: Some(Bytes::from_static(&[
-                                                            100, 102, 103
-                                                        ]))
-                                                    },
-                                                    record::Header {
-                                                        key: Some(Bytes::from_static(&[104, 51])),
-                                                        value: Some(Bytes::from_static(&[
-                                                            108, 107, 106
-                                                        ]))
-                                                    }
-                                                ]
-                                                .into()
-                                            },
-                                            Record {
-                                                length: 38,
-                                                attributes: 0,
-                                                timestamp_delta: 8,
-                                                offset_delta: 2,
-                                                key: Some(Bytes::from_static(&[
-                                                    106, 107, 108, 106, 107, 108
-                                                ])),
-                                                value: Some(Bytes::from_static(&[
-                                                    105, 117, 105, 117, 105
-                                                ])),
-                                                headers: [
-                                                    record::Header {
-                                                        key: Some(Bytes::from_static(&[104, 49])),
-                                                        value: Some(Bytes::from_static(&[
-                                                            122, 120, 99
-                                                        ]))
-                                                    },
-                                                    record::Header {
-                                                        key: Some(Bytes::from_static(&[104, 50])),
-                                                        value: Some(Bytes::from_static(&[
-                                                            99, 118, 98
-                                                        ]))
-                                                    },
-                                                    record::Header {
-                                                        key: Some(Bytes::from_static(&[104, 51])),
-                                                        value: Some(Bytes::from_static(&[
-                                                            109, 110, 98
-                                                        ]))
-                                                    }
-                                                ]
-                                                .into()
-                                            },
-                                            Record {
-                                                length: 42,
-                                                attributes: 0,
-                                                timestamp_delta: 8,
-                                                offset_delta: 3,
-                                                key: Some(Bytes::from_static(&[
-                                                    113, 119, 101, 114, 116, 121
-                                                ])),
-                                                value: Some(Bytes::from_static(&[
-                                                    121, 116, 114, 114, 114, 119, 113, 101, 101
-                                                ])),
-                                                headers: [
-                                                    record::Header {
-                                                        key: Some(Bytes::from_static(&[104, 49])),
-                                                        value: Some(Bytes::from_static(&[
-                                                            101, 114, 105
-                                                        ]))
-                                                    },
-                                                    record::Header {
-                                                        key: Some(Bytes::from_static(&[104, 50])),
-                                                        value: Some(Bytes::from_static(&[
-                                                            101, 105, 117
-                                                        ]))
-                                                    },
-                                                    record::Header {
-                                                        key: Some(Bytes::from_static(&[104, 51])),
-                                                        value: Some(Bytes::from_static(&[
-                                                            112, 112, 111
-                                                        ]))
-                                                    }
-                                                ]
-                                                .into()
-                                            },
-                                            Record {
-                                                length: 67,
-                                                attributes: 0,
-                                                timestamp_delta: 8,
-                                                offset_delta: 4,
-                                                key: Some(Bytes::from_static(&[
-                                                    113, 119, 114, 114, 114, 116, 105, 105, 112
-                                                ])),
-                                                value: Some(Bytes::from_static(&[
-                                                    106, 107, 108, 106, 107, 108, 106, 107, 108,
-                                                    107, 106, 107, 106, 107, 108, 107, 106, 108,
-                                                    106, 108, 107, 106, 108, 106, 107, 108, 106,
-                                                    108, 107, 106, 106
-                                                ])),
-                                                headers: [
-                                                    record::Header {
-                                                        key: Some(Bytes::from_static(&[104, 49])),
-                                                        value: Some(Bytes::from_static(&[
-                                                            105, 105, 111
-                                                        ]))
-                                                    },
-                                                    record::Header {
-                                                        key: Some(Bytes::from_static(&[104, 50])),
-                                                        value: Some(Bytes::from_static(&[
-                                                            101, 114, 116
-                                                        ]))
-                                                    },
-                                                    record::Header {
-                                                        key: Some(Bytes::from_static(&[104, 51])),
-                                                        value: Some(Bytes::from_static(&[
-                                                            113, 119, 101
-                                                        ]))
-                                                    }
-                                                ]
-                                                .into()
-                                            }
-                                        ]
+                                records: Some(
+                                    batch::Frame {
+                                        batches: [batch::Batch {
+                                            base_offset: 0,
+                                            batch_length: 278,
+                                            partition_leader_epoch: -1,
+                                            magic: 2,
+                                            crc: 3116562872,
+                                            attributes: 0,
+                                            last_offset_delta: 4,
+                                            base_timestamp: 1721978771334,
+                                            max_timestamp: 1721978771342,
+                                            producer_id: 1,
+                                            producer_epoch: 0,
+                                            base_sequence: 0,
+                                            records: [
+                                                Record {
+                                                    length: 38,
+                                                    attributes: 0,
+                                                    timestamp_delta: 0,
+                                                    offset_delta: 0,
+                                                    key: Some(Bytes::from_static(&[
+                                                        113, 119, 101, 114, 116, 121
+                                                    ])),
+                                                    value: Some(Bytes::from_static(&[
+                                                        112, 111, 105, 117, 121
+                                                    ])),
+                                                    headers: [
+                                                        record::Header {
+                                                            key: Some(Bytes::from_static(&[
+                                                                104, 49
+                                                            ])),
+                                                            value: Some(Bytes::from_static(&[
+                                                                112, 113, 114
+                                                            ]))
+                                                        },
+                                                        record::Header {
+                                                            key: Some(Bytes::from_static(&[
+                                                                104, 50
+                                                            ])),
+                                                            value: Some(Bytes::from_static(&[
+                                                                106, 107, 108
+                                                            ]))
+                                                        },
+                                                        record::Header {
+                                                            key: Some(Bytes::from_static(&[
+                                                                104, 51
+                                                            ])),
+                                                            value: Some(Bytes::from_static(&[
+                                                                117, 105, 111
+                                                            ]))
+                                                        }
+                                                    ]
+                                                    .into()
+                                                },
+                                                Record {
+                                                    length: 38,
+                                                    attributes: 0,
+                                                    timestamp_delta: 8,
+                                                    offset_delta: 1,
+                                                    key: Some(Bytes::from_static(&[
+                                                        97, 115, 100, 102, 103, 104
+                                                    ])),
+                                                    value: Some(Bytes::from_static(&[
+                                                        108, 107, 106, 104, 103
+                                                    ])),
+                                                    headers: [
+                                                        record::Header {
+                                                            key: Some(Bytes::from_static(&[
+                                                                104, 49
+                                                            ])),
+                                                            value: Some(Bytes::from_static(&[
+                                                                114, 116, 121
+                                                            ]))
+                                                        },
+                                                        record::Header {
+                                                            key: Some(Bytes::from_static(&[
+                                                                104, 50
+                                                            ])),
+                                                            value: Some(Bytes::from_static(&[
+                                                                100, 102, 103
+                                                            ]))
+                                                        },
+                                                        record::Header {
+                                                            key: Some(Bytes::from_static(&[
+                                                                104, 51
+                                                            ])),
+                                                            value: Some(Bytes::from_static(&[
+                                                                108, 107, 106
+                                                            ]))
+                                                        }
+                                                    ]
+                                                    .into()
+                                                },
+                                                Record {
+                                                    length: 38,
+                                                    attributes: 0,
+                                                    timestamp_delta: 8,
+                                                    offset_delta: 2,
+                                                    key: Some(Bytes::from_static(&[
+                                                        106, 107, 108, 106, 107, 108
+                                                    ])),
+                                                    value: Some(Bytes::from_static(&[
+                                                        105, 117, 105, 117, 105
+                                                    ])),
+                                                    headers: [
+                                                        record::Header {
+                                                            key: Some(Bytes::from_static(&[
+                                                                104, 49
+                                                            ])),
+                                                            value: Some(Bytes::from_static(&[
+                                                                122, 120, 99
+                                                            ]))
+                                                        },
+                                                        record::Header {
+                                                            key: Some(Bytes::from_static(&[
+                                                                104, 50
+                                                            ])),
+                                                            value: Some(Bytes::from_static(&[
+                                                                99, 118, 98
+                                                            ]))
+                                                        },
+                                                        record::Header {
+                                                            key: Some(Bytes::from_static(&[
+                                                                104, 51
+                                                            ])),
+                                                            value: Some(Bytes::from_static(&[
+                                                                109, 110, 98
+                                                            ]))
+                                                        }
+                                                    ]
+                                                    .into()
+                                                },
+                                                Record {
+                                                    length: 42,
+                                                    attributes: 0,
+                                                    timestamp_delta: 8,
+                                                    offset_delta: 3,
+                                                    key: Some(Bytes::from_static(&[
+                                                        113, 119, 101, 114, 116, 121
+                                                    ])),
+                                                    value: Some(Bytes::from_static(&[
+                                                        121, 116, 114, 114, 114, 119, 113, 101, 101
+                                                    ])),
+                                                    headers: [
+                                                        record::Header {
+                                                            key: Some(Bytes::from_static(&[
+                                                                104, 49
+                                                            ])),
+                                                            value: Some(Bytes::from_static(&[
+                                                                101, 114, 105
+                                                            ]))
+                                                        },
+                                                        record::Header {
+                                                            key: Some(Bytes::from_static(&[
+                                                                104, 50
+                                                            ])),
+                                                            value: Some(Bytes::from_static(&[
+                                                                101, 105, 117
+                                                            ]))
+                                                        },
+                                                        record::Header {
+                                                            key: Some(Bytes::from_static(&[
+                                                                104, 51
+                                                            ])),
+                                                            value: Some(Bytes::from_static(&[
+                                                                112, 112, 111
+                                                            ]))
+                                                        }
+                                                    ]
+                                                    .into()
+                                                },
+                                                Record {
+                                                    length: 67,
+                                                    attributes: 0,
+                                                    timestamp_delta: 8,
+                                                    offset_delta: 4,
+                                                    key: Some(Bytes::from_static(&[
+                                                        113, 119, 114, 114, 114, 116, 105, 105, 112
+                                                    ])),
+                                                    value: Some(Bytes::from_static(&[
+                                                        106, 107, 108, 106, 107, 108, 106, 107,
+                                                        108, 107, 106, 107, 106, 107, 108, 107,
+                                                        106, 108, 106, 108, 107, 106, 108, 106,
+                                                        107, 108, 106, 108, 107, 106, 106
+                                                    ])),
+                                                    headers: [
+                                                        record::Header {
+                                                            key: Some(Bytes::from_static(&[
+                                                                104, 49
+                                                            ])),
+                                                            value: Some(Bytes::from_static(&[
+                                                                105, 105, 111
+                                                            ]))
+                                                        },
+                                                        record::Header {
+                                                            key: Some(Bytes::from_static(&[
+                                                                104, 50
+                                                            ])),
+                                                            value: Some(Bytes::from_static(&[
+                                                                101, 114, 116
+                                                            ]))
+                                                        },
+                                                        record::Header {
+                                                            key: Some(Bytes::from_static(&[
+                                                                104, 51
+                                                            ])),
+                                                            value: Some(Bytes::from_static(&[
+                                                                113, 119, 101
+                                                            ]))
+                                                        }
+                                                    ]
+                                                    .into()
+                                                }
+                                            ]
+                                            .into()
+                                        }]
                                         .into()
-                                    }]
-                                    .into()
-                                })
+                                    }
+                                    .try_into()?
+                                )
                             }]
                             .into()
                         )

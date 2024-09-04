@@ -24,11 +24,31 @@ use serde::{
 };
 use tracing::debug;
 
-use crate::{Compression, Decoder, Encoder, Error, Result};
+use crate::{record::Record, Compression, Decoder, Encoder, Error, Result};
 
-use super::Record;
+#[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct Frame {
+    pub batches: Vec<Batch>,
+}
 
-#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+impl TryFrom<crate::record::batch::Frame> for Frame {
+    type Error = Error;
+
+    fn try_from(inflated: crate::record::batch::Frame) -> Result<Self, Self::Error> {
+        inflated
+            .batches
+            .into_iter()
+            .try_fold(Vec::new(), |mut acc, batch| {
+                Batch::try_from(batch).map(|deflated| {
+                    acc.push(deflated);
+                    acc
+                })
+            })
+            .map(|batches| Self { batches })
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct Batch {
     pub base_offset: i64,
     pub batch_length: i32,
@@ -166,10 +186,10 @@ fn into_record_data(records: &[Record], compression: Compression) -> Result<Byte
     }
 }
 
-impl TryFrom<super::Batch> for Batch {
+impl TryFrom<crate::record::batch::Batch> for Batch {
     type Error = Error;
 
-    fn try_from(batch: super::Batch) -> std::result::Result<Self, Self::Error> {
+    fn try_from(batch: crate::record::batch::Batch) -> std::result::Result<Self, Self::Error> {
         CrcData {
             attributes: batch.attributes,
             last_offset_delta: batch.last_offset_delta,
@@ -186,6 +206,10 @@ impl TryFrom<super::Batch> for Batch {
 }
 
 impl Batch {
+    pub fn max_offset(&self) -> i64 {
+        self.base_offset + i64::from(self.last_offset_delta)
+    }
+
     fn compression(&self) -> Result<Compression> {
         Compression::try_from(self.attributes)
     }
@@ -427,7 +451,7 @@ mod tests {
             Compression::try_from(decoded.attributes)?
         );
 
-        let inflated = crate::record::Batch::try_from(decoded.clone())?;
+        let inflated = crate::record::batch::Batch::try_from(decoded.clone())?;
 
         assert_eq!(
             vec![Record {
@@ -507,7 +531,7 @@ mod tests {
             Compression::try_from(decoded.attributes)?
         );
 
-        let inflated = crate::record::Batch::try_from(decoded.clone())?;
+        let inflated = crate::record::batch::Batch::try_from(decoded.clone())?;
 
         assert_eq!(
             vec![Record {
@@ -592,7 +616,7 @@ mod tests {
         let decoded = Batch::deserialize(&mut decoder)?;
         assert_eq!(Compression::Lz4, Compression::try_from(decoded.attributes)?);
 
-        let inflated = crate::record::Batch::try_from(decoded.clone())?;
+        let inflated = crate::record::batch::Batch::try_from(decoded.clone())?;
 
         assert_eq!(
             vec![Record {

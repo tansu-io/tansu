@@ -21,7 +21,7 @@ pub mod ser;
 pub use de::Decoder;
 use flate2::read::GzDecoder;
 use primitive::tagged::TagBuffer;
-use record::Frame as RecordBatch;
+use record::compression::Frame as RecordBatch;
 pub use ser::Encoder;
 use serde::{Deserialize, Serialize};
 use std::{

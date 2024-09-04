@@ -26,7 +26,7 @@ use std::{
     time::Duration,
 };
 use tansu_kafka_sans_io::{
-    record::{Batch, Record},
+    record::{batch, compression, Record},
     Body,
 };
 use tansu_raft::{
@@ -144,6 +144,9 @@ impl KvStore for SegmentStorage {
                             storage
                                 .fetch(&topition, offset)
                                 .map_err(Into::into)
+                                .and_then(|deflated| {
+                                    batch::Batch::try_from(deflated).map_err(Into::into)
+                                })
                                 .map(|batch| batch.records[0].value.clone())
                         })
                 })
@@ -154,9 +157,10 @@ impl KvStore for SegmentStorage {
 
     fn put(&mut self, key: Bytes, value: Bytes) -> Result<(), RaftError> {
         debug!(?key, ?value);
-        Batch::builder()
+        batch::Batch::builder()
             .record(Record::builder().value(value.into()))
             .build()
+            .and_then(compression::Batch::try_from)
             .map_err(Into::into)
             .and_then(|batch| {
                 Self::topition(key.clone())
@@ -522,6 +526,7 @@ impl PersistentState for StoragePersistentState {
                     .and_then(|offset| storage.fetch(&topition, offset))
                     .map_err(Into::into)
             })
+            .and_then(|deflated| batch::Batch::try_from(deflated).map_err(Into::into))
             .map_err(Into::into)
             .and_then(|batch| {
                 batch.records[0]
@@ -538,9 +543,10 @@ impl PersistentState for StoragePersistentState {
     fn write(&mut self, entry: PersistentEntry) -> Result<(), RaftError> {
         let value = Bytes::from(entry);
 
-        Batch::builder()
+        batch::Batch::builder()
             .record(Record::builder().value(value.into()))
             .build()
+            .and_then(compression::Batch::try_from)
             .map_err(Into::into)
             .and_then(|batch| {
                 let topition = Self::topition();
@@ -592,6 +598,7 @@ impl ServerFactory {
                 .map_err(Into::into)
                 .inspect(|high_watermark| debug!(?high_watermark))
                 .and_then(|offset| storage.fetch(&state, offset).map_err(Into::into))
+                .and_then(|deflated| batch::Batch::try_from(deflated).map_err(Into::into))
                 .and_then(|batch| {
                     if let Some(value) = batch.records[0].value.as_ref() {
                         State::try_from(value).map(|state| state.applied)

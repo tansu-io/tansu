@@ -15,7 +15,7 @@
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use std::iter;
-use tansu_kafka_sans_io::record::{Batch, Record};
+use tansu_kafka_sans_io::record::{batch, compression, Record};
 use tansu_storage::{
     index::offset::OffsetIndex,
     segment::{LogSegment, MemorySegmentProvider, Segment, SegmentProvider},
@@ -48,9 +48,10 @@ fn append_in_memory(c: &mut Criterion) {
 
                 _ = segment
                     .append(
-                        Batch::builder()
+                        batch::Batch::builder()
                             .record(Record::builder().value(value.into()))
                             .build()
+                            .and_then(compression::Batch::try_from)
                             .unwrap(),
                     )
                     .unwrap();
@@ -91,9 +92,10 @@ fn append_in_memory_provider(c: &mut Criterion) {
 
                 _ = segment
                     .append(
-                        Batch::builder()
+                        batch::Batch::builder()
                             .record(Record::builder().value(value.into()))
                             .build()
+                            .and_then(compression::Batch::try_from)
                             .unwrap(),
                     )
                     .unwrap();

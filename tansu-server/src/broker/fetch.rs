@@ -23,7 +23,7 @@ use tansu_kafka_sans_io::{
     fetch_response::{
         EpochEndOffset, FetchableTopicResponse, LeaderIdAndEpoch, PartitionData, SnapshotId,
     },
-    record::{Batch, Frame},
+    record::{compression::Batch, compression::Frame},
     Body, ErrorCode, IsolationLevel,
 };
 use tansu_storage::{Storage, Topition};
@@ -317,7 +317,7 @@ where
 
 impl ByteSize for Batch {
     fn byte_size(&self) -> u64 {
-        self.records.iter().map(|record| record.length as u64).sum()
+        self.record_data.len() as u64
     }
 }
 
