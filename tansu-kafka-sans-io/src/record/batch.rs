@@ -15,7 +15,9 @@
 
 use super::Record;
 use crate::{
-    primitive::ByteSize, record::codec::Sequence, record::compression, Encoder, Error, Result,
+    primitive::ByteSize,
+    record::{codec::Sequence, compression},
+    Compression, Encoder, Error, Result,
 };
 use bytes::Bytes;
 use crc::{Crc, Digest, CRC_32_ISCSI};
@@ -95,6 +97,10 @@ pub struct Compaction {
 }
 
 impl Batch {
+    pub fn compression(&self) -> Result<Compression> {
+        Compression::try_from(self.attributes)
+    }
+
     #[must_use]
     pub fn builder() -> Builder {
         Builder::default()

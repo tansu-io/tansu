@@ -1,3 +1,8 @@
+default: fmt build test clippy
+
+build:
+    cargo build --workspace --all-features --all-targets
+
 test:
     cargo test --workspace --all-features --all-targets
 
