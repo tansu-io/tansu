@@ -15,6 +15,7 @@
 
 use std::{
     collections::BTreeSet,
+    fs::File,
     path::PathBuf,
     str::FromStr,
     sync::{Arc, Mutex},
@@ -87,16 +88,19 @@ struct Cli {
 async fn main() -> Result<()> {
     let filter = Targets::new()
         .with_target("tansu_server", Level::DEBUG)
-        .with_target("tansu_storage", Level::DEBUG)
-        .with_target("tansu_raft", Level::DEBUG);
+        .with_target("tansu_storage", Level::ERROR)
+        .with_target("tansu_raft", Level::ERROR);
 
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::fmt::layer()
-                .pretty()
+                .with_level(true)
                 .with_line_number(true)
+                .with_thread_ids(true)
                 .with_span_events(FmtSpan::ACTIVE)
-                .with_thread_ids(true),
+                .with_writer(
+                    File::create(format!("{}.log", env!("CARGO_PKG_NAME"))).map(Arc::new)?,
+                ),
         )
         .with(filter)
         .init();

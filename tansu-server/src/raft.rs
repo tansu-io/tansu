@@ -36,7 +36,7 @@ use tansu_raft::{
     ProvideServer, Server,
 };
 use tansu_storage::{Storage, Topition};
-use tracing::{debug, instrument};
+use tracing::debug;
 use url::Url;
 use uuid::Uuid;
 
@@ -261,7 +261,6 @@ impl Applicator {
         self.current.lock().map_err(|error| error.into())
     }
 
-    #[instrument]
     fn register_when_applied(
         &self,
         id: Uuid,
@@ -274,7 +273,6 @@ impl Applicator {
             .and(Ok(()))
     }
 
-    #[instrument]
     fn unregister_when_applied(&self, id: Uuid) {
         if let Ok(mut on_application) = self.pending_when_applied_lock() {
             _ = on_application.remove(&id);
@@ -297,7 +295,6 @@ impl Applicator {
 }
 
 impl ApplyState for Applicator {
-    #[instrument]
     fn apply(
         &self,
         index: Index,
@@ -380,7 +377,6 @@ impl<'a> WhenAppliedFuture<'a> {
 impl<'a> Future for WhenAppliedFuture<'a> {
     type Output = Body;
 
-    #[instrument]
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.lock()
             .map(|locked| {
@@ -400,7 +396,6 @@ impl<'a> Future for WhenAppliedFuture<'a> {
 }
 
 impl<'a> Drop for WhenAppliedFuture<'a> {
-    #[instrument]
     fn drop(&mut self) {
         self.applicator.unregister_when_applied(self.id)
     }
@@ -428,7 +423,6 @@ impl<'a> WithCurrentStateFuture<'a> {
 impl<'a> Future for WithCurrentStateFuture<'a> {
     type Output = State;
 
-    #[instrument]
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.lock()
             .map(|locked| {
@@ -537,7 +531,11 @@ impl PersistentState for StoragePersistentState {
                     })
             })
             .or(Ok(PersistentEntry::default()))
-            .inspect(|entry| debug!(?entry))
+            .inspect(|entry| {
+                let current_term = entry.current_term();
+                let voted_for = entry.voted_for().map(|voted_for| voted_for.to_string());
+                debug!(?current_term, voted_for);
+            })
     }
 
     fn write(&mut self, entry: PersistentEntry) -> Result<(), RaftError> {
@@ -612,7 +610,6 @@ impl ServerFactory {
 }
 
 impl ProvideServer for ServerFactory {
-    #[instrument]
     fn provide_server(&mut self) -> Result<Box<dyn Server>, RaftError> {
         self.commit_index()
             .map_err(Into::into)
