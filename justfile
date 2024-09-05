@@ -18,6 +18,15 @@ miri:
 work-dir:
     rm -rf work-dir/tansu-*/*
 
+docker-build:
+    docker build --tag ghcr.io/tansu-io/tansu --no-cache --progress plain .
+
+docker-run:
+    docker run --detach --name tansu --publish 9092:9092 tansu
+
+docker-rm-f:
+    docker rm --force tansu
+
 list-topics:
     kafka-topics --bootstrap-server 127.0.0.1:9092 --list
 
