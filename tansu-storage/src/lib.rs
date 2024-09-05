@@ -30,7 +30,7 @@ use std::{
     task::Waker,
     time::SystemTimeError,
 };
-use tansu_kafka_sans_io::record::Batch;
+use tansu_kafka_sans_io::record::deflated::Batch;
 use tracing::{debug, instrument};
 
 pub mod index;
@@ -348,7 +348,7 @@ mod tests {
     use super::*;
     use crate::segment::MemorySegmentProvider;
     use bytes::Bytes;
-    use tansu_kafka_sans_io::record::{Batch, Record};
+    use tansu_kafka_sans_io::record::{inflated, Record};
 
     #[test]
     fn produce_fetch() -> Result<()> {
@@ -362,9 +362,10 @@ mod tests {
         let values = (0..10)
             .map(|i| i.to_string())
             .try_fold(Vec::new(), |mut acc, value| {
-                Batch::builder()
+                inflated::Batch::builder()
                     .record(Record::builder().value(value.clone().as_bytes().into()))
                     .build()
+                    .and_then(TryInto::try_into)
                     .map_err(Into::into)
                     .and_then(|batch| {
                         manager.produce(&topition, batch).map(|offset| {
@@ -375,7 +376,10 @@ mod tests {
             })?;
 
         for (offset, expecting) in values {
-            let actual = manager.fetch(&topition, offset)?.records[0]
+            let actual = manager
+                .fetch(&topition, offset)
+                .and_then(|inflated| inflated::Batch::try_from(inflated).map_err(Into::into))?
+                .records[0]
                 .value
                 .clone()
                 .unwrap();

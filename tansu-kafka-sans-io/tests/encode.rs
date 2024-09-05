@@ -20,7 +20,10 @@ use std::{fs::File, io::Cursor, sync::Arc, thread};
 use tansu_kafka_sans_io::{
     join_group_request::JoinGroupRequestProtocol,
     join_group_response::JoinGroupResponseMember,
-    record::{self, Batch, Record},
+    record::{
+        inflated::{self, Batch},
+        Record,
+    },
     ser::Encoder,
     Body, Error, Frame, Header, Result,
 };
@@ -1458,59 +1461,62 @@ fn fetch_response_v12_001() -> Result<()> {
                             snapshot_id: None,
                             aborted_transactions: None,
                             preferred_read_replica: Some(-1),
-                            records: Some(record::Frame {
-                                batches: [
-                                    Batch {
-                                        base_offset: 0,
-                                        batch_length: 62,
-                                        partition_leader_epoch: 0,
-                                        magic: 2,
-                                        crc: 2915995653,
-                                        attributes: 0,
-                                        last_offset_delta: 0,
-                                        base_timestamp: 1707058170165,
-                                        max_timestamp: 1707058170165,
-                                        producer_id: 1,
-                                        producer_epoch: 0,
-                                        base_sequence: 1,
-                                        records: [Record {
-                                            length: 12,
+                            records: Some(
+                                inflated::Frame {
+                                    batches: [
+                                        Batch {
+                                            base_offset: 0,
+                                            batch_length: 62,
+                                            partition_leader_epoch: 0,
+                                            magic: 2,
+                                            crc: 2915995653,
                                             attributes: 0,
-                                            timestamp_delta: 0,
-                                            offset_delta: 0,
-                                            key: Some(Bytes::from_static(&[97, 98, 99])),
-                                            value: Some(Bytes::from_static(&[112, 113, 114])),
-                                            headers: [].into(),
-                                        }]
-                                        .into(),
-                                    },
-                                    Batch {
-                                        base_offset: 1,
-                                        batch_length: 62,
-                                        partition_leader_epoch: 0,
-                                        magic: 2,
-                                        crc: 2915995653,
-                                        attributes: 0,
-                                        last_offset_delta: 0,
-                                        base_timestamp: 1707058170165,
-                                        max_timestamp: 1707058170165,
-                                        producer_id: 1,
-                                        producer_epoch: 0,
-                                        base_sequence: 1,
-                                        records: [Record {
-                                            length: 12,
+                                            last_offset_delta: 0,
+                                            base_timestamp: 1707058170165,
+                                            max_timestamp: 1707058170165,
+                                            producer_id: 1,
+                                            producer_epoch: 0,
+                                            base_sequence: 1,
+                                            records: [Record {
+                                                length: 12,
+                                                attributes: 0,
+                                                timestamp_delta: 0,
+                                                offset_delta: 0,
+                                                key: Some(Bytes::from_static(&[97, 98, 99])),
+                                                value: Some(Bytes::from_static(&[112, 113, 114])),
+                                                headers: [].into(),
+                                            }]
+                                            .into(),
+                                        },
+                                        Batch {
+                                            base_offset: 1,
+                                            batch_length: 62,
+                                            partition_leader_epoch: 0,
+                                            magic: 2,
+                                            crc: 2915995653,
                                             attributes: 0,
-                                            timestamp_delta: 0,
-                                            offset_delta: 0,
-                                            key: Some(Bytes::from_static(&[97, 98, 99])),
-                                            value: Some(Bytes::from_static(&[112, 113, 114])),
-                                            headers: [].into(),
-                                        }]
-                                        .into(),
-                                    },
-                                ]
-                                .into(),
-                            }),
+                                            last_offset_delta: 0,
+                                            base_timestamp: 1707058170165,
+                                            max_timestamp: 1707058170165,
+                                            producer_id: 1,
+                                            producer_epoch: 0,
+                                            base_sequence: 1,
+                                            records: [Record {
+                                                length: 12,
+                                                attributes: 0,
+                                                timestamp_delta: 0,
+                                                offset_delta: 0,
+                                                key: Some(Bytes::from_static(&[97, 98, 99])),
+                                                value: Some(Bytes::from_static(&[112, 113, 114])),
+                                                headers: [].into(),
+                                            }]
+                                            .into(),
+                                        },
+                                    ]
+                                    .into(),
+                                }
+                                .try_into()?,
+                            ),
                         },
                         PartitionData {
                             partition_index: 2,
@@ -1598,33 +1604,36 @@ fn fetch_response_v16_001() -> Result<()> {
                         }),
                         aborted_transactions: Some([].into()),
                         preferred_read_replica: Some(0),
-                        records: Some(record::Frame {
-                            batches: [Batch {
-                                base_offset: 0,
-                                batch_length: 61,
-                                partition_leader_epoch: -1,
-                                magic: 2,
-                                crc: 2576291984,
-                                attributes: 0,
-                                last_offset_delta: 0,
-                                base_timestamp: 1721989616694,
-                                max_timestamp: 1721989616694,
-                                producer_id: 1,
-                                producer_epoch: 0,
-                                base_sequence: 0,
-                                records: [Record {
-                                    length: 11,
+                        records: Some(
+                            inflated::Frame {
+                                batches: [Batch {
+                                    base_offset: 0,
+                                    batch_length: 61,
+                                    partition_leader_epoch: -1,
+                                    magic: 2,
+                                    crc: 2576291984,
                                     attributes: 0,
-                                    timestamp_delta: 0,
-                                    offset_delta: 0,
-                                    key: None,
-                                    value: Some(Bytes::from_static(&[112, 111, 105, 117, 121])),
-                                    headers: [].into(),
+                                    last_offset_delta: 0,
+                                    base_timestamp: 1721989616694,
+                                    max_timestamp: 1721989616694,
+                                    producer_id: 1,
+                                    producer_epoch: 0,
+                                    base_sequence: 0,
+                                    records: [Record {
+                                        length: 11,
+                                        attributes: 0,
+                                        timestamp_delta: 0,
+                                        offset_delta: 0,
+                                        key: None,
+                                        value: Some(Bytes::from_static(&[112, 111, 105, 117, 121])),
+                                        headers: [].into(),
+                                    }]
+                                    .into(),
                                 }]
                                 .into(),
-                            }]
-                            .into(),
-                        }),
+                            }
+                            .try_into()?,
+                        ),
                     }]
                     .into(),
                 ),
@@ -1695,33 +1704,36 @@ fn fetch_response_v16_002() -> Result<()> {
                         }),
                         aborted_transactions: Some([].into()),
                         preferred_read_replica: Some(0),
-                        records: Some(record::Frame {
-                            batches: [Batch {
-                                base_offset: 0,
-                                batch_length: 61,
-                                partition_leader_epoch: -1,
-                                magic: 2,
-                                crc: 2576291984,
-                                attributes: 0,
-                                last_offset_delta: 0,
-                                base_timestamp: 1721989616694,
-                                max_timestamp: 1721989616694,
-                                producer_id: 1,
-                                producer_epoch: 0,
-                                base_sequence: 0,
-                                records: [Record {
-                                    length: 11,
+                        records: Some(
+                            inflated::Frame {
+                                batches: [Batch {
+                                    base_offset: 0,
+                                    batch_length: 61,
+                                    partition_leader_epoch: -1,
+                                    magic: 2,
+                                    crc: 2576291984,
                                     attributes: 0,
-                                    timestamp_delta: 0,
-                                    offset_delta: 0,
-                                    key: None,
-                                    value: Some(Bytes::from_static(&[112, 111, 105, 117, 121])),
-                                    headers: [].into(),
+                                    last_offset_delta: 0,
+                                    base_timestamp: 1721989616694,
+                                    max_timestamp: 1721989616694,
+                                    producer_id: 1,
+                                    producer_epoch: 0,
+                                    base_sequence: 0,
+                                    records: [Record {
+                                        length: 11,
+                                        attributes: 0,
+                                        timestamp_delta: 0,
+                                        offset_delta: 0,
+                                        key: None,
+                                        value: Some(Bytes::from_static(&[112, 111, 105, 117, 121])),
+                                        headers: [].into(),
+                                    }]
+                                    .into(),
                                 }]
                                 .into(),
-                            }]
-                            .into(),
-                        }),
+                            }
+                            .try_into()?,
+                        ),
                     }]
                     .into(),
                 ),
@@ -2376,33 +2388,36 @@ fn produce_request_v9_000() -> Result<()> {
                     partition_data: Some(
                         [PartitionProduceData {
                             index: 0,
-                            records: Some(record::Frame {
-                                batches: [Batch {
-                                    base_offset: 0,
-                                    batch_length: 59,
-                                    partition_leader_epoch: -1,
-                                    magic: 2,
-                                    crc: 1126819645,
-                                    attributes: 0,
-                                    last_offset_delta: 0,
-                                    base_timestamp: 1707058170165,
-                                    max_timestamp: 1707058170165,
-                                    producer_id: 1,
-                                    producer_epoch: 0,
-                                    base_sequence: 1,
-                                    records: [Record {
-                                        length: 9,
+                            records: Some(
+                                inflated::Frame {
+                                    batches: [Batch {
+                                        base_offset: 0,
+                                        batch_length: 59,
+                                        partition_leader_epoch: -1,
+                                        magic: 2,
+                                        crc: 1126819645,
                                         attributes: 0,
-                                        timestamp_delta: 0,
-                                        offset_delta: 0,
-                                        key: None,
-                                        value: Some(Bytes::from_static(&[100, 101, 102])),
-                                        headers: [].into(),
+                                        last_offset_delta: 0,
+                                        base_timestamp: 1707058170165,
+                                        max_timestamp: 1707058170165,
+                                        producer_id: 1,
+                                        producer_epoch: 0,
+                                        base_sequence: 1,
+                                        records: [Record {
+                                            length: 9,
+                                            attributes: 0,
+                                            timestamp_delta: 0,
+                                            offset_delta: 0,
+                                            key: None,
+                                            value: Some(Bytes::from_static(&[100, 101, 102])),
+                                            headers: [].into(),
+                                        }]
+                                        .into(),
                                     }]
                                     .into(),
-                                }]
-                                .into(),
-                            }),
+                                }
+                                .try_into()?,
+                            ),
                         }]
                         .into(),
                     ),

@@ -33,7 +33,7 @@ use tansu_kafka_sans_io::{
         OffsetFetchResponseGroup, OffsetFetchResponsePartition, OffsetFetchResponsePartitions,
         OffsetFetchResponseTopic, OffsetFetchResponseTopics,
     },
-    record::{Batch, Record},
+    record::{inflated, Record},
     sync_group_request::SyncGroupRequestAssignment,
     to_timestamp, Body, ErrorCode,
 };
@@ -680,13 +680,14 @@ where
                                             consumer_offsets_partition,
                                         );
 
-                                        if let Ok(_offset) = Batch::builder()
+                                        if let Ok(_offset) = inflated::Batch::builder()
                                             .record(
                                                 Record::builder()
                                                     .key(key.into())
                                                     .value(value.into()),
                                             )
                                             .build()
+                                            .and_then(TryInto::try_into)
                                             .map_err(Into::into)
                                             .and_then(|batch| {
                                                 self.storage_lock().and_then(|mut storage| {

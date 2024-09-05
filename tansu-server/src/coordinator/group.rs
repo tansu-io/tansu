@@ -29,6 +29,7 @@ use tansu_kafka_sans_io::{
     leave_group_request::MemberIdentity,
     offset_commit_request::OffsetCommitRequestTopic,
     offset_fetch_request::{OffsetFetchRequestGroup, OffsetFetchRequestTopic},
+    record::inflated,
     sync_group_request::SyncGroupRequestAssignment,
     Body,
 };
@@ -351,7 +352,10 @@ impl GroupProvider {
 
             let offset = 0;
 
-            let Ok(batch) = storage.fetch(&topition, offset) else {
+            let Ok(batch) = storage
+                .fetch(&topition, offset)
+                .and_then(|deflated| inflated::Batch::try_from(deflated).map_err(Into::into))
+            else {
                 continue;
             };
 

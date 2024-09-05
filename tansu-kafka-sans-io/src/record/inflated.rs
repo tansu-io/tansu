@@ -13,8 +13,11 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use super::Record;
-use crate::{primitive::ByteSize, record::codec::Sequence, Encoder, Result};
+use crate::{
+    primitive::ByteSize,
+    record::{codec::Sequence, deflated, Record},
+    Compression, Encoder, Error, Result,
+};
 use bytes::Bytes;
 use crc::{Crc, Digest, CRC_32_ISCSI};
 use serde::{Deserialize, Serialize};
@@ -29,7 +32,25 @@ pub struct Frame {
     pub batches: Vec<Batch>,
 }
 
+impl TryFrom<deflated::Frame> for Frame {
+    type Error = Error;
+
+    fn try_from(deflated: deflated::Frame) -> Result<Self, Self::Error> {
+        deflated
+            .batches
+            .into_iter()
+            .try_fold(Vec::new(), |mut acc, batch| {
+                Batch::try_from(batch).map(|inflated| {
+                    acc.push(inflated);
+                    acc
+                })
+            })
+            .map(|batches| Self { batches })
+    }
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(try_from = "deflated::Batch")]
 pub struct Batch {
     pub base_offset: i64,
     pub batch_length: i32,
@@ -45,8 +66,44 @@ pub struct Batch {
     pub base_sequence: i32,
 
     #[serde(serialize_with = "Sequence::<Record>::serialize")]
-    #[serde(deserialize_with = "Sequence::<Record>::deserialize")]
     pub records: Vec<Record>,
+}
+
+impl TryFrom<deflated::Batch> for Batch {
+    type Error = Error;
+
+    fn try_from(value: deflated::Batch) -> Result<Self, Self::Error> {
+        let base_offset = value.base_offset;
+        let batch_length = value.batch_length;
+        let partition_leader_epoch = value.partition_leader_epoch;
+        let magic = value.magic;
+        let crc = value.crc;
+        let attributes = value.attributes;
+        let last_offset_delta = value.last_offset_delta;
+        let base_timestamp = value.base_timestamp;
+        let max_timestamp = value.max_timestamp;
+        let producer_id = value.producer_id;
+        let producer_epoch = value.producer_epoch;
+        let base_sequence = value.base_sequence;
+
+        let records: Vec<Record> = value.try_into()?;
+
+        Ok(Self {
+            base_offset,
+            batch_length,
+            partition_leader_epoch,
+            magic,
+            crc,
+            attributes,
+            last_offset_delta,
+            base_timestamp,
+            max_timestamp,
+            producer_id,
+            producer_epoch,
+            base_sequence,
+            records,
+        })
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -56,6 +113,10 @@ pub struct Compaction {
 }
 
 impl Batch {
+    pub fn compression(&self) -> Result<Compression> {
+        Compression::try_from(self.attributes)
+    }
+
     #[must_use]
     pub fn builder() -> Builder {
         Builder::default()
@@ -333,6 +394,8 @@ impl Builder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{de::Decoder, Result};
+    use std::io::Cursor;
 
     #[test]
     fn compaction() -> Result<()> {
@@ -454,6 +517,125 @@ mod tests {
             .collect();
 
         assert_eq!(BTreeSet::from([3, 4, 6, 8, 9]), retained);
+
+        Ok(())
+    }
+
+    #[test]
+    fn batch() -> Result<()> {
+        let decoded = Batch::builder()
+            .base_offset(0)
+            .partition_leader_epoch(-1)
+            .magic(2)
+            .attributes(0)
+            .last_offset_delta(0)
+            .base_timestamp(1_707_058_170_165)
+            .max_timestamp(1_707_058_170_165)
+            .producer_id(1)
+            .producer_epoch(0)
+            .base_sequence(1)
+            .record(Record::builder().value(vec![100, 101, 102].into()))
+            .build()?;
+
+        assert_eq!(decoded.batch_length, 59);
+        assert_eq!(decoded.crc, 1_126_819_645);
+
+        Ok(())
+    }
+
+    #[test]
+    fn batch_decode() -> Result<()> {
+        let mut encoded = vec![
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 59, 255, 255, 255, 255, 2, 67, 41, 231, 61, 0, 0, 0,
+            0, 0, 0, 0, 0, 1, 141, 116, 152, 137, 53, 0, 0, 1, 141, 116, 152, 137, 53, 0, 0, 0, 0,
+            0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 18, 0, 0, 0, 1, 6, 100, 101, 102, 0,
+        ];
+
+        let decoded = Batch::builder()
+            .base_offset(0)
+            .partition_leader_epoch(-1)
+            .magic(2)
+            .attributes(0)
+            .last_offset_delta(0)
+            .base_timestamp(1_707_058_170_165)
+            .max_timestamp(1_707_058_170_165)
+            .producer_id(1)
+            .producer_epoch(0)
+            .base_sequence(1)
+            .record(Record::builder().value(vec![100, 101, 102].into()))
+            .build()?;
+
+        let mut c = Cursor::new(&mut encoded);
+        let mut decoder = Decoder::new(&mut c);
+        let actual = Batch::deserialize(&mut decoder)?;
+
+        assert_eq!(decoded, actual);
+
+        Ok(())
+    }
+
+    #[test]
+    fn batch_encode() -> Result<()> {
+        let mut encoded = vec![
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 59, 255, 255, 255, 255, 2, 67, 41, 231, 61, 0, 0, 0,
+            0, 0, 0, 0, 0, 1, 141, 116, 152, 137, 53, 0, 0, 1, 141, 116, 152, 137, 53, 0, 0, 0, 0,
+            0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 18, 0, 0, 0, 1, 6, 100, 101, 102, 0,
+        ];
+
+        let decoded = Batch::builder()
+            .base_offset(0)
+            .partition_leader_epoch(-1)
+            .magic(2)
+            .attributes(0)
+            .last_offset_delta(0)
+            .base_timestamp(1_707_058_170_165)
+            .max_timestamp(1_707_058_170_165)
+            .producer_id(1)
+            .producer_epoch(0)
+            .base_sequence(1)
+            .record(Record::builder().value(vec![100, 101, 102].into()))
+            .build()?;
+
+        let mut c = Cursor::new(&mut encoded);
+        let mut decoder = Decoder::new(&mut c);
+        let actual = Batch::deserialize(&mut decoder)?;
+
+        assert_eq!(decoded, actual);
+
+        Ok(())
+    }
+
+    #[test]
+    fn build_batch_records() -> Result<()> {
+        let keys: Vec<String> = (0..=6).map(|i| format!("k{i}")).collect();
+        let values: Vec<String> = (0..=11).map(|i| format!("v{i}")).collect();
+
+        let mut builder = Batch::builder();
+        let indexes = [
+            (1, 1),
+            (2, 2),
+            (1, 3),
+            (1, 4),
+            (3, 5),
+            (2, 6),
+            (4, 7),
+            (5, 8),
+            (5, 9),
+            (2, 10),
+            (6, 11),
+        ];
+
+        for (offset_delta, (key_index, value_index)) in indexes.into_iter().enumerate() {
+            builder = builder.record(
+                Record::builder()
+                    .offset_delta(i32::try_from(offset_delta)?)
+                    .key(keys[key_index].as_bytes().into())
+                    .value(values[value_index].as_bytes().into()),
+            );
+        }
+
+        let batch = builder.build()?;
+        assert_eq!(indexes.len(), batch.records.len());
 
         Ok(())
     }

@@ -19,15 +19,16 @@ pub mod record;
 pub mod ser;
 
 pub use de::Decoder;
+use flate2::read::GzDecoder;
 use primitive::tagged::TagBuffer;
-use record::Frame as RecordBatch;
+use record::deflated::Frame as RecordBatch;
 pub use ser::Encoder;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     env::VarError,
     fmt::{self, Display, Formatter},
-    io::{self, Cursor, Write},
+    io::{self, BufRead, Cursor, Read, Write},
     num, str, string,
     sync::OnceLock,
     time::{Duration, SystemTime, SystemTimeError},
@@ -101,6 +102,7 @@ pub enum Error {
     TryFromInt(num::TryFromIntError),
     UnexpectedTaggedHeader(HeaderMezzanine),
     UnknownApiErrorCode(i16),
+    UnknownCompressionType(i16),
     Utf8(str::Utf8Error),
 }
 
@@ -1131,6 +1133,61 @@ impl TryFrom<i16> for Ack {
             0 => Ok(Self::None),
             1 => Ok(Self::Leader),
             _ => Err(Error::InvalidAckValue(value)),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+pub enum Compression {
+    #[default]
+    None,
+    Gzip,
+    Snappy,
+    Lz4,
+    Zstd,
+}
+
+impl TryFrom<i16> for Compression {
+    type Error = Error;
+
+    fn try_from(value: i16) -> Result<Self, Self::Error> {
+        match value & 0b111i16 {
+            0 => Ok(Self::None),
+            1 => Ok(Self::Gzip),
+            2 => Ok(Self::Snappy),
+            3 => Ok(Self::Lz4),
+            4 => Ok(Self::Zstd),
+            otherwise => Err(Error::UnknownCompressionType(otherwise)),
+        }
+    }
+}
+
+impl From<Compression> for i16 {
+    fn from(value: Compression) -> Self {
+        match value {
+            Compression::None => 0,
+            Compression::Gzip => 1,
+            Compression::Snappy => 2,
+            Compression::Lz4 => 3,
+            Compression::Zstd => 4,
+        }
+    }
+}
+
+impl Compression {
+    fn inflator(&self, deflated: impl BufRead + 'static) -> Result<Box<dyn Read>> {
+        match self {
+            Compression::None => Ok(Box::new(deflated)),
+            Compression::Gzip => Ok(Box::new(GzDecoder::new(deflated))),
+            Compression::Snappy => Ok(Box::new(snap::read::FrameDecoder::new(deflated))),
+            Compression::Lz4 => lz4::Decoder::new(deflated)
+                .map(Box::new)
+                .map(|boxed| boxed as Box<dyn Read>)
+                .map_err(Into::into),
+            Compression::Zstd => zstd::stream::read::Decoder::with_buffer(deflated)
+                .map(Box::new)
+                .map(|boxed| boxed as Box<dyn Read>)
+                .map_err(Into::into),
         }
     }
 }

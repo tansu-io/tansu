@@ -13,9 +13,10 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-pub mod batch;
 pub(crate) mod codec;
+pub mod deflated;
 pub mod header;
+pub mod inflated;
 
 use crate::{
     primitive::{
@@ -24,7 +25,6 @@ use crate::{
     },
     Result,
 };
-pub use batch::{Batch, Frame};
 use bytes::Bytes;
 use codec::{Octets, VarIntSequence};
 pub use header::Header;
@@ -202,7 +202,7 @@ impl Builder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{de::Decoder, ser::Encoder, Result};
+    use crate::{ser::Encoder, Result};
     use codec::Sequence;
     use std::io::Cursor;
 
@@ -261,28 +261,6 @@ mod tests {
     }
 
     #[test]
-    fn batch() -> Result<()> {
-        let decoded = Batch::builder()
-            .base_offset(0)
-            .partition_leader_epoch(-1)
-            .magic(2)
-            .attributes(0)
-            .last_offset_delta(0)
-            .base_timestamp(1_707_058_170_165)
-            .max_timestamp(1_707_058_170_165)
-            .producer_id(1)
-            .producer_epoch(0)
-            .base_sequence(1)
-            .record(Record::builder().value(vec![100, 101, 102].into()))
-            .build()?;
-
-        assert_eq!(decoded.batch_length, 59);
-        assert_eq!(decoded.crc, 1_126_819_645);
-
-        Ok(())
-    }
-
-    #[test]
     fn crc_check() {
         use crc::Crc;
         use crc::CRC_32_ISCSI;
@@ -296,102 +274,5 @@ mod tests {
         let mut digester = crc.digest();
         digester.update(&b);
         assert_eq!(1_126_819_645, digester.finalize());
-    }
-
-    #[test]
-    fn batch_decode() -> Result<()> {
-        let mut encoded = vec![
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 59, 255, 255, 255, 255, 2, 67, 41, 231, 61, 0, 0, 0,
-            0, 0, 0, 0, 0, 1, 141, 116, 152, 137, 53, 0, 0, 1, 141, 116, 152, 137, 53, 0, 0, 0, 0,
-            0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 18, 0, 0, 0, 1, 6, 100, 101, 102, 0,
-        ];
-
-        let decoded = Batch::builder()
-            .base_offset(0)
-            .partition_leader_epoch(-1)
-            .magic(2)
-            .attributes(0)
-            .last_offset_delta(0)
-            .base_timestamp(1_707_058_170_165)
-            .max_timestamp(1_707_058_170_165)
-            .producer_id(1)
-            .producer_epoch(0)
-            .base_sequence(1)
-            .record(Record::builder().value(vec![100, 101, 102].into()))
-            .build()?;
-
-        let mut c = Cursor::new(&mut encoded);
-        let mut decoder = Decoder::new(&mut c);
-        let actual = Batch::deserialize(&mut decoder)?;
-
-        assert_eq!(decoded, actual);
-
-        Ok(())
-    }
-
-    #[test]
-    fn batch_encode() -> Result<()> {
-        let mut encoded = vec![
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 59, 255, 255, 255, 255, 2, 67, 41, 231, 61, 0, 0, 0,
-            0, 0, 0, 0, 0, 1, 141, 116, 152, 137, 53, 0, 0, 1, 141, 116, 152, 137, 53, 0, 0, 0, 0,
-            0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 18, 0, 0, 0, 1, 6, 100, 101, 102, 0,
-        ];
-
-        let decoded = Batch::builder()
-            .base_offset(0)
-            .partition_leader_epoch(-1)
-            .magic(2)
-            .attributes(0)
-            .last_offset_delta(0)
-            .base_timestamp(1_707_058_170_165)
-            .max_timestamp(1_707_058_170_165)
-            .producer_id(1)
-            .producer_epoch(0)
-            .base_sequence(1)
-            .record(Record::builder().value(vec![100, 101, 102].into()))
-            .build()?;
-
-        let mut c = Cursor::new(&mut encoded);
-        let mut decoder = Decoder::new(&mut c);
-        let actual = Batch::deserialize(&mut decoder)?;
-
-        assert_eq!(decoded, actual);
-
-        Ok(())
-    }
-
-    #[test]
-    fn build_batch_records() -> Result<()> {
-        let keys: Vec<String> = (0..=6).map(|i| format!("k{i}")).collect();
-        let values: Vec<String> = (0..=11).map(|i| format!("v{i}")).collect();
-
-        let mut builder = Batch::builder();
-        let indexes = [
-            (1, 1),
-            (2, 2),
-            (1, 3),
-            (1, 4),
-            (3, 5),
-            (2, 6),
-            (4, 7),
-            (5, 8),
-            (5, 9),
-            (2, 10),
-            (6, 11),
-        ];
-
-        for (offset_delta, (key_index, value_index)) in indexes.into_iter().enumerate() {
-            builder = builder.record(
-                Record::builder()
-                    .offset_delta(i32::try_from(offset_delta)?)
-                    .key(keys[key_index].as_bytes().into())
-                    .value(values[value_index].as_bytes().into()),
-            );
-        }
-
-        let batch = builder.build()?;
-        assert_eq!(indexes.len(), batch.records.len());
-
-        Ok(())
     }
 }
