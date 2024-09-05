@@ -79,11 +79,11 @@ impl FetchRequest {
             }
         }
 
-        self.storage_lock().and_then(|storage| {
-            let last_stable_offset = storage.last_stable_offset(&tp)?;
-            let high_watermark = storage.high_watermark(&tp)?;
+        self.storage_lock().map(|storage| {
+            let last_stable_offset = storage.last_stable_offset(&tp).unwrap_or(-1);
+            let high_watermark = storage.high_watermark(&tp).unwrap_or(-1);
 
-            Ok(PartitionData {
+            PartitionData {
                 partition_index,
                 error_code: ErrorCode::None.into(),
                 high_watermark,
@@ -99,7 +99,7 @@ impl FetchRequest {
                 } else {
                     Some(Frame { batches })
                 },
-            })
+            }
         })
     }
 
