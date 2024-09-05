@@ -413,4 +413,12 @@ mod tests {
         assert_eq!(i32::MAX, topition.partition());
         Ok(())
     }
+
+    #[test]
+    fn topic_with_dashes_in_name() -> Result<()> {
+        let topition = Topition::from_str("test-topic-0000000-eFC79C8-2147483647")?;
+        assert_eq!("test-topic-0000000-eFC79C8", topition.topic());
+        assert_eq!(i32::MAX, topition.partition());
+        Ok(())
+    }
 }
