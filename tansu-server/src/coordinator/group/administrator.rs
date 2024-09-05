@@ -175,6 +175,13 @@ impl Wrapper {
         }
     }
 
+    pub fn skip_assignment(&self) -> Option<&bool> {
+        match self {
+            Self::Forming(inner) => inner.skip_assignment.as_ref(),
+            Self::Formed(inner) => inner.skip_assignment.as_ref(),
+        }
+    }
+
     fn members(&self) -> Vec<JoinGroupResponseMember> {
         match self {
             Wrapper::Forming(inner) => inner
@@ -553,6 +560,7 @@ pub struct Inner<S: Debug> {
     storage: Arc<Mutex<Storage>>,
     offsets: Arc<Mutex<BTreeMap<GroupTopition, OffsetCommitValue>>>,
     partitions: i32,
+    skip_assignment: Option<bool>,
 }
 
 impl<S> Inner<S>
@@ -774,6 +782,7 @@ impl Inner<Forming> {
             storage,
             offsets,
             partitions,
+            skip_assignment: Some(false),
         })
     }
 }
@@ -818,7 +827,7 @@ impl Group for Inner<Forming> {
                     protocol_type: self.state.protocol_type.clone(),
                     protocol_name: Some("".into()),
                     leader: "".into(),
-                    skip_assignment: None,
+                    skip_assignment: self.skip_assignment,
                     member_id,
                     members: Some([].into()),
                 };
@@ -835,7 +844,7 @@ impl Group for Inner<Forming> {
                 protocol_type: self.state.protocol_type.clone(),
                 protocol_name: Some("".into()),
                 leader: "".into(),
-                skip_assignment: None,
+                skip_assignment: self.skip_assignment,
                 member_id: "".into(),
                 members: Some([].into()),
             };
@@ -857,7 +866,7 @@ impl Group for Inner<Forming> {
                     protocol_type: Some(protocol_type.into()),
                     protocol_name: self.state.protocol_name.clone(),
                     leader: "".into(),
-                    skip_assignment: None,
+                    skip_assignment: self.skip_assignment,
                     member_id: "".into(),
                     members: Some([].into()),
                 };
@@ -927,7 +936,7 @@ impl Group for Inner<Forming> {
                     .leader
                     .as_ref()
                     .map_or(String::from(""), |leader| leader.clone()),
-                skip_assignment: Some(false),
+                skip_assignment: self.skip_assignment,
                 member_id: member_id.into(),
                 members: Some(
                     if self
@@ -1073,6 +1082,7 @@ impl Group for Inner<Forming> {
             storage: self.storage,
             offsets: self.offsets,
             partitions: self.partitions,
+            skip_assignment: self.skip_assignment,
         };
 
         debug!(?state);
@@ -1249,7 +1259,7 @@ impl Group for Inner<Formed> {
                     protocol_type: None,
                     protocol_name: Some("".into()),
                     leader: "".into(),
-                    skip_assignment: None,
+                    skip_assignment: self.skip_assignment,
                     member_id,
                     members: Some([].into()),
                 };
@@ -1266,7 +1276,7 @@ impl Group for Inner<Formed> {
                 protocol_type: Some(protocol_type.into()),
                 protocol_name: Some("".into()),
                 leader: "".into(),
-                skip_assignment: None,
+                skip_assignment: self.skip_assignment,
                 member_id: "".into(),
                 members: Some([].into()),
             };
@@ -1285,7 +1295,7 @@ impl Group for Inner<Formed> {
                 protocol_type: Some(protocol_type.into()),
                 protocol_name: Some(self.state.protocol_name.clone()),
                 leader: "".into(),
-                skip_assignment: None,
+                skip_assignment: self.skip_assignment,
                 member_id: "".into(),
                 members: Some([].into()),
             };
@@ -1313,8 +1323,8 @@ impl Group for Inner<Formed> {
 
                     let body = {
                         let members = state.members();
-                        let protocol_type = state.protocol_type().map(|s| s.to_owned());
-                        let protocol_name = state.protocol_name().map(|s| s.to_owned());
+                        let protocol_type = state.protocol_type().map(ToOwned::to_owned);
+                        let protocol_name = state.protocol_name().map(ToOwned::to_owned);
 
                         Body::JoinGroupResponse {
                             throttle_time_ms: Some(0),
@@ -1326,7 +1336,7 @@ impl Group for Inner<Formed> {
                                 .leader()
                                 .map(|s| s.to_owned())
                                 .unwrap_or("".to_owned()),
-                            skip_assignment: Some(false),
+                            skip_assignment: state.skip_assignment().map(ToOwned::to_owned),
                             member_id: member_id.into(),
                             members: Some(members),
                         }
@@ -1348,6 +1358,7 @@ impl Group for Inner<Formed> {
                         storage: self.storage,
                         offsets: self.offsets,
                         partitions: self.partitions,
+                        skip_assignment: self.skip_assignment,
                     }
                     .into();
 
@@ -1366,7 +1377,7 @@ impl Group for Inner<Formed> {
                                 .leader()
                                 .map(|s| s.to_owned())
                                 .unwrap_or("".to_owned()),
-                            skip_assignment: Some(false),
+                            skip_assignment: self.skip_assignment,
                             member_id: member_id.into(),
                             members: Some(members),
                         }
@@ -1391,6 +1402,7 @@ impl Group for Inner<Formed> {
                     storage: self.storage,
                     offsets: self.offsets,
                     partitions: self.partitions,
+                    skip_assignment: self.skip_assignment,
                 }
                 .into();
 
@@ -1408,7 +1420,7 @@ impl Group for Inner<Formed> {
                             .leader()
                             .map(|s| s.to_owned())
                             .unwrap_or("".to_owned()),
-                        skip_assignment: Some(false),
+                        skip_assignment: self.skip_assignment,
                         member_id: member_id.into(),
                         members: Some([].into()),
                     }
@@ -1606,6 +1618,7 @@ impl Group for Inner<Formed> {
                 storage: self.storage,
                 offsets: self.offsets,
                 partitions: self.partitions,
+                skip_assignment: self.skip_assignment,
             }
             .into()
         } else {
@@ -1905,7 +1918,7 @@ mod tests {
                 protocol_type: None,
                 protocol_name: Some(protocol_name),
                 leader,
-                skip_assignment: None,
+                skip_assignment: Some(false),
                 members,
                 member_id,
             } => {
@@ -2024,7 +2037,7 @@ mod tests {
                     protocol_type: None,
                     protocol_name: Some(protocol_name),
                     leader,
-                    skip_assignment: None,
+                    skip_assignment: Some(false),
                     members,
                     member_id,
                 },
@@ -2285,7 +2298,7 @@ mod tests {
                     protocol_type: None,
                     protocol_name: Some(protocol_name),
                     leader,
-                    skip_assignment: None,
+                    skip_assignment: Some(false),
                     members: Some(members),
                     member_id,
                 },
@@ -2433,7 +2446,7 @@ mod tests {
                     protocol_type: None,
                     protocol_name: Some(protocol_name),
                     leader,
-                    skip_assignment: None,
+                    skip_assignment: Some(false),
                     members: Some(members),
                     member_id,
                 },
@@ -3029,7 +3042,7 @@ mod tests {
                     protocol_type: None,
                     protocol_name: Some(protocol_name),
                     leader,
-                    skip_assignment: None,
+                    skip_assignment: Some(false),
                     members: Some(members),
                     member_id,
                 },
@@ -3177,7 +3190,7 @@ mod tests {
                     protocol_type: None,
                     protocol_name: Some(protocol_name),
                     leader,
-                    skip_assignment: None,
+                    skip_assignment: Some(false),
                     members: Some(members),
                     member_id,
                 },
