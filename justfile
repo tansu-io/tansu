@@ -45,11 +45,11 @@ test-topic-consume:
 tansu-1:
     RUST_BACKTRACE=1 ./target/debug/tansu-server \
         --kafka-cluster-id RvQwrYegSUCkIPkaiAZQlQ \
-        --kafka-listener-url tcp://localhost:9092/ \
+        --kafka-listener-url tcp://127.0.0.1:9092/ \
         --kafka-node-id 4343 \
-        --raft-listener-url tcp://localhost:4567/ \
-        --raft-peer-url tcp://localhost:4568/ \
-        --raft-peer-url tcp://localhost:4569/ \
+        --raft-listener-url tcp://127.0.0.1:4567/ \
+        --raft-peer-url tcp://127.0.0.1:4568/ \
+        --raft-peer-url tcp://127.0.0.1:4569/ \
         --work-dir work-dir/tansu-1
 
 kafka-proxy:
