@@ -1,0 +1,23 @@
+---
+services:
+  db:
+    image: postgres:16.4
+    environment:
+      PGUSER: postgres
+      POSTGRES_PASSWORD: postgres
+    command: -c wal_level=logical
+    ports:
+      - 5432:5432
+    volumes:
+      - db:/var/lib/postgresql/data
+      - ./work-dir/initdb.d/:/docker-entrypoint-initdb.d/
+      - ./work-dir/data:/mnt
+    healthcheck:
+      test: /usr/bin/pg_isready
+      interval: 5s
+      timeout: 10s
+      retries: 5
+    pull_policy: missing
+volumes:
+  db:
+    driver: local

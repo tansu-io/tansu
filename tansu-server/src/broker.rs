@@ -14,6 +14,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 pub mod api_versions;
+pub mod create_topic;
 pub mod describe_cluster;
 pub mod describe_configs;
 pub mod fetch;
@@ -34,6 +35,7 @@ use crate::{
 };
 use api_versions::ApiVersionsRequest;
 use bytes::Bytes;
+use create_topic::CreateTopic;
 use describe_cluster::DescribeClusterRequest;
 use describe_configs::DescribeConfigsRequest;
 use fetch::FetchRequest;
@@ -49,7 +51,7 @@ use metadata::MetadataRequest;
 use produce::ProduceRequest;
 use std::{
     io::ErrorKind,
-    sync::{Arc, Mutex, MutexGuard},
+    sync::{Arc, Mutex},
 };
 use tansu_kafka_sans_io::{Body, Frame, Header};
 use tansu_raft::{Log, Raft};
@@ -64,7 +66,7 @@ use url::Url;
 use uuid::Uuid;
 
 #[derive(Clone, Debug)]
-pub struct Broker {
+pub struct Broker<S> {
     node_id: i32,
     cluster_id: String,
     incarnation_id: Uuid,
@@ -72,11 +74,14 @@ pub struct Broker {
     applicator: Applicator,
     listener: Url,
     rack: Option<String>,
-    storage: Arc<Mutex<Storage>>,
+    storage: S,
     groups: Arc<Mutex<Box<dyn Coordinator>>>,
 }
 
-impl Broker {
+impl<S> Broker<S>
+where
+    S: Storage + Clone + 'static,
+{
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         node_id: i32,
@@ -85,7 +90,7 @@ impl Broker {
         applicator: Applicator,
         listener: Url,
         rack: Option<String>,
-        storage: Arc<Mutex<Storage>>,
+        storage: S,
         groups: Arc<Mutex<Box<dyn Coordinator>>>,
     ) -> Self {
         let incarnation_id = Uuid::new_v4();
@@ -101,10 +106,6 @@ impl Broker {
             storage,
             groups,
         }
-    }
-
-    pub(crate) fn storage_lock(&self) -> Result<MutexGuard<'_, Storage>> {
-        self.storage.lock().map_err(|error| error.into())
     }
 
     pub async fn serve(&mut self) -> Result<()> {
@@ -264,9 +265,16 @@ impl Broker {
             }
 
             Body::CreateTopicsRequest {
-                validate_only: Some(false),
+                validate_only,
+                topics,
                 ..
-            } => self.when_applied(body).await,
+            } => {
+                let create_topic = CreateTopic::with_storage(self.storage.clone());
+
+                Ok(create_topic
+                    .request(topics, validate_only.unwrap_or(false))
+                    .await)
+            }
 
             Body::DescribeClusterRequest {
                 include_cluster_authorized_operations,
@@ -304,7 +312,7 @@ impl Broker {
                 ..
             } => {
                 let storage = self.storage.clone();
-                let mut fetch = FetchRequest { storage };
+                let mut fetch = FetchRequest::with_storage(storage);
                 let state = self.applicator.with_current_state().await;
                 fetch
                     .response(
@@ -485,16 +493,11 @@ impl Broker {
             } => {
                 let state = self.applicator.with_current_state().await;
 
-                self.storage_lock().map(|mut manager| {
-                    ProduceRequest::response(
-                        transactional_id,
-                        acks,
-                        timeout_ms,
-                        topic_data,
-                        &mut manager,
-                        &state,
-                    )
-                })
+                let storage = self.storage.clone();
+                let request = ProduceRequest::with_storage(storage);
+                Ok(request
+                    .response(transactional_id, acks, timeout_ms, topic_data, &state)
+                    .await)
             }
 
             Body::SyncGroupRequest {

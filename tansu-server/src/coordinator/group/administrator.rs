@@ -37,7 +37,7 @@ use tansu_kafka_sans_io::{
     sync_group_request::SyncGroupRequestAssignment,
     to_timestamp, Body, ErrorCode,
 };
-use tansu_storage::{Storage, Topition};
+use tansu_storage::{segment::Storage, Topition};
 use tracing::{debug, info, instrument};
 use uuid::Uuid;
 

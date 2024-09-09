@@ -21,6 +21,25 @@ work-dir:
 docker-build:
     docker build --tag ghcr.io/tansu-io/tansu --no-cache --progress plain .
 
+docker-compose-up:
+    docker compose up --detach
+
+docker-compose-down:
+    docker compose down --volumes
+
+psql:
+    docker compose exec db psql $*
+
+docker-run-postgres:
+    docker run \
+        --detach \
+        --name postgres \
+        --publish 5432:5432 \
+        --env PGUSER=postgres \
+        --env POSTGRES_PASSWORD=postgres \
+        --volume ./work-dir/initdb.d/:/docker-entrypoint-initdb.d/ \
+        postgres:16.4
+
 docker-run:
     docker run --detach --name tansu --publish 9092:9092 tansu
 

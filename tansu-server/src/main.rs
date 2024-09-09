@@ -34,8 +34,8 @@ use tansu_server::{
     Error, Result, NUM_CONSUMER_OFFSETS_PARTITIONS,
 };
 use tansu_storage::{
-    segment::{FileSystemSegmentProvider, SegmentProvider},
-    Storage,
+    pg::Postgres,
+    segment::{self, FileSystemSegmentProvider, SegmentProvider},
 };
 use tokio::task::JoinSet;
 use tracing::{debug, Level};
@@ -55,6 +55,27 @@ impl FromStr for ElectionTimeout {
             .map_err(Into::into)
     }
 }
+
+// #[derive(Clone, Debug)]
+// struct KeyValue<K, V> {
+//     key: K,
+//     value: V,
+// }
+
+// impl FromStr for KeyValue<String, Url> {
+//     type Err = Error;
+
+//     fn from_str(kv: &str) -> std::result::Result<Self, Self::Err> {
+//         kv.split_once('=')
+//             .ok_or(Error::Custom("kv: {kv}".into()))
+//             .and_then(|(k, v)| {
+//                 Url::try_from(v).map_err(Into::into).map(|value| Self {
+//                     key: k.to_owned(),
+//                     value,
+//                 })
+//             })
+//     }
+// }
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -80,6 +101,8 @@ struct Cli {
     #[arg(long, default_value = "tcp://localhost:9092")]
     kafka_listener_url: Url,
 
+    // #[arg(long = "storage-engine")]
+    // storage_engines: Vec<KeyValue<String, Url>>,
     #[arg(long, default_value = ".")]
     work_dir: PathBuf,
 }
@@ -117,13 +140,13 @@ async fn main() -> Result<()> {
 
     let applicator = Applicator::new();
 
-    let storage = FileSystemSegmentProvider::new(8_192, args.work_dir.clone())
+    let segment_storage = FileSystemSegmentProvider::new(8_192, args.work_dir.clone())
         .map(|provider| Box::new(provider) as Box<dyn SegmentProvider>)
-        .and_then(Storage::with_segment_provider)
+        .and_then(segment::Storage::with_segment_provider)
         .map(|storage| Arc::new(Mutex::new(storage)))?;
 
     let server_factory = Box::new(ServerFactory {
-        storage: storage.clone(),
+        storage: segment_storage.clone(),
     }) as Box<dyn ProvideServer>;
 
     let raft = Raft::builder()
@@ -133,12 +156,12 @@ async fn main() -> Result<()> {
         )))
         .with_voters(peers)
         .with_kv_store(Box::new(StorageFactory {
-            storage: storage.clone(),
+            storage: segment_storage.clone(),
         }) as Box<dyn ProvideKvStore>)
         .with_apply_state(Box::new(ApplyStateFactory::new(applicator.clone())))
         .with_persistent_state(Box::new(StoragePersistentStateFactory {
             id: args.raft_listener_url,
-            storage: storage.clone(),
+            storage: segment_storage.clone(),
         }))
         .with_server(server_factory)
         .with_raft_rpc(Box::<RaftTcpTarpcClientFactory>::default())
@@ -146,6 +169,8 @@ async fn main() -> Result<()> {
         .await?;
 
     let mut set = JoinSet::new();
+
+    let storage = Postgres::from_str("host=localhost user=postgres password=postgres")?;
 
     {
         let raft = raft.clone();
@@ -156,7 +181,7 @@ async fn main() -> Result<()> {
     }
 
     {
-        let groups = GroupProvider::new(storage.clone(), NUM_CONSUMER_OFFSETS_PARTITIONS)
+        let groups = GroupProvider::new(segment_storage.clone(), NUM_CONSUMER_OFFSETS_PARTITIONS)
             .map(|group_provider| Box::new(group_provider) as Box<dyn ProvideCoordinator>)
             .map(Manager::new)
             .map(|manager| Box::new(manager) as Box<dyn Coordinator>)

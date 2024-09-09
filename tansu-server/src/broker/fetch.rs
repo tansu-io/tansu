@@ -13,10 +13,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::{
-    sync::{Arc, Mutex, MutexGuard},
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 use tansu_kafka_sans_io::{
     fetch_request::{FetchPartition, FetchTopic},
@@ -33,13 +30,16 @@ use tracing::debug;
 use crate::{Result, State};
 
 #[derive(Clone, Debug)]
-pub(crate) struct FetchRequest {
-    pub storage: Arc<Mutex<Storage>>,
+pub struct FetchRequest<S> {
+    storage: S,
 }
 
-impl FetchRequest {
-    pub(crate) fn storage_lock(&self) -> Result<MutexGuard<'_, Storage>> {
-        self.storage.lock().map_err(|error| error.into())
+impl<S> FetchRequest<S>
+where
+    S: Storage,
+{
+    pub fn with_storage(storage: S) -> Self {
+        Self { storage }
     }
 
     async fn fetch_partition(
@@ -66,8 +66,9 @@ impl FetchRequest {
 
         for offset in fetch_partition.fetch_offset.. {
             let mut fetched = self
-                .storage_lock()
-                .and_then(|mut storage| storage.fetch(&tp, offset).map_err(Into::into))
+                .storage
+                .fetch(&tp, offset)
+                .await
                 .map_or(Vec::new(), |batch| vec![batch]);
 
             debug!(?offset, ?fetched);
@@ -79,27 +80,25 @@ impl FetchRequest {
             }
         }
 
-        self.storage_lock().map(|storage| {
-            let last_stable_offset = storage.last_stable_offset(&tp).unwrap_or(-1);
-            let high_watermark = storage.high_watermark(&tp).unwrap_or(-1);
+        let last_stable_offset = self.storage.last_stable_offset(&tp).await.unwrap_or(-1);
+        let high_watermark = self.storage.high_watermark(&tp).await.unwrap_or(-1);
 
-            PartitionData {
-                partition_index,
-                error_code: ErrorCode::None.into(),
-                high_watermark,
-                last_stable_offset: Some(last_stable_offset),
-                log_start_offset: Some(-1),
-                diverging_epoch: None,
-                current_leader: None,
-                snapshot_id: None,
-                aborted_transactions: Some([].into()),
-                preferred_read_replica: Some(-1),
-                records: if batches.is_empty() {
-                    None
-                } else {
-                    Some(Frame { batches })
-                },
-            }
+        Ok(PartitionData {
+            partition_index,
+            error_code: ErrorCode::None.into(),
+            high_watermark,
+            last_stable_offset: Some(last_stable_offset),
+            log_start_offset: Some(-1),
+            diverging_epoch: None,
+            current_leader: None,
+            snapshot_id: None,
+            aborted_transactions: Some([].into()),
+            preferred_read_replica: Some(-1),
+            records: if batches.is_empty() {
+                None
+            } else {
+                Some(Frame { batches })
+            },
         })
     }
 
