@@ -1717,6 +1717,7 @@ dependencies = [
  "deadpool",
  "deadpool-postgres",
  "glob",
+ "rand",
  "regex",
  "serde",
  "tansu-kafka-sans-io",

@@ -111,8 +111,8 @@ struct Cli {
 async fn main() -> Result<()> {
     let filter = Targets::new()
         .with_target("tansu_server", Level::DEBUG)
-        .with_target("tansu_storage", Level::ERROR)
-        .with_target("tansu_raft", Level::ERROR);
+        .with_target("tansu_storage", Level::DEBUG)
+        .with_target("tansu_raft", Level::DEBUG);
 
     tracing_subscriber::registry()
         .with(
@@ -170,7 +170,10 @@ async fn main() -> Result<()> {
 
     let mut set = JoinSet::new();
 
-    let storage = Postgres::from_str("host=localhost user=postgres password=postgres")?;
+    let storage = Postgres::builder("host=localhost user=postgres password=postgres")
+        .map(|builder| builder.cluster(args.kafka_cluster_id.as_str()))
+        .map(|builder| builder.node(args.kafka_node_id))
+        .map(|builder| builder.build())?;
 
     {
         let raft = raft.clone();

@@ -136,12 +136,6 @@ impl Kind {
     }
 }
 
-#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-struct Structure {
-    name: String,
-    fields: BTreeMap<String, Kind>,
-}
-
 impl FromStr for Kind {
     type Err = Error;
 

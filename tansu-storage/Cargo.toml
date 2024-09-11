@@ -13,6 +13,7 @@ bytes.workspace = true
 deadpool-postgres.workspace = true
 deadpool.workspace = true
 glob.workspace = true
+rand.workspace = true
 regex.workspace = true
 serde.workspace = true
 tansu-kafka-sans-io = { path = "../tansu-kafka-sans-io" }

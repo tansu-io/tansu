@@ -30,7 +30,14 @@ use std::{
     sync::PoisonError,
     time::{Duration, SystemTime, SystemTimeError},
 };
-use tansu_kafka_sans_io::record::deflated;
+use tansu_kafka_sans_io::{
+    broker_registration_request::{Feature, Listener},
+    create_topics_request::CreatableTopic,
+    metadata_request::MetadataRequestTopic,
+    metadata_response::{MetadataResponseBroker, MetadataResponseTopic},
+    record::deflated,
+    ErrorCode,
+};
 use uuid::Uuid;
 
 pub mod index;
@@ -39,6 +46,9 @@ pub mod segment;
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
+    #[error("api")]
+    Api(ErrorCode),
+
     #[error("build")]
     DeadPoolBuild(#[from] deadpool::managed::BuildError),
 
@@ -263,6 +273,60 @@ pub struct OffsetCommitRequest {
     metadata: Option<String>,
 }
 
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum TopicId {
+    Name(String),
+    Id(Uuid),
+}
+
+impl From<&MetadataRequestTopic> for TopicId {
+    fn from(value: &MetadataRequestTopic) -> Self {
+        if let Some(ref name) = value.name {
+            Self::Name(name.into())
+        } else if let Some(ref id) = value.topic_id {
+            Self::Id(Uuid::from_bytes(*id))
+        } else {
+            panic!("neither name nor uuid")
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct BrokerRegistationRequest {
+    pub broker_id: i32,
+    pub cluster_id: String,
+    pub incarnation_id: Uuid,
+    pub listeners: Vec<Listener>,
+    pub features: Vec<Feature>,
+    pub rack: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct MetadataResponse {
+    cluster: Option<String>,
+    controller: Option<i32>,
+    brokers: Vec<MetadataResponseBroker>,
+    topics: Vec<MetadataResponseTopic>,
+}
+
+impl MetadataResponse {
+    pub fn cluster(&self) -> Option<&str> {
+        self.cluster.as_deref()
+    }
+
+    pub fn controller(&self) -> Option<i32> {
+        self.controller
+    }
+
+    pub fn brokers(&self) -> &[MetadataResponseBroker] {
+        self.brokers.as_ref()
+    }
+
+    pub fn topics(&self) -> &[MetadataResponseTopic] {
+        self.topics.as_ref()
+    }
+}
+
 #[async_trait]
 pub trait StorageProvider {
     async fn provide_storage(&mut self) -> impl Storage;
@@ -270,12 +334,9 @@ pub trait StorageProvider {
 
 #[async_trait]
 pub trait Storage: Debug + Send + Sync {
-    async fn create_topic(
-        &self,
-        name: &str,
-        partitions: i32,
-        config: &[(&str, Option<&str>)],
-    ) -> Result<Uuid>;
+    async fn register_broker(&self, broker_registration: BrokerRegistationRequest) -> Result<()>;
+
+    async fn create_topic(&self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid>;
 
     async fn delete_topic(&self, name: &str) -> Result<u64>;
 
@@ -302,6 +363,8 @@ pub trait Storage: Debug + Send + Sync {
         topics: &[Topition],
         require_stable: Option<bool>,
     ) -> Result<BTreeMap<Topition, i64>>;
+
+    async fn metadata(&self, topics: Option<&[TopicId]>) -> Result<MetadataResponse>;
 }
 
 #[cfg(test)]

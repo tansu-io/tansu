@@ -20,6 +20,8 @@ use tansu_kafka_sans_io::{
 use tansu_storage::Storage;
 use tracing::debug;
 
+use crate::Error;
+
 #[derive(Clone, Debug)]
 pub struct CreateTopic<S> {
     storage: S,
@@ -40,42 +42,50 @@ where
     ) -> CreatableTopicResult {
         let _ = validate_only;
 
-        let config = topic
-            .configs
-            .as_ref()
-            .map(|configs| {
-                configs
-                    .iter()
-                    .map(|config| (config.name.as_str(), config.value.as_deref()))
-                    .collect()
-            })
-            .unwrap_or(vec![]);
+        let name = topic.name.clone();
+        let num_partitions = Some(topic.num_partitions);
+        let replication_factor = Some(topic.replication_factor);
 
-        if let Ok(topic_id) = self
-            .storage
-            .create_topic(topic.name.as_str(), topic.num_partitions, config.as_slice())
-            .await
-        {
-            CreatableTopicResult {
-                name: topic.name,
-                topic_id: Some(topic_id.into_bytes()),
-                error_code: ErrorCode::None.into(),
-                error_message: None,
-                topic_config_error_code: Some(ErrorCode::None.into()),
-                num_partitions: Some(topic.num_partitions),
-                replication_factor: Some(3),
-                configs: Some([].into()),
+        match self.storage.create_topic(topic, validate_only).await {
+            Ok(topic_id) => {
+                debug!(?topic_id);
+
+                CreatableTopicResult {
+                    name,
+                    topic_id: Some(topic_id.into_bytes()),
+                    error_code: ErrorCode::None.into(),
+                    error_message: None,
+                    topic_config_error_code: Some(ErrorCode::None.into()),
+                    num_partitions,
+                    replication_factor,
+                    configs: Some([].into()),
+                }
             }
-        } else {
-            CreatableTopicResult {
-                name: topic.name,
-                topic_id: None,
-                error_code: ErrorCode::UnknownServerError.into(),
-                error_message: None,
+
+            Err(tansu_storage::Error::Api(error_code)) => CreatableTopicResult {
+                name,
+                topic_id: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+                error_code: error_code.into(),
+                error_message: Some(error_code.to_string()),
                 topic_config_error_code: None,
-                num_partitions: None,
-                replication_factor: None,
+                num_partitions,
+                replication_factor,
                 configs: Some([].into()),
+            },
+
+            Err(error) => {
+                debug!(?error);
+
+                CreatableTopicResult {
+                    name,
+                    topic_id: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+                    error_code: ErrorCode::UnknownServerError.into(),
+                    error_message: None,
+                    topic_config_error_code: None,
+                    num_partitions: None,
+                    replication_factor: None,
+                    configs: Some([].into()),
+                }
             }
         }
     }

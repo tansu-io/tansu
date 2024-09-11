@@ -20,6 +20,7 @@ use tansu_kafka_sans_io::{
     Body, ErrorCode,
 };
 use tansu_storage::{Storage, Topition};
+use tracing::debug;
 
 #[derive(Clone, Copy, Debug)]
 pub struct ProduceRequest<S> {
@@ -78,31 +79,18 @@ where
         }
     }
 
-    async fn topic(&self, topic: TopicProduceData, state: &State) -> TopicProduceResponse {
-        let partition_responses = if state.topics().contains_key(&topic.name) {
-            let mut partitions = vec![];
+    async fn topic(&self, topic: TopicProduceData) -> TopicProduceResponse {
+        let mut partitions = vec![];
 
-            if let Some(partition_data) = topic.partition_data {
-                for partition in partition_data {
-                    partitions.push(self.partition(&topic.name, partition).await)
-                }
+        if let Some(partition_data) = topic.partition_data {
+            for partition in partition_data {
+                partitions.push(self.partition(&topic.name, partition).await)
             }
-
-            Some(partitions)
-        } else {
-            topic.partition_data.map(|partitions| {
-                partitions
-                    .into_iter()
-                    .map(|partition| {
-                        self.error(partition.index, ErrorCode::UnknownTopicOrPartition)
-                    })
-                    .collect()
-            })
-        };
+        }
 
         TopicProduceResponse {
             name: topic.name,
-            partition_responses,
+            partition_responses: Some(partitions),
         }
     }
 
@@ -112,14 +100,15 @@ where
         _acks: i16,
         _timeout_ms: i32,
         topic_data: Option<Vec<TopicProduceData>>,
-        state: &State,
     ) -> Body {
         let mut responses =
             Vec::with_capacity(topic_data.as_ref().map_or(0, |topic_data| topic_data.len()));
 
         if let Some(topics) = topic_data {
             for topic in topics {
-                responses.push(self.topic(topic, state).await)
+                debug!(?topic);
+
+                responses.push(self.topic(topic).await)
             }
         }
 

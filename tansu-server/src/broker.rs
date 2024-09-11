@@ -53,9 +53,9 @@ use std::{
     io::ErrorKind,
     sync::{Arc, Mutex},
 };
-use tansu_kafka_sans_io::{Body, Frame, Header};
+use tansu_kafka_sans_io::{broker_registration_request::Listener, Body, Frame, Header};
 use tansu_raft::{Log, Raft};
-use tansu_storage::Storage;
+use tansu_storage::{BrokerRegistationRequest, Storage};
 use telemetry::GetTelemetrySubscriptionsRequest;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -113,26 +113,24 @@ where
         self.listen().await
     }
 
-    pub async fn register(&mut self) -> Result<Body> {
-        use tansu_kafka_sans_io::broker_registration_request::Listener;
-
-        self.when_applied(Body::BrokerRegistrationRequest {
-            broker_id: self.node_id,
-            cluster_id: self.cluster_id.clone(),
-            incarnation_id: *self.incarnation_id.as_bytes(),
-            listeners: Some(vec![Listener {
-                name: "broker".into(),
-                host: self.listener.host_str().unwrap_or("localhost").to_owned(),
-                port: self.listener.port().unwrap_or(9092),
-                security_protocol: 0,
-            }]),
-            features: Some(vec![]),
-            rack: self.rack.clone(),
-            is_migrating_zk_broker: Some(false),
-            log_dirs: Some(vec![]),
-            previous_broker_epoch: Some(-1),
-        })
-        .await
+    pub async fn register(&mut self) -> Result<()> {
+        self.storage
+            .register_broker(BrokerRegistationRequest {
+                broker_id: self.node_id,
+                cluster_id: self.cluster_id.clone(),
+                incarnation_id: self.incarnation_id,
+                listeners: [Listener {
+                    name: "broker".into(),
+                    host: self.listener.host_str().unwrap_or("localhost").to_owned(),
+                    port: self.listener.port().unwrap_or(9092),
+                    security_protocol: 0,
+                }]
+                .into(),
+                features: [].into(),
+                rack: None,
+            })
+            .await
+            .map_err(Into::into)
     }
 
     pub async fn listen(&self) -> Result<()> {
@@ -436,13 +434,8 @@ where
             }
 
             Body::MetadataRequest { topics, .. } => {
-                let controller_id = Some(self.node_id);
-                let state = self.applicator.with_current_state().await;
-
-                let topics = topics.as_deref();
-
-                let request = MetadataRequest;
-                Ok(request.response(controller_id, topics, &state))
+                let request = MetadataRequest::with_storage(self.storage.clone());
+                request.response(topics).await
             }
 
             Body::OffsetCommitRequest {
@@ -491,12 +484,10 @@ where
                 timeout_ms,
                 topic_data,
             } => {
-                let state = self.applicator.with_current_state().await;
-
                 let storage = self.storage.clone();
                 let request = ProduceRequest::with_storage(storage);
                 Ok(request
-                    .response(transactional_id, acks, timeout_ms, topic_data, &state)
+                    .response(transactional_id, acks, timeout_ms, topic_data)
                     .await)
             }
 
