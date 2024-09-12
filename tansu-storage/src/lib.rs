@@ -18,7 +18,7 @@ use glob::{GlobError, PatternError};
 use regex::Regex;
 use std::{
     array::TryFromSliceError,
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     ffi::OsString,
     fmt::Debug,
     fs::DirEntry,
@@ -33,10 +33,12 @@ use std::{
 use tansu_kafka_sans_io::{
     broker_registration_request::{Feature, Listener},
     create_topics_request::CreatableTopic,
+    fetch_request::FetchTopic,
     metadata_request::MetadataRequestTopic,
     metadata_response::{MetadataResponseBroker, MetadataResponseTopic},
+    offset_commit_request::OffsetCommitRequestPartition,
     record::deflated,
-    ErrorCode,
+    to_system_time, to_timestamp, ErrorCode,
 };
 use uuid::Uuid;
 
@@ -143,8 +145,8 @@ pub struct Topition {
 }
 
 impl Topition {
-    pub fn new(topic: &str, partition: i32) -> Self {
-        let topic = topic.to_owned();
+    pub fn new(topic: impl Into<String>, partition: i32) -> Self {
+        let topic = topic.into();
         Self { topic, partition }
     }
 
@@ -246,21 +248,37 @@ pub enum ListOffsetRequest {
     #[default]
     Earliest,
     Latest,
-    Timestamp(i64),
+    Timestamp(SystemTime),
 }
 
 #[derive(Copy, Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ListOffsetResponse {
-    timestamp: Option<i64>,
+    timestamp: Option<SystemTime>,
     offset: Option<i64>,
 }
 
-impl From<ListOffsetRequest> for i64 {
-    fn from(value: ListOffsetRequest) -> Self {
+impl TryFrom<ListOffsetRequest> for i64 {
+    type Error = Error;
+
+    fn try_from(value: ListOffsetRequest) -> Result<Self, Self::Error> {
         match value {
-            ListOffsetRequest::Earliest => -2,
-            ListOffsetRequest::Latest => -1,
-            ListOffsetRequest::Timestamp(timestamp) => timestamp,
+            ListOffsetRequest::Earliest => Ok(-2),
+            ListOffsetRequest::Latest => Ok(-1),
+            ListOffsetRequest::Timestamp(timestamp) => to_timestamp(timestamp).map_err(Into::into),
+        }
+    }
+}
+
+impl TryFrom<i64> for ListOffsetRequest {
+    type Error = Error;
+
+    fn try_from(value: i64) -> Result<Self, Self::Error> {
+        match value {
+            -2 => Ok(ListOffsetRequest::Earliest),
+            -1 => Ok(ListOffsetRequest::Latest),
+            timestamp => to_system_time(timestamp)
+                .map(ListOffsetRequest::Timestamp)
+                .map_err(Into::into),
         }
     }
 }
@@ -273,10 +291,42 @@ pub struct OffsetCommitRequest {
     metadata: Option<String>,
 }
 
+impl TryFrom<&OffsetCommitRequestPartition> for OffsetCommitRequest {
+    type Error = Error;
+
+    fn try_from(value: &OffsetCommitRequestPartition) -> Result<Self, Self::Error> {
+        value
+            .commit_timestamp
+            .map_or(Ok(None), |commit_timestamp| {
+                to_system_time(commit_timestamp)
+                    .map(Some)
+                    .map_err(Into::into)
+            })
+            .map(|timestamp| Self {
+                offset: value.committed_offset,
+                leader_epoch: value.committed_leader_epoch,
+                timestamp,
+                metadata: value.committed_metadata.clone(),
+            })
+    }
+}
+
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum TopicId {
     Name(String),
     Id(Uuid),
+}
+
+impl From<&FetchTopic> for TopicId {
+    fn from(value: &FetchTopic) -> Self {
+        if let Some(ref name) = value.topic {
+            Self::Name(name.into())
+        } else if let Some(ref id) = value.topic_id {
+            Self::Id(Uuid::from_bytes(*id))
+        } else {
+            panic!("neither name nor uuid")
+        }
+    }
 }
 
 impl From<&MetadataRequestTopic> for TopicId {
@@ -333,7 +383,7 @@ pub trait StorageProvider {
 }
 
 #[async_trait]
-pub trait Storage: Debug + Send + Sync {
+pub trait Storage: Clone + Debug + Send + Sync + 'static {
     async fn register_broker(&self, broker_registration: BrokerRegistationRequest) -> Result<()>;
 
     async fn create_topic(&self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid>;
@@ -348,14 +398,14 @@ pub trait Storage: Debug + Send + Sync {
     async fn list_offsets(
         &self,
         offsets: &[(Topition, ListOffsetRequest)],
-    ) -> Result<&[(Topition, ListOffsetResponse)]>;
+    ) -> Result<Vec<(Topition, ListOffsetResponse)>>;
 
     async fn offset_commit(
         &self,
         group_id: &str,
         retention_time_ms: Option<Duration>,
         offsets: &[(Topition, OffsetCommitRequest)],
-    ) -> Result<()>;
+    ) -> Result<Vec<(Topition, ErrorCode)>>;
 
     async fn offset_fetch(
         &self,

@@ -20,12 +20,13 @@ use tansu_kafka_sans_io::{
     fetch_response::{
         EpochEndOffset, FetchableTopicResponse, LeaderIdAndEpoch, PartitionData, SnapshotId,
     },
+    metadata_response::MetadataResponseTopic,
     record::{deflated::Batch, deflated::Frame},
     Body, ErrorCode, IsolationLevel,
 };
 use tansu_storage::{Storage, Topition};
 use tokio::time::sleep;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::{Result, State};
 
@@ -69,19 +70,30 @@ where
                 .storage
                 .fetch(&tp, offset)
                 .await
+                .inspect_err(|error| warn!(?error))
                 .map_or(Vec::new(), |batch| vec![batch]);
 
             debug!(?offset, ?fetched);
 
-            if fetched.is_empty() {
+            if fetched.len() == 0 || fetched.first().is_some_and(|batch| batch.record_count == 0) {
                 break;
             } else {
                 batches.append(&mut fetched);
             }
         }
 
-        let last_stable_offset = self.storage.last_stable_offset(&tp).await.unwrap_or(-1);
-        let high_watermark = self.storage.high_watermark(&tp).await.unwrap_or(-1);
+        let last_stable_offset = self
+            .storage
+            .last_stable_offset(&tp)
+            .await
+            .inspect_err(|error| warn!(?error))
+            .unwrap_or(-1);
+        let high_watermark = self
+            .storage
+            .high_watermark(&tp)
+            .await
+            .inspect_err(|error| warn!(?error))
+            .unwrap_or(-1);
 
         Ok(PartitionData {
             partition_index,
@@ -137,58 +149,61 @@ where
     }
 
     #[allow(clippy::too_many_arguments)]
-    async fn fetch_topic<'a>(
+    async fn fetch_topic(
         &mut self,
-        state: &'a State,
         max_wait_ms: Duration,
         min_bytes: u64,
         max_bytes: Option<u64>,
         isolation: Option<IsolationLevel>,
-        fetch: &'a FetchTopic,
+        fetch: &FetchTopic,
         _is_first: bool,
     ) -> Result<FetchableTopicResponse> {
-        debug!(?state, ?max_wait_ms, ?min_bytes, ?isolation, ?fetch);
+        debug!(?max_wait_ms, ?min_bytes, ?isolation, ?fetch);
 
-        match state.topic(fetch.into()) {
-            None => self.unknown_topic_response(fetch),
+        let metadata = self.storage.metadata(Some(&[fetch.into()])).await?;
 
-            Some(detail) => {
-                let mut partitions = Vec::new();
+        if let Some(MetadataResponseTopic {
+            topic_id,
+            name: Some(name),
+            ..
+        }) = metadata.topics().first()
+        {
+            let mut partitions = Vec::new();
 
-                for fetch_partition in fetch.partitions.as_ref().unwrap_or(&Vec::new()) {
-                    let partition = self
-                        .fetch_partition(
-                            max_wait_ms,
-                            min_bytes,
-                            max_bytes,
-                            isolation,
-                            detail.name(),
-                            fetch_partition,
-                        )
-                        .await?;
+            for fetch_partition in fetch.partitions.as_ref().unwrap_or(&Vec::new()) {
+                let partition = self
+                    .fetch_partition(
+                        max_wait_ms,
+                        min_bytes,
+                        max_bytes,
+                        isolation,
+                        name,
+                        fetch_partition,
+                    )
+                    .await?;
 
-                    partitions.push(partition);
-                }
-
-                Ok(FetchableTopicResponse {
-                    topic: fetch.topic.to_owned(),
-                    topic_id: Some(detail.id),
-                    partitions: Some(partitions),
-                })
+                partitions.push(partition);
             }
+
+            Ok(FetchableTopicResponse {
+                topic: fetch.topic.to_owned(),
+                topic_id: topic_id.to_owned(),
+                partitions: Some(partitions),
+            })
+        } else {
+            self.unknown_topic_response(fetch)
         }
     }
 
     pub(crate) async fn fetch<'a>(
         &mut self,
-        state: &'a State,
         max_wait: Duration,
         min_bytes: u64,
         max_bytes: Option<u64>,
         isolation: Option<IsolationLevel>,
         topics: &'a [FetchTopic],
     ) -> Result<Vec<FetchableTopicResponse>> {
-        debug!(?state, ?max_wait, ?min_bytes, ?isolation, ?topics);
+        debug!(?max_wait, ?min_bytes, ?isolation, ?topics);
 
         if topics.is_empty() {
             Ok(vec![])
@@ -205,15 +220,7 @@ where
 
                 for (i, fetch) in enumerate {
                     let fetch_response = self
-                        .fetch_topic(
-                            state,
-                            max_wait,
-                            min_bytes,
-                            max_bytes,
-                            isolation,
-                            fetch,
-                            i == 0,
-                        )
+                        .fetch_topic(max_wait, min_bytes, max_bytes, isolation, fetch, i == 0)
                         .await?;
 
                     responses.push(fetch_response);
@@ -255,7 +262,6 @@ where
         max_bytes: Option<i32>,
         isolation_level: Option<i8>,
         topics: Option<&[FetchTopic]>,
-        state: &State,
     ) -> Result<Body> {
         let responses = Some(if let Some(topics) = topics {
             let isolation_level = isolation_level.map_or(Ok(None), |isolation| {
@@ -269,15 +275,8 @@ where
             let max_bytes =
                 max_bytes.map_or(Ok(None), |max_bytes| u64::try_from(max_bytes).map(Some))?;
 
-            self.fetch(
-                state,
-                max_wait_ms,
-                min_bytes,
-                max_bytes,
-                isolation_level,
-                topics,
-            )
-            .await?
+            self.fetch(max_wait_ms, min_bytes, max_bytes, isolation_level, topics)
+                .await?
         } else {
             vec![]
         });

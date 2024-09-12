@@ -31,7 +31,7 @@ use tansu_kafka_sans_io::{
     to_system_time, to_timestamp, ErrorCode,
 };
 use tokio_postgres::{error::SqlState, Config, NoTls};
-use tracing::debug;
+use tracing::{debug, warn};
 use uuid::Uuid;
 
 use crate::{
@@ -347,31 +347,37 @@ impl Storage for Postgres {
     }
 
     async fn fetch(&self, topition: &'_ Topition, offset: i64) -> Result<deflated::Batch> {
+        debug!(?topition, ?offset);
         let c = self.connection().await?;
 
         let prepared = c
             .prepare(concat!(
-                "select record.id, timestamp, k, v from record, topic",
+                "select record.id, timestamp, k, v from cluster, record, topic",
                 " where",
-                " record.topic = topic.id",
-                " and",
-                " topic.name = $1",
-                " and",
-                " record.partition = $2",
-                " and",
-                " record.offset >= $3"
+                " cluster.name = $1",
+                " and topic.name = $2",
+                " and record.partition = $3",
+                " and record.id >= $4",
+                " and topic.cluster = cluster.id",
+                " and record.topic = topic.id",
             ))
             .await?;
 
         let rows = c
             .query(
                 &prepared,
-                &[&topition.topic(), &topition.partition(), &offset],
+                &[
+                    &self.cluster,
+                    &topition.topic(),
+                    &topition.partition(),
+                    &offset,
+                ],
             )
             .await?;
 
         let builder = if let Some(first) = rows.first() {
             let base_offset: i64 = first.try_get(0)?;
+            debug!(?base_offset);
 
             let base_timestamp = first
                 .try_get::<_, SystemTime>(1)
@@ -459,7 +465,7 @@ impl Storage for Postgres {
         group: &str,
         retention: Option<Duration>,
         offsets: &[(Topition, OffsetCommitRequest)],
-    ) -> Result<()> {
+    ) -> Result<Vec<(Topition, ErrorCode)>> {
         let _ = group;
         let _ = retention;
 
@@ -483,6 +489,8 @@ impl Storage for Postgres {
             ))
             .await?;
 
+        let mut responses = vec![];
+
         for (topition, offset) in offsets {
             _ = tx
                 .execute(
@@ -497,12 +505,14 @@ impl Storage for Postgres {
                         &offset.metadata,
                     ],
                 )
-                .await?
+                .await?;
+
+            responses.push((topition.to_owned(), ErrorCode::None));
         }
 
         tx.commit().await?;
 
-        Ok(())
+        Ok(responses)
     }
 
     async fn offset_fetch(
@@ -514,16 +524,140 @@ impl Storage for Postgres {
         let _ = group_id;
         let _ = topics;
         let _ = require_stable;
-        todo!()
+
+        let c = self.connection().await?;
+
+        let prepared = c
+            .prepare(concat!(
+                "select",
+                " committed_offset",
+                " from consumer_offset, topic",
+                " where grp=$1",
+                " and topic.name=$2",
+                " and consumer_offset.topic = topic.id",
+                " and partition=$3",
+            ))
+            .await?;
+
+        let mut offsets = BTreeMap::new();
+
+        for topic in topics {
+            let offset = c
+                .query_opt(&prepared, &[&group_id, &topic.topic(), &topic.partition()])
+                .await?
+                .map_or(Ok(-1), |row| row.try_get::<_, i64>(0))?;
+
+            _ = offsets.insert(topic.to_owned(), offset);
+        }
+
+        Ok(offsets)
     }
 
     async fn list_offsets(
         &self,
         offsets: &[(Topition, ListOffsetRequest)],
-    ) -> Result<&[(Topition, ListOffsetResponse)]> {
-        let _ = offsets;
+    ) -> Result<Vec<(Topition, ListOffsetResponse)>> {
+        debug!(?offsets);
 
-        todo!()
+        let c = self.connection().await?;
+
+        let mut responses = vec![];
+
+        for (topition, offset_type) in offsets {
+            let query = match offset_type {
+                ListOffsetRequest::Earliest => concat!(
+                    "select",
+                    " id as offset, timestamp",
+                    " from",
+                    " record",
+                    " join (",
+                    " select",
+                    " min(record.id) as offset",
+                    " from record, topic, cluster",
+                    " where",
+                    " topic.cluster = cluster.id",
+                    " and cluster.name = $1",
+                    " and topic.name = $2",
+                    " and record.partition = $3",
+                    " and record.topic = topic.id) as minimum",
+                    " on record.id = minimum.offset",
+                ),
+                ListOffsetRequest::Latest => concat!(
+                    "select",
+                    " id as offset, timestamp",
+                    " from",
+                    " record",
+                    " join (",
+                    " select",
+                    " max(record.id) as offset",
+                    " from record, topic, cluster",
+                    " where",
+                    " topic.cluster = cluster.id",
+                    " and cluster.name = $1",
+                    " and topic.name = $2",
+                    " and record.partition = $3",
+                    " and record.topic = topic.id) as maximum",
+                    " on record.id = maximum.offset",
+                ),
+                ListOffsetRequest::Timestamp(_) => concat!(
+                    "select",
+                    " id as offset, timestamp",
+                    " from",
+                    " record",
+                    " join (",
+                    " select",
+                    " min(record.id) as offset",
+                    " from record, topic, cluster",
+                    " where",
+                    " topic.cluster = cluster.id",
+                    " and cluster.name = $1",
+                    " and topic.name = $2",
+                    " and record.partition = $3",
+                    " and record.timestamp >= $4",
+                    " and record.topic = topic.id) as minimum",
+                    " on record.id = minimum.offset",
+                ),
+            };
+
+            let prepared = c.prepare(query).await?;
+
+            let offset = match offset_type {
+                ListOffsetRequest::Earliest | ListOffsetRequest::Latest => {
+                    c.query_opt(
+                        &prepared,
+                        &[
+                            &self.cluster.as_str(),
+                            &topition.topic(),
+                            &topition.partition(),
+                        ],
+                    )
+                    .await
+                }
+                ListOffsetRequest::Timestamp(timestamp) => {
+                    c.query_opt(
+                        &prepared,
+                        &[
+                            &self.cluster.as_str(),
+                            &topition.topic(),
+                            &topition.partition(),
+                            timestamp,
+                        ],
+                    )
+                    .await
+                }
+            }?
+            .map_or(Ok(ListOffsetResponse::default()), |row| {
+                row.try_get::<_, i64>(0).map(Some).and_then(|offset| {
+                    row.try_get::<_, SystemTime>(1)
+                        .map(Some)
+                        .map(|timestamp| ListOffsetResponse { timestamp, offset })
+                })
+            })?;
+
+            responses.push((topition.clone(), offset));
+        }
+
+        Ok(responses)
     }
 
     async fn metadata(&self, topics: Option<&[TopicId]>) -> Result<MetadataResponse> {
@@ -644,13 +778,79 @@ impl Storage for Postgres {
                     }
                     TopicId::Id(id) => {
                         debug!(?id);
-                        MetadataResponseTopic {
-                            error_code: ErrorCode::UnknownTopicOrPartition.into(),
-                            name: None,
-                            topic_id: None,
-                            is_internal: None,
-                            partitions: None,
-                            topic_authorized_operations: None,
+                        let prepared = c
+                            .prepare(concat!(
+                                "select",
+                                " topic.id, topic.name, is_internal, partitions, replication_factor",
+                                " from topic, cluster",
+                                " where cluster.name = $1",
+                                " and topic.id = $2",
+                                " and topic.cluster = cluster.id",
+                            ))
+                            .await
+                            .inspect_err(|error|warn!(?error))?;
+
+                        match c
+                            .query_one(&prepared, &[&self.cluster, &id])
+                            .await
+                        {
+                            Ok(row) => {
+                                let error_code = ErrorCode::None.into();
+                                let topic_id = row
+                                    .try_get::<_, Uuid>(0)
+                                    .map(|uuid| uuid.into_bytes())
+                                    .map(Some)?;
+                                let name = row.try_get::<_, String>(1).map(Some)?;
+                                let is_internal = row.try_get::<_, bool>(2).map(Some)?;
+                                let partitions = row.try_get::<_, i32>(3)?;
+                                let replication_factor = row.try_get::<_, i32>(4)?;
+
+                                let mut rng = thread_rng();
+                                let mut broker_ids:Vec<_> = brokers.iter().map(|broker|broker.node_id).collect();
+                                broker_ids.shuffle(&mut rng);
+
+                                let mut brokers = broker_ids.into_iter().cycle();
+
+                                let partitions = Some((0..partitions).map(|partition_index| {
+                                    let leader_id = brokers.next().expect("cycling");
+
+                                    let replica_nodes = Some((0..replication_factor).map(|_replica|brokers.next().expect("cycling")).collect());
+                                    let isr_nodes = replica_nodes.clone();
+
+                                    MetadataResponsePartition {
+                                    error_code,
+                                                    partition_index,
+                                                    leader_id,
+                                                    leader_epoch: Some(-1),
+                                                    replica_nodes,
+                                                    isr_nodes,
+                                                offline_replicas: Some([].into()) }
+
+
+
+                                }).collect());
+
+
+                                MetadataResponseTopic {
+                                    error_code,
+                                    name,
+                                    topic_id,
+                                    is_internal,
+                                    partitions,
+                                    topic_authorized_operations: Some(-2147483648),
+                                }
+                            }
+                            Err(reason) => {
+                                debug!(?reason);
+                                MetadataResponseTopic {
+                                    error_code: ErrorCode::UnknownTopicOrPartition.into(),
+                                    name: None,
+                                    topic_id: Some(id.into_bytes()),
+                                    is_internal: None,
+                                    partitions: None,
+                                    topic_authorized_operations: None,
+                                }
+                            }
                         }
                     }
                 });

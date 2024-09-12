@@ -13,8 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::sync::{Arc, Mutex, MutexGuard};
-
 use tansu_kafka_sans_io::{offset_commit_request::OffsetCommitRequestTopic, Body};
 
 use crate::{
@@ -23,19 +21,16 @@ use crate::{
 };
 
 #[derive(Debug)]
-pub struct OffsetCommitRequest {
-    pub groups: Arc<Mutex<Box<dyn Coordinator>>>,
+pub struct OffsetCommitRequest<C> {
+    coordinator: C,
 }
 
-impl OffsetCommitRequest {
-    pub fn groups_lock(&self) -> Result<MutexGuard<'_, Box<dyn Coordinator>>> {
-        self.groups.lock().map_err(|error| error.into())
-    }
-}
-
-impl OffsetCommitRequest {
-    pub fn response(
-        &self,
+impl<C> OffsetCommitRequest<C>
+where
+    C: Coordinator,
+{
+    pub async fn response(
+        &mut self,
         group_id: &str,
         generation_id_or_member_epoch: Option<i32>,
         member_id: Option<&str>,
@@ -43,8 +38,8 @@ impl OffsetCommitRequest {
         retention_time_ms: Option<i64>,
         topics: Option<&[OffsetCommitRequestTopic]>,
     ) -> Result<Body> {
-        self.groups_lock().and_then(|mut coordinator| {
-            coordinator.offset_commit(OffsetCommit {
+        self.coordinator
+            .offset_commit(OffsetCommit {
                 group_id,
                 generation_id_or_member_epoch,
                 member_id,
@@ -52,6 +47,6 @@ impl OffsetCommitRequest {
                 retention_time_ms,
                 topics,
             })
-        })
+            .await
     }
 }

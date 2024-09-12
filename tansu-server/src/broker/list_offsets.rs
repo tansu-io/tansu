@@ -13,55 +13,99 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+use std::{collections::BTreeSet, ops::Deref};
+
 use tansu_kafka_sans_io::{
     list_offsets_request::ListOffsetsTopic,
     list_offsets_response::{ListOffsetsPartitionResponse, ListOffsetsTopicResponse},
     Body, ErrorCode,
 };
+use tansu_storage::{ListOffsetRequest, Storage, Topition};
 
-use crate::State;
+use crate::{Result, State};
 
 #[derive(Clone, Copy, Debug)]
-pub struct ListOffsetsRequest;
+pub struct ListOffsetsRequest<S> {
+    storage: S,
+}
 
-impl ListOffsetsRequest {
-    pub fn response(
+impl<S> ListOffsetsRequest<S>
+where
+    S: Storage,
+{
+    pub fn with_storage(storage: S) -> Self {
+        Self { storage }
+    }
+
+    pub async fn response(
         &self,
         replica_id: i32,
         isolation_level: Option<i8>,
         topics: Option<&[ListOffsetsTopic]>,
-        state: &State,
-    ) -> Body {
+    ) -> Result<Body> {
         let _ = replica_id;
         let _ = isolation_level;
-        let _ = state;
 
         let throttle_time_ms = Some(0);
-        let topics = topics.map(|topics| {
-            topics
-                .iter()
-                .map(|topic| ListOffsetsTopicResponse {
-                    name: topic.name.clone(),
-                    partitions: topic.partitions.as_ref().map(|partitions| {
-                        partitions
+
+        let topics = if let Some(topics) = topics {
+            let mut offsets = vec![];
+
+            for topic in topics {
+                if let Some(ref partitions) = topic.partitions {
+                    for partition in partitions {
+                        let tp = Topition::new(topic.name.clone(), partition.partition_index);
+                        let offset = ListOffsetRequest::try_from(partition.timestamp)?;
+
+                        offsets.push((tp, offset));
+                    }
+                }
+            }
+
+            Some(
+                self.storage
+                    .list_offsets(offsets.deref())
+                    .await
+                    .map(|offsets| {
+                        offsets
                             .iter()
-                            .map(|partition| ListOffsetsPartitionResponse {
-                                partition_index: partition.partition_index,
-                                error_code: ErrorCode::None.into(),
-                                old_style_offsets: None,
-                                timestamp: Some(-1),
-                                offset: Some(0),
-                                leader_epoch: Some(0),
+                            .fold(BTreeSet::new(), |mut topics, (topition, _)| {
+                                _ = topics.insert(topition.topic());
+                                topics
+                            })
+                            .iter()
+                            .map(|topic_name| ListOffsetsTopicResponse {
+                                name: (*topic_name).into(),
+                                partitions: Some(
+                                    offsets
+                                        .iter()
+                                        .filter_map(|(topition, offset)| {
+                                            if topition.topic() == *topic_name {
+                                                Some(ListOffsetsPartitionResponse {
+                                                    partition_index: topition.partition(),
+                                                    error_code: ErrorCode::None.into(),
+                                                    old_style_offsets: None,
+                                                    timestamp: Some(-1),
+                                                    offset: Some(0),
+                                                    leader_epoch: Some(0),
+                                                })
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                        .collect(),
+                                ),
                             })
                             .collect()
-                    }),
-                })
-                .collect()
-        });
+                    })?,
+            )
+        } else {
+            None
+        };
 
-        Body::ListOffsetsResponse {
+        Ok(Body::ListOffsetsResponse {
             throttle_time_ms,
             topics,
-        }
+        })
     }
 }

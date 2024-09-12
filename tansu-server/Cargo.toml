@@ -8,6 +8,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+async-trait.workspace = true
 bytes.workspace = true
 clap.workspace = true
 deadpool-postgres.workspace = true

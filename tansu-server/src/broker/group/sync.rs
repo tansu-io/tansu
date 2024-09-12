@@ -13,27 +13,26 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::sync::{Arc, Mutex, MutexGuard};
-
 use tansu_kafka_sans_io::{sync_group_request::SyncGroupRequestAssignment, Body};
 
 use crate::{coordinator::group::Coordinator, Result};
 
 #[derive(Debug)]
-pub struct SyncGroupRequest {
-    pub groups: Arc<Mutex<Box<dyn Coordinator>>>,
+pub struct SyncGroupRequest<C> {
+    coordinator: C,
 }
 
-impl SyncGroupRequest {
-    pub fn groups_lock(&self) -> Result<MutexGuard<'_, Box<dyn Coordinator>>> {
-        self.groups.lock().map_err(|error| error.into())
+impl<C> SyncGroupRequest<C>
+where
+    C: Coordinator,
+{
+    pub fn with_coordinator(coordinator: C) -> Self {
+        Self { coordinator }
     }
-}
 
-impl SyncGroupRequest {
     #[allow(clippy::too_many_arguments)]
-    pub fn response(
-        &self,
+    pub async fn response(
+        &mut self,
         group_id: &str,
         generation_id: i32,
         member_id: &str,
@@ -42,8 +41,8 @@ impl SyncGroupRequest {
         protocol_name: Option<&str>,
         assignments: Option<&[SyncGroupRequestAssignment]>,
     ) -> Result<Body> {
-        self.groups_lock().and_then(|mut coordinator| {
-            coordinator.sync(
+        self.coordinator
+            .sync(
                 group_id,
                 generation_id,
                 member_id,
@@ -52,6 +51,6 @@ impl SyncGroupRequest {
                 protocol_name,
                 assignments,
             )
-        })
+            .await
     }
 }

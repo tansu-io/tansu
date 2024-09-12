@@ -13,33 +13,37 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::sync::{Arc, Mutex, MutexGuard};
-
 use tansu_kafka_sans_io::Body;
 
 use crate::{coordinator::group::Coordinator, Result};
 
 #[derive(Debug)]
-pub struct HeartbeatRequest {
-    pub groups: Arc<Mutex<Box<dyn Coordinator>>>,
+pub struct HeartbeatRequest<C> {
+    coordinator: C,
 }
 
-impl HeartbeatRequest {
-    pub fn groups_lock(&self) -> Result<MutexGuard<'_, Box<dyn Coordinator>>> {
-        self.groups.lock().map_err(|error| error.into())
+impl<C> HeartbeatRequest<C> {
+    pub fn with_coordinator(coordinator: C) -> Self
+    where
+        C: Coordinator,
+    {
+        Self { coordinator }
     }
 }
 
-impl HeartbeatRequest {
-    pub(crate) fn response(
-        &self,
+impl<C> HeartbeatRequest<C>
+where
+    C: Coordinator,
+{
+    pub async fn response(
+        &mut self,
         group_id: &str,
         generation_id: i32,
         member_id: &str,
         group_instance_id: Option<&str>,
     ) -> Result<Body> {
-        self.groups_lock().and_then(|mut coordinator| {
-            coordinator.heartbeat(group_id, generation_id, member_id, group_instance_id)
-        })
+        self.coordinator
+            .heartbeat(group_id, generation_id, member_id, group_instance_id)
+            .await
     }
 }

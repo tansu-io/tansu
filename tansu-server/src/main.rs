@@ -26,12 +26,12 @@ use clap::Parser;
 use tansu_raft::{tarpc::RaftTcpTarpcClientFactory, ProvideKvStore, ProvideServer, Raft};
 use tansu_server::{
     broker::Broker,
-    coordinator::group::{Coordinator, GroupProvider, Manager, ProvideCoordinator},
+    coordinator::group::administrator::Controller,
     raft::{
         Applicator, ApplyStateFactory, Config, ServerFactory, StorageFactory,
         StoragePersistentStateFactory,
     },
-    Error, Result, NUM_CONSUMER_OFFSETS_PARTITIONS,
+    Error, Result,
 };
 use tansu_storage::{
     pg::Postgres,
@@ -184,12 +184,7 @@ async fn main() -> Result<()> {
     }
 
     {
-        let groups = GroupProvider::new(segment_storage.clone(), NUM_CONSUMER_OFFSETS_PARTITIONS)
-            .map(|group_provider| Box::new(group_provider) as Box<dyn ProvideCoordinator>)
-            .map(Manager::new)
-            .map(|manager| Box::new(manager) as Box<dyn Coordinator>)
-            .map(Mutex::new)
-            .map(Arc::new)?;
+        let groups = Controller::with_storage(storage.clone())?;
 
         let mut broker = Broker::new(
             args.kafka_node_id,

@@ -29,7 +29,7 @@ pub mod telemetry;
 
 use crate::{
     command::{Command, Request},
-    coordinator::group::Coordinator,
+    coordinator::group::{Coordinator, OffsetCommit},
     raft::Applicator,
     Error, Result,
 };
@@ -61,12 +61,12 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
 };
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 use url::Url;
 use uuid::Uuid;
 
 #[derive(Clone, Debug)]
-pub struct Broker<S> {
+pub struct Broker<G, S> {
     node_id: i32,
     cluster_id: String,
     incarnation_id: Uuid,
@@ -75,11 +75,12 @@ pub struct Broker<S> {
     listener: Url,
     rack: Option<String>,
     storage: S,
-    groups: Arc<Mutex<Box<dyn Coordinator>>>,
+    groups: G,
 }
 
-impl<S> Broker<S>
+impl<G, S> Broker<G, S>
 where
+    G: Coordinator,
     S: Storage + Clone + 'static,
 {
     #[allow(clippy::too_many_arguments)]
@@ -91,7 +92,7 @@ where
         listener: Url,
         rack: Option<String>,
         storage: S,
-        groups: Arc<Mutex<Box<dyn Coordinator>>>,
+        groups: G,
     ) -> Self {
         let incarnation_id = Uuid::new_v4();
 
@@ -207,7 +208,8 @@ where
                 debug!(?api_key, ?api_version, ?correlation_id);
                 let body = self
                     .response_for(client_id.as_deref(), body, correlation_id)
-                    .await?;
+                    .await
+                    .inspect_err(|err| warn!(?err))?;
                 debug!(?body, ?correlation_id);
                 Frame::response(
                     Header::Response { correlation_id },
@@ -311,7 +313,6 @@ where
             } => {
                 let storage = self.storage.clone();
                 let mut fetch = FetchRequest::with_storage(storage);
-                let state = self.applicator.with_current_state().await;
                 fetch
                     .response(
                         max_wait_ms,
@@ -319,9 +320,9 @@ where
                         max_bytes,
                         isolation_level,
                         topics.as_deref(),
-                        &state,
                     )
                     .await
+                    .inspect_err(|error| warn!(?error))
             }
 
             Body::FindCoordinatorRequest {
@@ -351,16 +352,14 @@ where
                 member_id,
                 group_instance_id,
             } => {
-                let heartbeat = HeartbeatRequest {
-                    groups: self.groups.clone(),
-                };
-
-                heartbeat.response(
-                    &group_id,
-                    generation_id,
-                    &member_id,
-                    group_instance_id.as_deref(),
-                )
+                self.groups
+                    .heartbeat(
+                        &group_id,
+                        generation_id,
+                        &member_id,
+                        group_instance_id.as_deref(),
+                    )
+                    .await
             }
 
             Body::InitProducerIdRequest {
@@ -388,21 +387,19 @@ where
                 protocols,
                 reason,
             } => {
-                let join = JoinRequest {
-                    groups: self.groups.clone(),
-                };
-
-                join.response(
-                    client_id,
-                    &group_id,
-                    session_timeout_ms,
-                    rebalance_timeout_ms,
-                    &member_id,
-                    group_instance_id.as_deref(),
-                    &protocol_type,
-                    protocols.as_deref(),
-                    reason.as_deref(),
-                )
+                self.groups
+                    .join(
+                        client_id,
+                        &group_id,
+                        session_timeout_ms,
+                        rebalance_timeout_ms,
+                        &member_id,
+                        group_instance_id.as_deref(),
+                        &protocol_type,
+                        protocols.as_deref(),
+                        reason.as_deref(),
+                    )
+                    .await
             }
 
             Body::LeaveGroupRequest {
@@ -410,11 +407,9 @@ where
                 member_id,
                 members,
             } => {
-                let leave = LeaveRequest {
-                    groups: self.groups.clone(),
-                };
-
-                leave.response(&group_id, member_id.as_deref(), members.as_deref())
+                self.groups
+                    .leave(&group_id, member_id.as_deref(), members.as_deref())
+                    .await
             }
 
             Body::ListOffsetsRequest {
@@ -422,9 +417,10 @@ where
                 isolation_level,
                 topics,
             } => {
-                let state = self.applicator.with_current_state().await;
-                let list_offsets = ListOffsetsRequest;
-                Ok(list_offsets.response(replica_id, isolation_level, topics.as_deref(), &state))
+                let list_offsets = ListOffsetsRequest::with_storage(self.storage.clone());
+                list_offsets
+                    .response(replica_id, isolation_level, topics.as_deref())
+                    .await
             }
 
             Body::ListPartitionReassignmentsRequest { topics, .. } => {
@@ -446,18 +442,16 @@ where
                 retention_time_ms,
                 topics,
             } => {
-                let offset_commit = OffsetCommitRequest {
-                    groups: self.groups.clone(),
+                let detail = OffsetCommit {
+                    group_id: group_id.as_str(),
+                    generation_id_or_member_epoch,
+                    member_id: member_id.as_deref(),
+                    group_instance_id: group_instance_id.as_deref(),
+                    retention_time_ms,
+                    topics: topics.as_deref(),
                 };
 
-                offset_commit.response(
-                    &group_id,
-                    generation_id_or_member_epoch,
-                    member_id.as_deref(),
-                    group_instance_id.as_deref(),
-                    retention_time_ms,
-                    topics.as_deref(),
-                )
+                self.groups.offset_commit(detail).await
             }
 
             Body::OffsetFetchRequest {
@@ -466,16 +460,14 @@ where
                 groups,
                 require_stable,
             } => {
-                let offset_fetch = OffsetFetchRequest {
-                    groups: self.groups.clone(),
-                };
-
-                offset_fetch.response(
-                    group_id.as_deref(),
-                    topics.as_deref(),
-                    groups.as_deref(),
-                    require_stable,
-                )
+                self.groups
+                    .offset_fetch(
+                        group_id.as_deref(),
+                        topics.as_deref(),
+                        groups.as_deref(),
+                        require_stable,
+                    )
+                    .await
             }
 
             Body::ProduceRequest {
@@ -500,19 +492,17 @@ where
                 protocol_name,
                 assignments,
             } => {
-                let sync_group = SyncGroupRequest {
-                    groups: self.groups.clone(),
-                };
-
-                sync_group.response(
-                    &group_id,
-                    generation_id,
-                    &member_id,
-                    group_instance_id.as_deref(),
-                    protocol_type.as_deref(),
-                    protocol_name.as_deref(),
-                    assignments.as_deref(),
-                )
+                self.groups
+                    .sync(
+                        &group_id,
+                        generation_id,
+                        &member_id,
+                        group_instance_id.as_deref(),
+                        protocol_type.as_deref(),
+                        protocol_name.as_deref(),
+                        assignments.as_deref(),
+                    )
+                    .await
             }
 
             _ => unimplemented!(),
