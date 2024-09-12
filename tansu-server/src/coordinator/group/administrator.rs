@@ -16,10 +16,8 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Debug,
-    hash::{DefaultHasher, Hash, Hasher},
     ops::Deref,
-    sync::{Arc, Mutex, MutexGuard},
-    time::{Duration, Instant, SystemTime},
+    time::{Duration, Instant},
 };
 
 use async_trait::async_trait;
@@ -35,15 +33,14 @@ use tansu_kafka_sans_io::{
         OffsetFetchResponseGroup, OffsetFetchResponsePartition, OffsetFetchResponsePartitions,
         OffsetFetchResponseTopic, OffsetFetchResponseTopics,
     },
-    record::{inflated, Record},
     sync_group_request::SyncGroupRequestAssignment,
-    to_timestamp, Body, ErrorCode,
+    Body, ErrorCode,
 };
 use tansu_storage::{OffsetCommitRequest, Storage, Topition};
 use tracing::{debug, info};
 use uuid::Uuid;
 
-use crate::{Error, Result, CONSUMER_OFFSETS};
+use crate::{Error, Result};
 
 use super::{Coordinator, OffsetCommit};
 
@@ -924,6 +921,8 @@ where
         protocols: Option<&[JoinGroupRequestProtocol]>,
         reason: Option<&str>,
     ) -> (Self::JoinState, Body) {
+        let _ = reason;
+
         if let Some(client_id) = client_id {
             if member_id.is_empty() {
                 let member_id = format!("{client_id}-{}", Uuid::new_v4());
@@ -1080,6 +1079,11 @@ where
         protocol_name: Option<&str>,
         assignments: Option<&[SyncGroupRequestAssignment]>,
     ) -> (Self::SyncState, Body) {
+        let _ = group_id;
+        let _ = group_instance_id;
+        let _ = protocol_type;
+        let _ = protocol_name;
+
         if !self.members.contains_key(member_id) {
             let body = Body::SyncGroupResponse {
                 throttle_time_ms: Some(0),
@@ -1201,6 +1205,8 @@ where
         member_id: &str,
         group_instance_id: Option<&str>,
     ) -> (Self::HeartbeatState, Body) {
+        let _ = group_instance_id;
+
         if !self.members.contains_key(member_id) {
             return (
                 self,
@@ -1344,14 +1350,24 @@ where
     }
 
     async fn offset_fetch(
-        self,
+        mut self,
         now: Instant,
         group_id: Option<&str>,
         topics: Option<&[OffsetFetchRequestTopic]>,
         groups: Option<&[OffsetFetchRequestGroup]>,
         require_stable: Option<bool>,
     ) -> (Self::OffsetFetchState, Body) {
-        todo!()
+        let _ = now;
+        match self
+            .fetch_offset(group_id, topics, groups, require_stable)
+            .await
+        {
+            Ok(body) => (self, body),
+            Err(error) => {
+                debug!(?error);
+                todo!()
+            }
+        }
     }
 }
 
@@ -1380,6 +1396,11 @@ where
         protocols: Option<&[JoinGroupRequestProtocol]>,
         reason: Option<&str>,
     ) -> (Self::JoinState, Body) {
+        let _ = group_id;
+        let _ = session_timeout_ms;
+        let _ = rebalance_timeout_ms;
+        let _ = reason;
+
         if let Some(client_id) = client_id {
             if member_id.is_empty() {
                 let member_id = format!("{client_id}-{}", Uuid::new_v4());
@@ -1570,6 +1591,12 @@ where
         protocol_name: Option<&str>,
         assignments: Option<&[SyncGroupRequestAssignment]>,
     ) -> (Self::SyncState, Body) {
+        let _ = group_id;
+        let _ = group_instance_id;
+        let _ = protocol_type;
+        let _ = protocol_name;
+        let _ = assignments;
+
         if !self.members.contains_key(member_id) {
             let body = Body::SyncGroupResponse {
                 throttle_time_ms: Some(0),
@@ -1637,6 +1664,8 @@ where
         member_id: &str,
         group_instance_id: Option<&str>,
     ) -> (Self::HeartbeatState, Body) {
+        let _ = group_instance_id;
+
         if !self.members.contains_key(member_id) {
             return (
                 self,
@@ -1687,6 +1716,9 @@ where
         member_id: Option<&str>,
         members: Option<&[MemberIdentity]>,
     ) -> (Self::LeaveState, Body) {
+        let _ = now;
+        let _ = group_id;
+
         let members = if let Some(member_id) = member_id {
             vec![MemberResponse {
                 member_id: member_id.to_owned(),
@@ -1805,6 +1837,8 @@ where
         groups: Option<&[OffsetFetchRequestGroup]>,
         require_stable: Option<bool>,
     ) -> (Self::OffsetFetchState, Body) {
+        let _ = now;
+
         match self
             .fetch_offset(group_id, topics, groups, require_stable)
             .await
@@ -1820,53 +1854,53 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    // use std::time::Duration;
 
-    use crate::NUM_CONSUMER_OFFSETS_PARTITIONS;
+    // use crate::NUM_CONSUMER_OFFSETS_PARTITIONS;
 
-    use super::*;
-    use pretty_assertions::assert_eq;
-    use tansu_kafka_sans_io::{
-        offset_commit_request::{OffsetCommitRequestPartition, OffsetCommitRequestTopic},
-        offset_fetch_request::OffsetFetchRequestTopics,
-        offset_fetch_response::{
-            OffsetFetchResponseGroup, OffsetFetchResponsePartitions, OffsetFetchResponseTopics,
-        },
-    };
-    use tansu_storage::segment::MemorySegmentProvider;
-    use tracing::subscriber::DefaultGuard;
+    // use super::*;
+    // use pretty_assertions::assert_eq;
+    // use tansu_kafka_sans_io::{
+    //     offset_commit_request::{OffsetCommitRequestPartition, OffsetCommitRequestTopic},
+    //     offset_fetch_request::OffsetFetchRequestTopics,
+    //     offset_fetch_response::{
+    //         OffsetFetchResponseGroup, OffsetFetchResponsePartitions, OffsetFetchResponseTopics,
+    //     },
+    // };
+    // use tansu_storage::segment::MemorySegmentProvider;
+    // use tracing::subscriber::DefaultGuard;
 
-    #[cfg(miri)]
-    fn init_tracing() -> Result<()> {
-        Ok(())
-    }
+    // #[cfg(miri)]
+    // fn init_tracing() -> Result<()> {
+    //     Ok(())
+    // }
 
-    #[cfg(not(miri))]
-    fn init_tracing() -> Result<DefaultGuard> {
-        use std::{fs::File, sync::Arc, thread};
+    // #[cfg(not(miri))]
+    // fn init_tracing() -> Result<DefaultGuard> {
+    //     use std::{fs::File, sync::Arc, thread};
 
-        use tracing_subscriber::fmt::format::FmtSpan;
+    //     use tracing_subscriber::fmt::format::FmtSpan;
 
-        Ok(tracing::subscriber::set_default(
-            tracing_subscriber::fmt()
-                .with_level(true)
-                .with_line_number(true)
-                .with_thread_names(false)
-                .with_max_level(tracing::Level::DEBUG)
-                .with_span_events(FmtSpan::ACTIVE)
-                .with_writer(
-                    thread::current()
-                        .name()
-                        .ok_or(Error::Message(String::from("unnamed thread")))
-                        .and_then(|name| {
-                            File::create(format!("../logs/{}/{name}.log", env!("CARGO_PKG_NAME")))
-                                .map_err(Into::into)
-                        })
-                        .map(Arc::new)?,
-                )
-                .finish(),
-        ))
-    }
+    //     Ok(tracing::subscriber::set_default(
+    //         tracing_subscriber::fmt()
+    //             .with_level(true)
+    //             .with_line_number(true)
+    //             .with_thread_names(false)
+    //             .with_max_level(tracing::Level::DEBUG)
+    //             .with_span_events(FmtSpan::ACTIVE)
+    //             .with_writer(
+    //                 thread::current()
+    //                     .name()
+    //                     .ok_or(Error::Message(String::from("unnamed thread")))
+    //                     .and_then(|name| {
+    //                         File::create(format!("../logs/{}/{name}.log", env!("CARGO_PKG_NAME")))
+    //                             .map_err(Into::into)
+    //                     })
+    //                     .map(Arc::new)?,
+    //             )
+    //             .finish(),
+    //     ))
+    // }
 
     // #[test]
     // fn join_requires_member_id() -> Result<()> {

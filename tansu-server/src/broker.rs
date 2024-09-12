@@ -40,19 +40,12 @@ use describe_cluster::DescribeClusterRequest;
 use describe_configs::DescribeConfigsRequest;
 use fetch::FetchRequest;
 use find_coordinator::FindCoordinatorRequest;
-use group::{
-    heartbeat::HeartbeatRequest, join::JoinRequest, leave::LeaveRequest,
-    offset_commit::OffsetCommitRequest, offset_fetch::OffsetFetchRequest, sync::SyncGroupRequest,
-};
 use init_producer_id::InitProducerIdRequest;
 use list_offsets::ListOffsetsRequest;
 use list_partition_reassignments::ListPartitionReassignmentsRequest;
 use metadata::MetadataRequest;
 use produce::ProduceRequest;
-use std::{
-    io::ErrorKind,
-    sync::{Arc, Mutex},
-};
+use std::io::ErrorKind;
 use tansu_kafka_sans_io::{broker_registration_request::Listener, Body, Frame, Header};
 use tansu_raft::{Log, Raft};
 use tansu_storage::{BrokerRegistationRequest, Storage};

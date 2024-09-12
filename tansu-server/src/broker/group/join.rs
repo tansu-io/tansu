@@ -17,7 +17,7 @@ use tansu_kafka_sans_io::{join_group_request::JoinGroupRequestProtocol, Body};
 
 use crate::{coordinator::group::Coordinator, Result};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct JoinRequest<C> {
     coordinator: C,
 }

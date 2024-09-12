@@ -20,8 +20,6 @@ use tansu_kafka_sans_io::{
 use tansu_storage::Storage;
 use tracing::debug;
 
-use crate::Error;
-
 #[derive(Clone, Debug)]
 pub struct CreateTopic<S> {
     storage: S,

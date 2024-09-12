@@ -28,7 +28,7 @@ use tansu_storage::{Storage, Topition};
 use tokio::time::sleep;
 use tracing::{debug, warn};
 
-use crate::{Result, State};
+use crate::Result;
 
 #[derive(Clone, Debug)]
 pub struct FetchRequest<S> {

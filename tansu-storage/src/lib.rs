@@ -18,7 +18,7 @@ use glob::{GlobError, PatternError};
 use regex::Regex;
 use std::{
     array::TryFromSliceError,
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     ffi::OsString,
     fmt::Debug,
     fs::DirEntry,
@@ -255,6 +255,18 @@ pub enum ListOffsetRequest {
 pub struct ListOffsetResponse {
     timestamp: Option<SystemTime>,
     offset: Option<i64>,
+}
+
+impl ListOffsetResponse {
+    pub fn offset(&self) -> Option<i64> {
+        self.offset
+    }
+
+    pub fn timestamp(&self) -> Result<Option<i64>> {
+        self.timestamp.map_or(Ok(None), |system_time| {
+            to_timestamp(system_time).map(Some).map_err(Into::into)
+        })
+    }
 }
 
 impl TryFrom<ListOffsetRequest> for i64 {

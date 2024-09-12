@@ -22,7 +22,7 @@ use tansu_kafka_sans_io::{
 };
 use tansu_storage::{ListOffsetRequest, Storage, Topition};
 
-use crate::{Result, State};
+use crate::Result;
 
 #[derive(Clone, Copy, Debug)]
 pub struct ListOffsetsRequest<S> {
@@ -85,8 +85,10 @@ where
                                                     partition_index: topition.partition(),
                                                     error_code: ErrorCode::None.into(),
                                                     old_style_offsets: None,
-                                                    timestamp: Some(-1),
-                                                    offset: Some(0),
+                                                    timestamp: offset
+                                                        .timestamp()
+                                                        .unwrap_or(Some(-1)),
+                                                    offset: offset.offset(),
                                                     leader_epoch: Some(0),
                                                 })
                                             } else {
