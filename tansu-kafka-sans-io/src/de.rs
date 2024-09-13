@@ -71,10 +71,17 @@ impl<'a> ReadPosition<'a> {
 
 impl<'a> Read for ReadPosition<'a> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        self.reader.read(buf).map(|count| {
-            self.position += count as u64;
-            count
-        })
+        match self.reader.read(buf) {
+            Ok(count) => {
+                let delta = u64::try_from(count)
+                    .map_err(|err| Box::new(err) as Box<dyn std::error::Error + Send + Sync>)
+                    .map_err(io::Error::other)?;
+                self.position += delta;
+                Ok(count)
+            }
+
+            Err(error) => Err(error),
+        }
     }
 }
 
