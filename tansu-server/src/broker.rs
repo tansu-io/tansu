@@ -103,7 +103,7 @@ where
     }
 
     pub async fn serve(&mut self) -> Result<()> {
-        _ = self.register().await?;
+        self.register().await?;
         self.listen().await
     }
 

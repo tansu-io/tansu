@@ -75,7 +75,7 @@ where
 
             debug!(?offset, ?fetched);
 
-            if fetched.len() == 0 || fetched.first().is_some_and(|batch| batch.record_count == 0) {
+            if fetched.is_empty() || fetched.first().is_some_and(|batch| batch.record_count == 0) {
                 break;
             } else {
                 batches.append(&mut fetched);

@@ -644,7 +644,7 @@ where
         let topics = if let Some(topics) = topics {
             let topics: Vec<Topition> = topics
                 .iter()
-                .map(|topic| {
+                .flat_map(|topic| {
                     topic
                         .partition_indexes
                         .as_ref()
@@ -654,11 +654,10 @@ where
                                 .map(|partition_index| {
                                     Topition::new(topic.name.clone(), *partition_index)
                                 })
-                                .collect()
+                                .collect::<Vec<_>>()
                         })
-                        .unwrap_or(vec![])
+                        .unwrap_or_default()
                 })
-                .flatten()
                 .collect();
 
             self.storage
@@ -707,7 +706,7 @@ where
                 if let Some(topics) = group.topics.as_ref().map(|topics| {
                     topics
                         .iter()
-                        .map(|topic| {
+                        .flat_map(|topic| {
                             topic
                                 .partition_indexes
                                 .as_ref()
@@ -717,12 +716,11 @@ where
                                         .map(|partition_index| {
                                             Topition::new(topic.name.clone(), *partition_index)
                                         })
-                                        .collect()
+                                        .collect::<Vec<_>>()
                                 })
-                                .unwrap_or(vec![])
+                                .unwrap_or_default()
                         })
-                        .flatten()
-                        .collect::<Vec<Topition>>()
+                        .collect::<Vec<_>>()
                 }) {
                     let response = self
                         .storage

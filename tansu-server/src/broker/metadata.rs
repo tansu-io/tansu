@@ -34,12 +34,7 @@ where
     pub async fn response(&self, topics: Option<Vec<MetadataRequestTopic>>) -> Result<Body> {
         let throttle_time_ms = Some(0);
 
-        let topics = topics.map(|topics| {
-            topics
-                .iter()
-                .map(|topic| TopicId::from(topic))
-                .collect::<Vec<TopicId>>()
-        });
+        let topics = topics.map(|topics| topics.iter().map(TopicId::from).collect::<Vec<_>>());
 
         let response = self.storage.metadata(topics.as_deref()).await?;
         let brokers = Some(response.brokers().to_owned());
