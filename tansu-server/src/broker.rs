@@ -63,9 +63,11 @@ pub struct Broker<G, S> {
     node_id: i32,
     cluster_id: String,
     incarnation_id: Uuid,
+    #[allow(dead_code)]
     context: Raft,
     applicator: Applicator,
     listener: Url,
+    #[allow(dead_code)]
     rack: Option<String>,
     storage: S,
     groups: G,
@@ -231,6 +233,7 @@ where
         }
     }
 
+    #[allow(dead_code)]
     async fn when_applied(&mut self, body: Body) -> Result<Body> {
         debug!(?self, ?body);
 

@@ -58,6 +58,7 @@ impl FromStr for ElectionTimeout {
 
 #[derive(Clone, Debug)]
 struct KeyValue<K, V> {
+    #[allow(dead_code)]
     key: K,
     value: V,
 }

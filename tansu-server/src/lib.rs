@@ -112,6 +112,7 @@ impl State {
         }
     }
 
+    #[allow(dead_code)]
     fn topics(&self) -> &BTreeMap<String, TopicDetail> {
         &self.topics
     }
