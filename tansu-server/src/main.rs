@@ -56,26 +56,26 @@ impl FromStr for ElectionTimeout {
     }
 }
 
-// #[derive(Clone, Debug)]
-// struct KeyValue<K, V> {
-//     key: K,
-//     value: V,
-// }
+#[derive(Clone, Debug)]
+struct KeyValue<K, V> {
+    key: K,
+    value: V,
+}
 
-// impl FromStr for KeyValue<String, Url> {
-//     type Err = Error;
+impl FromStr for KeyValue<String, Url> {
+    type Err = Error;
 
-//     fn from_str(kv: &str) -> std::result::Result<Self, Self::Err> {
-//         kv.split_once('=')
-//             .ok_or(Error::Custom("kv: {kv}".into()))
-//             .and_then(|(k, v)| {
-//                 Url::try_from(v).map_err(Into::into).map(|value| Self {
-//                     key: k.to_owned(),
-//                     value,
-//                 })
-//             })
-//     }
-// }
+    fn from_str(kv: &str) -> std::result::Result<Self, Self::Err> {
+        kv.split_once('=')
+            .ok_or(Error::Custom("kv: {kv}".into()))
+            .and_then(|(k, v)| {
+                Url::try_from(v).map_err(Into::into).map(|value| Self {
+                    key: k.to_owned(),
+                    value,
+                })
+            })
+    }
+}
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -101,8 +101,9 @@ struct Cli {
     #[arg(long, default_value = "tcp://localhost:9092")]
     kafka_listener_url: Url,
 
-    // #[arg(long = "storage-engine")]
-    // storage_engines: Vec<KeyValue<String, Url>>,
+    #[arg(long, default_value = "pg=postgres://postgres:postgres@localhost")]
+    storage_engine: KeyValue<String, Url>,
+
     #[arg(long, default_value = ".")]
     work_dir: PathBuf,
 }
@@ -173,7 +174,7 @@ async fn main() -> Result<()> {
 
     let mut set = JoinSet::new();
 
-    let storage = Postgres::builder("host=localhost user=postgres password=postgres")
+    let storage = Postgres::builder(args.storage_engine.value.to_string().as_str())
         .map(|builder| builder.cluster(args.kafka_cluster_id.as_str()))
         .map(|builder| builder.node(args.kafka_node_id))
         .map(|builder| builder.build())?;

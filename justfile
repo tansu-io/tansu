@@ -69,6 +69,7 @@ tansu-1:
         --raft-listener-url tcp://127.0.0.1:4567/ \
         --raft-peer-url tcp://127.0.0.1:4568/ \
         --raft-peer-url tcp://127.0.0.1:4569/ \
+        --storage-engine pg=postgres://postgres:postgres@localhost \
         --work-dir work-dir/tansu-1
 
 kafka-proxy:
