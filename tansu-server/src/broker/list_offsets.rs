@@ -18,9 +18,10 @@ use std::{collections::BTreeSet, ops::Deref};
 use tansu_kafka_sans_io::{
     list_offsets_request::ListOffsetsTopic,
     list_offsets_response::{ListOffsetsPartitionResponse, ListOffsetsTopicResponse},
-    Body, ErrorCode,
+    Body,
 };
 use tansu_storage::{ListOffsetRequest, Storage, Topition};
+use tracing::{debug, error};
 
 use crate::Result;
 
@@ -43,8 +44,7 @@ where
         isolation_level: Option<i8>,
         topics: Option<&[ListOffsetsTopic]>,
     ) -> Result<Body> {
-        let _ = replica_id;
-        let _ = isolation_level;
+        debug!(?replica_id, ?isolation_level, ?topics);
 
         let throttle_time_ms = Some(0);
 
@@ -66,6 +66,8 @@ where
                 self.storage
                     .list_offsets(offsets.deref())
                     .await
+                    .inspect(|r| debug!(?r, ?offsets))
+                    .inspect_err(|err| error!(?err, ?offsets))
                     .map(|offsets| {
                         offsets
                             .iter()
@@ -83,12 +85,13 @@ where
                                             if topition.topic() == *topic_name {
                                                 Some(ListOffsetsPartitionResponse {
                                                     partition_index: topition.partition(),
-                                                    error_code: ErrorCode::None.into(),
+                                                    error_code: offset.error_code().into(),
                                                     old_style_offsets: None,
                                                     timestamp: offset
                                                         .timestamp()
-                                                        .unwrap_or(Some(-1)),
-                                                    offset: offset.offset(),
+                                                        .unwrap_or(Some(0))
+                                                        .or(Some(0)),
+                                                    offset: offset.offset().or(Some(0)),
                                                     leader_epoch: Some(0),
                                                 })
                                             } else {
@@ -109,5 +112,6 @@ where
             throttle_time_ms,
             topics,
         })
+        .inspect(|r| debug!(?r))
     }
 }

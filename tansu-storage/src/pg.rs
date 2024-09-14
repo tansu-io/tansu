@@ -31,12 +31,12 @@ use tansu_kafka_sans_io::{
     to_system_time, to_timestamp, ErrorCode,
 };
 use tokio_postgres::{error::SqlState, Config, NoTls};
-use tracing::{debug, warn};
+use tracing::{debug, error};
 use uuid::Uuid;
 
 use crate::{
     BrokerRegistationRequest, Error, ListOffsetRequest, ListOffsetResponse, MetadataResponse,
-    OffsetCommitRequest, Result, Storage, TopicId, Topition,
+    OffsetCommitRequest, OffsetStage, Result, Storage, TopicId, Topition,
 };
 
 #[derive(Clone, Debug)]
@@ -346,13 +346,27 @@ impl Storage for Postgres {
         Ok(offsets.first().copied().unwrap_or(-1))
     }
 
-    async fn fetch(&self, topition: &'_ Topition, offset: i64) -> Result<deflated::Batch> {
+    async fn fetch(
+        &self,
+        topition: &Topition,
+        offset: i64,
+        min_bytes: u32,
+        max_bytes: u32,
+    ) -> Result<deflated::Batch> {
         debug!(?topition, ?offset);
         let c = self.connection().await?;
 
         let prepared = c
             .prepare(concat!(
-                "select record.id, timestamp, k, v from cluster, record, topic",
+                "with sized as (",
+                " select",
+                " record.id",
+                ", timestamp",
+                ", k",
+                ", v",
+                ", sum(coalesce(length(k), 0) + coalesce(length(v), 0))",
+                " over (order by record.id) as bytes",
+                " from cluster, record, topic",
                 " where",
                 " cluster.name = $1",
                 " and topic.name = $2",
@@ -360,6 +374,8 @@ impl Storage for Postgres {
                 " and record.id >= $4",
                 " and topic.cluster = cluster.id",
                 " and record.topic = topic.id",
+                ") select * from sized",
+                " where bytes < $5",
             ))
             .await?;
 
@@ -371,6 +387,7 @@ impl Storage for Postgres {
                     &topition.topic(),
                     &topition.partition(),
                     &offset,
+                    &(max_bytes as i64),
                 ],
             )
             .await?;
@@ -405,12 +422,14 @@ impl Storage for Postgres {
                     })?;
 
                 let k = record
-                    .get::<_, Option<&[u8]>>(2)
-                    .map(Bytes::copy_from_slice);
+                    .try_get::<_, Option<&[u8]>>(2)
+                    .map(|o| o.map(Bytes::copy_from_slice))?;
 
                 let v = record
-                    .get::<_, Option<&[u8]>>(3)
-                    .map(Bytes::copy_from_slice);
+                    .try_get::<_, Option<&[u8]>>(3)
+                    .map(|o| o.map(Bytes::copy_from_slice))?;
+
+                let bytes = record.try_get::<_, i64>(4)?;
 
                 builder = builder.record(
                     Record::builder()
@@ -418,7 +437,11 @@ impl Storage for Postgres {
                         .timestamp_delta(timestamp_delta)
                         .key(k.into())
                         .value(v.into()),
-                )
+                );
+
+                if bytes > (min_bytes as i64) {
+                    break;
+                }
             }
 
             builder
@@ -432,32 +455,47 @@ impl Storage for Postgres {
             .map_err(Into::into)
     }
 
-    async fn last_stable_offset(&self, topition: &'_ Topition) -> Result<i64> {
-        self.high_watermark(topition).await
-    }
-
-    async fn high_watermark(&self, topition: &'_ Topition) -> Result<i64> {
-        let _ = topition;
+    async fn offset_stage(&self, topition: &'_ Topition) -> Result<OffsetStage> {
         let c = self.connection().await?;
 
         let prepared = c
             .prepare(concat!(
-                "select max(record.id) from record, topic",
-                " where topic.name = $1",
-                " and topic.id = record.topic",
-                " and record.partition = $2"
+                "select",
+                " coalesce(min(record.id), (select last_value from record_id_seq)) as log_start",
+                ", coalesce(max(record.id), (select last_value from record_id_seq)) as high_watermark",
+                " from cluster, record, topic",
+                " where",
+                " cluster.name = $1",
+                " and topic.name = $2",
+                " and record.partition = $3",
+                " and topic.cluster = cluster.id",
+                " and record.topic = topic.id",
             ))
             .await?;
 
-        let rows = c
-            .query(&prepared, &[&topition.topic(), &topition.partition()])
-            .await?;
+        let row = c
+            .query_one(
+                &prepared,
+                &[&self.cluster, &topition.topic(), &topition.partition()],
+            )
+            .await
+            .inspect_err(|err| error!(?topition, ?prepared, ?err))?;
 
-        if let Some(row) = rows.first() {
-            row.try_get::<_, i64>(0).map_err(Into::into)
-        } else {
-            Ok(-1)
-        }
+        let log_start = row
+            .try_get::<_, i64>(0)
+            .inspect_err(|err| error!(?topition, ?prepared, ?err))?;
+
+        let high_watermark = row
+            .try_get::<_, i64>(0)
+            .inspect_err(|err| error!(?topition, ?prepared, ?err))?;
+
+        let last_stable = high_watermark;
+
+        Ok(OffsetStage {
+            last_stable,
+            high_watermark,
+            log_start,
+        })
     }
 
     async fn offset_commit(
@@ -572,7 +610,7 @@ impl Storage for Postgres {
                     " record",
                     " join (",
                     " select",
-                    " min(record.id) as offset",
+                    " coalesce(min(record.id), (select last_value from record_id_seq)) as offset",
                     " from record, topic, cluster",
                     " where",
                     " topic.cluster = cluster.id",
@@ -589,7 +627,7 @@ impl Storage for Postgres {
                     " record",
                     " join (",
                     " select",
-                    " max(record.id) as offset",
+                    " coalesce(max(record.id), (select last_value from record_id_seq)) as offset",
                     " from record, topic, cluster",
                     " where",
                     " topic.cluster = cluster.id",
@@ -606,7 +644,7 @@ impl Storage for Postgres {
                     " record",
                     " join (",
                     " select",
-                    " min(record.id) as offset",
+                    " coalesce(min(record.id), (select last_value from record_id_seq)) as offset",
                     " from record, topic, cluster",
                     " where",
                     " topic.cluster = cluster.id",
@@ -621,7 +659,7 @@ impl Storage for Postgres {
 
             let prepared = c.prepare(query).await?;
 
-            let offset = match offset_type {
+            let list_offset = match offset_type {
                 ListOffsetRequest::Earliest | ListOffsetRequest::Latest => {
                     c.query_opt(
                         &prepared,
@@ -645,19 +683,37 @@ impl Storage for Postgres {
                     )
                     .await
                 }
-            }?
-            .map_or(Ok(ListOffsetResponse::default()), |row| {
-                row.try_get::<_, i64>(0).map(Some).and_then(|offset| {
-                    row.try_get::<_, SystemTime>(1)
-                        .map(Some)
-                        .map(|timestamp| ListOffsetResponse { timestamp, offset })
-                })
-            })?;
+            }
+            .inspect_err(|err| {
+                let cluster = self.cluster.as_str();
+                error!(?err, ?cluster, ?topition);
+            })?
+            .map_or_else(
+                || {
+                    let cluster = self.cluster.as_str();
+                    error!(?cluster, ?topition);
+                    Ok(ListOffsetResponse {
+                        error_code: ErrorCode::UnknownServerError,
+                        ..Default::default()
+                    })
+                },
+                |row| {
+                    row.try_get::<_, i64>(0).map(Some).and_then(|offset| {
+                        row.try_get::<_, SystemTime>(1).map(Some).map(|timestamp| {
+                            ListOffsetResponse {
+                                timestamp,
+                                offset,
+                                ..Default::default()
+                            }
+                        })
+                    })
+                },
+            )?;
 
-            responses.push((topition.clone(), offset));
+            responses.push((topition.clone(), list_offset));
         }
 
-        Ok(responses)
+        Ok(responses).inspect(|r| debug!(?r))
     }
 
     async fn metadata(&self, topics: Option<&[TopicId]>) -> Result<MetadataResponse> {
@@ -788,7 +844,7 @@ impl Storage for Postgres {
                                 " and topic.cluster = cluster.id",
                             ))
                             .await
-                            .inspect_err(|error|warn!(?error))?;
+                            .inspect_err(|error|error!(?error))?;
 
                         match c
                             .query_one(&prepared, &[&self.cluster, &id])

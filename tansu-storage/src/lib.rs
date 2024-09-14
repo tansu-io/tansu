@@ -251,10 +251,21 @@ pub enum ListOffsetRequest {
     Timestamp(SystemTime),
 }
 
-#[derive(Copy, Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ListOffsetResponse {
+    error_code: ErrorCode,
     timestamp: Option<SystemTime>,
     offset: Option<i64>,
+}
+
+impl Default for ListOffsetResponse {
+    fn default() -> Self {
+        Self {
+            error_code: ErrorCode::None,
+            timestamp: None,
+            offset: None,
+        }
+    }
 }
 
 impl ListOffsetResponse {
@@ -266,6 +277,10 @@ impl ListOffsetResponse {
         self.timestamp.map_or(Ok(None), |system_time| {
             to_timestamp(system_time).map(Some).map_err(Into::into)
         })
+    }
+
+    pub fn error_code(&self) -> ErrorCode {
+        self.error_code
     }
 }
 
@@ -389,6 +404,27 @@ impl MetadataResponse {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct OffsetStage {
+    last_stable: i64,
+    high_watermark: i64,
+    log_start: i64,
+}
+
+impl OffsetStage {
+    pub fn last_stable(&self) -> i64 {
+        self.last_stable
+    }
+
+    pub fn high_watermark(&self) -> i64 {
+        self.high_watermark
+    }
+
+    pub fn log_start(&self) -> i64 {
+        self.log_start
+    }
+}
+
 #[async_trait]
 pub trait StorageProvider {
     async fn provide_storage(&mut self) -> impl Storage;
@@ -402,10 +438,16 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
 
     async fn delete_topic(&self, name: &str) -> Result<u64>;
 
-    async fn produce(&self, topition: &'_ Topition, batch: deflated::Batch) -> Result<i64>;
-    async fn fetch(&self, topition: &'_ Topition, offset: i64) -> Result<deflated::Batch>;
-    async fn last_stable_offset(&self, topition: &'_ Topition) -> Result<i64>;
-    async fn high_watermark(&self, topition: &'_ Topition) -> Result<i64>;
+    async fn produce(&self, topition: &Topition, batch: deflated::Batch) -> Result<i64>;
+    async fn fetch(
+        &self,
+        topition: &'_ Topition,
+        offset: i64,
+        min_bytes: u32,
+        max_bytes: u32,
+    ) -> Result<deflated::Batch>;
+
+    async fn offset_stage(&self, topition: &Topition) -> Result<OffsetStage>;
 
     async fn list_offsets(
         &self,

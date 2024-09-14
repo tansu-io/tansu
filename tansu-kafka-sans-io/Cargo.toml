@@ -36,6 +36,7 @@ lz4.workspace = true
 serde.workspace = true
 snap.workspace = true
 tansu-kafka-model = { path = "../tansu-kafka-model" }
+thiserror.workspace = true
 tracing.workspace = true
 zstd.workspace = true
 
@@ -55,6 +56,8 @@ pretty_assertions.workspace = true
 tracing-subscriber.workspace = true
 
 [features]
+default = []
+nightly-features = []
 diagnostics = []
 
 

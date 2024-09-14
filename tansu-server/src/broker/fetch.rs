@@ -26,7 +26,7 @@ use tansu_kafka_sans_io::{
 };
 use tansu_storage::{Storage, Topition};
 use tokio::time::sleep;
-use tracing::{debug, warn};
+use tracing::{debug, error};
 
 use crate::Result;
 
@@ -46,8 +46,8 @@ where
     async fn fetch_partition(
         &mut self,
         max_wait_ms: Duration,
-        min_bytes: u64,
-        max_bytes: Option<u64>,
+        min_bytes: u32,
+        max_bytes: &mut u32,
         isolation: Option<IsolationLevel>,
         topic: &str,
         fetch_partition: &FetchPartition,
@@ -66,12 +66,21 @@ where
         let mut batches = Vec::new();
 
         for offset in fetch_partition.fetch_offset.. {
+            if *max_bytes == 0 {
+                break;
+            }
+
+            debug!(offset);
+
             let mut fetched = self
                 .storage
-                .fetch(&tp, offset)
+                .fetch(&tp, offset, min_bytes, *max_bytes)
                 .await
-                .inspect_err(|error| warn!(?error))
+                .inspect(|r| debug!(?tp, ?offset, ?r))
+                .inspect_err(|error| error!(?tp, ?error))
                 .map_or(Vec::new(), |batch| vec![batch]);
+
+            *max_bytes -= u32::try_from(fetched.byte_size())?;
 
             debug!(?offset, ?fetched);
 
@@ -82,25 +91,18 @@ where
             }
         }
 
-        let last_stable_offset = self
+        let offset_stage = self
             .storage
-            .last_stable_offset(&tp)
+            .offset_stage(&tp)
             .await
-            .inspect_err(|error| warn!(?error))
-            .unwrap_or(-1);
-        let high_watermark = self
-            .storage
-            .high_watermark(&tp)
-            .await
-            .inspect_err(|error| warn!(?error))
-            .unwrap_or(-1);
+            .inspect_err(|error| error!(?error, ?tp))?;
 
         Ok(PartitionData {
             partition_index,
             error_code: ErrorCode::None.into(),
-            high_watermark,
-            last_stable_offset: Some(last_stable_offset),
-            log_start_offset: Some(-1),
+            high_watermark: offset_stage.high_watermark(),
+            last_stable_offset: Some(offset_stage.last_stable()),
+            log_start_offset: Some(offset_stage.log_start()),
             diverging_epoch: None,
             current_leader: None,
             snapshot_id: None,
@@ -112,6 +114,7 @@ where
                 Some(Frame { batches })
             },
         })
+        .inspect(|r| debug!(?r))
     }
 
     fn unknown_topic_response(&self, fetch: &FetchTopic) -> Result<FetchableTopicResponse> {
@@ -152,8 +155,8 @@ where
     async fn fetch_topic(
         &mut self,
         max_wait_ms: Duration,
-        min_bytes: u64,
-        max_bytes: Option<u64>,
+        min_bytes: u32,
+        max_bytes: &mut u32,
         isolation: Option<IsolationLevel>,
         fetch: &FetchTopic,
         _is_first: bool,
@@ -195,13 +198,13 @@ where
         }
     }
 
-    pub(crate) async fn fetch<'a>(
+    pub(crate) async fn fetch(
         &mut self,
         max_wait: Duration,
-        min_bytes: u64,
-        max_bytes: Option<u64>,
+        min_bytes: u32,
+        max_bytes: &mut u32,
         isolation: Option<IsolationLevel>,
-        topics: &'a [FetchTopic],
+        topics: &[FetchTopic],
     ) -> Result<Vec<FetchableTopicResponse>> {
         debug!(?max_wait, ?min_bytes, ?isolation, ?topics);
 
@@ -215,6 +218,8 @@ where
             let mut bytes = 0;
 
             while elapsed < max_wait && bytes < min_bytes {
+                debug!(?elapsed, ?max_wait, ?bytes, ?min_bytes);
+
                 let enumerate = topics.iter().enumerate();
                 responses.clear();
 
@@ -226,7 +231,7 @@ where
                     responses.push(fetch_response);
                 }
 
-                bytes = responses.byte_size();
+                bytes += u32::try_from(responses.byte_size())?;
 
                 let now = Instant::now();
                 elapsed = now.duration_since(start);
@@ -263,6 +268,8 @@ where
         isolation_level: Option<i8>,
         topics: Option<&[FetchTopic]>,
     ) -> Result<Body> {
+        debug!(?max_wait_ms, ?min_bytes, ?max_bytes, ?topics);
+
         let responses = Some(if let Some(topics) = topics {
             let isolation_level = isolation_level.map_or(Ok(None), |isolation| {
                 IsolationLevel::try_from(isolation).map(Some)
@@ -270,13 +277,22 @@ where
 
             let max_wait_ms = u64::try_from(max_wait_ms).map(Duration::from_millis)?;
 
-            let min_bytes = u64::try_from(min_bytes)?;
+            let min_bytes = u32::try_from(min_bytes)?;
 
-            let max_bytes =
-                max_bytes.map_or(Ok(None), |max_bytes| u64::try_from(max_bytes).map(Some))?;
+            const DEFAULT_MAX_BYTES: u32 = 5 * 1024 * 1024;
 
-            self.fetch(max_wait_ms, min_bytes, max_bytes, isolation_level, topics)
-                .await?
+            let mut max_bytes = max_bytes.map_or(Ok(DEFAULT_MAX_BYTES), |max_bytes| {
+                u32::try_from(max_bytes).map(|max_bytes| max_bytes.min(DEFAULT_MAX_BYTES))
+            })?;
+
+            self.fetch(
+                max_wait_ms,
+                min_bytes,
+                &mut max_bytes,
+                isolation_level,
+                topics,
+            )
+            .await?
         } else {
             vec![]
         });
@@ -288,6 +304,7 @@ where
             node_endpoints: Some([].into()),
             responses,
         })
+        .inspect(|r| debug!(?r))
     }
 }
 

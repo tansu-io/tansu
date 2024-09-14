@@ -13,6 +13,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+#[cfg_attr(feature = "nightly-features", feature(error_generic_member_access))]
 pub mod de;
 pub mod primitive;
 pub mod record;
@@ -24,6 +25,8 @@ use primitive::tagged::TagBuffer;
 use record::deflated::Frame as RecordBatch;
 pub use ser::Encoder;
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "nightly-features")]
+use std::backtrace::Backtrace;
 use std::{
     collections::HashMap,
     env::VarError,
@@ -34,7 +37,7 @@ use std::{
     time::{Duration, SystemTime, SystemTimeError},
 };
 use tansu_kafka_model::{MessageKind, MessageMeta};
-use tracing::debug;
+use tracing::{debug, warn};
 
 #[derive(Debug)]
 pub struct RootMessageMeta {
@@ -83,7 +86,7 @@ impl RootMessageMeta {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum Error {
     ApiError(ErrorCode),
     EnvVar(VarError),
@@ -99,7 +102,12 @@ pub enum Error {
     StringWithoutLength,
     SystemTime(SystemTimeError),
     TansuKafkaModel(tansu_kafka_model::Error),
-    TryFromInt(num::TryFromIntError),
+    TryFromInt {
+        #[from]
+        source: num::TryFromIntError,
+        #[cfg(feature = "nightly-features")]
+        backtrace: Backtrace,
+    },
     UnexpectedTaggedHeader(HeaderMezzanine),
     UnknownApiErrorCode(i16),
     UnknownCompressionType(i16),
@@ -116,8 +124,6 @@ impl Display for Error {
         }
     }
 }
-
-impl std::error::Error for Error {}
 
 impl serde::ser::Error for Error {
     fn custom<T: Display>(msg: T) -> Self {
@@ -146,12 +152,6 @@ impl From<str::Utf8Error> for Error {
 impl From<string::FromUtf8Error> for Error {
     fn from(value: string::FromUtf8Error) -> Self {
         Self::FromUtf8(value)
-    }
-}
-
-impl From<num::TryFromIntError> for Error {
-    fn from(value: num::TryFromIntError) -> Self {
-        Self::TryFromInt(value)
     }
 }
 
@@ -219,7 +219,12 @@ impl Frame {
         };
 
         frame.serialize(&mut serializer)?;
-        let size = i32::try_from(c.position()).map(|position| position - 4)?;
+        let size = i32::try_from(c.position())
+            .map(|position| position - 4)
+            .inspect_err(|err| {
+                let position = c.position();
+                warn!(?err, ?position, ?frame);
+            })?;
 
         c.set_position(0);
         let buf = size.to_be_bytes();

@@ -54,7 +54,7 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
 };
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 use url::Url;
 use uuid::Uuid;
 
@@ -165,7 +165,10 @@ where
         let mut size = [0u8; 4];
 
         loop {
-            _ = stream.read_exact(&mut size).await?;
+            _ = stream
+                .read_exact(&mut size)
+                .await
+                .inspect_err(|error| error!(?error))?;
 
             if i32::from_be_bytes(size) == 0 {
                 info!("empty read!");
@@ -174,13 +177,23 @@ where
 
             let mut request: Vec<u8> = vec![0u8; i32::from_be_bytes(size) as usize + size.len()];
             request[0..4].copy_from_slice(&size[..]);
-            _ = stream.read_exact(&mut request[4..]).await?;
+
+            _ = stream
+                .read_exact(&mut request[4..])
+                .await
+                .inspect_err(|error| error!(?size, ?request, ?error))?;
             debug!(?request);
 
-            let response = self.process_request(&request).await?;
+            let response = self
+                .process_request(&request)
+                .await
+                .inspect_err(|error| error!(?request, ?error))?;
             debug!(?response);
 
-            stream.write_all(&response).await?;
+            stream
+                .write_all(&response)
+                .await
+                .inspect_err(|error| error!(?request, ?response, ?error))?;
         }
     }
 
@@ -202,7 +215,7 @@ where
                 let body = self
                     .response_for(client_id.as_deref(), body, correlation_id)
                     .await
-                    .inspect_err(|err| warn!(?err))?;
+                    .inspect_err(|err| error!(?err))?;
                 debug!(?body, ?correlation_id);
                 Frame::response(
                     Header::Response { correlation_id },
@@ -210,6 +223,7 @@ where
                     api_key,
                     api_version,
                 )
+                .inspect_err(|err| error!(?err))
                 .map_err(Into::into)
             }
 
@@ -273,6 +287,8 @@ where
                 include_cluster_authorized_operations,
                 endpoint_type,
             } => {
+                error!(?include_cluster_authorized_operations, ?endpoint_type);
+
                 let state = self.applicator.with_current_state().await;
 
                 let describe_cluster = DescribeClusterRequest;
@@ -315,7 +331,8 @@ where
                         topics.as_deref(),
                     )
                     .await
-                    .inspect_err(|error| warn!(?error))
+                    .inspect(|r| debug!(?r))
+                    .inspect_err(|error| error!(?error))
             }
 
             Body::FindCoordinatorRequest {
@@ -417,6 +434,7 @@ where
             }
 
             Body::ListPartitionReassignmentsRequest { topics, .. } => {
+                error!(?topics);
                 let state = self.applicator.with_current_state().await;
                 let list_partition_reassignments = ListPartitionReassignmentsRequest;
                 Ok(list_partition_reassignments.response(topics.as_deref(), &state))

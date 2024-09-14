@@ -1637,6 +1637,7 @@ dependencies = [
  "snap",
  "syn 2.0.77",
  "tansu-kafka-model",
+ "thiserror",
  "tracing",
  "tracing-subscriber",
  "zstd",

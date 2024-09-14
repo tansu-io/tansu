@@ -110,9 +110,12 @@ struct Cli {
 #[tokio::main]
 async fn main() -> Result<()> {
     let filter = Targets::new()
-        .with_target("tansu_server", Level::DEBUG)
-        .with_target("tansu_storage", Level::DEBUG)
-        .with_target("tansu_raft", Level::DEBUG);
+        .with_target("tansu_server", Level::WARN)
+        // .with_target("tansu_server::broker::fetch", Level::DEBUG)
+        // .with_target("tansu_server::broker::list_offsets", Level::DEBUG)
+        .with_target("tansu_storage", Level::WARN)
+        .with_target("tansu_kafka_sans_io", Level::WARN)
+        .with_target("tansu_raft", Level::WARN);
 
     tracing_subscriber::registry()
         .with(
