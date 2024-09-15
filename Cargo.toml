@@ -53,7 +53,7 @@ futures = "0.3"
 getrandom = "0.2"
 glob = "0.3.1"
 lazy_static = "1.4.0"
-lz4 = "1.26.0"
+lz4 = "1.27.0"
 opentelemetry = { version = "0.21.0" }
 opentelemetry-jaeger = { version = "0.20.0", features = ["rt-tokio"] }
 opentelemetry_sdk = "0.21.2"
