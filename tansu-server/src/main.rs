@@ -209,11 +209,7 @@ async fn main() -> Result<()> {
         });
     }
 
-    loop {
-        if set.join_next().await.is_none() {
-            break;
-        }
-    }
+    _ = set.join_next().await;
 
     Ok(())
 }
