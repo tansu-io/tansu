@@ -26,6 +26,7 @@ use deadpool_postgres::{Manager, ManagerConfig, Object, Pool, RecyclingMethod};
 use rand::{prelude::*, thread_rng};
 use tansu_kafka_sans_io::{
     create_topics_request::CreatableTopic,
+    describe_cluster_response::DescribeClusterBroker,
     metadata_response::{MetadataResponseBroker, MetadataResponsePartition, MetadataResponseTopic},
     record::{deflated, inflated, Record},
     to_system_time, to_timestamp, ErrorCode,
@@ -219,6 +220,45 @@ impl Storage for Postgres {
         tx.commit().await?;
 
         Ok(())
+    }
+
+    async fn brokers(&self) -> Result<Vec<DescribeClusterBroker>> {
+        let c = self.connection().await?;
+
+        let prepared = c
+            .prepare(concat!(
+                "select",
+                " broker.id, host, port, rack",
+                " from broker, cluster, listener",
+                " where",
+                " cluster.name = $1",
+                ", listener.name = $2",
+                ", broker.cluster = cluster.id",
+                ", listener.broker = broker.id"
+            ))
+            .await?;
+
+        let mut brokers = vec![];
+
+        let rows = c
+            .query(&prepared, &[&self.cluster.as_str(), &"broker"])
+            .await?;
+
+        for row in rows {
+            let broker_id = row.try_get::<_, i32>(0)?;
+            let host = row.try_get::<_, String>(1)?;
+            let port = row.try_get::<_, i32>(2)?;
+            let rack = row.try_get::<_, Option<String>>(3)?;
+
+            brokers.push(DescribeClusterBroker {
+                broker_id,
+                host,
+                port,
+                rack,
+            });
+        }
+
+        Ok(brokers)
     }
 
     async fn create_topic(&self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {

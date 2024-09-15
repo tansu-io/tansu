@@ -267,6 +267,8 @@ where
                 client_software_name,
                 client_software_version,
             } => {
+                debug!(?client_software_name, ?client_software_version,);
+
                 let api_versions = ApiVersionsRequest;
                 Ok(api_versions.response(
                     client_software_name.as_deref(),
@@ -279,27 +281,24 @@ where
                 topics,
                 ..
             } => {
-                let create_topic = CreateTopic::with_storage(self.storage.clone());
-
-                Ok(create_topic
+                debug!(?validate_only, ?topics);
+                CreateTopic::with_storage(self.storage.clone())
                     .request(topics, validate_only.unwrap_or(false))
-                    .await)
+                    .await
             }
 
             Body::DescribeClusterRequest {
                 include_cluster_authorized_operations,
                 endpoint_type,
             } => {
-                error!(?include_cluster_authorized_operations, ?endpoint_type);
+                debug!(?include_cluster_authorized_operations, ?endpoint_type);
 
-                let state = self.applicator.with_current_state().await;
-
-                let describe_cluster = DescribeClusterRequest;
-                Ok(describe_cluster.response(
-                    include_cluster_authorized_operations,
-                    endpoint_type,
-                    &state,
-                ))
+                DescribeClusterRequest {
+                    cluster_id: self.cluster_id.clone(),
+                    storage: self.storage.clone(),
+                }
+                .response(include_cluster_authorized_operations, endpoint_type)
+                .await
             }
 
             Body::DescribeConfigsRequest {
@@ -307,6 +306,8 @@ where
                 include_synonyms,
                 include_documentation,
             } => {
+                debug!(?resources, ?include_synonyms, ?include_documentation,);
+
                 let describe_configs = DescribeConfigsRequest;
                 Ok(describe_configs.response(
                     resources.as_deref(),
@@ -323,9 +324,15 @@ where
                 topics,
                 ..
             } => {
-                let storage = self.storage.clone();
-                let mut fetch = FetchRequest::with_storage(storage);
-                fetch
+                debug!(
+                    ?max_wait_ms,
+                    ?min_bytes,
+                    ?max_bytes,
+                    ?isolation_level,
+                    ?topics,
+                );
+
+                FetchRequest::with_storage(self.storage.clone())
                     .response(
                         max_wait_ms,
                         min_bytes,
@@ -343,6 +350,8 @@ where
                 key_type,
                 coordinator_keys,
             } => {
+                debug!(?key, ?key_type, ?coordinator_keys);
+
                 let find_coordinator = FindCoordinatorRequest;
 
                 Ok(find_coordinator.response(
@@ -355,6 +364,7 @@ where
             }
 
             Body::GetTelemetrySubscriptionsRequest { client_instance_id } => {
+                debug!(?client_instance_id);
                 let get_telemetry_subscriptions = GetTelemetrySubscriptionsRequest;
                 Ok(get_telemetry_subscriptions.response(client_instance_id))
             }
@@ -365,6 +375,8 @@ where
                 member_id,
                 group_instance_id,
             } => {
+                debug!(?group_id, ?generation_id, ?member_id, ?group_instance_id,);
+
                 self.groups
                     .heartbeat(
                         &group_id,
@@ -381,6 +393,13 @@ where
                 producer_id,
                 producer_epoch,
             } => {
+                debug!(
+                    ?transactional_id,
+                    ?transaction_timeout_ms,
+                    ?producer_id,
+                    ?producer_epoch,
+                );
+
                 let init_producer_id = InitProducerIdRequest;
                 Ok(init_producer_id.response(
                     transactional_id.as_deref(),
@@ -400,6 +419,17 @@ where
                 protocols,
                 reason,
             } => {
+                debug!(
+                    ?group_id,
+                    ?session_timeout_ms,
+                    ?rebalance_timeout_ms,
+                    ?member_id,
+                    ?group_instance_id,
+                    ?protocol_type,
+                    ?protocols,
+                    ?reason,
+                );
+
                 self.groups
                     .join(
                         client_id,
@@ -420,6 +450,8 @@ where
                 member_id,
                 members,
             } => {
+                debug!(?group_id, ?member_id, ?members);
+
                 self.groups
                     .leave(&group_id, member_id.as_deref(), members.as_deref())
                     .await
@@ -430,22 +462,26 @@ where
                 isolation_level,
                 topics,
             } => {
-                let list_offsets = ListOffsetsRequest::with_storage(self.storage.clone());
-                list_offsets
+                debug!(?replica_id, ?isolation_level, ?topics);
+
+                ListOffsetsRequest::with_storage(self.storage.clone())
                     .response(replica_id, isolation_level, topics.as_deref())
                     .await
             }
 
             Body::ListPartitionReassignmentsRequest { topics, .. } => {
-                error!(?topics);
-                let state = self.applicator.with_current_state().await;
-                let list_partition_reassignments = ListPartitionReassignmentsRequest;
-                Ok(list_partition_reassignments.response(topics.as_deref(), &state))
+                debug!(?topics);
+
+                ListPartitionReassignmentsRequest::with_storage(self.storage.clone())
+                    .response(topics.as_deref())
+                    .await
             }
 
             Body::MetadataRequest { topics, .. } => {
-                let request = MetadataRequest::with_storage(self.storage.clone());
-                request.response(topics).await
+                debug!(?topics);
+                MetadataRequest::with_storage(self.storage.clone())
+                    .response(topics)
+                    .await
             }
 
             Body::OffsetCommitRequest {
@@ -456,6 +492,15 @@ where
                 retention_time_ms,
                 topics,
             } => {
+                debug!(
+                    ?group_id,
+                    ?generation_id_or_member_epoch,
+                    ?member_id,
+                    ?group_instance_id,
+                    ?retention_time_ms,
+                    ?topics
+                );
+
                 let detail = OffsetCommit {
                     group_id: group_id.as_str(),
                     generation_id_or_member_epoch,
@@ -474,6 +519,7 @@ where
                 groups,
                 require_stable,
             } => {
+                debug!(?group_id, ?topics, ?groups, ?require_stable);
                 self.groups
                     .offset_fetch(
                         group_id.as_deref(),
@@ -490,11 +536,10 @@ where
                 timeout_ms,
                 topic_data,
             } => {
-                let storage = self.storage.clone();
-                let request = ProduceRequest::with_storage(storage);
-                Ok(request
+                debug!(?transactional_id, ?acks, ?timeout_ms, ?topic_data);
+                ProduceRequest::with_storage(self.storage.clone())
                     .response(transactional_id, acks, timeout_ms, topic_data)
-                    .await)
+                    .await
             }
 
             Body::SyncGroupRequest {

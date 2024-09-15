@@ -30,7 +30,7 @@ use tracing::{debug, error};
 
 use crate::Result;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct FetchRequest<S> {
     storage: S,
 }

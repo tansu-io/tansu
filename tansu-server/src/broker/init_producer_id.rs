@@ -15,10 +15,11 @@
 
 use tansu_kafka_sans_io::{Body, ErrorCode};
 
-pub(crate) struct InitProducerIdRequest;
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct InitProducerIdRequest;
 
 impl InitProducerIdRequest {
-    pub(crate) fn response(
+    pub fn response(
         &self,
         transactional_id: Option<&str>,
         transaction_timeout_ms: i32,

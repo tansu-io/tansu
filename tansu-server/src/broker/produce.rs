@@ -13,6 +13,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+use crate::Result;
 use tansu_kafka_sans_io::{
     produce_request::{PartitionProduceData, TopicProduceData},
     produce_response::{PartitionProduceResponse, TopicProduceResponse},
@@ -21,7 +22,7 @@ use tansu_kafka_sans_io::{
 use tansu_storage::{Storage, Topition};
 use tracing::debug;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ProduceRequest<S> {
     storage: S,
 }
@@ -99,7 +100,7 @@ where
         _acks: i16,
         _timeout_ms: i32,
         topic_data: Option<Vec<TopicProduceData>>,
-    ) -> Body {
+    ) -> Result<Body> {
         let mut responses =
             Vec::with_capacity(topic_data.as_ref().map_or(0, |topic_data| topic_data.len()));
 
@@ -111,10 +112,10 @@ where
             }
         }
 
-        Body::ProduceResponse {
+        Ok(Body::ProduceResponse {
             responses: Some(responses),
             throttle_time_ms: Some(0),
             node_endpoints: None,
-        }
+        })
     }
 }

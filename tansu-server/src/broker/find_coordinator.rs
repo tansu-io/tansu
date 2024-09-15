@@ -16,10 +16,11 @@
 use tansu_kafka_sans_io::{find_coordinator_response::Coordinator, Body, ErrorCode};
 use url::Url;
 
-pub(crate) struct FindCoordinatorRequest;
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct FindCoordinatorRequest;
 
 impl FindCoordinatorRequest {
-    pub(crate) fn response(
+    pub fn response(
         &self,
         key: Option<&str>,
         key_type: Option<i8>,

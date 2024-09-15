@@ -13,6 +13,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+use crate::Result;
 use tansu_kafka_sans_io::{
     create_topics_request::CreatableTopic, create_topics_response::CreatableTopicResult, Body,
     ErrorCode,
@@ -92,7 +93,7 @@ where
         &self,
         creatable: Option<Vec<CreatableTopic>>,
         validate_only: bool,
-    ) -> Body {
+    ) -> Result<Body> {
         debug!(?creatable, ?validate_only);
 
         let mut topics =
@@ -104,9 +105,9 @@ where
             }
         }
 
-        Body::CreateTopicsResponse {
+        Ok(Body::CreateTopicsResponse {
             throttle_time_ms: Some(0),
             topics: Some(topics),
-        }
+        })
     }
 }

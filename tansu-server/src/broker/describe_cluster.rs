@@ -13,61 +13,38 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use tansu_kafka_sans_io::{
-    broker_registration_request::Listener, describe_cluster_response::DescribeClusterBroker, Body,
-    ErrorCode,
-};
+use crate::Result;
+use tansu_kafka_sans_io::{Body, ErrorCode};
+use tansu_storage::Storage;
 
-use crate::State;
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct DescribeClusterRequest<S> {
+    pub cluster_id: String,
+    pub storage: S,
+}
 
-pub(crate) struct DescribeClusterRequest;
-
-impl DescribeClusterRequest {
-    pub(crate) fn response(
+impl<S> DescribeClusterRequest<S>
+where
+    S: Storage,
+{
+    pub async fn response(
         &self,
         include_cluster_authorized_operations: bool,
         endpoint_type: Option<i8>,
-        state: &State,
-    ) -> Body {
+    ) -> Result<Body> {
         let _ = include_cluster_authorized_operations;
-        let _ = endpoint_type;
 
-        Body::DescribeClusterResponse {
+        let brokers = self.storage.brokers().await?;
+
+        Ok(Body::DescribeClusterResponse {
             throttle_time_ms: 0,
             error_code: ErrorCode::None.into(),
             error_message: None,
-            endpoint_type: Some(1),
-            cluster_id: state.cluster_id.clone().unwrap_or(String::from("")),
+            endpoint_type,
+            cluster_id: self.cluster_id.clone(),
             controller_id: -1,
-            brokers: Some(
-                state
-                    .brokers
-                    .iter()
-                    .map(|(broker_id, broker)| {
-                        let listener = broker
-                            .listeners
-                            .as_ref()
-                            .unwrap_or(&vec![])
-                            .iter()
-                            .find(|&listener| listener.name == "broker")
-                            .cloned()
-                            .unwrap_or(Listener {
-                                name: "broker".into(),
-                                host: "localhost".into(),
-                                port: 9092,
-                                security_protocol: 0,
-                            });
-
-                        DescribeClusterBroker {
-                            broker_id: *broker_id,
-                            host: listener.host,
-                            port: listener.port as i32,
-                            rack: broker.rack.clone(),
-                        }
-                    })
-                    .collect(),
-            ),
+            brokers: Some(brokers),
             cluster_authorized_operations: -2_147_483_648,
-        }
+        })
     }
 }
