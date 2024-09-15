@@ -21,6 +21,12 @@ work-dir:
 docker-build:
     docker build --tag ghcr.io/tansu-io/tansu --no-cache --progress plain .
 
+docker-compose-db-up:
+    docker compose up --detach db
+
+docker-compose-db-down:
+    docker compose down --volumes db
+
 docker-compose-up:
     docker compose up --detach
 
@@ -62,7 +68,7 @@ test-topic-consume:
     kafka-console-consumer --consumer.config /usr/local/etc/kafka/consumer.properties --bootstrap-server localhost:9092 --topic test --from-beginning --property print.timestamp=true --property print.key=true --property print.offset=true --property print.partition=true --property print.headers=true --property print.value=true
 
 tansu-1:
-    RUST_BACKTRACE=1 ./target/debug/tansu-server \
+    RUST_BACKTRACE=1 RUST_LOG=warn,tansu_server=debug ./target/debug/tansu-server \
         --kafka-cluster-id RvQwrYegSUCkIPkaiAZQlQ \
         --kafka-listener-url tcp://127.0.0.1:9092/ \
         --kafka-node-id 4343 \

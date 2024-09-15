@@ -141,7 +141,7 @@ where
 
         loop {
             let (stream, addr) = listener.accept().await?;
-            info!(?addr);
+            debug!(?addr);
 
             let mut broker = self.clone();
 
@@ -170,7 +170,13 @@ where
             _ = stream
                 .read_exact(&mut size)
                 .await
-                .inspect_err(|error| error!(?error))?;
+                .inspect_err(|error| match error.kind() {
+                    ErrorKind::UnexpectedEof => {
+                        info!(?error);
+                    }
+
+                    _ => error!(?error),
+                })?;
 
             if i32::from_be_bytes(size) == 0 {
                 info!("empty read!");

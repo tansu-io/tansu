@@ -116,6 +116,7 @@ impl Postgres {
     pub fn builder(
         connection: &str,
     ) -> Result<Builder<PhantomData<String>, PhantomData<i32>, Pool>> {
+        debug!(connection);
         Builder::from_str(connection)
     }
 

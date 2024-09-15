@@ -23,6 +23,7 @@ services:
     restart: unless-stopped
     environment:
       RUST_BACKTRACE: full
+      RUST_LOG: warn,tansu_server=debug
     command:
       --kafka-cluster-id RvQwrYegSUCkIPkaiAZQlQ
       --kafka-listener-url tcp://127.0.0.1:9092/

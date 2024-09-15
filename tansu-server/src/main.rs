@@ -15,7 +15,6 @@
 
 use std::{
     collections::BTreeSet,
-    fs::File,
     path::PathBuf,
     str::FromStr,
     sync::{Arc, Mutex},
@@ -38,8 +37,8 @@ use tansu_storage::{
     segment::{self, FileSystemSegmentProvider, SegmentProvider},
 };
 use tokio::task::JoinSet;
-use tracing::{debug, Level};
-use tracing_subscriber::{filter::Targets, fmt::format::FmtSpan, prelude::*};
+use tracing::debug;
+use tracing_subscriber::{fmt::format::FmtSpan, prelude::*, EnvFilter};
 use url::Url;
 
 #[derive(Clone, Debug)]
@@ -111,26 +110,15 @@ struct Cli {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let filter = Targets::new()
-        .with_target("tansu_server", Level::WARN)
-        // .with_target("tansu_server::broker::fetch", Level::DEBUG)
-        // .with_target("tansu_server::broker::list_offsets", Level::DEBUG)
-        .with_target("tansu_storage", Level::WARN)
-        .with_target("tansu_kafka_sans_io", Level::WARN)
-        .with_target("tansu_raft", Level::WARN);
-
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::fmt::layer()
                 .with_level(true)
                 .with_line_number(true)
                 .with_thread_ids(true)
-                .with_span_events(FmtSpan::ACTIVE)
-                .with_writer(
-                    File::create(format!("{}.log", env!("CARGO_PKG_NAME"))).map(Arc::new)?,
-                ),
+                .with_span_events(FmtSpan::ACTIVE),
         )
-        .with(filter)
+        .with(EnvFilter::from_default_env())
         .init();
 
     let args = Cli::parse();
