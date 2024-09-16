@@ -14,6 +14,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 pub mod api_versions;
+pub mod create_topic;
 pub mod describe_cluster;
 pub mod describe_configs;
 pub mod fetch;
@@ -28,32 +29,26 @@ pub mod telemetry;
 
 use crate::{
     command::{Command, Request},
-    coordinator::group::Coordinator,
+    coordinator::group::{Coordinator, OffsetCommit},
     raft::Applicator,
     Error, Result,
 };
 use api_versions::ApiVersionsRequest;
 use bytes::Bytes;
+use create_topic::CreateTopic;
 use describe_cluster::DescribeClusterRequest;
 use describe_configs::DescribeConfigsRequest;
 use fetch::FetchRequest;
 use find_coordinator::FindCoordinatorRequest;
-use group::{
-    heartbeat::HeartbeatRequest, join::JoinRequest, leave::LeaveRequest,
-    offset_commit::OffsetCommitRequest, offset_fetch::OffsetFetchRequest, sync::SyncGroupRequest,
-};
 use init_producer_id::InitProducerIdRequest;
 use list_offsets::ListOffsetsRequest;
 use list_partition_reassignments::ListPartitionReassignmentsRequest;
 use metadata::MetadataRequest;
 use produce::ProduceRequest;
-use std::{
-    io::ErrorKind,
-    sync::{Arc, Mutex, MutexGuard},
-};
-use tansu_kafka_sans_io::{Body, Frame, Header};
+use std::io::ErrorKind;
+use tansu_kafka_sans_io::{broker_registration_request::Listener, Body, Frame, Header};
 use tansu_raft::{Log, Raft};
-use tansu_storage::Storage;
+use tansu_storage::{BrokerRegistationRequest, Storage};
 use telemetry::GetTelemetrySubscriptionsRequest;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -64,19 +59,25 @@ use url::Url;
 use uuid::Uuid;
 
 #[derive(Clone, Debug)]
-pub struct Broker {
+pub struct Broker<G, S> {
     node_id: i32,
     cluster_id: String,
     incarnation_id: Uuid,
+    #[allow(dead_code)]
     context: Raft,
     applicator: Applicator,
     listener: Url,
+    #[allow(dead_code)]
     rack: Option<String>,
-    storage: Arc<Mutex<Storage>>,
-    groups: Arc<Mutex<Box<dyn Coordinator>>>,
+    storage: S,
+    groups: G,
 }
 
-impl Broker {
+impl<G, S> Broker<G, S>
+where
+    G: Coordinator,
+    S: Storage + Clone + 'static,
+{
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         node_id: i32,
@@ -85,8 +86,8 @@ impl Broker {
         applicator: Applicator,
         listener: Url,
         rack: Option<String>,
-        storage: Arc<Mutex<Storage>>,
-        groups: Arc<Mutex<Box<dyn Coordinator>>>,
+        storage: S,
+        groups: G,
     ) -> Self {
         let incarnation_id = Uuid::new_v4();
 
@@ -103,35 +104,29 @@ impl Broker {
         }
     }
 
-    pub(crate) fn storage_lock(&self) -> Result<MutexGuard<'_, Storage>> {
-        self.storage.lock().map_err(|error| error.into())
-    }
-
     pub async fn serve(&mut self) -> Result<()> {
-        _ = self.register().await?;
+        self.register().await?;
         self.listen().await
     }
 
-    pub async fn register(&mut self) -> Result<Body> {
-        use tansu_kafka_sans_io::broker_registration_request::Listener;
-
-        self.when_applied(Body::BrokerRegistrationRequest {
-            broker_id: self.node_id,
-            cluster_id: self.cluster_id.clone(),
-            incarnation_id: *self.incarnation_id.as_bytes(),
-            listeners: Some(vec![Listener {
-                name: "broker".into(),
-                host: self.listener.host_str().unwrap_or("localhost").to_owned(),
-                port: self.listener.port().unwrap_or(9092),
-                security_protocol: 0,
-            }]),
-            features: Some(vec![]),
-            rack: self.rack.clone(),
-            is_migrating_zk_broker: Some(false),
-            log_dirs: Some(vec![]),
-            previous_broker_epoch: Some(-1),
-        })
-        .await
+    pub async fn register(&mut self) -> Result<()> {
+        self.storage
+            .register_broker(BrokerRegistationRequest {
+                broker_id: self.node_id,
+                cluster_id: self.cluster_id.clone(),
+                incarnation_id: self.incarnation_id,
+                listeners: [Listener {
+                    name: "broker".into(),
+                    host: self.listener.host_str().unwrap_or("localhost").to_owned(),
+                    port: self.listener.port().unwrap_or(9092),
+                    security_protocol: 0,
+                }]
+                .into(),
+                features: [].into(),
+                rack: None,
+            })
+            .await
+            .map_err(Into::into)
     }
 
     pub async fn listen(&self) -> Result<()> {
@@ -139,14 +134,14 @@ impl Broker {
 
         let listener = TcpListener::bind(format!(
             "{}:{}",
-            self.listener.host_str().unwrap_or("localhost"),
+            self.listener.host_str().unwrap_or("0.0.0.0"),
             self.listener.port().unwrap_or(9092)
         ))
         .await?;
 
         loop {
             let (stream, addr) = listener.accept().await?;
-            info!(?addr);
+            debug!(?addr);
 
             let mut broker = self.clone();
 
@@ -172,7 +167,16 @@ impl Broker {
         let mut size = [0u8; 4];
 
         loop {
-            _ = stream.read_exact(&mut size).await?;
+            _ = stream
+                .read_exact(&mut size)
+                .await
+                .inspect_err(|error| match error.kind() {
+                    ErrorKind::UnexpectedEof => {
+                        info!(?error);
+                    }
+
+                    _ => error!(?error),
+                })?;
 
             if i32::from_be_bytes(size) == 0 {
                 info!("empty read!");
@@ -181,13 +185,23 @@ impl Broker {
 
             let mut request: Vec<u8> = vec![0u8; i32::from_be_bytes(size) as usize + size.len()];
             request[0..4].copy_from_slice(&size[..]);
-            _ = stream.read_exact(&mut request[4..]).await?;
+
+            _ = stream
+                .read_exact(&mut request[4..])
+                .await
+                .inspect_err(|error| error!(?size, ?request, ?error))?;
             debug!(?request);
 
-            let response = self.process_request(&request).await?;
+            let response = self
+                .process_request(&request)
+                .await
+                .inspect_err(|error| error!(?request, ?error))?;
             debug!(?response);
 
-            stream.write_all(&response).await?;
+            stream
+                .write_all(&response)
+                .await
+                .inspect_err(|error| error!(?request, ?response, ?error))?;
         }
     }
 
@@ -208,7 +222,8 @@ impl Broker {
                 debug!(?api_key, ?api_version, ?correlation_id);
                 let body = self
                     .response_for(client_id.as_deref(), body, correlation_id)
-                    .await?;
+                    .await
+                    .inspect_err(|err| error!(?err))?;
                 debug!(?body, ?correlation_id);
                 Frame::response(
                     Header::Response { correlation_id },
@@ -216,6 +231,7 @@ impl Broker {
                     api_key,
                     api_version,
                 )
+                .inspect_err(|err| error!(?err))
                 .map_err(Into::into)
             }
 
@@ -223,6 +239,7 @@ impl Broker {
         }
     }
 
+    #[allow(dead_code)]
     async fn when_applied(&mut self, body: Body) -> Result<Body> {
         debug!(?self, ?body);
 
@@ -256,6 +273,8 @@ impl Broker {
                 client_software_name,
                 client_software_version,
             } => {
+                debug!(?client_software_name, ?client_software_version,);
+
                 let api_versions = ApiVersionsRequest;
                 Ok(api_versions.response(
                     client_software_name.as_deref(),
@@ -264,22 +283,28 @@ impl Broker {
             }
 
             Body::CreateTopicsRequest {
-                validate_only: Some(false),
+                validate_only,
+                topics,
                 ..
-            } => self.when_applied(body).await,
+            } => {
+                debug!(?validate_only, ?topics);
+                CreateTopic::with_storage(self.storage.clone())
+                    .request(topics, validate_only.unwrap_or(false))
+                    .await
+            }
 
             Body::DescribeClusterRequest {
                 include_cluster_authorized_operations,
                 endpoint_type,
             } => {
-                let state = self.applicator.with_current_state().await;
+                debug!(?include_cluster_authorized_operations, ?endpoint_type);
 
-                let describe_cluster = DescribeClusterRequest;
-                Ok(describe_cluster.response(
-                    include_cluster_authorized_operations,
-                    endpoint_type,
-                    &state,
-                ))
+                DescribeClusterRequest {
+                    cluster_id: self.cluster_id.clone(),
+                    storage: self.storage.clone(),
+                }
+                .response(include_cluster_authorized_operations, endpoint_type)
+                .await
             }
 
             Body::DescribeConfigsRequest {
@@ -287,6 +312,8 @@ impl Broker {
                 include_synonyms,
                 include_documentation,
             } => {
+                debug!(?resources, ?include_synonyms, ?include_documentation,);
+
                 let describe_configs = DescribeConfigsRequest;
                 Ok(describe_configs.response(
                     resources.as_deref(),
@@ -303,19 +330,25 @@ impl Broker {
                 topics,
                 ..
             } => {
-                let storage = self.storage.clone();
-                let mut fetch = FetchRequest { storage };
-                let state = self.applicator.with_current_state().await;
-                fetch
+                debug!(
+                    ?max_wait_ms,
+                    ?min_bytes,
+                    ?max_bytes,
+                    ?isolation_level,
+                    ?topics,
+                );
+
+                FetchRequest::with_storage(self.storage.clone())
                     .response(
                         max_wait_ms,
                         min_bytes,
                         max_bytes,
                         isolation_level,
                         topics.as_deref(),
-                        &state,
                     )
                     .await
+                    .inspect(|r| debug!(?r))
+                    .inspect_err(|error| error!(?error))
             }
 
             Body::FindCoordinatorRequest {
@@ -323,6 +356,8 @@ impl Broker {
                 key_type,
                 coordinator_keys,
             } => {
+                debug!(?key, ?key_type, ?coordinator_keys);
+
                 let find_coordinator = FindCoordinatorRequest;
 
                 Ok(find_coordinator.response(
@@ -335,6 +370,7 @@ impl Broker {
             }
 
             Body::GetTelemetrySubscriptionsRequest { client_instance_id } => {
+                debug!(?client_instance_id);
                 let get_telemetry_subscriptions = GetTelemetrySubscriptionsRequest;
                 Ok(get_telemetry_subscriptions.response(client_instance_id))
             }
@@ -345,16 +381,16 @@ impl Broker {
                 member_id,
                 group_instance_id,
             } => {
-                let heartbeat = HeartbeatRequest {
-                    groups: self.groups.clone(),
-                };
+                debug!(?group_id, ?generation_id, ?member_id, ?group_instance_id,);
 
-                heartbeat.response(
-                    &group_id,
-                    generation_id,
-                    &member_id,
-                    group_instance_id.as_deref(),
-                )
+                self.groups
+                    .heartbeat(
+                        &group_id,
+                        generation_id,
+                        &member_id,
+                        group_instance_id.as_deref(),
+                    )
+                    .await
             }
 
             Body::InitProducerIdRequest {
@@ -363,6 +399,13 @@ impl Broker {
                 producer_id,
                 producer_epoch,
             } => {
+                debug!(
+                    ?transactional_id,
+                    ?transaction_timeout_ms,
+                    ?producer_id,
+                    ?producer_epoch,
+                );
+
                 let init_producer_id = InitProducerIdRequest;
                 Ok(init_producer_id.response(
                     transactional_id.as_deref(),
@@ -382,21 +425,30 @@ impl Broker {
                 protocols,
                 reason,
             } => {
-                let join = JoinRequest {
-                    groups: self.groups.clone(),
-                };
+                debug!(
+                    ?group_id,
+                    ?session_timeout_ms,
+                    ?rebalance_timeout_ms,
+                    ?member_id,
+                    ?group_instance_id,
+                    ?protocol_type,
+                    ?protocols,
+                    ?reason,
+                );
 
-                join.response(
-                    client_id,
-                    &group_id,
-                    session_timeout_ms,
-                    rebalance_timeout_ms,
-                    &member_id,
-                    group_instance_id.as_deref(),
-                    &protocol_type,
-                    protocols.as_deref(),
-                    reason.as_deref(),
-                )
+                self.groups
+                    .join(
+                        client_id,
+                        &group_id,
+                        session_timeout_ms,
+                        rebalance_timeout_ms,
+                        &member_id,
+                        group_instance_id.as_deref(),
+                        &protocol_type,
+                        protocols.as_deref(),
+                        reason.as_deref(),
+                    )
+                    .await
             }
 
             Body::LeaveGroupRequest {
@@ -404,11 +456,11 @@ impl Broker {
                 member_id,
                 members,
             } => {
-                let leave = LeaveRequest {
-                    groups: self.groups.clone(),
-                };
+                debug!(?group_id, ?member_id, ?members);
 
-                leave.response(&group_id, member_id.as_deref(), members.as_deref())
+                self.groups
+                    .leave(&group_id, member_id.as_deref(), members.as_deref())
+                    .await
             }
 
             Body::ListOffsetsRequest {
@@ -416,25 +468,26 @@ impl Broker {
                 isolation_level,
                 topics,
             } => {
-                let state = self.applicator.with_current_state().await;
-                let list_offsets = ListOffsetsRequest;
-                Ok(list_offsets.response(replica_id, isolation_level, topics.as_deref(), &state))
+                debug!(?replica_id, ?isolation_level, ?topics);
+
+                ListOffsetsRequest::with_storage(self.storage.clone())
+                    .response(replica_id, isolation_level, topics.as_deref())
+                    .await
             }
 
             Body::ListPartitionReassignmentsRequest { topics, .. } => {
-                let state = self.applicator.with_current_state().await;
-                let list_partition_reassignments = ListPartitionReassignmentsRequest;
-                Ok(list_partition_reassignments.response(topics.as_deref(), &state))
+                debug!(?topics);
+
+                ListPartitionReassignmentsRequest::with_storage(self.storage.clone())
+                    .response(topics.as_deref())
+                    .await
             }
 
             Body::MetadataRequest { topics, .. } => {
-                let controller_id = Some(self.node_id);
-                let state = self.applicator.with_current_state().await;
-
-                let topics = topics.as_deref();
-
-                let request = MetadataRequest;
-                Ok(request.response(controller_id, topics, &state))
+                debug!(?topics);
+                MetadataRequest::with_storage(self.storage.clone())
+                    .response(topics)
+                    .await
             }
 
             Body::OffsetCommitRequest {
@@ -445,18 +498,25 @@ impl Broker {
                 retention_time_ms,
                 topics,
             } => {
-                let offset_commit = OffsetCommitRequest {
-                    groups: self.groups.clone(),
+                debug!(
+                    ?group_id,
+                    ?generation_id_or_member_epoch,
+                    ?member_id,
+                    ?group_instance_id,
+                    ?retention_time_ms,
+                    ?topics
+                );
+
+                let detail = OffsetCommit {
+                    group_id: group_id.as_str(),
+                    generation_id_or_member_epoch,
+                    member_id: member_id.as_deref(),
+                    group_instance_id: group_instance_id.as_deref(),
+                    retention_time_ms,
+                    topics: topics.as_deref(),
                 };
 
-                offset_commit.response(
-                    &group_id,
-                    generation_id_or_member_epoch,
-                    member_id.as_deref(),
-                    group_instance_id.as_deref(),
-                    retention_time_ms,
-                    topics.as_deref(),
-                )
+                self.groups.offset_commit(detail).await
             }
 
             Body::OffsetFetchRequest {
@@ -465,16 +525,15 @@ impl Broker {
                 groups,
                 require_stable,
             } => {
-                let offset_fetch = OffsetFetchRequest {
-                    groups: self.groups.clone(),
-                };
-
-                offset_fetch.response(
-                    group_id.as_deref(),
-                    topics.as_deref(),
-                    groups.as_deref(),
-                    require_stable,
-                )
+                debug!(?group_id, ?topics, ?groups, ?require_stable);
+                self.groups
+                    .offset_fetch(
+                        group_id.as_deref(),
+                        topics.as_deref(),
+                        groups.as_deref(),
+                        require_stable,
+                    )
+                    .await
             }
 
             Body::ProduceRequest {
@@ -483,18 +542,10 @@ impl Broker {
                 timeout_ms,
                 topic_data,
             } => {
-                let state = self.applicator.with_current_state().await;
-
-                self.storage_lock().map(|mut manager| {
-                    ProduceRequest::response(
-                        transactional_id,
-                        acks,
-                        timeout_ms,
-                        topic_data,
-                        &mut manager,
-                        &state,
-                    )
-                })
+                debug!(?transactional_id, ?acks, ?timeout_ms, ?topic_data);
+                ProduceRequest::with_storage(self.storage.clone())
+                    .response(transactional_id, acks, timeout_ms, topic_data)
+                    .await
             }
 
             Body::SyncGroupRequest {
@@ -506,19 +557,17 @@ impl Broker {
                 protocol_name,
                 assignments,
             } => {
-                let sync_group = SyncGroupRequest {
-                    groups: self.groups.clone(),
-                };
-
-                sync_group.response(
-                    &group_id,
-                    generation_id,
-                    &member_id,
-                    group_instance_id.as_deref(),
-                    protocol_type.as_deref(),
-                    protocol_name.as_deref(),
-                    assignments.as_deref(),
-                )
+                self.groups
+                    .sync(
+                        &group_id,
+                        generation_id,
+                        &member_id,
+                        group_instance_id.as_deref(),
+                        protocol_type.as_deref(),
+                        protocol_name.as_deref(),
+                        assignments.as_deref(),
+                    )
+                    .await
             }
 
             _ => unimplemented!(),

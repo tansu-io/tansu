@@ -1,63 +1,146 @@
 # Tansu
 
-Tansu is an Apache Kafka API compatible server written in 🦀 Rust, licensed under the GNU AGPL.
+[Tansu][github-com-tansu-io] is an Apache Kafka API compatible broker
+with a Postgres storage engine. Acting as a drop in replacement,
+existing clients connect to Tansu, producing and fetching messages
+stored in Postgres.  Tansu is in **early** development, licensed under
+the [GNU AGPL][agpl-license]. Written in async 🦀
+[Rust][rust-lang-org] 🚀.
 
-> [!CAUTION]
->
-> This project is still in early development.
-> Expect breaking changes and bugs, and please report any issues you encounter.
-> Thank you!
+While retaining API compatibility, the current storage engine
+implemented for Postgres is very different when compared to Apache
+Kafka:
 
----
+- Messages are not stored in segments, so that retention and
+  compaction polices can be applied immediately.
+- Message ordering is total over all topics and not restricted to a
+  single topic partition.
+- Brokers do not replicate messages, relying on [continous
+  archiving][continuous-archiving] instead.
+  
+Our initial use cases are relatively low volume Kafka deployments
+where total message ordering could be useful. Other non-functional
+requirements might require a different storage engine. Tansu has been
+designed to work with multiple storage engines which are also in
+development:
 
-## Quick start
+- A Postgres engine where message ordering is either per topic,
+  or per topic partition (as in Kafka).
+- An object store for S3 or compatible services.
+- A segmented disk store (as in Kafka with broker replication).
 
-Assuming that you have Apache Kafka command line tools and [just](https://github.com/casey/just) installed
-for the following, while in the root of the repository:
+We store a Kafka message using the following `record` schema:
 
-Start a Tansu server that will listen for connections on 127.0.0.1:9092:
-
-```shell
-just tansu-1
+```sql
+create table record (
+  id bigserial primary key not null,
+  topic uuid references topic(id),
+  partition integer,
+  producer_id bigint,
+  sequence integer,
+  timestamp timestamp,
+  k bytea,
+  v bytea,
+  last_updated timestamp default current_timestamp not null,
+  created_at timestamp default current_timestamp not null
+);
 ```
 
-In another shell:
+The `k` and `v` are the key and value being stored by the client, with
+the SQL being used for a fetch looks like:
 
-```shell
-just test-topic-create
+```sql
+with sized as (
+ select
+ record.id,
+ timestamp,
+ k,
+ v,
+ sum(coalesce(length(k), 0) + coalesce(length(v), 0)),
+ over (order by record.id) as bytes
+ from cluster, record, topic
+ where
+ cluster.name = $1
+ and topic.name = $2
+ and record.partition = $3
+ and record.id >= $4
+ and topic.cluster = cluster.id
+ and record.topic = topic.id
+) select * from sized where bytes < $5;
 ```
 
-The above will use `kafka-topics` to create a test topic by connecting to 127.0.0.1:9092.
-Output should look like:
+One of the parameters for the [Kafka Fetch API][kafka-fetch] is the
+maximum number of bytes being returned. We use a [with
+query][with-queries] here to restrict the size of the result set being
+returned, with a running total of the size.
+
+Tansu is available as a [minimal from scratch][docker-from-scratch]
+docker image. With a `compose.yaml`, available from [here][compose]:
 
 ```shell
-kafka-topics --bootstrap-server 127.0.0.1:9092 --config cleanup.policy=compact --partitions=1 --replication-factor=1 --create --topic test
-Created topic test.
+docker compose up
 ```
-To produce some data onto the test topic:
+
+Using the regular Apache Kafka CLI you can create topics, produce and consume
+messages with Tansu:
 
 ```shell
-just test-topic-produce
+kafka-topics \
+  --bootstrap-server localhost:9092 \
+  --partitions=3 \
+  --replication-factor=1 \
+  --create --topic test
 ```
 
-Output will look like:
+Producer:
 
 ```shell
-echo "h1:pqr,h2:jkl,h3:uio  qwerty  poiuy" | kafka-console-producer --bootstrap-server localhost:9092 --topic test --property parse.headers=true --property parse.key=true
->>
+echo "hello world" | kafka-console-producer \
+    --bootstrap-server localhost:9092 \
+    --topic test
 ```
 
-The above produces a record with 3 headers (h1 -> pqr, h2 -> jkl, h3 -> uio) with a key of "qwerty" and value of "poiuy".
-
-To consume the data:
+Consumer:
 
 ```shell
-just test-topic-consume
+kafka-console-consumer \
+  --bootstrap-server localhost:9092 \
+  --topic test \
+  --from-beginning \
+  --property print.timestamp=true \
+  --property print.key=true \
+  --property print.offset=true \
+  --property print.partition=true \
+  --property print.headers=true \
+  --property print.value=true
 ```
 
-Output should look like:
+Or using [librdkafka][librdkafka] to produce:
 
 ```shell
-kafka-console-consumer --consumer.config /usr/local/etc/kafka/consumer.properties --bootstrap-server localhost:9092 --topic test --from-beginning --property print.timestamp=true --property print.key=true --property print.offset=true --property print.partition=true --property print.headers=true --property print.value=true
-CreateTime:1724251212963        Partition:0     Offset:0        h1:pqr,h2:jkl,h3:uio    qwerty  poiuy
+echo "Lorem ipsum dolor..." | \
+  ./examples/rdkafka_example -P \
+  -t test \
+  -b localhost:9092 \
+  -z gzip
 ```
+
+Consumer:
+
+```shell
+./examples/rdkafka_example \
+  -C \
+  -t test \
+  -b localhost:9092
+```
+
+
+[agpl-license]: https://www.gnu.org/licenses/agpl-3.0.en.html
+[compose]: https://github.com/tansu-io/tansu/blob/main/compose.yaml
+[continuous-archiving]: https://www.postgresql.org/docs/current/continuous-archiving.html
+[docker-from-scratch]: https://docs.docker.com/build/building/base-images/#create-a-minimal-base-image-using-scratch
+[github-com-tansu-io]: https://github.com/tansu-io/tansu
+[kafka-fetch]: https://kafka.apache.org/protocol.html#The_Messages_Fetch
+[librdkafka]: https://github.com/confluentinc/librdkafka
+[rust-lang-org]: https://www.rust-lang.org
+[with-queries]: https://www.postgresql.org/docs/current/queries-with.html

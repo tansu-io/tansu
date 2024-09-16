@@ -35,7 +35,7 @@ use tansu_raft::{
     LogEntry, PersistentEntry, ProvideApplyState, ProvideConfiguration, ProvideKvStore,
     ProvideServer, Server,
 };
-use tansu_storage::{Storage, Topition};
+use tansu_storage::{segment::Storage, Topition};
 use tracing::debug;
 use url::Url;
 use uuid::Uuid;

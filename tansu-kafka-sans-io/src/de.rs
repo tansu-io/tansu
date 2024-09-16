@@ -932,7 +932,7 @@ impl<'de, 'a> Deserializer<'de> for &'a mut Decoder<'de> {
             }
         } else {
             if !["Frame", "HeaderMezzanine"].contains(&name) {
-                warn!("deserialize_struct, no message meta for struct, name: {name}");
+                debug!("deserialize_struct, no message meta for struct, name: {name}");
             }
 
             visitor.visit_seq(Struct::new(self, name, fields))

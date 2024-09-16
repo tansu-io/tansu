@@ -16,10 +16,11 @@
 use tansu_kafka_sans_io::{Body, ErrorCode};
 use uuid::Uuid;
 
-pub(crate) struct GetTelemetrySubscriptionsRequest;
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct GetTelemetrySubscriptionsRequest;
 
 impl GetTelemetrySubscriptionsRequest {
-    pub(crate) fn response(&self, client_instance_id: [u8; 16]) -> Body {
+    pub fn response(&self, client_instance_id: [u8; 16]) -> Body {
         let _ = client_instance_id;
 
         let client_instance_id = *Uuid::new_v4().as_bytes();

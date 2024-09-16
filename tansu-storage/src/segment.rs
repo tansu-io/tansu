@@ -43,6 +43,131 @@ use tansu_kafka_sans_io::{
 };
 use tracing::{debug, instrument};
 
+#[derive(Debug)]
+pub struct Storage {
+    provider: Box<dyn SegmentProvider>,
+    segments: BTreeMap<Topition, BTreeMap<i64, Box<dyn Segment>>>,
+    pending_fetch: Vec<Waker>,
+}
+
+impl Storage {
+    pub fn with_segment_provider(provider: Box<dyn SegmentProvider>) -> Result<Self> {
+        let segments = provider.init()?;
+
+        Ok(Self {
+            provider,
+            segments,
+            pending_fetch: Vec::new(),
+        })
+    }
+
+    #[instrument]
+    pub fn produce(&mut self, topition: &'_ Topition, batch: Batch) -> Result<i64> {
+        let base_offset = if let Some(segments) = self.segments.get_mut(topition) {
+            segments
+                .last_entry()
+                .as_mut()
+                .ok_or_else(|| Error::SegmentEmpty(topition.to_owned()))
+                .and_then(|segment| segment.get_mut().append(batch).map_err(Into::into))?
+        } else {
+            let tpo = TopitionOffset::new(topition.clone(), batch.base_offset);
+            let mut segment = self.provider.provide_segment(&tpo)?;
+            let base_offset = segment.append(batch)?;
+
+            let mut mapping = BTreeMap::new();
+            _ = mapping.insert(base_offset, segment);
+
+            _ = self.segments.insert(topition.to_owned(), mapping);
+            base_offset
+        };
+
+        for ws in self.pending_fetch.drain(..) {
+            ws.wake()
+        }
+
+        debug!(?base_offset);
+
+        Ok(base_offset)
+    }
+
+    fn segments(&self, topition: &'_ Topition) -> Result<&BTreeMap<i64, Box<dyn Segment>>> {
+        self.segments.get(topition).ok_or_else(|| {
+            debug!(?topition);
+
+            Error::SegmentMissing {
+                topition: topition.to_owned(),
+                offset: None,
+            }
+        })
+    }
+
+    fn segments_mut(
+        &mut self,
+        topition: &'_ Topition,
+    ) -> Result<&mut BTreeMap<i64, Box<dyn Segment>>> {
+        self.segments.get_mut(topition).ok_or_else(|| {
+            debug!(?topition);
+
+            Error::SegmentMissing {
+                topition: topition.to_owned(),
+                offset: None,
+            }
+        })
+    }
+
+    fn segment_mut(
+        &mut self,
+        topition: &'_ Topition,
+        offset: i64,
+    ) -> Result<&mut Box<dyn Segment>> {
+        self.segments_mut(topition).and_then(|segments| {
+            segments
+                .range_mut(..=offset)
+                .last()
+                .ok_or_else(|| {
+                    debug!(?topition, ?offset);
+
+                    Error::SegmentMissing {
+                        topition: topition.to_owned(),
+                        offset: Some(offset),
+                    }
+                })
+                .map(|(_, segment)| segment)
+        })
+    }
+
+    #[instrument]
+    pub fn fetch(&mut self, topition: &'_ Topition, offset: i64) -> Result<Batch> {
+        self.segment_mut(topition, offset)
+            .and_then(|segment| segment.read(offset).map_err(Into::into))
+    }
+
+    #[instrument]
+    pub fn last_stable_offset(&self, topition: &'_ Topition) -> Result<i64> {
+        self.segments(topition).map(|segments| {
+            if segments.len() > 1 {
+                segments.last_key_value().map_or(0, |(_, segment)| {
+                    segment.max_offset().unwrap_or(segment.base_offset() - 1)
+                })
+            } else {
+                segments
+                    .last_key_value()
+                    .map_or(0, |(_, segment)| segment.max_offset().unwrap_or(0))
+            }
+        })
+    }
+
+    #[instrument]
+    pub fn high_watermark(&self, topition: &'_ Topition) -> Result<i64> {
+        self.last_stable_offset(topition)
+    }
+
+    #[instrument]
+    pub fn register_pending_fetch(&mut self, waker: Waker) {
+        self.pending_fetch.push(waker)
+    }
+}
+
 pub trait Segment: Debug + Send {
     fn append(&mut self, batch: Batch) -> Result<i64>;
     fn read(&mut self, starting_offset: i64) -> Result<Batch>;
@@ -801,10 +926,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::segment::MemorySegmentProvider;
     use crate::{Error, Topition};
     use bytes::Bytes;
     use std::{fs::write, sync::Arc, thread};
-    use tansu_kafka_sans_io::record::Record;
+    use tansu_kafka_sans_io::record::{inflated, Record};
     use tempfile::tempdir;
     use tracing::{subscriber::DefaultGuard, Level};
     use tracing_subscriber::{filter::Targets, fmt, prelude::*, registry};
@@ -840,6 +966,62 @@ mod tests {
                     })?,
             );
         Ok(tracing::subscriber::set_default(subscriber))
+    }
+
+    #[test]
+    fn produce_fetch() -> Result<()> {
+        let mut manager =
+            Storage::with_segment_provider(Box::new(MemorySegmentProvider::default()))?;
+
+        let topic = "abc";
+        let partition = 6;
+        let topition = Topition::new(topic, partition);
+
+        let values = (0..10)
+            .map(|i| i.to_string())
+            .try_fold(Vec::new(), |mut acc, value| {
+                inflated::Batch::builder()
+                    .record(Record::builder().value(value.clone().as_bytes().into()))
+                    .build()
+                    .and_then(TryInto::try_into)
+                    .map_err(Into::into)
+                    .and_then(|batch| {
+                        manager.produce(&topition, batch).map(|offset| {
+                            acc.push((offset, Bytes::copy_from_slice(value.as_bytes())));
+                            acc
+                        })
+                    })
+            })?;
+
+        for (offset, expecting) in values {
+            let actual = manager
+                .fetch(&topition, offset)
+                .and_then(|inflated| inflated::Batch::try_from(inflated).map_err(Into::into))?
+                .records[0]
+                .value
+                .clone()
+                .unwrap();
+            assert_eq!(actual, expecting);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn as_path_buf() {
+        let topic = "qwerty";
+        let partition = i32::MAX;
+        let topition = Topition::new(topic, partition);
+
+        assert_eq!(PathBuf::from("qwerty-2147483647"), PathBuf::from(&topition));
+
+        let base_offset = i64::MAX;
+        let tpo = TopitionOffset::new(topition, base_offset);
+
+        assert_eq!(
+            PathBuf::from("qwerty-2147483647/09223372036854775807"),
+            PathBuf::from(&tpo)
+        );
     }
 
     #[test]

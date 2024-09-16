@@ -14,7 +14,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use bytes::Bytes;
-use pretty_assertions::assert_eq;
+//use pretty_assertions::assert_eq;
 use serde::Deserialize;
 use std::{fs::File, io::Cursor, sync::Arc, thread};
 use tansu_kafka_sans_io::{
@@ -1357,6 +1357,218 @@ fn fetch_request_v12_000() -> Result<()> {
                                     last_fetched_epoch: Some(-1),
                                     log_start_offset: Some(-1),
                                     partition_max_bytes: 1048576
+                                }
+                            ]
+                            .into()
+                        )
+                    }]
+                    .into()
+                ),
+                forgotten_topics_data: Some([].into()),
+                rack_id: Some("".into())
+            }
+        },
+        Frame::deserialize(&mut deserializer)?
+    );
+
+    Ok(())
+}
+
+#[test]
+fn fetch_request_v15_000() -> Result<()> {
+    use tansu_kafka_sans_io::fetch_request::{FetchPartition, FetchTopic};
+
+    let _guard = init_tracing()?;
+
+    let v = vec![
+        0, 0, 2, 96, 0, 1, 0, 15, 0, 0, 0, 14, 0, 26, 99, 111, 110, 115, 117, 109, 101, 114, 45,
+        115, 117, 98, 45, 48, 48, 48, 45, 87, 116, 51, 97, 112, 52, 65, 45, 49, 0, 0, 0, 1, 244, 0,
+        0, 0, 1, 3, 32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 139, 193, 249, 209, 188, 231, 73, 214,
+        186, 217, 20, 95, 74, 239, 160, 61, 17, 0, 0, 0, 7, 255, 255, 255, 255, 0, 0, 0, 0, 0, 0,
+        0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 160, 0, 0, 0, 0, 0, 0,
+        6, 255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+        255, 255, 255, 0, 160, 0, 0, 0, 0, 0, 0, 8, 255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0,
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 160, 0, 0, 0, 0, 0, 0, 11,
+        255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+        255, 255, 255, 0, 160, 0, 0, 0, 0, 0, 0, 10, 255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0,
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 160, 0, 0, 0, 0, 0, 0, 13,
+        255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+        255, 255, 255, 0, 160, 0, 0, 0, 0, 0, 0, 12, 255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0,
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 160, 0, 0, 0, 0, 0, 0, 15,
+        255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+        255, 255, 255, 0, 160, 0, 0, 0, 0, 0, 0, 14, 255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0,
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 160, 0, 0, 0, 0, 0, 0, 1,
+        255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+        255, 255, 255, 0, 160, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0,
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 160, 0, 0, 0, 0, 0, 0, 3,
+        255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+        255, 255, 255, 0, 160, 0, 0, 0, 0, 0, 0, 2, 255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0,
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 160, 0, 0, 0, 0, 0, 0, 5,
+        255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+        255, 255, 255, 0, 160, 0, 0, 0, 0, 0, 0, 4, 255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0,
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 160, 0, 0, 0, 0, 0, 0, 9,
+        255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 109, 160, 255, 255, 255, 255, 255, 255, 255, 255,
+        255, 255, 255, 255, 0, 160, 0, 0, 0, 0, 1, 1, 0,
+    ];
+
+    let mut c = Cursor::new(v);
+    let mut deserializer = Decoder::request(&mut c);
+
+    assert_eq!(
+        Frame {
+            size: 608,
+            header: Header::Request {
+                api_key: 1,
+                api_version: 15,
+                correlation_id: 14,
+                client_id: Some("consumer-sub-000-Wt3ap4A-1".into())
+            },
+            body: Body::FetchRequest {
+                cluster_id: None,
+                replica_id: None,
+                replica_state: None,
+                max_wait_ms: 500,
+                min_bytes: 1,
+                max_bytes: Some(52428800),
+                isolation_level: Some(0),
+                session_id: Some(0),
+                session_epoch: Some(0),
+                topics: Some(
+                    [FetchTopic {
+                        topic: None,
+                        topic_id: Some([
+                            139, 193, 249, 209, 188, 231, 73, 214, 186, 217, 20, 95, 74, 239, 160,
+                            61
+                        ]),
+                        partitions: Some(
+                            [
+                                FetchPartition {
+                                    partition: 7,
+                                    current_leader_epoch: Some(-1),
+                                    fetch_offset: 0,
+                                    last_fetched_epoch: Some(-1),
+                                    log_start_offset: Some(-1),
+                                    partition_max_bytes: 10485760
+                                },
+                                FetchPartition {
+                                    partition: 6,
+                                    current_leader_epoch: Some(-1),
+                                    fetch_offset: 0,
+                                    last_fetched_epoch: Some(-1),
+                                    log_start_offset: Some(-1),
+                                    partition_max_bytes: 10485760
+                                },
+                                FetchPartition {
+                                    partition: 8,
+                                    current_leader_epoch: Some(-1),
+                                    fetch_offset: 0,
+                                    last_fetched_epoch: Some(-1),
+                                    log_start_offset: Some(-1),
+                                    partition_max_bytes: 10485760
+                                },
+                                FetchPartition {
+                                    partition: 11,
+                                    current_leader_epoch: Some(-1),
+                                    fetch_offset: 0,
+                                    last_fetched_epoch: Some(-1),
+                                    log_start_offset: Some(-1),
+                                    partition_max_bytes: 10485760
+                                },
+                                FetchPartition {
+                                    partition: 10,
+                                    current_leader_epoch: Some(-1),
+                                    fetch_offset: 0,
+                                    last_fetched_epoch: Some(-1),
+                                    log_start_offset: Some(-1),
+                                    partition_max_bytes: 10485760
+                                },
+                                FetchPartition {
+                                    partition: 13,
+                                    current_leader_epoch: Some(-1),
+                                    fetch_offset: 0,
+                                    last_fetched_epoch: Some(-1),
+                                    log_start_offset: Some(-1),
+                                    partition_max_bytes: 10485760
+                                },
+                                FetchPartition {
+                                    partition: 12,
+                                    current_leader_epoch: Some(-1),
+                                    fetch_offset: 0,
+                                    last_fetched_epoch: Some(-1),
+                                    log_start_offset: Some(-1),
+                                    partition_max_bytes: 10485760
+                                },
+                                FetchPartition {
+                                    partition: 15,
+                                    current_leader_epoch: Some(-1),
+                                    fetch_offset: 0,
+                                    last_fetched_epoch: Some(-1),
+                                    log_start_offset: Some(-1),
+                                    partition_max_bytes: 10485760
+                                },
+                                FetchPartition {
+                                    partition: 14,
+                                    current_leader_epoch: Some(-1),
+                                    fetch_offset: 0,
+                                    last_fetched_epoch: Some(-1),
+                                    log_start_offset: Some(-1),
+                                    partition_max_bytes: 10485760
+                                },
+                                FetchPartition {
+                                    partition: 1,
+                                    current_leader_epoch: Some(-1),
+                                    fetch_offset: 0,
+                                    last_fetched_epoch: Some(-1),
+                                    log_start_offset: Some(-1),
+                                    partition_max_bytes: 10485760
+                                },
+                                FetchPartition {
+                                    partition: 0,
+                                    current_leader_epoch: Some(-1),
+                                    fetch_offset: 0,
+                                    last_fetched_epoch: Some(-1),
+                                    log_start_offset: Some(-1),
+                                    partition_max_bytes: 10485760
+                                },
+                                FetchPartition {
+                                    partition: 3,
+                                    current_leader_epoch: Some(-1),
+                                    fetch_offset: 0,
+                                    last_fetched_epoch: Some(-1),
+                                    log_start_offset: Some(-1),
+                                    partition_max_bytes: 10485760
+                                },
+                                FetchPartition {
+                                    partition: 2,
+                                    current_leader_epoch: Some(-1),
+                                    fetch_offset: 0,
+                                    last_fetched_epoch: Some(-1),
+                                    log_start_offset: Some(-1),
+                                    partition_max_bytes: 10485760
+                                },
+                                FetchPartition {
+                                    partition: 5,
+                                    current_leader_epoch: Some(-1),
+                                    fetch_offset: 0,
+                                    last_fetched_epoch: Some(-1),
+                                    log_start_offset: Some(-1),
+                                    partition_max_bytes: 10485760
+                                },
+                                FetchPartition {
+                                    partition: 4,
+                                    current_leader_epoch: Some(-1),
+                                    fetch_offset: 0,
+                                    last_fetched_epoch: Some(-1),
+                                    log_start_offset: Some(-1),
+                                    partition_max_bytes: 10485760
+                                },
+                                FetchPartition {
+                                    partition: 9,
+                                    current_leader_epoch: Some(-1),
+                                    fetch_offset: 28064,
+                                    last_fetched_epoch: Some(-1),
+                                    log_start_offset: Some(-1),
+                                    partition_max_bytes: 10485760
                                 }
                             ]
                             .into()

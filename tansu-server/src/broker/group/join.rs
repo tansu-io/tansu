@@ -13,27 +13,26 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::sync::{Arc, Mutex, MutexGuard};
-
 use tansu_kafka_sans_io::{join_group_request::JoinGroupRequestProtocol, Body};
 
 use crate::{coordinator::group::Coordinator, Result};
 
 #[derive(Clone, Debug)]
-pub struct JoinRequest {
-    pub groups: Arc<Mutex<Box<dyn Coordinator>>>,
+pub struct JoinRequest<C> {
+    coordinator: C,
 }
 
-impl JoinRequest {
-    pub fn groups_lock(&self) -> Result<MutexGuard<'_, Box<dyn Coordinator>>> {
-        self.groups.lock().map_err(|error| error.into())
+impl<C> JoinRequest<C>
+where
+    C: Coordinator,
+{
+    pub fn with_coordinator(coordinator: C) -> Self {
+        Self { coordinator }
     }
-}
 
-impl JoinRequest {
     #[allow(clippy::too_many_arguments)]
-    pub fn response(
-        &self,
+    pub async fn response(
+        &mut self,
         client_id: Option<&str>,
         group_id: &str,
         session_timeout_ms: i32,
@@ -44,8 +43,8 @@ impl JoinRequest {
         protocols: Option<&[JoinGroupRequestProtocol]>,
         reason: Option<&str>,
     ) -> Result<Body> {
-        self.groups_lock().and_then(|mut coordinator| {
-            coordinator.join(
+        self.coordinator
+            .join(
                 client_id,
                 group_id,
                 session_timeout_ms,
@@ -56,6 +55,6 @@ impl JoinRequest {
                 protocols,
                 reason,
             )
-        })
+            .await
     }
 }

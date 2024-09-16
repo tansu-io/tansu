@@ -15,7 +15,6 @@
 
 use std::{
     collections::BTreeSet,
-    fs::File,
     path::PathBuf,
     str::FromStr,
     sync::{Arc, Mutex},
@@ -26,20 +25,20 @@ use clap::Parser;
 use tansu_raft::{tarpc::RaftTcpTarpcClientFactory, ProvideKvStore, ProvideServer, Raft};
 use tansu_server::{
     broker::Broker,
-    coordinator::group::{Coordinator, GroupProvider, Manager, ProvideCoordinator},
+    coordinator::group::administrator::Controller,
     raft::{
         Applicator, ApplyStateFactory, Config, ServerFactory, StorageFactory,
         StoragePersistentStateFactory,
     },
-    Error, Result, NUM_CONSUMER_OFFSETS_PARTITIONS,
+    Error, Result,
 };
 use tansu_storage::{
-    segment::{FileSystemSegmentProvider, SegmentProvider},
-    Storage,
+    pg::Postgres,
+    segment::{self, FileSystemSegmentProvider, SegmentProvider},
 };
 use tokio::task::JoinSet;
-use tracing::{debug, Level};
-use tracing_subscriber::{filter::Targets, fmt::format::FmtSpan, prelude::*};
+use tracing::debug;
+use tracing_subscriber::{fmt::format::FmtSpan, prelude::*, EnvFilter};
 use url::Url;
 
 #[derive(Clone, Debug)]
@@ -56,10 +55,32 @@ impl FromStr for ElectionTimeout {
     }
 }
 
+#[derive(Clone, Debug)]
+struct KeyValue<K, V> {
+    #[allow(dead_code)]
+    key: K,
+    value: V,
+}
+
+impl FromStr for KeyValue<String, Url> {
+    type Err = Error;
+
+    fn from_str(kv: &str) -> std::result::Result<Self, Self::Err> {
+        kv.split_once('=')
+            .ok_or(Error::Custom("kv: {kv}".into()))
+            .and_then(|(k, v)| {
+                Url::try_from(v).map_err(Into::into).map(|value| Self {
+                    key: k.to_owned(),
+                    value,
+                })
+            })
+    }
+}
+
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Cli {
-    #[arg(long, default_value = "tcp://localhost:4567")]
+    #[arg(long, default_value = "tcp://0.0.0.0:4567")]
     raft_listener_url: Url,
 
     #[arg(long, default_value = "10000")]
@@ -77,8 +98,11 @@ struct Cli {
     #[arg(long, default_value = "100")]
     kafka_node_id: i32,
 
-    #[arg(long, default_value = "tcp://localhost:9092")]
+    #[arg(long, default_value = "tcp://0.0.0.0:9092")]
     kafka_listener_url: Url,
+
+    #[arg(long, default_value = "pg=postgres://postgres:postgres@localhost")]
+    storage_engine: KeyValue<String, Url>,
 
     #[arg(long, default_value = ".")]
     work_dir: PathBuf,
@@ -86,23 +110,15 @@ struct Cli {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let filter = Targets::new()
-        .with_target("tansu_server", Level::DEBUG)
-        .with_target("tansu_storage", Level::ERROR)
-        .with_target("tansu_raft", Level::ERROR);
-
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::fmt::layer()
                 .with_level(true)
                 .with_line_number(true)
                 .with_thread_ids(true)
-                .with_span_events(FmtSpan::ACTIVE)
-                .with_writer(
-                    File::create(format!("{}.log", env!("CARGO_PKG_NAME"))).map(Arc::new)?,
-                ),
+                .with_span_events(FmtSpan::ACTIVE),
         )
-        .with(filter)
+        .with(EnvFilter::from_default_env())
         .init();
 
     let args = Cli::parse();
@@ -117,13 +133,13 @@ async fn main() -> Result<()> {
 
     let applicator = Applicator::new();
 
-    let storage = FileSystemSegmentProvider::new(8_192, args.work_dir.clone())
+    let segment_storage = FileSystemSegmentProvider::new(8_192, args.work_dir.clone())
         .map(|provider| Box::new(provider) as Box<dyn SegmentProvider>)
-        .and_then(Storage::with_segment_provider)
+        .and_then(segment::Storage::with_segment_provider)
         .map(|storage| Arc::new(Mutex::new(storage)))?;
 
     let server_factory = Box::new(ServerFactory {
-        storage: storage.clone(),
+        storage: segment_storage.clone(),
     }) as Box<dyn ProvideServer>;
 
     let raft = Raft::builder()
@@ -133,12 +149,12 @@ async fn main() -> Result<()> {
         )))
         .with_voters(peers)
         .with_kv_store(Box::new(StorageFactory {
-            storage: storage.clone(),
+            storage: segment_storage.clone(),
         }) as Box<dyn ProvideKvStore>)
         .with_apply_state(Box::new(ApplyStateFactory::new(applicator.clone())))
         .with_persistent_state(Box::new(StoragePersistentStateFactory {
             id: args.raft_listener_url,
-            storage: storage.clone(),
+            storage: segment_storage.clone(),
         }))
         .with_server(server_factory)
         .with_raft_rpc(Box::<RaftTcpTarpcClientFactory>::default())
@@ -146,6 +162,11 @@ async fn main() -> Result<()> {
         .await?;
 
     let mut set = JoinSet::new();
+
+    let storage = Postgres::builder(args.storage_engine.value.to_string().as_str())
+        .map(|builder| builder.cluster(args.kafka_cluster_id.as_str()))
+        .map(|builder| builder.node(args.kafka_node_id))
+        .map(|builder| builder.build())?;
 
     {
         let raft = raft.clone();
@@ -156,12 +177,7 @@ async fn main() -> Result<()> {
     }
 
     {
-        let groups = GroupProvider::new(storage.clone(), NUM_CONSUMER_OFFSETS_PARTITIONS)
-            .map(|group_provider| Box::new(group_provider) as Box<dyn ProvideCoordinator>)
-            .map(Manager::new)
-            .map(|manager| Box::new(manager) as Box<dyn Coordinator>)
-            .map(Mutex::new)
-            .map(Arc::new)?;
+        let groups = Controller::with_storage(storage.clone())?;
 
         let mut broker = Broker::new(
             args.kafka_node_id,
@@ -181,11 +197,7 @@ async fn main() -> Result<()> {
         });
     }
 
-    loop {
-        if set.join_next().await.is_none() {
-            break;
-        }
-    }
+    _ = set.join_next().await;
 
     Ok(())
 }

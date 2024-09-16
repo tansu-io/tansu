@@ -13,20 +13,29 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use crate::State;
-use std::sync::MutexGuard;
+use crate::Result;
 use tansu_kafka_sans_io::{
     produce_request::{PartitionProduceData, TopicProduceData},
     produce_response::{PartitionProduceResponse, TopicProduceResponse},
     Body, ErrorCode,
 };
 use tansu_storage::{Storage, Topition};
+use tracing::debug;
 
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct ProduceRequest;
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ProduceRequest<S> {
+    storage: S,
+}
 
-impl ProduceRequest {
-    fn error(index: i32, error_code: ErrorCode) -> PartitionProduceResponse {
+impl<S> ProduceRequest<S>
+where
+    S: Storage,
+{
+    pub fn with_storage(storage: S) -> Self {
+        Self { storage }
+    }
+
+    fn error(&self, index: i32, error_code: ErrorCode) -> PartitionProduceResponse {
         PartitionProduceResponse {
             index,
             error_code: error_code.into(),
@@ -39,10 +48,10 @@ impl ProduceRequest {
         }
     }
 
-    fn partition<'a>(
-        name: &'a str,
+    async fn partition(
+        &self,
+        name: &str,
         partition: PartitionProduceData,
-        manager: &'a mut MutexGuard<'_, Storage>,
     ) -> PartitionProduceResponse {
         match partition.records {
             Some(mut records) if records.batches.len() == 1 => {
@@ -50,72 +59,63 @@ impl ProduceRequest {
 
                 let tp = Topition::new(name, partition.index);
 
-                let base_offset = manager.produce(&tp, batch).unwrap();
-
-                PartitionProduceResponse {
-                    index: partition.index,
-                    error_code: ErrorCode::None.into(),
-                    base_offset,
-                    log_append_time_ms: Some(-1),
-                    log_start_offset: Some(0),
-                    record_errors: Some([].into()),
-                    error_message: None,
-                    current_leader: None,
+                if let Ok(base_offset) = self.storage.produce(&tp, batch).await {
+                    PartitionProduceResponse {
+                        index: partition.index,
+                        error_code: ErrorCode::None.into(),
+                        base_offset,
+                        log_append_time_ms: Some(-1),
+                        log_start_offset: Some(0),
+                        record_errors: Some([].into()),
+                        error_message: None,
+                        current_leader: None,
+                    }
+                } else {
+                    self.error(partition.index, ErrorCode::UnknownServerError)
                 }
             }
 
-            _otherwise => Self::error(partition.index, ErrorCode::UnknownServerError),
+            _otherwise => self.error(partition.index, ErrorCode::UnknownServerError),
         }
     }
 
-    fn topic(
-        topic: TopicProduceData,
-        manager: &mut MutexGuard<'_, Storage>,
-        state: &State,
-    ) -> TopicProduceResponse {
-        let partition_responses = if state.topics().contains_key(&topic.name) {
-            topic.partition_data.map(|partitions| {
-                partitions
-                    .into_iter()
-                    .map(|partition| Self::partition(&topic.name, partition, manager))
-                    .collect()
-            })
-        } else {
-            topic.partition_data.map(|partitions| {
-                partitions
-                    .into_iter()
-                    .map(|partition| {
-                        Self::error(partition.index, ErrorCode::UnknownTopicOrPartition)
-                    })
-                    .collect()
-            })
-        };
+    async fn topic(&self, topic: TopicProduceData) -> TopicProduceResponse {
+        let mut partitions = vec![];
+
+        if let Some(partition_data) = topic.partition_data {
+            for partition in partition_data {
+                partitions.push(self.partition(&topic.name, partition).await)
+            }
+        }
 
         TopicProduceResponse {
             name: topic.name,
-            partition_responses,
+            partition_responses: Some(partitions),
         }
     }
 
-    pub(crate) fn response(
+    pub async fn response(
+        &self,
         _transactional_id: Option<String>,
         _acks: i16,
         _timeout_ms: i32,
         topic_data: Option<Vec<TopicProduceData>>,
-        manager: &mut MutexGuard<'_, Storage>,
-        state: &State,
-    ) -> Body {
-        let responses = topic_data.map(|topics| {
-            topics
-                .into_iter()
-                .map(|topic| Self::topic(topic, manager, state))
-                .collect()
-        });
+    ) -> Result<Body> {
+        let mut responses =
+            Vec::with_capacity(topic_data.as_ref().map_or(0, |topic_data| topic_data.len()));
 
-        Body::ProduceResponse {
-            responses,
+        if let Some(topics) = topic_data {
+            for topic in topics {
+                debug!(?topic);
+
+                responses.push(self.topic(topic).await)
+            }
+        }
+
+        Ok(Body::ProduceResponse {
+            responses: Some(responses),
             throttle_time_ms: Some(0),
             node_endpoints: None,
-        }
+        })
     }
 }

@@ -13,6 +13,9 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+#[cfg_attr(feature = "nightly-features", feature(error_generic_member_access))]
+#[cfg(feature = "nightly-features")]
+use std::backtrace::Backtrace;
 use std::{
     collections::BTreeMap,
     fmt, io,
@@ -109,6 +112,7 @@ impl State {
         }
     }
 
+    #[allow(dead_code)]
     fn topics(&self) -> &BTreeMap<String, TopicDetail> {
         &self.topics
     }
@@ -273,19 +277,27 @@ pub struct BrokerDetail {
 pub enum Error {
     Api(ErrorCode),
     ClientRpc(#[from] tarpc::client::RpcError),
+    Custom(String),
     EmptyCoordinatorWrapper,
     EmptyJoinGroupRequestProtocol,
     ExpectedJoinGroupRequestProtocol(&'static str),
     Io(Arc<io::Error>),
     Json(#[from] serde_json::Error),
-    KafkaProtocol(#[from] tansu_kafka_sans_io::Error),
+    KafkaProtocol {
+        #[from]
+        source: tansu_kafka_sans_io::Error,
+        #[cfg(feature = "nightly-features")]
+        backtrace: Backtrace,
+    },
     Message(String),
     Model(#[from] tansu_kafka_model::Error),
     ParseInt(#[from] std::num::ParseIntError),
     Poison,
+    Pool(#[from] deadpool_postgres::PoolError),
     Raft(#[from] tansu_raft::Error),
-    StringUtf8(#[from] FromUtf8Error),
     Storage(#[from] tansu_storage::Error),
+    StringUtf8(#[from] FromUtf8Error),
+    TokioPostgres(#[from] tokio_postgres::error::Error),
     TryFromInt(#[from] TryFromIntError),
     Url(#[from] url::ParseError),
     Utf8(#[from] Utf8Error),

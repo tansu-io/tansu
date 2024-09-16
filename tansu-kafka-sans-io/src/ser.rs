@@ -28,7 +28,7 @@ use serde::{
     Serialize, Serializer,
 };
 use tansu_kafka_model::{FieldMeta, MessageMeta};
-use tracing::{debug, warn};
+use tracing::debug;
 
 use crate::{Error, Result, RootMessageMeta};
 
@@ -841,7 +841,7 @@ impl<'a> SerializeStruct for &'a mut Encoder<'_> {
             _ = self.meta.field.take();
             outcome
         } else {
-            warn!("field name: {}, has no field meta", self.field_name());
+            debug!("field name: {}, has no field meta", self.field_name());
 
             _ = self.meta.field.take();
             self.meta.parse.push_front(FieldLookup(&[]));
@@ -892,7 +892,7 @@ impl<'a> SerializeStructVariant for &'a mut Encoder<'_> {
                 Ok(())
             }
         } else {
-            warn!("field name: {}, has no field meta", self.field_name());
+            debug!("field name: {}, has no field meta", self.field_name());
 
             _ = self.meta.field.take();
             self.meta.parse.push_front(FieldLookup(&[]));

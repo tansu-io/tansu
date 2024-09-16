@@ -13,6 +13,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+use crate::Result;
 use tansu_kafka_sans_io::{
     list_partition_reassignments_request::ListPartitionReassignmentsTopics,
     list_partition_reassignments_response::{
@@ -20,52 +21,60 @@ use tansu_kafka_sans_io::{
     },
     Body, ErrorCode,
 };
+use tansu_storage::{Storage, TopicId};
 
-use crate::State;
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ListPartitionReassignmentsRequest<S> {
+    storage: S,
+}
 
-pub(crate) struct ListPartitionReassignmentsRequest;
+impl<S> ListPartitionReassignmentsRequest<S>
+where
+    S: Storage,
+{
+    pub fn with_storage(storage: S) -> Self {
+        Self { storage }
+    }
 
-impl ListPartitionReassignmentsRequest {
-    pub(crate) fn response(
+    pub async fn response(
         &self,
         topics: Option<&[ListPartitionReassignmentsTopics]>,
-        state: &State,
-    ) -> Body {
-        Body::ListPartitionReassignmentsResponse {
+    ) -> Result<Body> {
+        let topics = topics.map(|topics| {
+            topics
+                .iter()
+                .map(|topic| TopicId::Name(topic.name.as_str().into()))
+                .collect::<Vec<_>>()
+        });
+
+        let metadata = self.storage.metadata(topics.as_deref()).await?;
+
+        let mut ongoing = vec![];
+
+        for topic in metadata.topics() {
+            let Some(ref name) = topic.name else { continue };
+
+            ongoing.push(OngoingTopicReassignment {
+                name: name.into(),
+                partitions: topic.partitions.as_ref().map(|partitions| {
+                    partitions
+                        .iter()
+                        .map(|partition| OngoingPartitionReassignment {
+                            partition_index: partition.partition_index,
+                            replicas: partition.replica_nodes.clone(),
+                            adding_replicas: Some(vec![]),
+                            removing_replicas: Some(vec![]),
+                        })
+                        .collect::<Vec<_>>()
+                }),
+            });
+        }
+
+        Ok(Body::ListPartitionReassignmentsResponse {
             throttle_time_ms: 0,
             error_code: ErrorCode::None.into(),
             error_message: None,
-            topics: topics.map(|topics| {
-                topics
-                    .iter()
-                    .map(|topic| OngoingTopicReassignment {
-                        name: topic.name.clone(),
-                        partitions: state.topic(topic.into()).map(|detail| {
-                            detail.creatable_topic.assignments.clone().map_or(
-                                Vec::new(),
-                                |assignments| {
-                                    assignments
-                                        .iter()
-                                        .map(|assignment| OngoingPartitionReassignment {
-                                            partition_index: assignment.partition_index,
-                                            replicas: Some(
-                                                assignment
-                                                    .broker_ids
-                                                    .as_ref()
-                                                    .map_or(vec![], |broker_ids| {
-                                                        broker_ids.clone()
-                                                    }),
-                                            ),
-                                            adding_replicas: Some(vec![]),
-                                            removing_replicas: Some(vec![]),
-                                        })
-                                        .collect()
-                                },
-                            )
-                        }),
-                    })
-                    .collect()
-            }),
-        }
+            topics: Some(ongoing),
+        })
     }
 }

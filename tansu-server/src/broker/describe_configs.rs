@@ -18,10 +18,11 @@ use tansu_kafka_sans_io::{
     describe_configs_response::DescribeConfigsResult, Body, ErrorCode,
 };
 
-pub(crate) struct DescribeConfigsRequest;
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct DescribeConfigsRequest;
 
 impl DescribeConfigsRequest {
-    pub(crate) fn response(
+    pub fn response(
         &self,
         resources: Option<&[DescribeConfigsResource]>,
         include_synonyms: Option<bool>,

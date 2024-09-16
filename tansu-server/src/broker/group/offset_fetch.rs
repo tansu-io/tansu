@@ -13,8 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::sync::{Arc, Mutex, MutexGuard};
-
 use tansu_kafka_sans_io::{
     offset_fetch_request::{OffsetFetchRequestGroup, OffsetFetchRequestTopic},
     Body,
@@ -23,26 +21,27 @@ use tansu_kafka_sans_io::{
 use crate::{coordinator::group::Coordinator, Result};
 
 #[derive(Debug)]
-pub struct OffsetFetchRequest {
-    pub groups: Arc<Mutex<Box<dyn Coordinator>>>,
+pub struct OffsetFetchRequest<C> {
+    coordinator: C,
 }
 
-impl OffsetFetchRequest {
-    pub fn groups_lock(&self) -> Result<MutexGuard<'_, Box<dyn Coordinator>>> {
-        self.groups.lock().map_err(|error| error.into())
+impl<C> OffsetFetchRequest<C>
+where
+    C: Coordinator,
+{
+    pub fn with_coordinator(coordinator: C) -> Self {
+        Self { coordinator }
     }
-}
 
-impl OffsetFetchRequest {
-    pub fn response(
-        &self,
+    pub async fn response(
+        &mut self,
         group_id: Option<&str>,
         topics: Option<&[OffsetFetchRequestTopic]>,
         groups: Option<&[OffsetFetchRequestGroup]>,
         require_stable: Option<bool>,
     ) -> Result<Body> {
-        self.groups_lock().and_then(|mut coordinator| {
-            coordinator.offset_fetch(group_id, topics, groups, require_stable)
-        })
+        self.coordinator
+            .offset_fetch(group_id, topics, groups, require_stable)
+            .await
     }
 }

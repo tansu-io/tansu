@@ -8,21 +8,24 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+async-trait.workspace = true
 bytes.workspace = true
 clap.workspace = true
+deadpool-postgres.workspace = true
 futures.workspace = true
+opentelemetry_sdk.workspace = true
 opentelemetry-jaeger.workspace = true
 opentelemetry.workspace = true
-opentelemetry_sdk.workspace = true
 rand.workspace = true
-serde.workspace = true
 serde_json.workspace = true
+serde.workspace = true
 tansu-kafka-model = { path = "../tansu-kafka-model" }
 tansu-kafka-sans-io = { path = "../tansu-kafka-sans-io" }
 tansu-raft = { path = "../tansu-raft" }
 tansu-storage = { path = "../tansu-storage" }
 tarpc.workspace = true
 thiserror.workspace = true
+tokio-postgres.workspace = true
 tokio.workspace = true
 tracing-subscriber.workspace = true
 tracing.workspace = true
@@ -33,3 +36,7 @@ uuid.workspace = true
 
 [dev-dependencies]
 pretty_assertions.workspace = true
+
+[features]
+default = []
+nightly-features = []

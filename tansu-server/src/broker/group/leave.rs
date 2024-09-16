@@ -13,31 +13,25 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::sync::{Arc, Mutex, MutexGuard};
-
 use tansu_kafka_sans_io::{leave_group_request::MemberIdentity, Body};
 
 use crate::{coordinator::group::Coordinator, Result};
 
 #[derive(Debug)]
-pub struct LeaveRequest {
-    pub groups: Arc<Mutex<Box<dyn Coordinator>>>,
+pub struct LeaveRequest<C> {
+    coordinator: C,
 }
 
-impl LeaveRequest {
-    pub fn groups_lock(&self) -> Result<MutexGuard<'_, Box<dyn Coordinator>>> {
-        self.groups.lock().map_err(|error| error.into())
-    }
-}
-
-impl LeaveRequest {
-    pub(crate) fn response(
-        &self,
+impl<C> LeaveRequest<C>
+where
+    C: Coordinator,
+{
+    pub async fn response(
+        &mut self,
         group_id: &str,
         member_id: Option<&str>,
         members: Option<&[MemberIdentity]>,
     ) -> Result<Body> {
-        self.groups_lock()
-            .and_then(|mut coordinator| coordinator.leave(group_id, member_id, members))
+        self.coordinator.leave(group_id, member_id, members).await
     }
 }

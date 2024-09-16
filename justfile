@@ -1,13 +1,13 @@
 default: fmt build test clippy
 
 build:
-    cargo build --workspace --all-features --all-targets
+    cargo build --workspace --all-targets
 
 test:
-    cargo test --workspace --all-features --all-targets
+    cargo test --workspace --all-targets
 
 clippy:
-    cargo clippy --all-targets --all-features
+    cargo clippy --all-targets
 
 fmt:
     cargo fmt --all
@@ -20,6 +20,31 @@ work-dir:
 
 docker-build:
     docker build --tag ghcr.io/tansu-io/tansu --no-cache --progress plain .
+
+docker-compose-db-up:
+    docker compose up --detach db
+
+docker-compose-db-down:
+    docker compose down --volumes db
+
+docker-compose-up:
+    docker compose up --detach
+
+docker-compose-down:
+    docker compose down --volumes
+
+psql:
+    docker compose exec db psql $*
+
+docker-run-postgres:
+    docker run \
+        --detach \
+        --name postgres \
+        --publish 5432:5432 \
+        --env PGUSER=postgres \
+        --env POSTGRES_PASSWORD=postgres \
+        --volume ./work-dir/initdb.d/:/docker-entrypoint-initdb.d/ \
+        postgres:16.4
 
 docker-run:
     docker run --detach --name tansu --publish 9092:9092 tansu
@@ -43,13 +68,14 @@ test-topic-consume:
     kafka-console-consumer --consumer.config /usr/local/etc/kafka/consumer.properties --bootstrap-server localhost:9092 --topic test --from-beginning --property print.timestamp=true --property print.key=true --property print.offset=true --property print.partition=true --property print.headers=true --property print.value=true
 
 tansu-1:
-    RUST_BACKTRACE=1 ./target/debug/tansu-server \
+    RUST_BACKTRACE=1 RUST_LOG=warn,tansu_server=debug ./target/debug/tansu-server \
         --kafka-cluster-id RvQwrYegSUCkIPkaiAZQlQ \
         --kafka-listener-url tcp://127.0.0.1:9092/ \
         --kafka-node-id 4343 \
         --raft-listener-url tcp://127.0.0.1:4567/ \
         --raft-peer-url tcp://127.0.0.1:4568/ \
         --raft-peer-url tcp://127.0.0.1:4569/ \
+        --storage-engine pg=postgres://postgres:postgres@localhost \
         --work-dir work-dir/tansu-1
 
 kafka-proxy:

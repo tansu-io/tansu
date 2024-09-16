@@ -1,0 +1,48 @@
+---
+services:
+  db:
+    image: postgres:16.4
+    environment:
+      PGUSER: postgres
+      POSTGRES_PASSWORD: postgres
+    command: -c wal_level=logical
+    ports:
+      - 5432:5432
+    volumes:
+      - db:/var/lib/postgresql/data
+      - ./work-dir/initdb.d/:/docker-entrypoint-initdb.d/
+      - ./work-dir/data:/mnt
+    healthcheck:
+      test: /usr/bin/pg_isready
+      interval: 5s
+      timeout: 10s
+      retries: 5
+    pull_policy: missing
+  tansu:
+    image: ghcr.io/tansu-io/tansu
+    restart: unless-stopped
+    environment:
+      RUST_BACKTRACE: full
+      RUST_LOG: warn
+    command:
+      --kafka-cluster-id RvQwrYegSUCkIPkaiAZQlQ
+      --kafka-listener-url tcp://0.0.0.0:9092/
+      --kafka-node-id 4343
+      --raft-listener-url tcp://0.0.0.0:4567/
+      --raft-peer-url tcp://127.0.0.1:4568/
+      --storage-engine db=postgres://postgres:postgres@db
+      --work-dir /data
+    volumes:
+      - raft:/data
+    ports:
+      - 9092:9092
+      - 4567:4567
+    links:
+      - db
+    pull_policy:
+      ${PULL_POLICY:-always}
+volumes:
+  db:
+    driver: local
+  raft:
+    driver: local
