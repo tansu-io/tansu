@@ -75,7 +75,7 @@ query][with-queries] here to restrict the size of the result set being
 returned, with a running total of the size.
 
 Tansu is available as a [minimal from scratch][docker-from-scratch]
-docker image.
+docker image. With a `compose.yaml`, available from [here][compose]:
 
 ```shell
 docker compose up
@@ -135,6 +135,7 @@ Consumer:
 ```
 
 
+[compose]: https://github.com/tansu-io/tansu/blob/main/compose.yaml
 [librdkafka]: https://github.com/confluentinc/librdkafka
 [docker-from-scratch]: https://docs.docker.com/build/building/base-images/#create-a-minimal-base-image-using-scratch
 [agpl-license]: https://www.gnu.org/licenses/agpl-3.0.en.html
