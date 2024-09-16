@@ -135,12 +135,12 @@ Consumer:
 ```
 
 
-[compose]: https://github.com/tansu-io/tansu/blob/main/compose.yaml
-[librdkafka]: https://github.com/confluentinc/librdkafka
-[docker-from-scratch]: https://docs.docker.com/build/building/base-images/#create-a-minimal-base-image-using-scratch
 [agpl-license]: https://www.gnu.org/licenses/agpl-3.0.en.html
+[compose]: https://github.com/tansu-io/tansu/blob/main/compose.yaml
 [continuous-archiving]: https://www.postgresql.org/docs/current/continuous-archiving.html
+[docker-from-scratch]: https://docs.docker.com/build/building/base-images/#create-a-minimal-base-image-using-scratch
 [github-com-tansu-io]: https://github.com/tansu-io/tansu
 [kafka-fetch]: https://kafka.apache.org/protocol.html#The_Messages_Fetch
+[librdkafka]: https://github.com/confluentinc/librdkafka
 [rust-lang-org]: https://www.rust-lang.org
 [with-queries]: https://www.postgresql.org/docs/current/queries-with.html
