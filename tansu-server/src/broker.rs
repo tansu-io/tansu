@@ -134,7 +134,7 @@ where
 
         let listener = TcpListener::bind(format!(
             "{}:{}",
-            self.listener.host_str().unwrap_or("localhost"),
+            self.listener.host_str().unwrap_or("0.0.0.0"),
             self.listener.port().unwrap_or(9092)
         ))
         .await?;

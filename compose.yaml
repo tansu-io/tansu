@@ -26,9 +26,9 @@ services:
       RUST_LOG: warn,tansu_server=debug
     command:
       --kafka-cluster-id RvQwrYegSUCkIPkaiAZQlQ
-      --kafka-listener-url tcp://127.0.0.1:9092/
+      --kafka-listener-url tcp://0.0.0.0:9092/
       --kafka-node-id 4343
-      --raft-listener-url tcp://127.0.0.1:4567/
+      --raft-listener-url tcp://0.0.0.0:4567/
       --raft-peer-url tcp://127.0.0.1:4568/
       --storage-engine db=postgres://postgres:postgres@db
       --work-dir /data
@@ -36,6 +36,7 @@ services:
       - raft:/data
     ports:
       - 9092:9092
+      - 4567:4567
     links:
       - db
 volumes:
