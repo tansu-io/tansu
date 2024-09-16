@@ -76,7 +76,7 @@ tempfile = "3"
 thiserror = "1.0"
 time = { version = "0.3.36", features = ["formatting", "macros"] }
 tokio = { version = "1", features = ["full"] }
-tokio-postgres = { version = "0.7.11", features = ["with-uuid-1"] }
+tokio-postgres = { version = "0.7.12", features = ["with-uuid-1"] }
 tracing = "0.1"
 tracing-core = { version = "0.1" }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
