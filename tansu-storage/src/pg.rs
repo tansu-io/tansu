@@ -346,6 +346,27 @@ impl Storage for Postgres {
 
         let prepared = tx
             .prepare(concat!(
+                "select topic_configuration.value",
+                " from cluster, topic, topic_configuration",
+                " where",
+                " cluster.name = $1",
+                " and topic.name = $2",
+                " and topic_configuration.name = 'cleanup.policy'",
+                " and topic.cluster = cluster.id",
+                " and topic_configuration.topic = topic.id",
+            ))
+            .await?;
+
+        let is_compact = tx
+            .query_opt(&prepared, &[&self.cluster.as_str(), &topition.topic()])
+            .await?
+            .map_or(false, |row| {
+                row.try_get::<_, String>(0)
+                    .is_ok_and(|cleanup_policy| cleanup_policy == "compact")
+            });
+
+        let produce = tx
+            .prepare(concat!(
                 "insert into record",
                 " (topic, partition, producer_id, sequence, timestamp, k, v)",
                 " select",
@@ -362,9 +383,39 @@ impl Storage for Postgres {
         for record in inflated.records {
             debug!(?record);
 
+            if is_compact {
+                let compact = tx
+                    .prepare(concat!(
+                        "delete from record",
+                        " using cluster, topic",
+                        " where",
+                        " cluster.name = $1",
+                        " and topic.name = $2",
+                        " and record.k = $3",
+                        " and record.partition = $4",
+                        " and topic.cluster = cluster.id",
+                        " and record.topic = topic.id"
+                    ))
+                    .await?;
+
+                let compacted = tx
+                    .execute(
+                        &compact,
+                        &[
+                            &self.cluster.as_str(),
+                            &topition.topic(),
+                            &record.key.as_deref(),
+                            &topition.partition(),
+                        ],
+                    )
+                    .await?;
+
+                debug!(?compacted, ?record);
+            }
+
             let row = tx
                 .query_one(
-                    &prepared,
+                    &produce,
                     &[
                         &topition.topic(),
                         &topition.partition(),
