@@ -26,6 +26,8 @@ use deadpool_postgres::{Manager, ManagerConfig, Object, Pool, RecyclingMethod};
 use rand::{prelude::*, thread_rng};
 use tansu_kafka_sans_io::{
     create_topics_request::CreatableTopic,
+    delete_records_request::DeleteRecordsTopic,
+    delete_records_response::{DeleteRecordsPartitionResult, DeleteRecordsTopicResult},
     describe_cluster_response::DescribeClusterBroker,
     metadata_response::{MetadataResponseBroker, MetadataResponsePartition, MetadataResponseTopic},
     record::{deflated, inflated, Record},
@@ -39,6 +41,8 @@ use crate::{
     BrokerRegistationRequest, Error, ListOffsetRequest, ListOffsetResponse, MetadataResponse,
     OffsetCommitRequest, OffsetStage, Result, Storage, TopicId, Topition,
 };
+
+const NULL_TOPIC_ID: [u8; 16] = [0; 16];
 
 #[derive(Clone, Debug)]
 pub struct Postgres {
@@ -328,6 +332,134 @@ impl Storage for Postgres {
         tx.commit().await?;
 
         Ok(topic_id)
+    }
+
+    async fn delete_records(
+        &self,
+        topics: &[DeleteRecordsTopic],
+    ) -> Result<Vec<DeleteRecordsTopicResult>> {
+        let c = self.connection().await?;
+
+        let delete_records = c
+            .prepare(concat!(
+                "delete from record",
+                " using  topic, cluster",
+                " where",
+                " cluster.name=$1",
+                " and topic.name = $2",
+                " and record.partition = $3",
+                " and record.id >= $4",
+                " and topic.cluster = cluster.id",
+                " and record.topic = topic.id",
+            ))
+            .await
+            .inspect_err(|err| error!(?err, ?topics))?;
+
+        let mut responses = vec![];
+
+        for topic in topics {
+            let mut partition_responses = vec![];
+
+            if let Some(ref partitions) = topic.partitions {
+                for partition in partitions {
+                    _ = c
+                        .execute(
+                            &delete_records,
+                            &[
+                                &self.cluster,
+                                &topic.name,
+                                &partition.partition_index,
+                                &partition.offset,
+                            ],
+                        )
+                        .await
+                        .inspect_err(|err| {
+                            let cluster = self.cluster.as_str();
+                            let topic = topic.name.as_str();
+                            let partition_index = partition.partition_index;
+                            let offset = partition.offset;
+
+                            error!(?err, ?cluster, ?topic, ?partition_index, ?offset)
+                        })?;
+
+                    let prepared = c
+                        .prepare(concat!(
+                            "select",
+                            " id as offset",
+                            " from",
+                            " record",
+                            " join (",
+                            " select",
+                            " coalesce(min(record.id), (select last_value from record_id_seq)) as offset",
+                            " from record, topic, cluster",
+                            " where",
+                            " topic.cluster = cluster.id",
+                            " and cluster.name = $1",
+                            " and topic.name = $2",
+                            " and record.partition = $3",
+                            " and record.topic = topic.id) as minimum",
+                            " on record.id = minimum.offset",
+                        ))
+                        .await
+                        .inspect_err(|err| {
+                            let cluster = self.cluster.as_str();
+                            let topic = topic.name.as_str();
+                            let partition_index = partition.partition_index;
+                            let offset = partition.offset;
+
+                            error!(?err, ?cluster, ?topic, ?partition_index, ?offset)
+                        })?;
+
+                    let partition_result = c
+                        .query_opt(
+                            &prepared,
+                            &[&self.cluster, &topic.name, &partition.partition_index],
+                        )
+                        .await
+                        .inspect_err(|err| {
+                            let cluster = self.cluster.as_str();
+                            let topic = topic.name.as_str();
+                            let partition_index = partition.partition_index;
+                            let offset = partition.offset;
+
+                            error!(?err, ?cluster, ?topic, ?partition_index, ?offset)
+                        })
+                        .map_or(
+                            Ok(DeleteRecordsPartitionResult {
+                                partition_index: partition.partition_index,
+                                low_watermark: 0,
+                                error_code: ErrorCode::UnknownServerError.into(),
+                            }),
+                            |row| {
+                                row.map_or(
+                                    Ok(DeleteRecordsPartitionResult {
+                                        partition_index: partition.partition_index,
+                                        low_watermark: 0,
+                                        error_code: ErrorCode::UnknownServerError.into(),
+                                    }),
+                                    |row| {
+                                        row.try_get::<_, i64>(0).map(|low_watermark| {
+                                            DeleteRecordsPartitionResult {
+                                                partition_index: partition.partition_index,
+                                                low_watermark,
+                                                error_code: ErrorCode::None.into(),
+                                            }
+                                        })
+                                    },
+                                )
+                            },
+                        )?;
+
+                    partition_responses.push(partition_result);
+                }
+            }
+
+            responses.push(DeleteRecordsTopicResult {
+                name: topic.name.clone(),
+                partitions: Some(partition_responses),
+            });
+        }
+        Ok(responses)
     }
 
     async fn delete_topic(&self, name: &str) -> Result<u64> {
@@ -704,11 +836,7 @@ impl Storage for Postgres {
                 ListOffsetRequest::Earliest | ListOffsetRequest::Latest => {
                     c.query_opt(
                         &prepared,
-                        &[
-                            &self.cluster.as_str(),
-                            &topition.topic(),
-                            &topition.partition(),
-                        ],
+                        &[&self.cluster, &topition.topic(), &topition.partition()],
                     )
                     .await
                 }
@@ -793,216 +921,216 @@ impl Storage for Postgres {
 
         debug!(?brokers);
 
-        let responses = if let Some(topics) = topics {
-            let mut responses = vec![];
+        let responses = match topics {
+            Some(topics) if !topics.is_empty() => {
+                let mut responses = vec![];
 
-            for topic in topics {
-                responses.push(match topic {
-                    TopicId::Name(name) => {
-                        let prepared = c
-                            .prepare(concat!(
-                                "select",
-                                " topic.id, topic.name, is_internal, partitions, replication_factor",
-                                " from topic, cluster",
-                                " where cluster.name = $1",
-                                " and topic.name = $2",
-                                " and topic.cluster = cluster.id",
-                            ))
-                            .await?;
+                for topic in topics {
+                    responses.push(match topic {
+                        TopicId::Name(name) => {
+                            let prepared = c
+                                .prepare(concat!(
+                                    "select",
+                                    " topic.id, topic.name, is_internal, partitions, replication_factor",
+                                    " from topic, cluster",
+                                    " where cluster.name = $1",
+                                    " and topic.name = $2",
+                                    " and topic.cluster = cluster.id",
+                                ))
+                                .await?;
 
-                        match c
-                            .query_one(&prepared, &[&self.cluster, &name.as_str()])
-                            .await
-                        {
-                            Ok(row) => {
-                                let error_code = ErrorCode::None.into();
-                                let topic_id = row
-                                    .try_get::<_, Uuid>(0)
-                                    .map(|uuid| uuid.into_bytes())
-                                    .map(Some)?;
-                                let name = row.try_get::<_, String>(1).map(Some)?;
-                                let is_internal = row.try_get::<_, bool>(2).map(Some)?;
-                                let partitions = row.try_get::<_, i32>(3)?;
-                                let replication_factor = row.try_get::<_, i32>(4)?;
+                            match c
+                                .query_one(&prepared, &[&self.cluster, &name.as_str()])
+                                .await
+                            {
+                                Ok(row) => {
+                                    let error_code = ErrorCode::None.into();
+                                    let topic_id = row
+                                        .try_get::<_, Uuid>(0)
+                                        .map(|uuid| uuid.into_bytes())
+                                        .map(Some)?;
+                                    let name = row.try_get::<_, String>(1).map(Some)?;
+                                    let is_internal = row.try_get::<_, bool>(2).map(Some)?;
+                                    let partitions = row.try_get::<_, i32>(3)?;
+                                    let replication_factor = row.try_get::<_, i32>(4)?;
 
-                                let mut rng = thread_rng();
-                                let mut broker_ids:Vec<_> = brokers.iter().map(|broker|broker.node_id).collect();
-                                broker_ids.shuffle(&mut rng);
+                                    let mut rng = thread_rng();
+                                    let mut broker_ids:Vec<_> = brokers.iter().map(|broker|broker.node_id).collect();
+                                    broker_ids.shuffle(&mut rng);
 
-                                let mut brokers = broker_ids.into_iter().cycle();
+                                    let mut brokers = broker_ids.into_iter().cycle();
 
-                                let partitions = Some((0..partitions).map(|partition_index| {
-                                    let leader_id = brokers.next().expect("cycling");
+                                    let partitions = Some((0..partitions).map(|partition_index| {
+                                        let leader_id = brokers.next().expect("cycling");
 
-                                    let replica_nodes = Some((0..replication_factor).map(|_replica|brokers.next().expect("cycling")).collect());
-                                    let isr_nodes = replica_nodes.clone();
+                                        let replica_nodes = Some((0..replication_factor).map(|_replica|brokers.next().expect("cycling")).collect());
+                                        let isr_nodes = replica_nodes.clone();
 
-                                    MetadataResponsePartition {
-                                    error_code,
-                                                    partition_index,
-                                                    leader_id,
-                                                    leader_epoch: Some(-1),
-                                                    replica_nodes,
-                                                    isr_nodes,
-                                                offline_replicas: Some([].into()) }
-
-
-
-                                }).collect());
+                                        MetadataResponsePartition {
+                                            error_code,
+                                            partition_index,
+                                            leader_id,
+                                            leader_epoch: Some(-1),
+                                            replica_nodes,
+                                            isr_nodes,
+                                            offline_replicas: Some([].into()),
+                                        }
+                                    }).collect());
 
 
-                                MetadataResponseTopic {
-                                    error_code,
-                                    name,
-                                    topic_id,
-                                    is_internal,
-                                    partitions,
-                                    topic_authorized_operations: Some(-2147483648),
+                                    MetadataResponseTopic {
+                                        error_code,
+                                        name,
+                                        topic_id,
+                                        is_internal,
+                                        partitions,
+                                        topic_authorized_operations: Some(-2147483648),
+                                    }
                                 }
-                            }
-                            Err(reason) => {
-                                debug!(?reason);
-                                MetadataResponseTopic {
-                                    error_code: ErrorCode::UnknownTopicOrPartition.into(),
-                                    name: Some(name.into()),
-                                    topic_id: None,
-                                    is_internal: None,
-                                    partitions: None,
-                                    topic_authorized_operations: None,
-                                }
-                            }
-                        }
-                    }
-                    TopicId::Id(id) => {
-                        debug!(?id);
-                        let prepared = c
-                            .prepare(concat!(
-                                "select",
-                                " topic.id, topic.name, is_internal, partitions, replication_factor",
-                                " from topic, cluster",
-                                " where cluster.name = $1",
-                                " and topic.id = $2",
-                                " and topic.cluster = cluster.id",
-                            ))
-                            .await
-                            .inspect_err(|error|error!(?error))?;
-
-                        match c
-                            .query_one(&prepared, &[&self.cluster, &id])
-                            .await
-                        {
-                            Ok(row) => {
-                                let error_code = ErrorCode::None.into();
-                                let topic_id = row
-                                    .try_get::<_, Uuid>(0)
-                                    .map(|uuid| uuid.into_bytes())
-                                    .map(Some)?;
-                                let name = row.try_get::<_, String>(1).map(Some)?;
-                                let is_internal = row.try_get::<_, bool>(2).map(Some)?;
-                                let partitions = row.try_get::<_, i32>(3)?;
-                                let replication_factor = row.try_get::<_, i32>(4)?;
-
-                                let mut rng = thread_rng();
-                                let mut broker_ids:Vec<_> = brokers.iter().map(|broker|broker.node_id).collect();
-                                broker_ids.shuffle(&mut rng);
-
-                                let mut brokers = broker_ids.into_iter().cycle();
-
-                                let partitions = Some((0..partitions).map(|partition_index| {
-                                    let leader_id = brokers.next().expect("cycling");
-
-                                    let replica_nodes = Some((0..replication_factor).map(|_replica|brokers.next().expect("cycling")).collect());
-                                    let isr_nodes = replica_nodes.clone();
-
-                                    MetadataResponsePartition {
-                                    error_code,
-                                                    partition_index,
-                                                    leader_id,
-                                                    leader_epoch: Some(-1),
-                                                    replica_nodes,
-                                                    isr_nodes,
-                                                offline_replicas: Some([].into()) }
-
-
-
-                                }).collect());
-
-
-                                MetadataResponseTopic {
-                                    error_code,
-                                    name,
-                                    topic_id,
-                                    is_internal,
-                                    partitions,
-                                    topic_authorized_operations: Some(-2147483648),
-                                }
-                            }
-                            Err(reason) => {
-                                debug!(?reason);
-                                MetadataResponseTopic {
-                                    error_code: ErrorCode::UnknownTopicOrPartition.into(),
-                                    name: None,
-                                    topic_id: Some(id.into_bytes()),
-                                    is_internal: None,
-                                    partitions: None,
-                                    topic_authorized_operations: None,
+                                Err(reason) => {
+                                    debug!(?reason);
+                                    MetadataResponseTopic {
+                                        error_code: ErrorCode::UnknownTopicOrPartition.into(),
+                                        name: Some(name.into()),
+                                        topic_id: Some(NULL_TOPIC_ID),
+                                        is_internal: Some(false),
+                                        partitions: Some([].into()),
+                                        topic_authorized_operations: Some(-2147483648),
+                                    }
                                 }
                             }
                         }
-                    }
-                });
+                        TopicId::Id(id) => {
+                            debug!(?id);
+                            let prepared = c
+                                .prepare(concat!(
+                                    "select",
+                                    " topic.id, topic.name, is_internal, partitions, replication_factor",
+                                    " from topic, cluster",
+                                    " where cluster.name = $1",
+                                    " and topic.id = $2",
+                                    " and topic.cluster = cluster.id",
+                                ))
+                                .await
+                                .inspect_err(|error|error!(?error))?;
+
+                            match c
+                                .query_one(&prepared, &[&self.cluster, &id])
+                                .await
+                            {
+                                Ok(row) => {
+                                    let error_code = ErrorCode::None.into();
+                                    let topic_id = row
+                                        .try_get::<_, Uuid>(0)
+                                        .map(|uuid| uuid.into_bytes())
+                                        .map(Some)?;
+                                    let name = row.try_get::<_, String>(1).map(Some)?;
+                                    let is_internal = row.try_get::<_, bool>(2).map(Some)?;
+                                    let partitions = row.try_get::<_, i32>(3)?;
+                                    let replication_factor = row.try_get::<_, i32>(4)?;
+
+                                    let mut rng = thread_rng();
+                                    let mut broker_ids:Vec<_> = brokers.iter().map(|broker|broker.node_id).collect();
+                                    broker_ids.shuffle(&mut rng);
+
+                                    let mut brokers = broker_ids.into_iter().cycle();
+
+                                    let partitions = Some((0..partitions).map(|partition_index| {
+                                        let leader_id = brokers.next().expect("cycling");
+
+                                        let replica_nodes = Some((0..replication_factor).map(|_replica|brokers.next().expect("cycling")).collect());
+                                        let isr_nodes = replica_nodes.clone();
+
+                                        MetadataResponsePartition {
+                                            error_code,
+                                            partition_index,
+                                            leader_id,
+                                            leader_epoch: Some(-1),
+                                            replica_nodes,
+                                            isr_nodes,
+                                            offline_replicas: Some([].into()),
+                                        }
+                                    }).collect());
+
+
+                                    MetadataResponseTopic {
+                                        error_code,
+                                        name,
+                                        topic_id,
+                                        is_internal,
+                                        partitions,
+                                        topic_authorized_operations: Some(-2147483648),
+                                    }
+                                }
+                                Err(reason) => {
+                                    debug!(?reason);
+                                    MetadataResponseTopic {
+                                        error_code: ErrorCode::UnknownTopicOrPartition.into(),
+                                        name: None,
+                                        topic_id: Some(id.into_bytes()),
+                                        is_internal: Some(false),
+                                        partitions: Some([].into()),
+                                        topic_authorized_operations: Some(-2147483648),
+                                    }
+                                }
+                            }
+                        }
+                    });
+                }
+
+                responses
             }
 
-            responses
-        } else {
-            let mut responses = vec![];
+            _ => {
+                let mut responses = vec![];
 
-            let prepared = c
-                .prepare(concat!(
-                    "select",
-                    " topic.id, topic.name, is_internal, partitions, replication_factor",
-                    " from topic, cluster",
-                    " where cluster.name = $1",
-                    " and topic.cluster = cluster.id",
-                ))
-                .await?;
+                let prepared = c
+                    .prepare(concat!(
+                        "select",
+                        " topic.id, topic.name, is_internal, partitions, replication_factor",
+                        " from topic, cluster",
+                        " where cluster.name = $1",
+                        " and topic.cluster = cluster.id",
+                    ))
+                    .await?;
 
-            match c.query(&prepared, &[&self.cluster]).await {
-                Ok(rows) => {
-                    for row in rows {
-                        let error_code = ErrorCode::None.into();
-                        let topic_id = row
-                            .try_get::<_, Uuid>(0)
-                            .map(|uuid| uuid.into_bytes())
-                            .map(Some)?;
-                        let name = row.try_get::<_, String>(1).map(Some)?;
-                        let is_internal = row.try_get::<_, bool>(2).map(Some)?;
-                        let _partitions = row.try_get::<_, i32>(3)?;
+                match c.query(&prepared, &[&self.cluster]).await {
+                    Ok(rows) => {
+                        for row in rows {
+                            let error_code = ErrorCode::None.into();
+                            let topic_id = row
+                                .try_get::<_, Uuid>(0)
+                                .map(|uuid| uuid.into_bytes())
+                                .map(Some)?;
+                            let name = row.try_get::<_, String>(1).map(Some)?;
+                            let is_internal = row.try_get::<_, bool>(2).map(Some)?;
+                            let _partitions = row.try_get::<_, i32>(3)?;
 
+                            responses.push(MetadataResponseTopic {
+                                error_code,
+                                name,
+                                topic_id,
+                                is_internal,
+                                partitions: Some([].into()),
+                                topic_authorized_operations: Some(-2147483648),
+                            });
+                        }
+                    }
+                    Err(reason) => {
+                        debug!(?reason);
                         responses.push(MetadataResponseTopic {
-                            error_code,
-                            name,
-                            topic_id,
-                            is_internal,
+                            error_code: ErrorCode::UnknownTopicOrPartition.into(),
+                            name: None,
+                            topic_id: Some(NULL_TOPIC_ID),
+                            is_internal: Some(false),
                             partitions: Some([].into()),
                             topic_authorized_operations: Some(-2147483648),
                         });
                     }
                 }
-                Err(reason) => {
-                    debug!(?reason);
-                    responses.push(MetadataResponseTopic {
-                        error_code: ErrorCode::UnknownTopicOrPartition.into(),
-                        name: None,
-                        topic_id: None,
-                        is_internal: None,
-                        partitions: None,
-                        topic_authorized_operations: None,
-                    });
-                }
-            }
 
-            responses
+                responses
+            }
         };
 
         Ok(MetadataResponse {

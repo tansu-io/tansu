@@ -15,6 +15,7 @@
 
 pub mod api_versions;
 pub mod create_topic;
+pub mod delete_records;
 pub mod describe_cluster;
 pub mod describe_configs;
 pub mod fetch;
@@ -36,6 +37,7 @@ use crate::{
 use api_versions::ApiVersionsRequest;
 use bytes::Bytes;
 use create_topic::CreateTopic;
+use delete_records::DeleteRecordsRequest;
 use describe_cluster::DescribeClusterRequest;
 use describe_configs::DescribeConfigsRequest;
 use fetch::FetchRequest;
@@ -290,6 +292,14 @@ where
                 debug!(?validate_only, ?topics);
                 CreateTopic::with_storage(self.storage.clone())
                     .request(topics, validate_only.unwrap_or(false))
+                    .await
+            }
+
+            Body::DeleteRecordsRequest { topics, .. } => {
+                debug!(?topics);
+
+                DeleteRecordsRequest::with_storage(self.storage.clone())
+                    .request(topics.as_deref().unwrap_or(&[]))
                     .await
             }
 

@@ -33,6 +33,8 @@ use std::{
 use tansu_kafka_sans_io::{
     broker_registration_request::{Feature, Listener},
     create_topics_request::CreatableTopic,
+    delete_records_request::DeleteRecordsTopic,
+    delete_records_response::DeleteRecordsTopicResult,
     describe_cluster_response::DescribeClusterBroker,
     fetch_request::FetchTopic,
     metadata_request::MetadataRequestTopic,
@@ -436,6 +438,11 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
     async fn register_broker(&self, broker_registration: BrokerRegistationRequest) -> Result<()>;
 
     async fn create_topic(&self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid>;
+
+    async fn delete_records(
+        &self,
+        topics: &[DeleteRecordsTopic],
+    ) -> Result<Vec<DeleteRecordsTopicResult>>;
 
     async fn delete_topic(&self, name: &str) -> Result<u64>;
 
