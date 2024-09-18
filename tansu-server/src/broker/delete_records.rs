@@ -34,7 +34,7 @@ where
     pub async fn request(&self, topics: &[DeleteRecordsTopic]) -> Result<Body> {
         let topics = self
             .storage
-            .delete_records(&topics)
+            .delete_records(topics)
             .await
             .inspect_err(|err| debug!(?err, ?topics))
             .map(Some)?;
