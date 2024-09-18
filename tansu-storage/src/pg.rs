@@ -40,6 +40,8 @@ use crate::{
     OffsetCommitRequest, OffsetStage, Result, Storage, TopicId, Topition,
 };
 
+const NULL_TOPIC_ID: [u8; 16] = [0; 16];
+
 #[derive(Clone, Debug)]
 pub struct Postgres {
     cluster: String,
@@ -838,16 +840,14 @@ impl Storage for Postgres {
                                     let isr_nodes = replica_nodes.clone();
 
                                     MetadataResponsePartition {
-                                    error_code,
-                                                    partition_index,
-                                                    leader_id,
-                                                    leader_epoch: Some(-1),
-                                                    replica_nodes,
-                                                    isr_nodes,
-                                                offline_replicas: Some([].into()) }
-
-
-
+                                        error_code,
+                                        partition_index,
+                                        leader_id,
+                                        leader_epoch: Some(-1),
+                                        replica_nodes,
+                                        isr_nodes,
+                                        offline_replicas: Some([].into()),
+                                    }
                                 }).collect());
 
 
@@ -865,10 +865,10 @@ impl Storage for Postgres {
                                 MetadataResponseTopic {
                                     error_code: ErrorCode::UnknownTopicOrPartition.into(),
                                     name: Some(name.into()),
-                                    topic_id: None,
-                                    is_internal: None,
-                                    partitions: None,
-                                    topic_authorized_operations: None,
+                                    topic_id: Some(NULL_TOPIC_ID),
+                                    is_internal: Some(false),
+                                    partitions: Some([].into()),
+                                    topic_authorized_operations: Some(-2147483648),
                                 }
                             }
                         }
@@ -915,16 +915,14 @@ impl Storage for Postgres {
                                     let isr_nodes = replica_nodes.clone();
 
                                     MetadataResponsePartition {
-                                    error_code,
-                                                    partition_index,
-                                                    leader_id,
-                                                    leader_epoch: Some(-1),
-                                                    replica_nodes,
-                                                    isr_nodes,
-                                                offline_replicas: Some([].into()) }
-
-
-
+                                        error_code,
+                                        partition_index,
+                                        leader_id,
+                                        leader_epoch: Some(-1),
+                                        replica_nodes,
+                                        isr_nodes,
+                                        offline_replicas: Some([].into()),
+                                    }
                                 }).collect());
 
 
@@ -943,9 +941,9 @@ impl Storage for Postgres {
                                     error_code: ErrorCode::UnknownTopicOrPartition.into(),
                                     name: None,
                                     topic_id: Some(id.into_bytes()),
-                                    is_internal: None,
-                                    partitions: None,
-                                    topic_authorized_operations: None,
+                                    is_internal: Some(false),
+                                    partitions: Some([].into()),
+                                    topic_authorized_operations: Some(-2147483648),
                                 }
                             }
                         }
@@ -994,10 +992,10 @@ impl Storage for Postgres {
                     responses.push(MetadataResponseTopic {
                         error_code: ErrorCode::UnknownTopicOrPartition.into(),
                         name: None,
-                        topic_id: None,
-                        is_internal: None,
-                        partitions: None,
-                        topic_authorized_operations: None,
+                        topic_id: Some(NULL_TOPIC_ID),
+                        is_internal: Some(false),
+                        partitions: Some([].into()),
+                        topic_authorized_operations: Some(-2147483648),
                     });
                 }
             }
