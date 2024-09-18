@@ -237,9 +237,9 @@ impl Storage for Postgres {
                 " from broker, cluster, listener",
                 " where",
                 " cluster.name = $1",
-                ", listener.name = $2",
-                ", broker.cluster = cluster.id",
-                ", listener.broker = broker.id"
+                " and listener.name = $2",
+                " and broker.cluster = cluster.id",
+                " and listener.broker = broker.id"
             ))
             .await?;
 

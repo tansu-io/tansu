@@ -1197,6 +1197,32 @@ impl Compression {
     }
 }
 
+pub enum EndpointType {
+    Unknown,
+    Broker,
+    Controller,
+}
+
+impl From<i8> for EndpointType {
+    fn from(value: i8) -> Self {
+        match value {
+            1 => Self::Broker,
+            2 => Self::Controller,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+impl From<EndpointType> for i8 {
+    fn from(value: EndpointType) -> Self {
+        match value {
+            EndpointType::Unknown => 0,
+            EndpointType::Broker => 1,
+            EndpointType::Controller => 2,
+        }
+    }
+}
+
 pub fn to_system_time(timestamp: i64) -> Result<SystemTime> {
     u64::try_from(timestamp)
         .map(|timestamp| SystemTime::UNIX_EPOCH + Duration::from_millis(timestamp))
