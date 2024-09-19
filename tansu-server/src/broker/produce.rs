@@ -20,7 +20,7 @@ use tansu_kafka_sans_io::{
     Body, ErrorCode,
 };
 use tansu_storage::{Storage, Topition};
-use tracing::debug;
+use tracing::{debug, error};
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ProduceRequest<S> {
@@ -59,7 +59,12 @@ where
 
                 let tp = Topition::new(name, partition.index);
 
-                if let Ok(base_offset) = self.storage.produce(&tp, batch).await {
+                if let Ok(base_offset) = self
+                    .storage
+                    .produce(&tp, batch)
+                    .await
+                    .inspect_err(|err| error!(?err))
+                {
                     PartitionProduceResponse {
                         index: partition.index,
                         error_code: ErrorCode::None.into(),
