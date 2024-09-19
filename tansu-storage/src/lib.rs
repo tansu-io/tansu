@@ -43,6 +43,7 @@ use tansu_kafka_sans_io::{
 };
 use uuid::Uuid;
 
+pub mod dos;
 pub mod index;
 pub mod pg;
 pub mod segment;
@@ -90,6 +91,9 @@ pub enum Error {
 
     #[error("os string {0:?}")]
     OsString(OsString),
+
+    #[error("object store: {0:?}")]
+    ObjectStore(#[from] object_store::Error),
 
     #[error("pattern")]
     Pattern(#[from] PatternError),

@@ -18,6 +18,17 @@ services:
       timeout: 10s
       retries: 5
     pull_policy: missing
+  minio:
+    image: quay.io/minio/minio
+    command:
+      server
+      /data
+      --console-address ":9001"
+    volumes:
+      - minio:/data
+    ports:
+      - 9000:9000
+      - 9001:9001
   tansu:
     image: ghcr.io/tansu-io/tansu
     restart: unless-stopped
@@ -45,4 +56,6 @@ volumes:
   db:
     driver: local
   raft:
+    driver: local
+  minio:
     driver: local
