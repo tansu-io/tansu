@@ -28,6 +28,12 @@ pub struct Header {
     pub value: Option<Bytes>,
 }
 
+impl Header {
+    pub fn builder() -> Builder {
+        Builder::default()
+    }
+}
+
 impl From<Builder> for Header {
     fn from(value: Builder) -> Self {
         Self {
