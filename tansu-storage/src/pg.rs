@@ -912,10 +912,12 @@ impl Storage for Postgres {
             })?
             .map_or_else(
                 || {
-                    let cluster = self.cluster.as_str();
-                    error!(?cluster, ?topition);
+                    let timestamp = Some(SystemTime::now());
+                    let offset = Some(0);
+
                     Ok(ListOffsetResponse {
-                        error_code: ErrorCode::UnknownServerError,
+                        timestamp,
+                        offset,
                         ..Default::default()
                     })
                 },
@@ -941,7 +943,7 @@ impl Storage for Postgres {
     async fn metadata(&self, topics: Option<&[TopicId]>) -> Result<MetadataResponse> {
         debug!(?topics);
 
-        let c = self.connection().await?;
+        let c = self.connection().await.inspect_err(|err| error!(?err))?;
 
         let prepared = c
             .prepare(concat!(
@@ -952,9 +954,13 @@ impl Storage for Postgres {
                 " and listener.broker = broker.id",
                 " and listener.name = 'broker'"
             ))
-            .await?;
+            .await
+            .inspect_err(|err| error!(?err))?;
 
-        let rows = c.query(&prepared, &[&self.cluster]).await?;
+        let rows = c
+            .query(&prepared, &[&self.cluster])
+            .await
+            .inspect_err(|err| error!(?err))?;
 
         let mut brokers = vec![];
 
@@ -990,11 +996,13 @@ impl Storage for Postgres {
                                     " and topic.name = $2",
                                     " and topic.cluster = cluster.id",
                                 ))
-                                .await?;
+                                .await
+                                .inspect_err(|err|{let cluster = self.cluster.as_str();error!(?err, ?cluster, ?name);})?;
 
                             match c
                                 .query_one(&prepared, &[&self.cluster, &name.as_str()])
                                 .await
+                                .inspect_err(|err|error!(?err))
                             {
                                 Ok(row) => {
                                     let error_code = ErrorCode::None.into();
@@ -1006,6 +1014,8 @@ impl Storage for Postgres {
                                     let is_internal = row.try_get::<_, bool>(2).map(Some)?;
                                     let partitions = row.try_get::<_, i32>(3)?;
                                     let replication_factor = row.try_get::<_, i32>(4)?;
+
+                                    debug!(?error_code, ?topic_id, ?name, ?is_internal, ?partitions, ?replication_factor);
 
                                     let mut rng = thread_rng();
                                     let mut broker_ids:Vec<_> = brokers.iter().map(|broker|broker.node_id).collect();
@@ -1082,6 +1092,8 @@ impl Storage for Postgres {
                                     let partitions = row.try_get::<_, i32>(3)?;
                                     let replication_factor = row.try_get::<_, i32>(4)?;
 
+                                    debug!(?error_code, ?topic_id, ?name, ?is_internal, ?partitions, ?replication_factor);
+
                                     let mut rng = thread_rng();
                                     let mut broker_ids:Vec<_> = brokers.iter().map(|broker|broker.node_id).collect();
                                     broker_ids.shuffle(&mut rng);
@@ -1145,9 +1157,14 @@ impl Storage for Postgres {
                         " where cluster.name = $1",
                         " and topic.cluster = cluster.id",
                     ))
-                    .await?;
+                    .await
+                    .inspect_err(|err| error!(?err))?;
 
-                match c.query(&prepared, &[&self.cluster]).await {
+                match c
+                    .query(&prepared, &[&self.cluster])
+                    .await
+                    .inspect_err(|err| error!(?err))
+                {
                     Ok(rows) => {
                         for row in rows {
                             let error_code = ErrorCode::None.into();
@@ -1157,14 +1174,56 @@ impl Storage for Postgres {
                                 .map(Some)?;
                             let name = row.try_get::<_, String>(1).map(Some)?;
                             let is_internal = row.try_get::<_, bool>(2).map(Some)?;
-                            let _partitions = row.try_get::<_, i32>(3)?;
+                            let partitions = row.try_get::<_, i32>(3)?;
+                            let replication_factor = row.try_get::<_, i32>(4)?;
+
+                            debug!(
+                                ?error_code,
+                                ?topic_id,
+                                ?name,
+                                ?is_internal,
+                                ?partitions,
+                                ?replication_factor
+                            );
+
+                            let mut rng = thread_rng();
+                            let mut broker_ids: Vec<_> =
+                                brokers.iter().map(|broker| broker.node_id).collect();
+                            broker_ids.shuffle(&mut rng);
+
+                            let mut brokers = broker_ids.into_iter().cycle();
+
+                            let partitions = Some(
+                                (0..partitions)
+                                    .map(|partition_index| {
+                                        let leader_id = brokers.next().expect("cycling");
+
+                                        let replica_nodes = Some(
+                                            (0..replication_factor)
+                                                .map(|_replica| brokers.next().expect("cycling"))
+                                                .collect(),
+                                        );
+                                        let isr_nodes = replica_nodes.clone();
+
+                                        MetadataResponsePartition {
+                                            error_code,
+                                            partition_index,
+                                            leader_id,
+                                            leader_epoch: Some(-1),
+                                            replica_nodes,
+                                            isr_nodes,
+                                            offline_replicas: Some([].into()),
+                                        }
+                                    })
+                                    .collect(),
+                            );
 
                             responses.push(MetadataResponseTopic {
                                 error_code,
                                 name,
                                 topic_id,
                                 is_internal,
-                                partitions: Some([].into()),
+                                partitions,
                                 topic_authorized_operations: Some(-2147483648),
                             });
                         }

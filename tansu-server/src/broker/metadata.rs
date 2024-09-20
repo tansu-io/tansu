@@ -15,6 +15,7 @@
 
 use tansu_kafka_sans_io::{metadata_request::MetadataRequestTopic, Body};
 use tansu_storage::{Storage, TopicId};
+use tracing::error;
 
 use crate::Result;
 
@@ -36,7 +37,11 @@ where
 
         let topics = topics.map(|topics| topics.iter().map(TopicId::from).collect::<Vec<_>>());
 
-        let response = self.storage.metadata(topics.as_deref()).await?;
+        let response = self
+            .storage
+            .metadata(topics.as_deref())
+            .await
+            .inspect_err(|err| error!(?err))?;
         let brokers = Some(response.brokers().to_owned());
         let cluster_id = response.cluster().map(|s| s.into());
         let controller_id = response.controller();
