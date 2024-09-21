@@ -27,10 +27,11 @@ pub mod list_partition_reassignments;
 pub mod metadata;
 pub mod produce;
 pub mod telemetry;
+pub mod txn;
 
 use crate::{
     command::{Command, Request},
-    coordinator::group::{Coordinator, OffsetCommit},
+    coordinator::group::Coordinator,
     raft::Applicator,
     Error, Result,
 };
@@ -57,6 +58,7 @@ use tokio::{
     net::{TcpListener, TcpStream},
 };
 use tracing::{debug, error, info};
+use txn::{add_offsets::AddOffsets, add_partitions::AddPartitions};
 use url::Url;
 use uuid::Uuid;
 
@@ -517,7 +519,7 @@ where
                     ?topics
                 );
 
-                let detail = OffsetCommit {
+                let detail = crate::coordinator::group::OffsetCommit {
                     group_id: group_id.as_str(),
                     generation_id_or_member_epoch,
                     member_id: member_id.as_deref(),
@@ -580,7 +582,89 @@ where
                     .await
             }
 
-            _ => unimplemented!(),
+            Body::AddOffsetsToTxnRequest {
+                transactional_id,
+                producer_id,
+                producer_epoch,
+                group_id,
+            } => {
+                debug!(?transactional_id, ?producer_id, ?producer_epoch, ?group_id);
+
+                AddOffsets::with_storage(self.storage.clone())
+                    .response(
+                        transactional_id.as_str(),
+                        producer_id,
+                        producer_epoch,
+                        group_id.as_str(),
+                    )
+                    .await
+            }
+
+            Body::AddPartitionsToTxnRequest {
+                transactions,
+                v_3_and_below_transactional_id,
+                v_3_and_below_producer_id,
+                v_3_and_below_producer_epoch,
+                v_3_and_below_topics,
+            } => {
+                debug!(
+                    ?transactions,
+                    ?v_3_and_below_transactional_id,
+                    ?v_3_and_below_producer_id,
+                    ?v_3_and_below_producer_epoch,
+                    ?v_3_and_below_topics
+                );
+
+                AddPartitions::with_storage(self.storage.clone())
+                    .response(
+                        transactions,
+                        v_3_and_below_transactional_id,
+                        v_3_and_below_producer_id,
+                        v_3_and_below_producer_epoch,
+                        v_3_and_below_topics,
+                    )
+                    .await
+            }
+
+            Body::TxnOffsetCommitRequest {
+                transactional_id,
+                group_id,
+                producer_id,
+                producer_epoch,
+                generation_id,
+                member_id,
+                group_instance_id,
+                topics,
+            } => {
+                debug!(
+                    ?transactional_id,
+                    ?group_id,
+                    ?producer_id,
+                    ?producer_epoch,
+                    ?generation_id,
+                    ?member_id,
+                    ?group_instance_id,
+                    ?topics,
+                );
+
+                txn::offset_commit::OffsetCommit::with_storage(self.storage.clone())
+                    .response(
+                        transactional_id.as_str(),
+                        group_id.as_str(),
+                        producer_id,
+                        producer_epoch,
+                        generation_id,
+                        member_id,
+                        group_instance_id,
+                        topics,
+                    )
+                    .await
+            }
+
+            request => {
+                error!(?request);
+                unimplemented!()
+            }
         }
     }
 }
