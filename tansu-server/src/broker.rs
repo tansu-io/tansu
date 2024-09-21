@@ -663,7 +663,7 @@ where
 
             request => {
                 error!(?request);
-                unimplemented!()
+                unimplemented!("{request:?}")
             }
         }
     }
