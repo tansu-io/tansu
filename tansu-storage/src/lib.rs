@@ -14,6 +14,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use async_trait::async_trait;
+use bytes::Bytes;
 use glob::{GlobError, PatternError};
 use regex::Regex;
 use std::{
@@ -41,7 +42,7 @@ use tansu_kafka_sans_io::{
     metadata_response::{MetadataResponseBroker, MetadataResponseTopic},
     offset_commit_request::OffsetCommitRequestPartition,
     record::deflated,
-    to_system_time, to_timestamp, ErrorCode,
+    to_system_time, to_timestamp, ErrorCode, ScramMechanism,
 };
 use uuid::Uuid;
 
@@ -480,6 +481,16 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
     ) -> Result<BTreeMap<Topition, i64>>;
 
     async fn metadata(&self, topics: Option<&[TopicId]>) -> Result<MetadataResponse>;
+
+    async fn upsert_user_scram_credential(
+        &self,
+        user: &str,
+        mechanism: ScramMechanism,
+        salt: Bytes,
+        iterations: i32,
+        stored_key: Bytes,
+        server_key: Bytes,
+    ) -> Result<()>;
 }
 
 #[cfg(test)]

@@ -18,6 +18,7 @@ use bytes::Bytes;
 use serde::Deserialize;
 use std::{fs::File, io::Cursor, sync::Arc, thread};
 use tansu_kafka_sans_io::{
+    alter_user_scram_credentials_request::ScramCredentialUpsertion,
     de::Decoder,
     describe_groups_response::DescribedGroup,
     fetch_response::{
@@ -66,6 +67,71 @@ fn init_tracing() -> Result<DefaultGuard> {
             )
             .finish(),
     ))
+}
+
+#[test]
+fn alter_scram_user_credentials_v0_000() -> Result<()> {
+    let _guard = init_tracing()?;
+
+    let v = vec![
+        0, 0, 0, 203, 0, 51, 0, 0, 0, 0, 0, 3, 0, 13, 97, 100, 109, 105, 110, 99, 108, 105, 101,
+        110, 116, 45, 49, 0, 1, 3, 6, 97, 100, 109, 105, 110, 2, 0, 0, 16, 0, 27, 49, 103, 110,
+        112, 117, 57, 110, 56, 57, 115, 107, 118, 50, 54, 107, 116, 105, 112, 119, 117, 118, 109,
+        51, 122, 116, 49, 65, 30, 137, 94, 102, 20, 180, 225, 155, 169, 126, 79, 248, 217, 157,
+        199, 198, 139, 97, 146, 65, 60, 142, 42, 214, 139, 141, 166, 159, 53, 44, 136, 229, 52,
+        117, 152, 237, 105, 231, 216, 250, 181, 77, 180, 194, 201, 103, 208, 142, 87, 208, 167, 7,
+        240, 44, 151, 106, 139, 140, 182, 144, 97, 98, 162, 24, 0, 6, 97, 100, 109, 105, 110, 1, 0,
+        0, 32, 0, 27, 49, 55, 110, 119, 108, 56, 100, 97, 101, 110, 116, 109, 107, 57, 55, 99, 98,
+        99, 113, 119, 101, 109, 108, 51, 121, 120, 33, 20, 115, 239, 40, 11, 102, 182, 177, 110,
+        127, 72, 241, 193, 119, 189, 205, 107, 93, 0, 159, 160, 139, 5, 219, 49, 211, 244, 224,
+        249, 4, 75, 166, 0, 0,
+    ];
+
+    let mut c = Cursor::new(v);
+    let mut deserializer = Decoder::request(&mut c);
+
+    let salted_password_1 = Bytes::from_static(b"\x14s\xef(\x0bf\xb6\xb1n\x7fH\xf1\xc1w\xbd\xcdk]\0\x9f\xa0\x8b\x05\xdb1\xd3\xf4\xe0\xf9\x04K\xa6");
+    let salt_1 = Bytes::from_static(b"17nwl8daentmk97cbcqweml3yx");
+
+    let salt_2 = Bytes::from_static(b"1gnpu9n89skv26ktipwuvm3zt1");
+    let salted_password_2 = Bytes::from_static(b"\x1e\x89^f\x14\xb4\xe1\x9b\xa9~O\xf8\xd9\x9d\xc7\xc6\x8ba\x92A<\x8e*\xd6\x8b\x8d\xa6\x9f5,\x88\xe54u\x98\xedi\xe7\xd8\xfa\xb5M\xb4\xc2\xc9g\xd0\x8eW\xd0\xa7\x07\xf0,\x97j\x8b\x8c\xb6\x90ab\xa2\x18");
+
+    assert_eq!(
+        Frame {
+            size: 203,
+            header: Header::Request {
+                api_key: 51,
+                api_version: 0,
+                correlation_id: 3,
+                client_id: Some("adminclient-1".into())
+            },
+            body: Body::AlterUserScramCredentialsRequest {
+                deletions: Some([].into()),
+                upsertions: Some(
+                    [
+                        ScramCredentialUpsertion {
+                            name: "admin".into(),
+                            mechanism: 2,
+                            iterations: 4096,
+                            salt: salt_2,
+                            salted_password: salted_password_2
+                        },
+                        ScramCredentialUpsertion {
+                            name: "admin".into(),
+                            mechanism: 1,
+                            iterations: 8192,
+                            salt: salt_1,
+                            salted_password: salted_password_1
+                        }
+                    ]
+                    .into()
+                )
+            }
+        },
+        Frame::deserialize(&mut deserializer)?
+    );
+
+    Ok(())
 }
 
 #[test]

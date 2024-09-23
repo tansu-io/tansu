@@ -93,6 +93,7 @@ pub enum Error {
     FromUtf8(string::FromUtf8Error),
     InvalidAckValue(i16),
     InvalidIsolationLevel(i8),
+    InvalidScramMechanism(i8),
     Io(io::Error),
     Message(String),
     NoSuchField(&'static str),
@@ -1197,7 +1198,9 @@ impl Compression {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum EndpointType {
+    #[default]
     Unknown,
     Broker,
     Controller,
@@ -1219,6 +1222,33 @@ impl From<EndpointType> for i8 {
             EndpointType::Unknown => 0,
             EndpointType::Broker => 1,
             EndpointType::Controller => 2,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum ScramMechanism {
+    Scram256,
+    Scram512,
+}
+
+impl TryFrom<i8> for ScramMechanism {
+    type Error = Error;
+
+    fn try_from(value: i8) -> Result<Self, Self::Error> {
+        match value {
+            1 => Ok(Self::Scram256),
+            2 => Ok(Self::Scram512),
+            otherwise => Err(Error::InvalidScramMechanism(otherwise)),
+        }
+    }
+}
+
+impl From<ScramMechanism> for i8 {
+    fn from(value: ScramMechanism) -> Self {
+        match value {
+            ScramMechanism::Scram256 => 1,
+            ScramMechanism::Scram512 => 2,
         }
     }
 }

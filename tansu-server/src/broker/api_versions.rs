@@ -18,10 +18,6 @@ use tansu_kafka_sans_io::{api_versions_response::ApiVersion, Body, ErrorCode, Ro
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ApiVersionsRequest;
 
-fn is_sasl(api_key: &i16) -> bool {
-    [17].contains(api_key)
-}
-
 fn is_telemetry(api_key: &i16) -> bool {
     [71, 72, 74].contains(api_key)
 }
@@ -45,7 +41,7 @@ impl ApiVersionsRequest {
                 RootMessageMeta::messages()
                     .requests()
                     .iter()
-                    .filter(|(api_key, _)| !(is_telemetry(api_key) || is_sasl(api_key)))
+                    .filter(|(api_key, _)| !is_telemetry(api_key))
                     .map(|(_, meta)| ApiVersion {
                         api_key: meta.api_key,
                         min_version: meta.version.valid.start,

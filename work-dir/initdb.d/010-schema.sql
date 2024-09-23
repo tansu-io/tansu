@@ -143,4 +143,23 @@ create table consumer_group (
   created_at timestamp default current_timestamp not null
 );
 
+create table user (
+  id uuid primary key not null,
+  username text,
+  last_updated timestamp default current_timestamp not null,
+  created_at timestamp default current_timestamp not null
+);
+
+create table scram_credential (
+    user uuid references user(id),
+    mechanism: integer,
+    stored_key: bytea,
+    server_key: bytea,
+    salt: bytea,
+    iterations: integer,
+    primary key (user, mechanism),
+    last_updated timestamp default current_timestamp not null,
+    created_at timestamp default current_timestamp not null
+);
+
 commit;

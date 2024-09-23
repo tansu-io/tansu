@@ -53,7 +53,13 @@ docker-rm-f:
     docker rm --force tansu
 
 list-topics:
-    kafka-topics --bootstrap-server 127.0.0.1:9092 --list
+    kafka-topics --bootstrap-server 127.0.0.1:9092 --command-config command.properties --list
+
+list-topics-plain:
+    kafka-topics --bootstrap-server 127.0.0.1:9092 --command-config command-plain.properties --list
+
+list-topics-scram-256:
+    kafka-topics --bootstrap-server 127.0.0.1:9092 --command-config command-scram-256.properties --list
 
 test-topic-describe:
     kafka-topics --bootstrap-server 127.0.0.1:9092 --describe --topic test

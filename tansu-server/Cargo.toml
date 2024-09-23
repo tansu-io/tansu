@@ -12,13 +12,16 @@ async-trait.workspace = true
 bytes.workspace = true
 clap.workspace = true
 deadpool-postgres.workspace = true
+digest.workspace = true
 futures.workspace = true
-opentelemetry_sdk.workspace = true
 opentelemetry-jaeger.workspace = true
 opentelemetry.workspace = true
+opentelemetry_sdk.workspace = true
 rand.workspace = true
-serde_json.workspace = true
+rsasl.workspace = true
 serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
 tansu-kafka-model = { path = "../tansu-kafka-model" }
 tansu-kafka-sans-io = { path = "../tansu-kafka-sans-io" }
 tansu-raft = { path = "../tansu-raft" }

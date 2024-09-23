@@ -31,7 +31,7 @@ use tansu_kafka_sans_io::{
     describe_cluster_response::DescribeClusterBroker,
     metadata_response::{MetadataResponseBroker, MetadataResponsePartition, MetadataResponseTopic},
     record::{deflated, inflated, Header, Record},
-    to_system_time, to_timestamp, ErrorCode,
+    to_system_time, to_timestamp, ErrorCode, ScramMechanism,
 };
 use tokio_postgres::{error::SqlState, Config, NoTls};
 use tracing::{debug, error};
@@ -1251,6 +1251,18 @@ impl Storage for Postgres {
             brokers,
             topics: responses,
         })
+    }
+
+    async fn upsert_user_scram_credential(
+        &self,
+        user: &str,
+        mechanism: ScramMechanism,
+        salt: Bytes,
+        iterations: i32,
+        stored_key: Bytes,
+        server_key: Bytes,
+    ) -> Result<()> {
+        Ok(())
     }
 }
 

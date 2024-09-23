@@ -50,6 +50,7 @@ crc = "3.0.1"
 criterion = { version = "0.5.1", features = ["html_reports"] }
 deadpool = "0.12.1"
 deadpool-postgres = "0.14.0"
+digest = "0.10.7"
 flate2 = "1.0"
 futures = "0.3"
 getrandom = "0.2"
@@ -65,8 +66,10 @@ proc-macro2 = "1.0.81"
 quote = "1.0"
 rand = "0.8"
 regex = "1.10.6"
+rsasl = { version = "2.1.0", features = ["provider"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10.8"
 snap = "1.1.1"
 strum = { version = "0.26", features = ["derive"] }
 strum_macros = "0.26"

@@ -295,6 +295,8 @@ pub enum Error {
     Poison,
     Pool(#[from] deadpool_postgres::PoolError),
     Raft(#[from] tansu_raft::Error),
+    Sasl(#[from] rsasl::prelude::SASLError),
+    SaslSession(#[from] rsasl::prelude::SessionError),
     Storage(#[from] tansu_storage::Error),
     StringUtf8(#[from] FromUtf8Error),
     TokioPostgres(#[from] tokio_postgres::error::Error),
