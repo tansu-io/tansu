@@ -1000,11 +1000,11 @@ impl Storage for Postgres {
                                 .inspect_err(|err|{let cluster = self.cluster.as_str();error!(?err, ?cluster, ?name);})?;
 
                             match c
-                                .query_one(&prepared, &[&self.cluster, &name.as_str()])
+                                .query_opt(&prepared, &[&self.cluster, &name.as_str()])
                                 .await
                                 .inspect_err(|err|error!(?err))
                             {
-                                Ok(row) => {
+                                Ok(Some(row)) => {
                                     let error_code = ErrorCode::None.into();
                                     let topic_id = row
                                         .try_get::<_, Uuid>(0)
@@ -1050,6 +1050,18 @@ impl Storage for Postgres {
                                         topic_authorized_operations: Some(-2147483648),
                                     }
                                 }
+
+                                Ok(None) => {
+                                    MetadataResponseTopic {
+                                        error_code: ErrorCode::UnknownTopicOrPartition.into(),
+                                        name: Some(name.into()),
+                                        topic_id: Some(NULL_TOPIC_ID),
+                                        is_internal: Some(false),
+                                        partitions: Some([].into()),
+                                        topic_authorized_operations: Some(-2147483648),
+                                    }
+                                }
+
                                 Err(reason) => {
                                     debug!(?reason);
                                     MetadataResponseTopic {
