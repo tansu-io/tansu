@@ -1253,6 +1253,15 @@ impl From<ScramMechanism> for i8 {
     }
 }
 
+impl From<ScramMechanism> for i32 {
+    fn from(value: ScramMechanism) -> Self {
+        match value {
+            ScramMechanism::Scram256 => 1,
+            ScramMechanism::Scram512 => 2,
+        }
+    }
+}
+
 pub fn to_system_time(timestamp: i64) -> Result<SystemTime> {
     u64::try_from(timestamp)
         .map(|timestamp| SystemTime::UNIX_EPOCH + Duration::from_millis(timestamp))

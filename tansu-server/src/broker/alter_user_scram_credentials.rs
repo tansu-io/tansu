@@ -14,17 +14,12 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use bytes::{Buf, Bytes};
-use digest::{
-    consts::U256,
-    core_api::{BufferKindUser, CoreWrapper},
-    typenum::{IsLess, Le, NonZero},
-    FixedOutputReset, HashMarker,
-};
 use rsasl::mechanisms::scram::tools::derive_keys;
 use sha2::{Digest, Sha256, Sha512};
 use tansu_kafka_sans_io::{
     alter_user_scram_credentials_request::{ScramCredentialDeletion, ScramCredentialUpsertion},
-    ScramMechanism,
+    alter_user_scram_credentials_response::AlterUserScramCredentialsResult,
+    Body, ErrorCode, ScramMechanism,
 };
 use tansu_storage::Storage;
 
@@ -47,20 +42,21 @@ where
         &self,
         deletions: Option<Vec<ScramCredentialDeletion>>,
         upsertions: Option<Vec<ScramCredentialUpsertion>>,
-    ) -> Result<()> {
-        if let Some(_deletions) = deletions {
-            todo!()
-        }
+    ) -> Result<Body> {
+        let mut results = vec![];
+
+        if let Some(_deletions) = deletions {}
 
         if let Some(upsertions) = upsertions {
             for upsertion in upsertions {
-                match ScramMechanism::try_from(upsertion.mechanism) {
-                    Ok(mechanism) => {
-                        let (stored_key, server_key) = if mechanism == ScramMechanism::Scram256 {
+                let (mechanism, stored_key, server_key) =
+                    ScramMechanism::try_from(upsertion.mechanism).map(|mechanism| {
+                        if mechanism == ScramMechanism::Scram256 {
                             let (client_key, server_key) =
                                 derive_keys::<Sha256>(&upsertion.salted_password);
 
                             (
+                                mechanism,
                                 Bytes::copy_from_slice(Sha256::digest(client_key).as_slice()),
                                 Bytes::copy_from_slice(server_key.as_slice()),
                             )
@@ -69,29 +65,43 @@ where
                                 derive_keys::<Sha512>(&upsertion.salted_password);
 
                             (
+                                mechanism,
                                 Bytes::copy_from_slice(Sha256::digest(client_key).as_slice()),
                                 Bytes::copy_from_slice(server_key.as_slice()),
                             )
-                        };
+                        }
+                    })?;
 
-                        let q = self
-                            .storage
-                            .upsert_user_scram_credential(
-                                upsertion.name.as_str(),
-                                mechanism,
-                                upsertion.salted_password,
-                                upsertion.iterations,
-                                stored_key,
-                                server_key,
-                            )
-                            .await;
-                    }
-
-                    _ => todo!(),
-                }
+                results.push(
+                    self.storage
+                        .upsert_user_scram_credential(
+                            upsertion.name.as_str(),
+                            mechanism,
+                            upsertion.salted_password,
+                            upsertion.iterations,
+                            stored_key,
+                            server_key,
+                        )
+                        .await
+                        .map_or(
+                            AlterUserScramCredentialsResult {
+                                user: upsertion.name.clone(),
+                                error_code: ErrorCode::UnsupportedSaslMechanism.into(),
+                                error_message: Some("".into()),
+                            },
+                            |()| AlterUserScramCredentialsResult {
+                                user: upsertion.name.clone(),
+                                error_code: ErrorCode::None.into(),
+                                error_message: Some("".into()),
+                            },
+                        ),
+                );
             }
         }
 
-        Ok(())
+        Ok(Body::AlterUserScramCredentialsResponse {
+            throttle_time_ms: 0,
+            results: Some(results),
+        })
     }
 }

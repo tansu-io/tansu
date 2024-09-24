@@ -33,7 +33,7 @@ use tansu_kafka_sans_io::{
     record::{deflated, inflated, Header, Record},
     to_system_time, to_timestamp, ErrorCode, ScramMechanism,
 };
-use tokio_postgres::{error::SqlState, Config, NoTls};
+use tokio_postgres::{error::SqlState, types::ToSql, Config, NoTls};
 use tracing::{debug, error};
 use uuid::Uuid;
 
@@ -1255,13 +1255,67 @@ impl Storage for Postgres {
 
     async fn upsert_user_scram_credential(
         &self,
-        user: &str,
+        username: &str,
         mechanism: ScramMechanism,
         salt: Bytes,
         iterations: i32,
         stored_key: Bytes,
         server_key: Bytes,
     ) -> Result<()> {
+        let c = self.connection().await?;
+
+        let prepared = c
+            .prepare(concat!(
+                "insert into scram_credential ",
+                " (username, mechanism, salt, iterations, stored_key, server_key) ",
+                " values",
+                " ($1, $2, $3, $4, $5, $6)",
+                " on conflict (username, mechanism)",
+                " do update set",
+                " salt = excluded.salt",
+                ", iterations = excluded.iterations",
+                ", stored_key = excluded.stored_key",
+                ", server_key = excluded.server_key",
+                ", last_updated = excluded.last_updated",
+            ))
+            .await
+            .inspect_err(|err| {
+                error!(
+                    ?err,
+                    ?username,
+                    ?mechanism,
+                    ?salt,
+                    ?iterations,
+                    ?stored_key,
+                    ?server_key
+                )
+            })?;
+
+        _ = c
+            .execute(
+                &prepared,
+                &[
+                    &username,
+                    &i32::from(mechanism),
+                    &&salt[..],
+                    &iterations,
+                    &&stored_key[..],
+                    &&server_key[..],
+                ],
+            )
+            .await
+            .inspect_err(|err| {
+                error!(
+                    ?err,
+                    ?username,
+                    ?mechanism,
+                    ?salt,
+                    ?iterations,
+                    ?stored_key,
+                    ?server_key
+                )
+            })?;
+
         Ok(())
     }
 }

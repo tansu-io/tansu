@@ -38,6 +38,7 @@ use crate::{
     raft::Applicator,
     Error, Result,
 };
+use alter_user_scram_credentials::AlterUserScramCredentials;
 use api_versions::ApiVersionsRequest;
 use bytes::Bytes;
 use create_topic::CreateTopic;
@@ -304,9 +305,10 @@ where
             Body::AlterUserScramCredentialsRequest {
                 deletions,
                 upsertions,
-            } => {
-                todo!()
-            }
+            } => AlterUserScramCredentials::with_storage(self.storage.clone())
+                .response(deletions, upsertions)
+                .await
+                .map(|response| (authentication, response)),
 
             Body::ApiVersionsRequest {
                 client_software_name,
