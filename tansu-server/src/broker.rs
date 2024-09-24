@@ -78,6 +78,7 @@ pub struct Broker<G, S> {
     context: Raft,
     applicator: Applicator,
     listener: Url,
+    advertised_listener: Url,
     #[allow(dead_code)]
     rack: Option<String>,
     storage: S,
@@ -96,6 +97,7 @@ where
         context: Raft,
         applicator: Applicator,
         listener: Url,
+        advertised_listener: Url,
         rack: Option<String>,
         storage: S,
         groups: G,
@@ -109,6 +111,7 @@ where
             context,
             applicator,
             listener,
+            advertised_listener,
             rack,
             storage,
             groups,
@@ -133,8 +136,12 @@ where
                 incarnation_id: self.incarnation_id,
                 listeners: [Listener {
                     name: "broker".into(),
-                    host: self.listener.host_str().unwrap_or("localhost").to_owned(),
-                    port: self.listener.port().unwrap_or(9092),
+                    host: self
+                        .advertised_listener
+                        .host_str()
+                        .unwrap_or("localhost")
+                        .to_owned(),
+                    port: self.advertised_listener.port().unwrap_or(9092),
                     security_protocol: 0,
                 }]
                 .into(),
