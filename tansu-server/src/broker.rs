@@ -52,10 +52,7 @@ use list_offsets::ListOffsetsRequest;
 use list_partition_reassignments::ListPartitionReassignmentsRequest;
 use metadata::MetadataRequest;
 use produce::ProduceRequest;
-use rsasl::{
-    config::SASLConfig,
-    prelude::{SASLServer, Session},
-};
+use rsasl::{config::SASLConfig, prelude::SASLServer};
 use sasl::{Authentication, Callback, Justification};
 use sasl_authenticate::SaslAuthenticate;
 use sasl_handshake::SaslHandshake;

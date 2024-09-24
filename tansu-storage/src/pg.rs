@@ -33,7 +33,7 @@ use tansu_kafka_sans_io::{
     record::{deflated, inflated, Header, Record},
     to_system_time, to_timestamp, ErrorCode, ScramMechanism,
 };
-use tokio_postgres::{error::SqlState, types::ToSql, Config, NoTls};
+use tokio_postgres::{error::SqlState, Config, NoTls};
 use tracing::{debug, error};
 use uuid::Uuid;
 

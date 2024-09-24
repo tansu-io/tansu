@@ -14,14 +14,10 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use crate::Result;
-use rsasl::{
-    config::SASLConfig,
-    prelude::{Mechname, SASLServer, Session},
-};
+use rsasl::prelude::Mechname;
 use tansu_kafka_sans_io::{Body, ErrorCode};
-use tansu_storage::Storage;
 
-use super::sasl::{Authentication, Callback, Justification};
+use super::sasl::Authentication;
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct SaslHandshake;

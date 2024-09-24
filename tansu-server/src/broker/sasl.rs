@@ -19,6 +19,7 @@ use rsasl::{
     prelude::{SASLServer, Session, Validation},
     validate::Validate,
 };
+use std::fmt::{Debug, Formatter};
 use tansu_storage::Storage;
 use tracing::debug;
 
@@ -26,6 +27,12 @@ pub enum Authentication {
     Server(SASLServer<Justification>),
     Session(Session<Justification>),
     None,
+}
+
+impl Debug for Authentication {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct(stringify!(Authentication)).finish()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
