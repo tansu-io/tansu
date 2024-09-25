@@ -92,6 +92,7 @@ pub enum Error {
     EnvVar(VarError),
     FromUtf8(string::FromUtf8Error),
     InvalidAckValue(i16),
+    InvalidCoordinatorType(i8),
     InvalidIsolationLevel(i8),
     Io(io::Error),
     Message(String),
@@ -1219,6 +1220,35 @@ impl From<EndpointType> for i8 {
             EndpointType::Unknown => 0,
             EndpointType::Broker => 1,
             EndpointType::Controller => 2,
+        }
+    }
+}
+
+pub enum CoordinatorType {
+    Group,
+    Transaction,
+    Share,
+}
+
+impl TryFrom<i8> for CoordinatorType {
+    type Error = Error;
+
+    fn try_from(value: i8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Group),
+            1 => Ok(Self::Transaction),
+            2 => Ok(Self::Share),
+            otherwise => Err(Error::InvalidCoordinatorType(otherwise)),
+        }
+    }
+}
+
+impl From<CoordinatorType> for i8 {
+    fn from(value: CoordinatorType) -> Self {
+        match value {
+            CoordinatorType::Group => 0,
+            CoordinatorType::Transaction => 1,
+            CoordinatorType::Share => 2,
         }
     }
 }
