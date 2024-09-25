@@ -17,6 +17,7 @@ use crate::Error;
 use rsasl::{
     callback::{Context, Request, SessionCallback, SessionData},
     prelude::{SASLServer, Session, Validation},
+    property::AuthId,
     validate::Validate,
 };
 use std::fmt::{Debug, Formatter};
@@ -71,6 +72,13 @@ where
     ) -> Result<(), rsasl::prelude::SessionError> {
         let _ = (session_data, context, request);
         debug!(?session_data);
+
+        if session_data.mechanism().mechanism.starts_with("SCRAM-") {
+            let mechanism = session_data.mechanism().mechanism;
+            let auth_id = context.get_ref::<AuthId>();
+            debug!(?auth_id, ?mechanism);
+        }
+
         Ok(())
     }
 
@@ -80,9 +88,9 @@ where
         context: &Context<'_>,
         validate: &mut Validate<'_>,
     ) -> Result<(), rsasl::validate::ValidationError> {
-        // silence the 'arg X not used' errors without having to prefix the parameter names with _
         let _ = (session_data, context, validate);
         debug!(?session_data);
+
         Ok(())
     }
 }

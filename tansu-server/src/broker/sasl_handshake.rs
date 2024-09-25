@@ -16,6 +16,7 @@
 use crate::Result;
 use rsasl::prelude::Mechname;
 use tansu_kafka_sans_io::{Body, ErrorCode};
+use tracing::debug;
 
 use super::sasl::Authentication;
 
@@ -39,6 +40,8 @@ impl SaslHandshake {
         };
 
         if let Ok(mechanism) = Mechname::parse(mechanism.as_bytes()) {
+            debug!(?mechanism);
+
             let mechanisms = server
                 .get_available()
                 .into_iter()

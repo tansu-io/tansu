@@ -39,7 +39,7 @@ use uuid::Uuid;
 
 use crate::{
     BrokerRegistationRequest, Error, ListOffsetRequest, ListOffsetResponse, MetadataResponse,
-    OffsetCommitRequest, OffsetStage, Result, Storage, TopicId, Topition,
+    OffsetCommitRequest, OffsetStage, Result, ScramCredential, Storage, TopicId, Topition,
 };
 
 const NULL_TOPIC_ID: [u8; 16] = [0; 16];
@@ -1269,10 +1269,7 @@ impl Storage for Postgres {
         &self,
         username: &str,
         mechanism: ScramMechanism,
-        salt: Bytes,
-        iterations: i32,
-        stored_key: Bytes,
-        server_key: Bytes,
+        credential: ScramCredential,
     ) -> Result<()> {
         let c = self.connection().await?;
 
@@ -1291,17 +1288,7 @@ impl Storage for Postgres {
                 ", last_updated = excluded.last_updated",
             ))
             .await
-            .inspect_err(|err| {
-                error!(
-                    ?err,
-                    ?username,
-                    ?mechanism,
-                    ?salt,
-                    ?iterations,
-                    ?stored_key,
-                    ?server_key
-                )
-            })?;
+            .inspect_err(|err| error!(?err, ?username, ?mechanism,))?;
 
         _ = c
             .execute(
@@ -1309,26 +1296,54 @@ impl Storage for Postgres {
                 &[
                     &username,
                     &i32::from(mechanism),
-                    &&salt[..],
-                    &iterations,
-                    &&stored_key[..],
-                    &&server_key[..],
+                    &&credential.salt()[..],
+                    &credential.iterations,
+                    &&credential.stored_key()[..],
+                    &&credential.server_key()[..],
                 ],
             )
             .await
-            .inspect_err(|err| {
-                error!(
-                    ?err,
-                    ?username,
-                    ?mechanism,
-                    ?salt,
-                    ?iterations,
-                    ?stored_key,
-                    ?server_key
-                )
-            })?;
+            .inspect_err(|err| error!(?err, ?username, ?mechanism,))?;
 
         Ok(())
+    }
+
+    async fn user_scram_credential(
+        &self,
+        user: &str,
+        mechanism: ScramMechanism,
+    ) -> Result<Option<ScramCredential>> {
+        let c = self.connection().await?;
+
+        let prepared = c
+            .prepare(concat!(
+                "select from scram_credential",
+                " salt, iterations, stored_key, server_key",
+                " where",
+                " username = $1",
+                ", and mechanism = $2",
+            ))
+            .await
+            .inspect_err(|err| error!(?err, ?user, ?mechanism,))?;
+
+        c.query_opt(&prepared, &[&user, &i32::from(mechanism)])
+            .await
+            .map_err(Into::into)
+            .and_then(|maybe| {
+                if let Some(row) = maybe {
+                    let salt = row.try_get::<_, &[u8]>(0).map(Bytes::copy_from_slice)?;
+                    let iterations = row.try_get::<_, i32>(1)?;
+                    let stored_key = row.try_get::<_, &[u8]>(2).map(Bytes::copy_from_slice)?;
+                    let server_key = row.try_get::<_, &[u8]>(3).map(Bytes::copy_from_slice)?;
+
+                    Ok(Some(ScramCredential::new(
+                        salt, iterations, stored_key, server_key,
+                    )))
+                } else {
+                    Ok(None)
+                }
+            })
+            .inspect_err(|err| error!(?err, ?user, ?mechanism,))
     }
 }
 

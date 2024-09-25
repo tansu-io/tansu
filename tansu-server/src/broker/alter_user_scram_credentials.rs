@@ -21,7 +21,7 @@ use tansu_kafka_sans_io::{
     alter_user_scram_credentials_response::AlterUserScramCredentialsResult,
     Body, ErrorCode, ScramMechanism,
 };
-use tansu_storage::Storage;
+use tansu_storage::{ScramCredential, Storage};
 
 use crate::Result;
 
@@ -72,15 +72,19 @@ where
                         }
                     })?;
 
+                let credential = ScramCredential::new(
+                    upsertion.salt,
+                    upsertion.iterations,
+                    stored_key,
+                    server_key,
+                );
+
                 results.push(
                     self.storage
                         .upsert_user_scram_credential(
                             upsertion.name.as_str(),
                             mechanism,
-                            upsertion.salted_password,
-                            upsertion.iterations,
-                            stored_key,
-                            server_key,
+                            credential,
                         )
                         .await
                         .map_or(

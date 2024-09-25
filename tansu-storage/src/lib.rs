@@ -486,11 +486,49 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
         &self,
         user: &str,
         mechanism: ScramMechanism,
-        salt: Bytes,
-        iterations: i32,
-        stored_key: Bytes,
-        server_key: Bytes,
+        credential: ScramCredential,
     ) -> Result<()>;
+
+    async fn user_scram_credential(
+        &self,
+        user: &str,
+        mechanism: ScramMechanism,
+    ) -> Result<Option<ScramCredential>>;
+}
+
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ScramCredential {
+    salt: Bytes,
+    iterations: i32,
+    stored_key: Bytes,
+    server_key: Bytes,
+}
+
+impl ScramCredential {
+    pub fn new(salt: Bytes, iterations: i32, stored_key: Bytes, server_key: Bytes) -> Self {
+        Self {
+            salt,
+            iterations,
+            stored_key,
+            server_key,
+        }
+    }
+
+    pub fn salt(&self) -> Bytes {
+        self.salt.clone()
+    }
+
+    pub fn iterations(&self) -> i32 {
+        self.iterations
+    }
+
+    pub fn stored_key(&self) -> Bytes {
+        self.stored_key.clone()
+    }
+
+    pub fn server_key(&self) -> Bytes {
+        self.server_key.clone()
+    }
 }
 
 #[cfg(test)]
