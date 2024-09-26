@@ -36,6 +36,12 @@ docker-compose-sr-up:
 docker-compose-sr-down:
     docker compose down --volumes sr
 
+docker-compose-c3-up:
+    docker compose up --detach c3
+
+docker-compose-c3-down:
+    docker compose down --volumes c3
+
 docker-compose-db-up:
     docker compose up --detach db
 
@@ -95,7 +101,7 @@ tansu-1:
     ./target/debug/tansu-server \
         --kafka-cluster-id RvQwrYegSUCkIPkaiAZQlQ \
         --kafka-listener-url tcp://127.0.0.1:9092/ \
-        --kafka-advertised-listener-url ${KAFKA_ADVERTISED_LISTENER_URL} \
+        --kafka-advertised-listener-url tcp:://127.0.0.1:9092/ \
         --kafka-node-id 4343 \
         --raft-listener-url tcp://127.0.0.1:4567/ \
         --raft-peer-url tcp://127.0.0.1:4568/ \
