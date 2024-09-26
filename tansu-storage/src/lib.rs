@@ -36,12 +36,13 @@ use tansu_kafka_sans_io::{
     delete_records_request::DeleteRecordsTopic,
     delete_records_response::DeleteRecordsTopicResult,
     describe_cluster_response::DescribeClusterBroker,
+    describe_configs_response::DescribeConfigsResult,
     fetch_request::FetchTopic,
     metadata_request::MetadataRequestTopic,
     metadata_response::{MetadataResponseBroker, MetadataResponseTopic},
     offset_commit_request::OffsetCommitRequestPartition,
     record::deflated,
-    to_system_time, to_timestamp, ErrorCode,
+    to_system_time, to_timestamp, ConfigResource, ErrorCode,
 };
 use uuid::Uuid;
 
@@ -484,6 +485,13 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
     ) -> Result<BTreeMap<Topition, i64>>;
 
     async fn metadata(&self, topics: Option<&[TopicId]>) -> Result<MetadataResponse>;
+
+    async fn describe_config(
+        &self,
+        name: &str,
+        resource: ConfigResource,
+        keys: Option<&[String]>,
+    ) -> Result<DescribeConfigsResult>;
 }
 
 #[cfg(test)]

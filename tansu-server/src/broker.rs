@@ -69,6 +69,7 @@ pub struct Broker<G, S> {
     context: Raft,
     applicator: Applicator,
     listener: Url,
+    advertised_listener: Url,
     #[allow(dead_code)]
     rack: Option<String>,
     storage: S,
@@ -87,6 +88,7 @@ where
         context: Raft,
         applicator: Applicator,
         listener: Url,
+        advertised_listener: Url,
         rack: Option<String>,
         storage: S,
         groups: G,
@@ -100,6 +102,7 @@ where
             context,
             applicator,
             listener,
+            advertised_listener,
             rack,
             storage,
             groups,
@@ -119,8 +122,12 @@ where
                 incarnation_id: self.incarnation_id,
                 listeners: [Listener {
                     name: "broker".into(),
-                    host: self.listener.host_str().unwrap_or("localhost").to_owned(),
-                    port: self.listener.port().unwrap_or(9092),
+                    host: self
+                        .advertised_listener
+                        .host_str()
+                        .unwrap_or("localhost")
+                        .to_owned(),
+                    port: self.advertised_listener.port().unwrap_or(9092),
                     security_protocol: 0,
                 }]
                 .into(),
@@ -324,12 +331,13 @@ where
             } => {
                 debug!(?resources, ?include_synonyms, ?include_documentation,);
 
-                let describe_configs = DescribeConfigsRequest;
-                Ok(describe_configs.response(
-                    resources.as_deref(),
-                    include_synonyms,
-                    include_documentation,
-                ))
+                DescribeConfigsRequest::with_storage(self.storage.clone())
+                    .response(
+                        resources.as_deref(),
+                        include_synonyms,
+                        include_documentation,
+                    )
+                    .await
             }
 
             Body::FetchRequest {
@@ -375,7 +383,7 @@ where
                     key_type,
                     coordinator_keys.as_deref(),
                     self.node_id,
-                    &self.listener,
+                    &self.advertised_listener,
                 ))
             }
 

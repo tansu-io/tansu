@@ -101,6 +101,9 @@ struct Cli {
     #[arg(long, default_value = "tcp://0.0.0.0:9092")]
     kafka_listener_url: Url,
 
+    #[arg(long, default_value = "tcp://0.0.0.0:9092")]
+    kafka_advertised_listener_url: Url,
+
     #[arg(long, default_value = "pg=postgres://postgres:postgres@localhost")]
     storage_engine: KeyValue<String, Url>,
 
@@ -185,6 +188,7 @@ async fn main() -> Result<()> {
             raft.clone(),
             applicator.clone(),
             args.kafka_listener_url,
+            args.kafka_advertised_listener_url,
             args.kafka_rack,
             storage,
             groups,
