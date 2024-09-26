@@ -1223,6 +1223,148 @@ impl From<EndpointType> for i8 {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum ConfigResource {
+    Group,
+    ClientMetric,
+    BrokerLogger,
+    Broker,
+    Topic,
+    Unknown,
+}
+
+impl From<i8> for ConfigResource {
+    fn from(value: i8) -> Self {
+        match value {
+            2 => Self::Topic,
+            4 => Self::Broker,
+            8 => Self::BrokerLogger,
+            16 => Self::ClientMetric,
+            32 => Self::Group,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+impl From<ConfigResource> for i8 {
+    fn from(value: ConfigResource) -> Self {
+        match value {
+            ConfigResource::Unknown => 0,
+            ConfigResource::Topic => 2,
+            ConfigResource::Broker => 4,
+            ConfigResource::BrokerLogger => 8,
+            ConfigResource::ClientMetric => 16,
+            ConfigResource::Group => 32,
+        }
+    }
+}
+
+impl From<ConfigResource> for i32 {
+    fn from(value: ConfigResource) -> Self {
+        match value {
+            ConfigResource::Unknown => 0,
+            ConfigResource::Topic => 2,
+            ConfigResource::Broker => 4,
+            ConfigResource::BrokerLogger => 8,
+            ConfigResource::ClientMetric => 16,
+            ConfigResource::Group => 32,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum ConfigType {
+    Unknown,
+    Boolean,
+    String,
+    Int,
+    Short,
+    Long,
+    Double,
+    List,
+    Class,
+    Password,
+}
+
+impl From<i8> for ConfigType {
+    fn from(value: i8) -> Self {
+        match value {
+            1 => Self::Boolean,
+            2 => Self::String,
+            3 => Self::Int,
+            4 => Self::Short,
+            5 => Self::Long,
+            6 => Self::Double,
+            7 => Self::List,
+            8 => Self::Class,
+            9 => Self::Password,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+impl From<ConfigType> for i8 {
+    fn from(value: ConfigType) -> i8 {
+        match value {
+            ConfigType::Boolean => 1,
+            ConfigType::String => 2,
+            ConfigType::Int => 3,
+            ConfigType::Short => 4,
+            ConfigType::Long => 5,
+            ConfigType::Double => 6,
+            ConfigType::List => 7,
+            ConfigType::Class => 8,
+            ConfigType::Password => 9,
+            ConfigType::Unknown => 0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum ConfigSource {
+    DynamicTopicConfig,
+    DynamicBrokerLoggerConfig,
+    DynamicBrokerConfig,
+    DynamicDefaultBrokerConfig,
+    DynamicClientMetricsConfig,
+    DynamicGroupConfig,
+    StaticBrokerConfig,
+    DefaultConfig,
+    Unknown,
+}
+
+impl From<i8> for ConfigSource {
+    fn from(value: i8) -> Self {
+        match value {
+            1 => Self::DynamicTopicConfig,
+            2 => Self::DynamicBrokerConfig,
+            3 => Self::DynamicDefaultBrokerConfig,
+            4 => Self::StaticBrokerConfig,
+            5 => Self::DefaultConfig,
+            6 => Self::DynamicBrokerLoggerConfig,
+            7 => Self::DynamicClientMetricsConfig,
+            8 => Self::DynamicGroupConfig,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+impl From<ConfigSource> for i8 {
+    fn from(value: ConfigSource) -> i8 {
+        match value {
+            ConfigSource::DynamicTopicConfig => 1,
+            ConfigSource::DynamicBrokerConfig => 2,
+            ConfigSource::DynamicDefaultBrokerConfig => 3,
+            ConfigSource::StaticBrokerConfig => 4,
+            ConfigSource::DefaultConfig => 5,
+            ConfigSource::DynamicBrokerLoggerConfig => 6,
+            ConfigSource::DynamicClientMetricsConfig => 7,
+            ConfigSource::DynamicGroupConfig => 8,
+            ConfigSource::Unknown => 0,
+        }
+    }
+}
+
 pub fn to_system_time(timestamp: i64) -> Result<SystemTime> {
     u64::try_from(timestamp)
         .map(|timestamp| SystemTime::UNIX_EPOCH + Duration::from_millis(timestamp))

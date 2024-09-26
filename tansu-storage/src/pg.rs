@@ -29,9 +29,10 @@ use tansu_kafka_sans_io::{
     delete_records_request::DeleteRecordsTopic,
     delete_records_response::{DeleteRecordsPartitionResult, DeleteRecordsTopicResult},
     describe_cluster_response::DescribeClusterBroker,
+    describe_configs_response::{DescribeConfigsResourceResult, DescribeConfigsResult},
     metadata_response::{MetadataResponseBroker, MetadataResponsePartition, MetadataResponseTopic},
     record::{deflated, inflated, Header, Record},
-    to_system_time, to_timestamp, ErrorCode,
+    to_system_time, to_timestamp, ConfigResource, ConfigSource, ConfigType, ErrorCode,
 };
 use tokio_postgres::{error::SqlState, Config, NoTls};
 use tracing::{debug, error};
@@ -1263,6 +1264,92 @@ impl Storage for Postgres {
             brokers,
             topics: responses,
         })
+    }
+
+    async fn describe_config(
+        &self,
+        name: &str,
+        resource: ConfigResource,
+        keys: Option<&[String]>,
+    ) -> Result<DescribeConfigsResult> {
+        debug!(?name, ?resource, ?keys);
+
+        let c = self.connection().await.inspect_err(|err| error!(?err))?;
+
+        let prepared = c
+            .prepare(concat!(
+                "select topic.id",
+                " from cluster, topic",
+                " where cluster.name = $1",
+                " and topic.name = $2",
+                " and topic.cluster = cluster.id",
+            ))
+            .await
+            .inspect_err(|err| error!(?err))?;
+
+        if let Some(row) = c
+            .query_opt(&prepared, &[&self.cluster.as_str(), &name])
+            .await
+            .inspect_err(|err| error!(?err))?
+        {
+            let id = row.try_get::<_, Uuid>(0)?;
+
+            let prepared = c
+                .prepare(concat!(
+                    "select name, value",
+                    " from topic_configuration",
+                    " where topic_configuration.topic = $1",
+                ))
+                .await
+                .inspect_err(|err| error!(?err))?;
+
+            let rows = c
+                .query(&prepared, &[&id])
+                .await
+                .inspect_err(|err| error!(?err))?;
+
+            let mut configs = vec![];
+
+            for row in rows {
+                let name = row.try_get::<_, String>(0)?;
+                let value = row
+                    .try_get::<_, Option<String>>(1)
+                    .map(|value| value.unwrap_or_default())
+                    .map(Some)?;
+
+                configs.push(DescribeConfigsResourceResult {
+                    name,
+                    value,
+                    read_only: false,
+                    is_default: Some(false),
+                    config_source: Some(ConfigSource::DefaultConfig.into()),
+                    is_sensitive: false,
+                    synonyms: Some([].into()),
+                    config_type: Some(ConfigType::String.into()),
+                    documentation: Some("".into()),
+                });
+            }
+
+            let error_code = ErrorCode::None;
+
+            Ok(DescribeConfigsResult {
+                error_code: error_code.into(),
+                error_message: Some(error_code.to_string()),
+                resource_type: i8::from(resource),
+                resource_name: name.into(),
+                configs: Some(configs),
+            })
+        } else {
+            let error_code = ErrorCode::UnknownTopicOrPartition;
+
+            Ok(DescribeConfigsResult {
+                error_code: error_code.into(),
+                error_message: Some(error_code.to_string()),
+                resource_type: i8::from(resource),
+                resource_name: name.into(),
+                configs: Some([].into()),
+            })
+        }
     }
 }
 

@@ -22,11 +22,11 @@ services:
     image: ghcr.io/tansu-io/tansu
     restart: unless-stopped
     environment:
-      RUST_BACKTRACE: full
-      RUST_LOG: warn
-    command:
-      --kafka-cluster-id RvQwrYegSUCkIPkaiAZQlQ
+      RUST_BACKTRACE: ${RUST_BACKTRACE}
+      RUST_LOG: ${RUST_LOG}
+    command: --kafka-cluster-id RvQwrYegSUCkIPkaiAZQlQ
       --kafka-listener-url tcp://0.0.0.0:9092/
+      --kafka-advertised-listener-url ${KAFKA_ADVERTISED_LISTENER_URL}
       --kafka-node-id 4343
       --raft-listener-url tcp://0.0.0.0:4567/
       --raft-peer-url tcp://127.0.0.1:4568/
@@ -39,8 +39,7 @@ services:
       - 4567:4567
     links:
       - db
-    pull_policy:
-      ${PULL_POLICY:-always}
+    pull_policy: missing
 volumes:
   db:
     driver: local
