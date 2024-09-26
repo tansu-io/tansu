@@ -23,6 +23,13 @@ work-dir:
 docker-build:
     docker build --tag ghcr.io/tansu-io/tansu --no-cache --progress plain .
 
+
+docker-compose-tansu-up:
+    docker compose up --detach tansu
+
+docker-compose-tansu-down:
+    docker compose down --volumes tansu
+
 docker-compose-sr-up:
     docker compose up --detach sr
 
