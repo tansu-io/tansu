@@ -23,7 +23,7 @@ use url::Url;
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Cli {
-    #[arg(long, default_value = "tcp://localhost:9092")]
+    #[arg(long, default_value = "tcp://0.0.0.0:9092")]
     listener_url: Url,
 
     #[arg(long, default_value = "tcp://localhost:19092")]

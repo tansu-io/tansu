@@ -24,8 +24,7 @@ services:
     environment:
       RUST_BACKTRACE: full
       RUST_LOG: warn
-    command:
-      --kafka-cluster-id RvQwrYegSUCkIPkaiAZQlQ
+    command: --kafka-cluster-id RvQwrYegSUCkIPkaiAZQlQ
       --kafka-listener-url tcp://0.0.0.0:9092/
       --kafka-node-id 4343
       --raft-listener-url tcp://0.0.0.0:4567/
@@ -39,8 +38,7 @@ services:
       - 4567:4567
     links:
       - db
-    pull_policy:
-      ${PULL_POLICY:-always}
+    pull_policy: missing
 volumes:
   db:
     driver: local

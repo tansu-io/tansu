@@ -331,12 +331,13 @@ where
             } => {
                 debug!(?resources, ?include_synonyms, ?include_documentation,);
 
-                let describe_configs = DescribeConfigsRequest;
-                Ok(describe_configs.response(
-                    resources.as_deref(),
-                    include_synonyms,
-                    include_documentation,
-                ))
+                DescribeConfigsRequest::with_storage(self.storage.clone())
+                    .response(
+                        resources.as_deref(),
+                        include_synonyms,
+                        include_documentation,
+                    )
+                    .await
             }
 
             Body::FetchRequest {
@@ -382,7 +383,7 @@ where
                     key_type,
                     coordinator_keys.as_deref(),
                     self.node_id,
-                    &self.listener,
+                    &self.advertised_listener,
                 ))
             }
 
