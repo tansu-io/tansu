@@ -137,8 +137,12 @@ create table consumer_offset (
 );
 
 create table consumer_group (
-  grp text primary key,
+  name text primary key,
   generation integer,
+  leader integer references broker(id) not null,
+  unique (name, generation, leader),
+  protocol_type text,
+  group_state text,
   last_updated timestamp default current_timestamp not null,
   created_at timestamp default current_timestamp not null
 );

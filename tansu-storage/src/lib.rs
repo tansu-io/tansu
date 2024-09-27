@@ -488,6 +488,15 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
         resource: ConfigResource,
         keys: Option<&[String]>,
     ) -> Result<DescribeConfigsResult>;
+
+    async fn group_heartbeat(
+        &self,
+        name: &str,
+        generation: i32,
+        session_timeout: Duration,
+        protocol_type: Option<&str>,
+        group_state: Option<&str>,
+    ) -> Result<bool>;
 }
 
 #[cfg(test)]

@@ -22,6 +22,7 @@ pub mod fetch;
 pub mod find_coordinator;
 pub mod group;
 pub mod init_producer_id;
+pub mod list_groups;
 pub mod list_offsets;
 pub mod list_partition_reassignments;
 pub mod metadata;
@@ -43,6 +44,7 @@ use describe_configs::DescribeConfigsRequest;
 use fetch::FetchRequest;
 use find_coordinator::FindCoordinatorRequest;
 use init_producer_id::InitProducerIdRequest;
+use list_groups::ListGroups;
 use list_offsets::ListOffsetsRequest;
 use list_partition_reassignments::ListPartitionReassignmentsRequest;
 use metadata::MetadataRequest;
@@ -478,6 +480,13 @@ where
 
                 self.groups
                     .leave(&group_id, member_id.as_deref(), members.as_deref())
+                    .await
+            }
+
+            Body::ListGroupsRequest { states_filter } => {
+                debug!(?states_filter);
+                ListGroups::with_storage(self.storage.clone())
+                    .response(states_filter.as_deref())
                     .await
             }
 

@@ -282,7 +282,8 @@ impl Storage for Postgres {
                 " where cluster.name = $1",
                 " returning topic.id",
             ))
-            .await?;
+            .await
+            .inspect_err(|err| error!("{err:?}"))?;
 
         let topic_id = tx
             .query_one(
@@ -1351,87 +1352,75 @@ impl Storage for Postgres {
             })
         }
     }
-}
 
-#[cfg(test)]
-mod tests {
+    async fn group_heartbeat(
+        &self,
+        name: &str,
+        generation: i32,
+        session_timeout: Duration,
+        protocol_type: Option<&str>,
+        group_state: Option<&str>,
+    ) -> Result<bool> {
+        debug!(?name, ?generation, ?protocol_type, ?group_state);
 
-    // use deadpool_postgres::{ManagerConfig, Pool};
-    // use tansu_kafka_sans_io::record::Record;
-    // use tokio_postgres::NoTls;
-    // use url::Url;
+        let mut c = self.connection().await?;
+        let tx = c.transaction().await?;
 
-    // use super::*;
+        let prepared = tx
+            .prepare(concat!(
+                "delete from consumer_group",
+                " where",
+                " 1=1",
+                " and name=$1",
+                " and current_timestamp - last_updated > $2::text::interval"
+            ))
+            .await
+            .inspect_err(|err| error!("{err:?}"))?;
 
-    // #[test]
-    // fn earl() -> Result<()> {
-    //     let q = Url::parse("postgresql://")?;
-    //     assert_eq!("localhost", q.host_str().unwrap());
+        _ = tx
+            .execute(
+                &prepared,
+                &[&name, &format!("{}ms", session_timeout.as_millis())],
+            )
+            .await
+            .inspect(|rows| debug!(?name, ?generation, ?session_timeout, ?rows))
+            .inspect_err(|err| error!("{err:?}"))?;
 
-    //     Ok(())
-    // }
+        let prepared = tx
+            .prepare(concat!(
+                "insert into consumer_group",
+                " (name, generation, leader, protocol_type, group_state, last_updated)",
+                " select",
+                " $3, $4, broker.id, $5, $6, current_timestamp",
+                " from broker, cluster",
+                " where cluster.name = $1",
+                " and broker.cluster = cluster.id",
+                " and broker.node = $2",
+                " on conflict (name, generation, leader)",
+                " do update set last_updated = excluded.last_updated"
+            ))
+            .await
+            .inspect_err(|err| error!("{err:?}"))?;
 
-    // #[tokio::test]
-    // async fn topic_id() -> Result<()> {
-    //     let pg_config =
-    //         tokio_postgres::Config::from_str("host=localhost user=postgres password=postgres")?;
+        let row = tx
+            .query_opt(
+                &prepared,
+                &[
+                    &self.cluster.as_str(),
+                    &self.node,
+                    &name,
+                    &generation,
+                    &protocol_type,
+                    &group_state,
+                ],
+            )
+            .await
+            .inspect_err(|err| error!("{err:?}"))?;
 
-    //     let mgr_config = ManagerConfig {
-    //         recycling_method: deadpool_postgres::RecyclingMethod::Fast,
-    //     };
+        debug!(?row);
 
-    //     let mgr = deadpool_postgres::Manager::from_config(pg_config, NoTls, mgr_config);
-    //     let pool = Pool::builder(mgr).max_size(16).build().unwrap();
+        tx.commit().await.inspect_err(|err| error!("{err:?}"))?;
 
-    //     let mut storage = Postgres { pool };
-
-    //     let topic = "abc";
-    //     let partition = 3;
-
-    //     _ = storage.create_topic(topic, partition, &[]).await?;
-
-    //     let def = &b"def"[..];
-
-    //     let deflated: deflated::Batch = inflated::Batch::builder()
-    //         .record(Record::builder().value(def.into()))
-    //         .build()
-    //         .and_then(TryInto::try_into)?;
-
-    //     let topition = Topition::new(topic, partition);
-
-    //     _ = storage.produce(&topition, deflated).await?;
-
-    //     let offsets = [(
-    //         Topition::new(topic, 1),
-    //         OffsetCommitRequest {
-    //             offset: 12321,
-    //             leader_epoch: None,
-    //             timestamp: None,
-    //             metadata: None,
-    //         },
-    //     )];
-
-    //     let group: &str = "some_group";
-    //     let retention = None;
-
-    //     storage
-    //         .offset_commit(group, retention, &offsets[..])
-    //         .await?;
-
-    //     let offsets = [(
-    //         Topition::new(topic, 1),
-    //         OffsetCommitRequest {
-    //             offset: 32123,
-    //             leader_epoch: None,
-    //             timestamp: None,
-    //             metadata: None,
-    //         },
-    //     )];
-
-    //     storage
-    //         .offset_commit(group, retention, &offsets[..])
-    //         .await?;
-
-    //     Ok(())
-    // }
+        Ok(row.is_some())
+    }
 }

@@ -37,7 +37,7 @@ use tansu_kafka_sans_io::{
     Body, ErrorCode,
 };
 use tansu_storage::{OffsetCommitRequest, Storage, Topition};
-use tracing::{debug, info};
+use tracing::{debug, error, info};
 use uuid::Uuid;
 
 use crate::{Error, Result};
@@ -1022,12 +1022,26 @@ where
         debug!(?member_id, ?self.members);
 
         if self.state.leader.is_none() {
-            info!(
-                "{member_id} is now leader of: {group_id} in generation: {}",
-                self.generation_id
-            );
+            if let Ok(true) = self
+                .storage
+                .group_heartbeat(
+                    group_id,
+                    self.generation_id,
+                    u64::try_from(self.session_timeout_ms)
+                        .map_or(Duration::from_millis(45_000), Duration::from_millis),
+                    self.state.protocol_type.as_deref(),
+                    None,
+                )
+                .await
+                .inspect_err(|err| error!("{err:?}"))
+            {
+                info!(
+                    "{member_id} is now leader of: {group_id} in generation: {}",
+                    self.generation_id
+                );
 
-            _ = self.state.leader.replace(member_id.to_owned());
+                _ = self.state.leader.replace(member_id.to_owned());
+            }
         }
 
         let body = {
@@ -1663,6 +1677,28 @@ where
         group_instance_id: Option<&str>,
     ) -> (Self::HeartbeatState, Body) {
         let _ = group_instance_id;
+
+        if let Ok(false) = self
+            .storage
+            .group_heartbeat(
+                group_id,
+                self.generation_id,
+                u64::try_from(self.session_timeout_ms)
+                    .map_or(Duration::from_millis(45_000), Duration::from_millis),
+                Some(self.state.protocol_type.as_str()),
+                None,
+            )
+            .await
+            .inspect_err(|err| error!("{err:?}"))
+        {
+            return (
+                self,
+                Body::HeartbeatResponse {
+                    throttle_time_ms: Some(0),
+                    error_code: ErrorCode::RebalanceInProgress.into(),
+                },
+            );
+        }
 
         if !self.members.contains_key(member_id) {
             return (
