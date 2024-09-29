@@ -39,6 +39,7 @@ use tansu_kafka_sans_io::{
 use tansu_raft::Index;
 use tansu_storage::Topition;
 use thiserror::Error;
+use url::Url;
 use uuid::Uuid;
 
 pub mod broker;
@@ -291,6 +292,7 @@ pub enum Error {
     },
     Message(String),
     Model(#[from] tansu_kafka_model::Error),
+    ObjectStore(#[from] object_store::Error),
     ParseInt(#[from] std::num::ParseIntError),
     Poison,
     Pool(#[from] deadpool_postgres::PoolError),
@@ -299,6 +301,7 @@ pub enum Error {
     StringUtf8(#[from] FromUtf8Error),
     TokioPostgres(#[from] tokio_postgres::error::Error),
     TryFromInt(#[from] TryFromIntError),
+    UnsupportedStorageUrl(Url),
     Url(#[from] url::ParseError),
     Utf8(#[from] Utf8Error),
     Uuid(#[from] uuid::Error),

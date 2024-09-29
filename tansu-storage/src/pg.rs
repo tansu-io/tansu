@@ -40,10 +40,8 @@ use uuid::Uuid;
 
 use crate::{
     BrokerRegistationRequest, Error, ListOffsetRequest, ListOffsetResponse, MetadataResponse,
-    OffsetCommitRequest, OffsetStage, Result, Storage, TopicId, Topition,
+    OffsetCommitRequest, OffsetStage, Result, Storage, TopicId, Topition, NULL_TOPIC_ID,
 };
-
-const NULL_TOPIC_ID: [u8; 16] = [0; 16];
 
 #[derive(Clone, Debug)]
 pub struct Postgres {

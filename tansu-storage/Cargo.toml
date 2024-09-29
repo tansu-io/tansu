@@ -13,12 +13,14 @@ bytes.workspace = true
 deadpool-postgres.workspace = true
 deadpool.workspace = true
 futures-core.workspace = true
+futures-util.workspace = true
 futures.workspace = true
 glob.workspace = true
 object_store.workspace = true
 rand.workspace = true
 regex.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 tansu-kafka-sans-io = { path = "../tansu-kafka-sans-io" }
 thiserror.workspace = true
 tokio-postgres.workspace = true

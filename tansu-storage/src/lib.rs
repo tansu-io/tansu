@@ -15,7 +15,10 @@
 
 use async_trait::async_trait;
 use glob::{GlobError, PatternError};
+use pg::Postgres;
 use regex::Regex;
+use s3::S3;
+use serde::{Deserialize, Serialize};
 use std::{
     array::TryFromSliceError,
     collections::BTreeMap,
@@ -49,7 +52,10 @@ use uuid::Uuid;
 pub mod dos;
 pub mod index;
 pub mod pg;
+pub mod s3;
 pub mod segment;
+
+const NULL_TOPIC_ID: [u8; 16] = [0; 16];
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
@@ -110,9 +116,6 @@ pub enum Error {
     #[error("pool")]
     Pool(#[from] deadpool_postgres::PoolError),
 
-    #[error("postgres")]
-    TokioPostgres(#[from] tokio_postgres::error::Error),
-
     #[error("regex")]
     Regex(#[from] regex::Error),
 
@@ -125,8 +128,14 @@ pub enum Error {
         offset: Option<i64>,
     },
 
+    #[error("json: {0}")]
+    SerdeJson(#[from] serde_json::Error),
+
     #[error("system time: {0}")]
     SystemTime(#[from] SystemTimeError),
+
+    #[error("postgres")]
+    TokioPostgres(#[from] tokio_postgres::error::Error),
 
     #[error("try from int: {0}")]
     TryFromInt(#[from] TryFromIntError),
@@ -146,7 +155,7 @@ impl<T> From<PoisonError<T>> for Error {
 
 pub type Result<T, E = Error> = result::Result<T, E>;
 
-#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct Topition {
     topic: String,
     partition: i32,
@@ -224,7 +233,7 @@ impl From<&Topition> for PathBuf {
     }
 }
 
-#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct TopitionOffset {
     topition: Topition,
     offset: i64,
@@ -318,7 +327,7 @@ impl TryFrom<i64> for ListOffsetRequest {
     }
 }
 
-#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct OffsetCommitRequest {
     offset: i64,
     leader_epoch: Option<i32>,
@@ -346,7 +355,7 @@ impl TryFrom<&OffsetCommitRequestPartition> for OffsetCommitRequest {
     }
 }
 
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum TopicId {
     Name(String),
     Id(Uuid),
@@ -376,7 +385,7 @@ impl From<&MetadataRequestTopic> for TopicId {
     }
 }
 
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct BrokerRegistationRequest {
     pub broker_id: i32,
     pub cluster_id: String,
@@ -386,7 +395,7 @@ pub struct BrokerRegistationRequest {
     pub rack: Option<String>,
 }
 
-#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct MetadataResponse {
     cluster: Option<String>,
     controller: Option<i32>,
@@ -412,7 +421,9 @@ impl MetadataResponse {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(
+    Clone, Copy, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize,
+)]
 pub struct OffsetStage {
     last_stable: i64,
     high_watermark: i64,
@@ -492,6 +503,133 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
         resource: ConfigResource,
         keys: Option<&[String]>,
     ) -> Result<DescribeConfigsResult>;
+}
+
+#[derive(Clone, Debug)]
+pub enum StorageContainer {
+    Postgres(Postgres),
+    S3(S3),
+}
+
+#[async_trait]
+impl Storage for StorageContainer {
+    async fn register_broker(&self, broker_registration: BrokerRegistationRequest) -> Result<()> {
+        match self {
+            Self::Postgres(pg) => pg.register_broker(broker_registration).await,
+            Self::S3(s3) => s3.register_broker(broker_registration).await,
+        }
+    }
+
+    async fn create_topic(&self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {
+        match self {
+            Self::Postgres(pg) => pg.create_topic(topic, validate_only).await,
+            Self::S3(s3) => s3.create_topic(topic, validate_only).await,
+        }
+    }
+
+    async fn delete_records(
+        &self,
+        topics: &[DeleteRecordsTopic],
+    ) -> Result<Vec<DeleteRecordsTopicResult>> {
+        match self {
+            Self::Postgres(pg) => pg.delete_records(topics).await,
+            Self::S3(s3) => s3.delete_records(topics).await,
+        }
+    }
+
+    async fn delete_topic(&self, name: &str) -> Result<u64> {
+        match self {
+            Self::Postgres(pg) => pg.delete_topic(name).await,
+            Self::S3(s3) => s3.delete_topic(name).await,
+        }
+    }
+
+    async fn brokers(&self) -> Result<Vec<DescribeClusterBroker>> {
+        match self {
+            Self::Postgres(pg) => pg.brokers().await,
+            Self::S3(s3) => s3.brokers().await,
+        }
+    }
+
+    async fn produce(&self, topition: &Topition, batch: deflated::Batch) -> Result<i64> {
+        match self {
+            Self::Postgres(pg) => pg.produce(topition, batch).await,
+            Self::S3(s3) => s3.produce(topition, batch).await,
+        }
+    }
+
+    async fn fetch(
+        &self,
+        topition: &'_ Topition,
+        offset: i64,
+        min_bytes: u32,
+        max_bytes: u32,
+    ) -> Result<deflated::Batch> {
+        match self {
+            Self::Postgres(pg) => pg.fetch(topition, offset, min_bytes, max_bytes).await,
+            Self::S3(s3) => s3.fetch(topition, offset, min_bytes, max_bytes).await,
+        }
+    }
+
+    async fn offset_stage(&self, topition: &Topition) -> Result<OffsetStage> {
+        match self {
+            Self::Postgres(pg) => pg.offset_stage(topition).await,
+            Self::S3(s3) => s3.offset_stage(topition).await,
+        }
+    }
+
+    async fn list_offsets(
+        &self,
+        offsets: &[(Topition, ListOffsetRequest)],
+    ) -> Result<Vec<(Topition, ListOffsetResponse)>> {
+        match self {
+            Self::Postgres(pg) => pg.list_offsets(offsets).await,
+            Self::S3(s3) => s3.list_offsets(offsets).await,
+        }
+    }
+
+    async fn offset_commit(
+        &self,
+        group_id: &str,
+        retention_time_ms: Option<Duration>,
+        offsets: &[(Topition, OffsetCommitRequest)],
+    ) -> Result<Vec<(Topition, ErrorCode)>> {
+        match self {
+            Self::Postgres(pg) => pg.offset_commit(group_id, retention_time_ms, offsets).await,
+            Self::S3(s3) => s3.offset_commit(group_id, retention_time_ms, offsets).await,
+        }
+    }
+
+    async fn offset_fetch(
+        &self,
+        group_id: Option<&str>,
+        topics: &[Topition],
+        require_stable: Option<bool>,
+    ) -> Result<BTreeMap<Topition, i64>> {
+        match self {
+            Self::Postgres(pg) => pg.offset_fetch(group_id, topics, require_stable).await,
+            Self::S3(s3) => s3.offset_fetch(group_id, topics, require_stable).await,
+        }
+    }
+
+    async fn metadata(&self, topics: Option<&[TopicId]>) -> Result<MetadataResponse> {
+        match self {
+            Self::Postgres(pg) => pg.metadata(topics).await,
+            Self::S3(s3) => s3.metadata(topics).await,
+        }
+    }
+
+    async fn describe_config(
+        &self,
+        name: &str,
+        resource: ConfigResource,
+        keys: Option<&[String]>,
+    ) -> Result<DescribeConfigsResult> {
+        match self {
+            Self::Postgres(pg) => pg.describe_config(name, resource, keys).await,
+            Self::S3(s3) => s3.describe_config(name, resource, keys).await,
+        }
+    }
 }
 
 #[cfg(test)]

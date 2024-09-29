@@ -57,6 +57,7 @@ pub(crate) struct Request {
     command: Box<dyn Command>,
 }
 
+#[allow(dead_code)]
 impl Request {
     pub(crate) fn new(id: Uuid, body: Body) -> Self {
         Self {

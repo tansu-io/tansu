@@ -15,26 +15,38 @@
 
 #[cfg(test)]
 mod tests {
+
     use crate::Result;
-    use futures::stream::BoxStream;
-    use futures_core::stream::BoxStream;
-    use object_store::parse_url_opts;
+    use futures::StreamExt;
+    use object_store::{aws::AmazonS3Builder, path::Path, ObjectStore};
     use tracing::debug;
-    use url::Url;
+    use tracing_subscriber::{fmt::format::FmtSpan, prelude::*};
 
     #[tokio::test]
     async fn minio() -> Result<()> {
-        let options = [
-            ("accessKey", "HAFgdT6j3X3Lek04nvDJ"),
-            ("secretKey", "qu5XLUSyS2U6xw12mboUYpOCmIH8zaRReDjxqWby"),
-        ];
+        tracing_subscriber::registry()
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_level(true)
+                    .with_line_number(true)
+                    .with_thread_ids(true)
+                    .with_span_events(FmtSpan::ACTIVE),
+            )
+            .init();
 
-        let url = Url::parse("http::/localhost:9000/bucket/tansu")?;
+        let store = AmazonS3Builder::new()
+            .with_access_key_id("HAFgdT6j3X3Lek04nvDJ")
+            .with_secret_access_key("qu5XLUSyS2U6xw12mboUYpOCmIH8zaRReDjxqWby")
+            .with_endpoint("http://localhost:9000")
+            .with_bucket_name("tansu")
+            .with_allow_http(true)
+            .build()?;
 
-        let (store, path) = parse_url_opts(&url, options.into_iter())?;
-        debug!(?store, ?path);
+        debug!(?store);
 
-        let mut list_stream = store.list(None);
+        let prefix = Path::from("a");
+
+        let mut list_stream = store.list(Some(&prefix));
 
         while let Some(meta) = list_stream.next().await.transpose().unwrap() {
             let location = meta.location;

@@ -23,6 +23,11 @@ work-dir:
 docker-build:
     docker build --tag ghcr.io/tansu-io/tansu --no-cache --progress plain .
 
+docker-compose-minio-up:
+    docker compose up --detach minio
+
+docker-compose-minio-down:
+    docker compose down --volumes minio
 
 docker-compose-tansu-up:
     docker compose up --detach tansu
@@ -95,13 +100,40 @@ tansu-1:
     ./target/debug/tansu-server \
         --kafka-cluster-id RvQwrYegSUCkIPkaiAZQlQ \
         --kafka-listener-url tcp://127.0.0.1:9092/ \
-        --kafka-advertised-listener-url ${KAFKA_ADVERTISED_LISTENER_URL} \
+        --kafka-advertised-listener-url tcp://127.0.0.1:9092/ \
         --kafka-node-id 4343 \
         --raft-listener-url tcp://127.0.0.1:4567/ \
         --raft-peer-url tcp://127.0.0.1:4568/ \
         --raft-peer-url tcp://127.0.0.1:4569/ \
         --storage-engine pg=postgres://postgres:postgres@localhost \
         --work-dir work-dir/tansu-1
+
+
+tansu-1-pg:
+    ./target/debug/tansu-server \
+        --kafka-cluster-id RvQwrYegSUCkIPkaiAZQlQ \
+        --kafka-listener-url tcp://127.0.0.1:9092/ \
+        --kafka-advertised-listener-url tcp://127.0.0.1:9092/ \
+        --kafka-node-id 4343 \
+        --raft-listener-url tcp://127.0.0.1:4567/ \
+        --raft-peer-url tcp://127.0.0.1:4568/ \
+        --raft-peer-url tcp://127.0.0.1:4569/ \
+        --storage-engine pg=postgres://postgres:postgres@localhost \
+        --work-dir work-dir/tansu-1
+
+
+tansu-1-minio:
+    ./target/debug/tansu-server \
+        --kafka-cluster-id RvQwrYegSUCkIPkaiAZQlQ \
+        --kafka-listener-url tcp://127.0.0.1:9092/ \
+        --kafka-advertised-listener-url tcp://127.0.0.1:9092/ \
+        --kafka-node-id 4343 \
+        --raft-listener-url tcp://127.0.0.1:4567/ \
+        --raft-peer-url tcp://127.0.0.1:4568/ \
+        --raft-peer-url tcp://127.0.0.1:4569/ \
+        --storage-engine minio=s3://tansu/ \
+        --work-dir work-dir/tansu-1
+
 
 kafka-proxy:
     docker run -d -p 19092:9092 apache/kafka:3.8.0
