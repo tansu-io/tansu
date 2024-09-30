@@ -118,7 +118,7 @@ async fn main() -> Result<()> {
                 .map(|builder| builder.cluster(args.kafka_cluster_id.as_str()))
                 .map(|builder| builder.node(args.kafka_node_id))
                 .map(|builder| builder.build())
-                .map(|storage| StorageContainer::Postgres(storage))
+                .map(StorageContainer::Postgres)
                 .map_err(Into::into)
         }
 
@@ -134,7 +134,7 @@ async fn main() -> Result<()> {
                 args.kafka_node_id,
                 object_store_builder,
             )
-            .map(|storage| StorageContainer::S3(storage))
+            .map(StorageContainer::S3)
             .map_err(Into::into)
         }
 

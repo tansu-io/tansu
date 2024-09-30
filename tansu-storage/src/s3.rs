@@ -46,7 +46,7 @@ use crate::{
     OffsetCommitRequest, OffsetStage, Result, Storage, TopicId, Topition, NULL_TOPIC_ID,
 };
 
-const APPLICATION_JSON: &'static str = "application/json";
+const APPLICATION_JSON: &str = "application/json";
 
 #[derive(Debug)]
 pub struct S3 {
@@ -557,7 +557,7 @@ impl Storage for S3 {
                             .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
 
                         ListOffsetResponse {
-                            error_code: ErrorCode::None.into(),
+                            error_code: ErrorCode::None,
                             timestamp: None,
                             offset: Some(watermark.low),
                         }
@@ -586,7 +586,7 @@ impl Storage for S3 {
                             .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
 
                         ListOffsetResponse {
-                            error_code: ErrorCode::None.into(),
+                            error_code: ErrorCode::None,
                             timestamp: None,
                             offset: Some(watermark.high),
                         }

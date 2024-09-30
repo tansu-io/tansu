@@ -49,7 +49,6 @@ use tansu_kafka_sans_io::{
 };
 use uuid::Uuid;
 
-pub mod dos;
 pub mod index;
 pub mod pg;
 pub mod s3;
