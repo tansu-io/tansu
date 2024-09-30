@@ -56,6 +56,35 @@ pub struct S3 {
     object_store: AmazonS3,
 }
 
+impl S3 {
+    async fn get_watermark(&self, topition: &Topition) -> Result<Watermark> {
+        debug!(?topition);
+        let location = Path::from(format!(
+            "clusters/{}/topics/{}/partitions/{:0>10}/watermark.json",
+            self.cluster, topition.topic, topition.partition,
+        ));
+
+        let get_result = self
+            .object_store
+            .get(&location)
+            .await
+            .inspect(|get_result| debug!(?get_result, ?topition))
+            .inspect_err(|error| error!(?error, ?location))
+            .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
+
+        let encoded = get_result
+            .bytes()
+            .await
+            .inspect_err(|error| error!(?error, ?location))
+            .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
+
+        serde_json::from_slice::<Watermark>(&encoded.slice(..))
+            .inspect(|watermark| debug!(?watermark, ?topition))
+            .inspect_err(|error| error!(?error, ?location))
+            .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))
+    }
+}
+
 // bucket structure:
 //
 // clusters/{cluster}
@@ -127,6 +156,8 @@ impl S3 {
 #[async_trait]
 impl Storage for S3 {
     async fn register_broker(&self, broker_registration: BrokerRegistationRequest) -> Result<()> {
+        debug!(?broker_registration);
+
         let payload = serde_json::to_vec(&broker_registration)
             .map(Bytes::from)
             .map(PutPayload::from)?;
@@ -159,7 +190,7 @@ impl Storage for S3 {
     }
 
     async fn create_topic(&self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {
-        let _ = validate_only;
+        debug!(?topic, ?validate_only);
 
         let id = Uuid::now_v7();
 
@@ -279,13 +310,12 @@ impl Storage for S3 {
         &self,
         topics: &[DeleteRecordsTopic],
     ) -> Result<Vec<DeleteRecordsTopicResult>> {
-        let _ = topics;
-
+        debug!(?topics);
         todo!()
     }
 
     async fn delete_topic(&self, name: &str) -> Result<u64> {
-        let _ = name;
+        debug!(?name);
         todo!()
     }
 
@@ -347,6 +377,8 @@ impl Storage for S3 {
     }
 
     async fn produce(&self, topition: &Topition, deflated: deflated::Batch) -> Result<i64> {
+        debug!(?topition, ?deflated);
+
         let location = Path::from(format!(
             "clusters/{}/topics/{}/partitions/{:0>10}/watermark.json",
             self.cluster, topition.topic, topition.partition,
@@ -435,6 +467,8 @@ impl Storage for S3 {
         min_bytes: u32,
         max_bytes: u32,
     ) -> Result<deflated::Batch> {
+        debug!(?topition, ?offset, ?min_bytes, ?max_bytes);
+
         let location = Path::from(format!(
             "clusters/{}/topics/{}/partitions/{:0>10}/records/",
             self.cluster, topition.topic, topition.partition
@@ -487,38 +521,22 @@ impl Storage for S3 {
             .inspect_err(|error| error!(?error, ?location))
             .map_err(|_| Error::Api(ErrorCode::UnknownServerError))
             .and_then(|encoded| self.decode(encoded))
+            .map(|mut deflated| {
+                deflated.base_offset = *offset;
+                deflated
+            })
     }
 
     async fn offset_stage(&self, topition: &Topition) -> Result<OffsetStage> {
         debug!(?topition);
 
-        let location = Path::from(format!(
-            "clusters/{}/topics/{}/partitions/{:0>10}/watermark.json",
-            self.cluster, topition.topic, topition.partition,
-        ));
-
-        let get_result = self
-            .object_store
-            .get(&location)
+        self.get_watermark(topition)
             .await
-            .inspect_err(|error| error!(?error, ?location))
-            .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
-
-        let encoded = get_result
-            .bytes()
-            .await
-            .inspect_err(|error| error!(?error, ?location))
-            .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
-
-        let watermark = serde_json::from_slice::<Watermark>(&encoded.slice(..))
-            .inspect_err(|error| error!(?error, ?location))
-            .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
-
-        Ok(OffsetStage {
-            last_stable: watermark.stable,
-            high_watermark: watermark.high,
-            log_start: watermark.low,
-        })
+            .map(|watermark| OffsetStage {
+                last_stable: watermark.stable,
+                high_watermark: watermark.high,
+                log_start: watermark.low,
+            })
     }
 
     async fn list_offsets(
@@ -534,62 +552,22 @@ impl Storage for S3 {
                 topition.to_owned(),
                 match offset_request {
                     ListOffsetRequest::Earliest => {
-                        let location = Path::from(format!(
-                            "clusters/{}/topics/{}/partitions/{:0>10}/watermark.json",
-                            self.cluster, topition.topic, topition.partition,
-                        ));
-
-                        let get_result = self
-                            .object_store
-                            .get(&location)
+                        self.get_watermark(topition)
                             .await
-                            .inspect_err(|error| error!(?error, ?location))
-                            .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
-
-                        let encoded = get_result
-                            .bytes()
-                            .await
-                            .inspect_err(|error| error!(?error, ?location))
-                            .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
-
-                        let watermark = serde_json::from_slice::<Watermark>(&encoded.slice(..))
-                            .inspect_err(|error| error!(?error, ?location))
-                            .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
-
-                        ListOffsetResponse {
-                            error_code: ErrorCode::None,
-                            timestamp: None,
-                            offset: Some(watermark.low),
-                        }
+                            .map(|watermark| ListOffsetResponse {
+                                error_code: ErrorCode::None,
+                                timestamp: None,
+                                offset: Some(watermark.low),
+                            })?
                     }
                     ListOffsetRequest::Latest => {
-                        let location = Path::from(format!(
-                            "clusters/{}/topics/{}/partitions/{:0>10}/watermark.json",
-                            self.cluster, topition.topic, topition.partition,
-                        ));
-
-                        let get_result = self
-                            .object_store
-                            .get(&location)
+                        self.get_watermark(topition)
                             .await
-                            .inspect_err(|error| error!(?error, ?location))
-                            .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
-
-                        let encoded = get_result
-                            .bytes()
-                            .await
-                            .inspect_err(|error| error!(?error, ?location))
-                            .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
-
-                        let watermark = serde_json::from_slice::<Watermark>(&encoded.slice(..))
-                            .inspect_err(|error| error!(?error, ?location))
-                            .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
-
-                        ListOffsetResponse {
-                            error_code: ErrorCode::None,
-                            timestamp: None,
-                            offset: Some(watermark.high),
-                        }
+                            .map(|watermark| ListOffsetResponse {
+                                error_code: ErrorCode::None,
+                                timestamp: None,
+                                offset: Some(watermark.high),
+                            })?
                     }
                     ListOffsetRequest::Timestamp(..) => todo!(),
                 },
@@ -605,7 +583,7 @@ impl Storage for S3 {
         retention_time_ms: Option<Duration>,
         offsets: &[(Topition, OffsetCommitRequest)],
     ) -> Result<Vec<(Topition, ErrorCode)>> {
-        let _ = retention_time_ms;
+        debug!(?retention_time_ms, ?group_id, ?offsets);
 
         let mut responses = vec![];
 
@@ -649,7 +627,7 @@ impl Storage for S3 {
         topics: &[Topition],
         require_stable: Option<bool>,
     ) -> Result<BTreeMap<Topition, i64>> {
-        let _ = require_stable;
+        debug!(?group_id, ?topics, ?require_stable);
         let mut responses = BTreeMap::new();
 
         if let Some(group_id) = group_id {
@@ -688,6 +666,8 @@ impl Storage for S3 {
     }
 
     async fn metadata(&self, topics: Option<&[TopicId]>) -> Result<MetadataResponse> {
+        debug!(?topics);
+
         let location = Path::from(format!("clusters/{}/brokers/", self.cluster));
 
         let mut brokers = vec![];
@@ -1027,8 +1007,7 @@ impl Storage for S3 {
         resource: ConfigResource,
         keys: Option<&[String]>,
     ) -> Result<DescribeConfigsResult> {
-        let _ = (name, resource, keys);
-
+        debug!(?name, ?resource, ?keys);
         todo!()
     }
 }
