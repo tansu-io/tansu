@@ -7,8 +7,7 @@ Written in 100% safe async 🦀 [Rust][rust-lang-org] 🚀.
 
 ## S3
 
-The storage engine implemented for S3 is very different when
-compared to Apache Kafka:
+Tansu with the S3 storage engine:
 
 - Brokers do not replicate messages, instead relying on the underlying
   storage for resilience.
@@ -35,7 +34,7 @@ conditional put.
 ### configuration
 
 The `storage-engine` parameter is a named S3 URL that specifies the bucket
-to be used. The above will configure a S3 storage engine called "minio"
+to be used. The following will configure a S3 storage engine called "minio"
 using the "tansu" bucket (full context is in
 [compose.yaml](compose.yaml)):
 
