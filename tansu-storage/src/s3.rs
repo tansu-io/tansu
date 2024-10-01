@@ -27,7 +27,7 @@ use object_store::{
 };
 use rand::{prelude::*, thread_rng};
 use serde::{Deserialize, Serialize};
-use tansu_kafka_sans_io::Decoder;
+use tansu_kafka_sans_io::describe_configs_response::DescribeConfigsResourceResult;
 use tansu_kafka_sans_io::{
     create_topics_request::CreatableTopic,
     delete_records_request::DeleteRecordsTopic,
@@ -38,6 +38,7 @@ use tansu_kafka_sans_io::{
     record::{deflated, inflated},
     ConfigResource, Encoder, ErrorCode,
 };
+use tansu_kafka_sans_io::{ConfigSource, ConfigType, Decoder};
 use tracing::{debug, error};
 use uuid::Uuid;
 
@@ -82,6 +83,29 @@ impl S3 {
             .inspect(|watermark| debug!(?watermark, ?topition))
             .inspect_err(|error| error!(?error, ?location))
             .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))
+    }
+
+    async fn topic_metadata(&self, topic: &TopicId) -> Result<TopicMetadata> {
+        debug!(?topic);
+
+        let location = match topic {
+            TopicId::Name(name) => {
+                Path::from(format!("clusters/{}/topics/{}.json", self.cluster, name))
+            }
+
+            TopicId::Id(id) => Path::from(format!(
+                "clusters/{}/topics/uuids/{}.json",
+                self.cluster, id
+            )),
+        };
+
+        let get_result = self.object_store.get(&location).await?;
+
+        let encoded = get_result.bytes().await?;
+
+        serde_json::from_slice::<TopicMetadata>(&encoded.slice(..))
+            .inspect(|topic_metadata| debug!(?topic_metadata, ?topic))
+            .map_err(Into::into)
     }
 }
 
@@ -316,6 +340,7 @@ impl Storage for S3 {
 
     async fn delete_topic(&self, name: &str) -> Result<u64> {
         debug!(?name);
+
         todo!()
     }
 
@@ -430,6 +455,7 @@ impl Storage for S3 {
                 .object_store
                 .put_opts(&location, payload, options)
                 .await
+                .inspect_err(|error| error!(?error, ?location))
                 .inspect(|put_result| debug!(?location, ?put_result))
             {
                 Ok(_) => {
@@ -450,12 +476,18 @@ impl Storage for S3 {
                     _ = self
                         .object_store
                         .put_opts(&location, payload, options)
-                        .await?;
+                        .await
+                        .inspect_err(|error| error!(?error))?;
 
                     return Ok(original.high);
                 }
                 Err(object_store::Error::Precondition { .. }) => continue,
-                Err(_) => return Err(Error::Api(ErrorCode::UnknownServerError)),
+                Err(error) => {
+                    return {
+                        error!(?error);
+                        Err(Error::Api(ErrorCode::UnknownServerError))
+                    }
+                }
             }
         }
     }
@@ -725,140 +757,86 @@ impl Storage for S3 {
                 let mut responses = vec![];
 
                 for topic in topics {
-                    let location = match topic {
-                        TopicId::Name(name) => {
-                            Path::from(format!("clusters/{}/topics/{}.json", self.cluster, name))
-                        }
-
-                        TopicId::Id(id) => Path::from(format!(
-                            "clusters/{}/topics/uuids/{}.json",
-                            self.cluster, id
-                        )),
-                    };
-
                     let response = match self
-                        .object_store
-                        .get(&location)
+                        .topic_metadata(topic)
                         .await
                         .inspect_err(|error| error!(?error, ?location))
                     {
-                        Ok(payload) => {
-                            if let Ok(encoded) = payload
-                                .bytes()
-                                .await
-                                .inspect_err(|error| error!(?error, ?location))
-                            {
-                                if let Ok(topic_metadata) =
-                                    serde_json::from_slice::<TopicMetadata>(&encoded.slice(..))
-                                        .inspect_err(|error| error!(?error, ?location))
-                                {
-                                    let name = Some(topic_metadata.topic.name.to_owned());
-                                    let error_code = ErrorCode::None.into();
-                                    let topic_id = Some(topic_metadata.id.into_bytes());
-                                    let is_internal = Some(false);
-                                    let partitions = topic_metadata.topic.num_partitions;
-                                    let replication_factor =
-                                        topic_metadata.topic.replication_factor;
+                        Ok(topic_metadata) => {
+                            let name = Some(topic_metadata.topic.name.to_owned());
+                            let error_code = ErrorCode::None.into();
+                            let topic_id = Some(topic_metadata.id.into_bytes());
+                            let is_internal = Some(false);
+                            let partitions = topic_metadata.topic.num_partitions;
+                            let replication_factor = topic_metadata.topic.replication_factor;
 
-                                    debug!(
-                                        ?error_code,
-                                        ?topic_id,
-                                        ?name,
-                                        ?is_internal,
-                                        ?partitions,
-                                        ?replication_factor
-                                    );
+                            debug!(
+                                ?error_code,
+                                ?topic_id,
+                                ?name,
+                                ?is_internal,
+                                ?partitions,
+                                ?replication_factor
+                            );
 
-                                    let mut rng = thread_rng();
-                                    let mut broker_ids: Vec<_> =
-                                        brokers.iter().map(|broker| broker.node_id).collect();
-                                    broker_ids.shuffle(&mut rng);
+                            let mut rng = thread_rng();
+                            let mut broker_ids: Vec<_> =
+                                brokers.iter().map(|broker| broker.node_id).collect();
+                            broker_ids.shuffle(&mut rng);
 
-                                    let mut brokers = broker_ids.into_iter().cycle();
+                            let mut brokers = broker_ids.into_iter().cycle();
 
-                                    let partitions = Some(
-                                        (0..partitions)
-                                            .map(|partition_index| {
-                                                let leader_id = brokers.next().expect("cycling");
+                            let partitions = Some(
+                                (0..partitions)
+                                    .map(|partition_index| {
+                                        let leader_id = brokers.next().expect("cycling");
 
-                                                let replica_nodes = Some(
-                                                    (0..replication_factor)
-                                                        .map(|_replica| {
-                                                            brokers.next().expect("cycling")
-                                                        })
-                                                        .collect(),
-                                                );
-                                                let isr_nodes = replica_nodes.clone();
+                                        let replica_nodes = Some(
+                                            (0..replication_factor)
+                                                .map(|_replica| brokers.next().expect("cycling"))
+                                                .collect(),
+                                        );
+                                        let isr_nodes = replica_nodes.clone();
 
-                                                MetadataResponsePartition {
-                                                    error_code,
-                                                    partition_index,
-                                                    leader_id,
-                                                    leader_epoch: Some(-1),
-                                                    replica_nodes,
-                                                    isr_nodes,
-                                                    offline_replicas: Some([].into()),
-                                                }
-                                            })
-                                            .collect(),
-                                    );
+                                        MetadataResponsePartition {
+                                            error_code,
+                                            partition_index,
+                                            leader_id,
+                                            leader_epoch: Some(-1),
+                                            replica_nodes,
+                                            isr_nodes,
+                                            offline_replicas: Some([].into()),
+                                        }
+                                    })
+                                    .collect(),
+                            );
 
-                                    MetadataResponseTopic {
-                                        error_code,
-                                        name,
-                                        topic_id,
-                                        is_internal,
-                                        partitions,
-                                        topic_authorized_operations: Some(-2147483648),
-                                    }
-                                } else {
-                                    MetadataResponseTopic {
-                                        error_code: ErrorCode::UnknownServerError.into(),
-                                        name: match topic {
-                                            TopicId::Name(name) => Some(name.into()),
-                                            TopicId::Id(_) => Some("".into()),
-                                        },
-                                        topic_id: Some(match topic {
-                                            TopicId::Name(_) => NULL_TOPIC_ID,
-                                            TopicId::Id(id) => id.into_bytes(),
-                                        }),
-                                        is_internal: Some(false),
-                                        partitions: Some([].into()),
-                                        topic_authorized_operations: Some(-2147483648),
-                                    }
-                                }
-                            } else {
-                                MetadataResponseTopic {
-                                    error_code: ErrorCode::UnknownServerError.into(),
-                                    name: match topic {
-                                        TopicId::Name(name) => Some(name.into()),
-                                        TopicId::Id(_) => Some("".into()),
-                                    },
-                                    topic_id: Some(match topic {
-                                        TopicId::Name(_) => NULL_TOPIC_ID,
-                                        TopicId::Id(id) => id.into_bytes(),
-                                    }),
-                                    is_internal: Some(false),
-                                    partitions: Some([].into()),
-                                    topic_authorized_operations: Some(-2147483648),
-                                }
+                            MetadataResponseTopic {
+                                error_code,
+                                name,
+                                topic_id,
+                                is_internal,
+                                partitions,
+                                topic_authorized_operations: Some(-2147483648),
                             }
                         }
 
-                        Err(object_store::Error::NotFound { .. }) => MetadataResponseTopic {
-                            error_code: ErrorCode::UnknownTopicOrPartition.into(),
-                            name: match topic {
-                                TopicId::Name(name) => Some(name.into()),
-                                TopicId::Id(_) => Some("".into()),
-                            },
-                            topic_id: Some(match topic {
-                                TopicId::Name(_) => NULL_TOPIC_ID,
-                                TopicId::Id(id) => id.into_bytes(),
-                            }),
-                            is_internal: Some(false),
-                            partitions: Some([].into()),
-                            topic_authorized_operations: Some(-2147483648),
-                        },
+                        Err(Error::ObjectStore(object_store::Error::NotFound { .. })) => {
+                            MetadataResponseTopic {
+                                error_code: ErrorCode::UnknownTopicOrPartition.into(),
+                                name: match topic {
+                                    TopicId::Name(name) => Some(name.into()),
+                                    TopicId::Id(_) => Some("".into()),
+                                },
+                                topic_id: Some(match topic {
+                                    TopicId::Name(_) => NULL_TOPIC_ID,
+                                    TopicId::Id(id) => id.into_bytes(),
+                                }),
+                                is_internal: Some(false),
+                                partitions: Some([].into()),
+                                topic_authorized_operations: Some(-2147483648),
+                            }
+                        }
 
                         Err(_) => MetadataResponseTopic {
                             error_code: ErrorCode::UnknownServerError.into(),
@@ -1008,6 +986,35 @@ impl Storage for S3 {
         keys: Option<&[String]>,
     ) -> Result<DescribeConfigsResult> {
         debug!(?name, ?resource, ?keys);
-        todo!()
+
+        match resource {
+            ConfigResource::Topic => match self.topic_metadata(&TopicId::Name(name.into())).await {
+                Ok(topic_metadata) => Ok(DescribeConfigsResult {
+                    error_code: ErrorCode::None.into(),
+                    error_message: Some("None".into()),
+                    resource_type: i8::from(resource),
+                    resource_name: name.into(),
+                    configs: topic_metadata.topic.configs.map(|configs| {
+                        configs
+                            .iter()
+                            .map(|config| DescribeConfigsResourceResult {
+                                name: config.name.clone(),
+                                value: config.value.clone(),
+                                read_only: false,
+                                is_default: Some(false),
+                                config_source: Some(ConfigSource::DefaultConfig.into()),
+                                is_sensitive: false,
+                                synonyms: Some([].into()),
+                                config_type: Some(ConfigType::String.into()),
+                                documentation: Some("".into()),
+                            })
+                            .collect()
+                    }),
+                }),
+                Err(_) => todo!(),
+            },
+
+            _ => todo!(),
+        }
     }
 }

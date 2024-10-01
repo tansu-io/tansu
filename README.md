@@ -1,14 +1,76 @@
 # Tansu
 
 [Tansu][github-com-tansu-io] is an Apache Kafka API compatible broker
-with a Postgres storage engine. Acting as a drop in replacement,
-existing clients connect to Tansu, producing and fetching messages
-stored in Postgres.  Tansu is in **early** development, licensed under
-the [GNU AGPL][agpl-license]. Written in async 🦀
-[Rust][rust-lang-org] 🚀.
+with multiple storage engines. Acting as a drop in replacement,
+existing clients connect to Tansu, producing and fetching messages.
+Tansu is licensed under the [GNU AGPL][agpl-license].
+Written in 100% safe async 🦀 [Rust][rust-lang-org] 🚀.
+
+Available storage engines:
+
+- S3
+- PostgreSQL (additional [discussion][tansu-postgres])
+
+## S3
+
+While retaining API compatibility, the storage engine
+implemented for S3 is very different when compared to Apache
+Kafka:
+
+- Brokers do not replicate messages, instead relying on the underlying
+  storage for resilience.
+- Brokers do not require a consensus protocol (e.g., Raft or
+  Zookeeper), instead conditional PUTs are used to coordinate state.
+- Brokers are stateless.
+- All brokers are leaders.
+
+Note that, Tansu requires that the underlying S3 service support conditional
+PUT requests. While
+[AWS S3 does now support conditional writes,][aws-s3-conditional-writes],
+the support is
+[limited to not overwriting an existing object][aws-s3-conditional-requests].
+To have stateless brokers we need to use a compare and set operation,
+which is not currently available in AWS S3.
+
+Much like the Kafka protocol, the open nature of the S3 protocol allows vendors
+to differentiate with different levels of service while retaining compatibility
+with the underlying API. A couple of other S3 vendors provide conditional updates,
+that we have tried:
+
+- [minio][min-io]
+- [tigis][tigris-conditional-writes]
+
+### configuration
+
+The `storage-engine` parameter is a named S3 URL that specifies the bucket
+to be used. The above will configure a S3 storage engine called "minio"
+using the "tansu" bucket (full context is in
+[compose.yaml](compose.yaml)):
+
+```shell
+--storage-engine minio=s3://tansu/
+```
+
+Tansu can be configured to use a local minio service with the following environment:
+
+```bash
+# Your AWS access key:
+AWS_ACCESS_KEY_ID="access key"
+
+# Your AWS secret:
+AWS_SECRET_ACCESS_KEY="secret"
+
+# The endpoint URL of the S3 service:
+AWS_ENDPOINT="http://localhost:9000"
+
+# Allow HTTP requests to the S3 service:
+AWS_ALLOW_HTTP="true"
+```
+
+## PostgreSQL
 
 While retaining API compatibility, the current storage engine
-implemented for Postgres is very different when compared to Apache
+implemented for PostgreSQL is very different when compared to Apache
 Kafka:
 
 - Messages are not stored in segments, so that retention and
@@ -17,62 +79,6 @@ Kafka:
   single topic partition.
 - Brokers do not replicate messages, relying on [continous
   archiving][continuous-archiving] instead.
-  
-Our initial use cases are relatively low volume Kafka deployments
-where total message ordering could be useful. Other non-functional
-requirements might require a different storage engine. Tansu has been
-designed to work with multiple storage engines which are also in
-development:
-
-- A Postgres engine where message ordering is either per topic,
-  or per topic partition (as in Kafka).
-- An object store for S3 or compatible services.
-- A segmented disk store (as in Kafka with broker replication).
-
-We store a Kafka message using the following `record` schema:
-
-```sql
-create table record (
-  id bigserial primary key not null,
-  topic uuid references topic(id),
-  partition integer,
-  producer_id bigint,
-  sequence integer,
-  timestamp timestamp,
-  k bytea,
-  v bytea,
-  last_updated timestamp default current_timestamp not null,
-  created_at timestamp default current_timestamp not null
-);
-```
-
-The `k` and `v` are the key and value being stored by the client, with
-the SQL being used for a fetch looks like:
-
-```sql
-with sized as (
- select
- record.id,
- timestamp,
- k,
- v,
- sum(coalesce(length(k), 0) + coalesce(length(v), 0)),
- over (order by record.id) as bytes
- from cluster, record, topic
- where
- cluster.name = $1
- and topic.name = $2
- and record.partition = $3
- and record.id >= $4
- and topic.cluster = cluster.id
- and record.topic = topic.id
-) select * from sized where bytes < $5;
-```
-
-One of the parameters for the [Kafka Fetch API][kafka-fetch] is the
-maximum number of bytes being returned. We use a [with
-query][with-queries] here to restrict the size of the result set being
-returned, with a running total of the size.
 
 Tansu is available as a [minimal from scratch][docker-from-scratch]
 docker image. With a `compose.yaml`, available from [here][compose]:
@@ -134,13 +140,15 @@ Consumer:
   -b localhost:9092
 ```
 
-
 [agpl-license]: https://www.gnu.org/licenses/agpl-3.0.en.html
+[aws-s3-conditional-requests]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-requests.html
+[aws-s3-conditional-writes]: https://aws.amazon.com/about-aws/whats-new/2024/08/amazon-s3-conditional-writes/
 [compose]: https://github.com/tansu-io/tansu/blob/main/compose.yaml
 [continuous-archiving]: https://www.postgresql.org/docs/current/continuous-archiving.html
 [docker-from-scratch]: https://docs.docker.com/build/building/base-images/#create-a-minimal-base-image-using-scratch
 [github-com-tansu-io]: https://github.com/tansu-io/tansu
-[kafka-fetch]: https://kafka.apache.org/protocol.html#The_Messages_Fetch
 [librdkafka]: https://github.com/confluentinc/librdkafka
+[min-io]: https://min.io
 [rust-lang-org]: https://www.rust-lang.org
-[with-queries]: https://www.postgresql.org/docs/current/queries-with.html
+[tansu-postgres]: https://shortishly.com/blog/tansu-postgres/
+[tigris-conditional-writes]: https://www.tigrisdata.com/blog/s3-conditional-writes/
