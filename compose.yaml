@@ -20,8 +20,7 @@ services:
     pull_policy: missing
   minio:
     image: quay.io/minio/minio
-    command:
-      server
+    command: server
       /data
       --console-address ":9001"
     volumes:
@@ -35,13 +34,15 @@ services:
     environment:
       RUST_BACKTRACE: ${RUST_BACKTRACE}
       RUST_LOG: ${RUST_LOG}
-    command: --kafka-cluster-id RvQwrYegSUCkIPkaiAZQlQ
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_ENDPOINT: ${AWS_ENDPOINT}
+      AWS_ALLOW_HTTP: ${AWS_ALLOW_HTTP}
+    command: --kafka-cluster-id ${CLUSTER_ID}
       --kafka-listener-url tcp://0.0.0.0:9092/
       --kafka-advertised-listener-url ${KAFKA_ADVERTISED_LISTENER_URL}
-      --kafka-node-id 4343
-      --raft-listener-url tcp://0.0.0.0:4567/
-      --raft-peer-url tcp://127.0.0.1:4568/
-      --storage-engine db=postgres://postgres:postgres@db
+      --kafka-node-id ${NODE_ID}
+      --storage-engine ${STORAGE_ENGINE}
       --work-dir /data
     volumes:
       - raft:/data
@@ -50,6 +51,7 @@ services:
       - 4567:4567
     links:
       - db
+      - minio
     pull_policy: missing
 volumes:
   db:
