@@ -29,13 +29,10 @@ pub mod produce;
 pub mod telemetry;
 
 use crate::{
-    command::{Command, Request},
     coordinator::group::{Coordinator, OffsetCommit},
-    raft::Applicator,
     Error, Result,
 };
 use api_versions::ApiVersionsRequest;
-use bytes::Bytes;
 use create_topic::CreateTopic;
 use delete_records::DeleteRecordsRequest;
 use describe_cluster::DescribeClusterRequest;
@@ -49,7 +46,6 @@ use metadata::MetadataRequest;
 use produce::ProduceRequest;
 use std::io::ErrorKind;
 use tansu_kafka_sans_io::{broker_registration_request::Listener, Body, Frame, Header};
-use tansu_raft::{Log, Raft};
 use tansu_storage::{BrokerRegistationRequest, Storage};
 use telemetry::GetTelemetrySubscriptionsRequest;
 use tokio::{
@@ -66,8 +62,8 @@ pub struct Broker<G, S> {
     cluster_id: String,
     incarnation_id: Uuid,
     #[allow(dead_code)]
-    context: Raft,
-    applicator: Applicator,
+    // context: Raft,
+    // applicator: Applicator,
     listener: Url,
     advertised_listener: Url,
     #[allow(dead_code)]
@@ -85,8 +81,8 @@ where
     pub fn new(
         node_id: i32,
         cluster_id: &str,
-        context: Raft,
-        applicator: Applicator,
+        // context: Raft,
+        // applicator: Applicator,
         listener: Url,
         advertised_listener: Url,
         rack: Option<String>,
@@ -99,8 +95,8 @@ where
             node_id,
             cluster_id: cluster_id.to_owned(),
             incarnation_id,
-            context,
-            applicator,
+            // context,
+            // applicator,
             listener,
             advertised_listener,
             rack,
@@ -249,25 +245,25 @@ where
     }
 
     #[allow(dead_code)]
-    async fn when_applied(&mut self, body: Body) -> Result<Body> {
-        debug!(?self, ?body);
+    // async fn when_applied(&mut self, body: Body) -> Result<Body> {
+    //     debug!(?self, ?body);
 
-        let id = Uuid::new_v4();
-        let request = Request::new(id, body);
-        let command = &request as &dyn Command;
+    //     let id = Uuid::new_v4();
+    //     let request = Request::new(id, body);
+    //     let command = &request as &dyn Command;
 
-        let json = serde_json::to_string(command)?;
-        debug!(?json);
+    //     let json = serde_json::to_string(command)?;
+    //     debug!(?json);
 
-        let index = self
-            .context
-            .log(Bytes::copy_from_slice(json.as_bytes()))
-            .await?;
+    //     let index = self
+    //         .context
+    //         .log(Bytes::copy_from_slice(json.as_bytes()))
+    //         .await?;
 
-        debug!(?index);
+    //     debug!(?index);
 
-        Ok(self.applicator.when_applied(id).await)
-    }
+    //     Ok(self.applicator.when_applied(id).await)
+    // }
 
     pub async fn response_for(
         &mut self,

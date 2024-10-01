@@ -23,6 +23,11 @@ work-dir:
 docker-build:
     docker build --tag ghcr.io/tansu-io/tansu --no-cache --progress plain .
 
+docker-compose-minio-up:
+    docker compose up --detach minio
+
+docker-compose-minio-down:
+    docker compose down --volumes minio
 
 docker-compose-tansu-up:
     docker compose up --detach tansu
@@ -95,18 +100,15 @@ test-topic-produce:
     echo "h1:pqr,h2:jkl,h3:uio	qwerty	poiuy\nh1:def,h2:lmn,h3:xyz	asdfgh	lkj\nh1:stu,h2:fgh,h3:ijk	zxcvbn	mnbvc" | kafka-console-producer --bootstrap-server localhost:9092 --topic test --property parse.headers=true --property parse.key=true
 
 test-topic-consume:
-    kafka-console-consumer --consumer.config /usr/local/etc/kafka/consumer.properties --bootstrap-server localhost:9092 --topic test --from-beginning --property print.timestamp=true --property print.key=true --property print.offset=true --property print.partition=true --property print.headers=true --property print.value=true
+    kafka-console-consumer --bootstrap-server localhost:9092 --topic test --from-beginning --property print.timestamp=true --property print.key=true --property print.offset=true --property print.partition=true --property print.headers=true --property print.value=true
 
 tansu-1:
     ./target/debug/tansu-server \
-        --kafka-cluster-id RvQwrYegSUCkIPkaiAZQlQ \
+        --kafka-cluster-id ${CLUSTER_ID} \
         --kafka-listener-url tcp://127.0.0.1:9092/ \
         --kafka-advertised-listener-url tcp:://127.0.0.1:9092/ \
-        --kafka-node-id 4343 \
-        --raft-listener-url tcp://127.0.0.1:4567/ \
-        --raft-peer-url tcp://127.0.0.1:4568/ \
-        --raft-peer-url tcp://127.0.0.1:4569/ \
-        --storage-engine pg=postgres://postgres:postgres@localhost \
+        --kafka-node-id ${NODE_ID} \
+        --storage-engine ${STORAGE_ENGINE} \
         --work-dir work-dir/tansu-1
 
 kafka-proxy:

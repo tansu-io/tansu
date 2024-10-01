@@ -435,7 +435,7 @@ where
 #[async_trait]
 impl<O> Coordinator for Controller<O>
 where
-    O: Storage,
+    O: Storage + Clone,
 {
     async fn join(
         &mut self,
