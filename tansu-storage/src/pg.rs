@@ -39,8 +39,9 @@ use tracing::{debug, error};
 use uuid::Uuid;
 
 use crate::{
-    BrokerRegistationRequest, Error, ListOffsetRequest, ListOffsetResponse, MetadataResponse,
-    OffsetCommitRequest, OffsetStage, Result, Storage, TopicId, Topition, NULL_TOPIC_ID,
+    BrokerRegistationRequest, Error, GroupDetail, ListOffsetRequest, ListOffsetResponse,
+    MetadataResponse, OffsetCommitRequest, OffsetStage, Result, Storage, TopicId, Topition,
+    UpdateError, Version, NULL_TOPIC_ID,
 };
 
 #[derive(Clone, Debug)]
@@ -1348,6 +1349,17 @@ impl Storage for Postgres {
                 configs: Some([].into()),
             })
         }
+    }
+
+    async fn update_group(
+        &self,
+        _group_id: &str,
+        detail: GroupDetail,
+        version: Option<Version>,
+    ) -> Result<Version, UpdateError<GroupDetail>> {
+        let _ = (detail, version);
+
+        Ok(Version::default())
     }
 }
 

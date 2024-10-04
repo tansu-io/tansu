@@ -147,8 +147,6 @@ async fn main() -> Result<()> {
         let mut broker = Broker::new(
             args.kafka_node_id,
             &args.kafka_cluster_id,
-            // raft.clone(),
-            // applicator.clone(),
             args.kafka_listener_url,
             args.kafka_advertised_listener_url,
             args.kafka_rack,

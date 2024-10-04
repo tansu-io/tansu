@@ -81,8 +81,6 @@ where
     pub fn new(
         node_id: i32,
         cluster_id: &str,
-        // context: Raft,
-        // applicator: Applicator,
         listener: Url,
         advertised_listener: Url,
         rack: Option<String>,
@@ -95,8 +93,6 @@ where
             node_id,
             cluster_id: cluster_id.to_owned(),
             incarnation_id,
-            // context,
-            // applicator,
             listener,
             advertised_listener,
             rack,

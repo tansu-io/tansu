@@ -15,18 +15,17 @@
 
 use std::collections::BTreeSet;
 use std::io::BufReader;
+use std::sync::Arc;
 use std::{collections::BTreeMap, fmt::Debug, io::Cursor, str::FromStr, time::Duration};
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::StreamExt;
-use object_store::PutResult;
 use object_store::{
-    aws::{AmazonS3, AmazonS3Builder},
-    path::Path,
-    Attribute, AttributeValue, Attributes, ObjectStore, PutMode, PutOptions, PutPayload, TagSet,
-    UpdateVersion,
+    path::Path, Attribute, AttributeValue, Attributes, ObjectStore, PutMode, PutOptions,
+    PutPayload, TagSet, UpdateVersion,
 };
+use object_store::{DynObjectStore, PutResult};
 use rand::{prelude::*, thread_rng};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -53,15 +52,36 @@ use crate::{
 
 const APPLICATION_JSON: &str = "application/json";
 
-#[derive(Debug)]
-pub struct S3 {
+#[derive(Clone, Debug)]
+pub struct DynoStore {
     cluster: String,
     node: i32,
-    builder: AmazonS3Builder,
-    object_store: AmazonS3,
+
+    object_store: Arc<DynObjectStore>,
 }
 
-impl S3 {
+#[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+struct TopicMetadata {
+    id: Uuid,
+    topic: CreatableTopic,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+struct Watermark {
+    low: i64,
+    high: i64,
+    stable: i64,
+}
+
+impl DynoStore {
+    pub fn new(cluster: &str, node: i32, object_store: impl ObjectStore) -> Self {
+        Self {
+            cluster: cluster.into(),
+            node,
+            object_store: Arc::new(object_store),
+        }
+    }
+
     async fn get_watermark(&self, topition: &Topition) -> Result<Watermark> {
         debug!(?topition);
         let location = Path::from(format!(
@@ -109,59 +129,6 @@ impl S3 {
 
         serde_json::from_slice::<TopicMetadata>(&encoded[..])
             .inspect(|topic_metadata| debug!(?topic_metadata, ?topic))
-            .map_err(Into::into)
-    }
-}
-
-// bucket structure:
-//
-// clusters/{cluster}
-// clusters/{cluster}/brokers/broker-id.json
-// clusters/{cluster}/topics/{name}.json
-// clusters/{cluster}/topics/uuids/{uuid}.json
-// clusters/{cluster}/topics/{name}/partitions.json
-// clusters/{cluster}/topics/{name}/partitions/{partition}/records/{offset}-{timestamp}
-// clusters/{cluster}/topics/{name}/partitions/0/watermark.json
-// clusters/{cluster}/topics/{name}/partitions/0/records/0001
-// clusters/{cluster}/topics/{name}/partitions/1/records/0000
-// clusters/{cluster}/groups/consumers/{name}.json
-// clusters/{cluster}/groups/consumers/{name}/offsets/topic/partition.json
-
-#[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
-struct TopicMetadata {
-    id: Uuid,
-    topic: CreatableTopic,
-}
-
-#[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
-struct Watermark {
-    low: i64,
-    high: i64,
-    stable: i64,
-}
-
-impl Clone for S3 {
-    fn clone(&self) -> Self {
-        Self {
-            cluster: self.cluster.clone(),
-            node: self.node,
-            object_store: self.builder.clone().build().expect("s3"),
-            builder: self.builder.clone(),
-        }
-    }
-}
-
-impl S3 {
-    pub fn new(cluster: &str, node: i32, builder: AmazonS3Builder) -> Result<Self> {
-        builder
-            .clone()
-            .build()
-            .map(|object_store| Self {
-                cluster: cluster.into(),
-                node,
-                object_store,
-                builder,
-            })
             .map_err(Into::into)
     }
 
@@ -241,7 +208,7 @@ impl S3 {
 }
 
 #[async_trait]
-impl Storage for S3 {
+impl Storage for DynoStore {
     async fn register_broker(&self, broker_registration: BrokerRegistationRequest) -> Result<()> {
         debug!(?broker_registration);
 

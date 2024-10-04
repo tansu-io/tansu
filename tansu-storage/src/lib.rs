@@ -14,6 +14,8 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use async_trait::async_trait;
+use bytes::Bytes;
+use dynostore::DynoStore;
 use glob::{GlobError, PatternError};
 use pg::Postgres;
 use regex::Regex;
@@ -41,6 +43,7 @@ use tansu_kafka_sans_io::{
     describe_cluster_response::DescribeClusterBroker,
     describe_configs_response::DescribeConfigsResult,
     fetch_request::FetchTopic,
+    join_group_response::JoinGroupResponseMember,
     metadata_request::MetadataRequestTopic,
     metadata_response::{MetadataResponseBroker, MetadataResponseTopic},
     offset_commit_request::OffsetCommitRequestPartition,
@@ -49,7 +52,9 @@ use tansu_kafka_sans_io::{
 };
 use uuid::Uuid;
 
+pub mod dynostore;
 pub mod index;
+pub mod os;
 pub mod pg;
 pub mod s3;
 pub mod segment;
@@ -443,6 +448,69 @@ impl OffsetStage {
     }
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct GroupMember {
+    pub join_response: JoinGroupResponseMember,
+    pub last_contact: Option<SystemTime>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+pub enum GroupState {
+    Forming {
+        protocol_type: Option<String>,
+        protocol_name: Option<String>,
+        leader: Option<String>,
+    },
+
+    Formed {
+        protocol_type: String,
+        protocol_name: String,
+        leader: String,
+        assignments: BTreeMap<String, Bytes>,
+    },
+}
+
+impl Default for GroupState {
+    fn default() -> Self {
+        Self::Forming {
+            protocol_type: None,
+            protocol_name: Some("".into()),
+            leader: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct GroupDetail {
+    pub session_timeout_ms: i32,
+    pub rebalance_timeout_ms: Option<i32>,
+    pub group_instance_id: Option<String>,
+    pub members: BTreeMap<String, GroupMember>,
+    pub generation_id: i32,
+    pub skip_assignment: Option<bool>,
+    pub state: GroupState,
+}
+
+impl Default for GroupDetail {
+    fn default() -> Self {
+        Self {
+            session_timeout_ms: 45_000,
+            rebalance_timeout_ms: None,
+            group_instance_id: None,
+            members: BTreeMap::new(),
+            generation_id: -1,
+            skip_assignment: Some(false),
+            state: GroupState::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct Version {
+    e_tag: Option<String>,
+    version: Option<String>,
+}
+
 #[async_trait]
 pub trait StorageProvider {
     async fn provide_storage(&mut self) -> impl Storage;
@@ -502,12 +570,28 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
         resource: ConfigResource,
         keys: Option<&[String]>,
     ) -> Result<DescribeConfigsResult>;
+
+    async fn update_group(
+        &self,
+        group_id: &str,
+        detail: GroupDetail,
+        version: Option<Version>,
+    ) -> Result<Version, UpdateError<GroupDetail>>;
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum UpdateError<T> {
+    Outdated { current: T, version: Version },
+    Error(#[from] Error),
+    ObjectStore(#[from] object_store::Error),
+    SerdeJson(#[from] serde_json::Error),
 }
 
 #[derive(Clone, Debug)]
 pub enum StorageContainer {
     Postgres(Postgres),
     S3(S3),
+    DynoStore(DynoStore),
 }
 
 #[async_trait]
@@ -516,6 +600,7 @@ impl Storage for StorageContainer {
         match self {
             Self::Postgres(pg) => pg.register_broker(broker_registration).await,
             Self::S3(s3) => s3.register_broker(broker_registration).await,
+            Self::DynoStore(dyn_store) => dyn_store.register_broker(broker_registration).await,
         }
     }
 
@@ -523,6 +608,7 @@ impl Storage for StorageContainer {
         match self {
             Self::Postgres(pg) => pg.create_topic(topic, validate_only).await,
             Self::S3(s3) => s3.create_topic(topic, validate_only).await,
+            Self::DynoStore(dyn_store) => dyn_store.create_topic(topic, validate_only).await,
         }
     }
 
@@ -533,6 +619,7 @@ impl Storage for StorageContainer {
         match self {
             Self::Postgres(pg) => pg.delete_records(topics).await,
             Self::S3(s3) => s3.delete_records(topics).await,
+            Self::DynoStore(dyn_store) => dyn_store.delete_records(topics).await,
         }
     }
 
@@ -540,6 +627,7 @@ impl Storage for StorageContainer {
         match self {
             Self::Postgres(pg) => pg.delete_topic(name).await,
             Self::S3(s3) => s3.delete_topic(name).await,
+            Self::DynoStore(dyn_store) => dyn_store.delete_topic(name).await,
         }
     }
 
@@ -547,6 +635,7 @@ impl Storage for StorageContainer {
         match self {
             Self::Postgres(pg) => pg.brokers().await,
             Self::S3(s3) => s3.brokers().await,
+            Self::DynoStore(dyn_store) => dyn_store.brokers().await,
         }
     }
 
@@ -554,6 +643,7 @@ impl Storage for StorageContainer {
         match self {
             Self::Postgres(pg) => pg.produce(topition, batch).await,
             Self::S3(s3) => s3.produce(topition, batch).await,
+            Self::DynoStore(dyn_store) => dyn_store.produce(topition, batch).await,
         }
     }
 
@@ -567,6 +657,11 @@ impl Storage for StorageContainer {
         match self {
             Self::Postgres(pg) => pg.fetch(topition, offset, min_bytes, max_bytes).await,
             Self::S3(s3) => s3.fetch(topition, offset, min_bytes, max_bytes).await,
+            Self::DynoStore(dyn_store) => {
+                dyn_store
+                    .fetch(topition, offset, min_bytes, max_bytes)
+                    .await
+            }
         }
     }
 
@@ -574,6 +669,7 @@ impl Storage for StorageContainer {
         match self {
             Self::Postgres(pg) => pg.offset_stage(topition).await,
             Self::S3(s3) => s3.offset_stage(topition).await,
+            Self::DynoStore(dyn_store) => dyn_store.offset_stage(topition).await,
         }
     }
 
@@ -584,6 +680,7 @@ impl Storage for StorageContainer {
         match self {
             Self::Postgres(pg) => pg.list_offsets(offsets).await,
             Self::S3(s3) => s3.list_offsets(offsets).await,
+            Self::DynoStore(dyn_store) => dyn_store.list_offsets(offsets).await,
         }
     }
 
@@ -596,6 +693,11 @@ impl Storage for StorageContainer {
         match self {
             Self::Postgres(pg) => pg.offset_commit(group_id, retention_time_ms, offsets).await,
             Self::S3(s3) => s3.offset_commit(group_id, retention_time_ms, offsets).await,
+            Self::DynoStore(dyn_store) => {
+                dyn_store
+                    .offset_commit(group_id, retention_time_ms, offsets)
+                    .await
+            }
         }
     }
 
@@ -608,6 +710,11 @@ impl Storage for StorageContainer {
         match self {
             Self::Postgres(pg) => pg.offset_fetch(group_id, topics, require_stable).await,
             Self::S3(s3) => s3.offset_fetch(group_id, topics, require_stable).await,
+            Self::DynoStore(dyn_store) => {
+                dyn_store
+                    .offset_fetch(group_id, topics, require_stable)
+                    .await
+            }
         }
     }
 
@@ -615,6 +722,7 @@ impl Storage for StorageContainer {
         match self {
             Self::Postgres(pg) => pg.metadata(topics).await,
             Self::S3(s3) => s3.metadata(topics).await,
+            Self::DynoStore(dyn_store) => dyn_store.metadata(topics).await,
         }
     }
 
@@ -627,6 +735,20 @@ impl Storage for StorageContainer {
         match self {
             Self::Postgres(pg) => pg.describe_config(name, resource, keys).await,
             Self::S3(s3) => s3.describe_config(name, resource, keys).await,
+            Self::DynoStore(dyn_store) => dyn_store.describe_config(name, resource, keys).await,
+        }
+    }
+
+    async fn update_group(
+        &self,
+        group_id: &str,
+        detail: GroupDetail,
+        version: Option<Version>,
+    ) -> Result<Version, UpdateError<GroupDetail>> {
+        match self {
+            Self::Postgres(pg) => pg.update_group(group_id, detail, version).await,
+            Self::S3(s3) => s3.update_group(group_id, detail, version).await,
+            Self::DynoStore(dyn_store) => dyn_store.update_group(group_id, detail, version).await,
         }
     }
 }
