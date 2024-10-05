@@ -240,27 +240,6 @@ where
         }
     }
 
-    #[allow(dead_code)]
-    // async fn when_applied(&mut self, body: Body) -> Result<Body> {
-    //     debug!(?self, ?body);
-
-    //     let id = Uuid::new_v4();
-    //     let request = Request::new(id, body);
-    //     let command = &request as &dyn Command;
-
-    //     let json = serde_json::to_string(command)?;
-    //     debug!(?json);
-
-    //     let index = self
-    //         .context
-    //         .log(Bytes::copy_from_slice(json.as_bytes()))
-    //         .await?;
-
-    //     debug!(?index);
-
-    //     Ok(self.applicator.when_applied(id).await)
-    // }
-
     pub async fn response_for(
         &mut self,
         client_id: Option<&str>,
