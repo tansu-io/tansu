@@ -587,8 +587,6 @@ where
                 let (state, body) = inner
                     .heartbeat(now, group_id, generation_id, member_id, group_instance_id)
                     .await;
-                debug!(?state, ?body);
-
                 (state.into(), body)
             }
 
@@ -596,8 +594,6 @@ where
                 let (state, body) = inner
                     .heartbeat(now, group_id, generation_id, member_id, group_instance_id)
                     .await;
-                debug!(?state, ?body);
-
                 (state.into(), body)
             }
         }
@@ -673,7 +669,7 @@ where
                 (Wrapper::Forming(inner), None)
             });
 
-            debug!(?wrapper, ?version, ?iteration);
+            debug!(?group_id, ?wrapper, ?version, ?iteration);
 
             let now = SystemTime::now();
             let wrapper = wrapper.missed_heartbeat(group_id, now);
@@ -699,6 +695,8 @@ where
                 .await
             {
                 Ok(version) => {
+                    debug!(?group_id, ?version);
+
                     _ = self
                         .wrappers
                         .insert(group_id.to_owned(), (wrapper, Some(version)));
@@ -707,7 +705,7 @@ where
                 }
 
                 Err(UpdateError::Outdated { current, version }) => {
-                    debug!(?current, ?version, ?iteration);
+                    debug!(?group_id, ?current, ?version, ?iteration);
 
                     _ = self.wrappers.insert(
                         group_id.to_owned(),
@@ -755,7 +753,7 @@ where
             iteration += 1;
 
             let (wrapper, version) = self.wrappers.remove(group_id).unwrap_or_else(|| {
-                debug!(?iteration, ?group_id);
+                debug!(?group_id, ?iteration);
 
                 let inner = Inner {
                     session_timeout_ms: Default::default(),
@@ -771,7 +769,7 @@ where
                 (Wrapper::Forming(inner), None)
             });
 
-            debug!(?wrapper, ?version, ?iteration);
+            debug!(?group_id, ?wrapper, ?version, ?iteration);
 
             let now = SystemTime::now();
             let wrapper = wrapper.missed_heartbeat(group_id, now);
@@ -795,14 +793,17 @@ where
                 .await
             {
                 Ok(version) => {
+                    debug!(?group_id, ?version);
+
                     _ = self
                         .wrappers
                         .insert(group_id.to_owned(), (wrapper, Some(version)));
+
                     return Ok(body);
                 }
 
                 Err(UpdateError::Outdated { current, version }) => {
-                    debug!(?current, ?version);
+                    debug!(?group_id, ?current, ?version);
 
                     _ = self.wrappers.insert(
                         group_id.to_owned(),
@@ -838,7 +839,7 @@ where
             iteration += 1;
 
             let (wrapper, version) = self.wrappers.remove(group_id).unwrap_or_else(|| {
-                debug!(?iteration, ?group_id);
+                debug!(?group_id, ?iteration);
 
                 let inner = Inner {
                     session_timeout_ms: Default::default(),
@@ -854,7 +855,7 @@ where
                 (Wrapper::Forming(inner), None)
             });
 
-            debug!(?wrapper, ?version, ?iteration);
+            debug!(?group_id, ?wrapper, ?version, ?iteration);
 
             let now = SystemTime::now();
             let wrapper = wrapper.missed_heartbeat(group_id, now);
@@ -867,14 +868,17 @@ where
                 .await
             {
                 Ok(version) => {
+                    debug!(?group_id, ?version);
+
                     _ = self
                         .wrappers
                         .insert(group_id.to_owned(), (wrapper, Some(version)));
+
                     return Ok(body);
                 }
 
                 Err(UpdateError::Outdated { current, version }) => {
-                    debug!(?current, ?version);
+                    debug!(?group_id, ?current, ?version);
 
                     _ = self.wrappers.insert(
                         group_id.to_owned(),
@@ -904,7 +908,7 @@ where
             iteration += 1;
 
             let (wrapper, version) = self.wrappers.remove(group_id).unwrap_or_else(|| {
-                debug!(?iteration, ?group_id);
+                debug!(?group_id, ?iteration);
 
                 let inner = Inner {
                     session_timeout_ms: Default::default(),
@@ -920,6 +924,8 @@ where
                 (Wrapper::Forming(inner), None)
             });
 
+            debug!(?group_id, ?wrapper, ?version, ?iteration);
+
             let now = SystemTime::now();
             let wrapper = wrapper.missed_heartbeat(group_id, now);
 
@@ -931,14 +937,17 @@ where
                 .await
             {
                 Ok(version) => {
+                    debug!(?group_id, ?version);
+
                     _ = self
                         .wrappers
                         .insert(group_id.to_owned(), (wrapper, Some(version)));
+
                     return Ok(body);
                 }
 
                 Err(UpdateError::Outdated { current, version }) => {
-                    debug!(?current, ?version);
+                    debug!(?group_id, ?current, ?version);
 
                     _ = self.wrappers.insert(
                         group_id.to_owned(),
@@ -967,6 +976,8 @@ where
         groups: Option<&[OffsetFetchRequestGroup]>,
         require_stable: Option<bool>,
     ) -> Result<Body> {
+        debug!(?group_id, ?topics, ?groups, ?require_stable);
+
         let wrapper = Wrapper::Forming(Inner {
             session_timeout_ms: Default::default(),
             rebalance_timeout_ms: Default::default(),
@@ -1000,7 +1011,7 @@ where
             iteration += 1;
 
             let (wrapper, version) = self.wrappers.remove(group_id).unwrap_or_else(|| {
-                debug!(?iteration, ?group_id);
+                debug!(?group_id, ?iteration);
 
                 let inner = Inner {
                     session_timeout_ms: Default::default(),
@@ -1016,6 +1027,8 @@ where
                 (Wrapper::Forming(inner), None)
             });
 
+            debug!(?group_id, ?wrapper, ?version, ?iteration);
+
             let now = SystemTime::now();
             // let wrapper = wrapper.missed_heartbeat(group_id, now);
 
@@ -1029,14 +1042,17 @@ where
                 .await
             {
                 Ok(version) => {
+                    debug!(?group_id, ?version);
+
                     _ = self
                         .wrappers
                         .insert(group_id.to_owned(), (wrapper, Some(version)));
+
                     return Ok(body);
                 }
 
                 Err(UpdateError::Outdated { current, version }) => {
-                    debug!(?current, ?version);
+                    debug!(?group_id, ?current, ?version);
 
                     _ = self.wrappers.insert(
                         group_id.to_owned(),
@@ -1530,21 +1546,34 @@ where
                 last_contact: Some(now),
             },
         ) {
-            Some(
-                ref member @ Member {
-                    join_response: JoinGroupResponseMember { ref metadata, .. },
-                    ..
-                },
-            ) => {
-                debug!(?member);
+            Some(Member {
+                join_response: JoinGroupResponseMember { ref metadata, .. },
+                ..
+            }) if *metadata == protocol.metadata => debug!(
+                "member_id: {}, existing metadata for generation: {}",
+                member_id, self.generation_id
+            ),
 
-                if *metadata != protocol.metadata {
-                    debug!( ?protocol.metadata);
-                    self.generation_id += 1;
-                }
+            Some(Member {
+                join_response: JoinGroupResponseMember { ref metadata, .. },
+                ..
+            }) => {
+                self.generation_id += 1;
+
+                debug!(
+                    "member_id: {}, metadata: {:?}, existing: {:?}, for new generation: {}",
+                    member_id, protocol.metadata, metadata, self.generation_id
+                );
             }
 
-            None => self.generation_id += 1,
+            None => {
+                self.generation_id += 1;
+
+                debug!(
+                    "member_id: {}, no metadata for new generation: {}",
+                    member_id, self.generation_id
+                );
+            }
         }
 
         debug!(?member_id, ?self.members);
@@ -2020,75 +2049,92 @@ where
             Some(Member {
                 join_response: JoinGroupResponseMember { metadata, .. },
                 ..
-            }) => {
-                if metadata == protocol.metadata {
-                    let state: Wrapper<O> = self.into();
+            }) if metadata == protocol.metadata => {
+                let state: Wrapper<O> = self.into();
 
-                    let body = {
-                        let members = state.members();
-                        let protocol_type = state.protocol_type().map(ToOwned::to_owned);
-                        let protocol_name = state.protocol_name().map(ToOwned::to_owned);
+                let body = {
+                    let members = state.members();
+                    let protocol_type = state.protocol_type().map(ToOwned::to_owned);
+                    let protocol_name = state.protocol_name().map(ToOwned::to_owned);
 
-                        Body::JoinGroupResponse {
-                            throttle_time_ms: Some(0),
-                            error_code: ErrorCode::None.into(),
-                            generation_id: state.generation_id(),
-                            protocol_type,
-                            protocol_name,
-                            leader: state
-                                .leader()
-                                .map(|s| s.to_owned())
-                                .unwrap_or("".to_owned()),
-                            skip_assignment: state.skip_assignment().map(ToOwned::to_owned),
-                            member_id: member_id.into(),
-                            members: Some(members),
-                        }
-                    };
-
-                    (state, body)
-                } else {
-                    let state: Wrapper<O> = Inner {
-                        generation_id: self.generation_id + 1,
-                        session_timeout_ms: self.session_timeout_ms,
-                        rebalance_timeout_ms: self.rebalance_timeout_ms,
-                        group_instance_id: self.group_instance_id,
-                        members: self.members,
-                        state: Forming {
-                            protocol_type: Some(self.state.protocol_type),
-                            protocol_name: Some(self.state.protocol_name),
-                            leader: Some(self.state.leader),
-                        },
-                        storage: self.storage,
-                        skip_assignment: self.skip_assignment,
+                    Body::JoinGroupResponse {
+                        throttle_time_ms: Some(0),
+                        error_code: ErrorCode::None.into(),
+                        generation_id: state.generation_id(),
+                        protocol_type,
+                        protocol_name,
+                        leader: state
+                            .leader()
+                            .map(|s| s.to_owned())
+                            .unwrap_or("".to_owned()),
+                        skip_assignment: state.skip_assignment().map(ToOwned::to_owned),
+                        member_id: member_id.into(),
+                        members: Some(members),
                     }
-                    .into();
+                };
 
-                    let body = {
-                        let members = state.members();
-                        let protocol_type = state.protocol_type().map(|s| s.to_owned());
-                        let protocol_name = state.protocol_name().map(|s| s.to_owned());
+                (state, body)
+            }
 
-                        Body::JoinGroupResponse {
-                            throttle_time_ms: Some(0),
-                            error_code: ErrorCode::None.into(),
-                            generation_id: state.generation_id(),
-                            protocol_type,
-                            protocol_name,
-                            leader: state
-                                .leader()
-                                .map(|s| s.to_owned())
-                                .unwrap_or("".to_owned()),
-                            skip_assignment: self.skip_assignment,
-                            member_id: member_id.into(),
-                            members: Some(members),
-                        }
-                    };
+            Some(Member {
+                join_response: JoinGroupResponseMember { metadata, .. },
+                ..
+            }) => {
+                debug!(
+                    "member_id: {}, metadata: {:?}, existing: {:?}, for new generation: {}",
+                    member_id,
+                    protocol.metadata,
+                    metadata,
+                    self.generation_id + 1
+                );
 
-                    (state, body)
+                let state: Wrapper<O> = Inner {
+                    generation_id: self.generation_id + 1,
+                    session_timeout_ms: self.session_timeout_ms,
+                    rebalance_timeout_ms: self.rebalance_timeout_ms,
+                    group_instance_id: self.group_instance_id,
+                    members: self.members,
+                    state: Forming {
+                        protocol_type: Some(self.state.protocol_type),
+                        protocol_name: Some(self.state.protocol_name),
+                        leader: Some(self.state.leader),
+                    },
+                    storage: self.storage,
+                    skip_assignment: self.skip_assignment,
                 }
+                .into();
+
+                let body = {
+                    let members = state.members();
+                    let protocol_type = state.protocol_type().map(|s| s.to_owned());
+                    let protocol_name = state.protocol_name().map(|s| s.to_owned());
+
+                    Body::JoinGroupResponse {
+                        throttle_time_ms: Some(0),
+                        error_code: ErrorCode::None.into(),
+                        generation_id: state.generation_id(),
+                        protocol_type,
+                        protocol_name,
+                        leader: state
+                            .leader()
+                            .map(|s| s.to_owned())
+                            .unwrap_or("".to_owned()),
+                        skip_assignment: self.skip_assignment,
+                        member_id: member_id.into(),
+                        members: Some(members),
+                    }
+                };
+
+                (state, body)
             }
 
             None => {
+                debug!(
+                    "member_id: {}, no metadata for new generation: {}",
+                    member_id,
+                    self.generation_id + 1
+                );
+
                 let state: Wrapper<O> = Inner {
                     generation_id: self.generation_id + 1,
                     session_timeout_ms: self.session_timeout_ms,
@@ -2434,6 +2480,7 @@ mod tests {
     fn init_tracing() -> Result<DefaultGuard> {
         use std::{fs::File, sync::Arc, thread};
 
+        use tracing::Level;
         use tracing_subscriber::fmt::format::FmtSpan;
 
         Ok(tracing::subscriber::set_default(
@@ -2441,7 +2488,7 @@ mod tests {
                 .with_level(true)
                 .with_line_number(true)
                 .with_thread_names(false)
-                .with_max_level(tracing::Level::DEBUG)
+                .with_max_level(Level::DEBUG)
                 .with_span_events(FmtSpan::ACTIVE)
                 .with_writer(
                     thread::current()
@@ -3032,6 +3079,259 @@ mod tests {
                 .await?
             );
         }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn rejoin() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let session_timeout_ms = 45_000;
+        let rebalance_timeout_ms = Some(300_000);
+        let group_instance_id = None;
+        let reason = None;
+
+        let cluster = "abc";
+        let node = 12321;
+
+        const CLIENT_ID: &str = "console-consumer";
+        const GROUP_ID: &str = "test-consumer-group";
+        const RANGE: &str = "range";
+        const COOPERATIVE_STICKY: &str = "cooperative-sticky";
+
+        const PROTOCOL_TYPE: &str = "consumer";
+
+        let mut s = Controller::with_storage(DynoStore::new(cluster, node, InMemory::new()))?;
+
+        let first_member_range_meta = Bytes::from_static(b"first_member_range_meta_01");
+        let first_member_sticky_meta = Bytes::from_static(b"first_member_sticky_meta_01");
+
+        let first_member_protocols = [
+            JoinGroupRequestProtocol {
+                name: RANGE.into(),
+                metadata: first_member_range_meta.clone(),
+            },
+            JoinGroupRequestProtocol {
+                name: COOPERATIVE_STICKY.into(),
+                metadata: first_member_sticky_meta,
+            },
+        ];
+
+        let first_member_id = match s
+            .join(
+                Some(CLIENT_ID),
+                GROUP_ID,
+                session_timeout_ms,
+                rebalance_timeout_ms,
+                "",
+                group_instance_id,
+                PROTOCOL_TYPE,
+                Some(&first_member_protocols[..]),
+                reason,
+            )
+            .await?
+        {
+            Body::JoinGroupResponse {
+                throttle_time_ms: Some(0),
+                error_code,
+                generation_id: -1,
+                leader,
+                skip_assignment: Some(false),
+                members: Some(members),
+                member_id,
+                ..
+            } => {
+                assert_eq!(error_code, i16::from(ErrorCode::MemberIdRequired));
+                assert!(leader.is_empty());
+                assert!(member_id.starts_with(CLIENT_ID));
+                assert_eq!(0, members.len());
+
+                assert_eq!(
+                    Body::JoinGroupResponse {
+                        throttle_time_ms: Some(0),
+                        error_code: ErrorCode::None.into(),
+                        generation_id: 0,
+                        protocol_type: Some(PROTOCOL_TYPE.into()),
+                        protocol_name: Some(RANGE.into()),
+                        leader: member_id.clone(),
+                        skip_assignment: Some(false),
+                        member_id: member_id.clone(),
+                        members: Some(
+                            [JoinGroupResponseMember {
+                                member_id: member_id.clone(),
+                                group_instance_id: None,
+                                metadata: first_member_range_meta.clone(),
+                            }]
+                            .into(),
+                        ),
+                    },
+                    s.join(
+                        Some(CLIENT_ID),
+                        GROUP_ID,
+                        session_timeout_ms,
+                        rebalance_timeout_ms,
+                        &member_id,
+                        group_instance_id,
+                        PROTOCOL_TYPE,
+                        Some(&first_member_protocols[..]),
+                        reason,
+                    )
+                    .await?
+                );
+
+                member_id
+            }
+
+            otherwise => panic!("{otherwise:?}"),
+        };
+
+        let second_member_range_meta = Bytes::from_static(b"second_member_range_meta_01");
+        let second_member_sticky_meta = Bytes::from_static(b"second_member_sticky_meta_01");
+
+        let second_member_protocols = [
+            JoinGroupRequestProtocol {
+                name: RANGE.into(),
+                metadata: second_member_range_meta.clone(),
+            },
+            JoinGroupRequestProtocol {
+                name: COOPERATIVE_STICKY.into(),
+                metadata: second_member_sticky_meta,
+            },
+        ];
+
+        let second_member_id = match s
+            .join(
+                Some(CLIENT_ID),
+                GROUP_ID,
+                session_timeout_ms,
+                rebalance_timeout_ms,
+                "",
+                group_instance_id,
+                PROTOCOL_TYPE,
+                Some(&second_member_protocols[..]),
+                reason,
+            )
+            .await?
+        {
+            Body::JoinGroupResponse {
+                throttle_time_ms: Some(0),
+                error_code,
+                generation_id: -1,
+                leader,
+                skip_assignment: Some(false),
+                members: Some(members),
+                member_id,
+                ..
+            } => {
+                assert_eq!(error_code, i16::from(ErrorCode::MemberIdRequired));
+                assert!(leader.is_empty());
+                assert!(member_id.starts_with(CLIENT_ID));
+                assert_eq!(0, members.len());
+
+                assert_eq!(
+                    Body::JoinGroupResponse {
+                        throttle_time_ms: Some(0),
+                        error_code: ErrorCode::None.into(),
+                        generation_id: 1,
+                        protocol_type: Some(PROTOCOL_TYPE.into()),
+                        protocol_name: Some(RANGE.into()),
+                        leader: first_member_id.clone(),
+                        skip_assignment: Some(false),
+                        member_id: member_id.clone(),
+                        members: Some([].into()),
+                    },
+                    s.join(
+                        Some(CLIENT_ID),
+                        GROUP_ID,
+                        session_timeout_ms,
+                        rebalance_timeout_ms,
+                        &member_id,
+                        group_instance_id,
+                        PROTOCOL_TYPE,
+                        Some(&second_member_protocols[..]),
+                        reason,
+                    )
+                    .await?
+                );
+
+                member_id
+            }
+
+            otherwise => panic!("{otherwise:?}"),
+        };
+
+        match s
+            .join(
+                Some(CLIENT_ID),
+                GROUP_ID,
+                session_timeout_ms,
+                rebalance_timeout_ms,
+                &first_member_id,
+                group_instance_id,
+                PROTOCOL_TYPE,
+                Some(&first_member_protocols[..]),
+                reason,
+            )
+            .await?
+        {
+            Body::JoinGroupResponse {
+                throttle_time_ms: Some(0),
+                error_code,
+                generation_id: 1,
+                protocol_type,
+                protocol_name,
+                leader,
+                skip_assignment: Some(false),
+                member_id,
+                members: Some(members),
+            } => {
+                assert_eq!(i16::from(ErrorCode::None), error_code);
+                assert_eq!(Some(PROTOCOL_TYPE.into()), protocol_type);
+                assert_eq!(Some(RANGE.into()), protocol_name);
+                assert_eq!(first_member_id.clone(), leader);
+                assert_eq!(first_member_id.clone(), member_id);
+                assert_eq!(2, members.len());
+                assert!(members.contains(&JoinGroupResponseMember {
+                    member_id: second_member_id.clone(),
+                    group_instance_id: None,
+                    metadata: second_member_range_meta.clone(),
+                }));
+                assert!(members.contains(&JoinGroupResponseMember {
+                    member_id: first_member_id.clone(),
+                    group_instance_id: None,
+                    metadata: first_member_range_meta.clone(),
+                }));
+            }
+
+            otherwise => panic!("{otherwise:?}"),
+        }
+
+        assert_eq!(
+            Body::JoinGroupResponse {
+                throttle_time_ms: Some(0),
+                error_code: ErrorCode::None.into(),
+                generation_id: 1,
+                protocol_type: Some(PROTOCOL_TYPE.into()),
+                protocol_name: Some(RANGE.into()),
+                leader: first_member_id.clone(),
+                skip_assignment: Some(false),
+                member_id: second_member_id.clone(),
+                members: Some([].into(),),
+            },
+            s.join(
+                Some(CLIENT_ID),
+                GROUP_ID,
+                session_timeout_ms,
+                rebalance_timeout_ms,
+                &second_member_id,
+                group_instance_id,
+                PROTOCOL_TYPE,
+                Some(&second_member_protocols[..]),
+                reason,
+            )
+            .await?
+        );
 
         Ok(())
     }
