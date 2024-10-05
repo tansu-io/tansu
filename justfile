@@ -115,7 +115,7 @@ kafka-proxy:
     docker run -d -p 19092:9092 apache/kafka:3.8.0
 
 proxy:
-    ./target/debug/tansu-proxy
+    ./target/debug/tansu-proxy | tee proxy.log
 
 
 all: test miri
