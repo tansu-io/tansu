@@ -48,7 +48,7 @@ use crate::{Error, Result};
 
 use super::{Coordinator, OffsetCommit};
 
-const PAUSE_MS: u64 = 100;
+const PAUSE_MS: u64 = 3_000;
 
 #[async_trait]
 pub trait Group: Debug + Send {
@@ -647,11 +647,9 @@ where
             ?reason,
         );
 
-        let mut iteration = -1;
+        let mut iteration = 0;
 
         loop {
-            iteration += 1;
-
             let (wrapper, version) = self.wrappers.remove(group_id).unwrap_or_else(|| {
                 debug!(?iteration, ?group_id);
 
@@ -669,10 +667,18 @@ where
                 (Wrapper::Forming(inner), None)
             });
 
-            debug!(?group_id, ?wrapper, ?version, ?iteration);
-
             let now = SystemTime::now();
             let wrapper = wrapper.missed_heartbeat(group_id, now);
+
+            if iteration == 0
+                && !member_id.is_empty()
+                && wrapper.leader().is_some_and(|leader| leader != member_id)
+            {
+                debug!(?member_id);
+                sleep(Duration::from_millis(PAUSE_MS)).await;
+            }
+
+            debug!(?group_id, ?wrapper, ?version, ?iteration);
 
             let (wrapper, body) = wrapper
                 .join(
@@ -715,6 +721,7 @@ where
                         ),
                     );
 
+                    iteration += 1;
                     continue;
                 }
 
@@ -747,11 +754,9 @@ where
             ?assignments
         );
 
-        let mut iteration = -1;
+        let mut iteration = 0;
 
         loop {
-            iteration += 1;
-
             let (wrapper, version) = self.wrappers.remove(group_id).unwrap_or_else(|| {
                 debug!(?group_id, ?iteration);
 
@@ -813,6 +818,7 @@ where
                         ),
                     );
 
+                    iteration += 1;
                     continue;
                 }
 
@@ -833,11 +839,9 @@ where
     ) -> Result<Body> {
         debug!(?group_id, ?member_id, ?members);
 
-        let mut iteration = -1;
+        let mut iteration = 0;
 
         loop {
-            iteration += 1;
-
             let (wrapper, version) = self.wrappers.remove(group_id).unwrap_or_else(|| {
                 debug!(?group_id, ?iteration);
 
@@ -888,6 +892,7 @@ where
                         ),
                     );
 
+                    iteration += 1;
                     continue;
                 }
 
@@ -902,11 +907,9 @@ where
 
     async fn offset_commit(&mut self, offset_commit: OffsetCommit<'_>) -> Result<Body> {
         let group_id = offset_commit.group_id;
-        let mut iteration = -1;
+        let mut iteration = 0;
 
         loop {
-            iteration += 1;
-
             let (wrapper, version) = self.wrappers.remove(group_id).unwrap_or_else(|| {
                 debug!(?group_id, ?iteration);
 
@@ -957,6 +960,7 @@ where
                         ),
                     );
 
+                    iteration += 1;
                     continue;
                 }
 
@@ -1005,11 +1009,9 @@ where
     ) -> Result<Body> {
         debug!(?group_id, ?generation_id, ?member_id, ?group_instance_id);
 
-        let mut iteration = -1;
+        let mut iteration = 0;
 
         loop {
-            iteration += 1;
-
             let (wrapper, version) = self.wrappers.remove(group_id).unwrap_or_else(|| {
                 debug!(?group_id, ?iteration);
 
@@ -1062,6 +1064,7 @@ where
                         ),
                     );
 
+                    iteration += 1;
                     continue;
                 }
 
@@ -1465,27 +1468,6 @@ where
     ) -> (Self::JoinState, Body) {
         let _ = reason;
 
-        if let Some(client_id) = client_id {
-            if member_id.is_empty() {
-                let member_id = format!("{client_id}-{}", Uuid::new_v4());
-                debug!(?member_id);
-
-                let body = Body::JoinGroupResponse {
-                    throttle_time_ms: Some(0),
-                    error_code: ErrorCode::MemberIdRequired.into(),
-                    generation_id: -1,
-                    protocol_type: self.state.protocol_type.clone(),
-                    protocol_name: Some("".into()),
-                    leader: "".into(),
-                    skip_assignment: self.skip_assignment,
-                    member_id,
-                    members: Some([].into()),
-                };
-
-                return (self, body);
-            }
-        }
-
         let Some(protocols) = protocols else {
             let body = Body::JoinGroupResponse {
                 throttle_time_ms: Some(0),
@@ -1532,6 +1514,41 @@ where
 
             &protocols[0]
         };
+
+        if let Some(client_id) = client_id {
+            if member_id.is_empty() {
+                let member_id = format!("{client_id}-{}", Uuid::new_v4());
+                debug!(?member_id);
+
+                let body = Body::JoinGroupResponse {
+                    throttle_time_ms: Some(0),
+                    error_code: ErrorCode::MemberIdRequired.into(),
+                    generation_id: -1,
+                    protocol_type: self.state.protocol_type.clone(),
+                    protocol_name: Some("".into()),
+                    leader: "".into(),
+                    skip_assignment: self.skip_assignment,
+                    member_id: member_id.clone(),
+                    members: Some([].into()),
+                };
+
+                _ = self.members.insert(
+                    member_id.clone(),
+                    Member {
+                        join_response: JoinGroupResponseMember {
+                            member_id,
+                            group_instance_id: group_instance_id.map(|s| s.to_owned()),
+                            metadata: protocol.metadata.clone(),
+                        },
+                        last_contact: Some(now),
+                    },
+                );
+
+                self.generation_id += 1;
+
+                return (self, body);
+            }
+        }
 
         debug!(?member_id, ?self.members);
 
@@ -1662,10 +1679,6 @@ where
                 assignment: Bytes::from_static(b""),
             };
 
-            debug!("about to sleep");
-            sleep(Duration::from_millis(PAUSE_MS)).await;
-            debug!("done sleeping");
-
             return (self.into(), body);
         }
 
@@ -1677,10 +1690,6 @@ where
                 protocol_name: self.state.protocol_name.clone(),
                 assignment: Bytes::from_static(b""),
             };
-
-            debug!("about to sleep");
-            sleep(Duration::from_millis(PAUSE_MS)).await;
-            debug!("done sleeping");
 
             return (self.into(), body);
         }
@@ -1704,10 +1713,6 @@ where
                 assignment: Bytes::from_static(b""),
             };
 
-            debug!("about to sleep");
-            sleep(Duration::from_millis(PAUSE_MS)).await;
-            debug!("done sleeping");
-
             return (self.into(), body);
         }
 
@@ -1719,10 +1724,6 @@ where
                 protocol_name: self.state.protocol_name.clone(),
                 assignment: Bytes::from_static(b""),
             };
-
-            debug!("about to sleep");
-            sleep(Duration::from_millis(PAUSE_MS)).await;
-            debug!("done sleeping");
 
             return (self.into(), body);
         };
@@ -1980,26 +1981,6 @@ where
         let _ = rebalance_timeout_ms;
         let _ = reason;
 
-        if let Some(client_id) = client_id {
-            if member_id.is_empty() {
-                let member_id = format!("{client_id}-{}", Uuid::new_v4());
-
-                let body = Body::JoinGroupResponse {
-                    throttle_time_ms: Some(0),
-                    error_code: ErrorCode::MemberIdRequired.into(),
-                    generation_id: -1,
-                    protocol_type: None,
-                    protocol_name: Some("".into()),
-                    leader: "".into(),
-                    skip_assignment: self.skip_assignment,
-                    member_id,
-                    members: Some([].into()),
-                };
-
-                return (self.into(), body);
-            }
-        }
-
         let Some(protocols) = protocols else {
             let body = Body::JoinGroupResponse {
                 throttle_time_ms: Some(0),
@@ -2035,6 +2016,40 @@ where
             return (self.into(), body);
         };
 
+        if let Some(client_id) = client_id {
+            if member_id.is_empty() {
+                let member_id = format!("{client_id}-{}", Uuid::new_v4());
+
+                let body = Body::JoinGroupResponse {
+                    throttle_time_ms: Some(0),
+                    error_code: ErrorCode::MemberIdRequired.into(),
+                    generation_id: -1,
+                    protocol_type: None,
+                    protocol_name: Some("".into()),
+                    leader: "".into(),
+                    skip_assignment: self.skip_assignment,
+                    member_id: member_id.clone(),
+                    members: Some([].into()),
+                };
+
+                _ = self.members.insert(
+                    member_id.clone(),
+                    Member {
+                        join_response: JoinGroupResponseMember {
+                            member_id,
+                            group_instance_id: group_instance_id.map(|s| s.to_owned()),
+                            metadata: protocol.metadata.clone(),
+                        },
+                        last_contact: Some(now),
+                    },
+                );
+
+                self.generation_id += 1;
+
+                return (self.into(), body);
+            }
+        }
+
         match self.members.insert(
             member_id.to_owned(),
             Member {
@@ -2053,7 +2068,13 @@ where
                 let state: Wrapper<O> = self.into();
 
                 let body = {
-                    let members = state.members();
+                    let members = Some(
+                        if state.leader().is_some_and(|leader| leader == member_id) {
+                            state.members()
+                        } else {
+                            [].into()
+                        },
+                    );
                     let protocol_type = state.protocol_type().map(ToOwned::to_owned);
                     let protocol_name = state.protocol_name().map(ToOwned::to_owned);
 
@@ -2069,7 +2090,7 @@ where
                             .unwrap_or("".to_owned()),
                         skip_assignment: state.skip_assignment().map(ToOwned::to_owned),
                         member_id: member_id.into(),
-                        members: Some(members),
+                        members,
                     }
                 };
 
@@ -2105,7 +2126,13 @@ where
                 .into();
 
                 let body = {
-                    let members = state.members();
+                    let members = Some(
+                        if state.leader().is_some_and(|leader| leader == member_id) {
+                            state.members()
+                        } else {
+                            [].into()
+                        },
+                    );
                     let protocol_type = state.protocol_type().map(|s| s.to_owned());
                     let protocol_name = state.protocol_name().map(|s| s.to_owned());
 
@@ -2121,7 +2148,7 @@ where
                             .unwrap_or("".to_owned()),
                         skip_assignment: self.skip_assignment,
                         member_id: member_id.into(),
-                        members: Some(members),
+                        members,
                     }
                 };
 
@@ -2152,6 +2179,14 @@ where
                 .into();
 
                 let body = {
+                    let members = Some(
+                        if state.leader().is_some_and(|leader| leader == member_id) {
+                            state.members()
+                        } else {
+                            [].into()
+                        },
+                    );
+
                     let protocol_type = state.protocol_type().map(|s| s.to_owned());
                     let protocol_name = state.protocol_name().map(|s| s.to_owned());
 
@@ -2167,7 +2202,7 @@ where
                             .unwrap_or("".to_owned()),
                         skip_assignment: self.skip_assignment,
                         member_id: member_id.into(),
-                        members: Some([].into()),
+                        members,
                     }
                 };
 
@@ -2202,10 +2237,6 @@ where
                 assignment: Bytes::from_static(b""),
             };
 
-            debug!("about to sleep");
-            sleep(Duration::from_millis(PAUSE_MS)).await;
-            debug!("done sleeping");
-
             return (self, body);
         }
 
@@ -2220,10 +2251,6 @@ where
                 assignment: Bytes::from_static(b""),
             };
 
-            debug!("about to sleep");
-            sleep(Duration::from_millis(PAUSE_MS)).await;
-            debug!("done sleeping");
-
             return (self, body);
         }
 
@@ -2235,10 +2262,6 @@ where
                 protocol_name: Some(self.state.protocol_name.clone()),
                 assignment: Bytes::from_static(b""),
             };
-
-            debug!("about to sleep");
-            sleep(Duration::from_millis(PAUSE_MS)).await;
-            debug!("done sleeping");
 
             return (self, body);
         }
@@ -2558,7 +2581,7 @@ mod tests {
                 throttle_time_ms: Some(0),
                 error_code,
                 generation_id: -1,
-                protocol_type: None,
+                protocol_type: Some(protocol_type),
                 protocol_name: Some(protocol_name),
                 leader,
                 skip_assignment: Some(false),
@@ -2566,6 +2589,7 @@ mod tests {
                 member_id,
             } => {
                 assert_eq!(error_code, i16::from(ErrorCode::MemberIdRequired));
+                assert_eq!("consumer", protocol_type);
                 assert_eq!("", protocol_name);
                 assert!(leader.is_empty());
                 assert!(member_id.starts_with(CLIENT_ID));
@@ -3332,6 +3356,98 @@ mod tests {
             )
             .await?
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn member_id_required_error_code_joins_group() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let session_timeout_ms = 45_000;
+        let rebalance_timeout_ms = Some(300_000);
+        let group_instance_id = None;
+        let reason = None;
+
+        let cluster = "abc";
+        let node = 12321;
+
+        const CLIENT_ID: &str = "console-consumer";
+        const GROUP_ID: &str = "test-consumer-group";
+        const RANGE: &str = "range";
+        const COOPERATIVE_STICKY: &str = "cooperative-sticky";
+
+        const PROTOCOL_TYPE: &str = "consumer";
+
+        let storage = DynoStore::new(cluster, node, InMemory::new());
+        let s = Wrapper::with_storage_group_detail(
+            storage,
+            GroupDetail {
+                session_timeout_ms,
+                rebalance_timeout_ms,
+                state: GroupState::Forming {
+                    protocol_type: Some(PROTOCOL_TYPE.into()),
+                    protocol_name: Some(RANGE.into()),
+                    leader: None,
+                },
+                ..Default::default()
+            },
+        );
+
+        let now = SystemTime::now();
+
+        let first_member_range_meta = Bytes::from_static(b"first_member_range_meta_01");
+        let first_member_sticky_meta = Bytes::from_static(b"first_member_sticky_meta_01");
+
+        let first_member_protocols = [
+            JoinGroupRequestProtocol {
+                name: RANGE.into(),
+                metadata: first_member_range_meta.clone(),
+            },
+            JoinGroupRequestProtocol {
+                name: COOPERATIVE_STICKY.into(),
+                metadata: first_member_sticky_meta,
+            },
+        ];
+
+        assert!(s.members().is_empty());
+
+        match s
+            .join(
+                now,
+                Some(CLIENT_ID),
+                GROUP_ID,
+                session_timeout_ms,
+                rebalance_timeout_ms,
+                "",
+                group_instance_id,
+                PROTOCOL_TYPE,
+                Some(&first_member_protocols[..]),
+                reason,
+            )
+            .await
+        {
+            (
+                s,
+                Body::JoinGroupResponse {
+                    error_code,
+                    generation_id,
+                    leader,
+                    member_id,
+                    members,
+                    ..
+                },
+            ) => {
+                assert_eq!(-1, generation_id);
+                assert_eq!(i16::from(ErrorCode::MemberIdRequired), error_code);
+                assert_eq!("", leader);
+                assert_eq!(Some([].into()), members);
+                assert!(member_id.starts_with(CLIENT_ID));
+                assert_eq!(1, s.members().len());
+            }
+
+            otherwise => panic!("{otherwise:?}"),
+        }
 
         Ok(())
     }
