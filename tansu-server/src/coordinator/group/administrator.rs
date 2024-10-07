@@ -231,33 +231,45 @@ where
             GroupState::Forming {
                 protocol_type,
                 protocol_name,
-                leader,
-            } => Self::Forming(Inner {
-                session_timeout_ms: gd.session_timeout_ms,
-                rebalance_timeout_ms: gd.rebalance_timeout_ms,
-                group_instance_id: gd.group_instance_id,
-                members: gd
-                    .members
-                    .iter()
-                    .map(|(id, member)| {
-                        (
-                            id.to_owned(),
-                            Member {
-                                join_response: member.join_response.clone(),
-                                last_contact: member.last_contact,
-                            },
-                        )
-                    })
-                    .collect(),
-                generation_id: gd.generation_id,
-                state: Forming {
-                    protocol_type,
-                    protocol_name,
-                    leader,
-                },
-                storage,
-                skip_assignment: gd.skip_assignment,
-            }),
+                mut leader,
+            } => {
+                if let Some(ref leader_id) = leader {
+                    if !gd
+                        .members
+                        .iter()
+                        .any(|(member_id, _)| member_id == leader_id)
+                    {
+                        _ = leader.take();
+                    }
+                }
+
+                Self::Forming(Inner {
+                    session_timeout_ms: gd.session_timeout_ms,
+                    rebalance_timeout_ms: gd.rebalance_timeout_ms,
+                    group_instance_id: gd.group_instance_id,
+                    members: gd
+                        .members
+                        .iter()
+                        .map(|(id, member)| {
+                            (
+                                id.to_owned(),
+                                Member {
+                                    join_response: member.join_response.clone(),
+                                    last_contact: member.last_contact,
+                                },
+                            )
+                        })
+                        .collect(),
+                    generation_id: gd.generation_id,
+                    state: Forming {
+                        protocol_type,
+                        protocol_name,
+                        leader,
+                    },
+                    storage,
+                    skip_assignment: gd.skip_assignment,
+                })
+            }
             GroupState::Formed {
                 protocol_type,
                 protocol_name,
@@ -1032,11 +1044,12 @@ where
             debug!(?group_id, ?wrapper, ?version, ?iteration);
 
             let now = SystemTime::now();
-            // let wrapper = wrapper.missed_heartbeat(group_id, now);
 
             let (wrapper, body) = wrapper
                 .heartbeat(now, group_id, generation_id, member_id, group_instance_id)
                 .await;
+
+            let wrapper = wrapper.missed_heartbeat(group_id, now);
 
             match self
                 .storage
@@ -1181,7 +1194,6 @@ where
                             "missed heartbeat for {member_id} for {group_id} in generation: {}, after {}ms",
                             self.generation_id, duration.as_millis()
                         );
-
 
                         false
                     } else {
@@ -3448,6 +3460,124 @@ mod tests {
 
             otherwise => panic!("{otherwise:?}"),
         }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn forming_leader_leaves_group() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let session_timeout_ms = 45_000;
+        let rebalance_timeout_ms = Some(300_000);
+        let group_instance_id = None;
+        let reason = None;
+
+        let cluster = "abc";
+        let node = 12321;
+
+        const CLIENT_ID: &str = "console-consumer";
+        const GROUP_ID: &str = "test-consumer-group";
+        const RANGE: &str = "range";
+        const COOPERATIVE_STICKY: &str = "cooperative-sticky";
+
+        const PROTOCOL_TYPE: &str = "consumer";
+
+        let storage = DynoStore::new(cluster, node, InMemory::new());
+        let s = Wrapper::with_storage_group_detail(
+            storage,
+            GroupDetail {
+                session_timeout_ms,
+                rebalance_timeout_ms,
+                state: GroupState::Forming {
+                    protocol_type: Some(PROTOCOL_TYPE.into()),
+                    protocol_name: Some(RANGE.into()),
+                    leader: None,
+                },
+                ..Default::default()
+            },
+        );
+
+        let now = SystemTime::now();
+
+        let first_member_range_meta = Bytes::from_static(b"first_member_range_meta_01");
+        let first_member_sticky_meta = Bytes::from_static(b"first_member_sticky_meta_01");
+
+        let first_member_protocols = [
+            JoinGroupRequestProtocol {
+                name: RANGE.into(),
+                metadata: first_member_range_meta.clone(),
+            },
+            JoinGroupRequestProtocol {
+                name: COOPERATIVE_STICKY.into(),
+                metadata: first_member_sticky_meta,
+            },
+        ];
+
+        assert!(s.members().is_empty());
+
+        let (s, member_id) = match s
+            .join(
+                now,
+                Some(CLIENT_ID),
+                GROUP_ID,
+                session_timeout_ms,
+                rebalance_timeout_ms,
+                "",
+                group_instance_id,
+                PROTOCOL_TYPE,
+                Some(&first_member_protocols[..]),
+                reason,
+            )
+            .await
+        {
+            (
+                s,
+                Body::JoinGroupResponse {
+                    error_code,
+                    generation_id,
+                    leader,
+                    member_id,
+                    members,
+                    ..
+                },
+            ) => {
+                assert_eq!(-1, generation_id);
+                assert_eq!(i16::from(ErrorCode::MemberIdRequired), error_code);
+                assert_eq!("", leader);
+                assert_eq!(Some([].into()), members);
+                assert!(member_id.starts_with(CLIENT_ID));
+                assert_eq!(1, s.members().len());
+
+                (s, member_id)
+            }
+
+            otherwise => panic!("{otherwise:?}"),
+        };
+
+        let assignments = [SyncGroupRequestAssignment {
+            member_id: member_id.clone(),
+            assignment: Bytes::from_static(b"assignment_01"),
+        }];
+
+        let (s, _) = s
+            .sync(
+                now,
+                GROUP_ID,
+                0,
+                member_id.as_str(),
+                group_instance_id,
+                Some(PROTOCOL_TYPE),
+                Some(RANGE),
+                Some(&assignments),
+            )
+            .await;
+
+        assert_eq!(Some(member_id.as_str()), s.leader());
+
+        let (s, _) = s.leave(now, GROUP_ID, Some(member_id.as_str()), None).await;
+
+        assert_eq!(None, s.leader());
 
         Ok(())
     }

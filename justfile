@@ -105,7 +105,7 @@ test-topic-consume:
 tansu-1:
     ./target/debug/tansu-server \
         --kafka-cluster-id ${CLUSTER_ID} \
-        --kafka-listener-url tcp://127.0.0.1:9092/ \
+        --kafka-listener-url tcp://0.0.0.0:9092/ \
         --kafka-advertised-listener-url tcp:://127.0.0.1:9092/ \
         --kafka-node-id ${NODE_ID} \
         --storage-engine ${STORAGE_ENGINE} \
