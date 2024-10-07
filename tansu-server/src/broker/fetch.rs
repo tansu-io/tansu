@@ -80,7 +80,8 @@ where
                 .inspect_err(|error| error!(?tp, ?error))
                 .map_or(Vec::new(), |batch| vec![batch]);
 
-            *max_bytes -= u32::try_from(fetched.byte_size())?;
+            *max_bytes =
+                u32::try_from(fetched.byte_size()).map(|bytes| max_bytes.saturating_sub(bytes))?;
 
             debug!(?offset, ?fetched);
 
