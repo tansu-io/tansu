@@ -372,6 +372,14 @@ where
         }
     }
 
+    #[cfg(test)]
+    fn assignments(&self) -> Option<BTreeMap<String, Bytes>> {
+        match self {
+            Wrapper::Forming(..) => None,
+            Wrapper::Formed(inner) => Some(inner.state.assignments.clone()),
+        }
+    }
+
     fn missed_heartbeat(self, group_id: &str, now: SystemTime) -> Self {
         debug!(?group_id, ?now);
 
@@ -707,6 +715,8 @@ where
                 )
                 .await;
 
+            debug!(?group_id, ?wrapper, ?version, ?iteration);
+
             match self
                 .storage
                 .update_group(group_id, GroupDetail::from(&wrapper), version)
@@ -804,6 +814,8 @@ where
                 )
                 .await;
 
+            debug!(?group_id, ?wrapper, ?version, ?iteration);
+
             match self
                 .storage
                 .update_group(group_id, GroupDetail::from(&wrapper), version)
@@ -878,6 +890,8 @@ where
 
             let (wrapper, body) = wrapper.leave(now, group_id, member_id, members).await;
 
+            debug!(?group_id, ?wrapper, ?version, ?iteration);
+
             match self
                 .storage
                 .update_group(group_id, GroupDetail::from(&wrapper), version)
@@ -945,6 +959,8 @@ where
             let wrapper = wrapper.missed_heartbeat(group_id, now);
 
             let (wrapper, body) = wrapper.offset_commit(now, &offset_commit).await;
+
+            debug!(?group_id, ?wrapper, ?version, ?iteration);
 
             match self
                 .storage
@@ -1050,6 +1066,8 @@ where
                 .await;
 
             let wrapper = wrapper.missed_heartbeat(group_id, now);
+
+            debug!(?group_id, ?wrapper, ?version, ?iteration);
 
             match self
                 .storage
@@ -2056,9 +2074,24 @@ where
                     },
                 );
 
-                self.generation_id += 1;
-
-                return (self.into(), body);
+                return (
+                    Inner {
+                        generation_id: self.generation_id + 1,
+                        session_timeout_ms: self.session_timeout_ms,
+                        rebalance_timeout_ms: self.rebalance_timeout_ms,
+                        group_instance_id: self.group_instance_id,
+                        members: self.members,
+                        state: Forming {
+                            protocol_type: Some(self.state.protocol_type),
+                            protocol_name: Some(self.state.protocol_name),
+                            leader: Some(self.state.leader),
+                        },
+                        storage: self.storage,
+                        skip_assignment: self.skip_assignment,
+                    }
+                    .into(),
+                    body,
+                );
             }
         }
 
@@ -3578,6 +3611,224 @@ mod tests {
         let (s, _) = s.leave(now, GROUP_ID, Some(member_id.as_str()), None).await;
 
         assert_eq!(None, s.leader());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn sync_from_member_while_forming() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let session_timeout_ms = 45_000;
+        let rebalance_timeout_ms = Some(300_000);
+        let group_instance_id = None;
+        let reason = None;
+
+        let cluster = "abc";
+        let node = 12321;
+
+        const CLIENT_ID: &str = "console-consumer";
+        const GROUP_ID: &str = "test-consumer-group";
+        const RANGE: &str = "range";
+        const COOPERATIVE_STICKY: &str = "cooperative-sticky";
+
+        const PROTOCOL_TYPE: &str = "consumer";
+
+        let storage = DynoStore::new(cluster, node, InMemory::new());
+        let s = Wrapper::with_storage_group_detail(
+            storage,
+            GroupDetail {
+                session_timeout_ms,
+                rebalance_timeout_ms,
+                state: GroupState::Forming {
+                    protocol_type: Some(PROTOCOL_TYPE.into()),
+                    protocol_name: Some(RANGE.into()),
+                    leader: None,
+                },
+                ..Default::default()
+            },
+        );
+
+        let now = SystemTime::now();
+
+        let first_member_range_meta = Bytes::from_static(b"first_member_range_meta_01");
+        let first_member_sticky_meta = Bytes::from_static(b"first_member_sticky_meta_01");
+
+        let second_member_range_meta = Bytes::from_static(b"second_member_range_meta_01");
+        let second_member_sticky_meta = Bytes::from_static(b"second_member_sticky_meta_01");
+
+        assert!(s.members().is_empty());
+        assert_eq!(None, s.leader());
+        assert_eq!(None, s.assignments());
+
+        let first_member_id = format!("{}-{}", CLIENT_ID, Uuid::new_v4());
+
+        let (s, _) = s
+            .join(
+                now,
+                Some(CLIENT_ID),
+                GROUP_ID,
+                session_timeout_ms,
+                rebalance_timeout_ms,
+                first_member_id.as_str(),
+                group_instance_id,
+                PROTOCOL_TYPE,
+                Some(
+                    &[
+                        JoinGroupRequestProtocol {
+                            name: RANGE.into(),
+                            metadata: first_member_range_meta.clone(),
+                        },
+                        JoinGroupRequestProtocol {
+                            name: COOPERATIVE_STICKY.into(),
+                            metadata: first_member_sticky_meta,
+                        },
+                    ][..],
+                ),
+                reason,
+            )
+            .await;
+
+        assert_eq!(0, s.generation_id());
+        assert_eq!(1, s.members().len());
+        assert!(s.members().contains(&JoinGroupResponseMember {
+            member_id: first_member_id.clone(),
+            group_instance_id: None,
+            metadata: first_member_range_meta.clone(),
+        }));
+        assert_eq!(Some(first_member_id.as_str()), s.leader());
+
+        let second_member_id = format!("{}-{}", CLIENT_ID, Uuid::new_v4());
+
+        let (s, _) = s
+            .join(
+                now,
+                Some(CLIENT_ID),
+                GROUP_ID,
+                session_timeout_ms,
+                rebalance_timeout_ms,
+                second_member_id.as_str(),
+                group_instance_id,
+                PROTOCOL_TYPE,
+                Some(
+                    &[
+                        JoinGroupRequestProtocol {
+                            name: RANGE.into(),
+                            metadata: second_member_range_meta.clone(),
+                        },
+                        JoinGroupRequestProtocol {
+                            name: COOPERATIVE_STICKY.into(),
+                            metadata: second_member_sticky_meta,
+                        },
+                    ][..],
+                ),
+                reason,
+            )
+            .await;
+
+        assert_eq!(1, s.generation_id());
+        assert_eq!(2, s.members().len());
+        assert_eq!(None, s.assignments());
+
+        assert!(s.members().contains(&JoinGroupResponseMember {
+            member_id: first_member_id.clone(),
+            group_instance_id: None,
+            metadata: first_member_range_meta.clone(),
+        }));
+
+        assert!(s.members().contains(&JoinGroupResponseMember {
+            member_id: second_member_id.clone(),
+            group_instance_id: None,
+            metadata: second_member_range_meta.clone(),
+        }));
+
+        assert_eq!(Some(first_member_id.as_str()), s.leader());
+
+        let (s, _) = s
+            .sync(
+                now,
+                GROUP_ID,
+                1,
+                second_member_id.as_str(),
+                group_instance_id,
+                Some(PROTOCOL_TYPE),
+                Some(RANGE),
+                Some(&[]),
+            )
+            .await;
+
+        assert_eq!(1, s.generation_id());
+        assert_eq!(Some(first_member_id.as_str()), s.leader());
+        assert_eq!(Some(first_member_id.as_str()), s.leader());
+        assert_eq!(None, s.assignments());
+
+        let assignments = [SyncGroupRequestAssignment {
+            member_id: first_member_id.clone(),
+            assignment: Bytes::from_static(b"first_assignment_01"),
+        }];
+
+        let (s, _) = s
+            .sync(
+                now,
+                GROUP_ID,
+                0,
+                first_member_id.as_str(),
+                group_instance_id,
+                Some(PROTOCOL_TYPE),
+                Some(RANGE),
+                Some(&assignments[..]),
+            )
+            .await;
+
+        assert_eq!(1, s.generation_id());
+        assert_eq!(Some(first_member_id.as_str()), s.leader());
+        assert_eq!(None, s.assignments());
+
+        let first_member_assignment = Bytes::from_static(b"first_assignment_02");
+        let second_member_assignment = Bytes::from_static(b"second_assignment_02");
+
+        let mut assignments = BTreeMap::new();
+        _ = assignments.insert(first_member_id.clone(), first_member_assignment.clone());
+        _ = assignments.insert(second_member_id.clone(), second_member_assignment.clone());
+
+        let (s, _) = s
+            .sync(
+                now,
+                GROUP_ID,
+                1,
+                first_member_id.as_str(),
+                group_instance_id,
+                Some(PROTOCOL_TYPE),
+                Some(RANGE),
+                Some(
+                    &assignments
+                        .iter()
+                        .map(|(member_id, assignment)| SyncGroupRequestAssignment {
+                            member_id: member_id.to_owned(),
+                            assignment: assignment.to_owned(),
+                        })
+                        .collect::<Vec<_>>()[..],
+                ),
+            )
+            .await;
+
+        assert_eq!(1, s.generation_id());
+        assert_eq!(Some(first_member_id.as_str()), s.leader());
+        assert_eq!(Some(first_member_id.as_str()), s.leader());
+
+        assert_eq!(
+            Some(first_member_assignment),
+            s.assignments()
+                .map(|assignments| assignments.get(first_member_id.as_str()).cloned())
+                .unwrap()
+        );
+
+        assert_eq!(
+            Some(second_member_assignment),
+            s.assignments()
+                .map(|assignments| assignments.get(second_member_id.as_str()).cloned())
+                .unwrap()
+        );
 
         Ok(())
     }
