@@ -498,7 +498,7 @@ impl Storage for Postgres {
             .await
             .inspect_err(|err| error!(?err))?;
 
-        let inflated = inflated::Batch::try_from(deflated)?;
+        let inflated = inflated::Batch::try_from(deflated).inspect_err(|err| error!(?err))?;
         let mut offsets = vec![];
 
         for record in inflated.records {
