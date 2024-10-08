@@ -19,6 +19,7 @@ pub mod primitive;
 pub mod record;
 pub mod ser;
 
+use bytes::{Buf, Bytes};
 pub use de::Decoder;
 use flate2::read::GzDecoder;
 use primitive::tagged::TagBuffer;
@@ -37,7 +38,7 @@ use std::{
     time::{Duration, SystemTime, SystemTimeError},
 };
 use tansu_kafka_model::{MessageKind, MessageMeta};
-use tracing::{debug, warn};
+use tracing::{debug, error, warn};
 
 #[derive(Debug)]
 pub struct RootMessageMeta {
@@ -98,6 +99,7 @@ pub enum Error {
     NoSuchField(&'static str),
     NoSuchMessage(&'static str),
     NoSuchRequest(i16),
+    Snap(#[from] snap::Error),
     StringWithoutApiVersion,
     StringWithoutLength,
     SystemTime(SystemTimeError),
@@ -1180,11 +1182,35 @@ impl From<Compression> for i16 {
 }
 
 impl Compression {
-    fn inflator(&self, deflated: impl BufRead + 'static) -> Result<Box<dyn Read>> {
+    fn inflator(&self, mut deflated: impl BufRead + 'static) -> Result<Box<dyn Read>> {
         match self {
             Compression::None => Ok(Box::new(deflated)),
             Compression::Gzip => Ok(Box::new(GzDecoder::new(deflated))),
-            Compression::Snappy => Ok(Box::new(snap::read::FrameDecoder::new(deflated))),
+            Compression::Snappy => {
+                let mut input = vec![];
+                _ = deflated.read_to_end(&mut input)?;
+                debug!(?input);
+
+                let mut decoder = snap::raw::Decoder::new();
+
+                decoder
+                    .decompress_vec(
+                        // https://github.com/xerial/snappy-java/tree/master?tab=readme-ov-file#compatibility-notes
+                        if input.starts_with(b"\x82SNAPPY\0") {
+                            let skip_header = &input[20..];
+                            debug!(?skip_header);
+                            skip_header
+                        } else {
+                            &input[..]
+                        },
+                    )
+                    .map_err(Into::into)
+                    .map(Bytes::from)
+                    .map(|bytes| bytes.reader())
+                    .map(Box::new)
+                    .map(|boxed| boxed as Box<dyn Read>)
+                    .inspect_err(|err| error!(?err))
+            }
             Compression::Lz4 => lz4::Decoder::new(deflated)
                 .map(Box::new)
                 .map(|boxed| boxed as Box<dyn Read>)

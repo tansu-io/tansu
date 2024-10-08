@@ -221,6 +221,9 @@ impl TryFrom<Batch> for Vec<Record> {
     fn try_from(batch: Batch) -> Result<Self, Self::Error> {
         let record_count = usize::try_from(batch.record_count)?;
 
+        debug!(?record_count);
+        debug!(?batch.record_data);
+
         let mut reader = batch
             .compression()
             .and_then(|compression| compression.inflator(batch.record_data.reader()))?;
@@ -660,7 +663,6 @@ mod tests {
         Ok(())
     }
 
-    #[ignore]
     #[test]
     fn decode_snappy() -> Result<()> {
         let _guard = init_tracing()?;
