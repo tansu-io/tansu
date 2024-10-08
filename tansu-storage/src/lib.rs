@@ -581,10 +581,13 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
 
 #[derive(Debug, thiserror::Error)]
 pub enum UpdateError<T> {
-    Outdated { current: T, version: Version },
     Error(#[from] Error),
     ObjectStore(#[from] object_store::Error),
+    Outdated { current: T, version: Version },
     SerdeJson(#[from] serde_json::Error),
+    TokioPostgres(#[from] tokio_postgres::error::Error),
+    MissingEtag,
+    Uuid(#[from] uuid::Error),
 }
 
 #[derive(Clone, Debug)]

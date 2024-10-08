@@ -137,8 +137,11 @@ create table consumer_offset (
 );
 
 create table consumer_group (
-  grp text primary key,
-  generation integer,
+  grp text not null,
+  cluster integer references cluster(id) not null,
+  primary key (grp, cluster),
+  e_tag uuid not null,
+  detail json not null,
   last_updated timestamp default current_timestamp not null,
   created_at timestamp default current_timestamp not null
 );

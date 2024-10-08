@@ -752,6 +752,16 @@ where
                 Err(UpdateError::ObjectStore(error)) => return Err(error.into()),
 
                 Err(UpdateError::SerdeJson(error)) => return Err(error.into()),
+
+                Err(UpdateError::TokioPostgres(error)) => return Err(error.into()),
+
+                Err(UpdateError::MissingEtag) => {
+                    return Err(Error::Message(String::from("missing e-tag")))
+                }
+
+                Err(UpdateError::Uuid(uuid)) => {
+                    return Err(Error::Message(format!("uuid: {uuid}")))
+                }
             }
         }
     }
@@ -851,6 +861,16 @@ where
                 Err(UpdateError::ObjectStore(error)) => return Err(error.into()),
 
                 Err(UpdateError::SerdeJson(error)) => return Err(error.into()),
+
+                Err(UpdateError::TokioPostgres(error)) => return Err(error.into()),
+
+                Err(UpdateError::MissingEtag) => {
+                    return Err(Error::Message(String::from("missing e-tag")))
+                }
+
+                Err(UpdateError::Uuid(uuid)) => {
+                    return Err(Error::Message(format!("uuid: {uuid}")))
+                }
             }
         }
     }
@@ -927,6 +947,16 @@ where
                 Err(UpdateError::ObjectStore(error)) => return Err(error.into()),
 
                 Err(UpdateError::SerdeJson(error)) => return Err(error.into()),
+
+                Err(UpdateError::TokioPostgres(error)) => return Err(error.into()),
+
+                Err(UpdateError::MissingEtag) => {
+                    return Err(Error::Message(String::from("missing e-tag")))
+                }
+
+                Err(UpdateError::Uuid(uuid)) => {
+                    return Err(Error::Message(format!("uuid: {uuid}")))
+                }
             }
         }
     }
@@ -997,6 +1027,16 @@ where
                 Err(UpdateError::ObjectStore(error)) => return Err(error.into()),
 
                 Err(UpdateError::SerdeJson(error)) => return Err(error.into()),
+
+                Err(UpdateError::TokioPostgres(error)) => return Err(error.into()),
+
+                Err(UpdateError::MissingEtag) => {
+                    return Err(Error::Message(String::from("missing e-tag")))
+                }
+
+                Err(UpdateError::Uuid(uuid)) => {
+                    return Err(Error::Message(format!("uuid: {uuid}")))
+                }
             }
         }
     }
@@ -1104,6 +1144,16 @@ where
                 Err(UpdateError::ObjectStore(error)) => return Err(error.into()),
 
                 Err(UpdateError::SerdeJson(error)) => return Err(error.into()),
+
+                Err(UpdateError::TokioPostgres(error)) => return Err(error.into()),
+
+                Err(UpdateError::MissingEtag) => {
+                    return Err(Error::Message(String::from("missing e-tag")))
+                }
+
+                Err(UpdateError::Uuid(uuid)) => {
+                    return Err(Error::Message(format!("uuid: {uuid}")))
+                }
             }
         }
     }
