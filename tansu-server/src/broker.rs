@@ -81,8 +81,6 @@ where
     pub fn new(
         node_id: i32,
         cluster_id: &str,
-        // context: Raft,
-        // applicator: Applicator,
         listener: Url,
         advertised_listener: Url,
         rack: Option<String>,
@@ -95,8 +93,6 @@ where
             node_id,
             cluster_id: cluster_id.to_owned(),
             incarnation_id,
-            // context,
-            // applicator,
             listener,
             advertised_listener,
             rack,
@@ -243,27 +239,6 @@ where
             _ => unimplemented!(),
         }
     }
-
-    #[allow(dead_code)]
-    // async fn when_applied(&mut self, body: Body) -> Result<Body> {
-    //     debug!(?self, ?body);
-
-    //     let id = Uuid::new_v4();
-    //     let request = Request::new(id, body);
-    //     let command = &request as &dyn Command;
-
-    //     let json = serde_json::to_string(command)?;
-    //     debug!(?json);
-
-    //     let index = self
-    //         .context
-    //         .log(Bytes::copy_from_slice(json.as_bytes()))
-    //         .await?;
-
-    //     debug!(?index);
-
-    //     Ok(self.applicator.when_applied(id).await)
-    // }
 
     pub async fn response_for(
         &mut self,

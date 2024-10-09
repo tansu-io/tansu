@@ -100,22 +100,22 @@ test-topic-produce:
     echo "h1:pqr,h2:jkl,h3:uio	qwerty	poiuy\nh1:def,h2:lmn,h3:xyz	asdfgh	lkj\nh1:stu,h2:fgh,h3:ijk	zxcvbn	mnbvc" | kafka-console-producer --bootstrap-server localhost:9092 --topic test --property parse.headers=true --property parse.key=true
 
 test-topic-consume:
-    kafka-console-consumer --bootstrap-server localhost:9092 --topic test --from-beginning --property print.timestamp=true --property print.key=true --property print.offset=true --property print.partition=true --property print.headers=true --property print.value=true
+    kafka-console-consumer --bootstrap-server localhost:9092 --consumer-property fetch.max.wait.ms=15000 --group test-consumer-group --topic test --from-beginning --property print.timestamp=true --property print.key=true --property print.offset=true --property print.partition=true --property print.headers=true --property print.value=true
 
 tansu-1:
     ./target/debug/tansu-server \
         --kafka-cluster-id ${CLUSTER_ID} \
-        --kafka-listener-url tcp://127.0.0.1:9092/ \
+        --kafka-listener-url tcp://0.0.0.0:9092/ \
         --kafka-advertised-listener-url tcp:://127.0.0.1:9092/ \
         --kafka-node-id ${NODE_ID} \
         --storage-engine ${STORAGE_ENGINE} \
-        --work-dir work-dir/tansu-1
+        --work-dir work-dir/tansu-1 | tee tansu.log
 
 kafka-proxy:
     docker run -d -p 19092:9092 apache/kafka:3.8.0
 
 proxy:
-    ./target/debug/tansu-proxy
+    ./target/debug/tansu-proxy | tee proxy.log
 
 
 all: test miri

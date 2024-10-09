@@ -24,6 +24,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use deadpool_postgres::{Manager, ManagerConfig, Object, Pool, RecyclingMethod};
 use rand::{prelude::*, thread_rng};
+use serde_json::Value;
 use tansu_kafka_sans_io::{
     create_topics_request::CreatableTopic,
     delete_records_request::DeleteRecordsTopic,
@@ -39,8 +40,9 @@ use tracing::{debug, error};
 use uuid::Uuid;
 
 use crate::{
-    BrokerRegistationRequest, Error, ListOffsetRequest, ListOffsetResponse, MetadataResponse,
-    OffsetCommitRequest, OffsetStage, Result, Storage, TopicId, Topition, NULL_TOPIC_ID,
+    BrokerRegistationRequest, Error, GroupDetail, ListOffsetRequest, ListOffsetResponse,
+    MetadataResponse, OffsetCommitRequest, OffsetStage, Result, Storage, TopicId, Topition,
+    UpdateError, Version, NULL_TOPIC_ID,
 };
 
 #[derive(Clone, Debug)]
@@ -1349,87 +1351,110 @@ impl Storage for Postgres {
             })
         }
     }
-}
 
-#[cfg(test)]
-mod tests {
+    async fn update_group(
+        &self,
+        group_id: &str,
+        detail: GroupDetail,
+        version: Option<Version>,
+    ) -> Result<Version, UpdateError<GroupDetail>> {
+        let mut c = self.connection().await?;
+        let tx = c.transaction().await?;
 
-    // use deadpool_postgres::{ManagerConfig, Pool};
-    // use tansu_kafka_sans_io::record::Record;
-    // use tokio_postgres::NoTls;
-    // use url::Url;
+        let prepared = tx
+            .prepare(concat!(
+                "insert into consumer_group",
+                " (grp, cluster, e_tag, detail)",
+                " select $1, cluster.id, $3, $4",
+                " from cluster",
+                " where cluster.name = $2",
+                " on conflict (grp, cluster)",
+                " do update set",
+                " detail = excluded.detail, e_tag = $5",
+                " where consumer_group.e_tag = $3",
+                " returning grp, cluster, e_tag, detail",
+            ))
+            .await
+            .inspect_err(|err| error!(?err))?;
 
-    // use super::*;
+        let existing_e_tag = version
+            .as_ref()
+            .map_or(Ok(Uuid::new_v4()), |version| {
+                version
+                    .e_tag
+                    .as_ref()
+                    .map_or(Err(UpdateError::MissingEtag::<GroupDetail>), |e_tag| {
+                        Uuid::from_str(e_tag.as_str()).map_err(Into::into)
+                    })
+            })
+            .inspect_err(|err| error!(?err))?;
 
-    // #[test]
-    // fn earl() -> Result<()> {
-    //     let q = Url::parse("postgresql://")?;
-    //     assert_eq!("localhost", q.host_str().unwrap());
+        let new_e_tag = Uuid::new_v4();
 
-    //     Ok(())
-    // }
+        let value = serde_json::to_value(detail)?;
 
-    // #[tokio::test]
-    // async fn topic_id() -> Result<()> {
-    //     let pg_config =
-    //         tokio_postgres::Config::from_str("host=localhost user=postgres password=postgres")?;
+        let outcome = if let Some(row) = tx
+            .query_opt(
+                &prepared,
+                &[
+                    &group_id,
+                    &self.cluster.as_str(),
+                    &existing_e_tag,
+                    &value,
+                    &new_e_tag,
+                ],
+            )
+            .await
+            .inspect(|row| debug!(?row))
+            .inspect_err(|err| error!(?err))?
+        {
+            row.try_get::<_, Uuid>(2)
+                .inspect_err(|err| error!(?err))
+                .map_err(Into::into)
+                .map(|uuid| uuid.to_string())
+                .map(Some)
+                .map(|e_tag| Version {
+                    e_tag,
+                    version: None,
+                })
+        } else {
+            let prepared = tx
+                .prepare(concat!(
+                    "select",
+                    " cg.e_tag, cg.detail",
+                    " from cluster c, consumer_group cg",
+                    " where",
+                    " cg.grp = $1",
+                    " and c.name = $2",
+                    " and c.id = cg.cluster"
+                ))
+                .await
+                .inspect_err(|err| error!(?err))?;
 
-    //     let mgr_config = ManagerConfig {
-    //         recycling_method: deadpool_postgres::RecyclingMethod::Fast,
-    //     };
+            let row = tx
+                .query_one(&prepared, &[&group_id, &self.cluster.as_str()])
+                .await
+                .inspect(|row| debug!(?row))
+                .inspect_err(|err| error!(?err))?;
 
-    //     let mgr = deadpool_postgres::Manager::from_config(pg_config, NoTls, mgr_config);
-    //     let pool = Pool::builder(mgr).max_size(16).build().unwrap();
+            let version = row
+                .try_get::<_, Uuid>(0)
+                .inspect_err(|err| error!(?err))
+                .map(|uuid| uuid.to_string())
+                .map(Some)
+                .map(|e_tag| Version {
+                    e_tag,
+                    version: None,
+                })?;
 
-    //     let mut storage = Postgres { pool };
+            let value = row.try_get::<_, Value>(1)?;
+            let current = serde_json::from_value::<GroupDetail>(value)?;
 
-    //     let topic = "abc";
-    //     let partition = 3;
+            Err(UpdateError::Outdated { current, version })
+        };
 
-    //     _ = storage.create_topic(topic, partition, &[]).await?;
+        tx.commit().await.inspect_err(|err| error!(?err))?;
 
-    //     let def = &b"def"[..];
-
-    //     let deflated: deflated::Batch = inflated::Batch::builder()
-    //         .record(Record::builder().value(def.into()))
-    //         .build()
-    //         .and_then(TryInto::try_into)?;
-
-    //     let topition = Topition::new(topic, partition);
-
-    //     _ = storage.produce(&topition, deflated).await?;
-
-    //     let offsets = [(
-    //         Topition::new(topic, 1),
-    //         OffsetCommitRequest {
-    //             offset: 12321,
-    //             leader_epoch: None,
-    //             timestamp: None,
-    //             metadata: None,
-    //         },
-    //     )];
-
-    //     let group: &str = "some_group";
-    //     let retention = None;
-
-    //     storage
-    //         .offset_commit(group, retention, &offsets[..])
-    //         .await?;
-
-    //     let offsets = [(
-    //         Topition::new(topic, 1),
-    //         OffsetCommitRequest {
-    //             offset: 32123,
-    //             leader_epoch: None,
-    //             timestamp: None,
-    //             metadata: None,
-    //         },
-    //     )];
-
-    //     storage
-    //         .offset_commit(group, retention, &offsets[..])
-    //         .await?;
-
-    //     Ok(())
-    // }
+        outcome
+    }
 }
