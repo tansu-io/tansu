@@ -24,25 +24,26 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use deadpool_postgres::{Manager, ManagerConfig, Object, Pool, RecyclingMethod};
 use rand::{prelude::*, thread_rng};
+use serde_json::Value;
 use tansu_kafka_sans_io::{
     create_topics_request::CreatableTopic,
     delete_records_request::DeleteRecordsTopic,
     delete_records_response::{DeleteRecordsPartitionResult, DeleteRecordsTopicResult},
     describe_cluster_response::DescribeClusterBroker,
+    describe_configs_response::{DescribeConfigsResourceResult, DescribeConfigsResult},
     metadata_response::{MetadataResponseBroker, MetadataResponsePartition, MetadataResponseTopic},
     record::{deflated, inflated, Header, Record},
-    to_system_time, to_timestamp, ErrorCode,
+    to_system_time, to_timestamp, ConfigResource, ConfigSource, ConfigType, ErrorCode,
 };
 use tokio_postgres::{error::SqlState, Config, NoTls};
 use tracing::{debug, error};
 use uuid::Uuid;
 
 use crate::{
-    BrokerRegistationRequest, Error, ListOffsetRequest, ListOffsetResponse, MetadataResponse,
-    OffsetCommitRequest, OffsetStage, Result, Storage, TopicId, Topition,
+    BrokerRegistationRequest, Error, GroupDetail, ListOffsetRequest, ListOffsetResponse,
+    MetadataResponse, OffsetCommitRequest, OffsetStage, Result, Storage, TopicId, Topition,
+    UpdateError, Version, NULL_TOPIC_ID,
 };
-
-const NULL_TOPIC_ID: [u8; 16] = [0; 16];
 
 #[derive(Clone, Debug)]
 pub struct Postgres {
@@ -499,7 +500,7 @@ impl Storage for Postgres {
             .await
             .inspect_err(|err| error!(?err))?;
 
-        let inflated = inflated::Batch::try_from(deflated)?;
+        let inflated = inflated::Batch::try_from(deflated).inspect_err(|err| error!(?err))?;
         let mut offsets = vec![];
 
         for record in inflated.records {
@@ -1000,11 +1001,11 @@ impl Storage for Postgres {
                                 .inspect_err(|err|{let cluster = self.cluster.as_str();error!(?err, ?cluster, ?name);})?;
 
                             match c
-                                .query_one(&prepared, &[&self.cluster, &name.as_str()])
+                                .query_opt(&prepared, &[&self.cluster, &name.as_str()])
                                 .await
                                 .inspect_err(|err|error!(?err))
                             {
-                                Ok(row) => {
+                                Ok(Some(row)) => {
                                     let error_code = ErrorCode::None.into();
                                     let topic_id = row
                                         .try_get::<_, Uuid>(0)
@@ -1050,6 +1051,18 @@ impl Storage for Postgres {
                                         topic_authorized_operations: Some(-2147483648),
                                     }
                                 }
+
+                                Ok(None) => {
+                                    MetadataResponseTopic {
+                                        error_code: ErrorCode::UnknownTopicOrPartition.into(),
+                                        name: Some(name.into()),
+                                        topic_id: Some(NULL_TOPIC_ID),
+                                        is_internal: Some(false),
+                                        partitions: Some([].into()),
+                                        topic_authorized_operations: Some(-2147483648),
+                                    }
+                                }
+
                                 Err(reason) => {
                                     debug!(?reason);
                                     MetadataResponseTopic {
@@ -1252,87 +1265,196 @@ impl Storage for Postgres {
             topics: responses,
         })
     }
-}
 
-#[cfg(test)]
-mod tests {
+    async fn describe_config(
+        &self,
+        name: &str,
+        resource: ConfigResource,
+        keys: Option<&[String]>,
+    ) -> Result<DescribeConfigsResult> {
+        debug!(?name, ?resource, ?keys);
 
-    // use deadpool_postgres::{ManagerConfig, Pool};
-    // use tansu_kafka_sans_io::record::Record;
-    // use tokio_postgres::NoTls;
-    // use url::Url;
+        let c = self.connection().await.inspect_err(|err| error!(?err))?;
 
-    // use super::*;
+        let prepared = c
+            .prepare(concat!(
+                "select topic.id",
+                " from cluster, topic",
+                " where cluster.name = $1",
+                " and topic.name = $2",
+                " and topic.cluster = cluster.id",
+            ))
+            .await
+            .inspect_err(|err| error!(?err))?;
 
-    // #[test]
-    // fn earl() -> Result<()> {
-    //     let q = Url::parse("postgresql://")?;
-    //     assert_eq!("localhost", q.host_str().unwrap());
+        if let Some(row) = c
+            .query_opt(&prepared, &[&self.cluster.as_str(), &name])
+            .await
+            .inspect_err(|err| error!(?err))?
+        {
+            let id = row.try_get::<_, Uuid>(0)?;
 
-    //     Ok(())
-    // }
+            let prepared = c
+                .prepare(concat!(
+                    "select name, value",
+                    " from topic_configuration",
+                    " where topic_configuration.topic = $1",
+                ))
+                .await
+                .inspect_err(|err| error!(?err))?;
 
-    // #[tokio::test]
-    // async fn topic_id() -> Result<()> {
-    //     let pg_config =
-    //         tokio_postgres::Config::from_str("host=localhost user=postgres password=postgres")?;
+            let rows = c
+                .query(&prepared, &[&id])
+                .await
+                .inspect_err(|err| error!(?err))?;
 
-    //     let mgr_config = ManagerConfig {
-    //         recycling_method: deadpool_postgres::RecyclingMethod::Fast,
-    //     };
+            let mut configs = vec![];
 
-    //     let mgr = deadpool_postgres::Manager::from_config(pg_config, NoTls, mgr_config);
-    //     let pool = Pool::builder(mgr).max_size(16).build().unwrap();
+            for row in rows {
+                let name = row.try_get::<_, String>(0)?;
+                let value = row
+                    .try_get::<_, Option<String>>(1)
+                    .map(|value| value.unwrap_or_default())
+                    .map(Some)?;
 
-    //     let mut storage = Postgres { pool };
+                configs.push(DescribeConfigsResourceResult {
+                    name,
+                    value,
+                    read_only: false,
+                    is_default: Some(false),
+                    config_source: Some(ConfigSource::DefaultConfig.into()),
+                    is_sensitive: false,
+                    synonyms: Some([].into()),
+                    config_type: Some(ConfigType::String.into()),
+                    documentation: Some("".into()),
+                });
+            }
 
-    //     let topic = "abc";
-    //     let partition = 3;
+            let error_code = ErrorCode::None;
 
-    //     _ = storage.create_topic(topic, partition, &[]).await?;
+            Ok(DescribeConfigsResult {
+                error_code: error_code.into(),
+                error_message: Some(error_code.to_string()),
+                resource_type: i8::from(resource),
+                resource_name: name.into(),
+                configs: Some(configs),
+            })
+        } else {
+            let error_code = ErrorCode::UnknownTopicOrPartition;
 
-    //     let def = &b"def"[..];
+            Ok(DescribeConfigsResult {
+                error_code: error_code.into(),
+                error_message: Some(error_code.to_string()),
+                resource_type: i8::from(resource),
+                resource_name: name.into(),
+                configs: Some([].into()),
+            })
+        }
+    }
 
-    //     let deflated: deflated::Batch = inflated::Batch::builder()
-    //         .record(Record::builder().value(def.into()))
-    //         .build()
-    //         .and_then(TryInto::try_into)?;
+    async fn update_group(
+        &self,
+        group_id: &str,
+        detail: GroupDetail,
+        version: Option<Version>,
+    ) -> Result<Version, UpdateError<GroupDetail>> {
+        let mut c = self.connection().await?;
+        let tx = c.transaction().await?;
 
-    //     let topition = Topition::new(topic, partition);
+        let prepared = tx
+            .prepare(concat!(
+                "insert into consumer_group",
+                " (grp, cluster, e_tag, detail)",
+                " select $1, cluster.id, $3, $4",
+                " from cluster",
+                " where cluster.name = $2",
+                " on conflict (grp, cluster)",
+                " do update set",
+                " detail = excluded.detail, e_tag = $5",
+                " where consumer_group.e_tag = $3",
+                " returning grp, cluster, e_tag, detail",
+            ))
+            .await
+            .inspect_err(|err| error!(?err))?;
 
-    //     _ = storage.produce(&topition, deflated).await?;
+        let existing_e_tag = version
+            .as_ref()
+            .map_or(Ok(Uuid::new_v4()), |version| {
+                version
+                    .e_tag
+                    .as_ref()
+                    .map_or(Err(UpdateError::MissingEtag::<GroupDetail>), |e_tag| {
+                        Uuid::from_str(e_tag.as_str()).map_err(Into::into)
+                    })
+            })
+            .inspect_err(|err| error!(?err))?;
 
-    //     let offsets = [(
-    //         Topition::new(topic, 1),
-    //         OffsetCommitRequest {
-    //             offset: 12321,
-    //             leader_epoch: None,
-    //             timestamp: None,
-    //             metadata: None,
-    //         },
-    //     )];
+        let new_e_tag = Uuid::new_v4();
 
-    //     let group: &str = "some_group";
-    //     let retention = None;
+        let value = serde_json::to_value(detail)?;
 
-    //     storage
-    //         .offset_commit(group, retention, &offsets[..])
-    //         .await?;
+        let outcome = if let Some(row) = tx
+            .query_opt(
+                &prepared,
+                &[
+                    &group_id,
+                    &self.cluster.as_str(),
+                    &existing_e_tag,
+                    &value,
+                    &new_e_tag,
+                ],
+            )
+            .await
+            .inspect(|row| debug!(?row))
+            .inspect_err(|err| error!(?err))?
+        {
+            row.try_get::<_, Uuid>(2)
+                .inspect_err(|err| error!(?err))
+                .map_err(Into::into)
+                .map(|uuid| uuid.to_string())
+                .map(Some)
+                .map(|e_tag| Version {
+                    e_tag,
+                    version: None,
+                })
+        } else {
+            let prepared = tx
+                .prepare(concat!(
+                    "select",
+                    " cg.e_tag, cg.detail",
+                    " from cluster c, consumer_group cg",
+                    " where",
+                    " cg.grp = $1",
+                    " and c.name = $2",
+                    " and c.id = cg.cluster"
+                ))
+                .await
+                .inspect_err(|err| error!(?err))?;
 
-    //     let offsets = [(
-    //         Topition::new(topic, 1),
-    //         OffsetCommitRequest {
-    //             offset: 32123,
-    //             leader_epoch: None,
-    //             timestamp: None,
-    //             metadata: None,
-    //         },
-    //     )];
+            let row = tx
+                .query_one(&prepared, &[&group_id, &self.cluster.as_str()])
+                .await
+                .inspect(|row| debug!(?row))
+                .inspect_err(|err| error!(?err))?;
 
-    //     storage
-    //         .offset_commit(group, retention, &offsets[..])
-    //         .await?;
+            let version = row
+                .try_get::<_, Uuid>(0)
+                .inspect_err(|err| error!(?err))
+                .map(|uuid| uuid.to_string())
+                .map(Some)
+                .map(|e_tag| Version {
+                    e_tag,
+                    version: None,
+                })?;
 
-    //     Ok(())
-    // }
+            let value = row.try_get::<_, Value>(1)?;
+            let current = serde_json::from_value::<GroupDetail>(value)?;
+
+            Err(UpdateError::Outdated { current, version })
+        };
+
+        tx.commit().await.inspect_err(|err| error!(?err))?;
+
+        outcome
+    }
 }

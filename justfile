@@ -1,3 +1,5 @@
+set dotenv-load
+
 default: fmt build test clippy
 
 build:
@@ -21,6 +23,30 @@ work-dir:
 docker-build:
     docker build --tag ghcr.io/tansu-io/tansu --no-cache --progress plain .
 
+docker-compose-minio-up:
+    docker compose up --detach minio
+
+docker-compose-minio-down:
+    docker compose down --volumes minio
+
+docker-compose-tansu-up:
+    docker compose up --detach tansu
+
+docker-compose-tansu-down:
+    docker compose down --volumes tansu
+
+docker-compose-sr-up:
+    docker compose up --detach sr
+
+docker-compose-sr-down:
+    docker compose down --volumes sr
+
+docker-compose-c3-up:
+    docker compose up --detach c3
+
+docker-compose-c3-down:
+    docker compose down --volumes c3
+
 docker-compose-db-up:
     docker compose up --detach db
 
@@ -32,6 +58,12 @@ docker-compose-up:
 
 docker-compose-down:
     docker compose down --volumes
+
+docker-compose-ps:
+    docker compose ps
+
+docker-compose-logs:
+    docker compose logs
 
 psql:
     docker compose exec db psql $*
@@ -64,29 +96,26 @@ test-topic-create:
 test-topic-get-offsets:
     kafka-get-offsets --bootstrap-server 127.0.0.1:9092 --topic test
 
-
 test-topic-produce:
     echo "h1:pqr,h2:jkl,h3:uio	qwerty	poiuy\nh1:def,h2:lmn,h3:xyz	asdfgh	lkj\nh1:stu,h2:fgh,h3:ijk	zxcvbn	mnbvc" | kafka-console-producer --bootstrap-server localhost:9092 --topic test --property parse.headers=true --property parse.key=true
 
 test-topic-consume:
-    kafka-console-consumer --consumer.config /usr/local/etc/kafka/consumer.properties --bootstrap-server localhost:9092 --topic test --from-beginning --property print.timestamp=true --property print.key=true --property print.offset=true --property print.partition=true --property print.headers=true --property print.value=true
+    kafka-console-consumer --bootstrap-server localhost:9092 --consumer-property fetch.max.wait.ms=15000 --group test-consumer-group --topic test --from-beginning --property print.timestamp=true --property print.key=true --property print.offset=true --property print.partition=true --property print.headers=true --property print.value=true
 
 tansu-1:
-    RUST_BACKTRACE=1 RUST_LOG=warn,tansu_storage=debug,tansu_server=debug ./target/debug/tansu-server \
-        --kafka-cluster-id RvQwrYegSUCkIPkaiAZQlQ \
-        --kafka-listener-url tcp://127.0.0.1:9092/ \
-        --kafka-node-id 4343 \
-        --raft-listener-url tcp://127.0.0.1:4567/ \
-        --raft-peer-url tcp://127.0.0.1:4568/ \
-        --raft-peer-url tcp://127.0.0.1:4569/ \
-        --storage-engine pg=postgres://postgres:postgres@localhost \
-        --work-dir work-dir/tansu-1
+    ./target/debug/tansu-server \
+        --kafka-cluster-id ${CLUSTER_ID} \
+        --kafka-listener-url tcp://0.0.0.0:9092/ \
+        --kafka-advertised-listener-url tcp:://127.0.0.1:9092/ \
+        --kafka-node-id ${NODE_ID} \
+        --storage-engine ${STORAGE_ENGINE} \
+        --work-dir work-dir/tansu-1 | tee tansu.log
 
 kafka-proxy:
     docker run -d -p 19092:9092 apache/kafka:3.8.0
 
 proxy:
-    ./target/debug/tansu-proxy
+    ./target/debug/tansu-proxy | tee proxy.log
 
 
 all: test miri

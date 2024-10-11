@@ -29,14 +29,8 @@ pub mod produce;
 pub mod telemetry;
 pub mod txn;
 
-use crate::{
-    command::{Command, Request},
-    coordinator::group::Coordinator,
-    raft::Applicator,
-    Error, Result,
-};
+use crate::{coordinator::group::Coordinator, Error, Result};
 use api_versions::ApiVersionsRequest;
-use bytes::Bytes;
 use create_topic::CreateTopic;
 use delete_records::DeleteRecordsRequest;
 use describe_cluster::DescribeClusterRequest;
@@ -50,7 +44,6 @@ use metadata::MetadataRequest;
 use produce::ProduceRequest;
 use std::io::ErrorKind;
 use tansu_kafka_sans_io::{broker_registration_request::Listener, Body, Frame, Header};
-use tansu_raft::{Log, Raft};
 use tansu_storage::{BrokerRegistationRequest, Storage};
 use telemetry::GetTelemetrySubscriptionsRequest;
 use tokio::{
@@ -68,9 +61,10 @@ pub struct Broker<G, S> {
     cluster_id: String,
     incarnation_id: Uuid,
     #[allow(dead_code)]
-    context: Raft,
-    applicator: Applicator,
+    // context: Raft,
+    // applicator: Applicator,
     listener: Url,
+    advertised_listener: Url,
     #[allow(dead_code)]
     rack: Option<String>,
     storage: S,
@@ -86,9 +80,8 @@ where
     pub fn new(
         node_id: i32,
         cluster_id: &str,
-        context: Raft,
-        applicator: Applicator,
         listener: Url,
+        advertised_listener: Url,
         rack: Option<String>,
         storage: S,
         groups: G,
@@ -99,9 +92,8 @@ where
             node_id,
             cluster_id: cluster_id.to_owned(),
             incarnation_id,
-            context,
-            applicator,
             listener,
+            advertised_listener,
             rack,
             storage,
             groups,
@@ -121,8 +113,12 @@ where
                 incarnation_id: self.incarnation_id,
                 listeners: [Listener {
                     name: "broker".into(),
-                    host: self.listener.host_str().unwrap_or("localhost").to_owned(),
-                    port: self.listener.port().unwrap_or(9092),
+                    host: self
+                        .advertised_listener
+                        .host_str()
+                        .unwrap_or("localhost")
+                        .to_owned(),
+                    port: self.advertised_listener.port().unwrap_or(9092),
                     security_protocol: 0,
                 }]
                 .into(),
@@ -243,27 +239,6 @@ where
         }
     }
 
-    #[allow(dead_code)]
-    async fn when_applied(&mut self, body: Body) -> Result<Body> {
-        debug!(?self, ?body);
-
-        let id = Uuid::new_v4();
-        let request = Request::new(id, body);
-        let command = &request as &dyn Command;
-
-        let json = serde_json::to_string(command)?;
-        debug!(?json);
-
-        let index = self
-            .context
-            .log(Bytes::copy_from_slice(json.as_bytes()))
-            .await?;
-
-        debug!(?index);
-
-        Ok(self.applicator.when_applied(id).await)
-    }
-
     pub async fn response_for(
         &mut self,
         client_id: Option<&str>,
@@ -326,12 +301,13 @@ where
             } => {
                 debug!(?resources, ?include_synonyms, ?include_documentation,);
 
-                let describe_configs = DescribeConfigsRequest;
-                Ok(describe_configs.response(
-                    resources.as_deref(),
-                    include_synonyms,
-                    include_documentation,
-                ))
+                DescribeConfigsRequest::with_storage(self.storage.clone())
+                    .response(
+                        resources.as_deref(),
+                        include_synonyms,
+                        include_documentation,
+                    )
+                    .await
             }
 
             Body::FetchRequest {
@@ -377,7 +353,7 @@ where
                     key_type,
                     coordinator_keys.as_deref(),
                     self.node_id,
-                    &self.listener,
+                    &self.advertised_listener,
                 ))
             }
 

@@ -19,6 +19,7 @@ pub mod primitive;
 pub mod record;
 pub mod ser;
 
+use bytes::{Buf, Bytes};
 pub use de::Decoder;
 use flate2::read::GzDecoder;
 use primitive::tagged::TagBuffer;
@@ -37,7 +38,7 @@ use std::{
     time::{Duration, SystemTime, SystemTimeError},
 };
 use tansu_kafka_model::{MessageKind, MessageMeta};
-use tracing::{debug, warn};
+use tracing::{debug, error, warn};
 
 #[derive(Debug)]
 pub struct RootMessageMeta {
@@ -99,6 +100,7 @@ pub enum Error {
     NoSuchField(&'static str),
     NoSuchMessage(&'static str),
     NoSuchRequest(i16),
+    Snap(#[from] snap::Error),
     StringWithoutApiVersion,
     StringWithoutLength,
     SystemTime(SystemTimeError),
@@ -1181,11 +1183,35 @@ impl From<Compression> for i16 {
 }
 
 impl Compression {
-    fn inflator(&self, deflated: impl BufRead + 'static) -> Result<Box<dyn Read>> {
+    fn inflator(&self, mut deflated: impl BufRead + 'static) -> Result<Box<dyn Read>> {
         match self {
             Compression::None => Ok(Box::new(deflated)),
             Compression::Gzip => Ok(Box::new(GzDecoder::new(deflated))),
-            Compression::Snappy => Ok(Box::new(snap::read::FrameDecoder::new(deflated))),
+            Compression::Snappy => {
+                let mut input = vec![];
+                _ = deflated.read_to_end(&mut input)?;
+                debug!(?input);
+
+                let mut decoder = snap::raw::Decoder::new();
+
+                decoder
+                    .decompress_vec(
+                        // https://github.com/xerial/snappy-java/tree/master?tab=readme-ov-file#compatibility-notes
+                        if input.starts_with(b"\x82SNAPPY\0") {
+                            let skip_header = &input[20..];
+                            debug!(?skip_header);
+                            skip_header
+                        } else {
+                            &input[..]
+                        },
+                    )
+                    .map_err(Into::into)
+                    .map(Bytes::from)
+                    .map(|bytes| bytes.reader())
+                    .map(Box::new)
+                    .map(|boxed| boxed as Box<dyn Read>)
+                    .inspect_err(|err| error!(?err))
+            }
             Compression::Lz4 => lz4::Decoder::new(deflated)
                 .map(Box::new)
                 .map(|boxed| boxed as Box<dyn Read>)
@@ -1243,12 +1269,154 @@ impl TryFrom<i8> for CoordinatorType {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum ConfigResource {
+    Group,
+    ClientMetric,
+    BrokerLogger,
+    Broker,
+    Topic,
+    Unknown,
+}
+
+impl From<i8> for ConfigResource {
+    fn from(value: i8) -> Self {
+        match value {
+            2 => Self::Topic,
+            4 => Self::Broker,
+            8 => Self::BrokerLogger,
+            16 => Self::ClientMetric,
+            32 => Self::Group,
+            _ => Self::Unknown,
+        }
+    }
+}
+
 impl From<CoordinatorType> for i8 {
     fn from(value: CoordinatorType) -> Self {
         match value {
             CoordinatorType::Group => 0,
             CoordinatorType::Transaction => 1,
             CoordinatorType::Share => 2,
+        }
+    }
+}
+
+impl From<ConfigResource> for i8 {
+    fn from(value: ConfigResource) -> Self {
+        match value {
+            ConfigResource::Unknown => 0,
+            ConfigResource::Topic => 2,
+            ConfigResource::Broker => 4,
+            ConfigResource::BrokerLogger => 8,
+            ConfigResource::ClientMetric => 16,
+            ConfigResource::Group => 32,
+        }
+    }
+}
+
+impl From<ConfigResource> for i32 {
+    fn from(value: ConfigResource) -> Self {
+        match value {
+            ConfigResource::Unknown => 0,
+            ConfigResource::Topic => 2,
+            ConfigResource::Broker => 4,
+            ConfigResource::BrokerLogger => 8,
+            ConfigResource::ClientMetric => 16,
+            ConfigResource::Group => 32,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum ConfigType {
+    Unknown,
+    Boolean,
+    String,
+    Int,
+    Short,
+    Long,
+    Double,
+    List,
+    Class,
+    Password,
+}
+
+impl From<i8> for ConfigType {
+    fn from(value: i8) -> Self {
+        match value {
+            1 => Self::Boolean,
+            2 => Self::String,
+            3 => Self::Int,
+            4 => Self::Short,
+            5 => Self::Long,
+            6 => Self::Double,
+            7 => Self::List,
+            8 => Self::Class,
+            9 => Self::Password,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+impl From<ConfigType> for i8 {
+    fn from(value: ConfigType) -> i8 {
+        match value {
+            ConfigType::Boolean => 1,
+            ConfigType::String => 2,
+            ConfigType::Int => 3,
+            ConfigType::Short => 4,
+            ConfigType::Long => 5,
+            ConfigType::Double => 6,
+            ConfigType::List => 7,
+            ConfigType::Class => 8,
+            ConfigType::Password => 9,
+            ConfigType::Unknown => 0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum ConfigSource {
+    DynamicTopicConfig,
+    DynamicBrokerLoggerConfig,
+    DynamicBrokerConfig,
+    DynamicDefaultBrokerConfig,
+    DynamicClientMetricsConfig,
+    DynamicGroupConfig,
+    StaticBrokerConfig,
+    DefaultConfig,
+    Unknown,
+}
+
+impl From<i8> for ConfigSource {
+    fn from(value: i8) -> Self {
+        match value {
+            1 => Self::DynamicTopicConfig,
+            2 => Self::DynamicBrokerConfig,
+            3 => Self::DynamicDefaultBrokerConfig,
+            4 => Self::StaticBrokerConfig,
+            5 => Self::DefaultConfig,
+            6 => Self::DynamicBrokerLoggerConfig,
+            7 => Self::DynamicClientMetricsConfig,
+            8 => Self::DynamicGroupConfig,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+impl From<ConfigSource> for i8 {
+    fn from(value: ConfigSource) -> i8 {
+        match value {
+            ConfigSource::DynamicTopicConfig => 1,
+            ConfigSource::DynamicBrokerConfig => 2,
+            ConfigSource::DynamicDefaultBrokerConfig => 3,
+            ConfigSource::StaticBrokerConfig => 4,
+            ConfigSource::DefaultConfig => 5,
+            ConfigSource::DynamicBrokerLoggerConfig => 6,
+            ConfigSource::DynamicClientMetricsConfig => 7,
+            ConfigSource::DynamicGroupConfig => 8,
+            ConfigSource::Unknown => 0,
         }
     }
 }

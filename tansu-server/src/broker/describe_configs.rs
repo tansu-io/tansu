@@ -13,46 +13,55 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+use crate::Result;
 use tansu_kafka_sans_io::{
-    describe_configs_request::DescribeConfigsResource,
-    describe_configs_response::DescribeConfigsResult, Body, ErrorCode,
+    describe_configs_request::DescribeConfigsResource, Body, ConfigResource,
 };
+use tansu_storage::Storage;
+use tracing::error;
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct DescribeConfigsRequest;
+pub struct DescribeConfigsRequest<S> {
+    storage: S,
+}
 
-impl DescribeConfigsRequest {
-    pub fn response(
+impl<S> DescribeConfigsRequest<S>
+where
+    S: Storage,
+{
+    pub fn with_storage(storage: S) -> Self {
+        Self { storage }
+    }
+
+    pub async fn response(
         &self,
         resources: Option<&[DescribeConfigsResource]>,
         include_synonyms: Option<bool>,
         include_documentation: Option<bool>,
-    ) -> Body {
+    ) -> Result<Body> {
         let _ = include_synonyms;
         let _ = include_documentation;
 
-        Body::DescribeConfigsResponse {
-            throttle_time_ms: 0,
-            results: resources.map(|resources| {
-                resources
-                    .iter()
-                    .map(|resource| match resource {
-                        DescribeConfigsResource {
-                            resource_type,
-                            resource_name,
-                            configuration_keys: None,
-                        } if *resource_type == 2 => DescribeConfigsResult {
-                            error_code: ErrorCode::None.into(),
-                            error_message: None,
-                            resource_type: *resource_type,
-                            resource_name: resource_name.clone(),
-                            configs: Some([].into()),
-                        },
+        let mut results = vec![];
 
-                        _ => todo!(),
-                    })
-                    .collect()
-            }),
+        if let Some(resources) = resources {
+            for resource in resources {
+                results.push(
+                    self.storage
+                        .describe_config(
+                            resource.resource_name.as_str(),
+                            ConfigResource::from(resource.resource_type),
+                            resource.configuration_keys.as_deref(),
+                        )
+                        .await
+                        .inspect_err(|err| error!(?err))?,
+                );
+            }
         }
+
+        Ok(Body::DescribeConfigsResponse {
+            throttle_time_ms: 0,
+            results: Some(results),
+        })
     }
 }

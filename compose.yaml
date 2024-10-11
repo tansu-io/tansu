@@ -18,19 +18,31 @@ services:
       timeout: 10s
       retries: 5
     pull_policy: missing
+  minio:
+    image: quay.io/minio/minio
+    command: server
+      /data
+      --console-address ":9001"
+    volumes:
+      - minio:/data
+    ports:
+      - 9000:9000
+      - 9001:9001
   tansu:
     image: ghcr.io/tansu-io/tansu
     restart: unless-stopped
     environment:
-      RUST_BACKTRACE: full
-      RUST_LOG: warn
-    command:
-      --kafka-cluster-id RvQwrYegSUCkIPkaiAZQlQ
+      RUST_BACKTRACE: ${RUST_BACKTRACE}
+      RUST_LOG: ${RUST_LOG}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_ENDPOINT: ${AWS_ENDPOINT}
+      AWS_ALLOW_HTTP: ${AWS_ALLOW_HTTP}
+    command: --kafka-cluster-id ${CLUSTER_ID}
       --kafka-listener-url tcp://0.0.0.0:9092/
-      --kafka-node-id 4343
-      --raft-listener-url tcp://0.0.0.0:4567/
-      --raft-peer-url tcp://127.0.0.1:4568/
-      --storage-engine db=postgres://postgres:postgres@db
+      --kafka-advertised-listener-url ${KAFKA_ADVERTISED_LISTENER_URL}
+      --kafka-node-id ${NODE_ID}
+      --storage-engine ${STORAGE_ENGINE}
       --work-dir /data
     volumes:
       - raft:/data
@@ -39,10 +51,12 @@ services:
       - 4567:4567
     links:
       - db
-    pull_policy:
-      ${PULL_POLICY:-always}
+      - minio
+    pull_policy: missing
 volumes:
   db:
     driver: local
   raft:
+    driver: local
+  minio:
     driver: local

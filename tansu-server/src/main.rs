@@ -13,34 +13,18 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::{
-    collections::BTreeSet,
-    path::PathBuf,
-    str::FromStr,
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::{path::PathBuf, str::FromStr, time::Duration};
 
 use clap::Parser;
-use tansu_raft::{tarpc::RaftTcpTarpcClientFactory, ProvideKvStore, ProvideServer, Raft};
-use tansu_server::{
-    broker::Broker,
-    coordinator::group::administrator::Controller,
-    raft::{
-        Applicator, ApplyStateFactory, Config, ServerFactory, StorageFactory,
-        StoragePersistentStateFactory,
-    },
-    Error, Result,
-};
-use tansu_storage::{
-    pg::Postgres,
-    segment::{self, FileSystemSegmentProvider, SegmentProvider},
-};
+use object_store::aws::{AmazonS3Builder, S3ConditionalPut};
+use tansu_server::{broker::Broker, coordinator::group::administrator::Controller, Error, Result};
+use tansu_storage::{pg::Postgres, s3::S3, StorageContainer};
 use tokio::task::JoinSet;
 use tracing::debug;
 use tracing_subscriber::{fmt::format::FmtSpan, prelude::*, EnvFilter};
 use url::Url;
 
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 struct ElectionTimeout(Duration);
 
@@ -101,6 +85,9 @@ struct Cli {
     #[arg(long, default_value = "tcp://0.0.0.0:9092")]
     kafka_listener_url: Url,
 
+    #[arg(long, default_value = "tcp://0.0.0.0:9092")]
+    kafka_advertised_listener_url: Url,
+
     #[arg(long, default_value = "pg=postgres://postgres:postgres@localhost")]
     storage_engine: KeyValue<String, Url>,
 
@@ -123,58 +110,36 @@ async fn main() -> Result<()> {
 
     let args = Cli::parse();
 
-    let peers = args
-        .raft_peers
-        .iter()
-        .fold(BTreeSet::new(), |mut acc, url| {
-            _ = acc.insert(url.clone());
-            acc
-        });
-
-    let applicator = Applicator::new();
-
-    let segment_storage = FileSystemSegmentProvider::new(8_192, args.work_dir.clone())
-        .map(|provider| Box::new(provider) as Box<dyn SegmentProvider>)
-        .and_then(segment::Storage::with_segment_provider)
-        .map(|storage| Arc::new(Mutex::new(storage)))?;
-
-    let server_factory = Box::new(ServerFactory {
-        storage: segment_storage.clone(),
-    }) as Box<dyn ProvideServer>;
-
-    let raft = Raft::builder()
-        .configuration(Box::new(Config::new(
-            args.raft_election_timeout.0,
-            args.raft_listener_url.clone(),
-        )))
-        .with_voters(peers)
-        .with_kv_store(Box::new(StorageFactory {
-            storage: segment_storage.clone(),
-        }) as Box<dyn ProvideKvStore>)
-        .with_apply_state(Box::new(ApplyStateFactory::new(applicator.clone())))
-        .with_persistent_state(Box::new(StoragePersistentStateFactory {
-            id: args.raft_listener_url,
-            storage: segment_storage.clone(),
-        }))
-        .with_server(server_factory)
-        .with_raft_rpc(Box::<RaftTcpTarpcClientFactory>::default())
-        .build()
-        .await?;
-
     let mut set = JoinSet::new();
 
-    let storage = Postgres::builder(args.storage_engine.value.to_string().as_str())
-        .map(|builder| builder.cluster(args.kafka_cluster_id.as_str()))
-        .map(|builder| builder.node(args.kafka_node_id))
-        .map(|builder| builder.build())?;
+    let storage = match args.storage_engine.value.scheme() {
+        "postgres" | "postgresql" => {
+            Postgres::builder(args.storage_engine.value.to_string().as_str())
+                .map(|builder| builder.cluster(args.kafka_cluster_id.as_str()))
+                .map(|builder| builder.node(args.kafka_node_id))
+                .map(|builder| builder.build())
+                .map(StorageContainer::Postgres)
+                .map_err(Into::into)
+        }
 
-    {
-        let raft = raft.clone();
+        "s3" => {
+            let bucket_name = args.storage_engine.value.host_str().unwrap_or("tansu");
 
-        _ = set.spawn(async move {
-            tansu_raft::main(raft).await.unwrap();
-        });
-    }
+            let object_store_builder = AmazonS3Builder::from_env()
+                .with_bucket_name(bucket_name)
+                .with_conditional_put(S3ConditionalPut::ETagMatch);
+
+            S3::new(
+                args.kafka_cluster_id.as_str(),
+                args.kafka_node_id,
+                object_store_builder,
+            )
+            .map(StorageContainer::S3)
+            .map_err(Into::into)
+        }
+
+        _unsupported => Err(Error::UnsupportedStorageUrl(args.storage_engine.value)),
+    }?;
 
     {
         let groups = Controller::with_storage(storage.clone())?;
@@ -182,9 +147,8 @@ async fn main() -> Result<()> {
         let mut broker = Broker::new(
             args.kafka_node_id,
             &args.kafka_cluster_id,
-            raft.clone(),
-            applicator.clone(),
             args.kafka_listener_url,
+            args.kafka_advertised_listener_url,
             args.kafka_rack,
             storage,
             groups,

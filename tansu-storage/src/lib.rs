@@ -14,8 +14,13 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use async_trait::async_trait;
+use bytes::Bytes;
+use dynostore::DynoStore;
 use glob::{GlobError, PatternError};
+use pg::Postgres;
 use regex::Regex;
+use s3::S3;
+use serde::{Deserialize, Serialize};
 use std::{
     array::TryFromSliceError,
     collections::BTreeMap,
@@ -36,18 +41,25 @@ use tansu_kafka_sans_io::{
     delete_records_request::DeleteRecordsTopic,
     delete_records_response::DeleteRecordsTopicResult,
     describe_cluster_response::DescribeClusterBroker,
+    describe_configs_response::DescribeConfigsResult,
     fetch_request::FetchTopic,
+    join_group_response::JoinGroupResponseMember,
     metadata_request::MetadataRequestTopic,
     metadata_response::{MetadataResponseBroker, MetadataResponseTopic},
     offset_commit_request::OffsetCommitRequestPartition,
     record::deflated,
-    to_system_time, to_timestamp, ErrorCode,
+    to_system_time, to_timestamp, ConfigResource, ErrorCode,
 };
 use uuid::Uuid;
 
+pub mod dynostore;
 pub mod index;
+pub mod os;
 pub mod pg;
+pub mod s3;
 pub mod segment;
+
+const NULL_TOPIC_ID: [u8; 16] = [0; 16];
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
@@ -93,6 +105,9 @@ pub enum Error {
     #[error("os string {0:?}")]
     OsString(OsString),
 
+    #[error("object store: {0:?}")]
+    ObjectStore(#[from] object_store::Error),
+
     #[error("pattern")]
     Pattern(#[from] PatternError),
 
@@ -104,9 +119,6 @@ pub enum Error {
 
     #[error("pool")]
     Pool(#[from] deadpool_postgres::PoolError),
-
-    #[error("postgres")]
-    TokioPostgres(#[from] tokio_postgres::error::Error),
 
     #[error("regex")]
     Regex(#[from] regex::Error),
@@ -120,8 +132,14 @@ pub enum Error {
         offset: Option<i64>,
     },
 
+    #[error("json: {0}")]
+    SerdeJson(#[from] serde_json::Error),
+
     #[error("system time: {0}")]
     SystemTime(#[from] SystemTimeError),
+
+    #[error("postgres")]
+    TokioPostgres(#[from] tokio_postgres::error::Error),
 
     #[error("try from int: {0}")]
     TryFromInt(#[from] TryFromIntError),
@@ -141,7 +159,7 @@ impl<T> From<PoisonError<T>> for Error {
 
 pub type Result<T, E = Error> = result::Result<T, E>;
 
-#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct Topition {
     topic: String,
     partition: i32,
@@ -219,7 +237,7 @@ impl From<&Topition> for PathBuf {
     }
 }
 
-#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct TopitionOffset {
     topition: Topition,
     offset: i64,
@@ -313,7 +331,7 @@ impl TryFrom<i64> for ListOffsetRequest {
     }
 }
 
-#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct OffsetCommitRequest {
     offset: i64,
     leader_epoch: Option<i32>,
@@ -341,7 +359,7 @@ impl TryFrom<&OffsetCommitRequestPartition> for OffsetCommitRequest {
     }
 }
 
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum TopicId {
     Name(String),
     Id(Uuid),
@@ -371,7 +389,7 @@ impl From<&MetadataRequestTopic> for TopicId {
     }
 }
 
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct BrokerRegistationRequest {
     pub broker_id: i32,
     pub cluster_id: String,
@@ -381,7 +399,7 @@ pub struct BrokerRegistationRequest {
     pub rack: Option<String>,
 }
 
-#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct MetadataResponse {
     cluster: Option<String>,
     controller: Option<i32>,
@@ -407,7 +425,9 @@ impl MetadataResponse {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(
+    Clone, Copy, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize,
+)]
 pub struct OffsetStage {
     last_stable: i64,
     high_watermark: i64,
@@ -426,6 +446,69 @@ impl OffsetStage {
     pub fn log_start(&self) -> i64 {
         self.log_start
     }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct GroupMember {
+    pub join_response: JoinGroupResponseMember,
+    pub last_contact: Option<SystemTime>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+pub enum GroupState {
+    Forming {
+        protocol_type: Option<String>,
+        protocol_name: Option<String>,
+        leader: Option<String>,
+    },
+
+    Formed {
+        protocol_type: String,
+        protocol_name: String,
+        leader: String,
+        assignments: BTreeMap<String, Bytes>,
+    },
+}
+
+impl Default for GroupState {
+    fn default() -> Self {
+        Self::Forming {
+            protocol_type: None,
+            protocol_name: Some("".into()),
+            leader: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct GroupDetail {
+    pub session_timeout_ms: i32,
+    pub rebalance_timeout_ms: Option<i32>,
+    pub group_instance_id: Option<String>,
+    pub members: BTreeMap<String, GroupMember>,
+    pub generation_id: i32,
+    pub skip_assignment: Option<bool>,
+    pub state: GroupState,
+}
+
+impl Default for GroupDetail {
+    fn default() -> Self {
+        Self {
+            session_timeout_ms: 45_000,
+            rebalance_timeout_ms: None,
+            group_instance_id: None,
+            members: BTreeMap::new(),
+            generation_id: -1,
+            skip_assignment: Some(false),
+            state: GroupState::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct Version {
+    e_tag: Option<String>,
+    version: Option<String>,
 }
 
 #[async_trait]
@@ -480,6 +563,197 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
     ) -> Result<BTreeMap<Topition, i64>>;
 
     async fn metadata(&self, topics: Option<&[TopicId]>) -> Result<MetadataResponse>;
+
+    async fn describe_config(
+        &self,
+        name: &str,
+        resource: ConfigResource,
+        keys: Option<&[String]>,
+    ) -> Result<DescribeConfigsResult>;
+
+    async fn update_group(
+        &self,
+        group_id: &str,
+        detail: GroupDetail,
+        version: Option<Version>,
+    ) -> Result<Version, UpdateError<GroupDetail>>;
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum UpdateError<T> {
+    Error(#[from] Error),
+    ObjectStore(#[from] object_store::Error),
+    Outdated { current: T, version: Version },
+    SerdeJson(#[from] serde_json::Error),
+    TokioPostgres(#[from] tokio_postgres::error::Error),
+    MissingEtag,
+    Uuid(#[from] uuid::Error),
+}
+
+#[derive(Clone, Debug)]
+pub enum StorageContainer {
+    Postgres(Postgres),
+    S3(S3),
+    DynoStore(DynoStore),
+}
+
+#[async_trait]
+impl Storage for StorageContainer {
+    async fn register_broker(&self, broker_registration: BrokerRegistationRequest) -> Result<()> {
+        match self {
+            Self::Postgres(pg) => pg.register_broker(broker_registration).await,
+            Self::S3(s3) => s3.register_broker(broker_registration).await,
+            Self::DynoStore(dyn_store) => dyn_store.register_broker(broker_registration).await,
+        }
+    }
+
+    async fn create_topic(&self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {
+        match self {
+            Self::Postgres(pg) => pg.create_topic(topic, validate_only).await,
+            Self::S3(s3) => s3.create_topic(topic, validate_only).await,
+            Self::DynoStore(dyn_store) => dyn_store.create_topic(topic, validate_only).await,
+        }
+    }
+
+    async fn delete_records(
+        &self,
+        topics: &[DeleteRecordsTopic],
+    ) -> Result<Vec<DeleteRecordsTopicResult>> {
+        match self {
+            Self::Postgres(pg) => pg.delete_records(topics).await,
+            Self::S3(s3) => s3.delete_records(topics).await,
+            Self::DynoStore(dyn_store) => dyn_store.delete_records(topics).await,
+        }
+    }
+
+    async fn delete_topic(&self, name: &str) -> Result<u64> {
+        match self {
+            Self::Postgres(pg) => pg.delete_topic(name).await,
+            Self::S3(s3) => s3.delete_topic(name).await,
+            Self::DynoStore(dyn_store) => dyn_store.delete_topic(name).await,
+        }
+    }
+
+    async fn brokers(&self) -> Result<Vec<DescribeClusterBroker>> {
+        match self {
+            Self::Postgres(pg) => pg.brokers().await,
+            Self::S3(s3) => s3.brokers().await,
+            Self::DynoStore(dyn_store) => dyn_store.brokers().await,
+        }
+    }
+
+    async fn produce(&self, topition: &Topition, batch: deflated::Batch) -> Result<i64> {
+        match self {
+            Self::Postgres(pg) => pg.produce(topition, batch).await,
+            Self::S3(s3) => s3.produce(topition, batch).await,
+            Self::DynoStore(dyn_store) => dyn_store.produce(topition, batch).await,
+        }
+    }
+
+    async fn fetch(
+        &self,
+        topition: &'_ Topition,
+        offset: i64,
+        min_bytes: u32,
+        max_bytes: u32,
+    ) -> Result<deflated::Batch> {
+        match self {
+            Self::Postgres(pg) => pg.fetch(topition, offset, min_bytes, max_bytes).await,
+            Self::S3(s3) => s3.fetch(topition, offset, min_bytes, max_bytes).await,
+            Self::DynoStore(dyn_store) => {
+                dyn_store
+                    .fetch(topition, offset, min_bytes, max_bytes)
+                    .await
+            }
+        }
+    }
+
+    async fn offset_stage(&self, topition: &Topition) -> Result<OffsetStage> {
+        match self {
+            Self::Postgres(pg) => pg.offset_stage(topition).await,
+            Self::S3(s3) => s3.offset_stage(topition).await,
+            Self::DynoStore(dyn_store) => dyn_store.offset_stage(topition).await,
+        }
+    }
+
+    async fn list_offsets(
+        &self,
+        offsets: &[(Topition, ListOffsetRequest)],
+    ) -> Result<Vec<(Topition, ListOffsetResponse)>> {
+        match self {
+            Self::Postgres(pg) => pg.list_offsets(offsets).await,
+            Self::S3(s3) => s3.list_offsets(offsets).await,
+            Self::DynoStore(dyn_store) => dyn_store.list_offsets(offsets).await,
+        }
+    }
+
+    async fn offset_commit(
+        &self,
+        group_id: &str,
+        retention_time_ms: Option<Duration>,
+        offsets: &[(Topition, OffsetCommitRequest)],
+    ) -> Result<Vec<(Topition, ErrorCode)>> {
+        match self {
+            Self::Postgres(pg) => pg.offset_commit(group_id, retention_time_ms, offsets).await,
+            Self::S3(s3) => s3.offset_commit(group_id, retention_time_ms, offsets).await,
+            Self::DynoStore(dyn_store) => {
+                dyn_store
+                    .offset_commit(group_id, retention_time_ms, offsets)
+                    .await
+            }
+        }
+    }
+
+    async fn offset_fetch(
+        &self,
+        group_id: Option<&str>,
+        topics: &[Topition],
+        require_stable: Option<bool>,
+    ) -> Result<BTreeMap<Topition, i64>> {
+        match self {
+            Self::Postgres(pg) => pg.offset_fetch(group_id, topics, require_stable).await,
+            Self::S3(s3) => s3.offset_fetch(group_id, topics, require_stable).await,
+            Self::DynoStore(dyn_store) => {
+                dyn_store
+                    .offset_fetch(group_id, topics, require_stable)
+                    .await
+            }
+        }
+    }
+
+    async fn metadata(&self, topics: Option<&[TopicId]>) -> Result<MetadataResponse> {
+        match self {
+            Self::Postgres(pg) => pg.metadata(topics).await,
+            Self::S3(s3) => s3.metadata(topics).await,
+            Self::DynoStore(dyn_store) => dyn_store.metadata(topics).await,
+        }
+    }
+
+    async fn describe_config(
+        &self,
+        name: &str,
+        resource: ConfigResource,
+        keys: Option<&[String]>,
+    ) -> Result<DescribeConfigsResult> {
+        match self {
+            Self::Postgres(pg) => pg.describe_config(name, resource, keys).await,
+            Self::S3(s3) => s3.describe_config(name, resource, keys).await,
+            Self::DynoStore(dyn_store) => dyn_store.describe_config(name, resource, keys).await,
+        }
+    }
+
+    async fn update_group(
+        &self,
+        group_id: &str,
+        detail: GroupDetail,
+        version: Option<Version>,
+    ) -> Result<Version, UpdateError<GroupDetail>> {
+        match self {
+            Self::Postgres(pg) => pg.update_group(group_id, detail, version).await,
+            Self::S3(s3) => s3.update_group(group_id, detail, version).await,
+            Self::DynoStore(dyn_store) => dyn_store.update_group(group_id, detail, version).await,
+        }
+    }
 }
 
 #[cfg(test)]
