@@ -16,9 +16,12 @@
 use std::{path::PathBuf, str::FromStr, time::Duration};
 
 use clap::Parser;
-use object_store::aws::{AmazonS3Builder, S3ConditionalPut};
+use object_store::{
+    aws::{AmazonS3Builder, S3ConditionalPut},
+    memory::InMemory,
+};
 use tansu_server::{broker::Broker, coordinator::group::administrator::Controller, Error, Result};
-use tansu_storage::{pg::Postgres, s3::S3, StorageContainer};
+use tansu_storage::{dynostore::DynoStore, pg::Postgres, StorageContainer};
 use tokio::task::JoinSet;
 use tracing::debug;
 use tracing_subscriber::{fmt::format::FmtSpan, prelude::*, EnvFilter};
@@ -125,18 +128,26 @@ async fn main() -> Result<()> {
         "s3" => {
             let bucket_name = args.storage_engine.value.host_str().unwrap_or("tansu");
 
-            let object_store_builder = AmazonS3Builder::from_env()
+            AmazonS3Builder::from_env()
                 .with_bucket_name(bucket_name)
-                .with_conditional_put(S3ConditionalPut::ETagMatch);
-
-            S3::new(
-                args.kafka_cluster_id.as_str(),
-                args.kafka_node_id,
-                object_store_builder,
-            )
-            .map(StorageContainer::S3)
-            .map_err(Into::into)
+                .with_conditional_put(S3ConditionalPut::ETagMatch)
+                .build()
+                .map(|object_store| {
+                    DynoStore::new(
+                        args.kafka_cluster_id.as_str(),
+                        args.kafka_node_id,
+                        object_store,
+                    )
+                })
+                .map(StorageContainer::DynoStore)
+                .map_err(Into::into)
         }
+
+        "memory" => Ok(StorageContainer::DynoStore(DynoStore::new(
+            args.kafka_cluster_id.as_str(),
+            args.kafka_node_id,
+            InMemory::new(),
+        ))),
 
         _unsupported => Err(Error::UnsupportedStorageUrl(args.storage_engine.value)),
     }?;
