@@ -19,7 +19,6 @@ use dynostore::DynoStore;
 use glob::{GlobError, PatternError};
 use pg::Postgres;
 use regex::Regex;
-use s3::S3;
 use serde::{Deserialize, Serialize};
 use std::{
     array::TryFromSliceError,
@@ -56,7 +55,6 @@ pub mod dynostore;
 pub mod index;
 pub mod os;
 pub mod pg;
-pub mod s3;
 pub mod segment;
 
 const NULL_TOPIC_ID: [u8; 16] = [0; 16];
@@ -593,7 +591,6 @@ pub enum UpdateError<T> {
 #[derive(Clone, Debug)]
 pub enum StorageContainer {
     Postgres(Postgres),
-    S3(S3),
     DynoStore(DynoStore),
 }
 
@@ -602,7 +599,6 @@ impl Storage for StorageContainer {
     async fn register_broker(&self, broker_registration: BrokerRegistationRequest) -> Result<()> {
         match self {
             Self::Postgres(pg) => pg.register_broker(broker_registration).await,
-            Self::S3(s3) => s3.register_broker(broker_registration).await,
             Self::DynoStore(dyn_store) => dyn_store.register_broker(broker_registration).await,
         }
     }
@@ -610,7 +606,6 @@ impl Storage for StorageContainer {
     async fn create_topic(&self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {
         match self {
             Self::Postgres(pg) => pg.create_topic(topic, validate_only).await,
-            Self::S3(s3) => s3.create_topic(topic, validate_only).await,
             Self::DynoStore(dyn_store) => dyn_store.create_topic(topic, validate_only).await,
         }
     }
@@ -621,7 +616,6 @@ impl Storage for StorageContainer {
     ) -> Result<Vec<DeleteRecordsTopicResult>> {
         match self {
             Self::Postgres(pg) => pg.delete_records(topics).await,
-            Self::S3(s3) => s3.delete_records(topics).await,
             Self::DynoStore(dyn_store) => dyn_store.delete_records(topics).await,
         }
     }
@@ -629,7 +623,6 @@ impl Storage for StorageContainer {
     async fn delete_topic(&self, name: &str) -> Result<u64> {
         match self {
             Self::Postgres(pg) => pg.delete_topic(name).await,
-            Self::S3(s3) => s3.delete_topic(name).await,
             Self::DynoStore(dyn_store) => dyn_store.delete_topic(name).await,
         }
     }
@@ -637,7 +630,6 @@ impl Storage for StorageContainer {
     async fn brokers(&self) -> Result<Vec<DescribeClusterBroker>> {
         match self {
             Self::Postgres(pg) => pg.brokers().await,
-            Self::S3(s3) => s3.brokers().await,
             Self::DynoStore(dyn_store) => dyn_store.brokers().await,
         }
     }
@@ -645,7 +637,6 @@ impl Storage for StorageContainer {
     async fn produce(&self, topition: &Topition, batch: deflated::Batch) -> Result<i64> {
         match self {
             Self::Postgres(pg) => pg.produce(topition, batch).await,
-            Self::S3(s3) => s3.produce(topition, batch).await,
             Self::DynoStore(dyn_store) => dyn_store.produce(topition, batch).await,
         }
     }
@@ -659,7 +650,6 @@ impl Storage for StorageContainer {
     ) -> Result<deflated::Batch> {
         match self {
             Self::Postgres(pg) => pg.fetch(topition, offset, min_bytes, max_bytes).await,
-            Self::S3(s3) => s3.fetch(topition, offset, min_bytes, max_bytes).await,
             Self::DynoStore(dyn_store) => {
                 dyn_store
                     .fetch(topition, offset, min_bytes, max_bytes)
@@ -671,7 +661,6 @@ impl Storage for StorageContainer {
     async fn offset_stage(&self, topition: &Topition) -> Result<OffsetStage> {
         match self {
             Self::Postgres(pg) => pg.offset_stage(topition).await,
-            Self::S3(s3) => s3.offset_stage(topition).await,
             Self::DynoStore(dyn_store) => dyn_store.offset_stage(topition).await,
         }
     }
@@ -682,7 +671,6 @@ impl Storage for StorageContainer {
     ) -> Result<Vec<(Topition, ListOffsetResponse)>> {
         match self {
             Self::Postgres(pg) => pg.list_offsets(offsets).await,
-            Self::S3(s3) => s3.list_offsets(offsets).await,
             Self::DynoStore(dyn_store) => dyn_store.list_offsets(offsets).await,
         }
     }
@@ -695,7 +683,6 @@ impl Storage for StorageContainer {
     ) -> Result<Vec<(Topition, ErrorCode)>> {
         match self {
             Self::Postgres(pg) => pg.offset_commit(group_id, retention_time_ms, offsets).await,
-            Self::S3(s3) => s3.offset_commit(group_id, retention_time_ms, offsets).await,
             Self::DynoStore(dyn_store) => {
                 dyn_store
                     .offset_commit(group_id, retention_time_ms, offsets)
@@ -712,7 +699,6 @@ impl Storage for StorageContainer {
     ) -> Result<BTreeMap<Topition, i64>> {
         match self {
             Self::Postgres(pg) => pg.offset_fetch(group_id, topics, require_stable).await,
-            Self::S3(s3) => s3.offset_fetch(group_id, topics, require_stable).await,
             Self::DynoStore(dyn_store) => {
                 dyn_store
                     .offset_fetch(group_id, topics, require_stable)
@@ -724,7 +710,6 @@ impl Storage for StorageContainer {
     async fn metadata(&self, topics: Option<&[TopicId]>) -> Result<MetadataResponse> {
         match self {
             Self::Postgres(pg) => pg.metadata(topics).await,
-            Self::S3(s3) => s3.metadata(topics).await,
             Self::DynoStore(dyn_store) => dyn_store.metadata(topics).await,
         }
     }
@@ -737,7 +722,6 @@ impl Storage for StorageContainer {
     ) -> Result<DescribeConfigsResult> {
         match self {
             Self::Postgres(pg) => pg.describe_config(name, resource, keys).await,
-            Self::S3(s3) => s3.describe_config(name, resource, keys).await,
             Self::DynoStore(dyn_store) => dyn_store.describe_config(name, resource, keys).await,
         }
     }
@@ -750,7 +734,6 @@ impl Storage for StorageContainer {
     ) -> Result<Version, UpdateError<GroupDetail>> {
         match self {
             Self::Postgres(pg) => pg.update_group(group_id, detail, version).await,
-            Self::S3(s3) => s3.update_group(group_id, detail, version).await,
             Self::DynoStore(dyn_store) => dyn_store.update_group(group_id, detail, version).await,
         }
     }
