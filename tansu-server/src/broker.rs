@@ -394,13 +394,14 @@ where
                     ?producer_epoch,
                 );
 
-                let init_producer_id = InitProducerIdRequest;
-                Ok(init_producer_id.response(
-                    transactional_id.as_deref(),
-                    transaction_timeout_ms,
-                    producer_id,
-                    producer_epoch,
-                ))
+                InitProducerIdRequest::with_storage(self.storage.clone())
+                    .response(
+                        transactional_id.as_deref(),
+                        transaction_timeout_ms,
+                        producer_id,
+                        producer_epoch,
+                    )
+                    .await
             }
 
             Body::JoinGroupRequest {

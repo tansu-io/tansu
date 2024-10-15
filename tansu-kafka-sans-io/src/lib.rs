@@ -982,7 +982,7 @@ impl Display for ErrorCode {
 }
 
 #[non_exhaustive]
-#[derive(Clone, Copy, Eq, Hash, Debug, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Deserialize, Eq, Hash, Debug, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum ErrorCode {
     UnknownServerError,
     None,

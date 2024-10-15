@@ -1127,7 +1127,7 @@ fn all(pattern: &str) -> Result<Vec<Message>> {
         .and_then(|mut paths| {
             paths.try_fold(Vec::new(), |mut acc, p| {
                 p.map_err(Into::into)
-                    // .inspect(|path| eprintln!("path: {path:?}"))
+                    .inspect(|path| println!("cargo::rerun-if-changed={}", path.display()))
                     .and_then(read_value)
                     .and_then(|v| Message::try_from(&Wv::from(&v)).map_err(Into::into))
                     .map(|m| {

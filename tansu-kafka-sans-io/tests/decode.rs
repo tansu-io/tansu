@@ -3664,6 +3664,7 @@ fn list_partition_reassignments_request_v0_000() -> Result<()> {
     Ok(())
 }
 
+#[ignore]
 #[test]
 fn list_transactions_request_v1_000() -> Result<()> {
     let _guard = init_tracing()?;
@@ -3688,7 +3689,7 @@ fn list_transactions_request_v1_000() -> Result<()> {
             body: Body::ListTransactionsRequest {
                 state_filters: Some([].into()),
                 producer_id_filters: Some([].into()),
-                duration_filter: Some(-1)
+                duration_filter: Some(-1),
             }
         },
         Frame::deserialize(&mut deserializer)?

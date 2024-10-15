@@ -16,6 +16,7 @@
 use std::collections::BTreeSet;
 use std::io::BufReader;
 use std::sync::Arc;
+use std::time::SystemTime;
 use std::{collections::BTreeMap, fmt::Debug, io::Cursor, str::FromStr, time::Duration};
 
 use async_trait::async_trait;
@@ -46,8 +47,8 @@ use uuid::Uuid;
 
 use crate::{
     BrokerRegistationRequest, Error, GroupDetail, ListOffsetRequest, ListOffsetResponse,
-    MetadataResponse, OffsetCommitRequest, OffsetStage, Result, Storage, TopicId, Topition,
-    UpdateError, Version, NULL_TOPIC_ID,
+    MetadataResponse, OffsetCommitRequest, OffsetStage, ProducerIdResponse, Result, Storage,
+    TopicId, Topition, UpdateError, Version, NULL_TOPIC_ID,
 };
 
 const APPLICATION_JSON: &str = "application/json";
@@ -56,8 +57,96 @@ const APPLICATION_JSON: &str = "application/json";
 pub struct DynoStore {
     cluster: String,
     node: i32,
+    producers: VersionData<BTreeMap<i64, Producer>>,
 
     object_store: Arc<DynObjectStore>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct VersionData<D> {
+    path: Path,
+    version: Option<UpdateVersion>,
+    tags: TagSet,
+    attributes: Attributes,
+    data: D,
+}
+
+impl<D> VersionData<D>
+where
+    D: Serialize + DeserializeOwned + Clone + Debug,
+{
+    async fn apply<E, F>(&mut self, object_store: &impl ObjectStore, f: F) -> Result<E>
+    where
+        F: Fn(&mut D) -> Result<E>,
+    {
+        loop {
+            let outcome = f(&mut self.data)?;
+
+            let payload = serde_json::to_vec(&self.data)
+                .map(Bytes::from)
+                .map(PutPayload::from)?;
+
+            match object_store
+                .put_opts(&self.path, payload, PutOptions::from(&*self))
+                .await
+                .inspect_err(|error| error!(?error, ?self))
+                .inspect(|put_result| debug!(?self, ?put_result))
+            {
+                Ok(result) => {
+                    self.version = Some(UpdateVersion {
+                        e_tag: result.e_tag,
+                        version: result.version,
+                    });
+
+                    return Ok(outcome);
+                }
+
+                Err(object_store::Error::Precondition { .. }) => {
+                    let get_result = object_store
+                        .get(&self.path)
+                        .await
+                        .inspect_err(|error| error!(?error, ?self))
+                        .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
+
+                    self.version = Some(UpdateVersion {
+                        e_tag: get_result.meta.e_tag.clone(),
+                        version: get_result.meta.version.clone(),
+                    });
+
+                    let encoded = get_result
+                        .bytes()
+                        .await
+                        .inspect_err(|error| error!(?error, ?self))
+                        .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
+
+                    self.data = serde_json::from_slice::<D>(&encoded[..])
+                        .inspect_err(|error| error!(?error, ?self))
+                        .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
+
+                    continue;
+                }
+
+                Err(error) => {
+                    return {
+                        error!(?error);
+                        Err(Error::Api(ErrorCode::UnknownServerError))
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl<D> From<&VersionData<D>> for PutOptions {
+    fn from(value: &VersionData<D>) -> Self {
+        Self {
+            mode: value.version.as_ref().map_or(PutMode::Create, |existing| {
+                PutMode::Update(existing.to_owned())
+            }),
+            tags: value.tags.to_owned(),
+            attributes: value.attributes.to_owned(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -73,11 +162,42 @@ struct Watermark {
     stable: i64,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+struct Producer {
+    epoch: i16,
+    updated: SystemTime,
+}
+
+impl Default for Producer {
+    fn default() -> Self {
+        Self {
+            epoch: 0,
+            updated: SystemTime::now(),
+        }
+    }
+}
+
+fn json_content_type() -> Attributes {
+    let mut attributes = Attributes::new();
+    _ = attributes.insert(
+        Attribute::ContentType,
+        AttributeValue::from(APPLICATION_JSON),
+    );
+    attributes
+}
+
 impl DynoStore {
     pub fn new(cluster: &str, node: i32, object_store: impl ObjectStore) -> Self {
         Self {
             cluster: cluster.into(),
             node,
+            producers: VersionData {
+                path: Path::from(format!("clusters/{}/producers.json", cluster)),
+                version: None,
+                attributes: Attributes::new(),
+                tags: TagSet::default(),
+                data: BTreeMap::new(),
+            },
             object_store: Arc::new(object_store),
         }
     }
@@ -221,16 +341,10 @@ impl Storage for DynoStore {
             self.cluster, self.node
         ));
 
-        let mut attributes = Attributes::new();
-        _ = attributes.insert(
-            Attribute::ContentType,
-            AttributeValue::from(APPLICATION_JSON),
-        );
-
         let options = PutOptions {
             mode: PutMode::Overwrite,
             tags: TagSet::default(),
-            attributes,
+            attributes: json_content_type(),
         };
 
         let put_result = self
@@ -254,16 +368,10 @@ impl Storage for DynoStore {
             .map(Bytes::from)
             .map(PutPayload::from)?;
 
-        let mut attributes = Attributes::new();
-        _ = attributes.insert(
-            Attribute::ContentType,
-            AttributeValue::from(APPLICATION_JSON),
-        );
-
         let options = PutOptions {
             mode: PutMode::Create,
             tags: TagSet::default(),
-            attributes,
+            attributes: json_content_type(),
         };
 
         match (
@@ -315,16 +423,10 @@ impl Storage for DynoStore {
                         self.cluster, td.topic.name, partition,
                     ));
 
-                    let mut attributes = Attributes::new();
-                    _ = attributes.insert(
-                        Attribute::ContentType,
-                        AttributeValue::from(APPLICATION_JSON),
-                    );
-
                     let options = PutOptions {
                         mode: PutMode::Create,
                         tags: TagSet::default(),
-                        attributes,
+                        attributes: json_content_type(),
                     };
 
                     match self
@@ -469,16 +571,10 @@ impl Storage for DynoStore {
                 .map(Bytes::from)
                 .map(PutPayload::from)?;
 
-            let mut attributes = Attributes::new();
-            _ = attributes.insert(
-                Attribute::ContentType,
-                AttributeValue::from(APPLICATION_JSON),
-            );
-
             let options = PutOptions {
                 mode: PutMode::Update(update_version),
                 tags: TagSet::default(),
-                attributes,
+                attributes: json_content_type(),
             };
 
             match self
@@ -659,16 +755,10 @@ impl Storage for DynoStore {
                 .map(Bytes::from)
                 .map(PutPayload::from)?;
 
-            let mut attributes = Attributes::new();
-            _ = attributes.insert(
-                Attribute::ContentType,
-                AttributeValue::from(APPLICATION_JSON),
-            );
-
             let options = PutOptions {
                 mode: PutMode::Overwrite,
                 tags: TagSet::default(),
-                attributes,
+                attributes: json_content_type(),
             };
 
             let error_code = self
@@ -1060,14 +1150,50 @@ impl Storage for DynoStore {
             self.cluster, group_id,
         ));
 
-        let mut attributes = Attributes::new();
-        _ = attributes.insert(
-            Attribute::ContentType,
-            AttributeValue::from(APPLICATION_JSON),
+        self.put(
+            &location,
+            detail,
+            json_content_type(),
+            version.map(Into::into),
+        )
+        .await
+        .map(Into::into)
+    }
+
+    async fn init_producer(
+        &mut self,
+        transactional_id: Option<&str>,
+        transaction_timeout_ms: i32,
+        producer_id: Option<i64>,
+        producer_epoch: Option<i16>,
+    ) -> Result<ProducerIdResponse> {
+        let _ = (
+            transactional_id,
+            transaction_timeout_ms,
+            producer_id,
+            producer_epoch,
         );
 
-        self.put(&location, detail, attributes, version.map(Into::into))
+        self.producers
+            .apply(&self.object_store, |producers| {
+                debug!(?producers);
+                match (producer_id, producer_epoch) {
+                    (Some(-1), Some(-1)) => {
+                        let id = producers.last_key_value().map_or(0, |(k, _)| k + 1);
+                        _ = producers.insert(id, Producer::default());
+
+                        Ok(ProducerIdResponse {
+                            id,
+                            epoch: 0,
+                            ..Default::default()
+                        })
+                    }
+                    (None, None) => todo!(),
+                    (None, Some(_)) => todo!(),
+                    (Some(_), None) => todo!(),
+                    (_, _) => todo!(),
+                }
+            })
             .await
-            .map(Into::into)
     }
 }
