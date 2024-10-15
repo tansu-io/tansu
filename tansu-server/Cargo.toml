@@ -22,7 +22,6 @@ serde.workspace = true
 serde_json.workspace = true
 tansu-kafka-model = { path = "../tansu-kafka-model" }
 tansu-kafka-sans-io = { path = "../tansu-kafka-sans-io" }
-tansu-raft = { path = "../tansu-raft" }
 tansu-storage = { path = "../tansu-storage" }
 tarpc.workspace = true
 thiserror.workspace = true
