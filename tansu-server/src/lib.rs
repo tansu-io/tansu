@@ -17,7 +17,6 @@
 #[cfg(feature = "nightly-features")]
 use std::backtrace::Backtrace;
 use std::{
-    collections::BTreeMap,
     fmt, io,
     num::TryFromIntError,
     result,
@@ -26,7 +25,6 @@ use std::{
     sync::{Arc, PoisonError},
 };
 
-use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use tansu_kafka_sans_io::{
     broker_registration_request::Listener,
@@ -36,147 +34,12 @@ use tansu_kafka_sans_io::{
     produce_request::TopicProduceData,
     ErrorCode,
 };
-use tansu_raft::Index;
-use tansu_storage::Topition;
 use thiserror::Error;
 use url::Url;
 use uuid::Uuid;
 
 pub mod broker;
-pub mod command;
 pub mod coordinator;
-pub mod raft;
-
-static RAFT_LOG: &str = "raft_log";
-static RAFT_STATE: &str = "raft_state";
-static CONSUMER_OFFSETS: &str = "consumer_offsets";
-pub static NUM_CONSUMER_OFFSETS_PARTITIONS: i32 = 3;
-
-#[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
-pub struct State {
-    applied: Index,
-    cluster_id: Option<String>,
-    brokers: BTreeMap<i32, BrokerDetail>,
-    topics: BTreeMap<String, TopicDetail>,
-    topic_uuid_to_name: BTreeMap<Uuid, String>,
-}
-
-impl State {
-    fn new() -> Self {
-        let mut topics = BTreeMap::new();
-
-        _ = topics.insert(
-            RAFT_LOG.to_owned(),
-            TopicDetail {
-                id: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                creatable_topic: CreatableTopic {
-                    name: RAFT_LOG.to_owned(),
-                    num_partitions: 1,
-                    replication_factor: 0,
-                    assignments: Some([].into()),
-                    configs: Some([].into()),
-                },
-            },
-        );
-
-        _ = topics.insert(
-            RAFT_STATE.to_owned(),
-            TopicDetail {
-                id: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                creatable_topic: CreatableTopic {
-                    name: RAFT_STATE.to_owned(),
-                    num_partitions: 1,
-                    replication_factor: 0,
-                    assignments: Some([].into()),
-                    configs: Some([].into()),
-                },
-            },
-        );
-
-        _ = topics.insert(
-            CONSUMER_OFFSETS.to_owned(),
-            TopicDetail {
-                id: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                creatable_topic: CreatableTopic {
-                    name: CONSUMER_OFFSETS.to_owned(),
-                    num_partitions: 1,
-                    replication_factor: 0,
-                    assignments: Some([].into()),
-                    configs: Some([].into()),
-                },
-            },
-        );
-
-        Self {
-            topics,
-            ..Default::default()
-        }
-    }
-
-    #[allow(dead_code)]
-    fn topics(&self) -> &BTreeMap<String, TopicDetail> {
-        &self.topics
-    }
-
-    fn topic(&self, id: TopicId) -> Option<&TopicDetail> {
-        match id {
-            TopicId::Name(ref name) => self.topics.get(name),
-
-            TopicId::Id(ref id) => self
-                .topic_uuid_to_name
-                .get(id)
-                .and_then(|name| self.topics.get(name)),
-        }
-    }
-
-    #[allow(dead_code)]
-    fn topition(&self, id: TopicId, partition: i32) -> Option<Topition> {
-        match id {
-            TopicId::Name(ref name) => Some(Topition::new(name, partition)),
-
-            TopicId::Id(ref id) => self
-                .topic_uuid_to_name
-                .get(id)
-                .map(|name| Topition::new(name, partition)),
-        }
-    }
-}
-
-impl TryFrom<&State> for Bytes {
-    type Error = Error;
-
-    fn try_from(state: &State) -> Result<Self, Self::Error> {
-        serde_json::to_vec(state)
-            .map(Bytes::from)
-            .map_err(|error| error.into())
-    }
-}
-
-impl TryFrom<State> for Bytes {
-    type Error = Error;
-
-    fn try_from(state: State) -> Result<Self, Self::Error> {
-        serde_json::to_vec(&state)
-            .map(Bytes::from)
-            .map_err(|error| error.into())
-    }
-}
-
-impl TryFrom<&Bytes> for State {
-    type Error = Error;
-
-    fn try_from(value: &Bytes) -> Result<Self, Self::Error> {
-        serde_json::from_slice::<State>(&value.slice(..)).map_err(Into::into)
-    }
-}
-
-impl TryFrom<Bytes> for State {
-    type Error = Error;
-
-    fn try_from(value: Bytes) -> Result<Self, Self::Error> {
-        serde_json::from_slice::<State>(&value.slice(..)).map_err(Into::into)
-    }
-}
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum TopicId {
@@ -296,7 +159,6 @@ pub enum Error {
     ParseInt(#[from] std::num::ParseIntError),
     Poison,
     Pool(#[from] deadpool_postgres::PoolError),
-    Raft(#[from] tansu_raft::Error),
     Storage(#[from] tansu_storage::Error),
     StringUtf8(#[from] FromUtf8Error),
     TokioPostgres(#[from] tokio_postgres::error::Error),
@@ -305,12 +167,6 @@ pub enum Error {
     Url(#[from] url::ParseError),
     Utf8(#[from] Utf8Error),
     Uuid(#[from] uuid::Error),
-}
-
-impl From<Error> for tansu_raft::Error {
-    fn from(error: Error) -> Self {
-        tansu_raft::Error::Custom(format!("{error:?}"))
-    }
 }
 
 impl From<io::Error> for Error {

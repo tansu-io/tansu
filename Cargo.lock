@@ -2200,27 +2200,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tansu-raft"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "bytes",
- "clap",
- "crc",
- "futures",
- "serde",
- "serde_json",
- "tansu-varint",
- "tarpc",
- "thiserror",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "typetag",
- "url",
-]
-
-[[package]]
 name = "tansu-server"
 version = "0.1.0"
 dependencies = [
@@ -2239,7 +2218,6 @@ dependencies = [
  "serde_json",
  "tansu-kafka-model",
  "tansu-kafka-sans-io",
- "tansu-raft",
  "tansu-storage",
  "tarpc",
  "thiserror",
