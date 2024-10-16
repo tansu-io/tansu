@@ -57,6 +57,10 @@ const APPLICATION_JSON: &str = "application/json";
 pub struct DynoStore {
     cluster: String,
     node: i32,
+
+    #[allow(dead_code)]
+    watermarks: BTreeMap<Topition, VersionData<Watermark>>,
+
     producers: VersionData<BTreeMap<i64, Producer>>,
 
     object_store: Arc<DynObjectStore>,
@@ -166,6 +170,7 @@ struct Watermark {
 struct Producer {
     epoch: i16,
     updated: SystemTime,
+    sequences: BTreeMap<Topition, i64>,
 }
 
 impl Default for Producer {
@@ -173,6 +178,7 @@ impl Default for Producer {
         Self {
             epoch: 0,
             updated: SystemTime::now(),
+            sequences: BTreeMap::new(),
         }
     }
 }
@@ -191,6 +197,7 @@ impl DynoStore {
         Self {
             cluster: cluster.into(),
             node,
+            watermarks: BTreeMap::new(),
             producers: VersionData {
                 path: Path::from(format!("clusters/{}/producers.json", cluster)),
                 version: None,
@@ -1179,7 +1186,7 @@ impl Storage for DynoStore {
                 debug!(?producers);
                 match (producer_id, producer_epoch) {
                     (Some(-1), Some(-1)) => {
-                        let id = producers.last_key_value().map_or(0, |(k, _)| k + 1);
+                        let id = producers.last_key_value().map_or(1, |(k, _)| k + 1);
                         _ = producers.insert(id, Producer::default());
 
                         Ok(ProducerIdResponse {
@@ -1188,6 +1195,46 @@ impl Storage for DynoStore {
                             ..Default::default()
                         })
                     }
+
+                    (Some(producer_id), Some(producer_epoch))
+                        if producer_id > 0 && producer_epoch >= 0 =>
+                    {
+                        match producers.get(&producer_id) {
+                            Some(Producer { epoch, .. }) if producer_epoch == *epoch => {
+                                if let Some(epoch) = epoch.checked_add(1) {
+                                    _ = producers.insert(
+                                        producer_id,
+                                        Producer {
+                                            epoch,
+                                            ..Default::default()
+                                        },
+                                    );
+
+                                    Ok(ProducerIdResponse {
+                                        id: producer_id,
+                                        epoch,
+                                        ..Default::default()
+                                    })
+                                } else {
+                                    let id = producers.last_key_value().map_or(1, |(k, _)| k + 1);
+                                    _ = producers.insert(id, Producer::default());
+
+                                    Ok(ProducerIdResponse {
+                                        id,
+                                        epoch: 0,
+                                        ..Default::default()
+                                    })
+                                }
+                            }
+
+                            Some(_) | None => Ok(ProducerIdResponse {
+                                id: -1,
+                                epoch: -1,
+                                error: ErrorCode::InvalidProducerEpoch,
+                            }),
+                        }
+                    }
+
                     (None, None) => todo!(),
                     (None, Some(_)) => todo!(),
                     (Some(_), None) => todo!(),

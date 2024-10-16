@@ -128,7 +128,7 @@ mod tests {
                 producer_epoch,
             } => {
                 assert_eq!(i16::from(ErrorCode::None), error_code);
-                assert_eq!(0, producer_id);
+                assert_eq!(1, producer_id);
                 assert_eq!(0, producer_epoch);
             }
 
@@ -151,7 +151,7 @@ mod tests {
                 producer_epoch,
             } => {
                 assert_eq!(i16::from(ErrorCode::None), error_code);
-                assert_eq!(1, producer_id);
+                assert_eq!(2, producer_id);
                 assert_eq!(0, producer_epoch);
             }
 
