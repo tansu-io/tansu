@@ -509,6 +509,23 @@ pub struct Version {
     version: Option<String>,
 }
 
+#[derive(Copy, Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct ProducerIdResponse {
+    pub error: ErrorCode,
+    pub id: i64,
+    pub epoch: i16,
+}
+
+impl Default for ProducerIdResponse {
+    fn default() -> Self {
+        Self {
+            error: ErrorCode::None,
+            id: 1,
+            epoch: 0,
+        }
+    }
+}
+
 #[async_trait]
 pub trait StorageProvider {
     async fn provide_storage(&mut self) -> impl Storage;
@@ -575,6 +592,14 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
         detail: GroupDetail,
         version: Option<Version>,
     ) -> Result<Version, UpdateError<GroupDetail>>;
+
+    async fn init_producer(
+        &mut self,
+        transactional_id: Option<&str>,
+        transaction_timeout_ms: i32,
+        producer_id: Option<i64>,
+        producer_epoch: Option<i16>,
+    ) -> Result<ProducerIdResponse>;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -735,6 +760,36 @@ impl Storage for StorageContainer {
         match self {
             Self::Postgres(pg) => pg.update_group(group_id, detail, version).await,
             Self::DynoStore(dyn_store) => dyn_store.update_group(group_id, detail, version).await,
+        }
+    }
+
+    async fn init_producer(
+        &mut self,
+        transactional_id: Option<&str>,
+        transaction_timeout_ms: i32,
+        producer_id: Option<i64>,
+        producer_epoch: Option<i16>,
+    ) -> Result<ProducerIdResponse> {
+        match self {
+            Self::Postgres(pg) => {
+                pg.init_producer(
+                    transactional_id,
+                    transaction_timeout_ms,
+                    producer_id,
+                    producer_epoch,
+                )
+                .await
+            }
+            Self::DynoStore(dyn_store) => {
+                dyn_store
+                    .init_producer(
+                        transactional_id,
+                        transaction_timeout_ms,
+                        producer_id,
+                        producer_epoch,
+                    )
+                    .await
+            }
         }
     }
 }

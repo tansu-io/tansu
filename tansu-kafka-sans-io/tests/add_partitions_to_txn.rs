@@ -26,7 +26,7 @@ fn check_message_meta() {
     let message = meta.get("AddPartitionsToTxnRequest").unwrap();
     assert_eq!(24, message.api_key);
     assert_eq!(MessageKind::Request, message.message_kind);
-    assert_eq!(VersionRange { start: 0, end: 4 }, message.version.valid);
+    assert_eq!(VersionRange { start: 0, end: 5 }, message.version.valid);
     assert_eq!(
         VersionRange {
             start: 3,

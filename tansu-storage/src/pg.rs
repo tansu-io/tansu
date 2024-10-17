@@ -41,8 +41,8 @@ use uuid::Uuid;
 
 use crate::{
     BrokerRegistationRequest, Error, GroupDetail, ListOffsetRequest, ListOffsetResponse,
-    MetadataResponse, OffsetCommitRequest, OffsetStage, Result, Storage, TopicId, Topition,
-    UpdateError, Version, NULL_TOPIC_ID,
+    MetadataResponse, OffsetCommitRequest, OffsetStage, ProducerIdResponse, Result, Storage,
+    TopicId, Topition, UpdateError, Version, NULL_TOPIC_ID,
 };
 
 #[derive(Clone, Debug)]
@@ -1456,5 +1456,22 @@ impl Storage for Postgres {
         tx.commit().await.inspect_err(|err| error!(?err))?;
 
         outcome
+    }
+
+    async fn init_producer(
+        &mut self,
+        transactional_id: Option<&str>,
+        transaction_timeout_ms: i32,
+        producer_id: Option<i64>,
+        producer_epoch: Option<i16>,
+    ) -> Result<ProducerIdResponse> {
+        let _ = (
+            transactional_id,
+            transaction_timeout_ms,
+            producer_id,
+            producer_epoch,
+        );
+
+        Ok(ProducerIdResponse::default())
     }
 }
