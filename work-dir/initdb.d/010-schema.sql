@@ -17,7 +17,7 @@
 begin;
 
 create table cluster (
-  id serial primary key,
+  id int generated always as identity primary key,
   name text not null,
   unique (name),
   last_updated timestamp default current_timestamp not null,
@@ -25,7 +25,7 @@ create table cluster (
 );
 
 create table broker (
-  id serial primary key,
+  id int generated always as identity primary key,
   cluster integer references cluster(id) not null,
   node integer not null,
   rack text,
@@ -36,7 +36,7 @@ create table broker (
 );
 
 create table listener (
-  id serial primary key,
+  id int generated always as identity primary key,
   broker integer references broker(id) not null,
   name text not null,
   host text not null,
@@ -103,7 +103,7 @@ create type "Compression" as enum (
 );
 
 create table record (
-  id bigserial primary key not null,
+  id bigint generated always as identity primary key,
   topic uuid references topic(id),
   partition integer,
   producer_id bigint,
