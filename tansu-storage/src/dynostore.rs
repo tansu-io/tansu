@@ -13,6 +13,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+use std::cmp::Ordering;
 use std::collections::BTreeSet;
 use std::io::BufReader;
 use std::sync::Arc;
@@ -26,7 +27,7 @@ use object_store::{
     path::Path, Attribute, AttributeValue, Attributes, ObjectStore, PutMode, PutOptions,
     PutPayload, TagSet, UpdateVersion,
 };
-use object_store::{DynObjectStore, PutResult};
+use object_store::{DynObjectStore, GetOptions, PutResult};
 use rand::{prelude::*, thread_rng};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -58,16 +59,14 @@ pub struct DynoStore {
     cluster: String,
     node: i32,
 
-    #[allow(dead_code)]
-    watermarks: BTreeMap<Topition, VersionData<Watermark>>,
-
-    producers: VersionData<BTreeMap<i64, Producer>>,
+    watermarks: BTreeMap<Topition, ConditionData<Watermark>>,
+    producers: ConditionData<BTreeMap<i64, Producer>>,
 
     object_store: Arc<DynObjectStore>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-struct VersionData<D> {
+struct ConditionData<D> {
     path: Path,
     version: Option<UpdateVersion>,
     tags: TagSet,
@@ -75,16 +74,49 @@ struct VersionData<D> {
     data: D,
 }
 
-impl<D> VersionData<D>
+impl<D> ConditionData<D>
 where
-    D: Serialize + DeserializeOwned + Clone + Debug,
+    D: Clone + Debug + DeserializeOwned + Send + Serialize + Sync,
 {
-    async fn apply<E, F>(&mut self, object_store: &impl ObjectStore, f: F) -> Result<E>
+    async fn get(&mut self, object_store: &impl ObjectStore) -> Result<()> {
+        debug!(?self, ?object_store);
+
+        let get_result = object_store
+            .get(&self.path)
+            .await
+            .inspect_err(|error| error!(?error, ?self))
+            .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
+
+        self.version = Some(UpdateVersion {
+            e_tag: get_result.meta.e_tag.clone(),
+            version: get_result.meta.version.clone(),
+        });
+
+        let encoded = get_result
+            .bytes()
+            .await
+            .inspect_err(|error| error!(?error, ?self))
+            .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
+
+        self.data = serde_json::from_slice::<D>(&encoded[..])
+            .inspect_err(|error| error!(?error, ?self))
+            .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
+
+        debug!(?self, ?object_store);
+
+        Ok(())
+    }
+
+    async fn with_mut<E, F>(&mut self, object_store: &impl ObjectStore, f: F) -> Result<E>
     where
+        E: Debug,
         F: Fn(&mut D) -> Result<E>,
     {
+        debug!(?self, ?object_store);
+
         loop {
             let outcome = f(&mut self.data)?;
+            debug!(?self, ?outcome);
 
             let payload = serde_json::to_vec(&self.data)
                 .map(Bytes::from)
@@ -97,6 +129,8 @@ where
                 .inspect(|put_result| debug!(?self, ?put_result))
             {
                 Ok(result) => {
+                    debug!(?self, ?result);
+
                     self.version = Some(UpdateVersion {
                         e_tag: result.e_tag,
                         version: result.version,
@@ -105,44 +139,77 @@ where
                     return Ok(outcome);
                 }
 
-                Err(object_store::Error::Precondition { .. }) => {
-                    let get_result = object_store
-                        .get(&self.path)
-                        .await
-                        .inspect_err(|error| error!(?error, ?self))
-                        .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
-
-                    self.version = Some(UpdateVersion {
-                        e_tag: get_result.meta.e_tag.clone(),
-                        version: get_result.meta.version.clone(),
-                    });
-
-                    let encoded = get_result
-                        .bytes()
-                        .await
-                        .inspect_err(|error| error!(?error, ?self))
-                        .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
-
-                    self.data = serde_json::from_slice::<D>(&encoded[..])
-                        .inspect_err(|error| error!(?error, ?self))
-                        .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
-
+                Err(pre_condition @ object_store::Error::Precondition { .. }) => {
+                    debug!(?self, ?pre_condition);
+                    self.get(object_store).await?;
                     continue;
                 }
 
                 Err(error) => {
                     return {
-                        error!(?error);
+                        error!(?self, ?error);
                         Err(Error::Api(ErrorCode::UnknownServerError))
                     }
                 }
             }
         }
     }
+
+    async fn with<E, F>(&mut self, object_store: &impl ObjectStore, f: F) -> Result<E>
+    where
+        F: Fn(&D) -> Result<E>,
+    {
+        debug!(?self, ?object_store);
+
+        match object_store
+            .get_opts(
+                &self.path,
+                GetOptions {
+                    if_none_match: self
+                        .version
+                        .as_ref()
+                        .and_then(|version| version.e_tag.clone()),
+                    ..GetOptions::default()
+                },
+            )
+            .await
+        {
+            Ok(get_result) => {
+                self.version = Some(UpdateVersion {
+                    e_tag: get_result.meta.e_tag.clone(),
+                    version: get_result.meta.version.clone(),
+                });
+
+                let encoded = get_result
+                    .bytes()
+                    .await
+                    .inspect_err(|error| error!(?error, ?self))
+                    .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
+
+                self.data = serde_json::from_slice::<D>(&encoded[..])
+                    .inspect_err(|error| error!(?error, ?self))
+                    .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
+
+                Ok(())
+            }
+
+            Err(object_store::Error::NotModified { .. }) => Ok(()),
+
+            Err(object_store::Error::NotFound { .. }) => {
+                self.with_mut(object_store, |_| Ok(())).await
+            }
+
+            Err(error) => {
+                error!(?self, ?error);
+                Err(Error::Api(ErrorCode::UnknownServerError))
+            }
+        }
+        .and(f(&self.data))
+    }
 }
 
-impl<D> From<&VersionData<D>> for PutOptions {
-    fn from(value: &VersionData<D>) -> Self {
+impl<D> From<&ConditionData<D>> for PutOptions {
+    fn from(value: &ConditionData<D>) -> Self {
         Self {
             mode: value.version.as_ref().map_or(PutMode::Create, |existing| {
                 PutMode::Update(existing.to_owned())
@@ -164,13 +231,44 @@ struct Watermark {
     low: i64,
     high: i64,
     stable: i64,
+    producers: BTreeMap<i64, WatermarkSequence>,
+}
+
+impl ConditionData<Watermark> {
+    fn new(cluster: &str, topition: &Topition) -> Self {
+        Self {
+            path: Path::from(format!(
+                "clusters/{}/topics/{}/partitions/{:0>10}/watermark.json",
+                cluster, topition.topic, topition.partition,
+            )),
+            data: Watermark::default(),
+            ..Default::default()
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+struct WatermarkSequence {
+    epoch: i16,
+    sequence: i32,
+    updated: SystemTime,
+}
+
+impl Default for WatermarkSequence {
+    fn default() -> Self {
+        Self {
+            epoch: 0,
+            sequence: 0,
+            updated: SystemTime::now(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 struct Producer {
     epoch: i16,
     updated: SystemTime,
-    sequences: BTreeMap<Topition, i64>,
+    sequences: BTreeMap<Topition, i32>,
 }
 
 impl Default for Producer {
@@ -198,7 +296,7 @@ impl DynoStore {
             cluster: cluster.into(),
             node,
             watermarks: BTreeMap::new(),
-            producers: VersionData {
+            producers: ConditionData {
                 path: Path::from(format!("clusters/{}/producers.json", cluster)),
                 version: None,
                 attributes: Attributes::new(),
@@ -207,33 +305,6 @@ impl DynoStore {
             },
             object_store: Arc::new(object_store),
         }
-    }
-
-    async fn get_watermark(&self, topition: &Topition) -> Result<Watermark> {
-        debug!(?topition);
-        let location = Path::from(format!(
-            "clusters/{}/topics/{}/partitions/{:0>10}/watermark.json",
-            self.cluster, topition.topic, topition.partition,
-        ));
-
-        let get_result = self
-            .object_store
-            .get(&location)
-            .await
-            .inspect(|get_result| debug!(?get_result, ?topition))
-            .inspect_err(|error| error!(?error, ?location))
-            .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
-
-        let encoded = get_result
-            .bytes()
-            .await
-            .inspect_err(|error| error!(?error, ?location))
-            .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
-
-        serde_json::from_slice::<Watermark>(&encoded[..])
-            .inspect(|watermark| debug!(?watermark, ?topition))
-            .inspect_err(|error| error!(?error, ?location))
-            .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))
     }
 
     async fn topic_metadata(&self, topic: &TopicId) -> Result<TopicMetadata> {
@@ -336,7 +407,10 @@ impl DynoStore {
 
 #[async_trait]
 impl Storage for DynoStore {
-    async fn register_broker(&self, broker_registration: BrokerRegistationRequest) -> Result<()> {
+    async fn register_broker(
+        &mut self,
+        broker_registration: BrokerRegistationRequest,
+    ) -> Result<()> {
         debug!(?broker_registration);
 
         let payload = serde_json::to_vec(&broker_registration)
@@ -364,7 +438,7 @@ impl Storage for DynoStore {
         Ok(())
     }
 
-    async fn create_topic(&self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {
+    async fn create_topic(&mut self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {
         debug!(?topic, ?validate_only);
 
         let id = Uuid::now_v7();
@@ -470,20 +544,20 @@ impl Storage for DynoStore {
     }
 
     async fn delete_records(
-        &self,
+        &mut self,
         topics: &[DeleteRecordsTopic],
     ) -> Result<Vec<DeleteRecordsTopicResult>> {
         debug!(?topics);
         todo!()
     }
 
-    async fn delete_topic(&self, name: &str) -> Result<u64> {
+    async fn delete_topic(&mut self, name: &str) -> Result<u64> {
         debug!(?name);
 
         todo!()
     }
 
-    async fn brokers(&self) -> Result<Vec<DescribeClusterBroker>> {
+    async fn brokers(&mut self) -> Result<Vec<DescribeClusterBroker>> {
         let location = Path::from(format!("clusters/{}/brokers/", self.cluster));
         debug!(?location);
 
@@ -540,93 +614,114 @@ impl Storage for DynoStore {
         Ok(brokers)
     }
 
-    async fn produce(&self, topition: &Topition, deflated: deflated::Batch) -> Result<i64> {
+    async fn produce(&mut self, topition: &Topition, deflated: deflated::Batch) -> Result<i64> {
         debug!(?topition, ?deflated);
 
+        if deflated.producer_id > 0 {
+            self.producers
+                .with(&self.object_store, |producers| {
+                    debug!(?producers, ?deflated.producer_id);
+                    producers.get(&deflated.producer_id).map_or(
+                        Err(Error::Api(ErrorCode::UnknownProducerId)),
+                        |producer| {
+                            if producer.epoch == deflated.producer_epoch {
+                                Ok(())
+                            } else {
+                                Err(Error::Api(ErrorCode::ProducerFenced))
+                            }
+                        },
+                    )
+                })
+                .await?
+        }
+
+        let offset = self
+            .watermarks
+            .entry(topition.to_owned())
+            .or_insert(ConditionData::<Watermark>::new(
+                self.cluster.as_str(),
+                topition,
+            ))
+            .with_mut(&self.object_store, |watermark| {
+                debug!(?watermark);
+
+                if deflated.producer_id > 0 {
+                    if let Some(ws) = watermark.producers.get_mut(&deflated.producer_id) {
+                        debug!(?ws);
+
+                        match ws.epoch.cmp(&deflated.producer_epoch) {
+                            Ordering::Equal => match ws.sequence.cmp(&deflated.base_sequence) {
+                                Ordering::Equal => {
+                                    debug!(?ws, ?deflated.base_sequence);
+
+                                    ws.sequence += deflated.last_offset_delta + 1;
+
+                                    let offset = watermark.high;
+                                    watermark.high += deflated.last_offset_delta as i64 + 1i64;
+                                    Ok(offset)
+                                }
+
+                                Ordering::Greater => {
+                                    debug!(?ws, ?deflated.base_sequence);
+                                    Err(Error::Api(ErrorCode::DuplicateSequenceNumber))
+                                }
+
+                                Ordering::Less => {
+                                    debug!(?ws, ?deflated.base_sequence);
+                                    Err(Error::Api(ErrorCode::OutOfOrderSequenceNumber))
+                                }
+                            },
+
+                            Ordering::Greater => Err(Error::Api(ErrorCode::ProducerFenced)),
+
+                            Ordering::Less => Err(Error::Api(ErrorCode::InvalidProducerEpoch)),
+                        }
+                    } else {
+                        let offset = watermark.high;
+                        watermark.high += deflated.last_offset_delta as i64 + 1i64;
+                        _ = watermark.producers.insert(
+                            deflated.producer_id,
+                            WatermarkSequence {
+                                epoch: deflated.producer_epoch,
+                                sequence: deflated.last_offset_delta + 1,
+                                ..Default::default()
+                            },
+                        );
+                        Ok(offset)
+                    }
+                } else {
+                    let offset = watermark.high;
+                    watermark.high += deflated.last_offset_delta as i64 + 1i64;
+                    Ok(offset)
+                }
+            })
+            .await?;
+
         let location = Path::from(format!(
-            "clusters/{}/topics/{}/partitions/{:0>10}/watermark.json",
-            self.cluster, topition.topic, topition.partition,
+            "clusters/{}/topics/{}/partitions/{:0>10}/records/{:0>20}.batch",
+            self.cluster, topition.topic, topition.partition, offset,
         ));
 
-        loop {
-            let get_result = self
-                .object_store
-                .get(&location)
-                .await
-                .inspect_err(|error| error!(?error, ?location))
-                .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
+        let payload = self.encode(deflated)?;
+        let attributes = Attributes::new();
 
-            let update_version = UpdateVersion {
-                e_tag: get_result.meta.e_tag.clone(),
-                version: get_result.meta.version.clone(),
-            };
+        let options = PutOptions {
+            mode: PutMode::Create,
+            tags: TagSet::default(),
+            attributes,
+        };
 
-            let encoded = get_result
-                .bytes()
-                .await
-                .inspect_err(|error| error!(?error, ?location))
-                .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
+        _ = self
+            .object_store
+            .put_opts(&location, payload, options)
+            .await
+            .inspect_err(|error| error!(?error))?;
 
-            let original = serde_json::from_slice::<Watermark>(&encoded[..])
-                .inspect_err(|error| error!(?error, ?location))
-                .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
-
-            let mut updated = original.clone();
-            updated.high += deflated.record_count as i64;
-
-            let payload = serde_json::to_vec(&updated)
-                .map(Bytes::from)
-                .map(PutPayload::from)?;
-
-            let options = PutOptions {
-                mode: PutMode::Update(update_version),
-                tags: TagSet::default(),
-                attributes: json_content_type(),
-            };
-
-            match self
-                .object_store
-                .put_opts(&location, payload, options)
-                .await
-                .inspect_err(|error| error!(?error, ?location))
-                .inspect(|put_result| debug!(?location, ?put_result))
-            {
-                Ok(_) => {
-                    let location = Path::from(format!(
-                        "clusters/{}/topics/{}/partitions/{:0>10}/records/{:0>20}.batch",
-                        self.cluster, topition.topic, topition.partition, original.high,
-                    ));
-
-                    let payload = self.encode(deflated)?;
-                    let attributes = Attributes::new();
-
-                    let options = PutOptions {
-                        mode: PutMode::Create,
-                        tags: TagSet::default(),
-                        attributes,
-                    };
-
-                    _ = self
-                        .object_store
-                        .put_opts(&location, payload, options)
-                        .await
-                        .inspect_err(|error| error!(?error))?;
-
-                    return Ok(original.high);
-                }
-                Err(object_store::Error::Precondition { .. }) => continue,
-                Err(error) => {
-                    return {
-                        error!(?error);
-                        Err(Error::Api(ErrorCode::UnknownServerError))
-                    }
-                }
-            }
-        }
+        Ok(offset)
     }
 
     async fn fetch(
-        &self,
+        &mut self,
         topition: &'_ Topition,
         offset: i64,
         min_bytes: u32,
@@ -692,20 +787,27 @@ impl Storage for DynoStore {
             })
     }
 
-    async fn offset_stage(&self, topition: &Topition) -> Result<OffsetStage> {
+    async fn offset_stage(&mut self, topition: &Topition) -> Result<OffsetStage> {
         debug!(?topition);
 
-        self.get_watermark(topition)
-            .await
-            .map(|watermark| OffsetStage {
-                last_stable: watermark.stable,
-                high_watermark: watermark.high,
-                log_start: watermark.low,
+        self.watermarks
+            .entry(topition.to_owned())
+            .or_insert(ConditionData::<Watermark>::new(
+                self.cluster.as_str(),
+                topition,
+            ))
+            .with(&self.object_store, |watermark| {
+                Ok(OffsetStage {
+                    last_stable: watermark.stable,
+                    high_watermark: watermark.high,
+                    log_start: watermark.low,
+                })
             })
+            .await
     }
 
     async fn list_offsets(
-        &self,
+        &mut self,
         offsets: &[(Topition, ListOffsetRequest)],
     ) -> Result<Vec<(Topition, ListOffsetResponse)>> {
         debug!(?offsets);
@@ -717,22 +819,36 @@ impl Storage for DynoStore {
                 topition.to_owned(),
                 match offset_request {
                     ListOffsetRequest::Earliest => {
-                        self.get_watermark(topition)
-                            .await
-                            .map(|watermark| ListOffsetResponse {
-                                error_code: ErrorCode::None,
-                                timestamp: None,
-                                offset: Some(watermark.low),
-                            })?
+                        self.watermarks
+                            .entry(topition.to_owned())
+                            .or_insert(ConditionData::<Watermark>::new(
+                                self.cluster.as_str(),
+                                topition,
+                            ))
+                            .with(&self.object_store, |watermark| {
+                                Ok(ListOffsetResponse {
+                                    error_code: ErrorCode::None,
+                                    timestamp: None,
+                                    offset: Some(watermark.low),
+                                })
+                            })
+                            .await?
                     }
                     ListOffsetRequest::Latest => {
-                        self.get_watermark(topition)
-                            .await
-                            .map(|watermark| ListOffsetResponse {
-                                error_code: ErrorCode::None,
-                                timestamp: None,
-                                offset: Some(watermark.high),
-                            })?
+                        self.watermarks
+                            .entry(topition.to_owned())
+                            .or_insert(ConditionData::<Watermark>::new(
+                                self.cluster.as_str(),
+                                topition,
+                            ))
+                            .with(&self.object_store, |watermark| {
+                                Ok(ListOffsetResponse {
+                                    error_code: ErrorCode::None,
+                                    timestamp: None,
+                                    offset: Some(watermark.high),
+                                })
+                            })
+                            .await?
                     }
                     ListOffsetRequest::Timestamp(..) => todo!(),
                 },
@@ -743,7 +859,7 @@ impl Storage for DynoStore {
     }
 
     async fn offset_commit(
-        &self,
+        &mut self,
         group_id: &str,
         retention_time_ms: Option<Duration>,
         offsets: &[(Topition, OffsetCommitRequest)],
@@ -781,7 +897,7 @@ impl Storage for DynoStore {
     }
 
     async fn offset_fetch(
-        &self,
+        &mut self,
         group_id: Option<&str>,
         topics: &[Topition],
         require_stable: Option<bool>,
@@ -824,7 +940,7 @@ impl Storage for DynoStore {
         Ok(responses)
     }
 
-    async fn metadata(&self, topics: Option<&[TopicId]>) -> Result<MetadataResponse> {
+    async fn metadata(&mut self, topics: Option<&[TopicId]>) -> Result<MetadataResponse> {
         debug!(?topics);
 
         let location = Path::from(format!("clusters/{}/brokers/", self.cluster));
@@ -1106,7 +1222,7 @@ impl Storage for DynoStore {
     }
 
     async fn describe_config(
-        &self,
+        &mut self,
         name: &str,
         resource: ConfigResource,
         keys: Option<&[String]>,
@@ -1145,7 +1261,7 @@ impl Storage for DynoStore {
     }
 
     async fn update_group(
-        &self,
+        &mut self,
         group_id: &str,
         detail: GroupDetail,
         version: Option<Version>,
@@ -1169,78 +1285,104 @@ impl Storage for DynoStore {
 
     async fn init_producer(
         &mut self,
-        transactional_id: Option<&str>,
+        transaction_id: Option<&str>,
         transaction_timeout_ms: i32,
         producer_id: Option<i64>,
         producer_epoch: Option<i16>,
     ) -> Result<ProducerIdResponse> {
-        let _ = (
-            transactional_id,
-            transaction_timeout_ms,
-            producer_id,
-            producer_epoch,
+        debug!(
+            ?transaction_id,
+            ?transaction_timeout_ms,
+            ?producer_id,
+            ?producer_epoch,
         );
 
-        self.producers
-            .apply(&self.object_store, |producers| {
-                debug!(?producers);
-                match (producer_id, producer_epoch) {
-                    (Some(-1), Some(-1)) => {
-                        let id = producers.last_key_value().map_or(1, |(k, _)| k + 1);
-                        _ = producers.insert(id, Producer::default());
+        if let Some(_transaction_id) = transaction_id {
+            self.producers
+                .with_mut(&self.object_store, |producers| {
+                    debug!(?producers);
+                    match (producer_id, producer_epoch) {
+                        (Some(-1), Some(-1)) => {
+                            let id = producers.last_key_value().map_or(1, |(k, _)| k + 1);
+                            _ = producers.insert(id, Producer::default());
 
-                        Ok(ProducerIdResponse {
-                            id,
-                            epoch: 0,
-                            ..Default::default()
-                        })
-                    }
+                            Ok(ProducerIdResponse {
+                                id,
+                                epoch: 0,
+                                ..Default::default()
+                            })
+                        }
 
-                    (Some(producer_id), Some(producer_epoch))
-                        if producer_id > 0 && producer_epoch >= 0 =>
-                    {
-                        match producers.get(&producer_id) {
-                            Some(Producer { epoch, .. }) if producer_epoch == *epoch => {
-                                if let Some(epoch) = epoch.checked_add(1) {
-                                    _ = producers.insert(
-                                        producer_id,
-                                        Producer {
+                        (Some(producer_id), Some(producer_epoch))
+                            if producer_id > 0 && producer_epoch >= 0 =>
+                        {
+                            match producers.get(&producer_id) {
+                                Some(Producer { epoch, .. }) if producer_epoch == *epoch => {
+                                    if let Some(epoch) = epoch.checked_add(1) {
+                                        _ = producers.insert(
+                                            producer_id,
+                                            Producer {
+                                                epoch,
+                                                ..Default::default()
+                                            },
+                                        );
+
+                                        Ok(ProducerIdResponse {
+                                            id: producer_id,
                                             epoch,
                                             ..Default::default()
-                                        },
-                                    );
+                                        })
+                                    } else {
+                                        let id =
+                                            producers.last_key_value().map_or(1, |(k, _)| k + 1);
+                                        _ = producers.insert(id, Producer::default());
 
-                                    Ok(ProducerIdResponse {
-                                        id: producer_id,
-                                        epoch,
-                                        ..Default::default()
-                                    })
-                                } else {
-                                    let id = producers.last_key_value().map_or(1, |(k, _)| k + 1);
-                                    _ = producers.insert(id, Producer::default());
-
-                                    Ok(ProducerIdResponse {
-                                        id,
-                                        epoch: 0,
-                                        ..Default::default()
-                                    })
+                                        Ok(ProducerIdResponse {
+                                            id,
+                                            epoch: 0,
+                                            ..Default::default()
+                                        })
+                                    }
                                 }
+
+                                Some(_) | None => Ok(ProducerIdResponse {
+                                    id: -1,
+                                    epoch: -1,
+                                    error: ErrorCode::InvalidProducerEpoch,
+                                }),
                             }
-
-                            Some(_) | None => Ok(ProducerIdResponse {
-                                id: -1,
-                                epoch: -1,
-                                error: ErrorCode::InvalidProducerEpoch,
-                            }),
                         }
-                    }
 
-                    (None, None) => todo!(),
-                    (None, Some(_)) => todo!(),
-                    (Some(_), None) => todo!(),
-                    (_, _) => todo!(),
-                }
-            })
-            .await
+                        (None, None) => todo!(),
+                        (None, Some(_)) => todo!(),
+                        (Some(_), None) => todo!(),
+                        (_, _) => todo!(),
+                    }
+                })
+                .await
+        } else {
+            self.producers
+                .with_mut(&self.object_store, |producers| {
+                    debug!(?producers);
+                    match (producer_id, producer_epoch) {
+                        (Some(-1), Some(-1)) => {
+                            let id = producers.last_key_value().map_or(1, |(k, _)| k + 1);
+                            _ = producers.insert(id, Producer::default());
+
+                            Ok(ProducerIdResponse {
+                                id,
+                                epoch: 0,
+                                ..Default::default()
+                            })
+                        }
+
+                        (None, None) => todo!(),
+                        (None, Some(_)) => todo!(),
+                        (Some(_), None) => todo!(),
+                        (_, _) => todo!(),
+                    }
+                })
+                .await
+        }
     }
 }

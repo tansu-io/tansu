@@ -32,7 +32,7 @@ where
         Self { storage }
     }
 
-    pub async fn response(&self, topics: Option<Vec<MetadataRequestTopic>>) -> Result<Body> {
+    pub async fn response(&mut self, topics: Option<Vec<MetadataRequestTopic>>) -> Result<Body> {
         let throttle_time_ms = Some(0);
 
         let topics = topics.map(|topics| topics.iter().map(TopicId::from).collect::<Vec<_>>());

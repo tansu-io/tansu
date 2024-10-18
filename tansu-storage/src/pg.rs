@@ -132,7 +132,10 @@ impl Postgres {
 
 #[async_trait]
 impl Storage for Postgres {
-    async fn register_broker(&self, broker_registration: BrokerRegistationRequest) -> Result<()> {
+    async fn register_broker(
+        &mut self,
+        broker_registration: BrokerRegistationRequest,
+    ) -> Result<()> {
         debug!(?broker_registration);
 
         let mut c = self.connection().await?;
@@ -228,7 +231,7 @@ impl Storage for Postgres {
         Ok(())
     }
 
-    async fn brokers(&self) -> Result<Vec<DescribeClusterBroker>> {
+    async fn brokers(&mut self) -> Result<Vec<DescribeClusterBroker>> {
         let c = self.connection().await?;
 
         let prepared = c
@@ -267,7 +270,7 @@ impl Storage for Postgres {
         Ok(brokers)
     }
 
-    async fn create_topic(&self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {
+    async fn create_topic(&mut self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {
         debug!(?topic, ?validate_only);
 
         let mut c = self.connection().await?;
@@ -336,7 +339,7 @@ impl Storage for Postgres {
     }
 
     async fn delete_records(
-        &self,
+        &mut self,
         topics: &[DeleteRecordsTopic],
     ) -> Result<Vec<DeleteRecordsTopicResult>> {
         let c = self.connection().await?;
@@ -463,7 +466,7 @@ impl Storage for Postgres {
         Ok(responses)
     }
 
-    async fn delete_topic(&self, name: &str) -> Result<u64> {
+    async fn delete_topic(&mut self, name: &str) -> Result<u64> {
         let c = self.connection().await?;
 
         let delete_topic = c.prepare("delete from topic where name=$1 cascade").await?;
@@ -471,7 +474,7 @@ impl Storage for Postgres {
         c.execute(&delete_topic, &[&name]).await.map_err(Into::into)
     }
 
-    async fn produce(&self, topition: &'_ Topition, deflated: deflated::Batch) -> Result<i64> {
+    async fn produce(&mut self, topition: &'_ Topition, deflated: deflated::Batch) -> Result<i64> {
         debug!(?topition, ?deflated);
         let mut c = self.connection().await?;
 
@@ -551,7 +554,7 @@ impl Storage for Postgres {
     }
 
     async fn fetch(
-        &self,
+        &mut self,
         topition: &Topition,
         offset: i64,
         min_bytes: u32,
@@ -682,7 +685,7 @@ impl Storage for Postgres {
             .map_err(Into::into)
     }
 
-    async fn offset_stage(&self, topition: &'_ Topition) -> Result<OffsetStage> {
+    async fn offset_stage(&mut self, topition: &'_ Topition) -> Result<OffsetStage> {
         let c = self.connection().await?;
 
         let prepared = c
@@ -726,7 +729,7 @@ impl Storage for Postgres {
     }
 
     async fn offset_commit(
-        &self,
+        &mut self,
         group: &str,
         retention: Option<Duration>,
         offsets: &[(Topition, OffsetCommitRequest)],
@@ -781,7 +784,7 @@ impl Storage for Postgres {
     }
 
     async fn offset_fetch(
-        &self,
+        &mut self,
         group_id: Option<&str>,
         topics: &[Topition],
         require_stable: Option<bool>,
@@ -819,7 +822,7 @@ impl Storage for Postgres {
     }
 
     async fn list_offsets(
-        &self,
+        &mut self,
         offsets: &[(Topition, ListOffsetRequest)],
     ) -> Result<Vec<(Topition, ListOffsetResponse)>> {
         debug!(?offsets);
@@ -941,7 +944,7 @@ impl Storage for Postgres {
         Ok(responses).inspect(|r| debug!(?r))
     }
 
-    async fn metadata(&self, topics: Option<&[TopicId]>) -> Result<MetadataResponse> {
+    async fn metadata(&mut self, topics: Option<&[TopicId]>) -> Result<MetadataResponse> {
         debug!(?topics);
 
         let c = self.connection().await.inspect_err(|err| error!(?err))?;
@@ -1267,7 +1270,7 @@ impl Storage for Postgres {
     }
 
     async fn describe_config(
-        &self,
+        &mut self,
         name: &str,
         resource: ConfigResource,
         keys: Option<&[String]>,
@@ -1353,7 +1356,7 @@ impl Storage for Postgres {
     }
 
     async fn update_group(
-        &self,
+        &mut self,
         group_id: &str,
         detail: GroupDetail,
         version: Option<Version>,

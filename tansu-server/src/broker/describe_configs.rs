@@ -34,7 +34,7 @@ where
     }
 
     pub async fn response(
-        &self,
+        &mut self,
         resources: Option<&[DescribeConfigsResource]>,
         include_synonyms: Option<bool>,
         include_documentation: Option<bool>,

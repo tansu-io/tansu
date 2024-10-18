@@ -35,7 +35,7 @@ where
     }
 
     async fn create_topic(
-        &self,
+        &mut self,
         topic: CreatableTopic,
         validate_only: bool,
     ) -> CreatableTopicResult {
@@ -90,7 +90,7 @@ where
     }
 
     pub async fn request(
-        &self,
+        &mut self,
         creatable: Option<Vec<CreatableTopic>>,
         validate_only: bool,
     ) -> Result<Body> {

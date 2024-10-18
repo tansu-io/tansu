@@ -14,8 +14,8 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use crate::Result;
-use tansu_kafka_sans_io::Body;
-use tansu_storage::Storage;
+use tansu_storage::{ProducerIdResponse, Storage};
+use tracing::debug;
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct InitProducerIdRequest<S> {
@@ -32,26 +32,27 @@ where
 
     pub async fn response(
         &mut self,
-        transactional_id: Option<&str>,
+        transaction_id: Option<&str>,
         transaction_timeout_ms: i32,
         producer_id: Option<i64>,
         producer_epoch: Option<i16>,
-    ) -> Result<Body> {
+    ) -> Result<ProducerIdResponse> {
+        debug!(
+            ?transaction_id,
+            ?transaction_timeout_ms,
+            ?producer_id,
+            ?producer_epoch
+        );
+
         self.storage
             .init_producer(
-                transactional_id,
+                transaction_id,
                 transaction_timeout_ms,
                 producer_id,
                 producer_epoch,
             )
             .await
             .map_err(Into::into)
-            .map(|response| Body::InitProducerIdResponse {
-                throttle_time_ms: 0,
-                error_code: response.error.into(),
-                producer_id: response.id,
-                producer_epoch: response.epoch,
-            })
     }
 }
 
@@ -98,65 +99,51 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn init_producer_id() -> Result<()> {
+    async fn no_txn_init_producer_id() -> Result<()> {
         let _guard = init_tracing()?;
 
         let cluster = "abc";
         let node = 12321;
 
-        let mut request =
-            InitProducerIdRequest::with_storage(DynoStore::new(cluster, node, InMemory::new()));
-
-        let transactional_id = None;
+        let transaction_id = None;
         let transaction_timeout_ms = 0;
         let producer_id = Some(-1);
         let producer_epoch = Some(-1);
 
-        match request
-            .response(
-                transactional_id,
-                transaction_timeout_ms,
-                producer_id,
-                producer_epoch,
-            )
-            .await?
-        {
-            Body::InitProducerIdResponse {
-                throttle_time_ms: 0,
-                error_code,
-                producer_id,
-                producer_epoch,
-            } => {
-                assert_eq!(i16::from(ErrorCode::None), error_code);
-                assert_eq!(1, producer_id);
-                assert_eq!(0, producer_epoch);
-            }
+        let mut request =
+            InitProducerIdRequest::with_storage(DynoStore::new(cluster, node, InMemory::new()));
 
-            otherwise => panic!("{otherwise:?}"),
-        }
+        assert_eq!(
+            ProducerIdResponse {
+                error: ErrorCode::None,
+                id: 1,
+                epoch: 0
+            },
+            request
+                .response(
+                    transaction_id,
+                    transaction_timeout_ms,
+                    producer_id,
+                    producer_epoch,
+                )
+                .await?
+        );
 
-        match request
-            .response(
-                transactional_id,
-                transaction_timeout_ms,
-                producer_id,
-                producer_epoch,
-            )
-            .await?
-        {
-            Body::InitProducerIdResponse {
-                throttle_time_ms: 0,
-                error_code,
-                producer_id,
-                producer_epoch,
-            } => {
-                assert_eq!(i16::from(ErrorCode::None), error_code);
-                assert_eq!(2, producer_id);
-                assert_eq!(0, producer_epoch);
-            }
-
-            otherwise => panic!("{otherwise:?}"),
-        }
+        assert_eq!(
+            ProducerIdResponse {
+                error: ErrorCode::None,
+                id: 2,
+                epoch: 0
+            },
+            request
+                .response(
+                    transaction_id,
+                    transaction_timeout_ms,
+                    producer_id,
+                    producer_epoch,
+                )
+                .await?
+        );
 
         Ok(())
     }

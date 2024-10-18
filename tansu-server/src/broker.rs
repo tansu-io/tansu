@@ -402,6 +402,12 @@ where
                         producer_epoch,
                     )
                     .await
+                    .map(|response| Body::InitProducerIdResponse {
+                        throttle_time_ms: 0,
+                        error_code: response.error.into(),
+                        producer_id: response.id,
+                        producer_epoch: response.epoch,
+                    })
             }
 
             Body::JoinGroupRequest {
@@ -535,6 +541,11 @@ where
                 ProduceRequest::with_storage(self.storage.clone())
                     .response(transactional_id, acks, timeout_ms, topic_data)
                     .await
+                    .map(|response| Body::ProduceResponse {
+                        responses: response.responses,
+                        throttle_time_ms: response.throttle_time_ms,
+                        node_endpoints: response.node_endpoints,
+                    })
             }
 
             Body::SyncGroupRequest {

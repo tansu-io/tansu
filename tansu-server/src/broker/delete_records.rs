@@ -31,7 +31,7 @@ where
         Self { storage }
     }
 
-    pub async fn request(&self, topics: &[DeleteRecordsTopic]) -> Result<Body> {
+    pub async fn request(&mut self, topics: &[DeleteRecordsTopic]) -> Result<Body> {
         let topics = self
             .storage
             .delete_records(topics)

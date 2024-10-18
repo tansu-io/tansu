@@ -49,6 +49,7 @@ use tansu_kafka_sans_io::{
     record::deflated,
     to_system_time, to_timestamp, ConfigResource, ErrorCode,
 };
+use tracing::debug;
 use uuid::Uuid;
 
 pub mod dynostore;
@@ -533,61 +534,64 @@ pub trait StorageProvider {
 
 #[async_trait]
 pub trait Storage: Clone + Debug + Send + Sync + 'static {
-    async fn register_broker(&self, broker_registration: BrokerRegistationRequest) -> Result<()>;
+    async fn register_broker(
+        &mut self,
+        broker_registration: BrokerRegistationRequest,
+    ) -> Result<()>;
 
-    async fn create_topic(&self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid>;
+    async fn create_topic(&mut self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid>;
 
     async fn delete_records(
-        &self,
+        &mut self,
         topics: &[DeleteRecordsTopic],
     ) -> Result<Vec<DeleteRecordsTopicResult>>;
 
-    async fn delete_topic(&self, name: &str) -> Result<u64>;
+    async fn delete_topic(&mut self, name: &str) -> Result<u64>;
 
-    async fn brokers(&self) -> Result<Vec<DescribeClusterBroker>>;
+    async fn brokers(&mut self) -> Result<Vec<DescribeClusterBroker>>;
 
-    async fn produce(&self, topition: &Topition, batch: deflated::Batch) -> Result<i64>;
+    async fn produce(&mut self, topition: &Topition, batch: deflated::Batch) -> Result<i64>;
 
     async fn fetch(
-        &self,
+        &mut self,
         topition: &'_ Topition,
         offset: i64,
         min_bytes: u32,
         max_bytes: u32,
     ) -> Result<deflated::Batch>;
 
-    async fn offset_stage(&self, topition: &Topition) -> Result<OffsetStage>;
+    async fn offset_stage(&mut self, topition: &Topition) -> Result<OffsetStage>;
 
     async fn list_offsets(
-        &self,
+        &mut self,
         offsets: &[(Topition, ListOffsetRequest)],
     ) -> Result<Vec<(Topition, ListOffsetResponse)>>;
 
     async fn offset_commit(
-        &self,
+        &mut self,
         group_id: &str,
         retention_time_ms: Option<Duration>,
         offsets: &[(Topition, OffsetCommitRequest)],
     ) -> Result<Vec<(Topition, ErrorCode)>>;
 
     async fn offset_fetch(
-        &self,
+        &mut self,
         group_id: Option<&str>,
         topics: &[Topition],
         require_stable: Option<bool>,
     ) -> Result<BTreeMap<Topition, i64>>;
 
-    async fn metadata(&self, topics: Option<&[TopicId]>) -> Result<MetadataResponse>;
+    async fn metadata(&mut self, topics: Option<&[TopicId]>) -> Result<MetadataResponse>;
 
     async fn describe_config(
-        &self,
+        &mut self,
         name: &str,
         resource: ConfigResource,
         keys: Option<&[String]>,
     ) -> Result<DescribeConfigsResult>;
 
     async fn update_group(
-        &self,
+        &mut self,
         group_id: &str,
         detail: GroupDetail,
         version: Option<Version>,
@@ -621,14 +625,17 @@ pub enum StorageContainer {
 
 #[async_trait]
 impl Storage for StorageContainer {
-    async fn register_broker(&self, broker_registration: BrokerRegistationRequest) -> Result<()> {
+    async fn register_broker(
+        &mut self,
+        broker_registration: BrokerRegistationRequest,
+    ) -> Result<()> {
         match self {
             Self::Postgres(pg) => pg.register_broker(broker_registration).await,
             Self::DynoStore(dyn_store) => dyn_store.register_broker(broker_registration).await,
         }
     }
 
-    async fn create_topic(&self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {
+    async fn create_topic(&mut self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {
         match self {
             Self::Postgres(pg) => pg.create_topic(topic, validate_only).await,
             Self::DynoStore(dyn_store) => dyn_store.create_topic(topic, validate_only).await,
@@ -636,7 +643,7 @@ impl Storage for StorageContainer {
     }
 
     async fn delete_records(
-        &self,
+        &mut self,
         topics: &[DeleteRecordsTopic],
     ) -> Result<Vec<DeleteRecordsTopicResult>> {
         match self {
@@ -645,21 +652,21 @@ impl Storage for StorageContainer {
         }
     }
 
-    async fn delete_topic(&self, name: &str) -> Result<u64> {
+    async fn delete_topic(&mut self, name: &str) -> Result<u64> {
         match self {
             Self::Postgres(pg) => pg.delete_topic(name).await,
             Self::DynoStore(dyn_store) => dyn_store.delete_topic(name).await,
         }
     }
 
-    async fn brokers(&self) -> Result<Vec<DescribeClusterBroker>> {
+    async fn brokers(&mut self) -> Result<Vec<DescribeClusterBroker>> {
         match self {
             Self::Postgres(pg) => pg.brokers().await,
             Self::DynoStore(dyn_store) => dyn_store.brokers().await,
         }
     }
 
-    async fn produce(&self, topition: &Topition, batch: deflated::Batch) -> Result<i64> {
+    async fn produce(&mut self, topition: &Topition, batch: deflated::Batch) -> Result<i64> {
         match self {
             Self::Postgres(pg) => pg.produce(topition, batch).await,
             Self::DynoStore(dyn_store) => dyn_store.produce(topition, batch).await,
@@ -667,7 +674,7 @@ impl Storage for StorageContainer {
     }
 
     async fn fetch(
-        &self,
+        &mut self,
         topition: &'_ Topition,
         offset: i64,
         min_bytes: u32,
@@ -683,7 +690,7 @@ impl Storage for StorageContainer {
         }
     }
 
-    async fn offset_stage(&self, topition: &Topition) -> Result<OffsetStage> {
+    async fn offset_stage(&mut self, topition: &Topition) -> Result<OffsetStage> {
         match self {
             Self::Postgres(pg) => pg.offset_stage(topition).await,
             Self::DynoStore(dyn_store) => dyn_store.offset_stage(topition).await,
@@ -691,7 +698,7 @@ impl Storage for StorageContainer {
     }
 
     async fn list_offsets(
-        &self,
+        &mut self,
         offsets: &[(Topition, ListOffsetRequest)],
     ) -> Result<Vec<(Topition, ListOffsetResponse)>> {
         match self {
@@ -701,7 +708,7 @@ impl Storage for StorageContainer {
     }
 
     async fn offset_commit(
-        &self,
+        &mut self,
         group_id: &str,
         retention_time_ms: Option<Duration>,
         offsets: &[(Topition, OffsetCommitRequest)],
@@ -717,7 +724,7 @@ impl Storage for StorageContainer {
     }
 
     async fn offset_fetch(
-        &self,
+        &mut self,
         group_id: Option<&str>,
         topics: &[Topition],
         require_stable: Option<bool>,
@@ -732,7 +739,7 @@ impl Storage for StorageContainer {
         }
     }
 
-    async fn metadata(&self, topics: Option<&[TopicId]>) -> Result<MetadataResponse> {
+    async fn metadata(&mut self, topics: Option<&[TopicId]>) -> Result<MetadataResponse> {
         match self {
             Self::Postgres(pg) => pg.metadata(topics).await,
             Self::DynoStore(dyn_store) => dyn_store.metadata(topics).await,
@@ -740,7 +747,7 @@ impl Storage for StorageContainer {
     }
 
     async fn describe_config(
-        &self,
+        &mut self,
         name: &str,
         resource: ConfigResource,
         keys: Option<&[String]>,
@@ -752,7 +759,7 @@ impl Storage for StorageContainer {
     }
 
     async fn update_group(
-        &self,
+        &mut self,
         group_id: &str,
         detail: GroupDetail,
         version: Option<Version>,
@@ -765,15 +772,22 @@ impl Storage for StorageContainer {
 
     async fn init_producer(
         &mut self,
-        transactional_id: Option<&str>,
+        transaction_id: Option<&str>,
         transaction_timeout_ms: i32,
         producer_id: Option<i64>,
         producer_epoch: Option<i16>,
     ) -> Result<ProducerIdResponse> {
+        debug!(
+            ?transaction_id,
+            ?transaction_timeout_ms,
+            ?producer_id,
+            ?producer_epoch
+        );
+
         match self {
             Self::Postgres(pg) => {
                 pg.init_producer(
-                    transactional_id,
+                    transaction_id,
                     transaction_timeout_ms,
                     producer_id,
                     producer_epoch,
@@ -783,7 +797,7 @@ impl Storage for StorageContainer {
             Self::DynoStore(dyn_store) => {
                 dyn_store
                     .init_producer(
-                        transactional_id,
+                        transaction_id,
                         transaction_timeout_ms,
                         producer_id,
                         producer_epoch,

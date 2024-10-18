@@ -39,7 +39,7 @@ where
     }
 
     pub async fn response(
-        &self,
+        &mut self,
         replica_id: i32,
         isolation_level: Option<i8>,
         topics: Option<&[ListOffsetsTopic]>,
