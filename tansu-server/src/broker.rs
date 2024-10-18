@@ -27,11 +27,9 @@ pub mod list_partition_reassignments;
 pub mod metadata;
 pub mod produce;
 pub mod telemetry;
+pub mod txn;
 
-use crate::{
-    coordinator::group::{Coordinator, OffsetCommit},
-    Error, Result,
-};
+use crate::{coordinator::group::Coordinator, Error, Result};
 use api_versions::ApiVersionsRequest;
 use create_topic::CreateTopic;
 use delete_records::DeleteRecordsRequest;
@@ -53,6 +51,7 @@ use tokio::{
     net::{TcpListener, TcpStream},
 };
 use tracing::{debug, error, info};
+use txn::{add_offsets::AddOffsets, add_partitions::AddPartitions};
 use url::Url;
 use uuid::Uuid;
 
@@ -395,13 +394,20 @@ where
                     ?producer_epoch,
                 );
 
-                let init_producer_id = InitProducerIdRequest;
-                Ok(init_producer_id.response(
-                    transactional_id.as_deref(),
-                    transaction_timeout_ms,
-                    producer_id,
-                    producer_epoch,
-                ))
+                InitProducerIdRequest::with_storage(self.storage.clone())
+                    .response(
+                        transactional_id.as_deref(),
+                        transaction_timeout_ms,
+                        producer_id,
+                        producer_epoch,
+                    )
+                    .await
+                    .map(|response| Body::InitProducerIdResponse {
+                        throttle_time_ms: 0,
+                        error_code: response.error.into(),
+                        producer_id: response.id,
+                        producer_epoch: response.epoch,
+                    })
             }
 
             Body::JoinGroupRequest {
@@ -496,7 +502,7 @@ where
                     ?topics
                 );
 
-                let detail = OffsetCommit {
+                let detail = crate::coordinator::group::OffsetCommit {
                     group_id: group_id.as_str(),
                     generation_id_or_member_epoch,
                     member_id: member_id.as_deref(),
@@ -535,6 +541,11 @@ where
                 ProduceRequest::with_storage(self.storage.clone())
                     .response(transactional_id, acks, timeout_ms, topic_data)
                     .await
+                    .map(|response| Body::ProduceResponse {
+                        responses: response.responses,
+                        throttle_time_ms: response.throttle_time_ms,
+                        node_endpoints: response.node_endpoints,
+                    })
             }
 
             Body::SyncGroupRequest {
@@ -559,7 +570,89 @@ where
                     .await
             }
 
-            _ => unimplemented!(),
+            Body::AddOffsetsToTxnRequest {
+                transactional_id,
+                producer_id,
+                producer_epoch,
+                group_id,
+            } => {
+                debug!(?transactional_id, ?producer_id, ?producer_epoch, ?group_id);
+
+                AddOffsets::with_storage(self.storage.clone())
+                    .response(
+                        transactional_id.as_str(),
+                        producer_id,
+                        producer_epoch,
+                        group_id.as_str(),
+                    )
+                    .await
+            }
+
+            Body::AddPartitionsToTxnRequest {
+                transactions,
+                v_3_and_below_transactional_id,
+                v_3_and_below_producer_id,
+                v_3_and_below_producer_epoch,
+                v_3_and_below_topics,
+            } => {
+                debug!(
+                    ?transactions,
+                    ?v_3_and_below_transactional_id,
+                    ?v_3_and_below_producer_id,
+                    ?v_3_and_below_producer_epoch,
+                    ?v_3_and_below_topics
+                );
+
+                AddPartitions::with_storage(self.storage.clone())
+                    .response(
+                        transactions,
+                        v_3_and_below_transactional_id,
+                        v_3_and_below_producer_id,
+                        v_3_and_below_producer_epoch,
+                        v_3_and_below_topics,
+                    )
+                    .await
+            }
+
+            Body::TxnOffsetCommitRequest {
+                transactional_id,
+                group_id,
+                producer_id,
+                producer_epoch,
+                generation_id,
+                member_id,
+                group_instance_id,
+                topics,
+            } => {
+                debug!(
+                    ?transactional_id,
+                    ?group_id,
+                    ?producer_id,
+                    ?producer_epoch,
+                    ?generation_id,
+                    ?member_id,
+                    ?group_instance_id,
+                    ?topics,
+                );
+
+                txn::offset_commit::OffsetCommit::with_storage(self.storage.clone())
+                    .response(
+                        transactional_id.as_str(),
+                        group_id.as_str(),
+                        producer_id,
+                        producer_epoch,
+                        generation_id,
+                        member_id,
+                        group_instance_id,
+                        topics,
+                    )
+                    .await
+            }
+
+            request => {
+                error!(?request);
+                unimplemented!("{request:?}")
+            }
         }
     }
 }

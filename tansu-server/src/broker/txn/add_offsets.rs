@@ -13,17 +13,18 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use crate::Result;
-use tansu_kafka_sans_io::{delete_records_request::DeleteRecordsTopic, Body};
+use tansu_kafka_sans_io::{Body, ErrorCode};
 use tansu_storage::Storage;
 use tracing::debug;
 
+use crate::Result;
+
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct DeleteRecordsRequest<S> {
+pub struct AddOffsets<S> {
     storage: S,
 }
 
-impl<S> DeleteRecordsRequest<S>
+impl<S> AddOffsets<S>
 where
     S: Storage,
 {
@@ -31,17 +32,18 @@ where
         Self { storage }
     }
 
-    pub async fn request(&mut self, topics: &[DeleteRecordsTopic]) -> Result<Body> {
-        let topics = self
-            .storage
-            .delete_records(topics)
-            .await
-            .inspect_err(|err| debug!(?err, ?topics))
-            .map(Some)?;
+    pub async fn response(
+        &self,
+        transactional_id: &str,
+        producer_id: i64,
+        producer_epoch: i16,
+        group_id: &str,
+    ) -> Result<Body> {
+        debug!(?transactional_id, ?producer_id, ?producer_epoch, ?group_id);
 
-        Ok(Body::DeleteRecordsResponse {
+        Ok(Body::AddOffsetsToTxnResponse {
             throttle_time_ms: 0,
-            topics,
+            error_code: ErrorCode::None.into(),
         })
     }
 }

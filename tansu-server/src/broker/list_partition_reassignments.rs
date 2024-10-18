@@ -37,7 +37,7 @@ where
     }
 
     pub async fn response(
-        &self,
+        &mut self,
         topics: Option<&[ListPartitionReassignmentsTopics]>,
     ) -> Result<Body> {
         let topics = topics.map(|topics| {

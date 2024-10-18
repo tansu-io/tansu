@@ -93,6 +93,7 @@ pub enum Error {
     EnvVar(VarError),
     FromUtf8(string::FromUtf8Error),
     InvalidAckValue(i16),
+    InvalidCoordinatorType(i8),
     InvalidIsolationLevel(i8),
     Io(io::Error),
     Message(String),
@@ -981,7 +982,7 @@ impl Display for ErrorCode {
 }
 
 #[non_exhaustive]
-#[derive(Clone, Copy, Eq, Hash, Debug, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Deserialize, Eq, Hash, Debug, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum ErrorCode {
     UnknownServerError,
     None,
@@ -1249,6 +1250,25 @@ impl From<EndpointType> for i8 {
     }
 }
 
+pub enum CoordinatorType {
+    Group,
+    Transaction,
+    Share,
+}
+
+impl TryFrom<i8> for CoordinatorType {
+    type Error = Error;
+
+    fn try_from(value: i8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Group),
+            1 => Ok(Self::Transaction),
+            2 => Ok(Self::Share),
+            otherwise => Err(Error::InvalidCoordinatorType(otherwise)),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ConfigResource {
     Group,
@@ -1268,6 +1288,16 @@ impl From<i8> for ConfigResource {
             16 => Self::ClientMetric,
             32 => Self::Group,
             _ => Self::Unknown,
+        }
+    }
+}
+
+impl From<CoordinatorType> for i8 {
+    fn from(value: CoordinatorType) -> Self {
+        match value {
+            CoordinatorType::Group => 0,
+            CoordinatorType::Transaction => 1,
+            CoordinatorType::Share => 2,
         }
     }
 }

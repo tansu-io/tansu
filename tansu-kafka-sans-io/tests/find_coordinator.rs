@@ -27,7 +27,7 @@ fn check_message_meta() {
     assert_eq!(10, message.api_key);
     assert_eq!(MessageKind::Request, message.message_kind);
 
-    assert_eq!(VersionRange { start: 0, end: 4 }, message.version.valid);
+    assert_eq!(VersionRange { start: 0, end: 5 }, message.version.valid);
 
     assert_eq!(
         Some(VersionRange { start: 0, end: 3 }),

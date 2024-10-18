@@ -28,7 +28,7 @@ where
     S: Storage,
 {
     pub async fn response(
-        &self,
+        &mut self,
         include_cluster_authorized_operations: bool,
         endpoint_type: Option<i8>,
     ) -> Result<Body> {
