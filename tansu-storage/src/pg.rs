@@ -1463,18 +1463,48 @@ impl Storage for Postgres {
 
     async fn init_producer(
         &mut self,
-        transactional_id: Option<&str>,
+        transaction_id: Option<&str>,
         transaction_timeout_ms: i32,
         producer_id: Option<i64>,
         producer_epoch: Option<i16>,
     ) -> Result<ProducerIdResponse> {
-        let _ = (
-            transactional_id,
-            transaction_timeout_ms,
-            producer_id,
-            producer_epoch,
-        );
+        if let Some(_transaction_id) = transaction_id {
+            Ok(ProducerIdResponse::default())
+        } else if producer_id.is_some_and(|producer_id| producer_id == -1)
+            && producer_epoch.is_some_and(|producer_epoch| producer_epoch == -1)
+        {
+            let c = self.connection().await.inspect_err(|err| error!(?err))?;
 
-        Ok(ProducerIdResponse::default())
+            let prepared = c
+                .prepare(concat!(
+                    "insert into producer",
+                    " (transaction_id",
+                    ", transaction_timeout_ms)",
+                    " values ($1, $2)",
+                    " returning id, epoch"
+                ))
+                .await
+                .inspect_err(|err| error!(?err))?;
+
+            debug!(?prepared);
+
+            let row = c
+                .query_one(&prepared, &[&transaction_id, &transaction_timeout_ms])
+                .await
+                .inspect_err(|err| error!(?err))?;
+
+            let id = row.get(0);
+            let epoch: i32 = row.get(1);
+
+            i16::try_from(epoch)
+                .map(|epoch| ProducerIdResponse {
+                    error: ErrorCode::None,
+                    id,
+                    epoch,
+                })
+                .map_err(Into::into)
+        } else {
+            Ok(ProducerIdResponse::default())
+        }
     }
 }

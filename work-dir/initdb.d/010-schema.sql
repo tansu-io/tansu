@@ -146,4 +146,15 @@ create table consumer_group (
   created_at timestamp default current_timestamp not null
 );
 
+create table producer (
+  id bigint generated always as identity primary key,
+  transaction_id text,
+  transaction_timeout_ms int,
+  epoch int default 0,
+  unique (id, epoch),
+  last_updated timestamp default current_timestamp not null,
+  created_at timestamp default current_timestamp not null
+);
+
+
 commit;
