@@ -15,8 +15,7 @@
 
 use crate::Result;
 use tansu_kafka_sans_io::{
-    create_topics_request::CreatableTopic, create_topics_response::CreatableTopicResult, Body,
-    ErrorCode,
+    create_topics_request::CreatableTopic, create_topics_response::CreatableTopicResult, ErrorCode,
 };
 use tansu_storage::Storage;
 use tracing::debug;
@@ -36,10 +35,18 @@ where
 
     async fn create_topic(
         &self,
-        topic: CreatableTopic,
+        mut topic: CreatableTopic,
         validate_only: bool,
     ) -> CreatableTopicResult {
         let _ = validate_only;
+
+        if topic.num_partitions == -1 {
+            topic.num_partitions = 1;
+        }
+
+        if topic.replication_factor == -1 {
+            topic.replication_factor = 3
+        }
 
         let name = topic.name.clone();
         let num_partitions = Some(topic.num_partitions);
@@ -89,11 +96,11 @@ where
         }
     }
 
-    pub async fn request(
+    pub async fn response(
         &self,
         creatable: Option<Vec<CreatableTopic>>,
         validate_only: bool,
-    ) -> Result<Body> {
+    ) -> Result<Vec<CreatableTopicResult>> {
         debug!(?creatable, ?validate_only);
 
         let mut topics =
@@ -105,9 +112,153 @@ where
             }
         }
 
-        Ok(Body::CreateTopicsResponse {
-            throttle_time_ms: Some(0),
-            topics: Some(topics),
-        })
+        Ok(topics)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use object_store::memory::InMemory;
+    use tansu_storage::{dynostore::DynoStore, NULL_TOPIC_ID};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn create() -> Result<()> {
+        let cluster = "abc";
+        let node = 12321;
+
+        let storage = DynoStore::new(cluster, node, InMemory::new());
+
+        let create_topic = CreateTopic::with_storage(storage);
+
+        let name = "pqr";
+        let num_partitions = 5;
+        let replication_factor = 3;
+        let assignments = Some([].into());
+        let configs = Some([].into());
+        let validate_only = false;
+
+        let r = create_topic
+            .response(
+                Some(vec![CreatableTopic {
+                    name: name.into(),
+                    num_partitions,
+                    replication_factor,
+                    assignments,
+                    configs,
+                }]),
+                validate_only,
+            )
+            .await?;
+
+        assert_eq!(1, r.len());
+        assert_eq!(name, r[0].name.as_str());
+        assert_ne!(Some(NULL_TOPIC_ID), r[0].topic_id);
+        assert_eq!(Some(5), r[0].num_partitions);
+        assert_eq!(Some(3), r[0].replication_factor);
+        assert_eq!(ErrorCode::None, ErrorCode::try_from(r[0].error_code)?);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn create_with_default() -> Result<()> {
+        let cluster = "abc";
+        let node = 12321;
+
+        let storage = DynoStore::new(cluster, node, InMemory::new());
+
+        let create_topic = CreateTopic::with_storage(storage);
+
+        let name = "pqr";
+        let num_partitions = -1;
+        let replication_factor = -1;
+        let assignments = Some([].into());
+        let configs = Some([].into());
+        let validate_only = false;
+
+        let r = create_topic
+            .response(
+                Some(vec![CreatableTopic {
+                    name: name.into(),
+                    num_partitions,
+                    replication_factor,
+                    assignments,
+                    configs,
+                }]),
+                validate_only,
+            )
+            .await?;
+
+        assert_eq!(1, r.len());
+        assert_eq!(name, r[0].name.as_str());
+        assert_ne!(Some(NULL_TOPIC_ID), r[0].topic_id);
+        assert_eq!(Some(1), r[0].num_partitions);
+        assert_eq!(Some(3), r[0].replication_factor);
+        assert_eq!(ErrorCode::None, ErrorCode::try_from(r[0].error_code)?);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn duplicate() -> Result<()> {
+        let cluster = "abc";
+        let node = 12321;
+
+        let storage = DynoStore::new(cluster, node, InMemory::new());
+
+        let create_topic = CreateTopic::with_storage(storage);
+
+        let name = "pqr";
+        let num_partitions = 5;
+        let replication_factor = 3;
+        let assignments = Some([].into());
+        let configs = Some([].into());
+        let validate_only = false;
+
+        let r = create_topic
+            .response(
+                Some(vec![CreatableTopic {
+                    name: name.into(),
+                    num_partitions,
+                    replication_factor,
+                    assignments: assignments.clone(),
+                    configs: configs.clone(),
+                }]),
+                validate_only,
+            )
+            .await?;
+
+        assert_eq!(1, r.len());
+        assert_eq!(name, r[0].name.as_str());
+        assert_ne!(Some(NULL_TOPIC_ID), r[0].topic_id);
+        assert_eq!(Some(5), r[0].num_partitions);
+        assert_eq!(Some(3), r[0].replication_factor);
+        assert_eq!(ErrorCode::None, ErrorCode::try_from(r[0].error_code)?);
+
+        let r = create_topic
+            .response(
+                Some(vec![CreatableTopic {
+                    name: name.into(),
+                    num_partitions,
+                    replication_factor,
+                    assignments,
+                    configs,
+                }]),
+                validate_only,
+            )
+            .await?;
+
+        assert_eq!(1, r.len());
+        assert_eq!(name, r[0].name.as_str());
+        assert_eq!(Some(NULL_TOPIC_ID), r[0].topic_id);
+        assert_eq!(Some(5), r[0].num_partitions);
+        assert_eq!(Some(3), r[0].replication_factor);
+        assert_eq!(
+            ErrorCode::TopicAlreadyExists,
+            ErrorCode::try_from(r[0].error_code)?
+        );
+        Ok(())
     }
 }

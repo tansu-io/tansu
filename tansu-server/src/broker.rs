@@ -16,6 +16,7 @@
 pub mod api_versions;
 pub mod create_topic;
 pub mod delete_records;
+pub mod delete_topics;
 pub mod describe_cluster;
 pub mod describe_configs;
 pub mod fetch;
@@ -35,6 +36,7 @@ use crate::{
 use api_versions::ApiVersionsRequest;
 use create_topic::CreateTopic;
 use delete_records::DeleteRecordsRequest;
+use delete_topics::DeleteTopicsRequest;
 use describe_cluster::DescribeClusterRequest;
 use describe_configs::DescribeConfigsRequest;
 use fetch::FetchRequest;
@@ -61,9 +63,6 @@ pub struct Broker<G, S> {
     node_id: i32,
     cluster_id: String,
     incarnation_id: Uuid,
-    #[allow(dead_code)]
-    // context: Raft,
-    // applicator: Applicator,
     listener: Url,
     advertised_listener: Url,
     #[allow(dead_code)]
@@ -269,8 +268,13 @@ where
             } => {
                 debug!(?validate_only, ?topics);
                 CreateTopic::with_storage(self.storage.clone())
-                    .request(topics, validate_only.unwrap_or(false))
+                    .response(topics, validate_only.unwrap_or(false))
                     .await
+                    .map(Some)
+                    .map(|topics| Body::CreateTopicsResponse {
+                        throttle_time_ms: Some(0),
+                        topics,
+                    })
             }
 
             Body::DeleteRecordsRequest { topics, .. } => {
@@ -279,6 +283,22 @@ where
                 DeleteRecordsRequest::with_storage(self.storage.clone())
                     .request(topics.as_deref().unwrap_or(&[]))
                     .await
+            }
+
+            Body::DeleteTopicsRequest {
+                topics,
+                topic_names,
+                timeout_ms,
+            } => {
+                debug!(?topics, ?topic_names, ?timeout_ms);
+
+                Ok(Body::DeleteTopicsResponse {
+                    throttle_time_ms: Some(0),
+                    responses: DeleteTopicsRequest::with_storage(self.storage.clone())
+                        .response(topics, topic_names)
+                        .await
+                        .map(Some)?,
+                })
             }
 
             Body::DescribeClusterRequest {
