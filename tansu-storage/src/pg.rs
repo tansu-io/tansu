@@ -372,7 +372,8 @@ impl Storage for Postgres {
                 " where cluster.name = $1",
                 " returning topic.id",
             ))
-            .await?;
+            .await
+            .inspect_err(|err| error!(?err, ?topic, ?validate_only))?;
 
         let topic_id = tx
             .query_one(
@@ -381,10 +382,11 @@ impl Storage for Postgres {
                     &self.cluster.as_str(),
                     &topic.name.as_str(),
                     &topic.num_partitions,
-                    &topic.replication_factor,
+                    &(topic.replication_factor as i32),
                 ],
             )
             .await
+            .inspect_err(|err| error!(?err, ?topic, ?validate_only))
             .map(|row| row.get(0))
             .map_err(|error| {
                 if error
@@ -416,11 +418,12 @@ impl Storage for Postgres {
                         &prepared,
                         &[&topic_id, &config.name.as_str(), &config.value.as_deref()],
                     )
-                    .await;
+                    .await
+                    .inspect_err(|err| error!(?err, ?config));
             }
         }
 
-        tx.commit().await?;
+        tx.commit().await.inspect_err(|err| error!(?err))?;
 
         Ok(topic_id)
     }
