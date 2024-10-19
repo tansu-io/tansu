@@ -35,7 +35,7 @@ use tansu_kafka_sans_io::{
     record::{deflated, inflated, Header, Record},
     to_system_time, to_timestamp, ConfigResource, ConfigSource, ConfigType, ErrorCode,
 };
-use tokio_postgres::{error::SqlState, Config, NoTls};
+use tokio_postgres::{error::SqlState, Config, NoTls, Transaction};
 use tracing::{debug, error};
 use uuid::Uuid;
 
@@ -44,6 +44,66 @@ use crate::{
     MetadataResponse, OffsetCommitRequest, OffsetStage, ProducerIdResponse, Result, Storage,
     TopicId, Topition, UpdateError, Version, NULL_TOPIC_ID,
 };
+
+const DELETE_CONSUMER_OFFSETS_FOR_TOPIC: &str = concat!(
+    "delete from consumer_offset",
+    " using",
+    " cluster",
+    ", topic",
+    " where",
+    " consumer_offset.topic = topic.id",
+    " and",
+    " topic.cluster = cluster.id",
+    " and",
+    " cluster.name = $1",
+    " and",
+    " topic.<COLUMN> = $2"
+);
+
+const DELETE_HEADERS_FOR_TOPIC: &str = concat!(
+    "delete from header",
+    " using",
+    " cluster",
+    ", record",
+    ", topic",
+    " where",
+    " header.record = record.id",
+    " and",
+    " record.topic = topic.id",
+    " and",
+    " topic.cluster = cluster.id",
+    " and",
+    " cluster.name = $1",
+    " and",
+    " topic.<COLUMN> = $2"
+);
+
+const DELETE_RECORDS_FOR_TOPIC: &str = concat!(
+    "delete from record",
+    " using",
+    " cluster",
+    ", topic",
+    " where",
+    " record.topic = topic.id",
+    " and",
+    " topic.cluster = cluster.id",
+    " and",
+    " cluster.name = $1",
+    " and",
+    " topic.<COLUMN> = $2"
+);
+
+const DELETE_TOPIC: &str = concat!(
+    "delete from topic",
+    " using",
+    " cluster",
+    " where",
+    " topic.cluster = cluster.id",
+    " and",
+    " cluster.name = $1",
+    " and",
+    " topic.<COLUMN> = $2"
+);
 
 #[derive(Clone, Debug)]
 pub struct Postgres {
@@ -127,6 +187,36 @@ impl Postgres {
 
     async fn connection(&self) -> Result<Object> {
         self.pool.get().await.map_err(Into::into)
+    }
+
+    async fn delete_for_topic(
+        &self,
+        tx: &Transaction<'_>,
+        sql: &str,
+        topic: &TopicId,
+    ) -> Result<u64> {
+        match topic {
+            TopicId::Id(id) => {
+                let sql = sql.replace("<COLUMN>", "id");
+
+                let prepared = tx.prepare(&sql).await.inspect_err(|err| error!(?err))?;
+
+                tx.execute(&prepared, &[&self.cluster, &id])
+                    .await
+                    .inspect_err(|err| error!(?err))
+                    .map_err(Into::into)
+            }
+            TopicId::Name(name) => {
+                let sql = sql.replace("<COLUMN>", "name");
+
+                let prepared = tx.prepare(&sql).await.inspect_err(|err| error!(?err))?;
+
+                tx.execute(&prepared, &[&self.cluster, &name])
+                    .await
+                    .inspect_err(|err| error!(?err))
+                    .map_err(Into::into)
+            }
+        }
     }
 }
 
@@ -294,7 +384,7 @@ impl Storage for Postgres {
                     &self.cluster.as_str(),
                     &topic.name.as_str(),
                     &topic.num_partitions,
-                    &(topic.replication_factor as i32),
+                    &topic.replication_factor,
                 ],
             )
             .await
@@ -466,12 +556,36 @@ impl Storage for Postgres {
         Ok(responses)
     }
 
-    async fn delete_topic(&mut self, name: &str) -> Result<u64> {
-        let c = self.connection().await?;
+    async fn delete_topic(&mut self, topic: &TopicId) -> Result<ErrorCode> {
+        let mut c = self.connection().await?;
+        let tx = c.transaction().await?;
 
-        let delete_topic = c.prepare("delete from topic where name=$1 cascade").await?;
+        for (description, sql) in [
+            ("consumer offsets", DELETE_CONSUMER_OFFSETS_FOR_TOPIC),
+            ("headers", DELETE_HEADERS_FOR_TOPIC),
+            ("records", DELETE_RECORDS_FOR_TOPIC),
+        ] {
+            let rows = self.delete_for_topic(&tx, sql, topic).await?;
+            debug!(?topic, ?rows, ?description);
+        }
 
-        c.execute(&delete_topic, &[&name]).await.map_err(Into::into)
+        let topic_deletion_result =
+            self.delete_for_topic(&tx, DELETE_TOPIC, topic)
+                .await
+                .map(|rows| match rows {
+                    0 => ErrorCode::UnknownTopicOrPartition,
+                    1 => ErrorCode::None,
+                    otherwise => {
+                        error!(?otherwise, ?DELETE_TOPIC, ?topic, ?self.cluster);
+                        ErrorCode::None
+                    }
+                });
+
+        tx.commit()
+            .await
+            .inspect_err(|err| error!(?err))
+            .map_err(Into::into)
+            .and(topic_deletion_result)
     }
 
     async fn produce(&mut self, topition: &'_ Topition, deflated: deflated::Batch) -> Result<i64> {

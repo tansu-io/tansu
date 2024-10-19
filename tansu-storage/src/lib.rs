@@ -39,6 +39,7 @@ use tansu_kafka_sans_io::{
     create_topics_request::CreatableTopic,
     delete_records_request::DeleteRecordsTopic,
     delete_records_response::DeleteRecordsTopicResult,
+    delete_topics_request::DeleteTopicState,
     describe_cluster_response::DescribeClusterBroker,
     describe_configs_response::DescribeConfigsResult,
     fetch_request::FetchTopic,
@@ -58,7 +59,7 @@ pub mod os;
 pub mod pg;
 pub mod segment;
 
-const NULL_TOPIC_ID: [u8; 16] = [0; 16];
+pub const NULL_TOPIC_ID: [u8; 16] = [0; 16];
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
@@ -364,6 +365,38 @@ pub enum TopicId {
     Id(Uuid),
 }
 
+impl FromStr for TopicId {
+    type Err = Error;
+
+    fn from_str(s: &str) -> result::Result<Self, Self::Err> {
+        Ok(Self::Name(s.into()))
+    }
+}
+
+impl From<&str> for TopicId {
+    fn from(value: &str) -> Self {
+        Self::Name(value.to_owned())
+    }
+}
+
+impl From<String> for TopicId {
+    fn from(value: String) -> Self {
+        Self::Name(value)
+    }
+}
+
+impl From<Uuid> for TopicId {
+    fn from(value: Uuid) -> Self {
+        Self::Id(value)
+    }
+}
+
+impl From<[u8; 16]> for TopicId {
+    fn from(value: [u8; 16]) -> Self {
+        Self::Id(Uuid::from_bytes(value))
+    }
+}
+
 impl From<&FetchTopic> for TopicId {
     fn from(value: &FetchTopic) -> Self {
         if let Some(ref name) = value.topic {
@@ -384,6 +417,19 @@ impl From<&MetadataRequestTopic> for TopicId {
             Self::Id(Uuid::from_bytes(*id))
         } else {
             panic!("neither name nor uuid")
+        }
+    }
+}
+
+impl From<DeleteTopicState> for TopicId {
+    fn from(value: DeleteTopicState) -> Self {
+        match value {
+            DeleteTopicState {
+                name: Some(name),
+                topic_id,
+            } if topic_id == NULL_TOPIC_ID => name.into(),
+
+            DeleteTopicState { topic_id, .. } => topic_id.into(),
         }
     }
 }
@@ -546,7 +592,7 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
         topics: &[DeleteRecordsTopic],
     ) -> Result<Vec<DeleteRecordsTopicResult>>;
 
-    async fn delete_topic(&mut self, name: &str) -> Result<u64>;
+    async fn delete_topic(&mut self, topic: &TopicId) -> Result<ErrorCode>;
 
     async fn brokers(&mut self) -> Result<Vec<DescribeClusterBroker>>;
 
@@ -652,10 +698,10 @@ impl Storage for StorageContainer {
         }
     }
 
-    async fn delete_topic(&mut self, name: &str) -> Result<u64> {
+    async fn delete_topic(&mut self, topic: &TopicId) -> Result<ErrorCode> {
         match self {
-            Self::Postgres(pg) => pg.delete_topic(name).await,
-            Self::DynoStore(dyn_store) => dyn_store.delete_topic(name).await,
+            Self::Postgres(pg) => pg.delete_topic(topic).await,
+            Self::DynoStore(dyn_store) => dyn_store.delete_topic(topic).await,
         }
     }
 

@@ -22,6 +22,7 @@ use std::{collections::BTreeMap, fmt::Debug, io::Cursor, str::FromStr, time::Dur
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use futures::stream::TryStreamExt;
 use futures::StreamExt;
 use object_store::{
     path::Path, Attribute, AttributeValue, Attributes, ObjectStore, PutMode, PutOptions,
@@ -551,10 +552,80 @@ impl Storage for DynoStore {
         todo!()
     }
 
-    async fn delete_topic(&mut self, name: &str) -> Result<u64> {
-        debug!(?name);
+    async fn delete_topic(&mut self, topic: &TopicId) -> Result<ErrorCode> {
+        debug!(?topic);
 
-        todo!()
+        if let Ok(metadata) = self.topic_metadata(topic).await {
+            let prefix = Path::from(format!(
+                "clusters/{}/topics/{}/",
+                self.cluster, metadata.topic.name,
+            ));
+
+            let locations = self
+                .object_store
+                .list(Some(&prefix))
+                .map_ok(|m| m.location)
+                .boxed();
+
+            _ = self
+                .object_store
+                .delete_stream(locations)
+                .try_collect::<Vec<Path>>()
+                .await?;
+
+            let prefix = Path::from(format!("clusters/{}/groups/consumers/", self.cluster));
+
+            let locations = self
+                .object_store
+                .list(Some(&prefix))
+                .filter_map(|m| async {
+                    m.map_or(None, |m| {
+                        debug!(?m.location);
+
+                        m.location.prefix_match(&prefix).and_then(|mut i| {
+                            // skip over the consumer group name
+                            _ = i.next();
+
+                            let sub = Path::from_iter(i);
+                            debug!(?sub);
+
+                            if sub.prefix_matches(&Path::from(format!(
+                                "offsets/{}/partitions/",
+                                metadata.topic.name
+                            ))) {
+                                Some(Ok(m.location.clone()))
+                            } else {
+                                None
+                            }
+                        })
+                    })
+                })
+                .boxed();
+
+            _ = self
+                .object_store
+                .delete_stream(locations)
+                .try_collect::<Vec<Path>>()
+                .await?;
+
+            self.object_store
+                .delete(&Path::from(format!(
+                    "clusters/{}/topics/uuids/{}.json",
+                    self.cluster, metadata.id,
+                )))
+                .await?;
+
+            self.object_store
+                .delete(&Path::from(format!(
+                    "clusters/{}/topics/{}.json",
+                    self.cluster, metadata.topic.name,
+                )))
+                .await?;
+
+            Ok(ErrorCode::None)
+        } else {
+            Ok(ErrorCode::UnknownTopicOrPartition)
+        }
     }
 
     async fn brokers(&mut self) -> Result<Vec<DescribeClusterBroker>> {
