@@ -93,8 +93,14 @@ test-topic-describe:
 test-topic-create:
     kafka-topics --bootstrap-server 127.0.0.1:9092 --config cleanup.policy=compact --partitions=3 --replication-factor=1 --create --topic test
 
-test-topic-get-offsets:
-    kafka-get-offsets --bootstrap-server 127.0.0.1:9092 --topic test
+test-topic-delete:
+    kafka-topics --bootstrap-server 127.0.0.1:9092 --delete --topic test
+
+test-topic-get-offsets-earliest:
+    kafka-get-offsets --bootstrap-server 127.0.0.1:9092 --topic test --time earliest
+
+test-topic-get-offsets-latest:
+    kafka-get-offsets --bootstrap-server 127.0.0.1:9092 --topic test --time latest
 
 test-topic-produce:
     echo "h1:pqr,h2:jkl,h3:uio	qwerty	poiuy\nh1:def,h2:lmn,h3:xyz	asdfgh	lkj\nh1:stu,h2:fgh,h3:ijk	zxcvbn	mnbvc" | kafka-console-producer --bootstrap-server localhost:9092 --topic test --property parse.headers=true --property parse.key=true

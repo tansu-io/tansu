@@ -947,23 +947,7 @@ impl Storage for Postgres {
 
         for (topition, offset_type) in offsets {
             let query = match offset_type {
-                ListOffsetRequest::Earliest => concat!(
-                    "select",
-                    " id as offset, timestamp",
-                    " from",
-                    " record",
-                    " join (",
-                    " select",
-                    " coalesce(min(record.id), (select last_value from record_id_seq)) as offset",
-                    " from record, topic, cluster",
-                    " where",
-                    " topic.cluster = cluster.id",
-                    " and cluster.name = $1",
-                    " and topic.name = $2",
-                    " and record.partition = $3",
-                    " and record.topic = topic.id) as minimum",
-                    " on record.id = minimum.offset",
-                ),
+                ListOffsetRequest::Earliest => include_str!("pg/list_earliest_offset.sql"),
                 ListOffsetRequest::Latest => concat!(
                     "select",
                     " id as offset, timestamp",
@@ -1001,7 +985,13 @@ impl Storage for Postgres {
                 ),
             };
 
-            let prepared = c.prepare(query).await.inspect_err(|err| error!(?err))?;
+            debug!(?query);
+
+            let prepared = c
+                .prepare(query)
+                .await
+                .inspect_err(|err| error!(?err))
+                .inspect(|prepared| debug!(?prepared))?;
 
             let list_offset = match offset_type {
                 ListOffsetRequest::Earliest | ListOffsetRequest::Latest => {
@@ -1027,7 +1017,8 @@ impl Storage for Postgres {
             .inspect_err(|err| {
                 let cluster = self.cluster.as_str();
                 error!(?err, ?cluster, ?topition);
-            })?
+            })
+            .inspect(|result| debug!(?result))?
             .map_or_else(
                 || {
                     let timestamp = Some(SystemTime::now());
@@ -1040,6 +1031,8 @@ impl Storage for Postgres {
                     })
                 },
                 |row| {
+                    debug!(?row);
+
                     row.try_get::<_, i64>(0).map(Some).and_then(|offset| {
                         row.try_get::<_, SystemTime>(1).map(Some).map(|timestamp| {
                             ListOffsetResponse {
