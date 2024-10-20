@@ -103,7 +103,7 @@ create type "Compression" as enum (
 );
 
 create table record (
-  id bigint generated always as identity primary key,
+  id bigint primary key generated always as identity (minvalue 0),
   topic uuid references topic(id),
   partition integer,
   producer_id bigint,
