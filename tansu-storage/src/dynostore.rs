@@ -59,7 +59,6 @@ const APPLICATION_JSON: &str = "application/json";
 pub struct DynoStore {
     cluster: String,
     node: i32,
-
     watermarks: BTreeMap<Topition, ConditionData<Watermark>>,
     producers: ConditionData<BTreeMap<i64, Producer>>,
 
@@ -126,7 +125,14 @@ where
             match object_store
                 .put_opts(&self.path, payload, PutOptions::from(&*self))
                 .await
-                .inspect_err(|error| error!(?error, ?self))
+                .inspect_err(|error| match error {
+                    object_store::Error::AlreadyExists { .. }
+                    | object_store::Error::Precondition { .. } => {
+                        debug!(?error, ?self)
+                    }
+
+                    _ => error!(?error, ?self),
+                })
                 .inspect(|put_result| debug!(?self, ?put_result))
             {
                 Ok(result) => {
@@ -142,6 +148,12 @@ where
 
                 Err(pre_condition @ object_store::Error::Precondition { .. }) => {
                     debug!(?self, ?pre_condition);
+                    self.get(object_store).await?;
+                    continue;
+                }
+
+                Err(already_exists @ object_store::Error::AlreadyExists { .. }) => {
+                    debug!(?self, ?already_exists);
                     self.get(object_store).await?;
                     continue;
                 }
@@ -269,7 +281,6 @@ impl Default for WatermarkSequence {
 struct Producer {
     epoch: i16,
     updated: SystemTime,
-    sequences: BTreeMap<Topition, i32>,
 }
 
 impl Default for Producer {
@@ -277,7 +288,6 @@ impl Default for Producer {
         Self {
             epoch: 0,
             updated: SystemTime::now(),
-            sequences: BTreeMap::new(),
         }
     }
 }
