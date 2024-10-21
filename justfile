@@ -115,13 +115,13 @@ tansu-1:
         --kafka-advertised-listener-url tcp:://127.0.0.1:9092/ \
         --kafka-node-id ${NODE_ID} \
         --storage-engine ${STORAGE_ENGINE} \
-        --work-dir work-dir/tansu-1 | tee tansu.log
+        --work-dir work-dir/tansu-1 2>&1 | tee tansu.log
 
 kafka-proxy:
     docker run -d -p 19092:9092 apache/kafka:3.8.0
 
 proxy:
-    ./target/debug/tansu-proxy | tee proxy.log
+    ./target/debug/tansu-proxy 2>&1 | tee proxy.log
 
 
 all: test miri
