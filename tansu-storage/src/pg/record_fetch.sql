@@ -14,14 +14,17 @@
 -- You should have received a copy of the GNU Affero General Public License
 -- along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
--- prepare list_earliest_offset (text, text, integer) as
-select r.offset_id, r.timestamp
-from cluster c, record r, topic t, topition tp, watermark w
+with sized as (
+select
+r.offset_id, r.timestamp, r.k, r.v, sum(coalesce(length(r.k), 0) + coalesce(length(r.v), 0))
+over (order by r.offset_id) as bytes
+from cluster c, record r, topic t, topition tp
 where c.name = $1
 and t.name = $2
 and tp.partition = $3
+and r.offset_id >= $4
 and t.cluster = c.id
 and tp.topic = t.id
-and w.topition = tp.id
-and r.offset_id = w.low
-and r.topition = tp.id;
+and r.topition = tp.id)
+
+select * from sized where bytes < $5;

@@ -33,6 +33,7 @@ use rand::{prelude::*, thread_rng};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tansu_kafka_sans_io::describe_configs_response::DescribeConfigsResourceResult;
+use tansu_kafka_sans_io::txn_offset_commit_response::TxnOffsetCommitResponseTopic;
 use tansu_kafka_sans_io::{
     create_topics_request::CreatableTopic,
     delete_records_request::DeleteRecordsTopic,
@@ -50,7 +51,8 @@ use uuid::Uuid;
 use crate::{
     BrokerRegistationRequest, Error, GroupDetail, ListOffsetRequest, ListOffsetResponse,
     MetadataResponse, OffsetCommitRequest, OffsetStage, ProducerIdResponse, Result, Storage,
-    TopicId, Topition, UpdateError, Version, NULL_TOPIC_ID,
+    TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse, TxnOffsetCommitRequest,
+    UpdateError, Version, NULL_TOPIC_ID,
 };
 
 const APPLICATION_JSON: &str = "application/json";
@@ -1465,5 +1467,44 @@ impl Storage for DynoStore {
                 })
                 .await
         }
+    }
+
+    async fn txn_add_offsets(
+        &mut self,
+        transaction_id: &str,
+        producer_id: i64,
+        producer_epoch: i16,
+        group_id: &str,
+    ) -> Result<ErrorCode> {
+        debug!(?transaction_id, ?producer_id, ?producer_epoch, ?group_id);
+
+        Ok(ErrorCode::None)
+    }
+
+    async fn txn_add_partitions(
+        &mut self,
+        partitions: TxnAddPartitionsRequest,
+    ) -> Result<TxnAddPartitionsResponse> {
+        debug!(?partitions);
+        todo!()
+    }
+
+    async fn txn_offset_commit(
+        &mut self,
+        offsets: TxnOffsetCommitRequest,
+    ) -> Result<TxnOffsetCommitResponseTopic> {
+        debug!(?offsets);
+        todo!()
+    }
+
+    async fn txn_end(
+        &mut self,
+        transaction_id: &str,
+        producer_id: i64,
+        producer_epoch: i16,
+        committed: bool,
+    ) -> Result<ErrorCode> {
+        debug!(?transaction_id, ?producer_id, ?producer_epoch, ?committed);
+        Ok(ErrorCode::None)
     }
 }

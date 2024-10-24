@@ -13,7 +13,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use tansu_kafka_sans_io::{Body, ErrorCode};
+use tansu_kafka_sans_io::Body;
 use tansu_storage::Storage;
 use tracing::debug;
 
@@ -33,17 +33,21 @@ where
     }
 
     pub async fn response(
-        &self,
-        transactional_id: &str,
+        &mut self,
+        transaction_id: &str,
         producer_id: i64,
         producer_epoch: i16,
         group_id: &str,
     ) -> Result<Body> {
-        debug!(?transactional_id, ?producer_id, ?producer_epoch, ?group_id);
+        debug!(?transaction_id, ?producer_id, ?producer_epoch, ?group_id);
 
-        Ok(Body::AddOffsetsToTxnResponse {
-            throttle_time_ms: 0,
-            error_code: ErrorCode::None.into(),
-        })
+        self.storage
+            .txn_add_offsets(transaction_id, producer_id, producer_epoch, group_id)
+            .await
+            .map_err(Into::into)
+            .map(|error_code| Body::AddOffsetsToTxnResponse {
+                throttle_time_ms: 0,
+                error_code: error_code.into(),
+            })
     }
 }

@@ -66,6 +66,19 @@ pub struct Batch {
     pub record_data: Bytes,
 }
 
+impl Batch {
+    const TRANSACTIONAL_BITMASK: i16 = 0b1_0000i16;
+    const CONTROL_BITMASK: i16 = 0b10_0000i16;
+
+    pub fn is_transactional(&self) -> bool {
+        self.attributes & Self::TRANSACTIONAL_BITMASK == Self::TRANSACTIONAL_BITMASK
+    }
+
+    pub fn is_control(&self) -> bool {
+        self.attributes & Self::CONTROL_BITMASK == Self::CONTROL_BITMASK
+    }
+}
+
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct CrcData {
     pub attributes: i16,
@@ -719,6 +732,73 @@ mod tests {
                 headers: [].into()
             }],
             records
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    pub fn is_transactional() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let batch = Batch {
+            base_offset: 0,
+            batch_length: 68,
+            partition_leader_epoch: 0,
+            magic: 2,
+            crc: 3650210183,
+            attributes: 16,
+            last_offset_delta: 0,
+            base_timestamp: 1729509915759,
+            max_timestamp: 1729509915759,
+            producer_id: 5,
+            producer_epoch: 0,
+            base_sequence: 0,
+            record_count: 1,
+            record_data: Bytes::from_static(b"$\0\0\0\x08\0\0\0\0\x10test0-ok\0"),
+        };
+
+        assert!(batch.is_transactional());
+
+        Ok(())
+    }
+
+    #[test]
+    pub fn is_transactional_control() -> Result<()> {
+        use crate::record::inflated;
+
+        let _guard = init_tracing()?;
+
+        let deflated = Batch {
+            base_offset: 1,
+            batch_length: 66,
+            partition_leader_epoch: 0,
+            magic: 2,
+            crc: 820655041,
+            attributes: 48,
+            last_offset_delta: 0,
+            base_timestamp: 1729509916024,
+            max_timestamp: 1729509916024,
+            producer_id: 5,
+            producer_epoch: 0,
+            base_sequence: -1,
+            record_count: 1,
+            record_data: Bytes::from_static(b" \0\0\0\x08\0\0\0\x01\x0c\0\0\0\0\0\0\0"),
+        };
+
+        assert!(deflated.is_transactional());
+        assert!(deflated.is_control());
+
+        let inflated = inflated::Batch::try_from(deflated)?;
+
+        assert_eq!(1, inflated.records.len());
+        assert_eq!(
+            Some(Bytes::from_static(b"\0\0\0\x01")),
+            inflated.records[0].key
+        );
+        assert_eq!(
+            Some(Bytes::from_static(b"\0\0\0\0\0\0")),
+            inflated.records[0].value
         );
 
         Ok(())

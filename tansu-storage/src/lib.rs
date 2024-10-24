@@ -35,6 +35,8 @@ use std::{
     time::{Duration, SystemTime, SystemTimeError},
 };
 use tansu_kafka_sans_io::{
+    add_partitions_to_txn_request::{AddPartitionsToTxnTopic, AddPartitionsToTxnTransaction},
+    add_partitions_to_txn_response::{AddPartitionsToTxnResult, AddPartitionsToTxnTopicResult},
     broker_registration_request::{Feature, Listener},
     create_topics_request::CreatableTopic,
     delete_records_request::DeleteRecordsTopic,
@@ -48,7 +50,10 @@ use tansu_kafka_sans_io::{
     metadata_response::{MetadataResponseBroker, MetadataResponseTopic},
     offset_commit_request::OffsetCommitRequestPartition,
     record::deflated,
-    to_system_time, to_timestamp, ConfigResource, ErrorCode,
+    to_system_time, to_timestamp,
+    txn_offset_commit_request::TxnOffsetCommitRequestTopic,
+    txn_offset_commit_response::TxnOffsetCommitResponseTopic,
+    Body, ConfigResource, ErrorCode,
 };
 use tracing::debug;
 use uuid::Uuid;
@@ -146,6 +151,9 @@ pub enum Error {
 
     #[error("try from slice: {0}")]
     TryFromSlice(#[from] TryFromSliceError),
+
+    #[error("body: {0:?}")]
+    UnexpectedBody(Body),
 
     #[error("url: {0}")]
     Url(#[from] url::ParseError),
@@ -274,9 +282,9 @@ pub enum ListOffsetRequest {
 
 #[derive(Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ListOffsetResponse {
-    error_code: ErrorCode,
-    timestamp: Option<SystemTime>,
-    offset: Option<i64>,
+    pub error_code: ErrorCode,
+    pub timestamp: Option<SystemTime>,
+    pub offset: Option<i64>,
 }
 
 impl Default for ListOffsetResponse {
@@ -573,6 +581,69 @@ impl Default for ProducerIdResponse {
     }
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+pub enum TxnAddPartitionsRequest {
+    VersionZeroToThree {
+        transaction_id: String,
+        producer_id: i64,
+        producer_epoch: i16,
+        topics: Vec<AddPartitionsToTxnTopic>,
+    },
+
+    VersionFourPlus {
+        transactions: Vec<AddPartitionsToTxnTransaction>,
+    },
+}
+
+impl TryFrom<Body> for TxnAddPartitionsRequest {
+    type Error = Error;
+
+    fn try_from(value: Body) -> result::Result<Self, Self::Error> {
+        match value {
+            Body::AddPartitionsToTxnRequest {
+                transactions: None,
+                v_3_and_below_transactional_id: Some(transactional_id),
+                v_3_and_below_producer_id: Some(producer_id),
+                v_3_and_below_producer_epoch: Some(producer_epoch),
+                v_3_and_below_topics: Some(topics),
+            } => Ok(Self::VersionZeroToThree {
+                transaction_id: transactional_id,
+                producer_id,
+                producer_epoch,
+                topics,
+            }),
+
+            Body::AddPartitionsToTxnRequest {
+                transactions: Some(transactions),
+                v_3_and_below_transactional_id: None,
+                v_3_and_below_producer_id: None,
+                v_3_and_below_producer_epoch: None,
+                v_3_and_below_topics: None,
+            } => Ok(Self::VersionFourPlus { transactions }),
+
+            unexpected => Err(Error::UnexpectedBody(unexpected)),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+pub enum TxnAddPartitionsResponse {
+    VersionZeroToThree(Vec<AddPartitionsToTxnTopicResult>),
+    VersionFourPlus(Vec<AddPartitionsToTxnResult>),
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct TxnOffsetCommitRequest {
+    transactional_id: String,
+    group_id: String,
+    producer_id: i64,
+    producer_epoch: i16,
+    generation_id: Option<i32>,
+    member_id: Option<String>,
+    group_instance_id: Option<String>,
+    topics: Vec<TxnOffsetCommitRequestTopic>,
+}
+
 #[async_trait]
 pub trait StorageProvider {
     async fn provide_storage(&mut self) -> impl Storage;
@@ -650,6 +721,32 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
         producer_id: Option<i64>,
         producer_epoch: Option<i16>,
     ) -> Result<ProducerIdResponse>;
+
+    async fn txn_add_offsets(
+        &mut self,
+        transactional: &str,
+        producer_id: i64,
+        producer_epoch: i16,
+        group_id: &str,
+    ) -> Result<ErrorCode>;
+
+    async fn txn_add_partitions(
+        &mut self,
+        partitions: TxnAddPartitionsRequest,
+    ) -> Result<TxnAddPartitionsResponse>;
+
+    async fn txn_offset_commit(
+        &mut self,
+        offsets: TxnOffsetCommitRequest,
+    ) -> Result<TxnOffsetCommitResponseTopic>;
+
+    async fn txn_end(
+        &mut self,
+        transaction_id: &str,
+        producer_id: i64,
+        producer_epoch: i16,
+        committed: bool,
+    ) -> Result<ErrorCode>;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -848,6 +945,66 @@ impl Storage for StorageContainer {
                         producer_id,
                         producer_epoch,
                     )
+                    .await
+            }
+        }
+    }
+
+    async fn txn_add_offsets(
+        &mut self,
+        transaction_id: &str,
+        producer_id: i64,
+        producer_epoch: i16,
+        group_id: &str,
+    ) -> Result<ErrorCode> {
+        match self {
+            Self::Postgres(pg) => {
+                pg.txn_add_offsets(transaction_id, producer_id, producer_epoch, group_id)
+                    .await
+            }
+            Self::DynoStore(dyn_store) => {
+                dyn_store
+                    .txn_add_offsets(transaction_id, producer_id, producer_epoch, group_id)
+                    .await
+            }
+        }
+    }
+
+    async fn txn_add_partitions(
+        &mut self,
+        partitions: TxnAddPartitionsRequest,
+    ) -> Result<TxnAddPartitionsResponse> {
+        match self {
+            Self::Postgres(pg) => pg.txn_add_partitions(partitions).await,
+            Self::DynoStore(dyn_store) => dyn_store.txn_add_partitions(partitions).await,
+        }
+    }
+
+    async fn txn_offset_commit(
+        &mut self,
+        offsets: TxnOffsetCommitRequest,
+    ) -> Result<TxnOffsetCommitResponseTopic> {
+        match self {
+            Self::Postgres(pg) => pg.txn_offset_commit(offsets).await,
+            Self::DynoStore(dyn_store) => dyn_store.txn_offset_commit(offsets).await,
+        }
+    }
+
+    async fn txn_end(
+        &mut self,
+        transaction_id: &str,
+        producer_id: i64,
+        producer_epoch: i16,
+        committed: bool,
+    ) -> Result<ErrorCode> {
+        match self {
+            Self::Postgres(pg) => {
+                pg.txn_end(transaction_id, producer_id, producer_epoch, committed)
+                    .await
+            }
+            Self::DynoStore(dyn_store) => {
+                dyn_store
+                    .txn_end(transaction_id, producer_id, producer_epoch, committed)
                     .await
             }
         }

@@ -13,18 +13,24 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+use std::sync::LazyLock;
+
 use tansu_kafka_sans_io::{api_versions_response::ApiVersion, Body, ErrorCode, RootMessageMeta};
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ApiVersionsRequest;
 
-fn is_sasl(api_key: &i16) -> bool {
-    [17].contains(api_key)
-}
+const TELEMETRY: [i16; 3] = [71, 72, 74];
+const SASL: [i16; 1] = [17];
+const DESCRIBE_TOPIC_PARTITIONS: [i16; 1] = [75];
 
-fn is_telemetry(api_key: &i16) -> bool {
-    [71, 72, 74].contains(api_key)
-}
+static UNSUPPORTED: LazyLock<Vec<i16>> = LazyLock::new(|| {
+    let mut unsupported = vec![];
+    unsupported.extend_from_slice(&TELEMETRY);
+    unsupported.extend_from_slice(&SASL);
+    unsupported.extend_from_slice(&DESCRIBE_TOPIC_PARTITIONS);
+    unsupported
+});
 
 impl ApiVersionsRequest {
     pub fn response(
@@ -45,7 +51,7 @@ impl ApiVersionsRequest {
                 RootMessageMeta::messages()
                     .requests()
                     .iter()
-                    .filter(|(api_key, _)| !(is_telemetry(api_key) || is_sasl(api_key)))
+                    .filter(|(api_key, _)| !UNSUPPORTED.contains(api_key))
                     .map(|(_, meta)| ApiVersion {
                         api_key: meta.api_key,
                         min_version: meta.version.valid.start,

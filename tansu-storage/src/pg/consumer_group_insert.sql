@@ -14,14 +14,14 @@
 -- You should have received a copy of the GNU Affero General Public License
 -- along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
--- prepare list_earliest_offset (text, text, integer) as
-select r.offset_id, r.timestamp
-from cluster c, record r, topic t, topition tp, watermark w
+insert into consumer_group
+(cluster, name, e_tag, detail)
+select c.id, $2, $3, $4
+from cluster c
 where c.name = $1
-and t.name = $2
-and tp.partition = $3
-and t.cluster = c.id
-and tp.topic = t.id
-and w.topition = tp.id
-and r.offset_id = w.low
-and r.topition = tp.id;
+on conflict (cluster, name)
+do update set
+detail = excluded.detail,
+e_tag = $5
+where consumer_group.e_tag = $3
+returning name, cluster, e_tag, detail;

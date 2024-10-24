@@ -14,7 +14,7 @@
 -- You should have received a copy of the GNU Affero General Public License
 -- along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
--- prepare list_earliest_offset (text, text, integer) as
+-- prepare list_latest_offset (text, text, integer) as
 select r.offset_id, r.timestamp
 from cluster c, record r, topic t, topition tp, watermark w
 where c.name = $1
@@ -23,5 +23,5 @@ and tp.partition = $3
 and t.cluster = c.id
 and tp.topic = t.id
 and w.topition = tp.id
-and r.offset_id = w.low
+and r.offset_id = w.high
 and r.topition = tp.id;

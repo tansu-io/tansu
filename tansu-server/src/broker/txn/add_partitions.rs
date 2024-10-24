@@ -13,14 +13,8 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use tansu_kafka_sans_io::{
-    add_partitions_to_txn_request::{AddPartitionsToTxnTopic, AddPartitionsToTxnTransaction},
-    add_partitions_to_txn_response::{
-        AddPartitionsToTxnPartitionResult, AddPartitionsToTxnTopicResult,
-    },
-    Body, ErrorCode,
-};
-use tansu_storage::Storage;
+use tansu_kafka_sans_io::{Body, ErrorCode};
+use tansu_storage::{Storage, TxnAddPartitionsRequest, TxnAddPartitionsResponse};
 use tracing::debug;
 
 use crate::Result;
@@ -38,78 +32,26 @@ where
         Self { storage }
     }
 
-    pub async fn response(
-        &self,
-        transactions: Option<Vec<AddPartitionsToTxnTransaction>>,
-        v_3_and_below_transactional_id: Option<String>,
-        v_3_and_below_producer_id: Option<i64>,
-        v_3_and_below_producer_epoch: Option<i16>,
-        v_3_and_below_topics: Option<Vec<AddPartitionsToTxnTopic>>,
-    ) -> Result<Body> {
-        debug!(
-            ?transactions,
-            ?v_3_and_below_transactional_id,
-            ?v_3_and_below_producer_id,
-            ?v_3_and_below_producer_epoch,
-            ?v_3_and_below_topics
-        );
-
-        match (
-            transactions,
-            v_3_and_below_transactional_id,
-            v_3_and_below_producer_id,
-            v_3_and_below_producer_epoch,
-            v_3_and_below_topics,
-        ) {
-            (
-                None,
-                Some(v_3_and_below_transactional_id),
-                Some(v_3_and_below_producer_id),
-                Some(v_3_and_below_producer_epoch),
-                Some(v_3_and_below_topics),
-            ) => {
-                let _ = v_3_and_below_producer_id;
-                let _ = v_3_and_below_producer_epoch;
-
-                let results_by_topic_v_3_and_below = Some(
-                    v_3_and_below_topics
-                        .iter()
-                        .map(|topic| AddPartitionsToTxnTopicResult {
-                            name: v_3_and_below_transactional_id.clone(),
-                            results_by_partition: topic.partitions.as_ref().map(|partitions| {
-                                partitions
-                                    .iter()
-                                    .map(|partition| AddPartitionsToTxnPartitionResult {
-                                        partition_index: *partition,
-                                        partition_error_code: ErrorCode::None.into(),
-                                    })
-                                    .collect()
-                            }),
-                        })
-                        .collect(),
-                );
-
+    pub async fn response(&mut self, partitions: TxnAddPartitionsRequest) -> Result<Body> {
+        debug!(?partitions);
+        match self.storage.txn_add_partitions(partitions).await? {
+            TxnAddPartitionsResponse::VersionZeroToThree(results_by_topic_v_3_and_below) => {
                 Ok(Body::AddPartitionsToTxnResponse {
                     throttle_time_ms: 0,
                     error_code: Some(ErrorCode::None.into()),
                     results_by_transaction: Some([].into()),
-                    results_by_topic_v_3_and_below,
+                    results_by_topic_v_3_and_below: Some(results_by_topic_v_3_and_below),
                 })
             }
 
-            (Some(_transactions), _, _, _, _) => Ok(Body::AddPartitionsToTxnResponse {
-                throttle_time_ms: 0,
-                error_code: Some(ErrorCode::UnknownServerError.into()),
-                results_by_transaction: Some([].into()),
-                results_by_topic_v_3_and_below: Some([].into()),
-            }),
-
-            (_, _, _, _, _) => Ok(Body::AddPartitionsToTxnResponse {
-                throttle_time_ms: 0,
-                error_code: Some(ErrorCode::UnknownServerError.into()),
-                results_by_transaction: Some([].into()),
-                results_by_topic_v_3_and_below: Some([].into()),
-            }),
+            TxnAddPartitionsResponse::VersionFourPlus(results_by_transaction) => {
+                Ok(Body::AddPartitionsToTxnResponse {
+                    throttle_time_ms: 0,
+                    error_code: Some(ErrorCode::None.into()),
+                    results_by_transaction: Some(results_by_transaction),
+                    results_by_topic_v_3_and_below: Some([].into()),
+                })
+            }
         }
     }
 }

@@ -26,6 +26,9 @@ use deadpool_postgres::{Manager, ManagerConfig, Object, Pool, RecyclingMethod};
 use rand::{prelude::*, thread_rng};
 use serde_json::Value;
 use tansu_kafka_sans_io::{
+    add_partitions_to_txn_response::{
+        AddPartitionsToTxnPartitionResult, AddPartitionsToTxnTopicResult,
+    },
     create_topics_request::CreatableTopic,
     delete_records_request::DeleteRecordsTopic,
     delete_records_response::{DeleteRecordsPartitionResult, DeleteRecordsTopicResult},
@@ -33,7 +36,9 @@ use tansu_kafka_sans_io::{
     describe_configs_response::{DescribeConfigsResourceResult, DescribeConfigsResult},
     metadata_response::{MetadataResponseBroker, MetadataResponsePartition, MetadataResponseTopic},
     record::{deflated, inflated, Header, Record},
-    to_system_time, to_timestamp, ConfigResource, ConfigSource, ConfigType, ErrorCode,
+    to_system_time, to_timestamp,
+    txn_offset_commit_response::TxnOffsetCommitResponseTopic,
+    ConfigResource, ConfigSource, ConfigType, ErrorCode,
 };
 use tokio_postgres::{error::SqlState, Config, NoTls, Transaction};
 use tracing::{debug, error};
@@ -42,7 +47,8 @@ use uuid::Uuid;
 use crate::{
     BrokerRegistationRequest, Error, GroupDetail, ListOffsetRequest, ListOffsetResponse,
     MetadataResponse, OffsetCommitRequest, OffsetStage, ProducerIdResponse, Result, Storage,
-    TopicId, Topition, UpdateError, Version, NULL_TOPIC_ID,
+    TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse, TxnOffsetCommitRequest,
+    UpdateError, Version, NULL_TOPIC_ID,
 };
 
 const DELETE_CONSUMER_OFFSETS_FOR_TOPIC: &str = concat!(
@@ -327,7 +333,7 @@ impl Storage for Postgres {
         let prepared = c
             .prepare(concat!(
                 "select",
-                " broker.id, host, port, rack",
+                " node, host, port, rack",
                 " from broker, cluster, listener",
                 " where",
                 " cluster.name = $1",
@@ -367,23 +373,16 @@ impl Storage for Postgres {
         let tx = c.transaction().await?;
 
         let prepared = tx
-            .prepare(concat!(
-                "insert into topic",
-                " (cluster, name, partitions, replication_factor, is_internal)",
-                " select cluster.id, $2, $3, $4, false",
-                " from cluster",
-                " where cluster.name = $1",
-                " returning topic.id",
-            ))
+            .prepare(include_str!("pg/topic_insert.sql"))
             .await
             .inspect_err(|err| error!(?err, ?topic, ?validate_only))?;
 
-        let topic_id = tx
+        let topic_uuid = tx
             .query_one(
                 &prepared,
                 &[
-                    &self.cluster.as_str(),
-                    &topic.name.as_str(),
+                    &self.cluster,
+                    &topic.name,
                     &topic.num_partitions,
                     &(topic.replication_factor as i32),
                 ],
@@ -402,16 +401,37 @@ impl Storage for Postgres {
                 }
             })?;
 
-        debug!(?topic_id);
+        debug!(?topic_uuid, ?self.cluster, ?topic.name);
+
+        for partition in 0..topic.num_partitions {
+            let prepared = tx
+                .prepare(include_str!("pg/topition_insert.sql"))
+                .await
+                .inspect_err(|err| error!(?err))?;
+
+            _ = tx
+                .query_one(&prepared, &[&self.cluster, &topic.name, &partition])
+                .await
+                .inspect_err(|err| error!(?err))?;
+        }
+
+        for partition in 0..topic.num_partitions {
+            let prepared = tx
+                .prepare(include_str!("pg/watermark_insert.sql"))
+                .await
+                .inspect_err(|err| error!(?err))?;
+
+            _ = tx
+                .query_one(&prepared, &[&self.cluster, &topic.name, &partition])
+                .await
+                .inspect_err(|err| error!(?err))?;
+        }
 
         if let Some(configs) = topic.configs {
             let prepared = tx
-                .prepare(concat!(
-                    "insert into topic_configuration",
-                    " (topic, name, value)",
-                    " values ($1, $2, $3)"
-                ))
-                .await?;
+                .prepare(include_str!("pg/topic_configuration_insert.sql"))
+                .await
+                .inspect_err(|err| error!(?err))?;
 
             for config in configs {
                 debug!(?config);
@@ -419,7 +439,12 @@ impl Storage for Postgres {
                 _ = tx
                     .execute(
                         &prepared,
-                        &[&topic_id, &config.name.as_str(), &config.value.as_deref()],
+                        &[
+                            &self.cluster,
+                            &topic.name,
+                            &config.name,
+                            &config.value.as_deref(),
+                        ],
                     )
                     .await
                     .inspect_err(|err| error!(?err, ?config));
@@ -428,7 +453,7 @@ impl Storage for Postgres {
 
         tx.commit().await.inspect_err(|err| error!(?err))?;
 
-        Ok(topic_id)
+        Ok(topic_uuid)
     }
 
     async fn delete_records(
@@ -593,50 +618,67 @@ impl Storage for Postgres {
 
     async fn produce(&mut self, topition: &'_ Topition, deflated: deflated::Batch) -> Result<i64> {
         debug!(?topition, ?deflated);
+
+        let topic = topition.topic();
+        let partition = topition.partition();
+
         let mut c = self.connection().await?;
 
         let tx = c.transaction().await?;
 
+        let (low, high, stable) = {
+            let prepared = tx
+                .prepare(include_str!("pg/watermark_select_for_update.sql"))
+                .await
+                .inspect_err(|err| error!(?err))?;
+
+            let row = tx
+                .query_one(&prepared, &[&self.cluster, &topic, &partition])
+                .await
+                .inspect_err(|err| error!(?err))?;
+
+            (
+                row.try_get::<_, Option<i64>>(0)
+                    .inspect_err(|err| error!(?err))?,
+                row.try_get::<_, Option<i64>>(1)
+                    .inspect_err(|err| error!(?err))?,
+                row.try_get::<_, Option<i64>>(2)
+                    .inspect_err(|err| error!(?err))?,
+            )
+        };
+
+        debug!(?low, ?high, ?stable);
+
         let insert_record = tx
-            .prepare(concat!(
-                "insert into record",
-                " (topic, partition, producer_id, sequence, timestamp, k, v)",
-                " select",
-                " topic.id, $2, $3, $4, $5, $6, $7",
-                " from topic",
-                " where topic.name = $1",
-                " returning id"
-            ))
+            .prepare(include_str!("pg/record_insert.sql"))
             .await
             .inspect_err(|err| error!(?err))?;
 
         let insert_header = tx
-            .prepare(concat!(
-                "insert into header",
-                " (record, k, v)",
-                " values",
-                " ($1, $2, $3)",
-            ))
+            .prepare(include_str!("pg/header_insert.sql"))
             .await
             .inspect_err(|err| error!(?err))?;
 
         let inflated = inflated::Batch::try_from(deflated).inspect_err(|err| error!(?err))?;
-        let mut offsets = vec![];
 
-        for record in inflated.records {
-            debug!(?record);
+        let records_len = i64::try_from(inflated.records.len())?;
 
-            let topic = topition.topic();
-            let partition = topition.partition();
+        for (delta, record) in inflated.records.iter().enumerate() {
+            let delta = i64::try_from(delta)?;
+            let offset = high.map_or(delta, |high| high + delta + 1);
             let key = record.key.as_deref();
             let value = record.value.as_deref();
 
-            let row = tx
-                .query_one(
+            debug!(?delta, ?record, ?offset);
+
+            _ = tx
+                .execute(
                     &insert_record,
                     &[
+                        &self.cluster,
                         &topic,
                         &partition,
+                        &offset,
                         &inflated.producer_id,
                         &inflated.base_sequence,
                         &(to_system_time(inflated.base_timestamp + record.timestamp_delta)?),
@@ -645,29 +687,47 @@ impl Storage for Postgres {
                     ],
                 )
                 .await
-                .inspect_err(|err| error!(?err, ?topic, ?partition, ?key, ?value))?;
+                .inspect_err(|err| error!(?err, ?topic, ?partition, ?offset, ?key, ?value))?;
 
-            let offset: i64 = row.get(0);
-            debug!(?offset);
-
-            for header in record.headers {
+            for header in record.headers.iter().as_ref() {
                 let key = header.key.as_deref();
                 let value = header.value.as_deref();
 
                 _ = tx
-                    .execute(&insert_header, &[&offset, &key, &value])
+                    .execute(
+                        &insert_header,
+                        &[&self.cluster, &topic, &partition, &offset, &key, &value],
+                    )
                     .await
                     .inspect_err(|err| {
                         error!(?err, ?topic, ?partition, ?offset, ?key, ?value);
                     });
             }
-
-            offsets.push(offset);
         }
+
+        let prepared = tx
+            .prepare(include_str!("pg/watermark_update_high.sql"))
+            .await
+            .inspect_err(|err| error!(?err))?;
+
+        _ = tx
+            .execute(
+                &prepared,
+                &[
+                    &self.cluster,
+                    &topic,
+                    &partition,
+                    &low.unwrap_or_default(),
+                    &high.map_or(records_len - 1, |high| high + records_len),
+                    &stable.map_or(records_len - 1, |high| high + records_len),
+                ],
+            )
+            .await
+            .inspect_err(|err| error!(?err))?;
 
         tx.commit().await?;
 
-        Ok(offsets.first().copied().unwrap_or(-1))
+        Ok(high.map_or(0, |high| high + 1))
     }
 
     async fn fetch(
@@ -681,31 +741,12 @@ impl Storage for Postgres {
         let c = self.connection().await?;
 
         let select_batch = c
-            .prepare(concat!(
-                "with sized as (",
-                " select",
-                " record.id",
-                ", timestamp",
-                ", k",
-                ", v",
-                ", sum(coalesce(length(k), 0) + coalesce(length(v), 0))",
-                " over (order by record.id) as bytes",
-                " from cluster, record, topic",
-                " where",
-                " cluster.name = $1",
-                " and topic.name = $2",
-                " and record.partition = $3",
-                " and record.id >= $4",
-                " and topic.cluster = cluster.id",
-                " and record.topic = topic.id",
-                ") select * from sized",
-                " where bytes < $5",
-            ))
+            .prepare(include_str!("pg/record_fetch.sql"))
             .await
             .inspect_err(|err| error!(?err))?;
 
         let select_headers = c
-            .prepare(concat!("select k, v from header where record = $1"))
+            .prepare(include_str!("pg/header_fetch.sql"))
             .await
             .inspect_err(|err| error!(?err))?;
 
@@ -720,7 +761,9 @@ impl Storage for Postgres {
                     &(max_bytes as i64),
                 ],
             )
-            .await?;
+            .await
+            .inspect(|rows| debug!(?rows))
+            .inspect_err(|err| error!(?err))?;
 
         let mut bytes = 0;
 
@@ -738,6 +781,8 @@ impl Storage for Postgres {
                 .base_timestamp(base_timestamp);
 
             for record in records.iter() {
+                debug!(?record);
+
                 let offset = record.try_get::<_, i64>(0)?;
                 let offset_delta = i32::try_from(offset - base_offset)?;
 
@@ -748,15 +793,18 @@ impl Storage for Postgres {
                         to_timestamp(system_time)
                             .map(|timestamp| timestamp - base_timestamp)
                             .map_err(Into::into)
-                    })?;
+                    })
+                    .inspect(|timestamp| debug!(?timestamp))?;
 
                 let k = record
                     .try_get::<_, Option<&[u8]>>(2)
-                    .map(|o| o.map(Bytes::copy_from_slice))?;
+                    .map(|o| o.map(Bytes::copy_from_slice))
+                    .inspect(|k| debug!(?k))?;
 
                 let v = record
                     .try_get::<_, Option<&[u8]>>(3)
-                    .map(|o| o.map(Bytes::copy_from_slice))?;
+                    .map(|o| o.map(Bytes::copy_from_slice))
+                    .inspect(|v| debug!(?v))?;
 
                 bytes += record.try_get::<_, i64>(4)?;
 
@@ -766,7 +814,20 @@ impl Storage for Postgres {
                     .key(k.into())
                     .value(v.into());
 
-                for header in c.query(&select_headers, &[&offset]).await? {
+                for header in c
+                    .query(
+                        &select_headers,
+                        &[
+                            &self.cluster,
+                            &topition.topic(),
+                            &topition.partition(),
+                            &offset,
+                        ],
+                    )
+                    .await
+                    .inspect(|row| debug!(?row))
+                    .inspect_err(|err| error!(?err))?
+                {
                     let mut header_builder = Header::builder();
 
                     if let Some(k) = header.try_get::<_, Option<&[u8]>>(0)? {
@@ -803,22 +864,10 @@ impl Storage for Postgres {
     }
 
     async fn offset_stage(&mut self, topition: &'_ Topition) -> Result<OffsetStage> {
+        debug!(?topition);
         let c = self.connection().await?;
 
-        let prepared = c
-            .prepare(concat!(
-                "select",
-                " coalesce(min(record.id), (select last_value from record_id_seq)) as log_start",
-                ", coalesce(max(record.id), (select last_value from record_id_seq)) as high_watermark",
-                " from cluster, record, topic",
-                " where",
-                " cluster.name = $1",
-                " and topic.name = $2",
-                " and record.partition = $3",
-                " and topic.cluster = cluster.id",
-                " and record.topic = topic.id",
-            ))
-            .await?;
+        let prepared = c.prepare(include_str!("pg/watermark_select.sql")).await?;
 
         let row = c
             .query_one(
@@ -833,10 +882,14 @@ impl Storage for Postgres {
             .inspect_err(|err| error!(?topition, ?prepared, ?err))?;
 
         let high_watermark = row
-            .try_get::<_, i64>(0)
+            .try_get::<_, i64>(1)
+            .map(|offset| if offset == -1 { 0 } else { offset })
             .inspect_err(|err| error!(?topition, ?prepared, ?err))?;
 
-        let last_stable = high_watermark;
+        let last_stable = row
+            .try_get::<_, i64>(2)
+            .map(|offset| if offset == -1 { 0 } else { offset })
+            .inspect_err(|err| error!(?topition, ?prepared, ?err))?;
 
         Ok(OffsetStage {
             last_stable,
@@ -913,23 +966,20 @@ impl Storage for Postgres {
         let c = self.connection().await?;
 
         let prepared = c
-            .prepare(concat!(
-                "select",
-                " committed_offset",
-                " from consumer_offset, topic",
-                " where grp=$1",
-                " and topic.name=$2",
-                " and consumer_offset.topic = topic.id",
-                " and partition=$3",
-            ))
-            .await?;
+            .prepare(include_str!("pg/consumer_group_committed_offset.sql"))
+            .await
+            .inspect_err(|err| error!(?err))?;
 
         let mut offsets = BTreeMap::new();
 
         for topic in topics {
             let offset = c
-                .query_opt(&prepared, &[&group_id, &topic.topic(), &topic.partition()])
-                .await?
+                .query_opt(
+                    &prepared,
+                    &[&self.cluster, &group_id, &topic.topic(), &topic.partition()],
+                )
+                .await
+                .inspect_err(|err| error!(?err))?
                 .map_or(Ok(-1), |row| row.try_get::<_, i64>(0))?;
 
             _ = offsets.insert(topic.to_owned(), offset);
@@ -951,23 +1001,7 @@ impl Storage for Postgres {
         for (topition, offset_type) in offsets {
             let query = match offset_type {
                 ListOffsetRequest::Earliest => include_str!("pg/list_earliest_offset.sql"),
-                ListOffsetRequest::Latest => concat!(
-                    "select",
-                    " id as offset, timestamp",
-                    " from",
-                    " record",
-                    " join (",
-                    " select",
-                    " coalesce(max(record.id), (select last_value from record_id_seq)) as offset",
-                    " from record, topic, cluster",
-                    " where",
-                    " topic.cluster = cluster.id",
-                    " and cluster.name = $1",
-                    " and topic.name = $2",
-                    " and record.partition = $3",
-                    " and record.topic = topic.id) as maximum",
-                    " on record.id = maximum.offset",
-                ),
+                ListOffsetRequest::Latest => include_str!("pg/list_latest_offset.sql"),
                 ListOffsetRequest::Timestamp(_) => concat!(
                     "select",
                     " id as offset, timestamp",
@@ -997,15 +1031,16 @@ impl Storage for Postgres {
                 .inspect(|prepared| debug!(?prepared))?;
 
             let list_offset = match offset_type {
-                ListOffsetRequest::Earliest | ListOffsetRequest::Latest => {
-                    c.query_opt(
+                ListOffsetRequest::Earliest | ListOffsetRequest::Latest => c
+                    .query_opt(
                         &prepared,
                         &[&self.cluster, &topition.topic(), &topition.partition()],
                     )
                     .await
-                }
-                ListOffsetRequest::Timestamp(timestamp) => {
-                    c.query_opt(
+                    .inspect_err(|err| error!(?err, ?self.cluster, ?topition)),
+
+                ListOffsetRequest::Timestamp(timestamp) => c
+                    .query_opt(
                         &prepared,
                         &[
                             &self.cluster.as_str(),
@@ -1015,7 +1050,7 @@ impl Storage for Postgres {
                         ],
                     )
                     .await
-                }
+                    .inspect_err(|err| error!(?err)),
             }
             .inspect_err(|err| {
                 let cluster = self.cluster.as_str();
@@ -1060,14 +1095,7 @@ impl Storage for Postgres {
         let c = self.connection().await.inspect_err(|err| error!(?err))?;
 
         let prepared = c
-            .prepare(concat!(
-                "select node, host, port, rack",
-                " from broker, cluster, listener",
-                " where cluster.name = $1",
-                " and broker.cluster = cluster.id",
-                " and listener.broker = broker.id",
-                " and listener.name = 'broker'"
-            ))
+            .prepare(include_str!("pg/broker_metadata_select.sql"))
             .await
             .inspect_err(|err| error!(?err))?;
 
@@ -1102,21 +1130,17 @@ impl Storage for Postgres {
                     responses.push(match topic {
                         TopicId::Name(name) => {
                             let prepared = c
-                                .prepare(concat!(
-                                    "select",
-                                    " topic.id, topic.name, is_internal, partitions, replication_factor",
-                                    " from topic, cluster",
-                                    " where cluster.name = $1",
-                                    " and topic.name = $2",
-                                    " and topic.cluster = cluster.id",
-                                ))
+                                .prepare(include_str!("pg/topic_select_name.sql"))
                                 .await
-                                .inspect_err(|err|{let cluster = self.cluster.as_str();error!(?err, ?cluster, ?name);})?;
+                                .inspect_err(|err| {
+                                    let cluster = self.cluster.as_str();
+                                    error!(?err, ?cluster, ?name);
+                                })?;
 
                             match c
                                 .query_opt(&prepared, &[&self.cluster, &name.as_str()])
                                 .await
-                                .inspect_err(|err|error!(?err))
+                                .inspect_err(|err| error!(?err))
                             {
                                 Ok(Some(row)) => {
                                     let error_code = ErrorCode::None.into();
@@ -1129,31 +1153,48 @@ impl Storage for Postgres {
                                     let partitions = row.try_get::<_, i32>(3)?;
                                     let replication_factor = row.try_get::<_, i32>(4)?;
 
-                                    debug!(?error_code, ?topic_id, ?name, ?is_internal, ?partitions, ?replication_factor);
+                                    debug!(
+                                        ?error_code,
+                                        ?topic_id,
+                                        ?name,
+                                        ?is_internal,
+                                        ?partitions,
+                                        ?replication_factor
+                                    );
 
                                     let mut rng = thread_rng();
-                                    let mut broker_ids:Vec<_> = brokers.iter().map(|broker|broker.node_id).collect();
+                                    let mut broker_ids: Vec<_> =
+                                        brokers.iter().map(|broker| broker.node_id).collect();
                                     broker_ids.shuffle(&mut rng);
 
                                     let mut brokers = broker_ids.into_iter().cycle();
 
-                                    let partitions = Some((0..partitions).map(|partition_index| {
-                                        let leader_id = brokers.next().expect("cycling");
+                                    let partitions = Some(
+                                        (0..partitions)
+                                            .map(|partition_index| {
+                                                let leader_id = brokers.next().expect("cycling");
 
-                                        let replica_nodes = Some((0..replication_factor).map(|_replica|brokers.next().expect("cycling")).collect());
-                                        let isr_nodes = replica_nodes.clone();
+                                                let replica_nodes = Some(
+                                                    (0..replication_factor)
+                                                        .map(|_replica| {
+                                                            brokers.next().expect("cycling")
+                                                        })
+                                                        .collect(),
+                                                );
+                                                let isr_nodes = replica_nodes.clone();
 
-                                        MetadataResponsePartition {
-                                            error_code,
-                                            partition_index,
-                                            leader_id,
-                                            leader_epoch: Some(-1),
-                                            replica_nodes,
-                                            isr_nodes,
-                                            offline_replicas: Some([].into()),
-                                        }
-                                    }).collect());
-
+                                                MetadataResponsePartition {
+                                                    error_code,
+                                                    partition_index,
+                                                    leader_id,
+                                                    leader_epoch: Some(-1),
+                                                    replica_nodes,
+                                                    isr_nodes,
+                                                    offline_replicas: Some([].into()),
+                                                }
+                                            })
+                                            .collect(),
+                                    );
 
                                     MetadataResponseTopic {
                                         error_code,
@@ -1165,16 +1206,14 @@ impl Storage for Postgres {
                                     }
                                 }
 
-                                Ok(None) => {
-                                    MetadataResponseTopic {
-                                        error_code: ErrorCode::UnknownTopicOrPartition.into(),
-                                        name: Some(name.into()),
-                                        topic_id: Some(NULL_TOPIC_ID),
-                                        is_internal: Some(false),
-                                        partitions: Some([].into()),
-                                        topic_authorized_operations: Some(-2147483648),
-                                    }
-                                }
+                                Ok(None) => MetadataResponseTopic {
+                                    error_code: ErrorCode::UnknownTopicOrPartition.into(),
+                                    name: Some(name.into()),
+                                    topic_id: Some(NULL_TOPIC_ID),
+                                    is_internal: Some(false),
+                                    partitions: Some([].into()),
+                                    topic_authorized_operations: Some(-2147483648),
+                                },
 
                                 Err(reason) => {
                                     debug!(?reason);
@@ -1192,21 +1231,11 @@ impl Storage for Postgres {
                         TopicId::Id(id) => {
                             debug!(?id);
                             let prepared = c
-                                .prepare(concat!(
-                                    "select",
-                                    " topic.id, topic.name, is_internal, partitions, replication_factor",
-                                    " from topic, cluster",
-                                    " where cluster.name = $1",
-                                    " and topic.id = $2",
-                                    " and topic.cluster = cluster.id",
-                                ))
+                                .prepare(include_str!("pg/topic_select_uuid.sql"))
                                 .await
-                                .inspect_err(|error|error!(?error))?;
+                                .inspect_err(|error| error!(?error))?;
 
-                            match c
-                                .query_one(&prepared, &[&self.cluster, &id])
-                                .await
-                            {
+                            match c.query_one(&prepared, &[&self.cluster, &id]).await {
                                 Ok(row) => {
                                     let error_code = ErrorCode::None.into();
                                     let topic_id = row
@@ -1218,31 +1247,48 @@ impl Storage for Postgres {
                                     let partitions = row.try_get::<_, i32>(3)?;
                                     let replication_factor = row.try_get::<_, i32>(4)?;
 
-                                    debug!(?error_code, ?topic_id, ?name, ?is_internal, ?partitions, ?replication_factor);
+                                    debug!(
+                                        ?error_code,
+                                        ?topic_id,
+                                        ?name,
+                                        ?is_internal,
+                                        ?partitions,
+                                        ?replication_factor
+                                    );
 
                                     let mut rng = thread_rng();
-                                    let mut broker_ids:Vec<_> = brokers.iter().map(|broker|broker.node_id).collect();
+                                    let mut broker_ids: Vec<_> =
+                                        brokers.iter().map(|broker| broker.node_id).collect();
                                     broker_ids.shuffle(&mut rng);
 
                                     let mut brokers = broker_ids.into_iter().cycle();
 
-                                    let partitions = Some((0..partitions).map(|partition_index| {
-                                        let leader_id = brokers.next().expect("cycling");
+                                    let partitions = Some(
+                                        (0..partitions)
+                                            .map(|partition_index| {
+                                                let leader_id = brokers.next().expect("cycling");
 
-                                        let replica_nodes = Some((0..replication_factor).map(|_replica|brokers.next().expect("cycling")).collect());
-                                        let isr_nodes = replica_nodes.clone();
+                                                let replica_nodes = Some(
+                                                    (0..replication_factor)
+                                                        .map(|_replica| {
+                                                            brokers.next().expect("cycling")
+                                                        })
+                                                        .collect(),
+                                                );
+                                                let isr_nodes = replica_nodes.clone();
 
-                                        MetadataResponsePartition {
-                                            error_code,
-                                            partition_index,
-                                            leader_id,
-                                            leader_epoch: Some(-1),
-                                            replica_nodes,
-                                            isr_nodes,
-                                            offline_replicas: Some([].into()),
-                                        }
-                                    }).collect());
-
+                                                MetadataResponsePartition {
+                                                    error_code,
+                                                    partition_index,
+                                                    leader_id,
+                                                    leader_epoch: Some(-1),
+                                                    replica_nodes,
+                                                    isr_nodes,
+                                                    offline_replicas: Some([].into()),
+                                                }
+                                            })
+                                            .collect(),
+                                    );
 
                                     MetadataResponseTopic {
                                         error_code,
@@ -1276,13 +1322,7 @@ impl Storage for Postgres {
                 let mut responses = vec![];
 
                 let prepared = c
-                    .prepare(concat!(
-                        "select",
-                        " topic.id, topic.name, is_internal, partitions, replication_factor",
-                        " from topic, cluster",
-                        " where cluster.name = $1",
-                        " and topic.cluster = cluster.id",
-                    ))
+                    .prepare(include_str!("pg/topic_by_cluster.sql"))
                     .await
                     .inspect_err(|err| error!(?err))?;
 
@@ -1475,18 +1515,7 @@ impl Storage for Postgres {
         let tx = c.transaction().await?;
 
         let prepared = tx
-            .prepare(concat!(
-                "insert into consumer_group",
-                " (grp, cluster, e_tag, detail)",
-                " select $1, cluster.id, $3, $4",
-                " from cluster",
-                " where cluster.name = $2",
-                " on conflict (grp, cluster)",
-                " do update set",
-                " detail = excluded.detail, e_tag = $5",
-                " where consumer_group.e_tag = $3",
-                " returning grp, cluster, e_tag, detail",
-            ))
+            .prepare(include_str!("pg/consumer_group_insert.sql"))
             .await
             .inspect_err(|err| error!(?err))?;
 
@@ -1510,8 +1539,8 @@ impl Storage for Postgres {
             .query_opt(
                 &prepared,
                 &[
+                    &self.cluster,
                     &group_id,
-                    &self.cluster.as_str(),
                     &existing_e_tag,
                     &value,
                     &new_e_tag,
@@ -1532,15 +1561,7 @@ impl Storage for Postgres {
                 })
         } else {
             let prepared = tx
-                .prepare(concat!(
-                    "select",
-                    " cg.e_tag, cg.detail",
-                    " from cluster c, consumer_group cg",
-                    " where",
-                    " cg.grp = $1",
-                    " and c.name = $2",
-                    " and c.id = cg.cluster"
-                ))
+                .prepare(include_str!("pg/consumer_group_detail.sql"))
                 .await
                 .inspect_err(|err| error!(?err))?;
 
@@ -1578,43 +1599,167 @@ impl Storage for Postgres {
         producer_id: Option<i64>,
         producer_epoch: Option<i16>,
     ) -> Result<ProducerIdResponse> {
-        if let Some(_transaction_id) = transaction_id {
-            Ok(ProducerIdResponse::default())
-        } else if producer_id.is_some_and(|producer_id| producer_id == -1)
-            && producer_epoch.is_some_and(|producer_epoch| producer_epoch == -1)
-        {
-            let c = self.connection().await.inspect_err(|err| error!(?err))?;
+        let Some(producer_id) = producer_id else {
+            return Ok(ProducerIdResponse {
+                error: ErrorCode::UnknownProducerId,
+                id: -1,
+                epoch: -1,
+            });
+        };
 
-            let prepared = c
-                .prepare(concat!(
-                    "insert into producer",
-                    " (transaction_id",
-                    ", transaction_timeout_ms)",
-                    " values ($1, $2)",
-                    " returning id, epoch"
-                ))
+        let Some(producer_epoch) = producer_epoch else {
+            return Ok(ProducerIdResponse {
+                error: ErrorCode::UnknownProducerId,
+                id: -1,
+                epoch: -1,
+            });
+        };
+
+        let mut c = self.connection().await.inspect_err(|err| error!(?err))?;
+        let tx = c.transaction().await?;
+
+        let row = if producer_id == -1 && producer_epoch == -1 {
+            let prepared = tx
+                .prepare(include_str!("pg/init_producer.sql"))
                 .await
                 .inspect_err(|err| error!(?err))?;
 
             debug!(?prepared);
 
-            let row = c
-                .query_one(&prepared, &[&transaction_id, &transaction_timeout_ms])
+            tx.query_one(&prepared, &[&self.cluster])
+                .await
+                .inspect_err(|err| error!(?err))?
+        } else {
+            let prepared = tx
+                .prepare(include_str!("pg/init_txn_producer.sql"))
                 .await
                 .inspect_err(|err| error!(?err))?;
 
-            let id = row.get(0);
-            let epoch: i32 = row.get(1);
+            debug!(?prepared);
 
-            i16::try_from(epoch)
-                .map(|epoch| ProducerIdResponse {
-                    error: ErrorCode::None,
-                    id,
-                    epoch,
-                })
-                .map_err(Into::into)
-        } else {
-            Ok(ProducerIdResponse::default())
+            tx.query_one(&prepared, &[&self.cluster, &producer_id, &producer_epoch])
+                .await
+                .inspect_err(|err| error!(?err))?
+        };
+
+        let id = row.get(0);
+        let epoch: i32 = row.get(1);
+
+        if let Some(transaction_id) = transaction_id {
+            let prepared = tx
+                .prepare(include_str!("pg/init_txn.sql"))
+                .await
+                .inspect_err(|err| error!(?err))?;
+
+            debug!(?prepared);
+
+            _ = tx
+                .execute(&prepared, &[&transaction_id, &transaction_timeout_ms, &id])
+                .await;
         }
+
+        tx.commit().await.inspect_err(|err| error!(?err))?;
+
+        i16::try_from(epoch)
+            .map(|epoch| ProducerIdResponse {
+                error: ErrorCode::None,
+                id,
+                epoch,
+            })
+            .map_err(Into::into)
+    }
+
+    async fn txn_add_offsets(
+        &mut self,
+        transaction_id: &str,
+        producer_id: i64,
+        producer_epoch: i16,
+        group_id: &str,
+    ) -> Result<ErrorCode> {
+        debug!(?transaction_id, ?producer_id, ?producer_epoch, ?group_id);
+
+        Ok(ErrorCode::None)
+    }
+
+    async fn txn_add_partitions(
+        &mut self,
+        partitions: TxnAddPartitionsRequest,
+    ) -> Result<TxnAddPartitionsResponse> {
+        debug!(?partitions);
+
+        match partitions {
+            TxnAddPartitionsRequest::VersionZeroToThree {
+                transaction_id,
+                producer_id,
+                producer_epoch,
+                topics,
+            } => {
+                debug!(?transaction_id, ?producer_id, ?producer_epoch, ?topics);
+
+                let mut c = self.connection().await.inspect_err(|err| error!(?err))?;
+                let tx = c.transaction().await.inspect_err(|err| error!(?err))?;
+
+                let prepared = tx
+                    .prepare(include_str!("pg/txn_add_partition.sql"))
+                    .await
+                    .inspect_err(|err| error!(?err))?;
+
+                let mut results = vec![];
+
+                for topic in topics {
+                    let mut results_by_partition = vec![];
+
+                    for partition_index in topic.partitions.unwrap_or(vec![]) {
+                        _ = tx
+                            .execute(
+                                &prepared,
+                                &[
+                                    &self.cluster,
+                                    &topic.name,
+                                    &transaction_id,
+                                    &partition_index,
+                                ],
+                            )
+                            .await
+                            .inspect_err(|err| error!(?err))?;
+
+                        results_by_partition.push(AddPartitionsToTxnPartitionResult {
+                            partition_index,
+                            partition_error_code: i16::from(ErrorCode::None),
+                        });
+                    }
+
+                    results.push(AddPartitionsToTxnTopicResult {
+                        name: topic.name,
+                        results_by_partition: Some(results_by_partition),
+                    })
+                }
+
+                Ok(TxnAddPartitionsResponse::VersionZeroToThree(results))
+            }
+
+            TxnAddPartitionsRequest::VersionFourPlus { .. } => {
+                todo!()
+            }
+        }
+    }
+
+    async fn txn_offset_commit(
+        &mut self,
+        offsets: TxnOffsetCommitRequest,
+    ) -> Result<TxnOffsetCommitResponseTopic> {
+        debug!(?offsets);
+        todo!()
+    }
+
+    async fn txn_end(
+        &mut self,
+        transaction_id: &str,
+        producer_id: i64,
+        producer_epoch: i16,
+        committed: bool,
+    ) -> Result<ErrorCode> {
+        debug!(?transaction_id, ?producer_id, ?producer_epoch, ?committed);
+        Ok(ErrorCode::None)
     }
 }

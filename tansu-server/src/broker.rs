@@ -608,29 +608,9 @@ where
                     .await
             }
 
-            Body::AddPartitionsToTxnRequest {
-                transactions,
-                v_3_and_below_transactional_id,
-                v_3_and_below_producer_id,
-                v_3_and_below_producer_epoch,
-                v_3_and_below_topics,
-            } => {
-                debug!(
-                    ?transactions,
-                    ?v_3_and_below_transactional_id,
-                    ?v_3_and_below_producer_id,
-                    ?v_3_and_below_producer_epoch,
-                    ?v_3_and_below_topics
-                );
-
+            add_partitions @ Body::AddPartitionsToTxnRequest { .. } => {
                 AddPartitions::with_storage(self.storage.clone())
-                    .response(
-                        transactions,
-                        v_3_and_below_transactional_id,
-                        v_3_and_below_producer_id,
-                        v_3_and_below_producer_epoch,
-                        v_3_and_below_topics,
-                    )
+                    .response(add_partitions.try_into()?)
                     .await
             }
 
@@ -668,6 +648,26 @@ where
                     )
                     .await
             }
+
+            Body::EndTxnRequest {
+                transactional_id,
+                producer_id,
+                producer_epoch,
+                committed,
+            } => self
+                .storage
+                .txn_end(
+                    transactional_id.as_str(),
+                    producer_id,
+                    producer_epoch,
+                    committed,
+                )
+                .await
+                .map(|error_code| Body::EndTxnResponse {
+                    throttle_time_ms: 0,
+                    error_code: i16::from(error_code),
+                })
+                .map_err(Into::into),
 
             request => {
                 error!(?request);

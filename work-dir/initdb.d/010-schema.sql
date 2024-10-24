@@ -26,88 +26,92 @@ create table cluster (
 
 create table broker (
   id int generated always as identity primary key,
-  cluster integer references cluster(id) not null,
-  node integer not null,
+
+  cluster int references cluster(id) not null,
+  node int not null,
+  unique (cluster, node),
+
   rack text,
   incarnation uuid not null,
-  unique (cluster, node),
   last_updated timestamp default current_timestamp not null,
   created_at timestamp default current_timestamp not null
 );
 
 create table listener (
   id int generated always as identity primary key,
-  broker integer references broker(id) not null,
+
+  broker int references broker(id) not null,
   name text not null,
-  host text not null,
-  port integer not null,
   unique (broker, name),
+
+  host text not null,
+  port int not null,
   last_updated timestamp default current_timestamp not null,
   created_at timestamp default current_timestamp not null
 );
 
 create table topic (
-  id uuid primary key default gen_random_uuid(),
-  cluster integer references cluster(id) not null,
+  id int generated always as identity primary key,
+
+  cluster int references cluster(id) not null,
   name text not null,
   unique (cluster, name),
-  partitions integer not null,
-  replication_factor integer not null,
+
+  uuid uuid default gen_random_uuid(),
+  partitions int not null,
+  replication_factor int not null,
   is_internal bool default false not null,
   last_updated timestamp default current_timestamp not null,
   created_at timestamp default current_timestamp not null
 );
 
-create table topic_leader (
-  topic uuid references topic(id) not null,
-  partition integer not null,
-  leader integer not null,
-  epoch integer,
-  primary key (topic, partition, leader),
+create table topition (
+  id int generated always as identity primary key,
+
+  topic int references topic(id),
+  partition int,
+  unique (topic, partition),
+
   last_updated timestamp default current_timestamp not null,
   created_at timestamp default current_timestamp not null
 );
 
-create table topic_replica_node (
-  topic uuid references topic(id),
-  partition integer,
-  replica integer,
-  primary key (topic, partition),
-  last_updated timestamp default current_timestamp not null,
-  created_at timestamp default current_timestamp not null
-);
 
-create table topic_isr_node (
-  topic uuid references topic(id),
-  partition integer,
-  replica integer,
-  primary key (topic, partition),
+create table watermark (
+  id int generated always as identity primary key,
+
+  topition int references topition(id),
+  unique(topition),
+
+  low bigint,
+  high bigint,
+  stable bigint,
+
   last_updated timestamp default current_timestamp not null,
   created_at timestamp default current_timestamp not null
 );
 
 create table topic_configuration (
-  topic uuid references topic(id),
+  id int generated always as identity primary key,
+
+  topic int references topic(id),
   name text not null,
+  unique (topic, name),
+
   value text,
-  primary key (topic, name),
   last_updated timestamp default current_timestamp not null,
   created_at timestamp default current_timestamp not null
 );
 
-create type "Compression" as enum (
-  'Gzip',
-  'Snappy',
-  'Lz4',
-  'Zstd'
-);
-
 create table record (
-  id bigint primary key generated always as identity (minvalue 0),
-  topic uuid references topic(id),
-  partition integer,
+  id bigint generated always as identity primary key,
+
+  topition int references topition(id),
+  offset_id bigint not null,
+  unique (topition, offset_id),
+
   producer_id bigint,
-  sequence integer,
+  sequence int,
   timestamp timestamp,
   k bytea,
   v bytea,
@@ -116,42 +120,126 @@ create table record (
 );
 
 create table header (
-  record bigint references record(id),
-  k bytea,
-  v bytea,
-  last_updated timestamp default current_timestamp not null,
-  created_at timestamp default current_timestamp not null
-);
+  id bigint generated always as identity primary key,
 
-create table consumer_offset (
-  grp text,
-  topic uuid references topic(id),
-  partition integer,
-  primary key (grp, topic, partition),
-  committed_offset bigint,
-  leader_epoch integer,
-  timestamp timestamp,
-  metadata text,
+  record int references record(id),
+  k bytea,
+  unique (record, k),
+
+  v bytea,
+
   last_updated timestamp default current_timestamp not null,
   created_at timestamp default current_timestamp not null
 );
 
 create table consumer_group (
-  grp text not null,
-  cluster integer references cluster(id) not null,
-  primary key (grp, cluster),
+  id int generated always as identity primary key,
+
+  cluster int references cluster(id),
+  name text,
+  unique (cluster, name),
+
   e_tag uuid not null,
   detail json not null,
   last_updated timestamp default current_timestamp not null,
   created_at timestamp default current_timestamp not null
 );
 
+
+create table consumer_offset (
+  id int generated always as identity primary key,
+
+  consumer_group int references consumer_group(id),
+  topition int references topition(id),
+  unique (consumer_group, topition),
+
+  committed_offset bigint,
+  leader_epoch int,
+  timestamp timestamp,
+  metadata text,
+  last_updated timestamp default current_timestamp not null,
+  created_at timestamp default current_timestamp not null
+);
+
+-- InitProducerIdRequest
+--
 create table producer (
-  id bigint generated always as identity primary key,
-  transaction_id text,
-  transaction_timeout_ms int,
-  epoch int default 0,
+  id bigint generated by default as identity primary key,
+  epoch int default 0 not null,
   unique (id, epoch),
+
+  cluster int references cluster(id) not null,
+  last_updated timestamp default current_timestamp not null,
+  created_at timestamp default current_timestamp not null
+);
+
+-- InitProducerIdRequest (txn detail)
+--
+create table txn (
+  id int generated always as identity primary key,
+
+  cluster int references cluster(id),
+  name text,
+  unique (cluster, name),
+
+  transaction_timeout_ms int not null,
+  producer bigint references producer(id),
+  last_updated timestamp default current_timestamp not null,
+  created_at timestamp default current_timestamp not null
+);
+
+-- AddPartitionsToTxnRequest
+--
+create table txn_partition (
+  id int generated always as identity primary key,
+
+
+  transaction int references txn(id),
+  topition int references topition(id),
+  unique (transaction, topition),
+
+  last_updated timestamp default current_timestamp not null,
+  created_at timestamp default current_timestamp not null
+);
+
+create table txn_offset (
+  id int generated always as identity primary key,
+
+  transaction int references txn(id),
+  group_id text,
+  unique (transaction, group_id),
+
+  last_updated timestamp default current_timestamp not null,
+  created_at timestamp default current_timestamp not null
+);
+
+create table txn_offset_commit (
+  id int generated always as identity primary key,
+
+  transaction int references txn(id),
+  group_id text,
+  unique (transaction, group_id),
+
+  producer_id bigint,
+  producer_epoch int,
+  generation_id int,
+  member_id text,
+
+  last_updated timestamp default current_timestamp not null,
+  created_at timestamp default current_timestamp not null
+);
+
+create table txn_offset_commit_tp (
+  id int generated always as identity primary key,
+
+  transaction int references txn(id),
+  topition int references topition(id),
+  unique (transaction, topition),
+
+  committed_offset bigint,
+  leader_epoch int,
+  timestamp timestamp,
+  metadata text,
   last_updated timestamp default current_timestamp not null,
   created_at timestamp default current_timestamp not null
 );
