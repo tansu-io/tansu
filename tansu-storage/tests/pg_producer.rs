@@ -23,7 +23,7 @@ use tansu_kafka_sans_io::{
 };
 use tansu_storage::{
     pg::Postgres, BrokerRegistationRequest, Error, ListOffsetRequest, Result, Storage,
-    StorageContainer, Topition,
+    StorageContainer, TopicId, Topition,
 };
 use tracing::{debug, subscriber::DefaultGuard};
 use uuid::Uuid;
@@ -114,7 +114,7 @@ async fn produce() -> Result<()> {
         configs,
     };
 
-    let _id = storage_container
+    let id = storage_container
         .create_topic(creatable.clone(), false)
         .await?;
 
@@ -172,10 +172,10 @@ async fn produce() -> Result<()> {
     assert_eq!(ErrorCode::None, after_produce_latest[0].1.error_code);
     assert_eq!(Some(offset), after_produce_latest[0].1.offset);
 
-    // assert_eq!(
-    //     ErrorCode::None,
-    //     storage_container.delete_topic(&TopicId::from(id)).await?
-    // );
+    assert_eq!(
+        ErrorCode::None,
+        storage_container.delete_topic(&TopicId::from(id)).await?
+    );
 
     Ok(())
 }

@@ -14,14 +14,8 @@
 -- You should have received a copy of the GNU Affero General Public License
 -- along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
-select co.committed_offset
-from cluster c,consumer_group cg, consumer_offset co, topic t, topition tp
+delete from topic
+using cluster c
 where c.name = $1
-and cg.name = $2
-and t.name = $3
-and tp.partition = $4
-and cg.cluster = c.id
-and co.consumer_group = cg.id
-and co.topition = tp.id
-and tp.topic = t.id;
+and topic.name = $2
+and topic.cluster = c.id

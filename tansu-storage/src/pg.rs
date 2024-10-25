@@ -40,7 +40,7 @@ use tansu_kafka_sans_io::{
     txn_offset_commit_response::TxnOffsetCommitResponseTopic,
     ConfigResource, ConfigSource, ConfigType, ErrorCode,
 };
-use tokio_postgres::{error::SqlState, Config, NoTls, Transaction};
+use tokio_postgres::{error::SqlState, Config, NoTls};
 use tracing::{debug, error};
 use uuid::Uuid;
 
@@ -50,66 +50,6 @@ use crate::{
     TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse, TxnOffsetCommitRequest,
     UpdateError, Version, NULL_TOPIC_ID,
 };
-
-const DELETE_CONSUMER_OFFSETS_FOR_TOPIC: &str = concat!(
-    "delete from consumer_offset",
-    " using",
-    " cluster",
-    ", topic",
-    " where",
-    " consumer_offset.topic = topic.id",
-    " and",
-    " topic.cluster = cluster.id",
-    " and",
-    " cluster.name = $1",
-    " and",
-    " topic.<COLUMN> = $2"
-);
-
-const DELETE_HEADERS_FOR_TOPIC: &str = concat!(
-    "delete from header",
-    " using",
-    " cluster",
-    ", record",
-    ", topic",
-    " where",
-    " header.record = record.id",
-    " and",
-    " record.topic = topic.id",
-    " and",
-    " topic.cluster = cluster.id",
-    " and",
-    " cluster.name = $1",
-    " and",
-    " topic.<COLUMN> = $2"
-);
-
-const DELETE_RECORDS_FOR_TOPIC: &str = concat!(
-    "delete from record",
-    " using",
-    " cluster",
-    ", topic",
-    " where",
-    " record.topic = topic.id",
-    " and",
-    " topic.cluster = cluster.id",
-    " and",
-    " cluster.name = $1",
-    " and",
-    " topic.<COLUMN> = $2"
-);
-
-const DELETE_TOPIC: &str = concat!(
-    "delete from topic",
-    " using",
-    " cluster",
-    " where",
-    " topic.cluster = cluster.id",
-    " and",
-    " cluster.name = $1",
-    " and",
-    " topic.<COLUMN> = $2"
-);
 
 #[derive(Clone, Debug)]
 pub struct Postgres {
@@ -193,36 +133,6 @@ impl Postgres {
 
     async fn connection(&self) -> Result<Object> {
         self.pool.get().await.map_err(Into::into)
-    }
-
-    async fn delete_for_topic(
-        &self,
-        tx: &Transaction<'_>,
-        sql: &str,
-        topic: &TopicId,
-    ) -> Result<u64> {
-        match topic {
-            TopicId::Id(id) => {
-                let sql = sql.replace("<COLUMN>", "id");
-
-                let prepared = tx.prepare(&sql).await.inspect_err(|err| error!(?err))?;
-
-                tx.execute(&prepared, &[&self.cluster, &id])
-                    .await
-                    .inspect_err(|err| error!(?err))
-                    .map_err(Into::into)
-            }
-            TopicId::Name(name) => {
-                let sql = sql.replace("<COLUMN>", "name");
-
-                let prepared = tx.prepare(&sql).await.inspect_err(|err| error!(?err))?;
-
-                tx.execute(&prepared, &[&self.cluster, &name])
-                    .await
-                    .inspect_err(|err| error!(?err))
-                    .map_err(Into::into)
-            }
-        }
     }
 }
 
@@ -588,32 +498,72 @@ impl Storage for Postgres {
         let mut c = self.connection().await?;
         let tx = c.transaction().await?;
 
+        let row = match topic {
+            TopicId::Id(id) => {
+                let prepared = tx
+                    .prepare(include_str!("pg/topic_select_uuid.sql"))
+                    .await
+                    .inspect_err(|err| error!(?err))?;
+
+                tx.query_opt(&prepared, &[&self.cluster, &id])
+                    .await
+                    .inspect_err(|err| error!(?err))?
+            }
+
+            TopicId::Name(name) => {
+                let prepared = tx
+                    .prepare(include_str!("pg/topic_select_name.sql"))
+                    .await
+                    .inspect_err(|err| error!(?err))?;
+
+                tx.query_opt(&prepared, &[&self.cluster, &name])
+                    .await
+                    .inspect_err(|err| error!(?err))?
+            }
+        };
+
+        let Some(row) = row else {
+            return Ok(ErrorCode::UnknownTopicOrPartition);
+        };
+
+        let topic_name = row.try_get::<_, String>(1)?;
+
         for (description, sql) in [
-            ("consumer offsets", DELETE_CONSUMER_OFFSETS_FOR_TOPIC),
-            ("headers", DELETE_HEADERS_FOR_TOPIC),
-            ("records", DELETE_RECORDS_FOR_TOPIC),
+            (
+                "consumer offsets",
+                include_str!("pg/consumer_offset_delete_by_topic.sql"),
+            ),
+            (
+                "watermarks",
+                include_str!("pg/watermark_delete_by_topic.sql"),
+            ),
+            ("headers", include_str!("pg/header_delete_by_topic.sql")),
+            ("records", include_str!("pg/record_delete_by_topic.sql")),
+            ("topitions", include_str!("pg/topition_delete_by_topic.sql")),
         ] {
-            let rows = self.delete_for_topic(&tx, sql, topic).await?;
+            let prepared = tx.prepare(sql).await.inspect_err(|err| error!(?err))?;
+
+            let rows = tx
+                .execute(&prepared, &[&self.cluster, &topic_name])
+                .await
+                .inspect_err(|err| error!(?err))?;
+
             debug!(?topic, ?rows, ?description);
         }
 
-        let topic_deletion_result =
-            self.delete_for_topic(&tx, DELETE_TOPIC, topic)
-                .await
-                .map(|rows| match rows {
-                    0 => ErrorCode::UnknownTopicOrPartition,
-                    1 => ErrorCode::None,
-                    otherwise => {
-                        error!(?otherwise, ?DELETE_TOPIC, ?topic, ?self.cluster);
-                        ErrorCode::None
-                    }
-                });
-
-        tx.commit()
+        let prepared = tx
+            .prepare(include_str!("pg/topic_delete_by.sql"))
             .await
-            .inspect_err(|err| error!(?err))
-            .map_err(Into::into)
-            .and(topic_deletion_result)
+            .inspect_err(|err| error!(?err))?;
+
+        _ = tx
+            .execute(&prepared, &[&self.cluster, &topic_name])
+            .await
+            .inspect_err(|err| error!(?err))?;
+
+        tx.commit().await.inspect_err(|err| error!(?err))?;
+
+        Ok(ErrorCode::None)
     }
 
     async fn produce(&mut self, topition: &'_ Topition, deflated: deflated::Batch) -> Result<i64> {
@@ -706,7 +656,7 @@ impl Storage for Postgres {
         }
 
         let prepared = tx
-            .prepare(include_str!("pg/watermark_update_high.sql"))
+            .prepare(include_str!("pg/watermark_update.sql"))
             .await
             .inspect_err(|err| error!(?err))?;
 
@@ -966,7 +916,7 @@ impl Storage for Postgres {
         let c = self.connection().await?;
 
         let prepared = c
-            .prepare(include_str!("pg/consumer_group_committed_offset.sql"))
+            .prepare(include_str!("pg/consumer_offset_select.sql"))
             .await
             .inspect_err(|err| error!(?err))?;
 

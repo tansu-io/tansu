@@ -154,17 +154,17 @@ async fn topic_lifecycle() -> Result<()> {
         Err(Error::Api(ErrorCode::TopicAlreadyExists))
     ));
 
-    // assert!(matches!(
-    //     storage_container
-    //         .delete_topic(&TopicId::from(name.clone()))
-    //         .await,
-    //     Ok(ErrorCode::None)
-    // ));
+    assert!(matches!(
+        storage_container
+            .delete_topic(&TopicId::from(name.clone()))
+            .await,
+        Ok(ErrorCode::None)
+    ));
 
-    // assert!(matches!(
-    //     storage_container.delete_topic(&TopicId::from(name)).await,
-    //     Ok(ErrorCode::UnknownTopicOrPartition)
-    // ));
+    assert!(matches!(
+        storage_container.delete_topic(&TopicId::from(name)).await,
+        Ok(ErrorCode::UnknownTopicOrPartition)
+    ));
 
     Ok(())
 }
