@@ -41,7 +41,7 @@ use tansu_storage::{
     Version,
 };
 use tokio::time::{sleep, Duration};
-use tracing::{debug, info};
+use tracing::{debug, error, info};
 use uuid::Uuid;
 
 use crate::{Error, Result};
@@ -1488,6 +1488,7 @@ where
                         topics: Some(topics),
                     }
                 })
+                .inspect_err(|err| error!(?err))
                 .map_err(Into::into)
         } else {
             Ok(Body::OffsetCommitResponse {

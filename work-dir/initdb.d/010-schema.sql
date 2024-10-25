@@ -135,8 +135,8 @@ create table header (
 create table consumer_group (
   id int generated always as identity primary key,
 
-  cluster int references cluster(id),
-  name text,
+  cluster int references cluster(id) not null,
+  name text not null,
   unique (cluster, name),
 
   e_tag uuid not null,

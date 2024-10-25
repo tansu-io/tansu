@@ -861,21 +861,9 @@ impl Storage for Postgres {
         let tx = c.transaction().await?;
 
         let prepared = tx
-            .prepare(concat!(
-                "insert into consumer_offset ",
-                " (grp, topic, partition, committed_offset, leader_epoch, timestamp, metadata) ",
-                " select",
-                " $1, topic.id, $3, $4, $5, $6, $7 ",
-                " from topic",
-                " where topic.name = $2",
-                " on conflict (grp, topic, partition)",
-                " do update set",
-                " committed_offset = excluded.committed_offset,",
-                " leader_epoch = excluded.leader_epoch,",
-                " timestamp = excluded.timestamp,",
-                " metadata = excluded.metadata",
-            ))
-            .await?;
+            .prepare(include_str!("pg/consumer_offset_insert.sql"))
+            .await
+            .inspect_err(|err| error!(?err))?;
 
         let mut responses = vec![];
 
@@ -884,21 +872,23 @@ impl Storage for Postgres {
                 .execute(
                     &prepared,
                     &[
-                        &group,
+                        &self.cluster,
                         &topition.topic(),
                         &topition.partition(),
+                        &group,
                         &offset.offset,
                         &offset.leader_epoch,
                         &offset.timestamp,
                         &offset.metadata,
                     ],
                 )
-                .await?;
+                .await
+                .inspect_err(|err| error!(?err))?;
 
             responses.push((topition.to_owned(), ErrorCode::None));
         }
 
-        tx.commit().await?;
+        tx.commit().await.inspect_err(|err| error!(?err))?;
 
         Ok(responses)
     }
@@ -1461,6 +1451,8 @@ impl Storage for Postgres {
         detail: GroupDetail,
         version: Option<Version>,
     ) -> Result<Version, UpdateError<GroupDetail>> {
+        debug!(?group_id, ?detail, ?version);
+
         let mut c = self.connection().await?;
         let tx = c.transaction().await?;
 
@@ -1479,11 +1471,13 @@ impl Storage for Postgres {
                         Uuid::from_str(e_tag.as_str()).map_err(Into::into)
                     })
             })
-            .inspect_err(|err| error!(?err))?;
+            .inspect_err(|err| error!(?err))
+            .inspect(|existing_e_tag| debug!(?existing_e_tag))?;
 
         let new_e_tag = Uuid::new_v4();
+        debug!(?new_e_tag);
 
-        let value = serde_json::to_value(detail)?;
+        let value = serde_json::to_value(detail).inspect(|value| debug!(?value))?;
 
         let outcome = if let Some(row) = tx
             .query_opt(
@@ -1492,8 +1486,8 @@ impl Storage for Postgres {
                     &self.cluster,
                     &group_id,
                     &existing_e_tag,
-                    &value,
                     &new_e_tag,
+                    &value,
                 ],
             )
             .await
@@ -1509,6 +1503,7 @@ impl Storage for Postgres {
                     e_tag,
                     version: None,
                 })
+                .inspect(|version| debug!(?version))
         } else {
             let prepared = tx
                 .prepare(include_str!("pg/consumer_group_detail.sql"))
@@ -1529,7 +1524,8 @@ impl Storage for Postgres {
                 .map(|e_tag| Version {
                     e_tag,
                     version: None,
-                })?;
+                })
+                .inspect(|version| debug!(?version))?;
 
             let value = row.try_get::<_, Value>(1)?;
             let current = serde_json::from_value::<GroupDetail>(value)?;
@@ -1538,6 +1534,8 @@ impl Storage for Postgres {
         };
 
         tx.commit().await.inspect_err(|err| error!(?err))?;
+
+        debug!(?outcome);
 
         outcome
     }
