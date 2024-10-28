@@ -52,7 +52,7 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
 };
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, span, Instrument, Level};
 use txn::{add_offsets::AddOffsets, add_partitions::AddPartitions};
 use url::Url;
 use uuid::Uuid;
@@ -145,17 +145,25 @@ where
             let mut broker = self.clone();
 
             _ = tokio::spawn(async move {
-                match broker.stream_handler(stream).await {
-                    Err(ref error @ Error::Io(ref io)) if io.kind() == ErrorKind::UnexpectedEof => {
-                        info!(?error);
-                    }
+                let span = span!(Level::DEBUG, "peer", addr = %addr);
 
-                    Err(error) => {
-                        error!(?error);
-                    }
+                async move {
+                    match broker.stream_handler(stream).await {
+                        Err(ref error @ Error::Io(ref io))
+                            if io.kind() == ErrorKind::UnexpectedEof =>
+                        {
+                            info!(?error);
+                        }
 
-                    Ok(_) => {}
+                        Err(error) => {
+                            error!(?error);
+                        }
+
+                        Ok(_) => {}
+                    }
                 }
+                .instrument(span)
+                .await
             });
         }
     }
@@ -219,10 +227,23 @@ where
                 ..
             } => {
                 debug!(?api_key, ?api_version, ?correlation_id);
-                let body = self
-                    .response_for(client_id.as_deref(), body, correlation_id)
-                    .await
-                    .inspect_err(|err| error!(?err))?;
+
+                let span = span!(
+                    Level::DEBUG,
+                    "request",
+                    api_key,
+                    api_version,
+                    correlation_id
+                );
+
+                let body = async move {
+                    self.response_for(client_id.as_deref(), body, correlation_id)
+                        .await
+                        .inspect_err(|err| error!(?err))
+                }
+                .instrument(span)
+                .await?;
+
                 debug!(?body, ?correlation_id);
                 Frame::response(
                     Header::Response { correlation_id },

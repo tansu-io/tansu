@@ -193,7 +193,6 @@ create table txn (
 create table txn_partition (
   id int generated always as identity primary key,
 
-
   transaction int references txn(id),
   topition int references topition(id),
   unique (transaction, topition),
@@ -206,8 +205,8 @@ create table txn_offset (
   id int generated always as identity primary key,
 
   transaction int references txn(id),
-  group_id text,
-  unique (transaction, group_id),
+  consumer_group int references consumer_group(id),
+  unique (transaction, consumer_group),
 
   last_updated timestamp default current_timestamp not null,
   created_at timestamp default current_timestamp not null
@@ -217,11 +216,11 @@ create table txn_offset_commit (
   id int generated always as identity primary key,
 
   transaction int references txn(id),
-  group_id text,
-  unique (transaction, group_id),
+  consumer_group int references consumer_group(id),
+  unique (transaction, consumer_group),
 
   producer_id bigint,
-  producer_epoch int,
+
   generation_id int,
   member_id text,
 
@@ -232,13 +231,12 @@ create table txn_offset_commit (
 create table txn_offset_commit_tp (
   id int generated always as identity primary key,
 
-  transaction int references txn(id),
+  offset_commit int references txn_offset_commit(id),
   topition int references topition(id),
-  unique (transaction, topition),
+  unique (offset_commit, topition),
 
   committed_offset bigint,
   leader_epoch int,
-  timestamp timestamp,
   metadata text,
   last_updated timestamp default current_timestamp not null,
   created_at timestamp default current_timestamp not null

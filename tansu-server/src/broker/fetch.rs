@@ -48,7 +48,7 @@ where
         max_wait_ms: Duration,
         min_bytes: u32,
         max_bytes: &mut u32,
-        isolation: Option<IsolationLevel>,
+        isolation: IsolationLevel,
         topic: &str,
         fetch_partition: &FetchPartition,
     ) -> Result<PartitionData> {
@@ -74,7 +74,7 @@ where
 
             let mut fetched = self
                 .storage
-                .fetch(&tp, offset, min_bytes, *max_bytes)
+                .fetch(&tp, offset, min_bytes, *max_bytes, isolation)
                 .await
                 .inspect(|r| debug!(?tp, ?offset, ?r))
                 .inspect_err(|error| error!(?tp, ?error))
@@ -158,7 +158,7 @@ where
         max_wait_ms: Duration,
         min_bytes: u32,
         max_bytes: &mut u32,
-        isolation: Option<IsolationLevel>,
+        isolation: IsolationLevel,
         fetch: &FetchTopic,
         _is_first: bool,
     ) -> Result<FetchableTopicResponse> {
@@ -204,7 +204,7 @@ where
         max_wait: Duration,
         min_bytes: u32,
         max_bytes: &mut u32,
-        isolation: Option<IsolationLevel>,
+        isolation: IsolationLevel,
         topics: &[FetchTopic],
     ) -> Result<Vec<FetchableTopicResponse>> {
         debug!(?max_wait, ?min_bytes, ?isolation, ?topics);
@@ -272,9 +272,10 @@ where
         debug!(?max_wait_ms, ?min_bytes, ?max_bytes, ?topics);
 
         let responses = Some(if let Some(topics) = topics {
-            let isolation_level = isolation_level.map_or(Ok(None), |isolation| {
-                IsolationLevel::try_from(isolation).map(Some)
-            })?;
+            let isolation_level = isolation_level
+                .map_or(Ok(IsolationLevel::ReadUncommitted), |isolation| {
+                    IsolationLevel::try_from(isolation)
+                })?;
 
             let max_wait_ms = u64::try_from(max_wait_ms).map(Duration::from_millis)?;
 

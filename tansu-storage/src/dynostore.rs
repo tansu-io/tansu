@@ -44,7 +44,7 @@ use tansu_kafka_sans_io::{
     record::{deflated, inflated},
     ConfigResource, Encoder, ErrorCode,
 };
-use tansu_kafka_sans_io::{ConfigSource, ConfigType, Decoder};
+use tansu_kafka_sans_io::{ConfigSource, ConfigType, Decoder, IsolationLevel};
 use tracing::{debug, error};
 use uuid::Uuid;
 
@@ -809,8 +809,9 @@ impl Storage for DynoStore {
         offset: i64,
         min_bytes: u32,
         max_bytes: u32,
+        isolation: IsolationLevel,
     ) -> Result<deflated::Batch> {
-        debug!(?topition, ?offset, ?min_bytes, ?max_bytes);
+        debug!(?topition, ?offset, ?min_bytes, ?max_bytes, ?isolation);
 
         let location = Path::from(format!(
             "clusters/{}/topics/{}/partitions/{:0>10}/records/",
@@ -1492,7 +1493,7 @@ impl Storage for DynoStore {
     async fn txn_offset_commit(
         &mut self,
         offsets: TxnOffsetCommitRequest,
-    ) -> Result<TxnOffsetCommitResponseTopic> {
+    ) -> Result<Vec<TxnOffsetCommitResponseTopic>> {
         debug!(?offsets);
         todo!()
     }

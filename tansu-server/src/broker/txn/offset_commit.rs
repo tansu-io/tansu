@@ -13,12 +13,8 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use tansu_kafka_sans_io::{
-    txn_offset_commit_request::TxnOffsetCommitRequestTopic,
-    txn_offset_commit_response::{TxnOffsetCommitResponsePartition, TxnOffsetCommitResponseTopic},
-    Body, ErrorCode,
-};
-use tansu_storage::Storage;
+use tansu_kafka_sans_io::{txn_offset_commit_request::TxnOffsetCommitRequestTopic, Body};
+use tansu_storage::{Storage, TxnOffsetCommitRequest};
 
 use crate::Result;
 
@@ -37,7 +33,7 @@ where
 
     #[allow(clippy::too_many_arguments)]
     pub async fn response(
-        &self,
+        &mut self,
         transactional_id: &str,
         group_id: &str,
         producer_id: i64,
@@ -47,36 +43,23 @@ where
         group_instance_id: Option<String>,
         topics: Option<Vec<TxnOffsetCommitRequestTopic>>,
     ) -> Result<Body> {
-        let _ = transactional_id;
-        let _ = group_id;
-        let _ = producer_id;
-        let _ = producer_epoch;
-        let _ = generation_id;
-        let _ = member_id;
-        let _ = group_instance_id;
-        let _ = topics;
-
-        let topics = topics.as_ref().map(|topics| {
-            topics
-                .iter()
-                .map(|topic| TxnOffsetCommitResponseTopic {
-                    name: topic.name.clone(),
-                    partitions: topic.partitions.as_ref().map(|partitions| {
-                        partitions
-                            .iter()
-                            .map(|partition| TxnOffsetCommitResponsePartition {
-                                partition_index: partition.partition_index,
-                                error_code: ErrorCode::None.into(),
-                            })
-                            .collect()
-                    }),
-                })
-                .collect()
-        });
+        let responses = self
+            .storage
+            .txn_offset_commit(TxnOffsetCommitRequest {
+                transaction_id: transactional_id.to_owned(),
+                group_id: group_id.to_owned(),
+                producer_id,
+                producer_epoch,
+                generation_id,
+                member_id,
+                group_instance_id,
+                topics: topics.unwrap_or_default(),
+            })
+            .await?;
 
         Ok(Body::TxnOffsetCommitResponse {
             throttle_time_ms: 0,
-            topics,
+            topics: Some(responses),
         })
     }
 }

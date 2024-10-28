@@ -105,8 +105,8 @@ async fn main() -> Result<()> {
             tracing_subscriber::fmt::layer()
                 .with_level(true)
                 .with_line_number(true)
-                .with_thread_ids(true)
-                .with_span_events(FmtSpan::ACTIVE),
+                .with_thread_ids(false)
+                .with_span_events(FmtSpan::NONE),
         )
         .with(EnvFilter::from_default_env())
         .init();

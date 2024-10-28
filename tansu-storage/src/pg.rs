@@ -37,8 +37,8 @@ use tansu_kafka_sans_io::{
     metadata_response::{MetadataResponseBroker, MetadataResponsePartition, MetadataResponseTopic},
     record::{deflated, inflated, Header, Record},
     to_system_time, to_timestamp,
-    txn_offset_commit_response::TxnOffsetCommitResponseTopic,
-    ConfigResource, ConfigSource, ConfigType, ErrorCode,
+    txn_offset_commit_response::{TxnOffsetCommitResponsePartition, TxnOffsetCommitResponseTopic},
+    ConfigResource, ConfigSource, ConfigType, ErrorCode, IsolationLevel,
 };
 use tokio_postgres::{error::SqlState, Config, NoTls};
 use tracing::{debug, error};
@@ -686,8 +686,18 @@ impl Storage for Postgres {
         offset: i64,
         min_bytes: u32,
         max_bytes: u32,
+        isolation: IsolationLevel,
     ) -> Result<deflated::Batch> {
-        debug!(?topition, ?offset);
+        debug!(?topition, ?offset, ?isolation);
+
+        let high_watermark = self.offset_stage(topition).await.map(|offset_stage| {
+            if isolation == IsolationLevel::ReadCommitted {
+                offset_stage.last_stable
+            } else {
+                offset_stage.high_watermark
+            }
+        })?;
+
         let c = self.connection().await?;
 
         let select_batch = c
@@ -709,6 +719,7 @@ impl Storage for Postgres {
                     &topition.partition(),
                     &offset,
                     &(max_bytes as i64),
+                    &high_watermark,
                 ],
             )
             .await
@@ -813,11 +824,14 @@ impl Storage for Postgres {
             .map_err(Into::into)
     }
 
-    async fn offset_stage(&mut self, topition: &'_ Topition) -> Result<OffsetStage> {
+    async fn offset_stage(&mut self, topition: &Topition) -> Result<OffsetStage> {
         debug!(?topition);
         let c = self.connection().await?;
 
-        let prepared = c.prepare(include_str!("pg/watermark_select.sql")).await?;
+        let prepared = c
+            .prepare(include_str!("pg/watermark_select.sql"))
+            .await
+            .inspect_err(|err| error!(?topition, ?err))?;
 
         let row = c
             .query_one(
@@ -828,18 +842,19 @@ impl Storage for Postgres {
             .inspect_err(|err| error!(?topition, ?prepared, ?err))?;
 
         let log_start = row
-            .try_get::<_, i64>(0)
-            .inspect_err(|err| error!(?topition, ?prepared, ?err))?;
+            .try_get::<_, Option<i64>>(0)
+            .inspect_err(|err| error!(?topition, ?prepared, ?err))?
+            .unwrap_or_default();
 
         let high_watermark = row
-            .try_get::<_, i64>(1)
-            .map(|offset| if offset == -1 { 0 } else { offset })
-            .inspect_err(|err| error!(?topition, ?prepared, ?err))?;
+            .try_get::<_, Option<i64>>(1)
+            .inspect_err(|err| error!(?topition, ?prepared, ?err))?
+            .unwrap_or_default();
 
         let last_stable = row
-            .try_get::<_, i64>(2)
-            .map(|offset| if offset == -1 { 0 } else { offset })
-            .inspect_err(|err| error!(?topition, ?prepared, ?err))?;
+            .try_get::<_, Option<i64>>(2)
+            .inspect_err(|err| error!(?topition, ?prepared, ?err))?
+            .unwrap_or_default();
 
         Ok(OffsetStage {
             last_stable,
@@ -1602,7 +1617,10 @@ impl Storage for Postgres {
             debug!(?prepared);
 
             _ = tx
-                .execute(&prepared, &[&transaction_id, &transaction_timeout_ms, &id])
+                .execute(
+                    &prepared,
+                    &[&self.cluster, &transaction_id, &transaction_timeout_ms, &id],
+                )
                 .await;
         }
 
@@ -1664,8 +1682,8 @@ impl Storage for Postgres {
                                 &[
                                     &self.cluster,
                                     &topic.name,
-                                    &transaction_id,
                                     &partition_index,
+                                    &transaction_id,
                                 ],
                             )
                             .await
@@ -1683,6 +1701,8 @@ impl Storage for Postgres {
                     })
                 }
 
+                tx.commit().await?;
+
                 Ok(TxnAddPartitionsResponse::VersionZeroToThree(results))
             }
 
@@ -1695,9 +1715,78 @@ impl Storage for Postgres {
     async fn txn_offset_commit(
         &mut self,
         offsets: TxnOffsetCommitRequest,
-    ) -> Result<TxnOffsetCommitResponseTopic> {
+    ) -> Result<Vec<TxnOffsetCommitResponseTopic>> {
         debug!(?offsets);
-        todo!()
+
+        let mut c = self.connection().await.inspect_err(|err| error!(?err))?;
+        let tx = c.transaction().await.inspect_err(|err| error!(?err))?;
+
+        let prepared = tx
+            .prepare(include_str!("pg/txn_offset_commit_insert.sql"))
+            .await
+            .inspect_err(|err| error!(?err))?;
+
+        _ = tx
+            .execute(
+                &prepared,
+                &[
+                    &self.cluster,
+                    &offsets.transaction_id,
+                    &offsets.group_id,
+                    &offsets.producer_id,
+                    &(offsets.producer_epoch as i32),
+                    &offsets.generation_id,
+                    &offsets.member_id,
+                ],
+            )
+            .await
+            .inspect_err(|err| error!(?err))?;
+
+        let prepared = tx
+            .prepare(include_str!("pg/txn_offset_commit_tp_insert.sql"))
+            .await
+            .inspect_err(|err| error!(?err))?;
+
+        let mut topics = vec![];
+
+        for topic in offsets.topics {
+            let mut partitions = vec![];
+
+            for partition in topic.partitions.unwrap_or(vec![]) {
+                _ = tx
+                    .execute(
+                        &prepared,
+                        &[
+                            &self.cluster,
+                            &offsets.transaction_id,
+                            &offsets.group_id,
+                            &offsets.producer_id,
+                            &(offsets.producer_epoch as i32),
+                            &topic.name,
+                            &partition.partition_index,
+                            &partition.committed_offset,
+                            &partition.committed_leader_epoch,
+                            &partition.committed_metadata,
+                        ],
+                    )
+                    .await
+                    .inspect_err(|err| error!(?err))?;
+
+                partitions.push(TxnOffsetCommitResponsePartition {
+                    partition_index: partition.partition_index,
+                    error_code: i16::from(ErrorCode::None),
+                });
+            }
+
+            topics.push(TxnOffsetCommitResponseTopic {
+                name: topic.name,
+                partitions: Some(partitions),
+            });
+        }
+
+        tx.commit().await?;
+
+        Ok(topics)
     }
 
     async fn txn_end(

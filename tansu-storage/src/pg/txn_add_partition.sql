@@ -15,7 +15,13 @@
 -- along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 insert into txn_partition
-(transaction_id, topic, partition)
-select $3, topic.id, $4
-from cluster, topic
-where cluster.name = $1 and topic.cluster = cluster.id and topic.name = $2
+(transaction, topition)
+select txn.id, tp.id
+from cluster c, topic t, topition tp, txn
+where c.name = $1
+and t.name = $2
+and tp.partition = $3
+and txn.name = $4
+and t.cluster = c.id
+and tp.topic = t.id
+and txn.cluster = c.id;

@@ -23,6 +23,7 @@ where c.name = $1
 and t.name = $2
 and tp.partition = $3
 and r.offset_id >= $4
+and r.offset_id <= $6
 and t.cluster = c.id
 and tp.topic = t.id
 and r.topition = tp.id)

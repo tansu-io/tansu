@@ -53,7 +53,7 @@ use tansu_kafka_sans_io::{
     to_system_time, to_timestamp,
     txn_offset_commit_request::TxnOffsetCommitRequestTopic,
     txn_offset_commit_response::TxnOffsetCommitResponseTopic,
-    Body, ConfigResource, ErrorCode,
+    Body, ConfigResource, ErrorCode, IsolationLevel,
 };
 use tracing::debug;
 use uuid::Uuid;
@@ -632,16 +632,32 @@ pub enum TxnAddPartitionsResponse {
     VersionFourPlus(Vec<AddPartitionsToTxnResult>),
 }
 
+impl TxnAddPartitionsResponse {
+    pub fn zero_to_three(&self) -> &[AddPartitionsToTxnTopicResult] {
+        match self {
+            Self::VersionZeroToThree(result) => result.as_slice(),
+            Self::VersionFourPlus(_) => &[][..],
+        }
+    }
+
+    pub fn four_plus(&self) -> &[AddPartitionsToTxnResult] {
+        match self {
+            Self::VersionZeroToThree(_) => &[][..],
+            Self::VersionFourPlus(result) => result.as_slice(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct TxnOffsetCommitRequest {
-    transactional_id: String,
-    group_id: String,
-    producer_id: i64,
-    producer_epoch: i16,
-    generation_id: Option<i32>,
-    member_id: Option<String>,
-    group_instance_id: Option<String>,
-    topics: Vec<TxnOffsetCommitRequestTopic>,
+    pub transaction_id: String,
+    pub group_id: String,
+    pub producer_id: i64,
+    pub producer_epoch: i16,
+    pub generation_id: Option<i32>,
+    pub member_id: Option<String>,
+    pub group_instance_id: Option<String>,
+    pub topics: Vec<TxnOffsetCommitRequestTopic>,
 }
 
 #[async_trait]
@@ -675,6 +691,7 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
         offset: i64,
         min_bytes: u32,
         max_bytes: u32,
+        isolation: IsolationLevel,
     ) -> Result<deflated::Batch>;
 
     async fn offset_stage(&mut self, topition: &Topition) -> Result<OffsetStage>;
@@ -716,7 +733,7 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
 
     async fn init_producer(
         &mut self,
-        transactional_id: Option<&str>,
+        transaction_id: Option<&str>,
         transaction_timeout_ms: i32,
         producer_id: Option<i64>,
         producer_epoch: Option<i16>,
@@ -724,7 +741,7 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
 
     async fn txn_add_offsets(
         &mut self,
-        transactional: &str,
+        transaction_id: &str,
         producer_id: i64,
         producer_epoch: i16,
         group_id: &str,
@@ -738,7 +755,7 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
     async fn txn_offset_commit(
         &mut self,
         offsets: TxnOffsetCommitRequest,
-    ) -> Result<TxnOffsetCommitResponseTopic>;
+    ) -> Result<Vec<TxnOffsetCommitResponseTopic>>;
 
     async fn txn_end(
         &mut self,
@@ -822,12 +839,16 @@ impl Storage for StorageContainer {
         offset: i64,
         min_bytes: u32,
         max_bytes: u32,
+        isolation: IsolationLevel,
     ) -> Result<deflated::Batch> {
         match self {
-            Self::Postgres(pg) => pg.fetch(topition, offset, min_bytes, max_bytes).await,
+            Self::Postgres(pg) => {
+                pg.fetch(topition, offset, min_bytes, max_bytes, isolation)
+                    .await
+            }
             Self::DynoStore(dyn_store) => {
                 dyn_store
-                    .fetch(topition, offset, min_bytes, max_bytes)
+                    .fetch(topition, offset, min_bytes, max_bytes, isolation)
                     .await
             }
         }
@@ -983,7 +1004,7 @@ impl Storage for StorageContainer {
     async fn txn_offset_commit(
         &mut self,
         offsets: TxnOffsetCommitRequest,
-    ) -> Result<TxnOffsetCommitResponseTopic> {
+    ) -> Result<Vec<TxnOffsetCommitResponseTopic>> {
         match self {
             Self::Postgres(pg) => pg.txn_offset_commit(offsets).await,
             Self::DynoStore(dyn_store) => dyn_store.txn_offset_commit(offsets).await,

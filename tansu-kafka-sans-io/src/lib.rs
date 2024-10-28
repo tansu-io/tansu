@@ -982,9 +982,12 @@ impl Display for ErrorCode {
 }
 
 #[non_exhaustive]
-#[derive(Clone, Copy, Deserialize, Eq, Hash, Debug, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Copy, Default, Deserialize, Eq, Hash, Debug, Ord, PartialEq, PartialOrd, Serialize,
+)]
 pub enum ErrorCode {
     UnknownServerError,
+    #[default]
     None,
     OffsetOutOfRange,
     CorruptMessage,
@@ -1107,8 +1110,9 @@ pub enum ErrorCode {
     InvalidRegistration,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum IsolationLevel {
+    #[default]
     ReadUncommitted,
     ReadCommitted,
 }
