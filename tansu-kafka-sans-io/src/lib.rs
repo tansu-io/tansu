@@ -1150,6 +1150,36 @@ impl TryFrom<i16> for Ack {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+pub enum TimestampType {
+    #[default]
+    CreateTime,
+    LogAppendTime,
+}
+
+impl TimestampType {
+    const TIMESTAMP_TYPE_BITMASK: i16 = 8;
+}
+
+impl From<i16> for TimestampType {
+    fn from(value: i16) -> Self {
+        if value & Self::TIMESTAMP_TYPE_BITMASK == Self::TIMESTAMP_TYPE_BITMASK {
+            Self::LogAppendTime
+        } else {
+            Self::CreateTime
+        }
+    }
+}
+
+impl From<TimestampType> for i16 {
+    fn from(value: TimestampType) -> Self {
+        match value {
+            TimestampType::CreateTime => 0,
+            TimestampType::LogAppendTime => TimestampType::TIMESTAMP_TYPE_BITMASK,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum Compression {
     #[default]
     None,
@@ -1225,6 +1255,88 @@ impl Compression {
                 .map(|boxed| boxed as Box<dyn Read>)
                 .map_err(Into::into),
         }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct BatchAttribute {
+    pub compression: Compression,
+    pub timestamp: TimestampType,
+    pub transaction: bool,
+    pub control: bool,
+    pub delete_horizon: bool,
+}
+
+impl BatchAttribute {
+    const TRANSACTION_BITMASK: i16 = 16;
+    const CONTROL_BITMASK: i16 = 32;
+    const DELETE_HORIZON_BITMASK: i16 = 64;
+
+    pub fn compression(self, compression: Compression) -> Self {
+        Self {
+            compression,
+            ..self
+        }
+    }
+
+    pub fn timestamp(self, timestamp: TimestampType) -> Self {
+        Self { timestamp, ..self }
+    }
+
+    pub fn transaction(self, transaction: bool) -> Self {
+        Self {
+            transaction,
+            ..self
+        }
+    }
+
+    pub fn control(self, control: bool) -> Self {
+        Self { control, ..self }
+    }
+
+    pub fn delete_horizon(self, delete_horizon: bool) -> Self {
+        Self {
+            delete_horizon,
+            ..self
+        }
+    }
+}
+
+impl From<BatchAttribute> for i16 {
+    fn from(value: BatchAttribute) -> Self {
+        let mut attributes = i16::from(value.compression);
+        attributes |= i16::from(value.timestamp);
+
+        if value.transaction {
+            attributes |= BatchAttribute::TRANSACTION_BITMASK;
+        }
+
+        if value.control {
+            attributes |= BatchAttribute::CONTROL_BITMASK;
+        }
+
+        if value.delete_horizon {
+            attributes |= BatchAttribute::DELETE_HORIZON_BITMASK;
+        }
+
+        attributes
+    }
+}
+
+impl TryFrom<i16> for BatchAttribute {
+    type Error = Error;
+
+    fn try_from(value: i16) -> Result<Self, Self::Error> {
+        Compression::try_from(value).map(|compression| {
+            Self::default()
+                .compression(compression)
+                .timestamp(TimestampType::from(value))
+                .transaction(value & Self::TRANSACTION_BITMASK == Self::TRANSACTION_BITMASK)
+                .control(value & Self::CONTROL_BITMASK == Self::CONTROL_BITMASK)
+                .delete_horizon(
+                    value & Self::DELETE_HORIZON_BITMASK == Self::DELETE_HORIZON_BITMASK,
+                )
+        })
     }
 }
 
@@ -1437,6 +1549,46 @@ pub fn to_timestamp(system_time: SystemTime) -> Result<i64> {
         .map_err(Into::into)
         .map(|since_epoch| since_epoch.as_millis())
         .and_then(|since_epoch| i64::try_from(since_epoch).map_err(Into::into))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn batch_attribute() {
+        assert_eq!(0, i16::from(BatchAttribute::default()));
+        assert_eq!(
+            0,
+            i16::from(BatchAttribute::default().compression(Compression::None))
+        );
+        assert_eq!(
+            1,
+            i16::from(BatchAttribute::default().compression(Compression::Gzip))
+        );
+        assert_eq!(
+            2,
+            i16::from(BatchAttribute::default().compression(Compression::Snappy))
+        );
+        assert_eq!(
+            3,
+            i16::from(BatchAttribute::default().compression(Compression::Lz4))
+        );
+        assert_eq!(
+            4,
+            i16::from(BatchAttribute::default().compression(Compression::Zstd))
+        );
+        assert_eq!(
+            8,
+            i16::from(BatchAttribute::default().timestamp(TimestampType::LogAppendTime))
+        );
+        assert_eq!(16, i16::from(BatchAttribute::default().transaction(true)));
+        assert_eq!(32, i16::from(BatchAttribute::default().control(true)));
+        assert_eq!(
+            64,
+            i16::from(BatchAttribute::default().delete_horizon(true))
+        );
+    }
 }
 
 include!(concat!(env!("OUT_DIR"), "/generate.rs"));

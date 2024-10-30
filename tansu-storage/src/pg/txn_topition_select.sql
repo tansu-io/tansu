@@ -14,14 +14,22 @@
 -- You should have received a copy of the GNU Affero General Public License
 -- along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-insert into txn_partition
-(transaction, topition)
-select txn.id, tp.id
-from cluster c, topic t, topition tp, txn
+select t.name, tp.partition, txnp.offset_start, txnp.offset_end
+from cluster c,
+producer p,
+topic t,
+topition tp,
+txn,
+txn_topition txn_tp
 where c.name = $1
-and t.name = $2
-and tp.partition = $3
-and txn.name = $4
+and p.id = $2
+and p.epoch = $3
+and t.name = $4
+and tp.partition = $5
+and txn.cluster = c.id
+and txn.producer = p.id
+and p.cluster = c.id
 and t.cluster = c.id
 and tp.topic = t.id
-and txn.cluster = c.id;
+and txn_tp.transaction = txn.id
+and txn_tp.topition = tp.id;

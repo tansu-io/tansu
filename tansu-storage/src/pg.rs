@@ -566,8 +566,13 @@ impl Storage for Postgres {
         Ok(ErrorCode::None)
     }
 
-    async fn produce(&mut self, topition: &'_ Topition, deflated: deflated::Batch) -> Result<i64> {
-        debug!(?topition, ?deflated);
+    async fn produce(
+        &mut self,
+        transaction_id: Option<&str>,
+        topition: &Topition,
+        deflated: deflated::Batch,
+    ) -> Result<i64> {
+        debug!(?transaction_id, ?topition, ?deflated);
 
         let topic = topition.topic();
         let partition = topition.partition();
@@ -575,6 +580,29 @@ impl Storage for Postgres {
         let mut c = self.connection().await?;
 
         let tx = c.transaction().await?;
+
+        let prepared = tx
+            .prepare(include_str!("pg/txn_topition_select_txns.sql"))
+            .await
+            .inspect_err(|err| error!(?err))?;
+
+        let topition_is_in_a_txn = tx
+            .query_one(
+                &prepared,
+                &[
+                    &self.cluster,
+                    &deflated.producer_id,
+                    &(deflated.producer_epoch as i32),
+                    &topic,
+                    &partition,
+                ],
+            )
+            .await
+            .and_then(|row| row.try_get::<_, i64>(0))
+            .inspect_err(|err| error!(?err))
+            .inspect(|in_progress_transactions| debug!(?in_progress_transactions))
+            .is_ok_and(|in_progress_transactions| in_progress_transactions > 0);
+        debug!(?topition_is_in_a_txn);
 
         let (low, high, stable) = {
             let prepared = tx
@@ -655,10 +683,40 @@ impl Storage for Postgres {
             }
         }
 
+        if let Some(transaction_id) = transaction_id {
+            let txn_produce_offset_insert = tx
+                .prepare(include_str!("pg/txn_produce_offset_insert.sql"))
+                .await
+                .inspect_err(|err| error!(?err))?;
+
+            _ = tx
+                .execute(
+                    &txn_produce_offset_insert,
+                    &[
+                        &self.cluster,
+                        &transaction_id,
+                        &inflated.producer_id,
+                        &(inflated.producer_epoch as i32),
+                        &topic,
+                        &partition,
+                        &high.unwrap_or_default(),
+                        &high.map_or(records_len - 1, |high| high + records_len),
+                    ],
+                )
+                .await
+                .inspect_err(|err| error!(?err))?;
+        }
+
         let prepared = tx
             .prepare(include_str!("pg/watermark_update.sql"))
             .await
             .inspect_err(|err| error!(?err))?;
+
+        let stable = if topition_is_in_a_txn {
+            stable.unwrap_or_default()
+        } else {
+            stable.map_or(records_len - 1, |high| high + records_len)
+        };
 
         _ = tx
             .execute(
@@ -669,7 +727,7 @@ impl Storage for Postgres {
                     &partition,
                     &low.unwrap_or_default(),
                     &high.map_or(records_len - 1, |high| high + records_len),
-                    &stable.map_or(records_len - 1, |high| high + records_len),
+                    &stable,
                 ],
             )
             .await
@@ -945,6 +1003,7 @@ impl Storage for Postgres {
 
     async fn list_offsets(
         &mut self,
+        isolation_level: IsolationLevel,
         offsets: &[(Topition, ListOffsetRequest)],
     ) -> Result<Vec<(Topition, ListOffsetResponse)>> {
         debug!(?offsets);
@@ -954,27 +1013,17 @@ impl Storage for Postgres {
         let mut responses = vec![];
 
         for (topition, offset_type) in offsets {
-            let query = match offset_type {
-                ListOffsetRequest::Earliest => include_str!("pg/list_earliest_offset.sql"),
-                ListOffsetRequest::Latest => include_str!("pg/list_latest_offset.sql"),
-                ListOffsetRequest::Timestamp(_) => concat!(
-                    "select",
-                    " id as offset, timestamp",
-                    " from",
-                    " record",
-                    " join (",
-                    " select",
-                    " coalesce(min(record.id), (select last_value from record_id_seq)) as offset",
-                    " from record, topic, cluster",
-                    " where",
-                    " topic.cluster = cluster.id",
-                    " and cluster.name = $1",
-                    " and topic.name = $2",
-                    " and record.partition = $3",
-                    " and record.timestamp >= $4",
-                    " and record.topic = topic.id) as minimum",
-                    " on record.id = minimum.offset",
-                ),
+            let query = match (offset_type, isolation_level) {
+                (ListOffsetRequest::Earliest, _) => include_str!("pg/list_earliest_offset.sql"),
+                (ListOffsetRequest::Latest, IsolationLevel::ReadCommitted) => {
+                    include_str!("pg/list_latest_offset_committed.sql")
+                }
+                (ListOffsetRequest::Latest, IsolationLevel::ReadUncommitted) => {
+                    include_str!("pg/list_latest_offset_uncommitted.sql")
+                }
+                (ListOffsetRequest::Timestamp(_), _) => {
+                    include_str!("pg/list_latest_offset_timestamp.sql")
+                }
             };
 
             debug!(?query);
@@ -1666,7 +1715,7 @@ impl Storage for Postgres {
                 let tx = c.transaction().await.inspect_err(|err| error!(?err))?;
 
                 let prepared = tx
-                    .prepare(include_str!("pg/txn_add_partition.sql"))
+                    .prepare(include_str!("pg/txn_topition_insert.sql"))
                     .await
                     .inspect_err(|err| error!(?err))?;
 
@@ -1797,6 +1846,48 @@ impl Storage for Postgres {
         committed: bool,
     ) -> Result<ErrorCode> {
         debug!(?transaction_id, ?producer_id, ?producer_epoch, ?committed);
+
+        let mut c = self.connection().await.inspect_err(|err| error!(?err))?;
+        let tx = c.transaction().await.inspect_err(|err| error!(?err))?;
+
+        let prepared = tx
+            .prepare(include_str!("pg/watermark_insert_from_txn.sql"))
+            .await
+            .inspect_err(|err| error!(?err))?;
+
+        _ = tx
+            .execute(
+                &prepared,
+                &[
+                    &self.cluster,
+                    &transaction_id,
+                    &producer_id,
+                    &(producer_epoch as i32),
+                ],
+            )
+            .await
+            .inspect_err(|err| error!(?err))?;
+
+        let prepared = tx
+            .prepare(include_str!("pg/consumer_offset_insert_from_txn.sql"))
+            .await
+            .inspect_err(|err| error!(?err))?;
+
+        _ = tx
+            .execute(
+                &prepared,
+                &[
+                    &self.cluster,
+                    &transaction_id,
+                    &producer_id,
+                    &(producer_epoch as i32),
+                ],
+            )
+            .await
+            .inspect_err(|err| error!(?err))?;
+
+        tx.commit().await?;
+
         Ok(ErrorCode::None)
     }
 }

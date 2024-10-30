@@ -14,7 +14,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use rand::{distributions::Alphanumeric, prelude::*, thread_rng};
-use tansu_kafka_sans_io::{broker_registration_request::Listener, ErrorCode};
+use tansu_kafka_sans_io::{broker_registration_request::Listener, ErrorCode, IsolationLevel};
 use tansu_storage::{
     pg::Postgres, BrokerRegistationRequest, Error, ListOffsetRequest, Result, Storage,
     StorageContainer, Topition,
@@ -102,7 +102,10 @@ async fn list_offset() -> Result<()> {
     let topition = Topition::new(name, partition);
 
     let earliest = storage_container
-        .list_offsets(&[(topition, ListOffsetRequest::Earliest)])
+        .list_offsets(
+            IsolationLevel::ReadUncommitted,
+            &[(topition, ListOffsetRequest::Earliest)],
+        )
         .await?;
 
     assert_eq!(ErrorCode::None, earliest[0].1.error_code);

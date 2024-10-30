@@ -697,8 +697,13 @@ impl Storage for DynoStore {
         Ok(brokers)
     }
 
-    async fn produce(&mut self, topition: &Topition, deflated: deflated::Batch) -> Result<i64> {
-        debug!(?topition, ?deflated);
+    async fn produce(
+        &mut self,
+        transaction_id: Option<&str>,
+        topition: &Topition,
+        deflated: deflated::Batch,
+    ) -> Result<i64> {
+        debug!(?transaction_id, ?topition, ?deflated);
 
         if deflated.producer_id > 0 {
             self.producers
@@ -892,9 +897,10 @@ impl Storage for DynoStore {
 
     async fn list_offsets(
         &mut self,
+        isolation_level: IsolationLevel,
         offsets: &[(Topition, ListOffsetRequest)],
     ) -> Result<Vec<(Topition, ListOffsetResponse)>> {
-        debug!(?offsets);
+        debug!(?offsets, ?isolation_level);
 
         let mut responses = vec![];
 

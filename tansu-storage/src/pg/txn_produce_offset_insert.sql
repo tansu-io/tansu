@@ -14,11 +14,34 @@
 -- You should have received a copy of the GNU Affero General Public License
 -- along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-insert into txn (cluster, name, transaction_timeout_ms, producer)
-select c.id, $2, $3, $4
-from cluster c
+insert into txn_produce_offset
+(txn_topition, offset_start, offset_end)
+
+select txn_tp.id, $7, $8
+
+from cluster c,
+producer p,
+topic t,
+topition tp,
+txn_topition txn_tp,
+txn
+
 where c.name = $1
-on conflict (cluster, name)
-do update set
-producer = excluded.producer,
+and txn.name = $2
+and p.id = $3
+and p.epoch = $4
+and t.name = $5
+and tp.partition = $6
+
+and p.cluster = c.id
+and t.cluster = c.id
+and txn.cluster = c.id
+
+and txn.producer = p.id
+and tp.topic = t.id
+and txn_tp.transaction = t.id
+and txn_tp.topition = tp.id
+
+on conflict (txn_topition)
+do update set offset_end = excluded.offset_end,
 last_updated = excluded.last_updated;

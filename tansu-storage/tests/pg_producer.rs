@@ -19,7 +19,7 @@ use tansu_kafka_sans_io::{
     broker_registration_request::Listener,
     create_topics_request::CreatableTopic,
     record::{inflated, Record},
-    ErrorCode,
+    ErrorCode, IsolationLevel,
 };
 use tansu_storage::{
     pg::Postgres, BrokerRegistationRequest, Error, ListOffsetRequest, Result, Storage,
@@ -123,7 +123,10 @@ async fn produce() -> Result<()> {
     let topition = Topition::new(name, partition);
 
     let before_produce_earliest = storage_container
-        .list_offsets(&[(topition.clone(), ListOffsetRequest::Earliest)])
+        .list_offsets(
+            IsolationLevel::ReadUncommitted,
+            &[(topition.clone(), ListOffsetRequest::Earliest)],
+        )
         .await
         .inspect(|offset| debug!(?offset))?;
 
@@ -131,7 +134,10 @@ async fn produce() -> Result<()> {
     assert_eq!(ErrorCode::None, before_produce_earliest[0].1.error_code);
 
     let before_produce_latest = storage_container
-        .list_offsets(&[(topition.clone(), ListOffsetRequest::Latest)])
+        .list_offsets(
+            IsolationLevel::ReadUncommitted,
+            &[(topition.clone(), ListOffsetRequest::Latest)],
+        )
         .await
         .inspect(|offset| debug!(?offset))?;
 
@@ -145,14 +151,17 @@ async fn produce() -> Result<()> {
         .inspect(|deflated| debug!(?deflated))?;
 
     let offset = storage_container
-        .produce(&topition, batch)
+        .produce(None, &topition, batch)
         .await
         .inspect(|offset| debug!(?offset))?;
 
     assert_eq!(before_produce_latest[0].1.offset, Some(offset));
 
     let after_produce_earliest = storage_container
-        .list_offsets(&[(topition.clone(), ListOffsetRequest::Earliest)])
+        .list_offsets(
+            IsolationLevel::ReadUncommitted,
+            &[(topition.clone(), ListOffsetRequest::Earliest)],
+        )
         .await
         .inspect(|offset| debug!(?offset))?;
 
@@ -164,7 +173,10 @@ async fn produce() -> Result<()> {
     );
 
     let after_produce_latest = storage_container
-        .list_offsets(&[(topition.clone(), ListOffsetRequest::Latest)])
+        .list_offsets(
+            IsolationLevel::ReadUncommitted,
+            &[(topition.clone(), ListOffsetRequest::Latest)],
+        )
         .await
         .inspect(|offset| debug!(?offset))?;
 

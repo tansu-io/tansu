@@ -57,6 +57,7 @@ where
 
     async fn partition(
         &mut self,
+        transaction_id: Option<&str>,
         name: &str,
         partition: PartitionProduceData,
     ) -> PartitionProduceResponse {
@@ -68,7 +69,7 @@ where
 
                 match self
                     .storage
-                    .produce(&tp, batch)
+                    .produce(transaction_id, &tp, batch)
                     .await
                     .map_err(Into::into)
                     .inspect_err(|err| error!(?err))
@@ -97,12 +98,16 @@ where
         }
     }
 
-    async fn topic(&mut self, topic: TopicProduceData) -> TopicProduceResponse {
+    async fn topic(
+        &mut self,
+        transaction_id: Option<&str>,
+        topic: TopicProduceData,
+    ) -> TopicProduceResponse {
         let mut partitions = vec![];
 
         if let Some(partition_data) = topic.partition_data {
             for partition in partition_data {
-                partitions.push(self.partition(&topic.name, partition).await)
+                partitions.push(self.partition(transaction_id, &topic.name, partition).await)
             }
         }
 
@@ -114,7 +119,7 @@ where
 
     pub async fn response(
         &mut self,
-        _transactional_id: Option<String>,
+        transaction_id: Option<String>,
         _acks: i16,
         _timeout_ms: i32,
         topic_data: Option<Vec<TopicProduceData>>,
@@ -126,7 +131,7 @@ where
             for topic in topics {
                 debug!(?topic);
 
-                responses.push(self.topic(topic).await)
+                responses.push(self.topic(transaction_id.as_deref(), topic).await)
             }
         }
 

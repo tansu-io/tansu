@@ -18,7 +18,7 @@ use std::{collections::BTreeSet, ops::Deref};
 use tansu_kafka_sans_io::{
     list_offsets_request::ListOffsetsTopic,
     list_offsets_response::{ListOffsetsPartitionResponse, ListOffsetsTopicResponse},
-    Body,
+    Body, IsolationLevel,
 };
 use tansu_storage::{ListOffsetRequest, Storage, Topition};
 use tracing::{debug, error};
@@ -41,7 +41,7 @@ where
     pub async fn response(
         &mut self,
         replica_id: i32,
-        isolation_level: Option<i8>,
+        isolation_level: IsolationLevel,
         topics: Option<&[ListOffsetsTopic]>,
     ) -> Result<Body> {
         debug!(?replica_id, ?isolation_level, ?topics);
@@ -64,7 +64,7 @@ where
 
             Some(
                 self.storage
-                    .list_offsets(offsets.deref())
+                    .list_offsets(isolation_level, offsets.deref())
                     .await
                     .inspect(|r| debug!(?r, ?offsets))
                     .inspect_err(|err| error!(?err, ?offsets))

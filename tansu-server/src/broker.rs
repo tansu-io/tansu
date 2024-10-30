@@ -45,7 +45,9 @@ use list_partition_reassignments::ListPartitionReassignmentsRequest;
 use metadata::MetadataRequest;
 use produce::ProduceRequest;
 use std::io::ErrorKind;
-use tansu_kafka_sans_io::{broker_registration_request::Listener, Body, Frame, Header};
+use tansu_kafka_sans_io::{
+    broker_registration_request::Listener, Body, Frame, Header, IsolationLevel,
+};
 use tansu_storage::{BrokerRegistationRequest, Storage};
 use telemetry::GetTelemetrySubscriptionsRequest;
 use tokio::{
@@ -505,6 +507,11 @@ where
                 topics,
             } => {
                 debug!(?replica_id, ?isolation_level, ?topics);
+
+                let isolation_level = isolation_level
+                    .map_or(Ok(IsolationLevel::ReadUncommitted), |isolation_level| {
+                        IsolationLevel::try_from(isolation_level)
+                    })?;
 
                 ListOffsetsRequest::with_storage(self.storage.clone())
                     .response(replica_id, isolation_level, topics.as_deref())

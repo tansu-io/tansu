@@ -1,7 +1,7 @@
 ---
 services:
   db:
-    image: postgres:16.4
+    image: ${POSTGRES_IMAGE:-postgres:16.4}
     environment:
       PGUSER: postgres
       POSTGRES_PASSWORD: postgres

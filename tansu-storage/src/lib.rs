@@ -683,7 +683,12 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
 
     async fn brokers(&mut self) -> Result<Vec<DescribeClusterBroker>>;
 
-    async fn produce(&mut self, topition: &Topition, batch: deflated::Batch) -> Result<i64>;
+    async fn produce(
+        &mut self,
+        transaction_id: Option<&str>,
+        topition: &Topition,
+        batch: deflated::Batch,
+    ) -> Result<i64>;
 
     async fn fetch(
         &mut self,
@@ -698,6 +703,7 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
 
     async fn list_offsets(
         &mut self,
+        isolation_level: IsolationLevel,
         offsets: &[(Topition, ListOffsetRequest)],
     ) -> Result<Vec<(Topition, ListOffsetResponse)>>;
 
@@ -826,10 +832,15 @@ impl Storage for StorageContainer {
         }
     }
 
-    async fn produce(&mut self, topition: &Topition, batch: deflated::Batch) -> Result<i64> {
+    async fn produce(
+        &mut self,
+        transaction_id: Option<&str>,
+        topition: &Topition,
+        batch: deflated::Batch,
+    ) -> Result<i64> {
         match self {
-            Self::Postgres(pg) => pg.produce(topition, batch).await,
-            Self::DynoStore(dyn_store) => dyn_store.produce(topition, batch).await,
+            Self::Postgres(pg) => pg.produce(transaction_id, topition, batch).await,
+            Self::DynoStore(dyn_store) => dyn_store.produce(transaction_id, topition, batch).await,
         }
     }
 
@@ -863,11 +874,12 @@ impl Storage for StorageContainer {
 
     async fn list_offsets(
         &mut self,
+        isolation_level: IsolationLevel,
         offsets: &[(Topition, ListOffsetRequest)],
     ) -> Result<Vec<(Topition, ListOffsetResponse)>> {
         match self {
-            Self::Postgres(pg) => pg.list_offsets(offsets).await,
-            Self::DynoStore(dyn_store) => dyn_store.list_offsets(offsets).await,
+            Self::Postgres(pg) => pg.list_offsets(isolation_level, offsets).await,
+            Self::DynoStore(dyn_store) => dyn_store.list_offsets(isolation_level, offsets).await,
         }
     }
 

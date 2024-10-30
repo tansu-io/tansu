@@ -14,11 +14,19 @@
 -- You should have received a copy of the GNU Affero General Public License
 -- along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-insert into txn (cluster, name, transaction_timeout_ms, producer)
-select c.id, $2, $3, $4
-from cluster c
-where c.name = $1
-on conflict (cluster, name)
-do update set
-producer = excluded.producer,
-last_updated = excluded.last_updated;
+select
+id as offset, timestamp
+from
+record
+join (
+select
+coalesce(min(record.id), (select last_value from record_id_seq)) as offset
+from record, topic, cluster
+where
+topic.cluster = cluster.id
+and cluster.name = $1
+and topic.name = $2
+and record.partition = $3
+and record.timestamp >= $4
+and record.topic = topic.id) as minimum
+on record.id = minimum.offset;

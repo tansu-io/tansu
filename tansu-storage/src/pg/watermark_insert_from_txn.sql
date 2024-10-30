@@ -14,11 +14,35 @@
 -- You should have received a copy of the GNU Affero General Public License
 -- along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-insert into txn (cluster, name, transaction_timeout_ms, producer)
-select c.id, $2, $3, $4
-from cluster c
-where c.name = $1
-on conflict (cluster, name)
-do update set
-producer = excluded.producer,
-last_updated = excluded.last_updated;
+insert into watermark
+(topition, stable)
+
+select tp.id, txn_po.offset_end
+
+from
+
+cluster c,
+producer p,
+topic t,
+topition tp,
+txn,
+txn_produce_offset txn_po,
+txn_topition txn_tp
+
+where
+
+c.name = $1
+and txn.name = $2
+and p.id = $3
+and p.epoch = $4
+
+and p.cluster = c.id
+and t.cluster = c.id
+and txn.cluster = c.id
+
+and tp.topic = t.id
+
+and txn_po.txn_topition = txn_tp.id
+
+and txn_tp.transaction = txn.id
+and txn_tp.topition = tp.id;

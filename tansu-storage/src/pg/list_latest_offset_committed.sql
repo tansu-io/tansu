@@ -14,11 +14,14 @@
 -- You should have received a copy of the GNU Affero General Public License
 -- along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-insert into txn (cluster, name, transaction_timeout_ms, producer)
-select c.id, $2, $3, $4
-from cluster c
+-- prepare list_latest_offset (text, text, integer) as
+select r.offset_id, r.timestamp
+from cluster c, record r, topic t, topition tp, watermark w
 where c.name = $1
-on conflict (cluster, name)
-do update set
-producer = excluded.producer,
-last_updated = excluded.last_updated;
+and t.name = $2
+and tp.partition = $3
+and t.cluster = c.id
+and tp.topic = t.id
+and w.topition = tp.id
+and r.offset_id = w.stable
+and r.topition = tp.id;
