@@ -57,16 +57,16 @@ getrandom = "0.2"
 glob = "0.3.1"
 lazy_static = "1.4.0"
 lz4 = "1.28.0"
-object_store = { version = "0.11.0", features = ["aws"] }
+object_store = { version = "0.11.1", features = ["aws"] }
 opentelemetry = { version = "0.21.0" }
 opentelemetry-jaeger = { version = "0.20.0", features = ["rt-tokio"] }
 opentelemetry_sdk = "0.21.2"
 pretty_assertions = "1"
-prettyplease = "0.2.22"
-proc-macro2 = "1.0.88"
+prettyplease = "0.2.24"
+proc-macro2 = "1.0.89"
 quote = "1.0"
 rand = "0.8"
-regex = "1.11.0"
+regex = "1.11.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1"
 snap = "1.1.1"
