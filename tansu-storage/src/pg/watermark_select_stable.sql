@@ -14,30 +14,27 @@
 -- You should have received a copy of the GNU Affero General Public License
 -- along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-insert into watermark
-(topition, stable)
+-- Last Stable Offset Tracking: To do this, the broker must maintain in
+-- memory the set of active transactions along with their initial
+-- offsets. The LSO is always equal to the minimum of the initial offsets
+-- across all active transactions.
+--
+-- prepare watermark (text, text, integer) as
+select
 
--- prepare watermark_from_txn (text, text, integer, integer) as
-select tp.id, txn_po.offset_end
+min(txn_po.offset_start) as stable
 
-from
+from cluster c
 
-cluster c
 join topic t on t.cluster = c.id
 join txn on txn.cluster = c.id
-join txn_detail on txn_detail.transaction = txn.id
-join txn_topition txn_tp on txn_tp.txn_detail = txn_detail.id
+join txn_topition txn_tp on txn_tp.transaction = txn.id
 join txn_produce_offset txn_po on txn_po.txn_topition = txn_tp.id
 join topition tp on tp.topic = t.id and txn_tp.topition = tp.id
+join watermark w on w.topition = tp.id
 
 where
 
 c.name = $1
-and txn.name = $2
-and txn.id = $3
-and txn_detail.epoch = $4
-
-on conflict (topition)
-do update
-set
-stable = excluded.stable;
+and t.name = $2
+and tp.partition = $3;

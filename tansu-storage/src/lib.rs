@@ -157,6 +157,9 @@ pub enum Error {
 
     #[error("url: {0}")]
     Url(#[from] url::ParseError),
+
+    #[error("state: {0}")]
+    UnknownTxnState(String),
 }
 
 impl<T> From<PoisonError<T>> for Error {
@@ -537,7 +540,6 @@ impl Default for GroupState {
 pub struct GroupDetail {
     pub session_timeout_ms: i32,
     pub rebalance_timeout_ms: Option<i32>,
-    pub group_instance_id: Option<String>,
     pub members: BTreeMap<String, GroupMember>,
     pub generation_id: i32,
     pub skip_assignment: Option<bool>,
@@ -549,7 +551,6 @@ impl Default for GroupDetail {
         Self {
             session_timeout_ms: 45_000,
             rebalance_timeout_ms: None,
-            group_instance_id: None,
             members: BTreeMap::new(),
             generation_id: -1,
             skip_assignment: Some(false),
@@ -660,6 +661,59 @@ pub struct TxnOffsetCommitRequest {
     pub topics: Vec<TxnOffsetCommitRequestTopic>,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+pub enum TxnState {
+    Begin,
+    PrepareCommit,
+    PrepareAbort,
+    Committed,
+    Aborted,
+}
+
+impl TxnState {
+    pub fn is_prepared(&self) -> bool {
+        match self {
+            Self::PrepareAbort | Self::PrepareCommit => true,
+            _otherwise => false,
+        }
+    }
+}
+
+impl FromStr for TxnState {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "ABORTED" => Ok(TxnState::Aborted),
+            "BEGIN" => Ok(TxnState::Begin),
+            "COMMITTED" => Ok(TxnState::Committed),
+            "PREPARE_ABORT" => Ok(TxnState::PrepareAbort),
+            "PREPARE_COMMIT" => Ok(TxnState::PrepareCommit),
+            otherwise => Err(Error::UnknownTxnState(otherwise.to_owned())),
+        }
+    }
+}
+
+impl TryFrom<String> for TxnState {
+    type Error = Error;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::from_str(&value)
+    }
+}
+
+impl From<TxnState> for String {
+    fn from(value: TxnState) -> Self {
+        match value {
+            TxnState::Begin => "BEGIN".into(),
+            TxnState::PrepareCommit => "PREPARE_COMMIT".into(),
+            TxnState::PrepareAbort => "PREPARE_ABORT".into(),
+            TxnState::Committed => "COMMITTED".into(),
+            TxnState::Aborted => "ABORTED".into(),
+        }
+    }
+}
+
 #[async_trait]
 pub trait StorageProvider {
     async fn provide_storage(&mut self) -> impl Storage;
@@ -697,7 +751,7 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
         min_bytes: u32,
         max_bytes: u32,
         isolation: IsolationLevel,
-    ) -> Result<deflated::Batch>;
+    ) -> Result<Vec<deflated::Batch>>;
 
     async fn offset_stage(&mut self, topition: &Topition) -> Result<OffsetStage>;
 
@@ -851,7 +905,7 @@ impl Storage for StorageContainer {
         min_bytes: u32,
         max_bytes: u32,
         isolation: IsolationLevel,
-    ) -> Result<deflated::Batch> {
+    ) -> Result<Vec<deflated::Batch>> {
         match self {
             Self::Postgres(pg) => {
                 pg.fetch(topition, offset, min_bytes, max_bytes, isolation)

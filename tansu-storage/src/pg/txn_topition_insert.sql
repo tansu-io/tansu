@@ -15,13 +15,23 @@
 -- along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 insert into txn_topition
-(transaction, topition)
-select txn.id, tp.id
-from cluster c, topic t, topition tp, txn
-where c.name = $1
+(txn_detail, topition)
+
+select txn_detail.id, tp.id
+
+from
+
+cluster c
+join topic t on t.cluster  = c.id
+join topition tp on tp.topic = t.id
+join txn on txn.cluster = c.id
+join txn_detail on txn_detail.transaction = txn.id
+
+where
+
+c.name = $1
 and t.name = $2
 and tp.partition = $3
 and txn.name = $4
-and t.cluster = c.id
-and tp.topic = t.id
-and txn.cluster = c.id;
+and txn.id = $5
+and txn_detail.epoch = $6;

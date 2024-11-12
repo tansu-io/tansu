@@ -15,13 +15,21 @@
 -- along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 -- prepare list_earliest_offset (text, text, integer) as
-select r.offset_id, r.timestamp
-from cluster c, record r, topic t, topition tp, watermark w
-where c.name = $1
+select
+
+r.offset_id,
+r.timestamp
+
+from
+
+cluster c
+join topic t on t.cluster = c.id
+join topition tp on tp.topic = t.id
+join watermark w on w.topition = tp.id
+join record r on r.topition = tp.id and r.offset_id = w.low
+
+where
+
+c.name = $1
 and t.name = $2
 and tp.partition = $3
-and t.cluster = c.id
-and tp.topic = t.id
-and w.topition = tp.id
-and r.offset_id = w.low
-and r.topition = tp.id;

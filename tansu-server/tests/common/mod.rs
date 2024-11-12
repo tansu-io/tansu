@@ -13,26 +13,83 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+#![allow(dead_code)]
 use bytes::Bytes;
-use rand::{distributions::Alphanumeric, prelude::*, thread_rng};
+use object_store::memory::InMemory;
+use rand::{
+    distributions::{Alphanumeric, Standard},
+    prelude::*,
+    thread_rng,
+};
 use tansu_kafka_sans_io::{
-    join_group_request::JoinGroupRequestProtocol, join_group_response::JoinGroupResponseMember,
-    offset_fetch_request::OffsetFetchRequestTopic, offset_fetch_response::OffsetFetchResponseTopic,
+    broker_registration_request::Listener, join_group_request::JoinGroupRequestProtocol,
+    join_group_response::JoinGroupResponseMember, leave_group_request::MemberIdentity,
+    leave_group_response::MemberResponse, offset_fetch_request::OffsetFetchRequestTopic,
+    offset_fetch_response::OffsetFetchResponseTopic,
     sync_group_request::SyncGroupRequestAssignment, Body, ErrorCode,
 };
 use tansu_server::{
     coordinator::group::{administrator::Controller, Coordinator},
     Error, Result,
 };
-use tansu_storage::{pg::Postgres, StorageContainer};
+use tansu_storage::{
+    dynostore::DynoStore, pg::Postgres, BrokerRegistationRequest, Storage, StorageContainer,
+};
+use tracing::{debug, subscriber::DefaultGuard};
+use tracing_subscriber::EnvFilter;
+use uuid::Uuid;
 
-pub(crate) fn storage_container(cluster: impl Into<String>, node: i32) -> Result<StorageContainer> {
-    Postgres::builder("postgres://postgres:postgres@localhost")
-        .map(|builder| builder.cluster(cluster))
-        .map(|builder| builder.node(node))
-        .map(|builder| builder.build())
-        .map(StorageContainer::Postgres)
-        .map_err(Into::into)
+pub(crate) fn init_tracing() -> Result<DefaultGuard> {
+    use std::{fs::File, sync::Arc, thread};
+
+    Ok(tracing::subscriber::set_default(
+        tracing_subscriber::fmt()
+            .with_level(true)
+            .with_line_number(true)
+            .with_thread_names(false)
+            .with_env_filter(EnvFilter::from_default_env())
+            .with_writer(
+                thread::current()
+                    .name()
+                    .ok_or(Error::Message(String::from("unnamed thread")))
+                    .and_then(|name| {
+                        File::create(format!(
+                            "../logs/{}/{}::{name}.log",
+                            env!("CARGO_PKG_NAME"),
+                            env!("CARGO_CRATE_NAME")
+                        ))
+                        .map_err(Into::into)
+                    })
+                    .map(Arc::new)?,
+            )
+            .finish(),
+    ))
+}
+
+pub(crate) enum StorageType {
+    Postgres,
+    InMemory,
+}
+
+pub(crate) fn storage_container(
+    storage_type: StorageType,
+    cluster: impl Into<String>,
+    node: i32,
+) -> Result<StorageContainer> {
+    match storage_type {
+        StorageType::Postgres => Postgres::builder("postgres://postgres:postgres@localhost")
+            .map(|builder| builder.cluster(cluster))
+            .map(|builder| builder.node(node))
+            .map(|builder| builder.build())
+            .map(StorageContainer::Postgres)
+            .map_err(Into::into),
+
+        StorageType::InMemory => Ok(StorageContainer::DynoStore(DynoStore::new(
+            cluster.into().as_str(),
+            node,
+            InMemory::new(),
+        ))),
+    }
 }
 
 pub(crate) fn alphanumeric_string(length: usize) -> String {
@@ -43,12 +100,20 @@ pub(crate) fn alphanumeric_string(length: usize) -> String {
         .collect()
 }
 
+pub(crate) fn random_bytes(length: usize) -> Bytes {
+    thread_rng()
+        .sample_iter(Standard)
+        .take(length)
+        .collect::<Vec<u8>>()
+        .into()
+}
+
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(crate) struct JoinGroupResponse {
     pub error_code: ErrorCode,
     pub generation_id: i32,
-    pub protocol_type: String,
-    pub protocol_name: String,
+    pub protocol_type: Option<String>,
+    pub protocol_name: Option<String>,
     pub leader: String,
     pub skip_assignment: bool,
     pub member_id: String,
@@ -64,8 +129,8 @@ impl TryFrom<Body> for JoinGroupResponse {
                 throttle_time_ms: Some(0),
                 error_code,
                 generation_id,
-                protocol_type: Some(protocol_type),
-                protocol_name: Some(protocol_name),
+                protocol_type,
+                protocol_name,
                 leader,
                 skip_assignment: Some(skip_assignment),
                 members: Some(members),
@@ -247,4 +312,234 @@ pub(crate) async fn offset_fetch(
         .await
         .map_err(Into::into)
         .and_then(TryInto::try_into)
+}
+
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub(crate) struct LeaveGroupResponse {
+    pub error_code: ErrorCode,
+    members: Vec<MemberResponse>,
+}
+
+impl TryFrom<Body> for LeaveGroupResponse {
+    type Error = Error;
+
+    fn try_from(value: Body) -> Result<Self, Self::Error> {
+        match value {
+            Body::LeaveGroupResponse {
+                error_code,
+                members,
+                ..
+            } => ErrorCode::try_from(error_code)
+                .map(|error_code| {
+                    let members = members.unwrap_or_default();
+                    LeaveGroupResponse {
+                        error_code,
+                        members,
+                    }
+                })
+                .map_err(Into::into),
+
+            otherwise => panic!("{otherwise:?}"),
+        }
+    }
+}
+
+pub(crate) async fn leave(
+    controller: &mut Controller<StorageContainer>,
+    group_id: &str,
+    member_id: &str,
+    group_instance_id: Option<&str>,
+) -> Result<LeaveGroupResponse> {
+    controller
+        .leave(
+            group_id,
+            None,
+            Some(&[MemberIdentity {
+                member_id: member_id.into(),
+                group_instance_id: group_instance_id.map(|s| s.to_owned()),
+                reason: Some("the consumer is being closed".into()),
+            }]),
+        )
+        .await
+        .map_err(Into::into)
+        .and_then(TryInto::try_into)
+}
+
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub(crate) enum JoinResponse {
+    Leader {
+        id: String,
+        generation: i32,
+        members: Vec<JoinGroupResponseMember>,
+        protocols: Vec<JoinGroupRequestProtocol>,
+    },
+    Follower {
+        leader: String,
+        id: String,
+        generation: i32,
+        protocols: Vec<JoinGroupRequestProtocol>,
+    },
+}
+
+impl JoinResponse {
+    #[allow(dead_code)]
+    pub(crate) fn leader(&self) -> &str {
+        match self {
+            Self::Leader { id: leader, .. } | Self::Follower { leader, .. } => leader.as_str(),
+        }
+    }
+
+    pub(crate) fn id(&self) -> &str {
+        match self {
+            Self::Leader { id, .. } | Self::Follower { id, .. } => id.as_str(),
+        }
+    }
+
+    pub(crate) fn generation(&self) -> i32 {
+        match self {
+            Self::Leader { generation, .. } | Self::Follower { generation, .. } => *generation,
+        }
+    }
+
+    pub(crate) fn is_leader(&self) -> bool {
+        matches!(self, Self::Leader { .. })
+    }
+
+    pub(crate) fn protocols(&self) -> &[JoinGroupRequestProtocol] {
+        match self {
+            Self::Leader { protocols, .. } | Self::Follower { protocols, .. } => &protocols[..],
+        }
+    }
+}
+
+pub(crate) const CLIENT_ID: &str = "console-consumer";
+pub(crate) const RANGE: &str = "range";
+pub(crate) const COOPERATIVE_STICKY: &str = "cooperative-sticky";
+pub(crate) const PROTOCOL_TYPE: &str = "consumer";
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn join(
+    controller: &mut Controller<StorageContainer>,
+    group_id: &str,
+    member_id: Option<&str>,
+    group_instance_id: Option<&str>,
+    protocols: Option<Vec<JoinGroupRequestProtocol>>,
+    session_timeout_ms: i32,
+    rebalance_timeout_ms: Option<i32>,
+) -> Result<JoinResponse> {
+    let reason = None;
+
+    let protocols = protocols.unwrap_or_else(|| {
+        [
+            JoinGroupRequestProtocol {
+                name: RANGE.into(),
+                metadata: random_bytes(15),
+            },
+            JoinGroupRequestProtocol {
+                name: COOPERATIVE_STICKY.into(),
+                metadata: random_bytes(15),
+            },
+        ]
+        .into()
+    });
+
+    let join_response = join_group(
+        controller,
+        Some(CLIENT_ID),
+        group_id,
+        session_timeout_ms,
+        rebalance_timeout_ms,
+        member_id.unwrap_or_default(),
+        group_instance_id,
+        PROTOCOL_TYPE,
+        Some(&protocols[..]),
+        reason,
+    )
+    .await?;
+
+    if member_id.is_none() && group_instance_id.is_none() {
+        // join rejected as member id is required for a dynamic group
+        //
+        assert_eq!(ErrorCode::MemberIdRequired, join_response.error_code);
+        assert_eq!(Some("".into()), join_response.protocol_name);
+        assert!(join_response.leader.is_empty());
+        assert!(join_response.member_id.starts_with(CLIENT_ID));
+        assert_eq!(0, join_response.members.len());
+
+        Box::pin(join(
+            controller,
+            group_id,
+            Some(join_response.member_id.as_str()),
+            group_instance_id,
+            Some(protocols),
+            session_timeout_ms,
+            rebalance_timeout_ms,
+        ))
+        .await
+    } else if join_response.member_id == join_response.leader {
+        assert_eq!(ErrorCode::None, join_response.error_code);
+        assert_eq!(Some(PROTOCOL_TYPE.into()), join_response.protocol_type);
+        assert_eq!(Some(RANGE.into()), join_response.protocol_name);
+
+        let id = join_response.leader;
+        let generation = join_response.generation_id;
+        let members = join_response.members;
+
+        Ok(JoinResponse::Leader {
+            id,
+            generation,
+            members,
+            protocols,
+        })
+    } else {
+        assert_eq!(ErrorCode::None, join_response.error_code);
+        assert_eq!(Some(PROTOCOL_TYPE.into()), join_response.protocol_type);
+        assert_eq!(Some(RANGE.into()), join_response.protocol_name);
+        assert_ne!(join_response.member_id, join_response.leader);
+        assert_eq!(0, join_response.members.len());
+
+        let id = join_response.member_id;
+        let leader = join_response.leader;
+        let generation = join_response.generation_id;
+
+        Ok(JoinResponse::Follower {
+            leader,
+            id,
+            generation,
+            protocols,
+        })
+    }
+}
+
+pub(crate) async fn register_broker(
+    cluster_id: &Uuid,
+    broker_id: i32,
+    sc: &mut StorageContainer,
+) -> Result<()> {
+    let mut rng = thread_rng();
+
+    let incarnation_id = Uuid::now_v7();
+
+    debug!(?cluster_id, ?broker_id, ?incarnation_id);
+
+    let port = rng.gen_range(1024..u16::MAX);
+    let security_protocol = rng.gen_range(0..i16::MAX);
+
+    let broker_registration = BrokerRegistationRequest {
+        broker_id,
+        cluster_id: cluster_id.to_owned().into(),
+        incarnation_id,
+        listeners: vec![Listener {
+            name: "broker".into(),
+            host: "test.local".into(),
+            port,
+            security_protocol,
+        }],
+        features: vec![],
+        rack: None,
+    };
+
+    sc.register_broker(broker_registration)
+        .await
+        .map_err(Into::into)
 }

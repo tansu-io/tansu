@@ -14,10 +14,14 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use bytes::Bytes;
+use common::{
+    alphanumeric_string, heartbeat, init_tracing, join_group, offset_fetch, register_broker,
+    storage_container, sync_group, HeartbeatResponse, OffsetFetchResponse, StorageType, CLIENT_ID,
+    COOPERATIVE_STICKY, PROTOCOL_TYPE, RANGE,
+};
 use rand::{prelude::*, thread_rng};
 use tansu_kafka_sans_io::{
     add_partitions_to_txn_request::AddPartitionsToTxnTopic,
-    broker_registration_request::Listener,
     create_topics_request::CreatableTopic,
     join_group_request::JoinGroupRequestProtocol,
     join_group_response::JoinGroupResponseMember,
@@ -29,39 +33,14 @@ use tansu_kafka_sans_io::{
     txn_offset_commit_response::{TxnOffsetCommitResponsePartition, TxnOffsetCommitResponseTopic},
     BatchAttribute, ErrorCode, IsolationLevel,
 };
-use tansu_server::{coordinator::group::administrator::Controller, Error, Result};
+use tansu_server::{coordinator::group::administrator::Controller, Result};
 use tansu_storage::{
-    BrokerRegistationRequest, ListOffsetRequest, Storage, Topition, TxnAddPartitionsRequest,
-    TxnOffsetCommitRequest,
+    ListOffsetRequest, Storage, Topition, TxnAddPartitionsRequest, TxnOffsetCommitRequest,
 };
-use tracing::{debug, subscriber::DefaultGuard};
+use tracing::debug;
 use uuid::Uuid;
 
 mod common;
-
-fn init_tracing() -> Result<DefaultGuard> {
-    use std::{fs::File, sync::Arc, thread};
-
-    use tracing::Level;
-
-    Ok(tracing::subscriber::set_default(
-        tracing_subscriber::fmt()
-            .with_level(true)
-            .with_line_number(true)
-            .with_max_level(Level::DEBUG)
-            .with_writer(
-                thread::current()
-                    .name()
-                    .ok_or(Error::Message(String::from("unnamed thread")))
-                    .and_then(|name| {
-                        File::create(format!("../logs/{}/{name}.log", env!("CARGO_PKG_NAME")))
-                            .map_err(Into::into)
-                    })
-                    .map(Arc::new)?,
-            )
-            .finish(),
-    ))
-}
 
 #[tokio::test]
 async fn simple_txn_commit() -> Result<()> {
@@ -71,32 +50,12 @@ async fn simple_txn_commit() -> Result<()> {
 
     let cluster_id = Uuid::now_v7();
     let broker_id = rng.gen_range(0..i32::MAX);
-    let incarnation_id = Uuid::now_v7();
 
-    debug!(?cluster_id, ?broker_id, ?incarnation_id);
+    let mut sc = storage_container(StorageType::Postgres, cluster_id, broker_id)?;
 
-    let mut sc = common::storage_container(cluster_id, broker_id)?;
+    register_broker(&cluster_id, broker_id, &mut sc).await?;
 
-    let port = rng.gen_range(1024..u16::MAX);
-    let security_protocol = rng.gen_range(0..i16::MAX);
-
-    let broker_registration = BrokerRegistationRequest {
-        broker_id,
-        cluster_id: cluster_id.into(),
-        incarnation_id,
-        listeners: vec![Listener {
-            name: "broker".into(),
-            host: "test.local".into(),
-            port,
-            security_protocol,
-        }],
-        features: vec![],
-        rack: None,
-    };
-
-    sc.register_broker(broker_registration).await?;
-
-    let input_topic_name: String = common::alphanumeric_string(15);
+    let input_topic_name: String = alphanumeric_string(15);
     debug!(?input_topic_name);
 
     let num_partitions = 6;
@@ -141,7 +100,7 @@ async fn simple_txn_commit() -> Result<()> {
             .inspect(|offset| debug!(?offset))?;
     }
 
-    let output_topic_name: String = common::alphanumeric_string(15);
+    let output_topic_name: String = alphanumeric_string(15);
     debug!(?output_topic_name);
 
     // create output topic
@@ -169,14 +128,8 @@ async fn simple_txn_commit() -> Result<()> {
     let group_instance_id = None;
     let reason = None;
 
-    let group_id: String = common::alphanumeric_string(15);
+    let group_id: String = alphanumeric_string(15);
     debug!(?group_id);
-
-    const CLIENT_ID: &str = "console-consumer";
-    const RANGE: &str = "range";
-    const COOPERATIVE_STICKY: &str = "cooperative-sticky";
-
-    const PROTOCOL_TYPE: &str = "consumer";
 
     let first_member_range_meta = Bytes::from_static(b"first_member_range_meta_01");
     let first_member_sticky_meta = Bytes::from_static(b"first_member_sticky_meta_01");
@@ -194,7 +147,7 @@ async fn simple_txn_commit() -> Result<()> {
 
     // join group without a member id
     //
-    let member_id_required = common::join_group(
+    let member_id_required = join_group(
         &mut controller,
         Some(CLIENT_ID),
         group_id.as_str(),
@@ -211,15 +164,15 @@ async fn simple_txn_commit() -> Result<()> {
     // join rejected as member id is required
     //
     assert_eq!(ErrorCode::MemberIdRequired, member_id_required.error_code);
-    assert_eq!("consumer", member_id_required.protocol_type);
-    assert_eq!("", member_id_required.protocol_name);
+    assert_eq!(Some(PROTOCOL_TYPE.into()), member_id_required.protocol_type);
+    assert_eq!(Some("".into()), member_id_required.protocol_name);
     assert!(member_id_required.leader.is_empty());
     assert!(member_id_required.member_id.starts_with(CLIENT_ID));
     assert_eq!(0, member_id_required.members.len());
 
     // join with the supplied member id
     //
-    let join_response = common::join_group(
+    let join_response = join_group(
         &mut controller,
         Some(CLIENT_ID),
         group_id.as_str(),
@@ -237,8 +190,8 @@ async fn simple_txn_commit() -> Result<()> {
     //
     assert_eq!(ErrorCode::None, join_response.error_code);
     assert_eq!(0, join_response.generation_id);
-    assert_eq!(PROTOCOL_TYPE, join_response.protocol_type);
-    assert_eq!(RANGE, join_response.protocol_name);
+    assert_eq!(Some(PROTOCOL_TYPE.into()), join_response.protocol_type);
+    assert_eq!(Some(RANGE.into()), join_response.protocol_name);
     assert_eq!(member_id_required.member_id.as_str(), join_response.leader);
     assert_eq!(
         vec![JoinGroupResponseMember {
@@ -261,7 +214,7 @@ async fn simple_txn_commit() -> Result<()> {
 
     // sync to form the group
     //
-    let sync_response = common::sync_group(
+    let sync_response = sync_group(
         &mut controller,
         group_id.as_str(),
         join_response.generation_id,
@@ -280,10 +233,10 @@ async fn simple_txn_commit() -> Result<()> {
     // heartbeat establishing leadership of current generation
     //
     assert_eq!(
-        common::HeartbeatResponse {
+        HeartbeatResponse {
             error_code: ErrorCode::None,
         },
-        common::heartbeat(
+        heartbeat(
             &mut controller,
             group_id.as_str(),
             join_response.generation_id,
@@ -293,14 +246,14 @@ async fn simple_txn_commit() -> Result<()> {
         .await?
     );
 
-    let transaction_id: String = common::alphanumeric_string(10);
+    let transaction_id: String = alphanumeric_string(10);
     debug!(?transaction_id);
 
     let transaction_timeout_ms = 10_000;
 
     // initialise producer with a transaction
     //
-    let producer = sc
+    let txn_producer = sc
         .init_producer(
             Some(transaction_id.as_str()),
             transaction_timeout_ms,
@@ -308,14 +261,14 @@ async fn simple_txn_commit() -> Result<()> {
             Some(-1),
         )
         .await?;
-    debug!(?producer);
+    debug!(?txn_producer);
 
     // add all output topic partitions to the transaction
     //
     let txn_add_partitions = TxnAddPartitionsRequest::VersionZeroToThree {
         transaction_id: transaction_id.clone(),
-        producer_id: producer.id,
-        producer_epoch: producer.epoch,
+        producer_id: txn_producer.id,
+        producer_epoch: txn_producer.epoch,
         topics: vec![AddPartitionsToTxnTopic {
             name: output_topic_name.clone(),
             partitions: Some((0..num_partitions).collect()),
@@ -336,8 +289,8 @@ async fn simple_txn_commit() -> Result<()> {
         ErrorCode::None,
         sc.txn_add_offsets(
             transaction_id.as_str(),
-            producer.id,
-            producer.epoch,
+            txn_producer.id,
+            txn_producer.epoch,
             group_id.as_str(),
         )
         .await?
@@ -361,8 +314,8 @@ async fn simple_txn_commit() -> Result<()> {
         sc.txn_offset_commit(TxnOffsetCommitRequest {
             transaction_id: transaction_id.clone(),
             group_id: group_id.clone(),
-            producer_id: producer.id,
-            producer_epoch: producer.epoch,
+            producer_id: txn_producer.id,
+            producer_epoch: txn_producer.epoch,
             generation_id: Some(join_response.generation_id),
             member_id: Some(member_id),
             group_instance_id: group_instance_id
@@ -387,7 +340,7 @@ async fn simple_txn_commit() -> Result<()> {
     // verify that the committed offset is not visible as the transaction remains in progress
     //
     assert_eq!(
-        common::OffsetFetchResponse {
+        OffsetFetchResponse {
             topics: [OffsetFetchResponseTopic {
                 name: input_topic_name.clone(),
                 partitions: Some(
@@ -404,7 +357,7 @@ async fn simple_txn_commit() -> Result<()> {
             .into(),
             error_code: ErrorCode::None
         },
-        common::offset_fetch(
+        offset_fetch(
             &mut controller,
             group_id.as_str(),
             &[OffsetFetchRequestTopic {
@@ -443,8 +396,9 @@ async fn simple_txn_commit() -> Result<()> {
         let batch = inflated::Batch::builder()
             .record(Record::builder().value(Bytes::copy_from_slice(value.as_bytes()).into()))
             .attributes(BatchAttribute::default().transaction(true).into())
-            .producer_id(producer.id)
-            .producer_epoch(producer.epoch)
+            .producer_id(txn_producer.id)
+            .producer_epoch(txn_producer.epoch)
+            .base_sequence(n as i32)
             .build()
             .and_then(TryInto::try_into)
             .inspect(|deflated| debug!(?deflated))?;
@@ -493,12 +447,18 @@ async fn simple_txn_commit() -> Result<()> {
     //
     assert_eq!(
         ErrorCode::None,
-        sc.txn_end(transaction_id.as_str(), producer.id, producer.epoch, true)
-            .await?
+        sc.txn_end(
+            transaction_id.as_str(),
+            txn_producer.id,
+            txn_producer.epoch,
+            true
+        )
+        .await?
     );
 
+    // committed offset is now visible
     assert_eq!(
-        common::OffsetFetchResponse {
+        OffsetFetchResponse {
             topics: [OffsetFetchResponseTopic {
                 name: input_topic_name.clone(),
                 partitions: Some(
@@ -515,7 +475,7 @@ async fn simple_txn_commit() -> Result<()> {
             .into(),
             error_code: ErrorCode::None
         },
-        common::offset_fetch(
+        offset_fetch(
             &mut controller,
             group_id.as_str(),
             &[OffsetFetchRequestTopic {
@@ -525,6 +485,51 @@ async fn simple_txn_commit() -> Result<()> {
         )
         .await?
     );
+
+    // read uncommitted
+    //
+    let list_offsets_after_produce = sc
+        .list_offsets(
+            IsolationLevel::ReadUncommitted,
+            &[(output_topition.clone(), ListOffsetRequest::Latest)],
+        )
+        .await?;
+    assert_eq!(1, list_offsets_after_produce.len());
+    assert_eq!(output_topic_name, list_offsets_after_produce[0].0.topic());
+    assert_eq!(
+        output_partition_index,
+        list_offsets_after_produce[0].0.partition()
+    );
+    assert_eq!(ErrorCode::None, list_offsets_after_produce[0].1.error_code);
+    // includes the produced end txn marker as part of the transaction
+    assert_eq!(Some(records), list_offsets_after_produce[0].1.offset);
+
+    // read committed offset has updated to high watermark
+    //
+    let list_offsets_after_produce = sc
+        .list_offsets(
+            IsolationLevel::ReadCommitted,
+            &[(output_topition.clone(), ListOffsetRequest::Latest)],
+        )
+        .await?;
+    assert_eq!(1, list_offsets_after_produce.len());
+    assert_eq!(output_topic_name, list_offsets_after_produce[0].0.topic());
+    assert_eq!(
+        output_partition_index,
+        list_offsets_after_produce[0].0.partition()
+    );
+    assert_eq!(ErrorCode::None, list_offsets_after_produce[0].1.error_code);
+    assert_eq!(Some(records), list_offsets_after_produce[0].1.offset);
+
+    // assert_eq!(
+    //     ErrorCode::None,
+    //     sc.delete_topic(&TopicId::from(input_topic_id)).await?
+    // );
+
+    // assert_eq!(
+    //     ErrorCode::None,
+    //     sc.delete_topic(&TopicId::from(output_topic_id)).await?
+    // );
 
     Ok(())
 }

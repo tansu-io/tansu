@@ -77,8 +77,7 @@ where
                 .fetch(&tp, offset, min_bytes, *max_bytes, isolation)
                 .await
                 .inspect(|r| debug!(?tp, ?offset, ?r))
-                .inspect_err(|error| error!(?tp, ?error))
-                .map_or(Vec::new(), |batch| vec![batch]);
+                .inspect_err(|error| error!(?tp, ?error))?;
 
             *max_bytes =
                 u32::try_from(fetched.byte_size()).map(|bytes| max_bytes.saturating_sub(bytes))?;

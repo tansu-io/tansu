@@ -16,15 +16,19 @@
 
 insert into consumer_offset
 (consumer_group, topition, committed_offset, leader_epoch, timestamp, metadata)
+
 select cg.id, tp.id, $5, $6, $7, $8
-from cluster c, consumer_group cg, topic t, topition tp
+
+from cluster c
+join consumer_group cg on cg.cluster = c.id
+join topic t on t.cluster = c.id
+join topition tp on tp.topic = t.id
+
 where c.name = $1
 and t.name = $2
 and tp.partition = $3
 and cg.name = $4
-and t.cluster = c.id
-and tp.topic = t.id
-and cg.cluster = c.id
+
 on conflict (consumer_group, topition)
 do update set
 committed_offset = excluded.committed_offset,

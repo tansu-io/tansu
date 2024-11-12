@@ -15,21 +15,18 @@
 -- along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 select count(distinct txn.name)
-from cluster c,
-producer p,
-topic t,
-topition tp,
-txn,
-txn_topition txn_tp
-where c.name = $1
-and p.id = $2
-and p.epoch = $3
-and t.name = $4
-and tp.partition = $5
-and txn.cluster = c.id
-and txn.producer = p.id
-and p.cluster = c.id
-and t.cluster = c.id
-and tp.topic = t.id
-and txn_tp.transaction = txn.id
-and txn_tp.topition = tp.id;
+
+from
+
+cluster c
+join topic t on t.cluster = c.id
+join topition tp on tp.topic = t.id
+join txn on txn.cluster = c.id
+join txn_detail on txn_detail.transaction = txn.id
+join txn_topition txn_tp on txn_tp.txn_detail = txn_detail.id and txn_tp.topition = tp.id
+
+where
+
+c.name = $1
+and t.name = $2
+and tp.partition = $3;

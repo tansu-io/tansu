@@ -14,30 +14,20 @@
 -- You should have received a copy of the GNU Affero General Public License
 -- along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-insert into watermark
-(topition, stable)
+select
 
--- prepare watermark_from_txn (text, text, integer, integer) as
-select tp.id, txn_po.offset_end
+txn_detail.epoch, txn_detail.sequence
 
 from
 
 cluster c
-join topic t on t.cluster = c.id
 join txn on txn.cluster = c.id
 join txn_detail on txn_detail.transaction = txn.id
-join txn_topition txn_tp on txn_tp.txn_detail = txn_detail.id
-join txn_produce_offset txn_po on txn_po.txn_topition = txn_tp.id
-join topition tp on tp.topic = t.id and txn_tp.topition = tp.id
 
 where
 
 c.name = $1
-and txn.name = $2
-and txn.id = $3
-and txn_detail.epoch = $4
+and txn.id = $2
+and txn.epoch = $3
 
-on conflict (topition)
-do update
-set
-stable = excluded.stable;
+for no key update;

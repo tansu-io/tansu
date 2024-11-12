@@ -17,9 +17,11 @@
 -- prepare cg_update (text, text, uuid, uuid, json) as
 insert into consumer_group
 (cluster, name, e_tag, detail)
+
 select c.id, $2, $4, $5
 from cluster c
 where c.name = $1
+
 on conflict (cluster, name)
 do update set
 detail = excluded.detail,

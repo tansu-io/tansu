@@ -14,11 +14,17 @@
 -- You should have received a copy of the GNU Affero General Public License
 -- along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-insert into txn (cluster, name, transaction_timeout_ms, producer)
-select c.id, $2, $3, $4
-from cluster c
+update txn_detail
+
+set
+
+status = $5,
+last_updated = current_timestamp
+
+from cluster c, txn
+
 where c.name = $1
-on conflict (cluster, name)
-do update set
-producer = excluded.producer,
-last_updated = excluded.last_updated;
+and txn.name = $2
+and txn.id = $3
+and txn_detail.transaction = txn.id
+and txn_detail.epoch = $4;

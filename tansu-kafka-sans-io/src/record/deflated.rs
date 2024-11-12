@@ -77,6 +77,10 @@ impl Batch {
     pub fn is_control(&self) -> bool {
         self.attributes & Self::CONTROL_BITMASK == Self::CONTROL_BITMASK
     }
+
+    pub fn is_idempotent(&self) -> bool {
+        self.producer_id != -1
+    }
 }
 
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -385,6 +389,8 @@ impl<'de> Deserialize<'de> for Batch {
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
+
+    use crate::{ControlBatch, EndTransactionMarker};
 
     use super::*;
 
@@ -796,10 +802,21 @@ mod tests {
             Some(Bytes::from_static(b"\0\0\0\x01")),
             inflated.records[0].key
         );
+
+        let control_batch = ControlBatch::try_from(inflated.records[0].clone().key().unwrap())?;
+        assert_eq!(0, control_batch.version);
+        assert!(control_batch.is_commit());
+        assert!(!control_batch.is_abort());
+
         assert_eq!(
             Some(Bytes::from_static(b"\0\0\0\0\0\0")),
             inflated.records[0].value
         );
+
+        let txn_marker =
+            EndTransactionMarker::try_from(inflated.records[0].clone().value.unwrap())?;
+        assert_eq!(0, txn_marker.version);
+        assert_eq!(0, txn_marker.coordinator_epoch);
 
         Ok(())
     }

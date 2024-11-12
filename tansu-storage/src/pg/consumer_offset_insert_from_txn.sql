@@ -33,35 +33,21 @@ txn_oc_tp.metadata
 
 from
 
-cluster c,
-consumer_group cg,
-producer p,
-topic t,
-topition tp,
-txn,
-txn_offset_commit txn_oc,
-txn_offset_commit_tp txn_oc_tp
+cluster c
+join consumer_group cg on cg.cluster = c.id
+join topic t on t.cluster = c.id
+join txn on txn.cluster = c.id
+join txn_detail on txn_detail.transaction = txn.id
+join topition tp on tp.topic = t.id
+join txn_offset_commit txn_oc on txn_oc.txn_detail = txn_detail.id and txn_oc.consumer_group = cg.id
+join txn_offset_commit_tp txn_oc_tp on txn_oc_tp.offset_commit = txn_oc.id and txn_oc_tp.topition = tp.id
 
 where
 
 c.name = $1
 and txn.name = $2
-and p.id = $3
-and p.epoch = $4
-
-and cg.cluster = c.id
-and p.cluster = c.id
-and t.cluster = c.id
-and txn.cluster = c.id
-
-and tp.topic = t.id
-
-and txn_oc.transaction = txn.id
-and txn_oc.consumer_group = cg.id
-and txn_oc.producer_id = p.id
-
-and txn_oc_tp.offset_commit = txn_oc.id
-and txn_oc_tp.topition = tp.id
+and txn.id = $3
+and txn.epoch = $4
 
 on conflict (consumer_group, topition)
 

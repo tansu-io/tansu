@@ -19,7 +19,7 @@ pub mod primitive;
 pub mod record;
 pub mod ser;
 
-use bytes::{Buf, Bytes};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 pub use de::Decoder;
 use flate2::read::GzDecoder;
 use primitive::tagged::TagBuffer;
@@ -1337,6 +1337,91 @@ impl TryFrom<i16> for BatchAttribute {
                     value & Self::DELETE_HORIZON_BITMASK == Self::DELETE_HORIZON_BITMASK,
                 )
         })
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct ControlBatch {
+    pub version: i16,
+    pub r#type: i16,
+}
+
+impl ControlBatch {
+    const ABORT: i16 = 0;
+    const COMMIT: i16 = 1;
+
+    pub fn is_abort(&self) -> bool {
+        self.r#type == Self::ABORT
+    }
+
+    pub fn is_commit(&self) -> bool {
+        self.r#type == Self::COMMIT
+    }
+
+    pub fn version(self, version: i16) -> Self {
+        Self { version, ..self }
+    }
+
+    pub fn commit(self) -> Self {
+        Self {
+            r#type: Self::COMMIT,
+            ..self
+        }
+    }
+
+    pub fn abort(self) -> Self {
+        Self {
+            r#type: Self::ABORT,
+            ..self
+        }
+    }
+}
+
+impl TryFrom<Bytes> for ControlBatch {
+    type Error = Error;
+
+    fn try_from(value: Bytes) -> Result<Self, Self::Error> {
+        let mut c = Cursor::new(value);
+        let mut deserializer = Decoder::new(&mut c);
+        Self::deserialize(&mut deserializer)
+    }
+}
+
+impl TryFrom<ControlBatch> for Bytes {
+    type Error = Error;
+
+    fn try_from(value: ControlBatch) -> Result<Self, Self::Error> {
+        let mut b = BytesMut::new().writer();
+        let mut serializer = Encoder::new(&mut b);
+        value.serialize(&mut serializer)?;
+        Ok(Bytes::from(b.into_inner()))
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct EndTransactionMarker {
+    pub version: i16,
+    pub coordinator_epoch: i32,
+}
+
+impl TryFrom<Bytes> for EndTransactionMarker {
+    type Error = Error;
+
+    fn try_from(value: Bytes) -> Result<Self, Self::Error> {
+        let mut c = Cursor::new(value);
+        let mut deserializer = Decoder::new(&mut c);
+        Self::deserialize(&mut deserializer)
+    }
+}
+
+impl TryFrom<EndTransactionMarker> for Bytes {
+    type Error = Error;
+
+    fn try_from(value: EndTransactionMarker) -> Result<Self, Self::Error> {
+        let mut b = BytesMut::new().writer();
+        let mut serializer = Encoder::new(&mut b);
+        value.serialize(&mut serializer)?;
+        Ok(Bytes::from(b.into_inner()))
     }
 }
 

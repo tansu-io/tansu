@@ -15,14 +15,25 @@
 -- along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 insert into txn_offset_commit
-(transaction, consumer_group, producer_id, generation_id, member_id)
-select txn.id, cg.id, p.id, $6, $7
-from cluster c, consumer_group cg, producer p, txn
-where c.name = $1
+(txn_detail, consumer_group, generation_id, member_id)
+
+select
+txn_detail.id,
+cg.id,
+$6,
+$7
+
+from
+
+cluster c
+join consumer_group cg on cg.cluster = c.id
+join txn on txn.cluster = c.id
+join txn_detail on txn_detail.transaction = txn.id
+
+where
+
+c.name = $1
 and txn.name = $2
 and cg.name = $3
-and p.id = $4
-and p.epoch = $5
-and txn.cluster = c.id
-and cg.cluster = c.id
-and p.cluster = c.id
+and txn.id = $4
+and txn_detail.epoch = $5;

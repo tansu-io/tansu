@@ -204,17 +204,17 @@ impl From<Batch> for Builder {
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Builder {
-    base_offset: i64,
-    partition_leader_epoch: i32,
-    magic: i8,
-    attributes: i16,
-    last_offset_delta: i32,
-    base_timestamp: i64,
-    max_timestamp: i64,
-    producer_id: i64,
-    producer_epoch: i16,
-    base_sequence: i32,
-    records: Sequence<super::Builder>,
+    pub base_offset: i64,
+    pub partition_leader_epoch: i32,
+    pub magic: i8,
+    pub attributes: i16,
+    pub last_offset_delta: i32,
+    pub base_timestamp: i64,
+    pub max_timestamp: i64,
+    pub producer_id: i64,
+    pub producer_epoch: i16,
+    pub base_sequence: i32,
+    pub records: Sequence<super::Builder>,
 }
 
 impl Default for Builder {

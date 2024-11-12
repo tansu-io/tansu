@@ -15,9 +15,22 @@
 -- along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 update watermark w
-set low = $4, high = $5, stable = $6
-from cluster c, topic t, topition tp
-where c.name = $1
+
+set
+
+low = $4,
+high = $5,
+stable = $6
+
+from
+
+cluster c
+join topic t on t.cluster = c.id
+join topition tp on tp.topic = t.id
+
+where
+
+c.name = $1
 and t.name = $2
 and tp.partition = $3
 and t.cluster = c.id

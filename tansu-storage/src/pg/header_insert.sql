@@ -16,13 +16,23 @@
 
 insert into header
 (record, k, v)
-select r.id, $5, $6
-from cluster c, record r, topic t, topition tp
-where c.name = $1
+
+select
+
+r.id, $5, $6
+
+from
+
+cluster c
+join topic t on t.cluster = c.id
+join topition tp on tp.topic = t.id
+join record r on r.topition = tp.id
+
+where
+
+c.name = $1
 and t.name = $2
 and tp.partition = $3
 and r.offset_id = $4
-and t.cluster = c.id
-and tp.topic = t.id
-and r.topition = tp.id
+
 returning header.id;

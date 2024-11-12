@@ -15,6 +15,10 @@
 -- along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 select t.uuid, t.name, is_internal, partitions, replication_factor
-from topic t, cluster c
-where c.name = $1
-and t.cluster = c.id;
+
+from
+
+cluster c
+join topic t on t.cluster = c.id
+
+where c.name = $1;

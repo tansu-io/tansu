@@ -14,6 +14,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use std::{
+    cmp::Ordering,
     collections::BTreeMap,
     marker::PhantomData,
     str::FromStr,
@@ -38,9 +39,10 @@ use tansu_kafka_sans_io::{
     record::{deflated, inflated, Header, Record},
     to_system_time, to_timestamp,
     txn_offset_commit_response::{TxnOffsetCommitResponsePartition, TxnOffsetCommitResponseTopic},
-    ConfigResource, ConfigSource, ConfigType, ErrorCode, IsolationLevel,
+    BatchAttribute, ConfigResource, ConfigSource, ConfigType, ControlBatch, EndTransactionMarker,
+    ErrorCode, IsolationLevel,
 };
-use tokio_postgres::{error::SqlState, Config, NoTls};
+use tokio_postgres::{error::SqlState, Config, NoTls, Row, Transaction};
 use tracing::{debug, error};
 use uuid::Uuid;
 
@@ -48,7 +50,7 @@ use crate::{
     BrokerRegistationRequest, Error, GroupDetail, ListOffsetRequest, ListOffsetResponse,
     MetadataResponse, OffsetCommitRequest, OffsetStage, ProducerIdResponse, Result, Storage,
     TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse, TxnOffsetCommitRequest,
-    UpdateError, Version, NULL_TOPIC_ID,
+    TxnState, UpdateError, Version, NULL_TOPIC_ID,
 };
 
 #[derive(Clone, Debug)]
@@ -123,6 +125,38 @@ where
     }
 }
 
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+struct Txn {
+    name: String,
+    producer_id: i64,
+    producer_epoch: i16,
+    status: TxnState,
+}
+
+impl TryFrom<Row> for Txn {
+    type Error = Error;
+
+    fn try_from(row: Row) -> Result<Self, Self::Error> {
+        let name = row
+            .try_get::<_, String>(0)
+            .inspect_err(|err| error!(?err))?;
+        let producer_id = row.try_get::<_, i64>(1).inspect_err(|err| error!(?err))?;
+        let producer_epoch = row.try_get::<_, i16>(2).inspect_err(|err| error!(?err))?;
+        let status = row
+            .try_get::<_, Option<String>>(3)
+            .map_err(Into::into)
+            .and_then(|status| status.map_or(Ok(TxnState::Begin), TxnState::try_from))
+            .inspect_err(|err| error!(?err))?;
+
+        Ok(Self {
+            name,
+            producer_id,
+            producer_epoch,
+            status,
+        })
+    }
+}
+
 impl Postgres {
     pub fn builder(
         connection: &str,
@@ -134,6 +168,660 @@ impl Postgres {
     async fn connection(&self) -> Result<Object> {
         self.pool.get().await.map_err(Into::into)
     }
+
+    fn idempotent_sequence_check(
+        producer_epoch: &i16,
+        sequence: &i32,
+        deflated: &deflated::Batch,
+    ) -> Result<i32> {
+        debug!(?producer_epoch, ?sequence, ?deflated);
+
+        match producer_epoch.cmp(&deflated.producer_epoch) {
+            Ordering::Equal => match sequence.cmp(&deflated.base_sequence) {
+                Ordering::Equal => Ok(deflated.last_offset_delta + 1),
+
+                Ordering::Greater => {
+                    debug!(?deflated.base_sequence);
+                    Err(Error::Api(ErrorCode::DuplicateSequenceNumber))
+                }
+
+                Ordering::Less => {
+                    debug!(?deflated.base_sequence);
+                    Err(Error::Api(ErrorCode::OutOfOrderSequenceNumber))
+                }
+            },
+
+            Ordering::Greater => Err(Error::Api(ErrorCode::ProducerFenced)),
+
+            Ordering::Less => Err(Error::Api(ErrorCode::InvalidProducerEpoch)),
+        }
+    }
+
+    async fn idempotent_message_check(
+        &mut self,
+        transaction_id: Option<&str>,
+        deflated: &deflated::Batch,
+        tx: &Transaction<'_>,
+    ) -> Result<()> {
+        debug!(transaction_id, ?deflated);
+        if transaction_id.is_none() {
+            let prepared = tx
+                .prepare(include_str!("pg/producer_select_for_update.sql"))
+                .await
+                .inspect_err(|err| error!(?err))?;
+
+            if let Some(row) = tx
+                .query_opt(&prepared, &[&self.cluster, &deflated.producer_id])
+                .await
+                .inspect_err(|err| error!(?err))?
+            {
+                let epoch = row.try_get::<_, i16>(0).inspect_err(|err| error!(?err))?;
+                let sequence = row.try_get::<_, i32>(1).inspect_err(|err| error!(?err))?;
+
+                let increment = Self::idempotent_sequence_check(&epoch, &sequence, deflated)?;
+
+                let prepared = tx
+                    .prepare(include_str!("pg/producer_update_sequence.sql"))
+                    .await
+                    .inspect_err(|err| error!(?err))?;
+
+                assert_eq!(
+                    1,
+                    tx.execute(
+                        &prepared,
+                        &[
+                            &self.cluster,
+                            &deflated.producer_id,
+                            &deflated.producer_epoch,
+                            &increment,
+                        ],
+                    )
+                    .await
+                    .inspect_err(|err| error!(?err))?
+                );
+
+                Ok(())
+            } else {
+                Err(Error::Api(ErrorCode::UnknownProducerId))
+            }
+        } else {
+            let prepared = tx
+                .prepare(include_str!("pg/txn_detail_select_for_update.sql"))
+                .await
+                .inspect_err(|err| error!(?err))?;
+
+            if let Some(row) = tx
+                .query_opt(&prepared, &[&self.cluster, &deflated.producer_id])
+                .await
+                .inspect_err(|err| error!(?err))?
+            {
+                let epoch = row.try_get::<_, i16>(0).inspect_err(|err| error!(?err))?;
+                let sequence = row.try_get::<_, i32>(1).inspect_err(|err| error!(?err))?;
+
+                let increment = Self::idempotent_sequence_check(&epoch, &sequence, deflated)?;
+
+                let prepared = tx
+                    .prepare(include_str!("pg/txn_detail_update_sequence.sql"))
+                    .await
+                    .inspect_err(|err| error!(?err))?;
+
+                assert_eq!(
+                    1,
+                    tx.execute(
+                        &prepared,
+                        &[
+                            &self.cluster,
+                            &deflated.producer_id,
+                            &deflated.producer_epoch,
+                            &increment,
+                        ],
+                    )
+                    .await
+                    .inspect_err(|err| error!(?err))?
+                );
+
+                Ok(())
+            } else {
+                Err(Error::Api(ErrorCode::UnknownProducerId))
+            }
+        }
+    }
+
+    async fn watermark_select_for_update(
+        &mut self,
+        topition: &Topition,
+        tx: &Transaction<'_>,
+    ) -> Result<(Option<i64>, Option<i64>, Option<i64>)> {
+        let prepared = tx
+            .prepare(include_str!("pg/watermark_select_for_update.sql"))
+            .await
+            .inspect_err(|err| error!(?err))?;
+
+        if let Some(row) = tx
+            .query_opt(
+                &prepared,
+                &[&self.cluster, &topition.topic(), &topition.partition()],
+            )
+            .await
+            .inspect_err(|err| error!(?err, ?self.cluster, ?topition))?
+        {
+            Ok((
+                row.try_get::<_, Option<i64>>(0)
+                    .inspect_err(|err| error!(?err))?,
+                row.try_get::<_, Option<i64>>(1)
+                    .inspect_err(|err| error!(?err))?,
+                row.try_get::<_, Option<i64>>(2)
+                    .inspect_err(|err| error!(?err))?,
+            ))
+        } else {
+            Err(Error::Api(ErrorCode::UnknownTopicOrPartition))
+        }
+    }
+
+    async fn produce_in_tx(
+        &mut self,
+        transaction_id: Option<&str>,
+        topition: &Topition,
+        deflated: deflated::Batch,
+        tx: &Transaction<'_>,
+    ) -> Result<i64> {
+        debug!(?self.cluster, ?transaction_id, ?topition, ?deflated);
+
+        let topic = topition.topic();
+        let partition = topition.partition();
+
+        if deflated.is_idempotent() {
+            self.idempotent_message_check(transaction_id, &deflated, tx)
+                .await
+                .inspect_err(|err| error!(?err))?;
+        }
+
+        let prepared = tx
+            .prepare(include_str!("pg/txn_topition_select_txns.sql"))
+            .await
+            .inspect_err(|err| error!(?err))?;
+
+        let topition_is_in_a_txn = tx
+            .query_one(&prepared, &[&self.cluster, &topic, &partition])
+            .await
+            .and_then(|row| row.try_get::<_, i64>(0))
+            .inspect_err(|err| error!(?err))
+            .inspect(|in_progress_transactions| debug!(?in_progress_transactions))
+            .is_ok_and(|in_progress_transactions| in_progress_transactions > 0);
+        debug!(?topition_is_in_a_txn);
+
+        let (low, high, stable) = self.watermark_select_for_update(topition, tx).await?;
+
+        debug!(?low, ?high, ?stable);
+
+        let insert_record = tx
+            .prepare(include_str!("pg/record_insert.sql"))
+            .await
+            .inspect_err(|err| error!(?err))?;
+
+        let insert_header = tx
+            .prepare(include_str!("pg/header_insert.sql"))
+            .await
+            .inspect_err(|err| error!(?err))?;
+
+        let inflated = inflated::Batch::try_from(deflated).inspect_err(|err| error!(?err))?;
+
+        let attributes = BatchAttribute::try_from(inflated.attributes)?;
+
+        let records_len = i64::try_from(inflated.records.len())?;
+
+        for (delta, record) in inflated.records.iter().enumerate() {
+            let delta = i64::try_from(delta)?;
+            let offset = high.map_or(delta, |high| high + delta + 1);
+            let key = record.key.as_deref();
+            let value = record.value.as_deref();
+
+            debug!(?delta, ?record, ?offset);
+
+            _ = tx
+                .execute(
+                    &insert_record,
+                    &[
+                        &self.cluster,
+                        &topic,
+                        &partition,
+                        &offset,
+                        &if transaction_id.is_none() {
+                            None
+                        } else {
+                            Some(inflated.producer_id)
+                        },
+                        &if transaction_id.is_none() {
+                            None
+                        } else {
+                            Some(inflated.producer_epoch)
+                        },
+                        &(to_system_time(inflated.base_timestamp + record.timestamp_delta)?),
+                        &key,
+                        &value,
+                    ],
+                )
+                .await
+                .inspect(|n| debug!(?n))
+                .inspect_err(|err| error!(?err, ?topic, ?partition, ?offset, ?key, ?value))?;
+
+            for header in record.headers.iter().as_ref() {
+                let key = header.key.as_deref();
+                let value = header.value.as_deref();
+
+                _ = tx
+                    .execute(
+                        &insert_header,
+                        &[&self.cluster, &topic, &partition, &offset, &key, &value],
+                    )
+                    .await
+                    .inspect_err(|err| {
+                        error!(?err, ?topic, ?partition, ?offset, ?key, ?value);
+                    });
+            }
+        }
+
+        if let Some(transaction_id) = transaction_id {
+            if attributes.transaction {
+                let txn_produce_offset_insert = tx
+                    .prepare(include_str!("pg/txn_produce_offset_insert.sql"))
+                    .await
+                    .inspect_err(|err| error!(?err))?;
+
+                let offset_start = high.unwrap_or_default();
+                let offset_end = high.map_or(records_len - 1, |high| high + records_len);
+
+                _ = tx
+                    .execute(
+                        &txn_produce_offset_insert,
+                        &[
+                            &self.cluster,
+                            &transaction_id,
+                            &inflated.producer_id,
+                            &inflated.producer_epoch,
+                            &topic,
+                            &partition,
+                            &offset_start,
+                            &offset_end,
+                        ],
+                    )
+                    .await
+                    .inspect(|n| debug!(?self.cluster, ?transaction_id, ?inflated.producer_id, ?inflated.producer_epoch, ?topic, ?partition, ?offset_start, ?offset_end, ?n))
+                    .inspect_err(|err| error!(?err))?;
+            }
+        }
+
+        let prepared = tx
+            .prepare(include_str!("pg/watermark_update.sql"))
+            .await
+            .inspect_err(|err| error!(?err))?;
+
+        let stable = if topition_is_in_a_txn {
+            stable.unwrap_or_default()
+        } else {
+            stable.map_or(records_len - 1, |high| high + records_len)
+        };
+
+        _ = tx
+            .execute(
+                &prepared,
+                &[
+                    &self.cluster,
+                    &topic,
+                    &partition,
+                    &low.unwrap_or_default(),
+                    &high.map_or(records_len - 1, |high| high + records_len),
+                    &stable,
+                ],
+            )
+            .await
+            .inspect(|n| debug!(?n))
+            .inspect_err(|err| error!(?err))?;
+
+        Ok(high.map_or(0, |high| high + 1))
+    }
+
+    async fn end_in_tx(
+        &mut self,
+        transaction_id: &str,
+        producer_id: i64,
+        producer_epoch: i16,
+        committed: bool,
+        tx: &Transaction<'_>,
+    ) -> Result<ErrorCode> {
+        debug!(?self.cluster, ?transaction_id, ?producer_id, ?producer_epoch, ?committed);
+
+        let prepared = tx
+            .prepare(include_str!("pg/txn_select_produced_topitions.sql"))
+            .await
+            .inspect(|prepared| debug!(?prepared))
+            .inspect_err(|err| error!(?err))?;
+
+        let mut overlaps = vec![];
+
+        for row in tx
+            .query(
+                &prepared,
+                &[
+                    &self.cluster,
+                    &transaction_id,
+                    &producer_id,
+                    &producer_epoch,
+                ],
+            )
+            .await
+            .inspect(|n| debug!(?self.cluster, ?transaction_id, ?producer_id, ?producer_epoch, ?n))
+            .inspect_err(|err| error!(?err))?
+        {
+            let topic = row.try_get::<_, String>(0)?;
+            let partition = row.try_get::<_, i32>(1)?;
+            let sequence = row.try_get::<_, i32>(2)?;
+
+            let topition = Topition::new(topic.clone(), partition);
+
+            debug!(?topition, sequence);
+
+            let control_batch: Bytes = if committed {
+                ControlBatch::default().commit().try_into()?
+            } else {
+                ControlBatch::default().abort().try_into()?
+            };
+            let end_transaction_marker: Bytes = EndTransactionMarker::default().try_into()?;
+
+            let batch = inflated::Batch::builder()
+                .record(
+                    Record::builder()
+                        .key(control_batch.into())
+                        .value(end_transaction_marker.into()),
+                )
+                .attributes(
+                    BatchAttribute::default()
+                        .control(true)
+                        .transaction(true)
+                        .into(),
+                )
+                .producer_id(producer_id)
+                .producer_epoch(producer_epoch)
+                .base_sequence(sequence)
+                .build()
+                .and_then(TryInto::try_into)
+                .inspect(|deflated| debug!(?deflated))?;
+
+            let offset = self
+                .produce_in_tx(Some(transaction_id), &topition, batch, tx)
+                .await?;
+
+            debug!(offset, ?topition, sequence);
+
+            let prepared = tx
+                .prepare(include_str!(
+                    "pg/txn_produce_offset_select_offset_range.sql"
+                ))
+                .await
+                .inspect(|prepared| debug!(?prepared))
+                .inspect_err(|err| error!(?err))?;
+
+            let row = tx
+                .query_one(
+                    &prepared,
+                    &[
+                        &self.cluster,
+                        &transaction_id,
+                        &producer_id,
+                        &producer_epoch,
+                        &topic,
+                        &partition,
+                    ],
+                )
+                .await
+                .inspect_err(|err| error!(?err))?;
+
+            let offset_start = row.try_get::<_, i64>(0)?;
+            let offset_end = row.try_get::<_, i64>(1)?;
+            debug!(offset_start, offset_end);
+
+            let prepared = tx
+                .prepare(include_str!(
+                    "pg/txn_produce_offset_select_overlapping_txn.sql"
+                ))
+                .await
+                .inspect(|prepared| debug!(?prepared))
+                .inspect_err(|err| error!(?err))?;
+
+            let rows = tx
+                .query(
+                    &prepared,
+                    &[
+                        &self.cluster,
+                        &transaction_id,
+                        &producer_id,
+                        &producer_epoch,
+                        &topic,
+                        &partition,
+                        &offset_end,
+                    ],
+                )
+                .await
+                .inspect_err(|err| error!(?err))?;
+
+            for row in rows {
+                overlaps.push(Txn::try_from(row)?);
+            }
+        }
+
+        if overlaps.iter().all(|txn| txn.status.is_prepared()) {
+            let txns = {
+                let mut txns = Vec::with_capacity(overlaps.len() + 1);
+
+                txns.append(&mut overlaps);
+
+                txns.push(Txn {
+                    name: transaction_id.into(),
+                    producer_id,
+                    producer_epoch,
+                    status: if committed {
+                        TxnState::PrepareCommit
+                    } else {
+                        TxnState::PrepareAbort
+                    },
+                });
+
+                txns
+            };
+
+            debug!(?txns);
+
+            for txn in txns {
+                debug!(?txn);
+
+                if txn.status == TxnState::PrepareCommit {
+                    let prepared = tx
+                        .prepare(include_str!("pg/watermark_insert_from_txn.sql"))
+                        .await
+                        .inspect(|prepared| debug!(?prepared))
+                        .inspect_err(|err| error!(?err))?;
+
+                    _ = tx
+                        .execute(
+                            &prepared,
+                            &[
+                                &self.cluster,
+                                &txn.name,
+                                &txn.producer_id,
+                                &txn.producer_epoch,
+                            ],
+                        )
+                        .await
+                        .inspect(|n| debug!(?self.cluster, ?txn, ?n))
+                        .inspect_err(|err| error!(?err))?;
+                }
+
+                let prepared = tx
+                    .prepare(include_str!("pg/txn_produce_offset_delete_by_txn.sql"))
+                    .await
+                    .inspect(|prepared| debug!(?prepared))
+                    .inspect_err(|err| error!(?err))?;
+
+                _ = tx
+                    .execute(
+                        &prepared,
+                        &[
+                            &self.cluster,
+                            &txn.name,
+                            &txn.producer_id,
+                            &txn.producer_epoch,
+                        ],
+                    )
+                    .await
+                    .inspect(|n| debug!(?self.cluster, ?txn, ?n))
+                    .inspect_err(|err| error!(?err))?;
+
+                let prepared = tx
+                    .prepare(include_str!("pg/txn_topition_delete_by_txn.sql"))
+                    .await
+                    .inspect(|prepared| debug!(?prepared))
+                    .inspect_err(|err| error!(?err))?;
+
+                _ = tx
+                    .execute(
+                        &prepared,
+                        &[
+                            &self.cluster,
+                            &txn.name,
+                            &txn.producer_id,
+                            &txn.producer_epoch,
+                        ],
+                    )
+                    .await
+                    .inspect(|n| debug!(?self.cluster, ?txn, ?n))
+                    .inspect_err(|err| error!(?err))?;
+
+                if txn.status == TxnState::PrepareCommit {
+                    let prepared = tx
+                        .prepare(include_str!("pg/consumer_offset_insert_from_txn.sql"))
+                        .await
+                        .inspect(|prepared| debug!(?prepared))
+                        .inspect_err(|err| error!(?err))?;
+
+                    _ = tx
+                        .execute(
+                            &prepared,
+                            &[
+                                &self.cluster,
+                                &txn.name,
+                                &txn.producer_id,
+                                &txn.producer_epoch,
+                            ],
+                        )
+                        .await
+                        .inspect(|n| debug!(?self.cluster, ?txn, ?n))
+                        .inspect_err(|err| error!(?err))?;
+                }
+
+                let prepared = tx
+                    .prepare(include_str!("pg/txn_offset_commit_tp_delete_by_txn.sql"))
+                    .await
+                    .inspect(|prepared| debug!(?prepared))
+                    .inspect_err(|err| error!(?err))?;
+
+                _ = tx
+                    .execute(
+                        &prepared,
+                        &[
+                            &self.cluster,
+                            &txn.name,
+                            &txn.producer_id,
+                            &txn.producer_epoch,
+                        ],
+                    )
+                    .await
+                    .inspect(|n| debug!(?self.cluster, ?txn, ?n))
+                    .inspect_err(|err| error!(?err))?;
+
+                let prepared = tx
+                    .prepare(include_str!("pg/txn_offset_commit_delete_by_txn.sql"))
+                    .await
+                    .inspect(|prepared| debug!(?prepared))
+                    .inspect_err(|err| error!(?err))?;
+
+                _ = tx
+                    .execute(
+                        &prepared,
+                        &[
+                            &self.cluster,
+                            &txn.name,
+                            &txn.producer_id,
+                            &txn.producer_epoch,
+                        ],
+                    )
+                    .await
+                    .inspect(|n| debug!(?self.cluster, ?txn, ?n))
+                    .inspect_err(|err| error!(?err))?;
+
+                let prepared = tx
+                    .prepare(include_str!("pg/txn_status_update.sql"))
+                    .await
+                    .inspect(|prepared| debug!(?prepared))
+                    .inspect_err(|err| error!(?err))?;
+
+                let outcome = if txn.status == TxnState::PrepareCommit {
+                    String::from(TxnState::Committed)
+                } else if txn.status == TxnState::PrepareAbort {
+                    String::from(TxnState::Aborted)
+                } else {
+                    String::from(txn.status)
+                };
+
+                _ = tx
+                    .execute(
+                        &prepared,
+                        &[
+                            &self.cluster,
+                            &txn.name,
+                            &txn.producer_id,
+                            &txn.producer_epoch,
+                            &outcome,
+                        ],
+                    )
+                    .await
+                    .inspect(|n| debug!(?self.cluster, ?txn, ?n))
+                    .inspect_err(|err| error!(?err))?;
+            }
+        } else {
+            debug!(?overlaps);
+
+            let prepared = tx
+                .prepare(include_str!("pg/txn_status_update.sql"))
+                .await
+                .inspect(|prepared| debug!(?prepared))
+                .inspect_err(|err| error!(?err))?;
+
+            let outcome = if committed {
+                String::from(TxnState::PrepareCommit)
+            } else {
+                String::from(TxnState::PrepareAbort)
+            };
+
+            _ = tx
+                .execute(
+                    &prepared,
+                    &[
+                        &self.cluster,
+                        &transaction_id,
+                        &producer_id,
+                        &producer_epoch,
+                        &outcome,
+                    ],
+                )
+                .await
+                .inspect(
+                    |n| debug!(?self.cluster, ?transaction_id, ?producer_id, ?producer_epoch, ?n),
+                )
+                .inspect_err(|err| error!(?err))?;
+        }
+
+        Ok(ErrorCode::None)
+    }
 }
 
 #[async_trait]
@@ -142,7 +830,7 @@ impl Storage for Postgres {
         &mut self,
         broker_registration: BrokerRegistationRequest,
     ) -> Result<()> {
-        debug!(?broker_registration);
+        debug!(?self.cluster, ?broker_registration);
 
         let mut c = self.connection().await?;
         let tx = c.transaction().await?;
@@ -238,6 +926,8 @@ impl Storage for Postgres {
     }
 
     async fn brokers(&mut self) -> Result<Vec<DescribeClusterBroker>> {
+        debug!(?self.cluster);
+
         let c = self.connection().await?;
 
         let prepared = c
@@ -277,7 +967,7 @@ impl Storage for Postgres {
     }
 
     async fn create_topic(&mut self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {
-        debug!(?topic, ?validate_only);
+        debug!(?self.cluster, ?topic, ?validate_only);
 
         let mut c = self.connection().await?;
         let tx = c.transaction().await?;
@@ -370,6 +1060,8 @@ impl Storage for Postgres {
         &mut self,
         topics: &[DeleteRecordsTopic],
     ) -> Result<Vec<DeleteRecordsTopicResult>> {
+        debug!(?self.cluster, ?topics);
+
         let c = self.connection().await?;
 
         let delete_records = c
@@ -495,6 +1187,8 @@ impl Storage for Postgres {
     }
 
     async fn delete_topic(&mut self, topic: &TopicId) -> Result<ErrorCode> {
+        debug!(?self.cluster, ?topic);
+
         let mut c = self.connection().await?;
         let tx = c.transaction().await?;
 
@@ -539,6 +1233,18 @@ impl Storage for Postgres {
             ),
             ("headers", include_str!("pg/header_delete_by_topic.sql")),
             ("records", include_str!("pg/record_delete_by_topic.sql")),
+            (
+                "txn_offset_commit_tp",
+                include_str!("pg/txn_offset_commit_tp_delete_by_topic.sql"),
+            ),
+            (
+                "txn_produce_offset_delete",
+                include_str!("pg/txn_produce_offset_delete_by_topic.sql"),
+            ),
+            (
+                "txn_topition",
+                include_str!("pg/txn_topition_delete_by_topic.sql"),
+            ),
             ("topitions", include_str!("pg/topition_delete_by_topic.sql")),
         ] {
             let prepared = tx.prepare(sql).await.inspect_err(|err| error!(?err))?;
@@ -572,181 +1278,30 @@ impl Storage for Postgres {
         topition: &Topition,
         deflated: deflated::Batch,
     ) -> Result<i64> {
-        debug!(?transaction_id, ?topition, ?deflated);
-
-        let topic = topition.topic();
-        let partition = topition.partition();
+        debug!(?self.cluster, ?transaction_id, ?topition, ?deflated);
 
         let mut c = self.connection().await?;
 
         let tx = c.transaction().await?;
 
-        let prepared = tx
-            .prepare(include_str!("pg/txn_topition_select_txns.sql"))
-            .await
-            .inspect_err(|err| error!(?err))?;
-
-        let topition_is_in_a_txn = tx
-            .query_one(
-                &prepared,
-                &[
-                    &self.cluster,
-                    &deflated.producer_id,
-                    &(deflated.producer_epoch as i32),
-                    &topic,
-                    &partition,
-                ],
-            )
-            .await
-            .and_then(|row| row.try_get::<_, i64>(0))
-            .inspect_err(|err| error!(?err))
-            .inspect(|in_progress_transactions| debug!(?in_progress_transactions))
-            .is_ok_and(|in_progress_transactions| in_progress_transactions > 0);
-        debug!(?topition_is_in_a_txn);
-
-        let (low, high, stable) = {
-            let prepared = tx
-                .prepare(include_str!("pg/watermark_select_for_update.sql"))
-                .await
-                .inspect_err(|err| error!(?err))?;
-
-            let row = tx
-                .query_one(&prepared, &[&self.cluster, &topic, &partition])
-                .await
-                .inspect_err(|err| error!(?err))?;
-
-            (
-                row.try_get::<_, Option<i64>>(0)
-                    .inspect_err(|err| error!(?err))?,
-                row.try_get::<_, Option<i64>>(1)
-                    .inspect_err(|err| error!(?err))?,
-                row.try_get::<_, Option<i64>>(2)
-                    .inspect_err(|err| error!(?err))?,
-            )
-        };
-
-        debug!(?low, ?high, ?stable);
-
-        let insert_record = tx
-            .prepare(include_str!("pg/record_insert.sql"))
-            .await
-            .inspect_err(|err| error!(?err))?;
-
-        let insert_header = tx
-            .prepare(include_str!("pg/header_insert.sql"))
-            .await
-            .inspect_err(|err| error!(?err))?;
-
-        let inflated = inflated::Batch::try_from(deflated).inspect_err(|err| error!(?err))?;
-
-        let records_len = i64::try_from(inflated.records.len())?;
-
-        for (delta, record) in inflated.records.iter().enumerate() {
-            let delta = i64::try_from(delta)?;
-            let offset = high.map_or(delta, |high| high + delta + 1);
-            let key = record.key.as_deref();
-            let value = record.value.as_deref();
-
-            debug!(?delta, ?record, ?offset);
-
-            _ = tx
-                .execute(
-                    &insert_record,
-                    &[
-                        &self.cluster,
-                        &topic,
-                        &partition,
-                        &offset,
-                        &inflated.producer_id,
-                        &inflated.base_sequence,
-                        &(to_system_time(inflated.base_timestamp + record.timestamp_delta)?),
-                        &key,
-                        &value,
-                    ],
-                )
-                .await
-                .inspect_err(|err| error!(?err, ?topic, ?partition, ?offset, ?key, ?value))?;
-
-            for header in record.headers.iter().as_ref() {
-                let key = header.key.as_deref();
-                let value = header.value.as_deref();
-
-                _ = tx
-                    .execute(
-                        &insert_header,
-                        &[&self.cluster, &topic, &partition, &offset, &key, &value],
-                    )
-                    .await
-                    .inspect_err(|err| {
-                        error!(?err, ?topic, ?partition, ?offset, ?key, ?value);
-                    });
-            }
-        }
-
-        if let Some(transaction_id) = transaction_id {
-            let txn_produce_offset_insert = tx
-                .prepare(include_str!("pg/txn_produce_offset_insert.sql"))
-                .await
-                .inspect_err(|err| error!(?err))?;
-
-            _ = tx
-                .execute(
-                    &txn_produce_offset_insert,
-                    &[
-                        &self.cluster,
-                        &transaction_id,
-                        &inflated.producer_id,
-                        &(inflated.producer_epoch as i32),
-                        &topic,
-                        &partition,
-                        &high.unwrap_or_default(),
-                        &high.map_or(records_len - 1, |high| high + records_len),
-                    ],
-                )
-                .await
-                .inspect_err(|err| error!(?err))?;
-        }
-
-        let prepared = tx
-            .prepare(include_str!("pg/watermark_update.sql"))
-            .await
-            .inspect_err(|err| error!(?err))?;
-
-        let stable = if topition_is_in_a_txn {
-            stable.unwrap_or_default()
-        } else {
-            stable.map_or(records_len - 1, |high| high + records_len)
-        };
-
-        _ = tx
-            .execute(
-                &prepared,
-                &[
-                    &self.cluster,
-                    &topic,
-                    &partition,
-                    &low.unwrap_or_default(),
-                    &high.map_or(records_len - 1, |high| high + records_len),
-                    &stable,
-                ],
-            )
-            .await
-            .inspect_err(|err| error!(?err))?;
+        let high = self
+            .produce_in_tx(transaction_id, topition, deflated, &tx)
+            .await?;
 
         tx.commit().await?;
 
-        Ok(high.map_or(0, |high| high + 1))
+        Ok(high)
     }
 
     async fn fetch(
         &mut self,
         topition: &Topition,
         offset: i64,
-        min_bytes: u32,
+        _min_bytes: u32,
         max_bytes: u32,
         isolation: IsolationLevel,
-    ) -> Result<deflated::Batch> {
-        debug!(?topition, ?offset, ?isolation);
+    ) -> Result<Vec<deflated::Batch>> {
+        debug!(?self.cluster, ?topition, ?offset, ?isolation);
 
         let high_watermark = self.offset_stage(topition).await.map(|offset_stage| {
             if isolation == IsolationLevel::ReadCommitted {
@@ -761,7 +1316,9 @@ impl Storage for Postgres {
         let select_batch = c
             .prepare(include_str!("pg/record_fetch.sql"))
             .await
-            .inspect_err(|err| error!(?err))?;
+            .inspect_err(
+                |err| error!(?err, ?self.cluster, ?topition, ?offset, ?max_bytes, ?high_watermark),
+            )?;
 
         let select_headers = c
             .prepare(include_str!("pg/header_fetch.sql"))
@@ -784,48 +1341,90 @@ impl Storage for Postgres {
             .inspect(|rows| debug!(?rows))
             .inspect_err(|err| error!(?err))?;
 
-        let mut bytes = 0;
+        let mut batches = vec![];
 
-        let batch = if let Some(first) = records.first() {
-            let base_offset: i64 = first.try_get(0)?;
-            debug!(?base_offset);
-
-            let base_timestamp = first
-                .try_get::<_, SystemTime>(1)
-                .map_err(Error::from)
-                .and_then(|system_time| to_timestamp(system_time).map_err(Into::into))?;
-
+        if let Some(first) = records.first() {
             let mut batch_builder = inflated::Batch::builder()
-                .base_offset(base_offset)
-                .base_timestamp(base_timestamp);
+                .base_offset(first.try_get::<_, i64>(0).inspect_err(|err| error!(?err))?)
+                .base_timestamp(
+                    first
+                        .try_get::<_, SystemTime>(1)
+                        .map_err(Error::from)
+                        .and_then(|system_time| to_timestamp(system_time).map_err(Into::into))
+                        .inspect_err(|err| error!(?err))?,
+                )
+                .producer_id(
+                    first
+                        .try_get::<_, Option<i64>>(5)
+                        .map(|producer_id| producer_id.unwrap_or(-1))
+                        .inspect_err(|err| error!(?err))?,
+                )
+                .producer_epoch(
+                    first
+                        .try_get::<_, Option<i16>>(6)
+                        .map(|producer_epoch| producer_epoch.unwrap_or(-1))
+                        .inspect_err(|err| error!(?err))?,
+                );
 
             for record in records.iter() {
                 debug!(?record);
 
-                let offset = record.try_get::<_, i64>(0)?;
-                let offset_delta = i32::try_from(offset - base_offset)?;
+                let producer_id = record
+                    .try_get::<_, Option<i64>>(5)
+                    .map(|producer_id| producer_id.unwrap_or(-1))
+                    .inspect_err(|err| error!(?err))?;
+                let producer_epoch = record
+                    .try_get::<_, Option<i16>>(6)
+                    .map(|producer_epoch| producer_epoch.unwrap_or(-1))
+                    .inspect_err(|err| error!(?err))?;
+
+                if batch_builder.producer_id != producer_id
+                    || batch_builder.producer_epoch != producer_epoch
+                {
+                    batches.push(batch_builder.build().and_then(TryInto::try_into)?);
+
+                    batch_builder = inflated::Batch::builder()
+                        .base_offset(first.try_get::<_, i64>(0).inspect_err(|err| error!(?err))?)
+                        .base_timestamp(
+                            first
+                                .try_get::<_, SystemTime>(1)
+                                .map_err(Error::from)
+                                .and_then(|system_time| {
+                                    to_timestamp(system_time).map_err(Into::into)
+                                })
+                                .inspect_err(|err| error!(?err))?,
+                        )
+                        .producer_id(producer_id)
+                        .producer_epoch(producer_epoch);
+                }
+
+                let offset = record
+                    .try_get::<_, i64>(0)
+                    .inspect_err(|err| error!(?err))?;
+                let offset_delta = i32::try_from(offset - batch_builder.base_offset)?;
 
                 let timestamp_delta = first
                     .try_get::<_, SystemTime>(1)
                     .map_err(Error::from)
                     .and_then(|system_time| {
                         to_timestamp(system_time)
-                            .map(|timestamp| timestamp - base_timestamp)
+                            .map(|timestamp| timestamp - batch_builder.base_timestamp)
                             .map_err(Into::into)
                     })
-                    .inspect(|timestamp| debug!(?timestamp))?;
+                    .inspect(|timestamp| debug!(?timestamp))
+                    .inspect_err(|err| error!(?err))?;
 
                 let k = record
                     .try_get::<_, Option<&[u8]>>(2)
                     .map(|o| o.map(Bytes::copy_from_slice))
-                    .inspect(|k| debug!(?k))?;
+                    .inspect(|k| debug!(?k))
+                    .inspect_err(|err| error!(?err))?;
 
                 let v = record
                     .try_get::<_, Option<&[u8]>>(3)
                     .map(|o| o.map(Bytes::copy_from_slice))
-                    .inspect(|v| debug!(?v))?;
-
-                bytes += record.try_get::<_, i64>(4)?;
+                    .inspect(|v| debug!(?v))
+                    .inspect_err(|err| error!(?err))?;
 
                 let mut record_builder = Record::builder()
                     .offset_delta(offset_delta)
@@ -849,15 +1448,17 @@ impl Storage for Postgres {
                 {
                     let mut header_builder = Header::builder();
 
-                    if let Some(k) = header.try_get::<_, Option<&[u8]>>(0)? {
-                        bytes += i64::try_from(k.len())?;
-
+                    if let Some(k) = header
+                        .try_get::<_, Option<&[u8]>>(0)
+                        .inspect_err(|err| error!(?err))?
+                    {
                         header_builder = header_builder.key(k.to_vec());
                     }
 
-                    if let Some(v) = header.try_get::<_, Option<&[u8]>>(1)? {
-                        bytes += i64::try_from(v.len())?;
-
+                    if let Some(v) = header
+                        .try_get::<_, Option<&[u8]>>(1)
+                        .inspect_err(|err| error!(?err))?
+                    {
                         header_builder = header_builder.value(v.to_vec());
                     }
 
@@ -865,25 +1466,22 @@ impl Storage for Postgres {
                 }
 
                 batch_builder = batch_builder.record(record_builder);
-
-                if bytes > (min_bytes as i64) {
-                    break;
-                }
             }
 
-            batch_builder
+            batches.push(batch_builder.build().and_then(TryInto::try_into)?);
         } else {
-            inflated::Batch::builder()
-        };
+            batches.push(
+                inflated::Batch::builder()
+                    .build()
+                    .and_then(TryInto::try_into)?,
+            );
+        }
 
-        batch
-            .build()
-            .and_then(TryInto::try_into)
-            .map_err(Into::into)
+        Ok(batches)
     }
 
     async fn offset_stage(&mut self, topition: &Topition) -> Result<OffsetStage> {
-        debug!(?topition);
+        debug!(?self.cluster, ?topition);
         let c = self.connection().await?;
 
         let prepared = c
@@ -927,8 +1525,7 @@ impl Storage for Postgres {
         retention: Option<Duration>,
         offsets: &[(Topition, OffsetCommitRequest)],
     ) -> Result<Vec<(Topition, ErrorCode)>> {
-        let _ = group;
-        let _ = retention;
+        debug!(?self.cluster, ?group, ?retention);
 
         let mut c = self.connection().await?;
         let tx = c.transaction().await?;
@@ -972,9 +1569,7 @@ impl Storage for Postgres {
         topics: &[Topition],
         require_stable: Option<bool>,
     ) -> Result<BTreeMap<Topition, i64>> {
-        let _ = group_id;
-        let _ = topics;
-        let _ = require_stable;
+        debug!(?self.cluster, ?group_id, ?topics, ?require_stable);
 
         let c = self.connection().await?;
 
@@ -1006,7 +1601,7 @@ impl Storage for Postgres {
         isolation_level: IsolationLevel,
         offsets: &[(Topition, ListOffsetRequest)],
     ) -> Result<Vec<(Topition, ListOffsetResponse)>> {
-        debug!(?offsets);
+        debug!(?self.cluster, ?offsets);
 
         let c = self.connection().await?;
 
@@ -1063,8 +1658,10 @@ impl Storage for Postgres {
             .inspect(|result| debug!(?result))?
             .map_or_else(
                 || {
+                    // this might need to be -1..
                     let timestamp = Some(SystemTime::now());
                     let offset = Some(0);
+                    debug!(?self.cluster, ?topition, ?offset_type, ?offset, ?timestamp);
 
                     Ok(ListOffsetResponse {
                         timestamp,
@@ -1077,6 +1674,8 @@ impl Storage for Postgres {
 
                     row.try_get::<_, i64>(0).map(Some).and_then(|offset| {
                         row.try_get::<_, SystemTime>(1).map(Some).map(|timestamp| {
+                            debug!(?self.cluster, ?topition, ?offset_type, ?offset, ?timestamp);
+
                             ListOffsetResponse {
                                 timestamp,
                                 offset,
@@ -1094,7 +1693,7 @@ impl Storage for Postgres {
     }
 
     async fn metadata(&mut self, topics: Option<&[TopicId]>) -> Result<MetadataResponse> {
-        debug!(?topics);
+        debug!(?self.cluster, ?topics);
 
         let c = self.connection().await.inspect_err(|err| error!(?err))?;
 
@@ -1429,7 +2028,7 @@ impl Storage for Postgres {
         resource: ConfigResource,
         keys: Option<&[String]>,
     ) -> Result<DescribeConfigsResult> {
-        debug!(?name, ?resource, ?keys);
+        debug!(?self.cluster, ?name, ?resource, ?keys);
 
         let c = self.connection().await.inspect_err(|err| error!(?err))?;
 
@@ -1515,7 +2114,7 @@ impl Storage for Postgres {
         detail: GroupDetail,
         version: Option<Version>,
     ) -> Result<Version, UpdateError<GroupDetail>> {
-        debug!(?group_id, ?detail, ?version);
+        debug!(?self.cluster, ?group_id, ?detail, ?version);
 
         let mut c = self.connection().await?;
         let tx = c.transaction().await?;
@@ -1611,77 +2210,120 @@ impl Storage for Postgres {
         producer_id: Option<i64>,
         producer_epoch: Option<i16>,
     ) -> Result<ProducerIdResponse> {
-        let Some(producer_id) = producer_id else {
-            return Ok(ProducerIdResponse {
-                error: ErrorCode::UnknownProducerId,
-                id: -1,
-                epoch: -1,
-            });
-        };
+        debug!(?self.cluster, ?transaction_id, ?producer_id, ?producer_epoch);
 
-        let Some(producer_epoch) = producer_epoch else {
-            return Ok(ProducerIdResponse {
-                error: ErrorCode::UnknownProducerId,
-                id: -1,
-                epoch: -1,
-            });
-        };
+        match (producer_id, producer_epoch) {
+            (Some(-1), Some(-1)) => {
+                if let Some(transaction_id) = transaction_id {
+                    let mut c = self.connection().await.inspect_err(|err| error!(?err))?;
+                    let tx = c.transaction().await.inspect_err(|err| error!(?err))?;
 
-        let mut c = self.connection().await.inspect_err(|err| error!(?err))?;
-        let tx = c.transaction().await?;
+                    let prepared = tx
+                        .prepare(include_str!("pg/txn_detail_select_current.sql"))
+                        .await
+                        .inspect_err(|err| error!(?err))?;
 
-        let row = if producer_id == -1 && producer_epoch == -1 {
-            let prepared = tx
-                .prepare(include_str!("pg/init_producer.sql"))
-                .await
-                .inspect_err(|err| error!(?err))?;
+                    if let Some(row) = tx
+                        .query_opt(&prepared, &[&self.cluster, &transaction_id])
+                        .await
+                        .inspect_err(|err| error!(?err))?
+                    {
+                        let id: i64 = row.try_get(0).inspect_err(|err| error!(?err))?;
+                        let epoch: i16 = row.try_get(1).inspect_err(|err| error!(?err))?;
+                        let sequence: i32 = row.try_get(2).inspect_err(|err| error!(?err))?;
+                        let status = row
+                            .try_get::<_, Option<String>>(3)
+                            .inspect_err(|err| error!(?err))?
+                            .map_or(Ok(None), |status| {
+                                TxnState::from_str(status.as_str()).map(Some)
+                            })?;
 
-            debug!(?prepared);
+                        debug!(transaction_id, id, epoch, sequence, ?status);
 
-            tx.query_one(&prepared, &[&self.cluster])
-                .await
-                .inspect_err(|err| error!(?err))?
-        } else {
-            let prepared = tx
-                .prepare(include_str!("pg/init_txn_producer.sql"))
-                .await
-                .inspect_err(|err| error!(?err))?;
+                        if let Some(TxnState::Begin) = status {
+                            let error = self
+                                .end_in_tx(transaction_id, id, epoch, false, &tx)
+                                .await?;
 
-            debug!(?prepared);
+                            if error != ErrorCode::None {
+                                _ = tx
+                                    .rollback()
+                                    .await
+                                    .inspect_err(|err| error!(?err, ?transaction_id, id, epoch));
 
-            tx.query_one(&prepared, &[&self.cluster, &producer_id, &producer_epoch])
-                .await
-                .inspect_err(|err| error!(?err))?
-        };
+                                return Ok(ProducerIdResponse { error, id, epoch });
+                            }
+                        }
+                    }
 
-        let id = row.get(0);
-        let epoch: i32 = row.get(1);
+                    let prepared = tx
+                        .prepare(include_str!("pg/txn_insert.sql"))
+                        .await
+                        .inspect_err(|err| error!(?err))?;
 
-        if let Some(transaction_id) = transaction_id {
-            let prepared = tx
-                .prepare(include_str!("pg/init_txn.sql"))
-                .await
-                .inspect_err(|err| error!(?err))?;
+                    let row = tx
+                        .query_one(&prepared, &[&self.cluster, &transaction_id])
+                        .await
+                        .inspect_err(|err| error!(?err))?;
 
-            debug!(?prepared);
+                    let id = row.try_get(0)?;
+                    let epoch: i16 = row.try_get(1)?;
+                    debug!(transaction_id, id, epoch);
 
-            _ = tx
-                .execute(
-                    &prepared,
-                    &[&self.cluster, &transaction_id, &transaction_timeout_ms, &id],
-                )
-                .await;
+                    let prepared = tx
+                        .prepare(include_str!("pg/txn_detail_insert.sql"))
+                        .await
+                        .inspect_err(|err| error!(?err))?;
+
+                    assert_eq!(
+                        1,
+                        tx.execute(&prepared, &[&id, &epoch, &transaction_timeout_ms])
+                            .await
+                            .inspect_err(|err| error!(?err))?
+                    );
+
+                    let error = match tx
+                        .commit()
+                        .await
+                        .inspect_err(|err| error!(?err, ?transaction_id, id, epoch))
+                    {
+                        Ok(()) => ErrorCode::None,
+                        Err(_) => ErrorCode::UnknownServerError,
+                    };
+
+                    Ok(ProducerIdResponse { error, id, epoch })
+                } else {
+                    let mut c = self.connection().await.inspect_err(|err| error!(?err))?;
+                    let tx = c.transaction().await.inspect_err(|err| error!(?err))?;
+
+                    let prepared = tx
+                        .prepare(include_str!("pg/producer_insert.sql"))
+                        .await
+                        .inspect_err(|err| error!(?err))?;
+
+                    let row = tx
+                        .query_one(&prepared, &[&self.cluster])
+                        .await
+                        .inspect_err(|err| error!(?err))?;
+
+                    let id = row.try_get(0)?;
+                    let epoch: i16 = row.try_get(1)?;
+
+                    let error = match tx
+                        .commit()
+                        .await
+                        .inspect_err(|err| error!(?err, ?transaction_id, id, epoch))
+                    {
+                        Ok(()) => ErrorCode::None,
+                        Err(_) => ErrorCode::UnknownServerError,
+                    };
+
+                    Ok(ProducerIdResponse { error, id, epoch })
+                }
+            }
+
+            (_, _) => todo!(),
         }
-
-        tx.commit().await.inspect_err(|err| error!(?err))?;
-
-        i16::try_from(epoch)
-            .map(|epoch| ProducerIdResponse {
-                error: ErrorCode::None,
-                id,
-                epoch,
-            })
-            .map_err(Into::into)
     }
 
     async fn txn_add_offsets(
@@ -1691,7 +2333,7 @@ impl Storage for Postgres {
         producer_epoch: i16,
         group_id: &str,
     ) -> Result<ErrorCode> {
-        debug!(?transaction_id, ?producer_id, ?producer_epoch, ?group_id);
+        debug!(?self.cluster, ?transaction_id, ?producer_id, ?producer_epoch, ?group_id);
 
         Ok(ErrorCode::None)
     }
@@ -1700,7 +2342,7 @@ impl Storage for Postgres {
         &mut self,
         partitions: TxnAddPartitionsRequest,
     ) -> Result<TxnAddPartitionsResponse> {
-        debug!(?partitions);
+        debug!(?self.cluster, ?partitions);
 
         match partitions {
             TxnAddPartitionsRequest::VersionZeroToThree {
@@ -1733,10 +2375,17 @@ impl Storage for Postgres {
                                     &topic.name,
                                     &partition_index,
                                     &transaction_id,
+                                    &producer_id,
+                                    &producer_epoch,
                                 ],
                             )
                             .await
-                            .inspect_err(|err| error!(?err))?;
+                            .inspect_err(|err| {
+                                error!(
+                                    ?err,
+                                    self.cluster, topic.name, partition_index, transaction_id
+                                )
+                            })?;
 
                         results_by_partition.push(AddPartitionsToTxnPartitionResult {
                             partition_index,
@@ -1749,6 +2398,29 @@ impl Storage for Postgres {
                         results_by_partition: Some(results_by_partition),
                     })
                 }
+
+                let prepared = tx
+                    .prepare(include_str!("pg/txn_detail_update_started_at.sql"))
+                    .await
+                    .inspect_err(|err| error!(?err))?;
+
+                _ = tx
+                    .execute(
+                        &prepared,
+                        &[
+                            &self.cluster,
+                            &transaction_id,
+                            &producer_id,
+                            &producer_epoch,
+                        ],
+                    )
+                    .await
+                    .inspect_err(|err| {
+                        error!(
+                            ?err,
+                            self.cluster, transaction_id, producer_id, producer_epoch,
+                        )
+                    })?;
 
                 tx.commit().await?;
 
@@ -1765,10 +2437,37 @@ impl Storage for Postgres {
         &mut self,
         offsets: TxnOffsetCommitRequest,
     ) -> Result<Vec<TxnOffsetCommitResponseTopic>> {
-        debug!(?offsets);
+        debug!(?self.cluster, ?offsets);
 
         let mut c = self.connection().await.inspect_err(|err| error!(?err))?;
         let tx = c.transaction().await.inspect_err(|err| error!(?err))?;
+
+        let prepared = tx
+            .prepare(include_str!("pg/txn_select_producer_epoch.sql"))
+            .await
+            .inspect_err(|err| error!(?err))?;
+
+        let (producer_id, producer_epoch) = if let Some(row) = tx
+            .query_opt(&prepared, &[&self.cluster, &offsets.transaction_id])
+            .await
+            .inspect_err(|err| error!(?err))?
+        {
+            let producer_id = row
+                .try_get::<_, i64>(0)
+                .map(Some)
+                .inspect_err(|err| error!(?err))?;
+
+            let epoch = row
+                .try_get::<_, i16>(1)
+                .map(Some)
+                .inspect_err(|err| error!(?err))?;
+
+            (producer_id, epoch)
+        } else {
+            (None, None)
+        };
+
+        debug!(?producer_id, ?producer_epoch);
 
         let prepared = tx
             .prepare(include_str!("pg/txn_offset_commit_insert.sql"))
@@ -1783,7 +2482,7 @@ impl Storage for Postgres {
                     &offsets.transaction_id,
                     &offsets.group_id,
                     &offsets.producer_id,
-                    &(offsets.producer_epoch as i32),
+                    &offsets.producer_epoch,
                     &offsets.generation_id,
                     &offsets.member_id,
                 ],
@@ -1802,29 +2501,45 @@ impl Storage for Postgres {
             let mut partitions = vec![];
 
             for partition in topic.partitions.unwrap_or(vec![]) {
-                _ = tx
-                    .execute(
-                        &prepared,
-                        &[
-                            &self.cluster,
-                            &offsets.transaction_id,
-                            &offsets.group_id,
-                            &offsets.producer_id,
-                            &(offsets.producer_epoch as i32),
-                            &topic.name,
-                            &partition.partition_index,
-                            &partition.committed_offset,
-                            &partition.committed_leader_epoch,
-                            &partition.committed_metadata,
-                        ],
-                    )
-                    .await
-                    .inspect_err(|err| error!(?err))?;
+                if producer_id.is_some_and(|producer_id| producer_id == offsets.producer_id) {
+                    if producer_epoch
+                        .is_some_and(|producer_epoch| producer_epoch == offsets.producer_epoch)
+                    {
+                        _ = tx
+                            .execute(
+                                &prepared,
+                                &[
+                                    &self.cluster,
+                                    &offsets.transaction_id,
+                                    &offsets.group_id,
+                                    &offsets.producer_id,
+                                    &offsets.producer_epoch,
+                                    &topic.name,
+                                    &partition.partition_index,
+                                    &partition.committed_offset,
+                                    &partition.committed_leader_epoch,
+                                    &partition.committed_metadata,
+                                ],
+                            )
+                            .await
+                            .inspect_err(|err| error!(?err))?;
 
-                partitions.push(TxnOffsetCommitResponsePartition {
-                    partition_index: partition.partition_index,
-                    error_code: i16::from(ErrorCode::None),
-                });
+                        partitions.push(TxnOffsetCommitResponsePartition {
+                            partition_index: partition.partition_index,
+                            error_code: i16::from(ErrorCode::None),
+                        });
+                    } else {
+                        partitions.push(TxnOffsetCommitResponsePartition {
+                            partition_index: partition.partition_index,
+                            error_code: i16::from(ErrorCode::InvalidProducerEpoch),
+                        });
+                    }
+                } else {
+                    partitions.push(TxnOffsetCommitResponsePartition {
+                        partition_index: partition.partition_index,
+                        error_code: i16::from(ErrorCode::UnknownProducerId),
+                    });
+                }
             }
 
             topics.push(TxnOffsetCommitResponseTopic {
@@ -1845,49 +2560,17 @@ impl Storage for Postgres {
         producer_epoch: i16,
         committed: bool,
     ) -> Result<ErrorCode> {
-        debug!(?transaction_id, ?producer_id, ?producer_epoch, ?committed);
+        debug!(?self.cluster, ?transaction_id, ?producer_id, ?producer_epoch, ?committed);
 
         let mut c = self.connection().await.inspect_err(|err| error!(?err))?;
         let tx = c.transaction().await.inspect_err(|err| error!(?err))?;
 
-        let prepared = tx
-            .prepare(include_str!("pg/watermark_insert_from_txn.sql"))
-            .await
-            .inspect_err(|err| error!(?err))?;
-
-        _ = tx
-            .execute(
-                &prepared,
-                &[
-                    &self.cluster,
-                    &transaction_id,
-                    &producer_id,
-                    &(producer_epoch as i32),
-                ],
-            )
-            .await
-            .inspect_err(|err| error!(?err))?;
-
-        let prepared = tx
-            .prepare(include_str!("pg/consumer_offset_insert_from_txn.sql"))
-            .await
-            .inspect_err(|err| error!(?err))?;
-
-        _ = tx
-            .execute(
-                &prepared,
-                &[
-                    &self.cluster,
-                    &transaction_id,
-                    &producer_id,
-                    &(producer_epoch as i32),
-                ],
-            )
-            .await
-            .inspect_err(|err| error!(?err))?;
+        let error_code = self
+            .end_in_tx(transaction_id, producer_id, producer_epoch, committed, &tx)
+            .await?;
 
         tx.commit().await?;
 
-        Ok(ErrorCode::None)
+        Ok(error_code)
     }
 }

@@ -19,28 +19,23 @@ insert into txn_produce_offset
 
 select txn_tp.id, $7, $8
 
-from cluster c,
-producer p,
-topic t,
-topition tp,
-txn_topition txn_tp,
-txn
+from
 
-where c.name = $1
+cluster c
+join txn on txn.cluster = c.id
+join txn_detail on txn_detail.transaction = txn.id
+join topic t on t.cluster = c.id
+join topition tp on tp.topic = t.id
+join txn_topition txn_tp on txn_tp.txn_detail = txn_detail.id and txn_tp.topition = tp.id
+
+where
+
+c.name = $1
 and txn.name = $2
-and p.id = $3
-and p.epoch = $4
+and txn.id = $3
+and txn_detail.epoch = $4
 and t.name = $5
 and tp.partition = $6
-
-and p.cluster = c.id
-and t.cluster = c.id
-and txn.cluster = c.id
-
-and txn.producer = p.id
-and tp.topic = t.id
-and txn_tp.transaction = t.id
-and txn_tp.topition = tp.id
 
 on conflict (txn_topition)
 do update set offset_end = excluded.offset_end,

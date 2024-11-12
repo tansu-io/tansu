@@ -14,18 +14,31 @@
 -- You should have received a copy of the GNU Affero General Public License
 -- along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+-- prepare record_fetch (text, text, integer, integer, integer, integer) as
 with sized as (
 select
-r.offset_id, r.timestamp, r.k, r.v, sum(coalesce(length(r.k), 0) + coalesce(length(r.v), 0))
-over (order by r.offset_id) as bytes
-from cluster c, record r, topic t, topition tp
-where c.name = $1
+
+r.offset_id,
+r.timestamp,
+r.k,
+r.v,
+sum(coalesce(length(r.k), 0) + coalesce(length(r.v), 0)) over (order by r.offset_id) as bytes,
+r.producer_id,
+r.producer_epoch
+
+from
+
+cluster c
+join topic t on t.cluster = c.id
+join topition tp on tp.topic = t.id
+join record r on r.topition = tp.id
+
+where
+
+c.name = $1
 and t.name = $2
 and tp.partition = $3
 and r.offset_id >= $4
-and r.offset_id <= $6
-and t.cluster = c.id
-and tp.topic = t.id
-and r.topition = tp.id)
+and r.offset_id <= $6)
 
 select * from sized where bytes < $5;

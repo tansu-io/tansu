@@ -705,7 +705,7 @@ impl Storage for DynoStore {
     ) -> Result<i64> {
         debug!(?transaction_id, ?topition, ?deflated);
 
-        if deflated.producer_id > 0 {
+        if deflated.producer_id != -1 {
             self.producers
                 .with(&self.object_store, |producers| {
                     debug!(?producers, ?deflated.producer_id);
@@ -733,7 +733,7 @@ impl Storage for DynoStore {
             .with_mut(&self.object_store, |watermark| {
                 debug!(?watermark);
 
-                if deflated.producer_id > 0 {
+                if deflated.producer_id != -1 {
                     if let Some(ws) = watermark.producers.get_mut(&deflated.producer_id) {
                         debug!(?ws);
 
@@ -815,7 +815,7 @@ impl Storage for DynoStore {
         min_bytes: u32,
         max_bytes: u32,
         isolation: IsolationLevel,
-    ) -> Result<deflated::Batch> {
+    ) -> Result<Vec<deflated::Batch>> {
         debug!(?topition, ?offset, ?min_bytes, ?max_bytes, ?isolation);
 
         let location = Path::from(format!(
@@ -849,6 +849,7 @@ impl Storage for DynoStore {
             return inflated::Batch::builder()
                 .build()
                 .and_then(TryInto::try_into)
+                .map(|batch| vec![batch])
                 .map_err(Into::into);
         };
 
@@ -872,7 +873,7 @@ impl Storage for DynoStore {
             .and_then(|encoded| self.decode(encoded))
             .map(|mut deflated| {
                 deflated.base_offset = *offset;
-                deflated
+                vec![deflated]
             })
     }
 

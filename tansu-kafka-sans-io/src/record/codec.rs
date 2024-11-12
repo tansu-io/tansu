@@ -310,7 +310,7 @@ impl<T: Serialize> Serialize for VarIntSequence<T> {
 }
 
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub(crate) struct Sequence<T>(pub Vec<T>);
+pub struct Sequence<T>(pub Vec<T>);
 
 impl<T> IntoIterator for Sequence<T> {
     type Item = T;

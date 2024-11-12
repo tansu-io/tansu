@@ -14,12 +14,24 @@
 -- You should have received a copy of the GNU Affero General Public License
 -- along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-select w.low, w.high, w.stable
-from cluster c, topic t, topition tp, watermark w
-where c.name = $1
+select
+
+w.low, w.high, w.stable
+
+from
+
+cluster c,
+topic t,
+topition tp,
+watermark w
+
+where
+
+c.name = $1
 and t.name = $2
 and tp.partition = $3
 and t.cluster = c.id
 and tp.topic = t.id
 and w.topition = tp.id
+
 for no key update;

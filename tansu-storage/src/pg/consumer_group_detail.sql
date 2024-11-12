@@ -15,7 +15,11 @@
 -- along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 select cg.e_tag, cg.detail
-from cluster c, consumer_group cg
+
+from
+
+cluster c
+join consumer_group cg on cg.cluster = c.id
+
 where cg.name = $1
-and c.name = $2
-and cg.cluster = c.id;
+and c.name = $2;

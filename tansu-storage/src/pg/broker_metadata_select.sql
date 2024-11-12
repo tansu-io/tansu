@@ -15,8 +15,14 @@
 -- along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 select b.node, l.host, l.port, b.rack
-from broker b, cluster c, listener l
-where c.name = $1
-and b.cluster = c.id
-and l.broker = b.id
+
+from
+
+cluster c
+join broker b on b.cluster = c.id
+join listener l on l.broker = b.id
+
+where
+
+c.name = $1
 and l.name = 'broker';

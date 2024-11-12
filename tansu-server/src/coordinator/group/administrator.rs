@@ -154,7 +154,6 @@ where
             Wrapper::Forming(Inner {
                 session_timeout_ms,
                 rebalance_timeout_ms,
-                group_instance_id,
                 members,
                 generation_id,
                 state,
@@ -163,7 +162,6 @@ where
             }) => GroupDetail {
                 session_timeout_ms: *session_timeout_ms,
                 rebalance_timeout_ms: *rebalance_timeout_ms,
-                group_instance_id: group_instance_id.clone(),
                 members: members
                     .iter()
                     .map(|(id, member)| {
@@ -187,7 +185,6 @@ where
             Wrapper::Formed(Inner {
                 session_timeout_ms,
                 rebalance_timeout_ms,
-                group_instance_id,
                 members,
                 generation_id,
                 state,
@@ -196,7 +193,6 @@ where
             }) => GroupDetail {
                 session_timeout_ms: *session_timeout_ms,
                 rebalance_timeout_ms: *rebalance_timeout_ms,
-                group_instance_id: group_instance_id.clone(),
                 members: members
                     .iter()
                     .map(|(id, member)| {
@@ -246,7 +242,6 @@ where
                 Self::Forming(Inner {
                     session_timeout_ms: gd.session_timeout_ms,
                     rebalance_timeout_ms: gd.rebalance_timeout_ms,
-                    group_instance_id: gd.group_instance_id,
                     members: gd
                         .members
                         .iter()
@@ -278,7 +273,6 @@ where
             } => Self::Formed(Inner {
                 session_timeout_ms: gd.session_timeout_ms,
                 rebalance_timeout_ms: gd.rebalance_timeout_ms,
-                group_instance_id: gd.group_instance_id,
                 members: gd
                     .members
                     .iter()
@@ -395,7 +389,6 @@ where
                     Wrapper::Forming(Inner {
                         session_timeout_ms: inner.session_timeout_ms,
                         rebalance_timeout_ms: inner.rebalance_timeout_ms,
-                        group_instance_id: inner.group_instance_id,
                         members: inner.members,
                         generation_id: inner.generation_id,
                         state: Forming {
@@ -676,7 +669,6 @@ where
                 let inner = Inner {
                     session_timeout_ms,
                     rebalance_timeout_ms,
-                    group_instance_id: group_instance_id.map(ToOwned::to_owned),
                     members: Default::default(),
                     generation_id: -1,
                     state: Forming::default(),
@@ -795,7 +787,6 @@ where
                 let inner = Inner {
                     session_timeout_ms: Default::default(),
                     rebalance_timeout_ms: Default::default(),
-                    group_instance_id: group_instance_id.map(ToOwned::to_owned),
                     members: Default::default(),
                     generation_id: -1,
                     state: Forming::default(),
@@ -892,7 +883,7 @@ where
                 let inner = Inner {
                     session_timeout_ms: Default::default(),
                     rebalance_timeout_ms: Default::default(),
-                    group_instance_id: Default::default(),
+
                     members: Default::default(),
                     generation_id: -1,
                     state: Forming::default(),
@@ -972,7 +963,7 @@ where
                 let inner = Inner {
                     session_timeout_ms: Default::default(),
                     rebalance_timeout_ms: Default::default(),
-                    group_instance_id: Default::default(),
+
                     members: Default::default(),
                     generation_id: -1,
                     state: Forming::default(),
@@ -1053,7 +1044,7 @@ where
         let wrapper = Wrapper::Forming(Inner {
             session_timeout_ms: Default::default(),
             rebalance_timeout_ms: Default::default(),
-            group_instance_id: Default::default(),
+
             members: Default::default(),
             generation_id: -1,
             state: Forming::default(),
@@ -1086,7 +1077,7 @@ where
                 let inner = Inner {
                     session_timeout_ms: Default::default(),
                     rebalance_timeout_ms: Default::default(),
-                    group_instance_id: Default::default(),
+
                     members: Default::default(),
                     generation_id: -1,
                     state: Forming::default(),
@@ -1178,7 +1169,6 @@ pub struct Formed {
 pub struct Inner<O, S> {
     session_timeout_ms: i32,
     rebalance_timeout_ms: Option<i32>,
-    group_instance_id: Option<String>,
     members: BTreeMap<String, Member>,
     generation_id: i32,
     state: S,
@@ -1596,45 +1586,61 @@ where
             &protocols[0]
         };
 
-        if let Some(client_id) = client_id {
-            if member_id.is_empty() {
-                let member_id = format!("{client_id}-{}", Uuid::new_v4());
-                debug!(?member_id);
+        if member_id.is_empty() && group_instance_id.is_none() {
+            let member_id = if let Some(client_id) = client_id {
+                format!("{client_id}-{}", Uuid::new_v4())
+            } else {
+                format!("{}", Uuid::new_v4())
+            };
+            debug!(?member_id);
 
-                let body = Body::JoinGroupResponse {
-                    throttle_time_ms: Some(0),
-                    error_code: ErrorCode::MemberIdRequired.into(),
-                    generation_id: -1,
-                    protocol_type: self.state.protocol_type.clone(),
-                    protocol_name: Some("".into()),
-                    leader: "".into(),
-                    skip_assignment: self.skip_assignment,
-                    member_id: member_id.clone(),
-                    members: Some([].into()),
-                };
+            let body = Body::JoinGroupResponse {
+                throttle_time_ms: Some(0),
+                error_code: ErrorCode::MemberIdRequired.into(),
+                generation_id: -1,
+                protocol_type: self.state.protocol_type.clone(),
+                protocol_name: Some("".into()),
+                leader: "".into(),
+                skip_assignment: self.skip_assignment,
+                member_id: member_id.clone(),
+                members: Some([].into()),
+            };
 
-                _ = self.members.insert(
-                    member_id.clone(),
-                    Member {
-                        join_response: JoinGroupResponseMember {
-                            member_id,
-                            group_instance_id: group_instance_id.map(|s| s.to_owned()),
-                            metadata: protocol.metadata.clone(),
-                        },
-                        last_contact: Some(now),
+            _ = self.members.insert(
+                member_id.clone(),
+                Member {
+                    join_response: JoinGroupResponseMember {
+                        member_id,
+                        group_instance_id: group_instance_id.map(|s| s.to_owned()),
+                        metadata: protocol.metadata.clone(),
                     },
-                );
+                    last_contact: Some(now),
+                },
+            );
 
-                self.generation_id += 1;
+            self.generation_id += 1;
 
-                return (self, body);
-            }
+            return (self, body);
         }
+
+        let member_id = group_instance_id.map_or(member_id.to_owned(), |group_instance_id| {
+            if member_id.is_empty() {
+                if let Some((member_id, _)) = self.members.iter().find(|(_, member)| {
+                    member.join_response.group_instance_id.as_deref() == Some(group_instance_id)
+                }) {
+                    member_id.into()
+                } else {
+                    format!("{group_instance_id}-{}", Uuid::new_v4())
+                }
+            } else {
+                member_id.into()
+            }
+        });
 
         debug!(?member_id, ?self.members);
 
         match self.members.insert(
-            member_id.to_owned(),
+            member_id.clone(),
             Member {
                 join_response: JoinGroupResponseMember {
                     member_id: member_id.to_string(),
@@ -1682,7 +1688,7 @@ where
                 self.generation_id
             );
 
-            _ = self.state.leader.replace(member_id.to_owned());
+            _ = self.state.leader.replace(member_id.clone());
         }
 
         let body = {
@@ -1698,13 +1704,12 @@ where
                     .as_ref()
                     .map_or(String::from(""), |leader| leader.clone()),
                 skip_assignment: self.skip_assignment,
-                member_id: member_id.into(),
                 members: Some(
                     if self
                         .state
                         .leader
                         .as_ref()
-                        .is_some_and(|leader| leader == member_id)
+                        .is_some_and(|leader| leader == member_id.as_str())
                     {
                         self.members
                             .values()
@@ -1715,6 +1720,7 @@ where
                         [].into()
                     },
                 ),
+                member_id,
             }
         };
 
@@ -1832,7 +1838,7 @@ where
         let state = Inner {
             session_timeout_ms: self.session_timeout_ms,
             rebalance_timeout_ms: self.rebalance_timeout_ms,
-            group_instance_id: self.group_instance_id,
+
             members: self.members,
             generation_id: self.generation_id,
             state: Formed {
@@ -2130,7 +2136,7 @@ where
                         generation_id: self.generation_id + 1,
                         session_timeout_ms: self.session_timeout_ms,
                         rebalance_timeout_ms: self.rebalance_timeout_ms,
-                        group_instance_id: self.group_instance_id,
+
                         members: self.members,
                         state: Forming {
                             protocol_type: Some(self.state.protocol_type),
@@ -2209,7 +2215,7 @@ where
                     generation_id: self.generation_id + 1,
                     session_timeout_ms: self.session_timeout_ms,
                     rebalance_timeout_ms: self.rebalance_timeout_ms,
-                    group_instance_id: self.group_instance_id,
+
                     members: self.members,
                     state: Forming {
                         protocol_type: Some(self.state.protocol_type),
@@ -2262,7 +2268,7 @@ where
                     generation_id: self.generation_id + 1,
                     session_timeout_ms: self.session_timeout_ms,
                     rebalance_timeout_ms: self.rebalance_timeout_ms,
-                    group_instance_id: self.group_instance_id,
+
                     members: self.members,
                     state: Forming {
                         protocol_type: Some(self.state.protocol_type),
@@ -2491,7 +2497,7 @@ where
                 generation_id: self.generation_id + 1,
                 session_timeout_ms: self.session_timeout_ms,
                 rebalance_timeout_ms: self.rebalance_timeout_ms,
-                group_instance_id: self.group_instance_id,
+
                 members: self.members,
                 state: Forming {
                     protocol_type: Some(self.state.protocol_type),

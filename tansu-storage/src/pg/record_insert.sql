@@ -15,11 +15,20 @@
 -- along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 insert into record
-(topition, offset_id, producer_id, sequence, timestamp, k, v)
-select tp.id, $4, $5, $6, $7, $8, $9
-from cluster c, topic t, topition tp
-where c.name = $1
+(topition, offset_id, producer_id, producer_epoch, timestamp, k, v)
+
+select
+
+tp.id, $4, $5, $6, $7, $8, $9
+
+from
+
+cluster c
+join topic t on t.cluster = c.id
+join topition tp on tp.topic = t.id
+
+where
+
+c.name = $1
 and t.name = $2
-and tp.partition = $3
-and t.cluster = c.id
-and tp.topic = t.id
+and tp.partition = $3;

@@ -15,12 +15,14 @@
 -- along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 select co.committed_offset
-from cluster c,consumer_group cg, consumer_offset co, topic t, topition tp
+
+from cluster c
+join consumer_group cg on cg.cluster = c.id
+join consumer_offset co on co.consumer_group = cg.id
+join topic t on t.cluster = c.id
+join topition tp on tp.topic = t.id
+
 where c.name = $1
 and cg.name = $2
 and t.name = $3
-and tp.partition = $4
-and cg.cluster = c.id
-and co.consumer_group = cg.id
-and co.topition = tp.id
-and tp.topic = t.id;
+and tp.partition = $4;
