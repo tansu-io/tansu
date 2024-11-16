@@ -1691,9 +1691,9 @@ where
             Body::JoinGroupResponse {
                 throttle_time_ms: Some(0),
                 error_code: ErrorCode::NotCoordinator.into(),
-                generation_id: self.generation_id,
-                protocol_type: self.state.protocol_type.clone(),
-                protocol_name: Some("".into()),
+                generation_id: -1,
+                protocol_type: None,
+                protocol_name: None,
                 leader: "".into(),
                 skip_assignment: self.skip_assignment,
                 member_id: "".into(),
