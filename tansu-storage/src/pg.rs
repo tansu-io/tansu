@@ -1236,6 +1236,10 @@ impl Storage for Postgres {
                 "txn_topition",
                 include_str!("pg/txn_topition_delete_by_topic.sql"),
             ),
+            (
+                "producer_detail",
+                include_str!("pg/producer_detail_delete_by_topic.sql"),
+            ),
             ("topitions", include_str!("pg/topition_delete_by_topic.sql")),
         ] {
             let prepared = tx.prepare(sql).await.inspect_err(|err| error!(?err))?;
