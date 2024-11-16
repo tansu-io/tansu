@@ -17,15 +17,17 @@
 insert into txn_topition
 (txn_detail, topition)
 
-select txn_detail.id, tp.id
+select txn_d.id, tp.id
 
 from
 
 cluster c
+join producer p on p.cluster = c.id
 join topic t on t.cluster  = c.id
 join topition tp on tp.topic = t.id
-join txn on txn.cluster = c.id
-join txn_detail on txn_detail.transaction = txn.id
+join txn on txn.cluster = c.id and txn.producer = p.id
+join producer_epoch pe on pe.producer = p.id
+join txn_detail txn_d on txn_d.transaction = txn.id and txn_d.producer_epoch = pe.id
 
 where
 
@@ -33,5 +35,5 @@ c.name = $1
 and t.name = $2
 and tp.partition = $3
 and txn.name = $4
-and txn.id = $5
-and txn_detail.epoch = $6;
+and p.id = $5
+and pe.epoch = $6;

@@ -14,22 +14,22 @@
 -- You should have received a copy of the GNU Affero General Public License
 -- along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
--- prepare cg_update (text, text, uuid, uuid, json) as
-insert into consumer_group
-(cluster, name, e_tag, detail)
+update producer
 
-select c.id, $2, $4, $5
-from cluster c
+set
+
+epoch = epoch + 1,
+sequence = 0
+
+from
+
+cluster c,
+txn
+
 where c.name = $1
+and txn.name = $2
+and txn.cluster = c.id
+and txn.producer = producer.id
+and producer.cluster = c.id
 
-on conflict (cluster, name)
-
-do update set
-
-detail = excluded.detail,
-last_updated = excluded.last_updated,
-e_tag = $4
-
-where consumer_group.e_tag = $3
-
-returning name, cluster, e_tag, detail;
+returning producer.id, producer.epoch;

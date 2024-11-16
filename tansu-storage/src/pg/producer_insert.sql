@@ -17,4 +17,4 @@
 insert into producer (cluster)
 select cluster.id
 from cluster where cluster.name = $1
-returning id, epoch;
+returning id;

@@ -24,14 +24,17 @@ status = 'BEGIN'
 from
 
 cluster c
-join txn on txn.cluster = c.id
+join producer p on p.cluster = c.id
+join producer_epoch pe on pe.producer = p.id
+join txn on txn.cluster = c.id and txn.producer = p.id
 
 where
 
 c.name = $1
 and txn.name = $2
-and txn.id = $3
+and p.id = $3
+and pe.epoch = $4
 and txn_detail.transaction = txn.id
-and txn_detail.epoch = $4
+and txn_detail.producer_epoch = pe.id
 and txn_detail.started_at is null
 and txn_detail.status is null;

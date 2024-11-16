@@ -31,7 +31,7 @@ use tansu_server::Result;
 use tansu_storage::{
     ListOffsetRequest, Storage, StorageContainer, Topition, TxnAddPartitionsRequest,
 };
-use tracing::debug;
+use tracing::{debug, error};
 use uuid::Uuid;
 
 pub mod common;
@@ -309,7 +309,9 @@ pub async fn init_producer_twice(
                     Some(-1),
                     Some(-1),
                 )
-                .await?;
+                .await
+                .inspect_err(|err| error!(?err))?;
+            debug!(?producer);
 
             let add_partitions = sc
                 .txn_add_partitions(TxnAddPartitionsRequest::VersionZeroToThree {
@@ -322,7 +324,9 @@ pub async fn init_producer_twice(
                     }]
                     .into(),
                 })
-                .await?;
+                .await
+                .inspect_err(|err| error!(?err))?;
+            debug!(?add_partitions);
 
             assert_eq!(
                 [AddPartitionsToTxnTopicResult {
@@ -339,6 +343,8 @@ pub async fn init_producer_twice(
             );
 
             for base_sequence in 0..num_records {
+                debug!(base_sequence);
+
                 let key = Bytes::copy_from_slice(alphanumeric_string(15).as_bytes());
                 let value = Bytes::copy_from_slice(alphanumeric_string(15).as_bytes());
 
@@ -354,14 +360,16 @@ pub async fn init_producer_twice(
                     .base_sequence(base_sequence)
                     .build()
                     .and_then(TryInto::try_into)
-                    .inspect(|deflated| debug!(?deflated))?;
+                    .inspect(|deflated| debug!(?deflated))
+                    .inspect_err(|err| error!(?err))?;
 
                 debug!(base_sequence, ?batch);
 
                 let offset = sc
                     .produce(Some(transaction.as_str()), &topition, batch)
                     .await
-                    .inspect(|offset| debug!(?offset))?;
+                    .inspect(|offset| debug!(?offset))
+                    .inspect_err(|err| error!(?err))?;
 
                 debug!(offset);
 
@@ -380,7 +388,8 @@ pub async fn init_producer_twice(
                 IsolationLevel::ReadUncommitted,
                 &[(topition.clone(), ListOffsetRequest::Latest)],
             )
-            .await?;
+            .await
+            .inspect_err(|err| error!(?err))?;
         assert_eq!(1, list_offsets_after.len());
         assert_eq!(topic_name, list_offsets_after[0].0.topic());
         assert_eq!(partition_index, list_offsets_after[0].0.partition());
@@ -397,7 +406,8 @@ pub async fn init_producer_twice(
                 IsolationLevel::ReadCommitted,
                 &[(topition.clone(), ListOffsetRequest::Latest)],
             )
-            .await?;
+            .await
+            .inspect_err(|err| error!(?err))?;
         assert_eq!(1, list_offsets_after.len());
         assert_eq!(topic_name, list_offsets_after[0].0.topic());
         assert_eq!(partition_index, list_offsets_after[0].0.partition());
@@ -415,7 +425,8 @@ pub async fn init_producer_twice(
             transactions[0].1.epoch,
             true
         )
-        .await?
+        .await
+        .inspect_err(|err| error!(?err))?
     );
 
     {
@@ -424,7 +435,8 @@ pub async fn init_producer_twice(
                 IsolationLevel::ReadUncommitted,
                 &[(topition.clone(), ListOffsetRequest::Latest)],
             )
-            .await?;
+            .await
+            .inspect_err(|err| error!(?err))?;
         assert_eq!(1, list_offsets.len());
         assert_eq!(topic_name, list_offsets[0].0.topic());
         assert_eq!(partition_index, list_offsets[0].0.partition());
@@ -458,7 +470,8 @@ pub async fn init_producer_twice(
                     })
                     .map_err(Into::into)
             })
-        })?;
+        })
+        .inspect_err(|err| error!(?err))?;
 
     debug!(min_bytes, max_bytes, ?batches);
 
@@ -478,7 +491,7 @@ pub async fn init_producer_twice(
         batches[0].records[0].value
     );
 
-    // init producer on transactions[1], should cause abort of
+    // init producer on transactions[1], will cause abort of
     // [1], with both [0] and [1] then visible at read committed.
     //
     let producer = sc
@@ -488,7 +501,8 @@ pub async fn init_producer_twice(
             Some(-1),
             Some(-1),
         )
-        .await?;
+        .await
+        .inspect_err(|err| error!(?err))?;
 
     assert_eq!(transactions[1].1.id, producer.id);
 
@@ -501,7 +515,8 @@ pub async fn init_producer_twice(
                 IsolationLevel::ReadUncommitted,
                 &[(topition.clone(), ListOffsetRequest::Latest)],
             )
-            .await?;
+            .await
+            .inspect_err(|err| error!(?err))?;
         assert_eq!(1, list_offsets.len());
         assert_eq!(topic_name, list_offsets[0].0.topic());
         assert_eq!(partition_index, list_offsets[0].0.partition());
@@ -532,7 +547,8 @@ pub async fn init_producer_twice(
                     })
                     .map_err(Into::into)
             })
-        })?;
+        })
+        .inspect_err(|err| error!(?err))?;
 
     debug!(min_bytes, max_bytes, ?batches);
 

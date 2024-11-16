@@ -16,6 +16,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Debug,
+    marker::PhantomData,
     ops::Deref,
     time::SystemTime,
 };
@@ -158,6 +159,7 @@ where
                 generation_id,
                 state,
                 skip_assignment,
+                inception,
                 ..
             }) => GroupDetail {
                 session_timeout_ms: *session_timeout_ms,
@@ -176,6 +178,7 @@ where
                     .collect(),
                 generation_id: *generation_id,
                 skip_assignment: *skip_assignment,
+                inception: *inception,
                 state: GroupState::Forming {
                     protocol_type: state.protocol_type.clone(),
                     protocol_name: state.protocol_name.clone(),
@@ -189,6 +192,7 @@ where
                 generation_id,
                 state,
                 skip_assignment,
+                inception,
                 ..
             }) => GroupDetail {
                 session_timeout_ms: *session_timeout_ms,
@@ -207,6 +211,7 @@ where
                     .collect(),
                 generation_id: *generation_id,
                 skip_assignment: *skip_assignment,
+                inception: *inception,
                 state: GroupState::Formed {
                     protocol_type: state.protocol_type.clone(),
                     protocol_name: state.protocol_name.clone(),
@@ -263,6 +268,7 @@ where
                     },
                     storage,
                     skip_assignment: gd.skip_assignment,
+                    inception: gd.inception,
                 })
             }
             GroupState::Formed {
@@ -295,6 +301,7 @@ where
                 },
                 storage,
                 skip_assignment: gd.skip_assignment,
+                inception: gd.inception,
             }),
         }
     }
@@ -398,6 +405,7 @@ where
                         },
                         storage: inner.storage,
                         skip_assignment: inner.skip_assignment,
+                        inception: inner.inception,
                     })
                 } else {
                     Wrapper::Formed(inner)
@@ -663,7 +671,7 @@ where
         let mut iteration = 0;
 
         loop {
-            let (wrapper, version) = self.wrappers.remove(group_id).unwrap_or_else(|| {
+            let (mut wrapper, version) = self.wrappers.remove(group_id).unwrap_or_else(|| {
                 debug!(?iteration, ?group_id);
 
                 let inner = Inner {
@@ -674,13 +682,17 @@ where
                     state: Forming::default(),
                     skip_assignment: Some(false),
                     storage: self.storage.clone(),
+                    inception: SystemTime::now(),
                 };
 
                 (Wrapper::Forming(inner), None)
             });
 
             let now = SystemTime::now();
-            let wrapper = wrapper.missed_heartbeat(group_id, now);
+
+            if group_instance_id.is_none() {
+                wrapper = wrapper.missed_heartbeat(group_id, now);
+            }
 
             if iteration == 0
                 && !member_id.is_empty()
@@ -781,26 +793,17 @@ where
         let mut iteration = 0;
 
         loop {
-            let (wrapper, version) = self.wrappers.remove(group_id).unwrap_or_else(|| {
-                debug!(?group_id, ?iteration);
-
-                let inner = Inner {
-                    session_timeout_ms: Default::default(),
-                    rebalance_timeout_ms: Default::default(),
-                    members: Default::default(),
-                    generation_id: -1,
-                    state: Forming::default(),
-                    skip_assignment: Some(false),
-                    storage: self.storage.clone(),
-                };
-
-                (Wrapper::Forming(inner), None)
-            });
+            let (mut wrapper, version) = self
+                .wrappers
+                .remove(group_id)
+                .unwrap_or((Wrapper::Forming(Inner::new(self.storage.clone())), None));
 
             debug!(?group_id, ?wrapper, ?version, ?iteration);
 
             let now = SystemTime::now();
-            let wrapper = wrapper.missed_heartbeat(group_id, now);
+            if group_instance_id.is_none() {
+                wrapper = wrapper.missed_heartbeat(group_id, now);
+            }
 
             let (wrapper, body) = wrapper
                 .sync(
@@ -877,22 +880,10 @@ where
         let mut iteration = 0;
 
         loop {
-            let (wrapper, version) = self.wrappers.remove(group_id).unwrap_or_else(|| {
-                debug!(?group_id, ?iteration);
-
-                let inner = Inner {
-                    session_timeout_ms: Default::default(),
-                    rebalance_timeout_ms: Default::default(),
-
-                    members: Default::default(),
-                    generation_id: -1,
-                    state: Forming::default(),
-                    skip_assignment: Some(false),
-                    storage: self.storage.clone(),
-                };
-
-                (Wrapper::Forming(inner), None)
-            });
+            let (wrapper, version) = self
+                .wrappers
+                .remove(group_id)
+                .unwrap_or((Wrapper::Forming(Inner::new(self.storage.clone())), None));
 
             debug!(?group_id, ?wrapper, ?version, ?iteration);
 
@@ -957,27 +948,14 @@ where
         let mut iteration = 0;
 
         loop {
-            let (wrapper, version) = self.wrappers.remove(group_id).unwrap_or_else(|| {
-                debug!(?group_id, ?iteration);
-
-                let inner = Inner {
-                    session_timeout_ms: Default::default(),
-                    rebalance_timeout_ms: Default::default(),
-
-                    members: Default::default(),
-                    generation_id: -1,
-                    state: Forming::default(),
-                    skip_assignment: Some(false),
-                    storage: self.storage.clone(),
-                };
-
-                (Wrapper::Forming(inner), None)
-            });
+            let (wrapper, version) = self
+                .wrappers
+                .remove(group_id)
+                .unwrap_or((Wrapper::Forming(Inner::new(self.storage.clone())), None));
 
             debug!(?group_id, ?wrapper, ?version, ?iteration);
 
             let now = SystemTime::now();
-            let wrapper = wrapper.missed_heartbeat(group_id, now);
 
             let (wrapper, body) = wrapper.offset_commit(now, &offset_commit).await;
 
@@ -1041,16 +1019,7 @@ where
     ) -> Result<Body> {
         debug!(?group_id, ?topics, ?groups, ?require_stable);
 
-        let wrapper = Wrapper::Forming(Inner {
-            session_timeout_ms: Default::default(),
-            rebalance_timeout_ms: Default::default(),
-
-            members: Default::default(),
-            generation_id: -1,
-            state: Forming::default(),
-            skip_assignment: Some(false),
-            storage: self.storage.clone(),
-        });
+        let wrapper = Wrapper::Forming(Inner::new(self.storage.clone()));
 
         let now = SystemTime::now();
         let (_wrapper, body) = wrapper
@@ -1071,32 +1040,22 @@ where
         let mut iteration = 0;
 
         loop {
-            let (wrapper, version) = self.wrappers.remove(group_id).unwrap_or_else(|| {
-                debug!(?group_id, ?iteration);
-
-                let inner = Inner {
-                    session_timeout_ms: Default::default(),
-                    rebalance_timeout_ms: Default::default(),
-
-                    members: Default::default(),
-                    generation_id: -1,
-                    state: Forming::default(),
-                    skip_assignment: Some(false),
-                    storage: self.storage.clone(),
-                };
-
-                (Wrapper::Forming(inner), None)
-            });
+            let (wrapper, version) = self
+                .wrappers
+                .remove(group_id)
+                .unwrap_or((Wrapper::Forming(Inner::new(self.storage.clone())), None));
 
             debug!(?group_id, ?wrapper, ?version, ?iteration);
 
             let now = SystemTime::now();
 
-            let (wrapper, body) = wrapper
+            let (mut wrapper, body) = wrapper
                 .heartbeat(now, group_id, generation_id, member_id, group_instance_id)
                 .await;
 
-            let wrapper = wrapper.missed_heartbeat(group_id, now);
+            if group_instance_id.is_none() {
+                wrapper = wrapper.missed_heartbeat(group_id, now);
+            }
 
             debug!(?group_id, ?wrapper, ?version, ?iteration);
 
@@ -1174,6 +1133,25 @@ pub struct Inner<O, S> {
     state: S,
     storage: O,
     skip_assignment: Option<bool>,
+    inception: SystemTime,
+}
+
+impl<O> Inner<O, PhantomData<Forming>>
+where
+    O: Storage,
+{
+    pub fn new(storage: O) -> Inner<O, Forming> {
+        Inner {
+            session_timeout_ms: Default::default(),
+            rebalance_timeout_ms: Default::default(),
+            members: Default::default(),
+            generation_id: -1,
+            state: Forming::default(),
+            skip_assignment: Some(false),
+            storage,
+            inception: SystemTime::now(),
+        }
+    }
 }
 
 impl<O> Inner<O, Forming>
@@ -1537,7 +1515,17 @@ where
         protocols: Option<&[JoinGroupRequestProtocol]>,
         reason: Option<&str>,
     ) -> (Self::JoinState, Body) {
-        let _ = reason;
+        debug!(
+            client_id,
+            group_id,
+            session_timeout_ms,
+            rebalance_timeout_ms,
+            member_id,
+            group_instance_id,
+            protocol_type,
+            ?protocols,
+            reason
+        );
 
         let Some(protocols) = protocols else {
             let body = Body::JoinGroupResponse {
@@ -1556,10 +1544,14 @@ where
         };
 
         let protocol = if let Some(protocol_name) = self.state.protocol_name.as_deref() {
+            debug!(protocol_name);
+
             if let Some(protocol) = protocols
                 .iter()
                 .find(|protocol| protocol.name == protocol_name)
             {
+                debug!(?protocol);
+
                 protocol
             } else {
                 let body = Body::JoinGroupResponse {
@@ -1691,7 +1683,23 @@ where
             _ = self.state.leader.replace(member_id.clone());
         }
 
-        let body = {
+        let body = if group_instance_id.is_some()
+            && now
+                .duration_since(self.inception)
+                .is_ok_and(|duration| duration.as_secs() < 5)
+        {
+            Body::JoinGroupResponse {
+                throttle_time_ms: Some(0),
+                error_code: ErrorCode::NotCoordinator.into(),
+                generation_id: self.generation_id,
+                protocol_type: self.state.protocol_type.clone(),
+                protocol_name: Some("".into()),
+                leader: "".into(),
+                skip_assignment: self.skip_assignment,
+                member_id: "".into(),
+                members: Some([].into()),
+            }
+        } else {
             Body::JoinGroupResponse {
                 throttle_time_ms: Some(0),
                 error_code: ErrorCode::None.into(),
@@ -1738,12 +1746,19 @@ where
         protocol_name: Option<&str>,
         assignments: Option<&[SyncGroupRequestAssignment]>,
     ) -> (Self::SyncState, Body) {
-        let _ = group_id;
-        let _ = group_instance_id;
-        let _ = protocol_type;
-        let _ = protocol_name;
+        debug!(
+            group_id,
+            generation_id,
+            member_id,
+            group_instance_id,
+            protocol_type,
+            protocol_name,
+            ?assignments
+        );
 
         if !self.members.contains_key(member_id) {
+            debug!(?self.members);
+
             let body = Body::SyncGroupResponse {
                 throttle_time_ms: Some(0),
                 error_code: ErrorCode::UnknownMemberId.into(),
@@ -1758,6 +1773,8 @@ where
         debug!(?member_id);
 
         if generation_id > self.generation_id {
+            debug!(self.generation_id);
+
             let body = Body::SyncGroupResponse {
                 throttle_time_ms: Some(0),
                 error_code: ErrorCode::IllegalGeneration.into(),
@@ -1770,6 +1787,8 @@ where
         }
 
         if generation_id < self.generation_id {
+            debug!(self.generation_id);
+
             let body = Body::SyncGroupResponse {
                 throttle_time_ms: Some(0),
                 error_code: ErrorCode::RebalanceInProgress.into(),
@@ -1792,6 +1811,8 @@ where
             .as_ref()
             .is_some_and(|leader_id| member_id != leader_id.as_str())
         {
+            debug!(?self.state.leader);
+
             let body = Body::SyncGroupResponse {
                 throttle_time_ms: Some(0),
                 error_code: ErrorCode::RebalanceInProgress.into(),
@@ -1849,6 +1870,7 @@ where
             },
             storage: self.storage,
             skip_assignment: self.skip_assignment,
+            inception: self.inception,
         };
 
         debug!(?state);
@@ -1875,6 +1897,8 @@ where
         let _ = group_instance_id;
 
         if !self.members.contains_key(member_id) {
+            debug!(?self.members);
+
             return (
                 self,
                 Body::HeartbeatResponse {
@@ -1885,6 +1909,8 @@ where
         }
 
         if generation_id > self.generation_id {
+            debug!(?self.generation_id);
+
             return (
                 self,
                 Body::HeartbeatResponse {
@@ -1900,6 +1926,8 @@ where
             .and_modify(|member| _ = member.last_contact.replace(now));
 
         if self.missed_heartbeat(group_id, now) || (generation_id < self.generation_id) {
+            debug!(self.generation_id);
+
             return (
                 self,
                 Body::HeartbeatResponse {
@@ -1924,10 +1952,12 @@ where
         member_id: Option<&str>,
         members: Option<&[MemberIdentity]>,
     ) -> (Self::LeaveState, Body) {
-        let _ = group_id;
         let _ = now;
+        debug!(?group_id, member_id, ?members);
 
         let members = if let Some(member_id) = member_id {
+            debug!(member_id);
+
             vec![MemberResponse {
                 member_id: member_id.to_owned(),
                 group_instance_id: None,
@@ -1983,6 +2013,7 @@ where
         detail: &OffsetCommit<'_>,
     ) -> (Self::OffsetCommitState, Body) {
         let _ = now;
+        debug!(?detail);
 
         match self.commit_offset(detail).await {
             Ok(body) => (self, body),
@@ -2025,6 +2056,7 @@ where
         require_stable: Option<bool>,
     ) -> (Self::OffsetFetchState, Body) {
         let _ = now;
+        debug!(group_id, ?topics, ?groups, ?require_stable);
         match self
             .fetch_offset(group_id, topics, groups, require_stable)
             .await
@@ -2063,10 +2095,17 @@ where
         protocols: Option<&[JoinGroupRequestProtocol]>,
         reason: Option<&str>,
     ) -> (Self::JoinState, Body) {
-        let _ = group_id;
-        let _ = session_timeout_ms;
-        let _ = rebalance_timeout_ms;
-        let _ = reason;
+        debug!(
+            client_id,
+            group_id,
+            session_timeout_ms,
+            rebalance_timeout_ms,
+            member_id,
+            group_instance_id,
+            protocol_type,
+            ?protocols,
+            reason
+        );
 
         let Some(protocols) = protocols else {
             let body = Body::JoinGroupResponse {
@@ -2103,54 +2142,74 @@ where
             return (self.into(), body);
         };
 
-        if let Some(client_id) = client_id {
-            if member_id.is_empty() {
-                let member_id = format!("{client_id}-{}", Uuid::new_v4());
+        if member_id.is_empty() && group_instance_id.is_none() {
+            let member_id = if let Some(client_id) = client_id {
+                format!("{client_id}-{}", Uuid::new_v4())
+            } else {
+                format!("{}", Uuid::new_v4())
+            };
+            debug!(?member_id);
 
-                let body = Body::JoinGroupResponse {
-                    throttle_time_ms: Some(0),
-                    error_code: ErrorCode::MemberIdRequired.into(),
-                    generation_id: -1,
-                    protocol_type: None,
-                    protocol_name: Some("".into()),
-                    leader: "".into(),
-                    skip_assignment: self.skip_assignment,
-                    member_id: member_id.clone(),
-                    members: Some([].into()),
-                };
+            let body = Body::JoinGroupResponse {
+                throttle_time_ms: Some(0),
+                error_code: ErrorCode::MemberIdRequired.into(),
+                generation_id: -1,
+                protocol_type: None,
+                protocol_name: Some("".into()),
+                leader: "".into(),
+                skip_assignment: self.skip_assignment,
+                member_id: member_id.clone(),
+                members: Some([].into()),
+            };
 
-                _ = self.members.insert(
-                    member_id.clone(),
-                    Member {
-                        join_response: JoinGroupResponseMember {
-                            member_id,
-                            group_instance_id: group_instance_id.map(|s| s.to_owned()),
-                            metadata: protocol.metadata.clone(),
-                        },
-                        last_contact: Some(now),
+            _ = self.members.insert(
+                member_id.clone(),
+                Member {
+                    join_response: JoinGroupResponseMember {
+                        member_id,
+                        group_instance_id: group_instance_id.map(|s| s.to_owned()),
+                        metadata: protocol.metadata.clone(),
                     },
-                );
+                    last_contact: Some(now),
+                },
+            );
 
-                return (
-                    Inner {
-                        generation_id: self.generation_id + 1,
-                        session_timeout_ms: self.session_timeout_ms,
-                        rebalance_timeout_ms: self.rebalance_timeout_ms,
+            return (
+                Inner {
+                    generation_id: self.generation_id + 1,
+                    session_timeout_ms: self.session_timeout_ms,
+                    rebalance_timeout_ms: self.rebalance_timeout_ms,
 
-                        members: self.members,
-                        state: Forming {
-                            protocol_type: Some(self.state.protocol_type),
-                            protocol_name: Some(self.state.protocol_name),
-                            leader: Some(self.state.leader),
-                        },
-                        storage: self.storage,
-                        skip_assignment: self.skip_assignment,
-                    }
-                    .into(),
-                    body,
-                );
-            }
+                    members: self.members,
+                    state: Forming {
+                        protocol_type: Some(self.state.protocol_type),
+                        protocol_name: Some(self.state.protocol_name),
+                        leader: Some(self.state.leader),
+                    },
+                    storage: self.storage,
+                    skip_assignment: self.skip_assignment,
+                    inception: self.inception,
+                }
+                .into(),
+                body,
+            );
         }
+
+        let member_id = group_instance_id.map_or(member_id.to_owned(), |group_instance_id| {
+            if member_id.is_empty() {
+                if let Some((member_id, _)) = self.members.iter().find(|(_, member)| {
+                    member.join_response.group_instance_id.as_deref() == Some(group_instance_id)
+                }) {
+                    member_id.into()
+                } else {
+                    format!("{group_instance_id}-{}", Uuid::new_v4())
+                }
+            } else {
+                member_id.into()
+            }
+        });
+
+        debug!(?member_id, ?self.members);
 
         match self.members.insert(
             member_id.to_owned(),
@@ -2167,6 +2226,11 @@ where
                 join_response: JoinGroupResponseMember { metadata, .. },
                 ..
             }) if metadata == protocol.metadata => {
+                debug!(
+                    "member_id: {}, existing metadata for generation: {}",
+                    member_id, self.generation_id
+                );
+
                 let state: Wrapper<O> = self.into();
 
                 let body = {
@@ -2191,7 +2255,7 @@ where
                             .map(|s| s.to_owned())
                             .unwrap_or("".to_owned()),
                         skip_assignment: state.skip_assignment().map(ToOwned::to_owned),
-                        member_id: member_id.into(),
+                        member_id,
                         members,
                     }
                 };
@@ -2224,6 +2288,7 @@ where
                     },
                     storage: self.storage,
                     skip_assignment: self.skip_assignment,
+                    inception: self.inception,
                 }
                 .into();
 
@@ -2249,7 +2314,7 @@ where
                             .map(|s| s.to_owned())
                             .unwrap_or("".to_owned()),
                         skip_assignment: self.skip_assignment,
-                        member_id: member_id.into(),
+                        member_id,
                         members,
                     }
                 };
@@ -2277,6 +2342,7 @@ where
                     },
                     storage: self.storage,
                     skip_assignment: self.skip_assignment,
+                    inception: self.inception,
                 }
                 .into();
 
@@ -2303,7 +2369,7 @@ where
                             .map(|s| s.to_owned())
                             .unwrap_or("".to_owned()),
                         skip_assignment: self.skip_assignment,
-                        member_id: member_id.into(),
+                        member_id,
                         members,
                     }
                 };
@@ -2506,6 +2572,7 @@ where
                 },
                 storage: self.storage,
                 skip_assignment: self.skip_assignment,
+                inception: self.inception,
             }
             .into()
         } else {

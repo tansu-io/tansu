@@ -14,22 +14,27 @@
 -- You should have received a copy of the GNU Affero General Public License
 -- along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
--- prepare cg_update (text, text, uuid, uuid, json) as
-insert into consumer_group
-(cluster, name, e_tag, detail)
+-- prepare producer_epoch_for_current_txn (text, text) as
 
-select c.id, $2, $4, $5
-from cluster c
-where c.name = $1
+select
 
-on conflict (cluster, name)
+p.id as producer,
+pe.epoch as epoch,
+txn_d.status as status
 
-do update set
+from
 
-detail = excluded.detail,
-last_updated = excluded.last_updated,
-e_tag = $4
+cluster c
+join producer p on p.cluster = c.id
+join producer_epoch pe on pe.producer = p.id
+join txn on txn.producer = p.id
+join txn_detail txn_d on txn_d.transaction = txn.id and txn_d.producer_epoch = pe.id
 
-where consumer_group.e_tag = $3
+where
 
-returning name, cluster, e_tag, detail;
+c.name = $1
+and txn.name = $2
+
+order by p.id, pe.epoch desc
+
+limit 1;

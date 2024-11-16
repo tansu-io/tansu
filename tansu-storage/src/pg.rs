@@ -200,90 +200,81 @@ impl Postgres {
     async fn idempotent_message_check(
         &mut self,
         transaction_id: Option<&str>,
+        topition: &Topition,
         deflated: &deflated::Batch,
         tx: &Transaction<'_>,
     ) -> Result<()> {
         debug!(transaction_id, ?deflated);
-        if transaction_id.is_none() {
+        let prepared = tx
+            .prepare(include_str!("pg/producer_epoch_current_for_producer.sql"))
+            .await
+            .inspect_err(|err| error!(?err))?;
+
+        if let Some(row) = tx
+            .query_opt(&prepared, &[&self.cluster, &deflated.producer_id])
+            .await
+            .inspect_err(|err| error!(?err))?
+        {
+            let current_epoch = row
+                .try_get::<_, i16>(0)
+                .inspect_err(|err| error!(self.cluster, deflated.producer_id, ?err))?;
+
             let prepared = tx
                 .prepare(include_str!("pg/producer_select_for_update.sql"))
                 .await
                 .inspect_err(|err| error!(?err))?;
 
-            if let Some(row) = tx
-                .query_opt(&prepared, &[&self.cluster, &deflated.producer_id])
+            let row = tx
+                .query_one(
+                    &prepared,
+                    &[
+                        &self.cluster,
+                        &topition.topic(),
+                        &topition.partition(),
+                        &deflated.producer_id,
+                        &deflated.producer_epoch,
+                    ],
+                )
                 .await
-                .inspect_err(|err| error!(?err))?
-            {
-                let epoch = row.try_get::<_, i16>(0).inspect_err(|err| error!(?err))?;
-                let sequence = row.try_get::<_, i32>(1).inspect_err(|err| error!(?err))?;
-
-                let increment = Self::idempotent_sequence_check(&epoch, &sequence, deflated)?;
-
-                let prepared = tx
-                    .prepare(include_str!("pg/producer_update_sequence.sql"))
-                    .await
-                    .inspect_err(|err| error!(?err))?;
-
-                assert_eq!(
-                    1,
-                    tx.execute(
-                        &prepared,
-                        &[
-                            &self.cluster,
-                            &deflated.producer_id,
-                            &deflated.producer_epoch,
-                            &increment,
-                        ],
+                .inspect_err(|err| {
+                    error!(
+                        self.cluster,
+                        ?topition,
+                        deflated.producer_id,
+                        deflated.producer_epoch,
+                        ?err
                     )
-                    .await
-                    .inspect_err(|err| error!(?err))?
-                );
+                })?;
 
-                Ok(())
-            } else {
-                Err(Error::Api(ErrorCode::UnknownProducerId))
-            }
-        } else {
+            let sequence = row.try_get::<_, i32>(0).inspect_err(|err| error!(?err))?;
+
+            let increment = Self::idempotent_sequence_check(&current_epoch, &sequence, deflated)?;
+
             let prepared = tx
-                .prepare(include_str!("pg/txn_detail_select_for_update.sql"))
+                .prepare(include_str!("pg/producer_detail_insert.sql"))
                 .await
                 .inspect_err(|err| error!(?err))?;
 
-            if let Some(row) = tx
-                .query_opt(&prepared, &[&self.cluster, &deflated.producer_id])
+            assert_eq!(
+                1,
+                tx.execute(
+                    &prepared,
+                    &[
+                        &self.cluster,
+                        &topition.topic(),
+                        &topition.partition(),
+                        &deflated.producer_id,
+                        &deflated.producer_epoch,
+                        &increment,
+                    ],
+                )
                 .await
                 .inspect_err(|err| error!(?err))?
-            {
-                let epoch = row.try_get::<_, i16>(0).inspect_err(|err| error!(?err))?;
-                let sequence = row.try_get::<_, i32>(1).inspect_err(|err| error!(?err))?;
+            );
 
-                let increment = Self::idempotent_sequence_check(&epoch, &sequence, deflated)?;
-
-                let prepared = tx
-                    .prepare(include_str!("pg/txn_detail_update_sequence.sql"))
-                    .await
-                    .inspect_err(|err| error!(?err))?;
-
-                assert_eq!(
-                    1,
-                    tx.execute(
-                        &prepared,
-                        &[
-                            &self.cluster,
-                            &deflated.producer_id,
-                            &deflated.producer_epoch,
-                            &increment,
-                        ],
-                    )
-                    .await
-                    .inspect_err(|err| error!(?err))?
-                );
-
-                Ok(())
-            } else {
-                Err(Error::Api(ErrorCode::UnknownProducerId))
-            }
+            Ok(())
+        } else {
+            Err(Error::Api(ErrorCode::UnknownProducerId))
         }
     }
 
@@ -331,7 +322,7 @@ impl Postgres {
         let partition = topition.partition();
 
         if deflated.is_idempotent() {
-            self.idempotent_message_check(transaction_id, &deflated, tx)
+            self.idempotent_message_check(transaction_id, topition, &deflated, tx)
                 .await
                 .inspect_err(|err| error!(?err))?;
         }
@@ -2212,90 +2203,74 @@ impl Storage for Postgres {
     ) -> Result<ProducerIdResponse> {
         debug!(?self.cluster, ?transaction_id, ?producer_id, ?producer_epoch);
 
-        match (producer_id, producer_epoch) {
-            (Some(-1), Some(-1)) => {
-                if let Some(transaction_id) = transaction_id {
-                    let mut c = self.connection().await.inspect_err(|err| error!(?err))?;
-                    let tx = c.transaction().await.inspect_err(|err| error!(?err))?;
+        match (producer_id, producer_epoch, transaction_id) {
+            (Some(-1), Some(-1), Some(transaction_id)) => {
+                let mut c = self.connection().await.inspect_err(|err| error!(?err))?;
+                let tx = c.transaction().await.inspect_err(|err| error!(?err))?;
 
-                    let prepared = tx
-                        .prepare(include_str!("pg/txn_detail_select_current.sql"))
-                        .await
-                        .inspect_err(|err| error!(?err))?;
+                let prepared = tx
+                    .prepare(include_str!("pg/producer_epoch_for_current_txn.sql"))
+                    .await
+                    .inspect_err(|err| error!(?err))?;
 
-                    if let Some(row) = tx
-                        .query_opt(&prepared, &[&self.cluster, &transaction_id])
-                        .await
+                if let Some(row) = tx
+                    .query_opt(&prepared, &[&self.cluster, &transaction_id])
+                    .await
+                    .inspect_err(|err| error!(?err))?
+                {
+                    let id: i64 = row.try_get(0).inspect_err(|err| error!(?err))?;
+                    let epoch: i16 = row.try_get(1).inspect_err(|err| error!(?err))?;
+                    let status = row
+                        .try_get::<_, Option<String>>(2)
                         .inspect_err(|err| error!(?err))?
-                    {
-                        let id: i64 = row.try_get(0).inspect_err(|err| error!(?err))?;
-                        let epoch: i16 = row.try_get(1).inspect_err(|err| error!(?err))?;
-                        let sequence: i32 = row.try_get(2).inspect_err(|err| error!(?err))?;
-                        let status = row
-                            .try_get::<_, Option<String>>(3)
-                            .inspect_err(|err| error!(?err))?
-                            .map_or(Ok(None), |status| {
-                                TxnState::from_str(status.as_str()).map(Some)
-                            })?;
+                        .map_or(Ok(None), |status| {
+                            TxnState::from_str(status.as_str()).map(Some)
+                        })?;
 
-                        debug!(transaction_id, id, epoch, sequence, ?status);
+                    debug!(transaction_id, id, epoch, ?status);
 
-                        if let Some(TxnState::Begin) = status {
-                            let error = self
-                                .end_in_tx(transaction_id, id, epoch, false, &tx)
-                                .await?;
+                    if let Some(TxnState::Begin) = status {
+                        let error = self
+                            .end_in_tx(transaction_id, id, epoch, false, &tx)
+                            .await?;
 
-                            if error != ErrorCode::None {
-                                _ = tx
-                                    .rollback()
-                                    .await
-                                    .inspect_err(|err| error!(?err, ?transaction_id, id, epoch));
+                        if error != ErrorCode::None {
+                            _ = tx
+                                .rollback()
+                                .await
+                                .inspect_err(|err| error!(?err, ?transaction_id, id, epoch));
 
-                                return Ok(ProducerIdResponse { error, id, epoch });
-                            }
+                            return Ok(ProducerIdResponse { error, id, epoch });
                         }
                     }
+                }
+
+                let prepared = tx
+                    .prepare(include_str!("pg/txn_select_name.sql"))
+                    .await
+                    .inspect_err(|err| error!(?err))?;
+
+                let (producer, epoch) = if let Some(row) = tx
+                    .query_opt(&prepared, &[&self.cluster, &transaction_id])
+                    .await
+                    .inspect_err(|err| error!(?err))?
+                {
+                    let producer: i64 = row.try_get(0).inspect_err(|err| error!(?err))?;
 
                     let prepared = tx
-                        .prepare(include_str!("pg/txn_insert.sql"))
+                        .prepare(include_str!("pg/producer_epoch_insert.sql"))
                         .await
                         .inspect_err(|err| error!(?err))?;
 
                     let row = tx
-                        .query_one(&prepared, &[&self.cluster, &transaction_id])
+                        .query_one(&prepared, &[&self.cluster, &producer])
                         .await
-                        .inspect_err(|err| error!(?err))?;
+                        .inspect_err(|err| error!(self.cluster, producer, ?err))?;
 
-                    let id = row.try_get(0)?;
-                    let epoch: i16 = row.try_get(1)?;
-                    debug!(transaction_id, id, epoch);
+                    let epoch: i16 = row.try_get(0)?;
 
-                    let prepared = tx
-                        .prepare(include_str!("pg/txn_detail_insert.sql"))
-                        .await
-                        .inspect_err(|err| error!(?err))?;
-
-                    assert_eq!(
-                        1,
-                        tx.execute(&prepared, &[&id, &epoch, &transaction_timeout_ms])
-                            .await
-                            .inspect_err(|err| error!(?err))?
-                    );
-
-                    let error = match tx
-                        .commit()
-                        .await
-                        .inspect_err(|err| error!(?err, ?transaction_id, id, epoch))
-                    {
-                        Ok(()) => ErrorCode::None,
-                        Err(_) => ErrorCode::UnknownServerError,
-                    };
-
-                    Ok(ProducerIdResponse { error, id, epoch })
+                    (producer, epoch)
                 } else {
-                    let mut c = self.connection().await.inspect_err(|err| error!(?err))?;
-                    let tx = c.transaction().await.inspect_err(|err| error!(?err))?;
-
                     let prepared = tx
                         .prepare(include_str!("pg/producer_insert.sql"))
                         .await
@@ -2306,23 +2281,130 @@ impl Storage for Postgres {
                         .await
                         .inspect_err(|err| error!(?err))?;
 
-                    let id = row.try_get(0)?;
-                    let epoch: i16 = row.try_get(1)?;
+                    let producer: i64 = row.try_get(0).inspect_err(|err| error!(?err))?;
 
-                    let error = match tx
-                        .commit()
+                    let prepared = tx
+                        .prepare(include_str!("pg/producer_epoch_insert.sql"))
                         .await
-                        .inspect_err(|err| error!(?err, ?transaction_id, id, epoch))
-                    {
+                        .inspect_err(|err| error!(?err))?;
+
+                    let row = tx
+                        .query_one(&prepared, &[&self.cluster, &producer])
+                        .await
+                        .inspect_err(|err| error!(self.cluster, producer, ?err))?;
+
+                    let epoch: i16 = row.try_get(0)?;
+
+                    let prepared = tx
+                        .prepare(include_str!("pg/txn_insert.sql"))
+                        .await
+                        .inspect_err(|err| error!(?err))?;
+
+                    assert_eq!(
+                        1,
+                        tx.execute(&prepared, &[&self.cluster, &transaction_id, &producer])
+                            .await
+                            .inspect_err(|err| error!(
+                                self.cluster,
+                                transaction_id,
+                                producer,
+                                ?err
+                            ))?
+                    );
+
+                    (producer, epoch)
+                };
+
+                debug!(transaction_id, producer, epoch);
+
+                let prepared = tx
+                    .prepare(include_str!("pg/txn_detail_insert.sql"))
+                    .await
+                    .inspect_err(|err| error!(?err))?;
+
+                assert_eq!(
+                    1,
+                    tx.execute(
+                        &prepared,
+                        &[
+                            &self.cluster,
+                            &transaction_id,
+                            &producer,
+                            &epoch,
+                            &transaction_timeout_ms
+                        ]
+                    )
+                    .await
+                    .inspect_err(|err| error!(
+                        self.cluster,
+                        transaction_id,
+                        producer,
+                        epoch,
+                        transaction_timeout_ms,
+                        ?err
+                    ))?
+                );
+
+                let error =
+                    match tx.commit().await.inspect_err(|err| {
+                        error!(?err, self.cluster, transaction_id, producer, epoch)
+                    }) {
                         Ok(()) => ErrorCode::None,
                         Err(_) => ErrorCode::UnknownServerError,
                     };
 
-                    Ok(ProducerIdResponse { error, id, epoch })
-                }
+                Ok(ProducerIdResponse {
+                    error,
+                    id: producer,
+                    epoch,
+                })
             }
 
-            (_, _) => todo!(),
+            (Some(-1), Some(-1), None) => {
+                let mut c = self.connection().await.inspect_err(|err| error!(?err))?;
+                let tx = c.transaction().await.inspect_err(|err| error!(?err))?;
+
+                let prepared = tx
+                    .prepare(include_str!("pg/producer_insert.sql"))
+                    .await
+                    .inspect_err(|err| error!(?err))?;
+
+                let row = tx
+                    .query_one(&prepared, &[&self.cluster])
+                    .await
+                    .inspect_err(|err| error!(self.cluster, ?err))?;
+
+                let producer = row.try_get(0)?;
+
+                let prepared = tx
+                    .prepare(include_str!("pg/producer_epoch_insert.sql"))
+                    .await
+                    .inspect_err(|err| error!(?err))?;
+
+                let row = tx
+                    .query_one(&prepared, &[&self.cluster, &producer])
+                    .await
+                    .inspect_err(|err| error!(self.cluster, producer, ?err))?;
+
+                let epoch: i16 = row.try_get(0)?;
+
+                let error = match tx
+                    .commit()
+                    .await
+                    .inspect_err(|err| error!(?err, ?transaction_id, producer, epoch))
+                {
+                    Ok(()) => ErrorCode::None,
+                    Err(_) => ErrorCode::UnknownServerError,
+                };
+
+                Ok(ProducerIdResponse {
+                    error,
+                    id: producer,
+                    epoch,
+                })
+            }
+
+            (_, _, _) => todo!(),
         }
     }
 
@@ -2443,7 +2525,7 @@ impl Storage for Postgres {
         let tx = c.transaction().await.inspect_err(|err| error!(?err))?;
 
         let prepared = tx
-            .prepare(include_str!("pg/txn_select_producer_epoch.sql"))
+            .prepare(include_str!("pg/producer_epoch_for_current_txn.sql"))
             .await
             .inspect_err(|err| error!(?err))?;
 

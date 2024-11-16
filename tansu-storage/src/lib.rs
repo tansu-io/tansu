@@ -543,6 +543,7 @@ pub struct GroupDetail {
     pub members: BTreeMap<String, GroupMember>,
     pub generation_id: i32,
     pub skip_assignment: Option<bool>,
+    pub inception: SystemTime,
     pub state: GroupState,
 }
 
@@ -554,6 +555,7 @@ impl Default for GroupDetail {
             members: BTreeMap::new(),
             generation_id: -1,
             skip_assignment: Some(false),
+            inception: SystemTime::now(),
             state: GroupState::default(),
         }
     }

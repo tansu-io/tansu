@@ -16,15 +16,19 @@
 
 delete from txn_produce_offset
 
-using cluster c, txn, txn_detail, txn_topition txn_tp
+using cluster c, producer p, producer_epoch pe, txn, txn_detail txn_d, txn_topition txn_tp
 
 where
 
 c.name = $1
 and txn.name = $2
-and txn.id = $3
-and txn_detail.epoch = $4
+and p.id = $3
+and pe.epoch = $4
 
-and txn_detail.transaction = txn.id
-and txn_tp.txn_detail = txn_detail.id
+and p.cluster = c.id
+and pe.producer = p.id
+and txn.cluster = c.id
+and txn.producer = p.id
+and txn_d.transaction = txn.id
+and txn_tp.txn_detail = txn_d.id
 and txn_produce_offset.txn_topition = txn_tp.id;

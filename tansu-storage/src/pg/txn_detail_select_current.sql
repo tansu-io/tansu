@@ -14,19 +14,23 @@
 -- You should have received a copy of the GNU Affero General Public License
 -- along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+-- prepare txn_detail_select_current(text, text) as
 
 select
 
-txn.id, txn_detail.epoch, txn_detail.sequence, txn_detail.status
+p.id, max(pe.epoch), txn_d.status
 
 from
 
 cluster c
-join txn on txn.cluster = c.id
-join txn_detail on txn_detail.transaction = txn.id
+join producer p on p.cluster = c.id
+join producer_epoch pe on pe.producer = p.id
+join txn on txn.cluster = c.id and txn.producer = p.id
+join txn_detail txn_d on txn_d.transaction = txn.id and txn_d.producer_epoch = pe.id
 
 where
 
 c.name = $1
 and txn.name = $2
-and txn.epoch = txn_detail.epoch;
+
+group by p.id;

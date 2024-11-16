@@ -16,12 +16,13 @@
 
 -- prepare txn_select_producer_epoch (text, text) as
 
-select txn.id, txn.epoch
+select p.id, p.epoch
 
 from
 
 cluster c
-join txn on txn.cluster = c.id
+join producer p on p.cluster = c.id
+join txn on txn.cluster = c.id and txn.producer = p.id
 
 where c.name = $1
 and txn.name = $2;

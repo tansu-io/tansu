@@ -16,13 +16,17 @@
 
 delete from txn_offset_commit
 
-using cluster c, txn, txn_detail
+using cluster c, producer p, producer_epoch pe, txn, txn_detail txn_d
 
 where c.name = $1
 and txn.name = $2
-and txn.id = $3
-and txn_detail.epoch = $4
+and p.id = $3
+and pe.epoch = $4
 
+and p.cluster = c.id
+and pe.producer = p.id
 and txn.cluster = c.id
-and txn_detail.transaction = txn.id
-and txn_offset_commit.txn_detail = txn_detail.id;
+and txn.producer = p.id
+and txn_d.transaction = txn.id
+and txn_d.producer_epoch = pe.id
+and txn_offset_commit.txn_detail = txn_d.id;

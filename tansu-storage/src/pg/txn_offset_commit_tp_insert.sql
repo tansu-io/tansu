@@ -30,18 +30,20 @@ from
 
 cluster c
 join consumer_group cg on cg.cluster = c.id
+join producer p on p.cluster = c.id
+join producer_epoch pe on pe.producer = p.id
 join topic t on t.cluster = c.id
 join topition tp on tp.topic = t.id
-join txn on txn.cluster = c.id
-join txn_detail on txn_detail.transaction = txn.id
-join txn_offset_commit oc on oc.txn_detail = txn_detail.id and oc.consumer_group = cg.id
+join txn on txn.cluster = c.id and txn.producer = p.id
+join txn_detail txn_d on txn_d.transaction = txn.id and txn_d.producer_epoch = pe.id
+join txn_offset_commit oc on oc.txn_detail = txn_d.id and oc.consumer_group = cg.id
 
 where
 
 c.name = $1
 and txn.name = $2
 and cg.name = $3
-and txn.id = $4
-and txn_detail.epoch = $5
+and p.id = $4
+and pe.epoch = $5
 and t.name = $6
 and tp.partition = $7;

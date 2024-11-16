@@ -14,5 +14,20 @@
 -- You should have received a copy of the GNU Affero General Public License
 -- along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-insert into txn_detail (transaction, epoch, transaction_timeout_ms)
-values ($1, $2, $3);
+insert into txn_detail (transaction, producer_epoch, transaction_timeout_ms)
+
+select txn.id, pe.id, $5
+
+from
+
+cluster c
+join txn on txn.cluster = c.id
+join producer p on p.cluster = c.id
+join producer_epoch pe on pe.producer = p.id
+
+where
+
+c.name = $1
+and txn.name = $2
+and p.id = $3
+and pe.epoch = $4;

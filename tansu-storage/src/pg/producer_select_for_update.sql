@@ -16,16 +16,21 @@
 
 select
 
-p.epoch, p.sequence
+coalesce(pd.sequence, 0)
 
 from
 
 cluster c
 join producer p on p.cluster = c.id
+join topic t on t.cluster = c.id
+join producer_epoch pe on pe.producer = p.id
+join topition tp on tp.topic = t.id
+left join producer_detail pd on pd.producer_epoch = pe.id and pd.topition = tp.id
 
 where
 
 c.name = $1
-and p.id = $2
-
-for no key update;
+and t.name = $2
+and tp.partition = $3
+and p.id = $4
+and pe.epoch = $5;

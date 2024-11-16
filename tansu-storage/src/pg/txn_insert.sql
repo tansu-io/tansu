@@ -14,18 +14,10 @@
 -- You should have received a copy of the GNU Affero General Public License
 -- along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-insert into txn (cluster, name)
+insert into txn (cluster, name, producer)
 
-select c.id, $2
+select c.id, $2, $3
 
 from cluster c
 
-where c.name = $1
-
-on conflict (cluster, name)
-
-do update set
-epoch = txn.epoch + 1,
-last_updated = excluded.last_updated
-
-returning id, epoch;
+where c.name = $1;

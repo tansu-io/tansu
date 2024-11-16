@@ -14,21 +14,29 @@
 -- You should have received a copy of the GNU Affero General Public License
 -- along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+
+-- prepare txn_detail_update_sequence (text, integer, integer) as
+
 update txn_detail
 
 set
 
-sequence = sequence + $4
+sequence = txn_detail.sequence + $5
 
 from
 
 cluster c,
+producer p,
 txn
 
 where
 
 c.name = $1
-and txn.id = $2
-and txn_detail.epoch = $3
+and txn.name = $2
+and p.id = $3
+and txn_detail.epoch = $4
+
+and p.cluster = c.id
 and txn.cluster = c.id
+and txn.producer = p.id
 and txn_detail.transaction = txn.id;

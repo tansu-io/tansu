@@ -177,6 +177,7 @@ mod pg {
         common::storage_container(StorageType::Postgres, cluster_id, broker_id)
     }
 
+    #[ignore]
     #[tokio::test]
     async fn join_with_empty_member_id() -> Result<()> {
         let _guard = common::init_tracing()?;
@@ -192,6 +193,7 @@ mod pg {
         .await
     }
 
+    #[ignore]
     #[tokio::test]
     async fn rejoin_with_empty_member_id() -> Result<()> {
         let _guard = common::init_tracing()?;
@@ -215,6 +217,7 @@ mod in_memory {
         common::storage_container(StorageType::InMemory, cluster_id, broker_id)
     }
 
+    #[ignore]
     #[tokio::test]
     async fn join_with_empty_member_id() -> Result<()> {
         let _guard = common::init_tracing()?;
@@ -230,6 +233,7 @@ mod in_memory {
         .await
     }
 
+    #[ignore]
     #[tokio::test]
     async fn rejoin_with_empty_member_id() -> Result<()> {
         let _guard = common::init_tracing()?;

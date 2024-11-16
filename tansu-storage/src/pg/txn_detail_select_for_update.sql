@@ -21,13 +21,15 @@ txn_detail.epoch, txn_detail.sequence, txn_detail.status
 from
 
 cluster c
-join txn on txn.cluster = c.id
+join producer p on p.cluster = c.id
+join txn on txn.cluster = c.id and txn.producer = p.id
 join txn_detail on txn_detail.transaction = txn.id
 
 where
 
 c.name = $1
-and txn.id = $2
-and txn.epoch = txn_detail.epoch
+and txn.name = $2
+and p.id = $3
+and txn_detail.epoch = $4
 
 for no key update;
