@@ -16,7 +16,6 @@
 use std::{
     fmt,
     io::{self, ErrorKind},
-    net::SocketAddr,
     result,
     sync::Arc,
 };
@@ -26,7 +25,7 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
 };
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, span, Instrument, Level};
 use url::Url;
 
 pub type Result<T, E = Error> = result::Result<T, E>;
@@ -61,7 +60,7 @@ impl Proxy {
     }
 
     pub async fn listen(&self) -> Result<()> {
-        debug!("listener: {}", self.listener.as_str());
+        debug!(%self.listener);
 
         let listener = TcpListener::bind(format!(
             "{}:{}",
@@ -72,36 +71,42 @@ impl Proxy {
 
         loop {
             let (stream, addr) = listener.accept().await?;
-            info!(?addr);
 
-            let mut connection = Connection::open(&self.origin, stream, addr).await?;
+            let mut connection = Connection::open(&self.origin, stream).await?;
 
             _ = tokio::spawn(async move {
-                match connection.stream_handler().await {
-                    Err(ref error @ Error::Io(ref io)) if io.kind() == ErrorKind::UnexpectedEof => {
-                        info!(?error);
-                    }
+                let span = span!(Level::DEBUG, "peer", addr = %addr);
 
-                    Err(error) => {
-                        error!(?error);
-                    }
+                async move {
+                    match connection.stream_handler().await {
+                        Err(ref error @ Error::Io(ref io))
+                            if io.kind() == ErrorKind::UnexpectedEof =>
+                        {
+                            info!(?error);
+                        }
 
-                    Ok(_) => {}
+                        Err(error) => {
+                            error!(?error);
+                        }
+
+                        Ok(_) => {}
+                    }
                 }
+                .instrument(span)
+                .await
             });
         }
     }
 }
 
 struct Connection {
-    addr: SocketAddr,
     proxy: TcpStream,
     origin: TcpStream,
 }
 
 impl Connection {
-    async fn open(origin: &Url, proxy: TcpStream, addr: SocketAddr) -> Result<Self> {
-        debug!("origin: {origin}, proxy: {proxy:?}, addr: {addr}");
+    async fn open(origin: &Url, proxy: TcpStream) -> Result<Self> {
+        debug!(%origin, ?proxy);
 
         TcpStream::connect(format!(
             "{}:{}",
@@ -109,11 +114,7 @@ impl Connection {
             origin.port().unwrap()
         ))
         .await
-        .map(|origin| Self {
-            addr,
-            proxy,
-            origin,
-        })
+        .map(|origin| Self { proxy, origin })
         .map_err(Into::into)
     }
 
@@ -131,7 +132,7 @@ impl Connection {
             request_buffer[0..size.len()].copy_from_slice(&size[..]);
             _ = self.proxy.read_exact(&mut request_buffer[4..]).await?;
 
-            debug!(?self.addr, ?request_buffer);
+            debug!(?request_buffer);
 
             self.origin.write_all(&request_buffer).await?;
 
@@ -143,7 +144,7 @@ impl Connection {
                 .origin
                 .read_exact(&mut response_buffer[size.len()..])
                 .await?;
-            debug!(?self.addr, ?response_buffer);
+            debug!(?response_buffer);
 
             self.proxy.write_all(&response_buffer).await?;
 
@@ -159,10 +160,12 @@ impl Connection {
                 },
             ) = Frame::request_from_bytes(&request_buffer)
             {
-                debug!(?self.addr, ?request);
+                debug!(?request);
+                debug!(?request.body);
 
                 let response = Frame::response_from_bytes(&response_buffer, api_key, api_version)?;
-                debug!(?self.addr, ?response);
+                debug!(?response);
+                debug!(?response.body);
             }
         }
     }

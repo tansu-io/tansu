@@ -37,10 +37,10 @@ async fn main() -> Result<()> {
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::fmt::layer()
-                .compact()
+                .with_level(true)
                 .with_line_number(true)
-                .with_span_events(FmtSpan::ACTIVE)
-                .with_thread_ids(false),
+                .with_thread_ids(false)
+                .with_span_events(FmtSpan::NONE),
         )
         .with(filter)
         .init();
