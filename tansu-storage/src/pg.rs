@@ -2135,7 +2135,7 @@ impl Storage for Postgres {
         let new_e_tag = Uuid::new_v4();
         debug!(?new_e_tag);
 
-        let value = serde_json::to_value(detail).inspect(|value| debug!(?value))?;
+        let detail = serde_json::to_value(detail).inspect(|detail| debug!(?detail))?;
 
         let outcome = if let Some(row) = tx
             .query_opt(
@@ -2145,7 +2145,7 @@ impl Storage for Postgres {
                     &group_id,
                     &existing_e_tag,
                     &new_e_tag,
-                    &value,
+                    &detail,
                 ],
             )
             .await
@@ -2186,7 +2186,8 @@ impl Storage for Postgres {
                 .inspect(|version| debug!(?version))?;
 
             let value = row.try_get::<_, Value>(1)?;
-            let current = serde_json::from_value::<GroupDetail>(value)?;
+            let current =
+                serde_json::from_value::<GroupDetail>(value).inspect(|current| debug!(?current))?;
 
             Err(UpdateError::Outdated { current, version })
         };

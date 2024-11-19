@@ -54,7 +54,7 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
 };
-use tracing::{debug, error, info, span, Instrument, Level};
+use tracing::{debug, debug_span, error, info, span, Instrument, Level, Span};
 use txn::{add_offsets::AddOffsets, add_partitions::AddPartitions};
 use url::Url;
 use uuid::Uuid;
@@ -151,11 +151,9 @@ where
 
                 async move {
                     match broker.stream_handler(stream).await {
-                        Err(ref error @ Error::Io(ref io))
-                            if io.kind() == ErrorKind::UnexpectedEof =>
-                        {
-                            info!(?error);
-                        }
+                        Err(Error::Io(ref io))
+                            if io.kind() == ErrorKind::UnexpectedEof
+                                || io.kind() == ErrorKind::ConnectionReset => {}
 
                         Err(error) => {
                             error!(?error);
@@ -180,9 +178,7 @@ where
                 .read_exact(&mut size)
                 .await
                 .inspect_err(|error| match error.kind() {
-                    ErrorKind::UnexpectedEof => {
-                        info!(?error);
-                    }
+                    ErrorKind::UnexpectedEof | ErrorKind::ConnectionReset => (),
 
                     _ => error!(?error),
                 })?;
@@ -228,33 +224,24 @@ where
                 body,
                 ..
             } => {
-                debug!(?api_key, ?api_version, ?correlation_id);
+                let span = request_span(api_key, api_version, correlation_id, &body);
 
-                let span = span!(
-                    Level::DEBUG,
-                    "request",
-                    api_key,
-                    api_version,
-                    correlation_id
-                );
-
-                let body = async move {
-                    self.response_for(client_id.as_deref(), body, correlation_id)
-                        .await
-                        .inspect_err(|err| error!(?err))
+                async move {
+                    Frame::response(
+                        Header::Response { correlation_id },
+                        self.response_for(client_id.as_deref(), body, correlation_id)
+                            .await
+                            .inspect(|body| debug!(?body))
+                            .inspect_err(|err| error!(?err))?,
+                        api_key,
+                        api_version,
+                    )
+                    .inspect(|response| debug!(?response))
+                    .inspect_err(|err| error!(?err))
+                    .map_err(Into::into)
                 }
                 .instrument(span)
-                .await?;
-
-                debug!(?body, ?correlation_id);
-                Frame::response(
-                    Header::Response { correlation_id },
-                    body,
-                    api_key,
-                    api_version,
-                )
-                .inspect_err(|err| error!(?err))
-                .map_err(Into::into)
+                .await
             }
 
             _ => unimplemented!(),
@@ -702,5 +689,167 @@ where
                 unimplemented!("{request:?}")
             }
         }
+    }
+}
+
+fn request_span(api_key: i16, api_version: i16, correlation_id: i32, body: &Body) -> Span {
+    match body {
+        Body::AddOffsetsToTxnRequest {
+            transactional_id,
+            producer_id,
+            producer_epoch,
+            group_id,
+            ..
+        } => {
+            debug_span!(
+                "add_offsets_to_txn",
+                api_key,
+                api_version,
+                correlation_id,
+                transactional_id,
+                producer_id,
+                producer_epoch,
+                group_id,
+            )
+        }
+
+        Body::AddPartitionsToTxnRequest { .. } => {
+            debug_span!(
+                "add_partitions_to_txn",
+                api_key,
+                api_version,
+                correlation_id,
+            )
+        }
+
+        Body::ApiVersionsRequest { .. } => {
+            debug_span!("api_versions", api_key, api_version, correlation_id,)
+        }
+
+        Body::CreateTopicsRequest { .. } => {
+            debug_span!("create_topics", api_key, api_version, correlation_id)
+        }
+
+        Body::DeleteTopicsRequest { .. } => {
+            debug_span!("delete_topics", api_key, api_version, correlation_id)
+        }
+
+        Body::EndTxnRequest {
+            transactional_id,
+            producer_id,
+            producer_epoch,
+            committed,
+        } => {
+            debug_span!(
+                "end_txn",
+                api_key,
+                api_version,
+                correlation_id,
+                transactional_id,
+                producer_id,
+                producer_epoch,
+                committed
+            )
+        }
+
+        Body::FetchRequest { .. } => {
+            debug_span!("fetch", api_key, api_version, correlation_id)
+        }
+
+        Body::FindCoordinatorRequest { .. } => {
+            debug_span!("find_coordinator", api_key, api_version, correlation_id)
+        }
+
+        Body::InitProducerIdRequest {
+            transactional_id,
+            producer_id,
+            producer_epoch,
+            ..
+        } => {
+            debug_span!(
+                "init_producer_id",
+                api_key,
+                api_version,
+                correlation_id,
+                transactional_id,
+                producer_id,
+                producer_epoch,
+            )
+        }
+
+        Body::JoinGroupRequest {
+            group_id,
+            member_id,
+            group_instance_id,
+            ..
+        } => debug_span!(
+            "join_group",
+            correlation_id,
+            group_id,
+            member_id,
+            group_instance_id,
+        ),
+
+        Body::LeaveGroupRequest { .. } => {
+            debug_span!("leave_group", api_key, api_version, correlation_id)
+        }
+
+        Body::ListOffsetsRequest { .. } => {
+            debug_span!("list_offsets", api_key, api_version, correlation_id)
+        }
+
+        Body::MetadataRequest { .. } => {
+            debug_span!("metadata", api_key, api_version, correlation_id,)
+        }
+
+        Body::OffsetFetchRequest { .. } => {
+            debug_span!("offset_fetch", api_key, api_version, correlation_id,)
+        }
+
+        Body::ProduceRequest { .. } => {
+            debug_span!("produce", api_key, api_version, correlation_id)
+        }
+
+        Body::SyncGroupRequest {
+            group_id,
+            generation_id,
+            member_id,
+            group_instance_id,
+            ..
+        } => debug_span!(
+            "sync_group",
+            correlation_id,
+            group_id,
+            generation_id,
+            member_id,
+            group_instance_id,
+        ),
+
+        Body::TxnOffsetCommitRequest {
+            transactional_id,
+            group_id,
+            producer_id,
+            producer_epoch,
+            generation_id,
+            member_id,
+            group_instance_id,
+            ..
+        } => {
+            debug_span!(
+                "txn_offset_commit",
+                api_key,
+                api_version,
+                correlation_id,
+                transactional_id,
+                group_id,
+                producer_id,
+                producer_epoch,
+                generation_id,
+                member_id,
+                group_instance_id,
+            )
+        }
+
+        _ => debug_span!("request", api_key, api_version, correlation_id,),
     }
 }

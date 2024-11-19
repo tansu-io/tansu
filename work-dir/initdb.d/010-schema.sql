@@ -221,7 +221,7 @@ create table if not exists txn (
   created_at timestamp default current_timestamp not null
 );
 
-create table if not exists insert into txn_detail (
+create table if not exists txn_detail (
   id bigint generated always as identity primary key,
 
   transaction bigint references txn(id),

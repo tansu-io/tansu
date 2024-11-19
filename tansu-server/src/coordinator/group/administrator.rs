@@ -49,7 +49,7 @@ use crate::{Error, Result};
 
 use super::{Coordinator, OffsetCommit};
 
-const PAUSE_MS: u64 = 3_000;
+const PAUSE_MS: u128 = 3_000;
 
 #[async_trait]
 pub trait Group: Debug + Send {
@@ -697,9 +697,10 @@ where
             if iteration == 0
                 && !member_id.is_empty()
                 && wrapper.leader().is_some_and(|leader| leader != member_id)
+                && group_instance_id.is_none()
             {
                 debug!(?member_id);
-                sleep(Duration::from_millis(PAUSE_MS)).await;
+                sleep(Duration::from_millis(PAUSE_MS as u64)).await;
             }
 
             debug!(?group_id, ?wrapper, ?version, ?iteration);
@@ -727,7 +728,7 @@ where
                 .await
             {
                 Ok(version) => {
-                    debug!(?group_id, ?version);
+                    debug!(?group_id, ?version, ?iteration);
 
                     _ = self
                         .wrappers
@@ -1631,76 +1632,92 @@ where
 
         debug!(?member_id, ?self.members);
 
-        match self.members.insert(
-            member_id.clone(),
-            Member {
-                join_response: JoinGroupResponseMember {
-                    member_id: member_id.to_string(),
-                    group_instance_id: group_instance_id.map(|s| s.to_owned()),
-                    metadata: protocol.metadata.clone(),
+        if let Some(member) = self.members.get_mut(&member_id) {
+            if member.join_response.metadata == protocol.metadata {
+                debug!(
+                    member_metadata = "existing",
+                    member_id,
+                    generation_id = self.generation_id
+                );
+            } else if group_instance_id.is_some() {
+                debug!(
+                    member_metadata = "soft_update",
+                    member_id,
+                    group_instance_id,
+                    updated = ?protocol.metadata,
+                    existing = ?member.join_response.metadata,
+                    generation_id = self.generation_id
+                );
+
+                member.join_response.metadata = protocol.metadata.clone();
+            } else {
+                self.generation_id += 1;
+
+                debug!(
+                    member_metadata = "update",
+                    member_id,
+                    updated = ?protocol.metadata,
+                    existing = ?member.join_response.metadata,
+                    generation_id = self.generation_id
+                );
+
+                member.join_response.metadata = protocol.metadata.clone();
+            }
+        } else {
+            self.generation_id += 1;
+
+            debug!(
+                member_metadata = "new",
+                member_id,
+                generation_id = self.generation_id
+            );
+
+            _ = self.members.insert(
+                member_id.clone(),
+                Member {
+                    join_response: JoinGroupResponseMember {
+                        member_id: member_id.to_string(),
+                        group_instance_id: group_instance_id.map(|s| s.to_owned()),
+                        metadata: protocol.metadata.clone(),
+                    },
+                    last_contact: Some(now),
                 },
-                last_contact: Some(now),
-            },
-        ) {
-            Some(Member {
-                join_response: JoinGroupResponseMember { ref metadata, .. },
-                ..
-            }) if *metadata == protocol.metadata => debug!(
-                "member_id: {}, existing metadata for generation: {}",
-                member_id, self.generation_id
-            ),
-
-            Some(Member {
-                join_response: JoinGroupResponseMember { ref metadata, .. },
-                ..
-            }) => {
-                self.generation_id += 1;
-
-                debug!(
-                    "member_id: {}, metadata: {:?}, existing: {:?}, for new generation: {}",
-                    member_id, protocol.metadata, metadata, self.generation_id
-                );
-            }
-
-            None => {
-                self.generation_id += 1;
-
-                debug!(
-                    "member_id: {}, no metadata for new generation: {}",
-                    member_id, self.generation_id
-                );
-            }
+            );
         }
 
         debug!(?member_id, ?self.members);
 
         if self.state.leader.is_none() {
-            info!(
-                "{member_id} is now leader of: {group_id} in generation: {}",
-                self.generation_id
-            );
+            info!(member_id, group_id, self.generation_id);
 
             _ = self.state.leader.replace(member_id.clone());
         }
 
-        let body = if group_instance_id.is_some()
-            && now
-                .duration_since(self.inception)
-                .is_ok_and(|duration| duration.as_secs() < 5)
-        {
-            Body::JoinGroupResponse {
-                throttle_time_ms: Some(0),
-                error_code: ErrorCode::NotCoordinator.into(),
-                generation_id: -1,
-                protocol_type: None,
-                protocol_name: None,
-                leader: "".into(),
-                skip_assignment: self.skip_assignment,
-                member_id: "".into(),
-                members: Some([].into()),
+        let body = match (
+            group_instance_id,
+            now.duration_since(self.inception)
+                .map(|duration| duration.as_millis())
+                .unwrap_or(0),
+        ) {
+            (Some(_), elapsed) if PAUSE_MS > elapsed => {
+                let remaining = (PAUSE_MS - elapsed) as u64;
+                debug!(?member_id, ?remaining);
+                sleep(Duration::from_millis(remaining)).await;
+
+                Body::JoinGroupResponse {
+                    throttle_time_ms: Some(0),
+                    error_code: ErrorCode::NotCoordinator.into(),
+                    generation_id: -1,
+                    protocol_type: None,
+                    protocol_name: None,
+                    leader: "".into(),
+                    skip_assignment: self.skip_assignment,
+                    member_id: "".into(),
+                    members: Some([].into()),
+                }
             }
-        } else {
-            Body::JoinGroupResponse {
+
+            (_, _) => Body::JoinGroupResponse {
                 throttle_time_ms: Some(0),
                 error_code: ErrorCode::None.into(),
                 generation_id: self.generation_id,
@@ -1729,7 +1746,7 @@ where
                     },
                 ),
                 member_id,
-            }
+            },
         };
 
         (self, body)
@@ -2211,24 +2228,15 @@ where
 
         debug!(?member_id, ?self.members);
 
-        match self.members.insert(
-            member_id.to_owned(),
-            Member {
-                join_response: JoinGroupResponseMember {
-                    member_id: member_id.to_string(),
-                    group_instance_id: group_instance_id.map(|s| s.to_owned()),
-                    metadata: protocol.metadata.clone(),
-                },
-                last_contact: Some(now),
-            },
-        ) {
+        match self.members.get_mut(&member_id) {
             Some(Member {
                 join_response: JoinGroupResponseMember { metadata, .. },
                 ..
-            }) if metadata == protocol.metadata => {
+            }) if *metadata == protocol.metadata => {
                 debug!(
-                    "member_id: {}, existing metadata for generation: {}",
-                    member_id, self.generation_id
+                    member_metadata = "existing",
+                    member_id,
+                    generation_id = self.generation_id
                 );
 
                 let state: Wrapper<O> = self.into();
@@ -2268,15 +2276,20 @@ where
                 ..
             }) => {
                 debug!(
-                    "member_id: {}, metadata: {:?}, existing: {:?}, for new generation: {}",
+                    member_metadata = if group_instance_id.is_none() {"update"} else { "soft_update"},
                     member_id,
-                    protocol.metadata,
-                    metadata,
-                    self.generation_id + 1
+                    updated = ?protocol.metadata,
+                    existing = ?metadata,
                 );
 
+                *metadata = protocol.metadata.clone();
+
                 let state: Wrapper<O> = Inner {
-                    generation_id: self.generation_id + 1,
+                    generation_id: if group_instance_id.is_none() {
+                        self.generation_id + 1
+                    } else {
+                        self.generation_id
+                    },
                     session_timeout_ms: self.session_timeout_ms,
                     rebalance_timeout_ms: self.rebalance_timeout_ms,
 
@@ -2324,9 +2337,21 @@ where
 
             None => {
                 debug!(
-                    "member_id: {}, no metadata for new generation: {}",
+                    member_metadata = "new",
                     member_id,
-                    self.generation_id + 1
+                    generation_id = self.generation_id + 1
+                );
+
+                _ = self.members.insert(
+                    member_id.clone(),
+                    Member {
+                        join_response: JoinGroupResponseMember {
+                            member_id: member_id.to_string(),
+                            group_instance_id: group_instance_id.map(|s| s.to_owned()),
+                            metadata: protocol.metadata.clone(),
+                        },
+                        last_contact: Some(now),
+                    },
                 );
 
                 let state: Wrapper<O> = Inner {
