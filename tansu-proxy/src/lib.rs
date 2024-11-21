@@ -161,11 +161,11 @@ impl Connection {
             ) = Frame::request_from_bytes(&request_buffer)
             {
                 debug!(?request);
-                debug!(?request.body);
+                debug!(body = ?request.body);
 
                 let response = Frame::response_from_bytes(&response_buffer, api_key, api_version)?;
                 debug!(?response);
-                debug!(?response.body);
+                debug!(body = ?response.body);
             }
         }
     }

@@ -79,7 +79,7 @@ impl Batch {
     }
 
     pub fn is_idempotent(&self) -> bool {
-        self.producer_id != -1
+        self.producer_id != -1 && self.base_sequence != -1
     }
 }
 

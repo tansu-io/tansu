@@ -181,12 +181,12 @@ impl Postgres {
                 Ordering::Equal => Ok(deflated.last_offset_delta + 1),
 
                 Ordering::Greater => {
-                    debug!(?deflated.base_sequence);
+                    debug!(?sequence, ?deflated.base_sequence);
                     Err(Error::Api(ErrorCode::DuplicateSequenceNumber))
                 }
 
                 Ordering::Less => {
-                    debug!(?deflated.base_sequence);
+                    debug!(?sequence, ?deflated.base_sequence);
                     Err(Error::Api(ErrorCode::OutOfOrderSequenceNumber))
                 }
             },
@@ -248,7 +248,18 @@ impl Postgres {
 
             let sequence = row.try_get::<_, i32>(0).inspect_err(|err| error!(?err))?;
 
+            debug!(
+                self.cluster,
+                ?topition,
+                deflated.producer_id,
+                deflated.producer_epoch,
+                current_epoch,
+                sequence,
+            );
+
             let increment = Self::idempotent_sequence_check(&current_epoch, &sequence, deflated)?;
+
+            debug!(increment);
 
             let prepared = tx
                 .prepare(include_str!("pg/producer_detail_insert.sql"))
@@ -533,7 +544,7 @@ impl Postgres {
                 )
                 .producer_id(producer_id)
                 .producer_epoch(producer_epoch)
-                .base_sequence(sequence)
+                .base_sequence(-1)
                 .build()
                 .and_then(TryInto::try_into)
                 .inspect(|deflated| debug!(?deflated))?;
