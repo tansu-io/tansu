@@ -37,6 +37,16 @@ create table if not exists broker (
   created_at timestamp default current_timestamp not null
 );
 
+create or replace view v_broker as
+select
+c.name as cluster,
+b.node as node,
+b.rack as rack,
+b.incarnation as incarnation
+from
+cluster c
+join broker b on b.cluster = c.id;
+
 create table if not exists listener (
   id int generated always as identity primary key,
 
@@ -49,6 +59,18 @@ create table if not exists listener (
   last_updated timestamp default current_timestamp not null,
   created_at timestamp default current_timestamp not null
 );
+
+create or replace view v_listener as
+select
+c.name as cluster,
+b.node as node,
+l.name as name,
+l.host as host,
+l.port as port
+from
+cluster c
+join broker b on b.cluster = c.id
+join listener l on l.broker = b.id;
 
 create table if not exists topic (
   id int generated always as identity primary key,
@@ -65,6 +87,18 @@ create table if not exists topic (
   created_at timestamp default current_timestamp not null
 );
 
+create or replace view v_topic as
+select
+c.name as cluster,
+t.name as topic,
+t.uuid as uuid,
+t.partitions as partitions,
+t.replication_factor as replication_factor,
+t.is_internal as is_internal
+from
+cluster c
+join topic t on t.cluster = c.id;
+
 create table if not exists topition (
   id int generated always as identity primary key,
 
@@ -76,6 +110,15 @@ create table if not exists topition (
   created_at timestamp default current_timestamp not null
 );
 
+create or replace view v_topition as
+select
+c.name as cluster,
+t.name as topic,
+tp.partition as partition
+from
+cluster c
+join topic t on t.cluster = c.id
+join topition tp on tp.topic = t.id;
 
 create table if not exists watermark (
   id int generated always as identity primary key,
@@ -103,6 +146,7 @@ c.name as cluster,
 t.name as topic,
 tp.partition as partition,
 w.low as low,
+w.stable as stable,
 w.high as high
 from
 cluster c
@@ -170,6 +214,20 @@ create table if not exists consumer_group (
   created_at timestamp default current_timestamp not null
 );
 
+create or replace view v_consumer_group as
+select
+c.name as cluster,
+cg.name as consumer_group,
+cg.e_tag as e_tag,
+cg.detail->'generation_id' as generation_id,
+cg.detail->'rebalance_timeout_ms' as rebalance_timeout_ms,
+cg.detail->'session_timeout_ms' as session_timeout_ms,
+cg.detail->'skip_assignment' as skip_assignment,
+array(select json_object_keys(cg.detail->'members')) as members
+from
+cluster c
+join consumer_group cg on cg.cluster = c.id;
+
 create table if not exists consumer_offset (
   id int generated always as identity primary key,
 
@@ -185,6 +243,22 @@ create table if not exists consumer_offset (
   created_at timestamp default current_timestamp not null
 );
 
+create or replace view v_consumer_offset as
+select
+c.name as cluster,
+cg.name as consumer_group,
+t.name as topic,
+tp.partition as partition,
+co.committed_offset as committed_offset,
+co.leader_epoch as leader_epoch,
+co.timestamp as timestamp,
+co.metadata as metadata
+from
+cluster c
+join consumer_group cg on cg.cluster = c.id
+join topic t on t.cluster = c.id
+join topition tp on tp.topic = t.id
+join consumer_offset co on co.consumer_group = cg.id and co.topition = tp.id;
 
 -- non transactional idempotent producer
 --

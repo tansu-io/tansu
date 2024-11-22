@@ -19,8 +19,7 @@
 select
 
 t.name as topic,
-tp.partition as partition,
-pd.sequence
+tp.partition as partition
 
 from
 
@@ -33,7 +32,6 @@ join txn_detail txn_d on txn_d.transaction = txn.id and txn_d.producer_epoch = p
 join txn_topition txn_tp on txn_tp.txn_detail = txn_d.id
 join txn_produce_offset txn_po on txn_po.txn_topition = txn_tp.id
 join topition tp on tp.topic = t.id and txn_tp.topition = tp.id
-join producer_detail pd on pd.producer_epoch = pe.id and pd.topition = tp.id
 
 where
 

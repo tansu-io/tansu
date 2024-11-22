@@ -22,11 +22,16 @@ use rand::{
     thread_rng,
 };
 use tansu_kafka_sans_io::{
-    broker_registration_request::Listener, join_group_request::JoinGroupRequestProtocol,
-    join_group_response::JoinGroupResponseMember, leave_group_request::MemberIdentity,
-    leave_group_response::MemberResponse, offset_fetch_request::OffsetFetchRequestTopic,
+    broker_registration_request::Listener,
+    fetch_response::{FetchableTopicResponse, NodeEndpoint},
+    join_group_request::JoinGroupRequestProtocol,
+    join_group_response::JoinGroupResponseMember,
+    leave_group_request::MemberIdentity,
+    leave_group_response::MemberResponse,
+    offset_fetch_request::OffsetFetchRequestTopic,
     offset_fetch_response::OffsetFetchResponseTopic,
-    sync_group_request::SyncGroupRequestAssignment, Body, ErrorCode,
+    sync_group_request::SyncGroupRequestAssignment,
+    Body, ErrorCode,
 };
 use tansu_server::{
     coordinator::group::{administrator::Controller, Coordinator},
@@ -542,4 +547,45 @@ pub(crate) async fn register_broker(
     sc.register_broker(broker_registration)
         .await
         .map_err(Into::into)
+}
+
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub(crate) struct FetchResponse {
+    error_code: ErrorCode,
+    session_id: Option<i32>,
+    responses: Vec<FetchableTopicResponse>,
+    node_endpoints: Vec<NodeEndpoint>,
+}
+
+impl FetchResponse {
+    pub(crate) fn error_code(&self) -> ErrorCode {
+        self.error_code
+    }
+
+    pub(crate) fn responses(&self) -> &[FetchableTopicResponse] {
+        &self.responses
+    }
+}
+
+impl TryFrom<Body> for FetchResponse {
+    type Error = Error;
+
+    fn try_from(value: Body) -> Result<Self, Self::Error> {
+        match value {
+            Body::FetchResponse {
+                error_code,
+                session_id,
+                responses,
+                node_endpoints,
+                ..
+            } => Ok(FetchResponse {
+                error_code: error_code.map_or(Ok(ErrorCode::None), TryInto::try_into)?,
+                session_id,
+                responses: responses.unwrap_or_default(),
+                node_endpoints: node_endpoints.unwrap_or_default(),
+            }),
+
+            otherwise => panic!("{otherwise:?}"),
+        }
+    }
 }

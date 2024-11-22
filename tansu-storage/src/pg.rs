@@ -305,7 +305,7 @@ impl Postgres {
                 &[&self.cluster, &topition.topic(), &topition.partition()],
             )
             .await
-            .inspect_err(|err| error!(?err, ?self.cluster, ?topition))?
+            .inspect_err(|err| error!(?err, cluster = ?self.cluster, ?topition))?
         {
             Ok((
                 row.try_get::<_, Option<i64>>(0)
@@ -327,7 +327,7 @@ impl Postgres {
         deflated: deflated::Batch,
         tx: &Transaction<'_>,
     ) -> Result<i64> {
-        debug!(?self.cluster, ?transaction_id, ?topition, ?deflated);
+        debug!(cluster = ?self.cluster, ?transaction_id, ?topition, ?deflated);
 
         let topic = topition.topic();
         let partition = topition.partition();
@@ -448,7 +448,7 @@ impl Postgres {
                         ],
                     )
                     .await
-                    .inspect(|n| debug!(?self.cluster, ?transaction_id, ?inflated.producer_id, ?inflated.producer_epoch, ?topic, ?partition, ?offset_start, ?offset_end, ?n))
+                    .inspect(|n| debug!(cluster = ?self.cluster, ?transaction_id, ?inflated.producer_id, ?inflated.producer_epoch, ?topic, ?partition, ?offset_start, ?offset_end, ?n))
                     .inspect_err(|err| error!(?err))?;
             }
         }
@@ -491,7 +491,7 @@ impl Postgres {
         committed: bool,
         tx: &Transaction<'_>,
     ) -> Result<ErrorCode> {
-        debug!(?self.cluster, ?transaction_id, ?producer_id, ?producer_epoch, ?committed);
+        debug!(cluster = ?self.cluster, ?transaction_id, ?producer_id, ?producer_epoch, ?committed);
 
         let prepared = tx
             .prepare(include_str!("pg/txn_select_produced_topitions.sql"))
@@ -517,11 +517,10 @@ impl Postgres {
         {
             let topic = row.try_get::<_, String>(0)?;
             let partition = row.try_get::<_, i32>(1)?;
-            let sequence = row.try_get::<_, i32>(2)?;
 
             let topition = Topition::new(topic.clone(), partition);
 
-            debug!(?topition, sequence);
+            debug!(?topition);
 
             let control_batch: Bytes = if committed {
                 ControlBatch::default().commit().try_into()?
@@ -553,7 +552,7 @@ impl Postgres {
                 .produce_in_tx(Some(transaction_id), &topition, batch, tx)
                 .await?;
 
-            debug!(offset, ?topition, sequence);
+            debug!(offset, ?topition);
 
             let prepared = tx
                 .prepare(include_str!(
@@ -654,7 +653,7 @@ impl Postgres {
                             ],
                         )
                         .await
-                        .inspect(|n| debug!(?self.cluster, ?txn, ?n))
+                        .inspect(|n| debug!(cluster = ?self.cluster, ?txn, ?n))
                         .inspect_err(|err| error!(?err))?;
                 }
 
@@ -695,7 +694,7 @@ impl Postgres {
                         ],
                     )
                     .await
-                    .inspect(|n| debug!(?self.cluster, ?txn, ?n))
+                    .inspect(|n| debug!(cluster = ?self.cluster, ?txn, ?n))
                     .inspect_err(|err| error!(?err))?;
 
                 if txn.status == TxnState::PrepareCommit {
@@ -716,7 +715,7 @@ impl Postgres {
                             ],
                         )
                         .await
-                        .inspect(|n| debug!(?self.cluster, ?txn, ?n))
+                        .inspect(|n| debug!(cluster = ?self.cluster, ?txn, ?n))
                         .inspect_err(|err| error!(?err))?;
                 }
 
@@ -737,7 +736,7 @@ impl Postgres {
                         ],
                     )
                     .await
-                    .inspect(|n| debug!(?self.cluster, ?txn, ?n))
+                    .inspect(|n| debug!(cluster = ?self.cluster, ?txn, ?n))
                     .inspect_err(|err| error!(?err))?;
 
                 let prepared = tx
@@ -757,7 +756,7 @@ impl Postgres {
                         ],
                     )
                     .await
-                    .inspect(|n| debug!(?self.cluster, ?txn, ?n))
+                    .inspect(|n| debug!(cluster = ?self.cluster, ?txn, ?n))
                     .inspect_err(|err| error!(?err))?;
 
                 let prepared = tx
@@ -786,7 +785,7 @@ impl Postgres {
                         ],
                     )
                     .await
-                    .inspect(|n| debug!(?self.cluster, ?txn, ?n))
+                    .inspect(|n| debug!(cluster = self.cluster, ?txn, n))
                     .inspect_err(|err| error!(?err))?;
             }
         } else {
@@ -816,9 +815,12 @@ impl Postgres {
                     ],
                 )
                 .await
-                .inspect(
-                    |n| debug!(?self.cluster, ?transaction_id, ?producer_id, ?producer_epoch, ?n),
-                )
+                .inspect(|n| {
+                    debug!(
+                        cluster = self.cluster,
+                        transaction_id, producer_id, producer_epoch, n
+                    )
+                })
                 .inspect_err(|err| error!(?err))?;
         }
 
@@ -832,7 +834,7 @@ impl Storage for Postgres {
         &mut self,
         broker_registration: BrokerRegistationRequest,
     ) -> Result<()> {
-        debug!(?self.cluster, ?broker_registration);
+        debug!(cluster = self.cluster, ?broker_registration);
 
         let mut c = self.connection().await?;
         let tx = c.transaction().await?;
@@ -928,7 +930,7 @@ impl Storage for Postgres {
     }
 
     async fn brokers(&mut self) -> Result<Vec<DescribeClusterBroker>> {
-        debug!(?self.cluster);
+        debug!(cluster = self.cluster);
 
         let c = self.connection().await?;
 
@@ -969,7 +971,7 @@ impl Storage for Postgres {
     }
 
     async fn create_topic(&mut self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {
-        debug!(?self.cluster, ?topic, ?validate_only);
+        debug!(cluster = self.cluster, ?topic, validate_only);
 
         let mut c = self.connection().await?;
         let tx = c.transaction().await?;
@@ -1003,7 +1005,7 @@ impl Storage for Postgres {
                 }
             })?;
 
-        debug!(?topic_uuid, ?self.cluster, ?topic.name);
+        debug!(?topic_uuid, cluster = self.cluster, ?topic);
 
         for partition in 0..topic.num_partitions {
             let prepared = tx
@@ -1062,7 +1064,7 @@ impl Storage for Postgres {
         &mut self,
         topics: &[DeleteRecordsTopic],
     ) -> Result<Vec<DeleteRecordsTopicResult>> {
-        debug!(?self.cluster, ?topics);
+        debug!(cluster = self.cluster, ?topics);
 
         let c = self.connection().await?;
 
@@ -1189,7 +1191,7 @@ impl Storage for Postgres {
     }
 
     async fn delete_topic(&mut self, topic: &TopicId) -> Result<ErrorCode> {
-        debug!(?self.cluster, ?topic);
+        debug!(cluster = self.cluster, ?topic);
 
         let mut c = self.connection().await?;
         let tx = c.transaction().await?;
@@ -1284,7 +1286,7 @@ impl Storage for Postgres {
         topition: &Topition,
         deflated: deflated::Batch,
     ) -> Result<i64> {
-        debug!(?self.cluster, ?transaction_id, ?topition, ?deflated);
+        debug!(cluster = self.cluster, transaction_id, ?topition, ?deflated);
 
         let mut c = self.connection().await?;
 
@@ -1307,7 +1309,7 @@ impl Storage for Postgres {
         max_bytes: u32,
         isolation: IsolationLevel,
     ) -> Result<Vec<deflated::Batch>> {
-        debug!(?self.cluster, ?topition, ?offset, ?isolation);
+        debug!(cluster = self.cluster, ?topition, offset, ?isolation);
 
         let high_watermark = self.offset_stage(topition).await.map(|offset_stage| {
             if isolation == IsolationLevel::ReadCommitted {
@@ -1322,9 +1324,16 @@ impl Storage for Postgres {
         let select_batch = c
             .prepare(include_str!("pg/record_fetch.sql"))
             .await
-            .inspect_err(
-                |err| error!(?err, ?self.cluster, ?topition, ?offset, ?max_bytes, ?high_watermark),
-            )?;
+            .inspect_err(|err| {
+                error!(
+                    ?err,
+                    cluster = self.cluster,
+                    ?topition,
+                    offset,
+                    max_bytes,
+                    high_watermark
+                )
+            })?;
 
         let select_headers = c
             .prepare(include_str!("pg/header_fetch.sql"))
@@ -1344,7 +1353,6 @@ impl Storage for Postgres {
                 ],
             )
             .await
-            .inspect(|rows| debug!(?rows))
             .inspect_err(|err| error!(?err))?;
 
         let mut batches = vec![];
@@ -1487,7 +1495,7 @@ impl Storage for Postgres {
     }
 
     async fn offset_stage(&mut self, topition: &Topition) -> Result<OffsetStage> {
-        debug!(?self.cluster, ?topition);
+        debug!(cluster = self.cluster, ?topition);
         let c = self.connection().await?;
 
         let prepared = c
@@ -1518,6 +1526,14 @@ impl Storage for Postgres {
             .inspect_err(|err| error!(?topition, ?prepared, ?err))?
             .unwrap_or_default();
 
+        debug!(
+            cluster = self.cluster,
+            ?topition,
+            log_start,
+            high_watermark,
+            last_stable
+        );
+
         Ok(OffsetStage {
             last_stable,
             high_watermark,
@@ -1531,7 +1547,7 @@ impl Storage for Postgres {
         retention: Option<Duration>,
         offsets: &[(Topition, OffsetCommitRequest)],
     ) -> Result<Vec<(Topition, ErrorCode)>> {
-        debug!(?self.cluster, ?group, ?retention);
+        debug!(cluster = self.cluster, ?group, ?retention);
 
         let mut c = self.connection().await?;
         let tx = c.transaction().await?;
@@ -1575,7 +1591,7 @@ impl Storage for Postgres {
         topics: &[Topition],
         require_stable: Option<bool>,
     ) -> Result<BTreeMap<Topition, i64>> {
-        debug!(?self.cluster, ?group_id, ?topics, ?require_stable);
+        debug!(cluster = self.cluster, ?group_id, ?topics, ?require_stable);
 
         let c = self.connection().await?;
 
@@ -1607,7 +1623,7 @@ impl Storage for Postgres {
         isolation_level: IsolationLevel,
         offsets: &[(Topition, ListOffsetRequest)],
     ) -> Result<Vec<(Topition, ListOffsetResponse)>> {
-        debug!(?self.cluster, ?offsets);
+        debug!(cluster = self.cluster, ?offsets);
 
         let c = self.connection().await?;
 
@@ -1642,7 +1658,7 @@ impl Storage for Postgres {
                         &[&self.cluster, &topition.topic(), &topition.partition()],
                     )
                     .await
-                    .inspect_err(|err| error!(?err, ?self.cluster, ?topition)),
+                    .inspect_err(|err| error!(?err, cluster = self.cluster, ?topition)),
 
                 ListOffsetRequest::Timestamp(timestamp) => c
                     .query_opt(
@@ -1658,8 +1674,7 @@ impl Storage for Postgres {
                     .inspect_err(|err| error!(?err)),
             }
             .inspect_err(|err| {
-                let cluster = self.cluster.as_str();
-                error!(?err, ?cluster, ?topition);
+                error!(?err, cluster = self.cluster, ?topition);
             })
             .inspect(|result| debug!(?result))?
             .map_or_else(
@@ -1667,7 +1682,13 @@ impl Storage for Postgres {
                     // this might need to be -1..
                     let timestamp = Some(SystemTime::now());
                     let offset = Some(0);
-                    debug!(?self.cluster, ?topition, ?offset_type, ?offset, ?timestamp);
+                    debug!(
+                        cluster = self.cluster,
+                        ?topition,
+                        ?offset_type,
+                        offset,
+                        ?timestamp
+                    );
 
                     Ok(ListOffsetResponse {
                         timestamp,
@@ -1680,7 +1701,13 @@ impl Storage for Postgres {
 
                     row.try_get::<_, i64>(0).map(Some).and_then(|offset| {
                         row.try_get::<_, SystemTime>(1).map(Some).map(|timestamp| {
-                            debug!(?self.cluster, ?topition, ?offset_type, ?offset, ?timestamp);
+                            debug!(
+                                cluster = self.cluster,
+                                ?topition,
+                                ?offset_type,
+                                offset,
+                                ?timestamp
+                            );
 
                             ListOffsetResponse {
                                 timestamp,
@@ -1699,7 +1726,7 @@ impl Storage for Postgres {
     }
 
     async fn metadata(&mut self, topics: Option<&[TopicId]>) -> Result<MetadataResponse> {
-        debug!(?self.cluster, ?topics);
+        debug!(cluster = self.cluster, ?topics);
 
         let c = self.connection().await.inspect_err(|err| error!(?err))?;
 
@@ -1742,8 +1769,7 @@ impl Storage for Postgres {
                                 .prepare(include_str!("pg/topic_select_name.sql"))
                                 .await
                                 .inspect_err(|err| {
-                                    let cluster = self.cluster.as_str();
-                                    error!(?err, ?cluster, ?name);
+                                    error!(?err, cluster = self.cluster, ?name);
                                 })?;
 
                             match c
@@ -2034,7 +2060,7 @@ impl Storage for Postgres {
         resource: ConfigResource,
         keys: Option<&[String]>,
     ) -> Result<DescribeConfigsResult> {
-        debug!(?self.cluster, ?name, ?resource, ?keys);
+        debug!(cluster = self.cluster, name, ?resource, ?keys);
 
         let c = self.connection().await.inspect_err(|err| error!(?err))?;
 
@@ -2120,7 +2146,7 @@ impl Storage for Postgres {
         detail: GroupDetail,
         version: Option<Version>,
     ) -> Result<Version, UpdateError<GroupDetail>> {
-        debug!(?self.cluster, ?group_id, ?detail, ?version);
+        debug!(cluster = self.cluster, group_id, ?detail, ?version);
 
         let mut c = self.connection().await?;
         let tx = c.transaction().await?;
@@ -2217,7 +2243,10 @@ impl Storage for Postgres {
         producer_id: Option<i64>,
         producer_epoch: Option<i16>,
     ) -> Result<ProducerIdResponse> {
-        debug!(?self.cluster, ?transaction_id, ?producer_id, ?producer_epoch);
+        debug!(
+            cluster = self.cluster,
+            transaction_id, producer_id, producer_epoch
+        );
 
         match (producer_id, producer_epoch, transaction_id) {
             (Some(-1), Some(-1), Some(transaction_id)) => {
@@ -2361,13 +2390,18 @@ impl Storage for Postgres {
                     ))?
                 );
 
-                let error =
-                    match tx.commit().await.inspect_err(|err| {
-                        error!(?err, self.cluster, transaction_id, producer, epoch)
-                    }) {
-                        Ok(()) => ErrorCode::None,
-                        Err(_) => ErrorCode::UnknownServerError,
-                    };
+                let error = match tx.commit().await.inspect_err(|err| {
+                    error!(
+                        ?err,
+                        cluster = self.cluster,
+                        transaction_id,
+                        producer,
+                        epoch
+                    )
+                }) {
+                    Ok(()) => ErrorCode::None,
+                    Err(_) => ErrorCode::UnknownServerError,
+                };
 
                 Ok(ProducerIdResponse {
                     error,
@@ -2431,7 +2465,10 @@ impl Storage for Postgres {
         producer_epoch: i16,
         group_id: &str,
     ) -> Result<ErrorCode> {
-        debug!(?self.cluster, ?transaction_id, ?producer_id, ?producer_epoch, ?group_id);
+        debug!(
+            cluster = self.cluster,
+            transaction_id, producer_id, producer_epoch, group_id
+        );
 
         Ok(ErrorCode::None)
     }
@@ -2440,7 +2477,7 @@ impl Storage for Postgres {
         &mut self,
         partitions: TxnAddPartitionsRequest,
     ) -> Result<TxnAddPartitionsResponse> {
-        debug!(?self.cluster, ?partitions);
+        debug!(cluster = self.cluster, ?partitions);
 
         match partitions {
             TxnAddPartitionsRequest::VersionZeroToThree {
@@ -2481,7 +2518,10 @@ impl Storage for Postgres {
                             .inspect_err(|err| {
                                 error!(
                                     ?err,
-                                    self.cluster, topic.name, partition_index, transaction_id
+                                    cluster = self.cluster,
+                                    topic = topic.name,
+                                    partition_index,
+                                    transaction_id
                                 )
                             })?;
 
@@ -2516,7 +2556,10 @@ impl Storage for Postgres {
                     .inspect_err(|err| {
                         error!(
                             ?err,
-                            self.cluster, transaction_id, producer_id, producer_epoch,
+                            cluster = self.cluster,
+                            transaction_id,
+                            producer_id,
+                            producer_epoch,
                         )
                     })?;
 
@@ -2535,7 +2578,7 @@ impl Storage for Postgres {
         &mut self,
         offsets: TxnOffsetCommitRequest,
     ) -> Result<Vec<TxnOffsetCommitResponseTopic>> {
-        debug!(?self.cluster, ?offsets);
+        debug!(cluster = self.cluster, ?offsets);
 
         let mut c = self.connection().await.inspect_err(|err| error!(?err))?;
         let tx = c.transaction().await.inspect_err(|err| error!(?err))?;
@@ -2658,7 +2701,7 @@ impl Storage for Postgres {
         producer_epoch: i16,
         committed: bool,
     ) -> Result<ErrorCode> {
-        debug!(?self.cluster, ?transaction_id, ?producer_id, ?producer_epoch, ?committed);
+        debug!(cluster = ?self.cluster, transaction_id, producer_id, producer_epoch, committed);
 
         let mut c = self.connection().await.inspect_err(|err| error!(?err))?;
         let tx = c.transaction().await.inspect_err(|err| error!(?err))?;

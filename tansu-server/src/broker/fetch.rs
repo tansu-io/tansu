@@ -65,7 +65,9 @@ where
 
         let mut batches = Vec::new();
 
-        for offset in fetch_partition.fetch_offset.. {
+        let mut offset = fetch_partition.fetch_offset;
+
+        loop {
             if *max_bytes == 0 {
                 break;
             }
@@ -81,6 +83,11 @@ where
 
             *max_bytes =
                 u32::try_from(fetched.byte_size()).map(|bytes| max_bytes.saturating_sub(bytes))?;
+
+            offset += fetched
+                .iter()
+                .map(|batch| batch.record_count as i64)
+                .sum::<i64>();
 
             debug!(?offset, ?fetched);
 
@@ -260,7 +267,7 @@ where
         }
     }
 
-    pub(crate) async fn response(
+    pub async fn response(
         &mut self,
         max_wait_ms: i32,
         min_bytes: i32,

@@ -1129,6 +1129,15 @@ impl TryFrom<i8> for IsolationLevel {
     }
 }
 
+impl From<&IsolationLevel> for i8 {
+    fn from(value: &IsolationLevel) -> Self {
+        match value {
+            IsolationLevel::ReadUncommitted => 0,
+            IsolationLevel::ReadCommitted => 1,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 enum Ack {
     None,
