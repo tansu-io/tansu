@@ -13,38 +13,39 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::cmp::Ordering;
-use std::collections::BTreeSet;
-use std::io::BufReader;
-use std::sync::Arc;
-use std::time::SystemTime;
-use std::{collections::BTreeMap, fmt::Debug, io::Cursor, str::FromStr, time::Duration};
+use std::{
+    collections::{btree_map::Entry, BTreeMap, BTreeSet},
+    fmt::Debug,
+    io::{BufReader, Cursor},
+    str::FromStr,
+    sync::Arc,
+    time::{Duration, SystemTime},
+};
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::stream::TryStreamExt;
-use futures::StreamExt;
+use futures::{stream::TryStreamExt, StreamExt};
 use object_store::{
-    path::Path, Attribute, AttributeValue, Attributes, ObjectStore, PutMode, PutOptions,
-    PutPayload, TagSet, UpdateVersion,
+    path::Path, Attribute, AttributeValue, Attributes, DynObjectStore, GetOptions, ObjectStore,
+    PutMode, PutOptions, PutPayload, PutResult, TagSet, UpdateVersion,
 };
-use object_store::{DynObjectStore, GetOptions, PutResult};
 use rand::{prelude::*, thread_rng};
-use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
-use tansu_kafka_sans_io::describe_configs_response::DescribeConfigsResourceResult;
-use tansu_kafka_sans_io::txn_offset_commit_response::TxnOffsetCommitResponseTopic;
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tansu_kafka_sans_io::{
+    add_partitions_to_txn_response::{
+        AddPartitionsToTxnPartitionResult, AddPartitionsToTxnTopicResult,
+    },
     create_topics_request::CreatableTopic,
     delete_records_request::DeleteRecordsTopic,
     delete_records_response::DeleteRecordsTopicResult,
     describe_cluster_response::DescribeClusterBroker,
-    describe_configs_response::DescribeConfigsResult,
+    describe_configs_response::{DescribeConfigsResourceResult, DescribeConfigsResult},
     metadata_response::{MetadataResponseBroker, MetadataResponsePartition, MetadataResponseTopic},
-    record::{deflated, inflated},
-    ConfigResource, Encoder, ErrorCode,
+    record::{deflated, inflated, Record},
+    txn_offset_commit_response::{TxnOffsetCommitResponsePartition, TxnOffsetCommitResponseTopic},
+    BatchAttribute, ConfigResource, ConfigSource, ConfigType, ControlBatch, Decoder, Encoder,
+    EndTransactionMarker, ErrorCode, IsolationLevel,
 };
-use tansu_kafka_sans_io::{ConfigSource, ConfigType, Decoder, IsolationLevel};
 use tracing::{debug, error};
 use uuid::Uuid;
 
@@ -52,7 +53,7 @@ use crate::{
     BrokerRegistationRequest, Error, GroupDetail, ListOffsetRequest, ListOffsetResponse,
     MetadataResponse, OffsetCommitRequest, OffsetStage, ProducerIdResponse, Result, Storage,
     TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse, TxnOffsetCommitRequest,
-    UpdateError, Version, NULL_TOPIC_ID,
+    TxnState, UpdateError, Version, NULL_TOPIC_ID,
 };
 
 const APPLICATION_JSON: &str = "application/json";
@@ -62,9 +63,82 @@ pub struct DynoStore {
     cluster: String,
     node: i32,
     watermarks: BTreeMap<Topition, ConditionData<Watermark>>,
-    producers: ConditionData<BTreeMap<i64, Producer>>,
+    meta: ConditionData<Meta>,
 
     object_store: Arc<DynObjectStore>,
+}
+
+type ProducerId = i64;
+type ProducerEpoch = i16;
+type Offset = i64;
+type Sequence = i32;
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+struct Meta {
+    producers: BTreeMap<ProducerId, ProducerDetail>,
+    transactions: BTreeMap<String, Txn>,
+}
+
+impl ConditionData<Meta> {
+    fn new(cluster: &str) -> Self {
+        Self {
+            path: Path::from(format!("clusters/{}/meta.json", cluster)),
+            data: Meta::default(),
+            ..Default::default()
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+struct ProducerDetail {
+    sequences: BTreeMap<ProducerEpoch, BTreeMap<String, BTreeMap<i32, Sequence>>>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+struct Txn {
+    producer: ProducerId,
+    epochs: BTreeMap<ProducerEpoch, TxnDetail>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+struct TxnDetail {
+    transaction_timeout_ms: i32,
+    started_at: Option<SystemTime>,
+    state: Option<TxnState>,
+    produces: BTreeMap<String, BTreeMap<i32, Option<TxnProduceOffset>>>,
+    offsets: BTreeMap<String, BTreeMap<i32, TxnCommitOffset>>,
+}
+
+impl From<&TxnDetail> for BTreeMap<Topition, Offset> {
+    fn from(value: &TxnDetail) -> Self {
+        let mut result = BTreeMap::new();
+
+        for (topic, partitions) in value.produces.iter() {
+            for (partition, offset_range) in partitions.iter() {
+                let Some(offset_range) = offset_range else {
+                    continue;
+                };
+
+                let tp = Topition::new(topic.to_owned(), *partition);
+                assert_eq!(None, result.insert(tp, offset_range.offset_start));
+            }
+        }
+
+        result
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+struct TxnProduceOffset {
+    offset_start: Offset,
+    offset_end: Offset,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+struct TxnCommitOffset {
+    committed_offset: Offset,
+    leader_epoch: Option<i32>,
+    metadata: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -81,7 +155,7 @@ where
     D: Clone + Debug + DeserializeOwned + Send + Serialize + Sync,
 {
     async fn get(&mut self, object_store: &impl ObjectStore) -> Result<()> {
-        debug!(?self, ?object_store);
+        debug!(?self);
 
         let get_result = object_store
             .get(&self.path)
@@ -104,7 +178,7 @@ where
             .inspect_err(|error| error!(?error, ?self))
             .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
 
-        debug!(?self, ?object_store);
+        debug!(?self);
 
         Ok(())
     }
@@ -114,15 +188,16 @@ where
         E: Debug,
         F: Fn(&mut D) -> Result<E>,
     {
-        debug!(?self, ?object_store);
+        debug!(?self);
 
         loop {
-            let outcome = f(&mut self.data)?;
+            let outcome = f(&mut self.data);
             debug!(?self, ?outcome);
 
             let payload = serde_json::to_vec(&self.data)
                 .map(Bytes::from)
-                .map(PutPayload::from)?;
+                .map(PutPayload::from)
+                .inspect_err(|err| error!(?err, data = ?self.data))?;
 
             match object_store
                 .put_opts(&self.path, payload, PutOptions::from(&*self))
@@ -145,7 +220,7 @@ where
                         version: result.version,
                     });
 
-                    return Ok(outcome);
+                    return outcome;
                 }
 
                 Err(pre_condition @ object_store::Error::Precondition { .. }) => {
@@ -174,7 +249,7 @@ where
     where
         F: Fn(&D) -> Result<E>,
     {
-        debug!(?self, ?object_store);
+        debug!(?self);
 
         match object_store
             .get_opts(
@@ -243,10 +318,8 @@ struct TopicMetadata {
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 struct Watermark {
-    low: i64,
-    high: i64,
-    stable: i64,
-    producers: BTreeMap<i64, WatermarkSequence>,
+    low: Option<i64>,
+    high: Option<i64>,
 }
 
 impl ConditionData<Watermark> {
@@ -279,21 +352,6 @@ impl Default for WatermarkSequence {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
-struct Producer {
-    epoch: i16,
-    updated: SystemTime,
-}
-
-impl Default for Producer {
-    fn default() -> Self {
-        Self {
-            epoch: 0,
-            updated: SystemTime::now(),
-        }
-    }
-}
-
 fn json_content_type() -> Attributes {
     let mut attributes = Attributes::new();
     _ = attributes.insert(
@@ -309,13 +367,7 @@ impl DynoStore {
             cluster: cluster.into(),
             node,
             watermarks: BTreeMap::new(),
-            producers: ConditionData {
-                path: Path::from(format!("clusters/{}/producers.json", cluster)),
-                version: None,
-                attributes: Attributes::new(),
-                tags: TagSet::default(),
-                data: BTreeMap::new(),
-            },
+            meta: ConditionData::<Meta>::new(cluster),
             object_store: Arc::new(object_store),
         }
     }
@@ -415,6 +467,33 @@ impl DynoStore {
 
             Err(otherwise) => Err(otherwise.into()),
         }
+    }
+
+    fn txn_offset_commit_response_error(
+        offsets: &TxnOffsetCommitRequest,
+        error_code: ErrorCode,
+    ) -> Result<Vec<TxnOffsetCommitResponseTopic>> {
+        let mut responses = vec![];
+
+        for topic in &offsets.topics {
+            let mut partition_responses = vec![];
+
+            if let Some(partitions) = topic.partitions.as_deref() {
+                for partition in partitions {
+                    partition_responses.push(TxnOffsetCommitResponsePartition {
+                        partition_index: partition.partition_index,
+                        error_code: error_code.into(),
+                    });
+                }
+            }
+
+            responses.push(TxnOffsetCommitResponseTopic {
+                name: topic.name.to_string(),
+                partitions: Some(partition_responses),
+            });
+        }
+
+        Ok(responses)
     }
 }
 
@@ -701,26 +780,63 @@ impl Storage for DynoStore {
         &mut self,
         transaction_id: Option<&str>,
         topition: &Topition,
-        deflated: deflated::Batch,
+        mut deflated: deflated::Batch,
     ) -> Result<i64> {
         debug!(?transaction_id, ?topition, ?deflated);
 
-        if deflated.producer_id != -1 {
-            self.producers
-                .with(&self.object_store, |producers| {
-                    debug!(?producers, ?deflated.producer_id);
-                    producers.get(&deflated.producer_id).map_or(
-                        Err(Error::Api(ErrorCode::UnknownProducerId)),
-                        |producer| {
-                            if producer.epoch == deflated.producer_epoch {
-                                Ok(())
-                            } else {
-                                Err(Error::Api(ErrorCode::ProducerFenced))
-                            }
-                        },
-                    )
+        if deflated.is_idempotent() {
+            self.meta
+                .with_mut(&self.object_store, |meta| {
+                    let Some(pd) = meta.producers.get_mut(&deflated.producer_id) else {
+                        debug!(producer_id = deflated.producer_id, ?meta.producers);
+                        return Err(Error::Api(ErrorCode::UnknownProducerId));
+                    };
+
+                    let Some(mut current) = pd.sequences.last_entry() else {
+                        debug!(last_entry = ?pd.sequences.last_entry());
+                        return Err(Error::Api(ErrorCode::UnknownServerError));
+                    };
+
+                    if current.key() != &deflated.producer_epoch {
+                        debug!(current = ?current.key(), producer_epoch = deflated.producer_epoch);
+                        return Err(Error::Api(ErrorCode::ProducerFenced));
+                    }
+
+                    let sequences = current.get_mut();
+                    debug!(?sequences);
+
+                    match sequences
+                        .entry(topition.topic.clone())
+                        .or_default()
+                        .entry(topition.partition)
+                        .or_default()
+                    {
+                        sequence if *sequence < deflated.base_sequence => {
+                            debug!(?sequence, base_sequence = deflated.base_sequence);
+
+                            Err(Error::Api(ErrorCode::OutOfOrderSequenceNumber))
+                        }
+
+                        sequence if *sequence > deflated.base_sequence => {
+                            debug!(?sequence, base_sequence = deflated.base_sequence);
+
+                            Err(Error::Api(ErrorCode::DuplicateSequenceNumber))
+                        }
+
+                        sequence => {
+                            debug!(?sequence, delta = deflated.last_offset_delta + 1);
+
+                            *sequence += deflated.last_offset_delta + 1;
+                            Ok(())
+                        }
+                    }
                 })
-                .await?
+                .await?;
+
+            if transaction_id.is_none() {
+                deflated.producer_id = -1;
+                deflated.producer_epoch = -1;
+            }
         }
 
         let offset = self
@@ -732,58 +848,51 @@ impl Storage for DynoStore {
             ))
             .with_mut(&self.object_store, |watermark| {
                 debug!(?watermark);
-
-                if deflated.producer_id != -1 {
-                    if let Some(ws) = watermark.producers.get_mut(&deflated.producer_id) {
-                        debug!(?ws);
-
-                        match ws.epoch.cmp(&deflated.producer_epoch) {
-                            Ordering::Equal => match ws.sequence.cmp(&deflated.base_sequence) {
-                                Ordering::Equal => {
-                                    debug!(?ws, ?deflated.base_sequence);
-
-                                    ws.sequence += deflated.last_offset_delta + 1;
-
-                                    let offset = watermark.high;
-                                    watermark.high += deflated.last_offset_delta as i64 + 1i64;
-                                    Ok(offset)
-                                }
-
-                                Ordering::Greater => {
-                                    debug!(?ws, ?deflated.base_sequence);
-                                    Err(Error::Api(ErrorCode::DuplicateSequenceNumber))
-                                }
-
-                                Ordering::Less => {
-                                    debug!(?ws, ?deflated.base_sequence);
-                                    Err(Error::Api(ErrorCode::OutOfOrderSequenceNumber))
-                                }
-                            },
-
-                            Ordering::Greater => Err(Error::Api(ErrorCode::ProducerFenced)),
-
-                            Ordering::Less => Err(Error::Api(ErrorCode::InvalidProducerEpoch)),
-                        }
-                    } else {
-                        let offset = watermark.high;
-                        watermark.high += deflated.last_offset_delta as i64 + 1i64;
-                        _ = watermark.producers.insert(
-                            deflated.producer_id,
-                            WatermarkSequence {
-                                epoch: deflated.producer_epoch,
-                                sequence: deflated.last_offset_delta + 1,
-                                ..Default::default()
-                            },
-                        );
-                        Ok(offset)
-                    }
-                } else {
-                    let offset = watermark.high;
-                    watermark.high += deflated.last_offset_delta as i64 + 1i64;
-                    Ok(offset)
-                }
+                let offset = watermark.high.map_or(0, |high| high + 1);
+                watermark.high = watermark.high.map_or(Some(0), |high| {
+                    Some(high + deflated.last_offset_delta as i64 + 1i64)
+                });
+                Ok(offset)
             })
             .await?;
+
+        let attributes = BatchAttribute::try_from(deflated.attributes)?;
+
+        if let Some(transaction_id) = transaction_id {
+            if attributes.transaction {
+                self.meta
+                    .with_mut(&self.object_store, |meta| {
+                        if let Some(transaction) = meta.transactions.get_mut(transaction_id) {
+                            if let Some(txn_detail) =
+                                transaction.epochs.get_mut(&deflated.producer_epoch)
+                            {
+                                let offset_end = deflated.last_offset_delta as i64 + 1i64;
+
+                                _ = txn_detail
+                                    .produces
+                                    .entry(topition.topic.clone())
+                                    .or_default()
+                                    .entry(topition.partition)
+                                    .and_modify(|entry| {
+                                        entry
+                                            .get_or_insert(TxnProduceOffset {
+                                                offset_start: offset,
+                                                offset_end,
+                                            })
+                                            .offset_end = offset_end;
+                                    })
+                                    .or_insert(Some(TxnProduceOffset {
+                                        offset_start: offset,
+                                        offset_end,
+                                    }));
+                            }
+                        }
+
+                        Ok(())
+                    })
+                    .await?;
+            }
+        }
 
         let location = Path::from(format!(
             "clusters/{}/topics/{}/partitions/{:0>10}/records/{:0>20}.batch",
@@ -791,17 +900,18 @@ impl Storage for DynoStore {
         ));
 
         let payload = self.encode(deflated)?;
-        let attributes = Attributes::new();
-
-        let options = PutOptions {
-            mode: PutMode::Create,
-            tags: TagSet::default(),
-            attributes,
-        };
 
         _ = self
             .object_store
-            .put_opts(&location, payload, options)
+            .put_opts(
+                &location,
+                payload,
+                PutOptions {
+                    mode: PutMode::Create,
+                    tags: TagSet::default(),
+                    attributes: Attributes::new(),
+                },
+            )
             .await
             .inspect_err(|error| error!(?error))?;
 
@@ -840,41 +950,46 @@ impl Storage for DynoStore {
             };
 
             let offset = i64::from_str(&offset.as_ref()[0..20])?;
+
             _ = offsets.insert(offset);
         }
 
-        let greater_or_equal = offsets.split_off(&offset);
+        let mut batches = vec![];
 
-        let Some(offset) = greater_or_equal.first() else {
-            return inflated::Batch::builder()
-                .build()
-                .and_then(TryInto::try_into)
-                .map(|batch| vec![batch])
-                .map_err(Into::into);
-        };
+        let mut bytes = max_bytes as usize;
 
-        let location = Path::from(format!(
-            "clusters/{}/topics/{}/partitions/{:0>10}/records/{:0>20}.batch",
-            self.cluster, topition.topic, topition.partition, offset,
-        ));
+        for offset in offsets.split_off(&offset) {
+            debug!(?offset);
 
-        let get_result = self
-            .object_store
-            .get(&location)
-            .await
-            .inspect_err(|error| error!(?error, ?topition, ?offset, ?min_bytes, ?max_bytes))
-            .map_err(|_| Error::Api(ErrorCode::UnknownServerError))?;
+            let location = Path::from(format!(
+                "clusters/{}/topics/{}/partitions/{:0>10}/records/{:0>20}.batch",
+                self.cluster, topition.topic, topition.partition, offset,
+            ));
 
-        get_result
-            .bytes()
-            .await
-            .inspect_err(|error| error!(?error, ?location))
-            .map_err(|_| Error::Api(ErrorCode::UnknownServerError))
-            .and_then(|encoded| self.decode(encoded))
-            .map(|mut deflated| {
-                deflated.base_offset = *offset;
-                vec![deflated]
-            })
+            let get_result = self
+                .object_store
+                .get(&location)
+                .await
+                .inspect_err(|error| error!(?error, ?topition, ?offset, ?min_bytes, ?max_bytes))
+                .map_err(|_| Error::Api(ErrorCode::UnknownServerError))?;
+
+            if get_result.meta.size > bytes {
+                break;
+            } else {
+                bytes = bytes.saturating_sub(get_result.meta.size);
+            }
+
+            let mut batch = get_result
+                .bytes()
+                .await
+                .inspect_err(|error| error!(?error, ?location))
+                .map_err(|_| Error::Api(ErrorCode::UnknownServerError))
+                .and_then(|encoded| self.decode(encoded))?;
+            batch.base_offset = offset;
+            batches.push(batch);
+        }
+
+        Ok(batches)
     }
 
     async fn offset_stage(&mut self, topition: &Topition) -> Result<OffsetStage> {
@@ -888,9 +1003,9 @@ impl Storage for DynoStore {
             ))
             .with(&self.object_store, |watermark| {
                 Ok(OffsetStage {
-                    last_stable: watermark.stable,
-                    high_watermark: watermark.high,
-                    log_start: watermark.low,
+                    last_stable: -1,
+                    high_watermark: watermark.high.unwrap_or(0),
+                    log_start: watermark.low.unwrap_or(0),
                 })
             })
             .await
@@ -902,6 +1017,45 @@ impl Storage for DynoStore {
         offsets: &[(Topition, ListOffsetRequest)],
     ) -> Result<Vec<(Topition, ListOffsetResponse)>> {
         debug!(?offsets, ?isolation_level);
+
+        let stable = if isolation_level == IsolationLevel::ReadCommitted {
+            self.meta
+                .with(&self.object_store, |meta| {
+                    Ok(meta
+                        .transactions
+                        .values()
+                        .flat_map(|txn| {
+                            txn.epochs
+                                .values()
+                                .filter(|detail| {
+                                    detail.state.is_some_and(|state| {
+                                        state != TxnState::Committed && state != TxnState::Aborted
+                                    })
+                                })
+                                .map(BTreeMap::<Topition, Offset>::from)
+                                .collect::<Vec<_>>()
+                        })
+                        .reduce(|mut acc, e| {
+                            debug!(?acc, ?e);
+                            for (topition, offset_start) in e.iter() {
+                                _ = acc
+                                    .entry(topition.to_owned())
+                                    .and_modify(|existing_offset_start| {
+                                        if *existing_offset_start > *offset_start {
+                                            *existing_offset_start = *offset_start
+                                        }
+                                    })
+                                    .or_insert(*offset_start);
+                            }
+
+                            acc
+                        })
+                        .unwrap_or(BTreeMap::new()))
+                })
+                .await?
+        } else {
+            BTreeMap::new()
+        };
 
         let mut responses = vec![];
 
@@ -920,26 +1074,34 @@ impl Storage for DynoStore {
                                 Ok(ListOffsetResponse {
                                     error_code: ErrorCode::None,
                                     timestamp: None,
-                                    offset: Some(watermark.low),
+                                    offset: Some(watermark.low.unwrap_or(0)),
                                 })
                             })
                             .await?
                     }
                     ListOffsetRequest::Latest => {
-                        self.watermarks
-                            .entry(topition.to_owned())
-                            .or_insert(ConditionData::<Watermark>::new(
-                                self.cluster.as_str(),
-                                topition,
-                            ))
-                            .with(&self.object_store, |watermark| {
-                                Ok(ListOffsetResponse {
-                                    error_code: ErrorCode::None,
-                                    timestamp: None,
-                                    offset: Some(watermark.high),
+                        if let Some(offset) = stable.get(topition) {
+                            ListOffsetResponse {
+                                error_code: ErrorCode::None,
+                                timestamp: None,
+                                offset: Some(*offset),
+                            }
+                        } else {
+                            self.watermarks
+                                .entry(topition.to_owned())
+                                .or_insert(ConditionData::<Watermark>::new(
+                                    self.cluster.as_str(),
+                                    topition,
+                                ))
+                                .with(&self.object_store, |watermark| {
+                                    Ok(ListOffsetResponse {
+                                        error_code: ErrorCode::None,
+                                        timestamp: None,
+                                        offset: Some(watermark.high.unwrap_or(0)),
+                                    })
                                 })
-                            })
-                            .await?
+                                .await?
+                        }
                     }
                     ListOffsetRequest::Timestamp(..) => todo!(),
                 },
@@ -1388,89 +1550,179 @@ impl Storage for DynoStore {
             ?producer_epoch,
         );
 
-        if let Some(_transaction_id) = transaction_id {
-            self.producers
-                .with_mut(&self.object_store, |producers| {
-                    debug!(?producers);
+        #[derive(Clone, Debug)]
+        enum InitProducer {
+            Completed(ProducerIdResponse),
+            NeedToRollback {
+                producer_id: i64,
+                producer_epoch: i16,
+            },
+        }
+
+        if let Some(transaction_id) = transaction_id {
+            match self
+                .meta
+                .with_mut(&self.object_store, |meta| {
+                    debug!(?meta);
                     match (producer_id, producer_epoch) {
                         (Some(-1), Some(-1)) => {
-                            let id = producers.last_key_value().map_or(1, |(k, _)| k + 1);
-                            _ = producers.insert(id, Producer::default());
+                            match meta.transactions.entry(transaction_id.to_string()) {
+                                Entry::Vacant(vacant) => {
+                                    let id = meta
+                                        .producers
+                                        .last_key_value()
+                                        .map_or(1.into(), |(k, _v)| k + 1);
 
-                            Ok(ProducerIdResponse {
-                                id,
-                                epoch: 0,
-                                ..Default::default()
-                            })
-                        }
+                                    let mut pd = ProducerDetail::default();
+                                    assert_eq!(None, pd.sequences.insert(0, BTreeMap::new()));
+                                    assert_eq!(None, meta.producers.insert(id, pd));
 
-                        (Some(producer_id), Some(producer_epoch))
-                            if producer_id > 0 && producer_epoch >= 0 =>
-                        {
-                            match producers.get(&producer_id) {
-                                Some(Producer { epoch, .. }) if producer_epoch == *epoch => {
-                                    if let Some(epoch) = epoch.checked_add(1) {
-                                        _ = producers.insert(
-                                            producer_id,
-                                            Producer {
-                                                epoch,
+                                    let mut epochs = BTreeMap::new();
+                                    assert_eq!(
+                                        None,
+                                        epochs.insert(
+                                            0,
+                                            TxnDetail {
+                                                transaction_timeout_ms,
                                                 ..Default::default()
                                             },
-                                        );
+                                        )
+                                    );
 
-                                        Ok(ProducerIdResponse {
-                                            id: producer_id,
-                                            epoch,
-                                            ..Default::default()
-                                        })
-                                    } else {
-                                        let id =
-                                            producers.last_key_value().map_or(1, |(k, _)| k + 1);
-                                        _ = producers.insert(id, Producer::default());
+                                    _ = vacant.insert(Txn {
+                                        producer: id,
+                                        epochs,
+                                    });
 
-                                        Ok(ProducerIdResponse {
-                                            id,
-                                            epoch: 0,
-                                            ..Default::default()
-                                        })
-                                    }
+                                    Ok(InitProducer::Completed(ProducerIdResponse {
+                                        id,
+                                        epoch: 0,
+                                        error: ErrorCode::None,
+                                    }))
                                 }
 
-                                Some(_) | None => Ok(ProducerIdResponse {
-                                    id: -1,
-                                    epoch: -1,
-                                    error: ErrorCode::InvalidProducerEpoch,
-                                }),
+                                Entry::Occupied(mut occupied) => {
+                                    if let Some((current_epoch, txn_detail)) =
+                                        occupied.get().epochs.last_key_value()
+                                    {
+                                        if txn_detail.state == Some(TxnState::Begin) {
+                                            Ok(InitProducer::NeedToRollback {
+                                                producer_id: occupied.get().producer,
+                                                producer_epoch: *current_epoch,
+                                            })
+                                        } else {
+                                            let id = occupied.get().producer;
+                                            let epoch = current_epoch + 1;
+
+                                            _ = meta.producers.entry(id).and_modify(|pd| {
+                                                assert_eq!(
+                                                    None,
+                                                    pd.sequences.insert(epoch, BTreeMap::new())
+                                                );
+                                            });
+
+                                            assert_eq!(
+                                                None,
+                                                occupied.get_mut().epochs.insert(
+                                                    epoch,
+                                                    TxnDetail {
+                                                        transaction_timeout_ms,
+                                                        ..Default::default()
+                                                    }
+                                                )
+                                            );
+
+                                            Ok(InitProducer::Completed(ProducerIdResponse {
+                                                id,
+                                                epoch,
+                                                error: ErrorCode::None,
+                                            }))
+                                        }
+                                    } else {
+                                        todo!()
+                                    }
+                                }
                             }
                         }
 
-                        (None, None) => todo!(),
-                        (None, Some(_)) => todo!(),
-                        (Some(_), None) => todo!(),
-                        (_, _) => todo!(),
+                        (producer, epoch) => {
+                            error!(?producer, ?epoch);
+                            Ok(InitProducer::Completed(ProducerIdResponse {
+                                id: -1,
+                                epoch: -1,
+                                error: ErrorCode::UnknownServerError,
+                            }))
+                        }
                     }
                 })
-                .await
+                .await?
+            {
+                InitProducer::Completed(completed) => Ok(completed),
+                InitProducer::NeedToRollback {
+                    producer_id: rollback_producer_id,
+                    producer_epoch: rollback_producer_epoch,
+                } => {
+                    let error_code = self
+                        .txn_end(
+                            transaction_id,
+                            rollback_producer_id,
+                            rollback_producer_epoch,
+                            false,
+                        )
+                        .await?;
+
+                    debug!(?rollback_producer_id, ?rollback_producer_epoch, ?error_code);
+
+                    if error_code == ErrorCode::None {
+                        return self
+                            .init_producer(
+                                Some(transaction_id),
+                                transaction_timeout_ms,
+                                producer_id,
+                                producer_epoch,
+                            )
+                            .await;
+                    } else {
+                        Ok(ProducerIdResponse {
+                            id: -1,
+                            epoch: -1,
+                            error: ErrorCode::UnknownServerError,
+                        })
+                    }
+                }
+            }
         } else {
-            self.producers
-                .with_mut(&self.object_store, |producers| {
-                    debug!(?producers);
+            self.meta
+                .with_mut(&self.object_store, |meta| {
+                    debug!(?meta);
                     match (producer_id, producer_epoch) {
                         (Some(-1), Some(-1)) => {
-                            let id = producers.last_key_value().map_or(1, |(k, _)| k + 1);
-                            _ = producers.insert(id, Producer::default());
+                            let producer = meta
+                                .producers
+                                .last_key_value()
+                                .map_or(1.into(), |(k, _v)| k + 1);
+
+                            let epoch = 0;
+                            let mut pd = ProducerDetail::default();
+                            assert_eq!(None, pd.sequences.insert(epoch, BTreeMap::new()));
+                            debug!(?producer, ?pd);
+                            assert_eq!(None, meta.producers.insert(producer, pd));
 
                             Ok(ProducerIdResponse {
-                                id,
-                                epoch: 0,
+                                id: producer,
+                                epoch,
                                 ..Default::default()
                             })
                         }
 
-                        (None, None) => todo!(),
-                        (None, Some(_)) => todo!(),
-                        (Some(_), None) => todo!(),
-                        (_, _) => todo!(),
+                        (producer, epoch) => {
+                            error!(?producer, ?epoch);
+                            Ok(ProducerIdResponse {
+                                id: -1,
+                                epoch: -1,
+                                error: ErrorCode::UnknownServerError,
+                            })
+                        }
                     }
                 })
                 .await
@@ -1484,7 +1736,7 @@ impl Storage for DynoStore {
         producer_epoch: i16,
         group_id: &str,
     ) -> Result<ErrorCode> {
-        debug!(?transaction_id, ?producer_id, ?producer_epoch, ?group_id);
+        debug!(transaction_id, producer_id, producer_epoch, group_id);
 
         Ok(ErrorCode::None)
     }
@@ -1494,7 +1746,144 @@ impl Storage for DynoStore {
         partitions: TxnAddPartitionsRequest,
     ) -> Result<TxnAddPartitionsResponse> {
         debug!(?partitions);
-        todo!()
+
+        match partitions {
+            TxnAddPartitionsRequest::VersionZeroToThree {
+                transaction_id,
+                producer_id,
+                producer_epoch,
+                ref topics,
+            } => {
+                self.meta
+                    .with_mut(&self.object_store, |meta| {
+                        let Some(transaction) = meta.transactions.get_mut(&transaction_id) else {
+                            let mut results = vec![];
+
+                            for topic in topics {
+                                let mut results_by_partition = vec![];
+
+                                for partition_index in topic.partitions.as_deref().unwrap_or(&[]) {
+                                    results_by_partition.push(AddPartitionsToTxnPartitionResult {
+                                        partition_index: *partition_index,
+                                        partition_error_code: ErrorCode::TransactionalIdNotFound
+                                            .into(),
+                                    });
+                                }
+
+                                results.push(AddPartitionsToTxnTopicResult {
+                                    name: topic.name.clone(),
+                                    results_by_partition: Some(results_by_partition),
+                                })
+                            }
+
+                            return Ok(TxnAddPartitionsResponse::VersionZeroToThree(results));
+                        };
+
+                        if transaction.producer != producer_id {
+                            let mut results = vec![];
+
+                            for topic in topics {
+                                let mut results_by_partition = vec![];
+
+                                for partition_index in topic.partitions.as_deref().unwrap_or(&[]) {
+                                    results_by_partition.push(AddPartitionsToTxnPartitionResult {
+                                        partition_index: *partition_index,
+                                        partition_error_code: ErrorCode::UnknownProducerId.into(),
+                                    });
+                                }
+
+                                results.push(AddPartitionsToTxnTopicResult {
+                                    name: topic.name.clone(),
+                                    results_by_partition: Some(results_by_partition),
+                                })
+                            }
+
+                            return Ok(TxnAddPartitionsResponse::VersionZeroToThree(results));
+                        }
+
+                        let Some(mut current_epoch) = transaction.epochs.last_entry() else {
+                            let mut results = vec![];
+
+                            for topic in topics {
+                                let mut results_by_partition = vec![];
+
+                                for partition_index in topic.partitions.as_deref().unwrap_or(&[]) {
+                                    results_by_partition.push(AddPartitionsToTxnPartitionResult {
+                                        partition_index: *partition_index,
+                                        partition_error_code: ErrorCode::ProducerFenced.into(),
+                                    });
+                                }
+
+                                results.push(AddPartitionsToTxnTopicResult {
+                                    name: topic.name.clone(),
+                                    results_by_partition: Some(results_by_partition),
+                                })
+                            }
+
+                            return Ok(TxnAddPartitionsResponse::VersionZeroToThree(results));
+                        };
+
+                        if &producer_epoch != current_epoch.key() {
+                            let mut results = vec![];
+
+                            for topic in topics {
+                                let mut results_by_partition = vec![];
+
+                                for partition_index in topic.partitions.as_deref().unwrap_or(&[]) {
+                                    results_by_partition.push(AddPartitionsToTxnPartitionResult {
+                                        partition_index: *partition_index,
+                                        partition_error_code: ErrorCode::ProducerFenced.into(),
+                                    });
+                                }
+
+                                results.push(AddPartitionsToTxnTopicResult {
+                                    name: topic.name.clone(),
+                                    results_by_partition: Some(results_by_partition),
+                                })
+                            }
+
+                            return Ok(TxnAddPartitionsResponse::VersionZeroToThree(results));
+                        }
+
+                        let txn_detail = current_epoch.get_mut();
+
+                        let mut results = vec![];
+
+                        for topic in topics {
+                            let mut results_by_partition = vec![];
+
+                            for partition_index in topic.partitions.as_deref().unwrap_or(&[]) {
+                                _ = txn_detail
+                                    .produces
+                                    .entry(topic.name.clone())
+                                    .or_default()
+                                    .entry(*partition_index)
+                                    .or_default();
+
+                                results_by_partition.push(AddPartitionsToTxnPartitionResult {
+                                    partition_index: *partition_index,
+                                    partition_error_code: i16::from(ErrorCode::None),
+                                });
+                            }
+
+                            results.push(AddPartitionsToTxnTopicResult {
+                                name: topic.name.clone(),
+                                results_by_partition: Some(results_by_partition),
+                            })
+                        }
+
+                        txn_detail.started_at = Some(SystemTime::now());
+                        txn_detail.state = Some(TxnState::Begin);
+
+                        Ok(TxnAddPartitionsResponse::VersionZeroToThree(results))
+                    })
+                    .await
+            }
+
+            TxnAddPartitionsRequest::VersionFourPlus { .. } => {
+                todo!()
+            }
+        }
     }
 
     async fn txn_offset_commit(
@@ -1502,7 +1891,74 @@ impl Storage for DynoStore {
         offsets: TxnOffsetCommitRequest,
     ) -> Result<Vec<TxnOffsetCommitResponseTopic>> {
         debug!(?offsets);
-        todo!()
+        self.meta
+            .with_mut(&self.object_store, |meta| {
+                let Some(transaction) = meta.transactions.get_mut(&offsets.transaction_id) else {
+                    return Self::txn_offset_commit_response_error(
+                        &offsets,
+                        ErrorCode::TransactionalIdNotFound,
+                    );
+                };
+
+                if transaction.producer != offsets.producer_id {
+                    return Self::txn_offset_commit_response_error(
+                        &offsets,
+                        ErrorCode::UnknownProducerId,
+                    );
+                }
+
+                let Some(mut current_epoch) = transaction.epochs.last_entry() else {
+                    return Self::txn_offset_commit_response_error(
+                        &offsets,
+                        ErrorCode::ProducerFenced,
+                    );
+                };
+
+                if &offsets.producer_epoch != current_epoch.key() {
+                    return Self::txn_offset_commit_response_error(
+                        &offsets,
+                        ErrorCode::ProducerFenced,
+                    );
+                }
+
+                let txn_detail = current_epoch.get_mut();
+
+                let mut responses = vec![];
+
+                for topic in &offsets.topics {
+                    let mut partition_responses = vec![];
+
+                    if let Some(partitions) = topic.partitions.as_deref() {
+                        for partition in partitions {
+                            _ = txn_detail
+                                .offsets
+                                .entry(topic.name.clone())
+                                .or_default()
+                                .insert(
+                                    partition.partition_index,
+                                    TxnCommitOffset {
+                                        committed_offset: partition.committed_offset,
+                                        leader_epoch: partition.committed_leader_epoch,
+                                        metadata: partition.committed_metadata.clone(),
+                                    },
+                                );
+
+                            partition_responses.push(TxnOffsetCommitResponsePartition {
+                                partition_index: partition.partition_index,
+                                error_code: ErrorCode::None.into(),
+                            });
+                        }
+                    }
+
+                    responses.push(TxnOffsetCommitResponseTopic {
+                        name: topic.name.to_string(),
+                        partitions: Some(partition_responses),
+                    });
+                }
+
+                Ok(responses)
+            })
+            .await
     }
 
     async fn txn_end(
@@ -1512,7 +1968,104 @@ impl Storage for DynoStore {
         producer_epoch: i16,
         committed: bool,
     ) -> Result<ErrorCode> {
-        debug!(?transaction_id, ?producer_id, ?producer_epoch, ?committed);
+        debug!(transaction_id, producer_id, producer_epoch, committed);
+
+        let produced = self
+            .meta
+            .with_mut(&self.object_store, |meta| {
+                let Some(transaction) = meta.transactions.get_mut(transaction_id) else {
+                    return Err(Error::Api(ErrorCode::TransactionalIdNotFound));
+                };
+
+                if transaction.producer != producer_id {
+                    return Err(Error::Api(ErrorCode::UnknownProducerId));
+                }
+
+                let Some(mut current_epoch) = transaction.epochs.last_entry() else {
+                    return Err(Error::Api(ErrorCode::ProducerFenced));
+                };
+
+                if &producer_epoch != current_epoch.key() {
+                    return Err(Error::Api(ErrorCode::ProducerFenced));
+                }
+
+                let txn_detail = current_epoch.get_mut();
+
+                let mut produced = vec![];
+
+                if txn_detail.state == Some(TxnState::Begin) {
+                    assert_eq!(
+                        Some(TxnState::Begin),
+                        txn_detail.state.replace(if committed {
+                            TxnState::PrepareCommit
+                        } else {
+                            TxnState::PrepareAbort
+                        })
+                    );
+
+                    for (topic, partitions) in &txn_detail.produces {
+                        for (partition, offset_range) in partitions {
+                            if offset_range.is_some() {
+                                produced.push(Topition::new(topic.to_owned(), *partition));
+                            }
+                        }
+                    }
+                }
+
+                Ok(produced)
+            })
+            .await?;
+
+        for topition in produced {
+            debug!(?topition);
+
+            let control_batch: Bytes = if committed {
+                ControlBatch::default().commit().try_into()?
+            } else {
+                ControlBatch::default().abort().try_into()?
+            };
+            let end_transaction_marker: Bytes = EndTransactionMarker::default().try_into()?;
+
+            let batch = inflated::Batch::builder()
+                .record(
+                    Record::builder()
+                        .key(control_batch.into())
+                        .value(end_transaction_marker.into()),
+                )
+                .attributes(
+                    BatchAttribute::default()
+                        .control(true)
+                        .transaction(true)
+                        .into(),
+                )
+                .producer_id(producer_id)
+                .producer_epoch(producer_epoch)
+                .base_sequence(-1)
+                .build()
+                .and_then(TryInto::try_into)
+                .inspect(|deflated| debug!(?deflated))?;
+
+            _ = self.produce(Some(transaction_id), &topition, batch).await?;
+        }
+
         Ok(ErrorCode::None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn int_key_b_tree_map() -> Result<()> {
+        let mut b = BTreeMap::new();
+        assert_eq!(None, b.insert(65, "a"));
+
+        let encoded = serde_json::to_vec(&b)?;
+
+        let decoded = serde_json::from_slice::<BTreeMap<i32, &str>>(&encoded[..])?;
+        assert_eq!(Some(&"a"), decoded.get(&65));
+
+        Ok(())
     }
 }

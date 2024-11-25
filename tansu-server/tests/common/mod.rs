@@ -52,7 +52,10 @@ pub(crate) fn init_tracing() -> Result<DefaultGuard> {
             .with_level(true)
             .with_line_number(true)
             .with_thread_names(false)
-            .with_env_filter(EnvFilter::from_default_env())
+            .with_env_filter(
+                EnvFilter::from_default_env()
+                    .add_directive(format!("{}=debug", env!("CARGO_CRATE_NAME")).parse()?),
+            )
             .with_writer(
                 thread::current()
                     .name()

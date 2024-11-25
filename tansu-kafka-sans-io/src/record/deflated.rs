@@ -390,7 +390,7 @@ impl<'de> Deserialize<'de> for Batch {
 mod tests {
     use std::io::Cursor;
 
-    use crate::{ControlBatch, EndTransactionMarker};
+    use crate::{record::inflated, BatchAttribute, ControlBatch, EndTransactionMarker};
 
     use super::*;
 
@@ -817,6 +817,42 @@ mod tests {
             EndTransactionMarker::try_from(inflated.records[0].clone().value.unwrap())?;
         assert_eq!(0, txn_marker.version);
         assert_eq!(0, txn_marker.coordinator_epoch);
+
+        Ok(())
+    }
+
+    #[test]
+    fn deflate() -> Result<()> {
+        let key = Bytes::copy_from_slice("Lorem ipsum dolor sit amet".as_bytes());
+        let value = Bytes::copy_from_slice("consectetur adipiscing elit".as_bytes());
+
+        let producer_id = 54345;
+        let producer_epoch = 32123;
+        let base_sequence = 78987;
+        let base_offset = 9876789;
+        let attributes: i16 = BatchAttribute::default().transaction(true).into();
+
+        let batch: Batch = inflated::Batch::builder()
+            .record(
+                Record::builder()
+                    .key(key.clone().into())
+                    .value(value.clone().into()),
+            )
+            .attributes(attributes)
+            .producer_id(producer_id)
+            .producer_epoch(producer_epoch)
+            .base_offset(base_offset)
+            .base_sequence(base_sequence)
+            .build()
+            .and_then(TryInto::try_into)
+            .inspect(|deflated| debug!(?deflated))?;
+
+        assert_eq!(base_sequence, batch.base_sequence);
+        assert_eq!(producer_id, batch.producer_id);
+        assert_eq!(producer_epoch, batch.producer_epoch);
+        assert_eq!(attributes, batch.attributes);
+        assert_eq!(1, batch.record_count);
+        assert_eq!(base_offset, batch.base_offset);
 
         Ok(())
     }

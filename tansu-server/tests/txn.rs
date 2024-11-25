@@ -608,3 +608,41 @@ mod pg {
         .await
     }
 }
+
+mod in_memory {
+    use super::*;
+
+    fn storage_container(cluster: impl Into<String>, node: i32) -> Result<StorageContainer> {
+        common::storage_container(StorageType::InMemory, cluster, node)
+    }
+
+    #[tokio::test]
+    async fn with_overlap() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = thread_rng().gen_range(0..i32::MAX);
+
+        super::with_overlap(
+            cluster_id,
+            broker_id,
+            storage_container(cluster_id, broker_id)?,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn init_producer_twice() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = thread_rng().gen_range(0..i32::MAX);
+
+        super::init_producer_twice(
+            cluster_id,
+            broker_id,
+            storage_container(cluster_id, broker_id)?,
+        )
+        .await
+    }
+}

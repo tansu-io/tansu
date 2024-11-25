@@ -29,7 +29,7 @@ use tansu_kafka_sans_io::{
 };
 use tansu_server::Result;
 use tansu_storage::{Storage, StorageContainer, Topition, TxnAddPartitionsRequest};
-use tracing::debug;
+use tracing::{debug, error};
 use uuid::Uuid;
 
 pub mod common;
@@ -128,14 +128,20 @@ pub async fn simple_non_txn(
 
     debug!(min_bytes, max_bytes, ?isolation, ?batches);
 
-    assert_eq!(1, batches.len());
-    assert_eq!(-1, batches[0].producer_id);
-    assert_eq!(-1, batches[0].producer_epoch);
+    assert!(!batches.is_empty());
+    assert!(batches.iter().all(|batch| batch.producer_id == -1));
+    assert!(batches.iter().all(|batch| batch.producer_epoch == -1));
     assert_eq!(
         offset_producer.first_key_value().unwrap().0,
         &batches[0].base_offset
     );
-    assert_eq!(records, batches[0].records.len());
+    assert_eq!(
+        records,
+        batches
+            .iter()
+            .map(|batch| batch.records.len())
+            .sum::<usize>()
+    );
 
     for record in &batches[0].records {
         let offset = batches[0].base_offset + (record.offset_delta as i64);
@@ -175,7 +181,8 @@ pub async fn with_txn(cluster_id: Uuid, broker_id: i32, mut sc: StorageContainer
             },
             false,
         )
-        .await?;
+        .await
+        .inspect_err(|err| error!(?err, topic_name, num_partitions, replication_factor))?;
     debug!(?topic_id);
 
     let transaction_timeout_ms = 10_000;
@@ -198,7 +205,8 @@ pub async fn with_txn(cluster_id: Uuid, broker_id: i32, mut sc: StorageContainer
                 Some(-1),
                 Some(-1),
             )
-            .await?;
+            .await
+            .inspect_err(|err| error!(?err, transaction_id, transaction_timeout_ms))?;
         debug!(transaction, ?txn_producer);
 
         let add_partitions = sc
@@ -212,7 +220,17 @@ pub async fn with_txn(cluster_id: Uuid, broker_id: i32, mut sc: StorageContainer
                 }]
                 .into(),
             })
-            .await?;
+            .await
+            .inspect_err(|err| {
+                error!(
+                    ?err,
+                    transaction_id,
+                    producer_id = txn_producer.id,
+                    producer_epoch = txn_producer.epoch,
+                    topic_name,
+                    partition_index
+                )
+            })?;
 
         assert_eq!(
             [AddPartitionsToTxnTopicResult {
@@ -254,7 +272,17 @@ pub async fn with_txn(cluster_id: Uuid, broker_id: i32, mut sc: StorageContainer
             let offset = sc
                 .produce(Some(transaction_id.as_str()), &topition, batch)
                 .await
-                .inspect(|offset| debug!(?offset))?;
+                .inspect(|offset| debug!(?offset))
+                .inspect_err(|err| {
+                    error!(
+                        ?err,
+                        transaction_id,
+                        producer_id = txn_producer.id,
+                        producer_epoch = txn_producer.epoch,
+                        base_sequence,
+                        ?topition,
+                    )
+                })?;
 
             debug!(offset);
 
@@ -323,42 +351,39 @@ pub async fn with_txn(cluster_id: Uuid, broker_id: i32, mut sc: StorageContainer
 
     debug!(min_bytes, max_bytes, ?isolation, ?batches);
 
-    assert_eq!(1, batches.len());
-    assert_ne!(-1, batches[0].producer_id);
-    assert_ne!(-1, batches[0].producer_epoch);
-    assert_eq!(
-        offset_producer.first_key_value().unwrap().0,
-        &batches[0].base_offset
-    );
-
     assert_eq!(
         records * transactions + transactions,
-        batches[0].records.len() as i32
+        batches
+            .iter()
+            .map(|batch| batch.records.len() as i32)
+            .sum::<i32>()
     );
 
-    for record in &batches[0].records {
-        let offset = batches[0].base_offset + (record.offset_delta as i64);
+    for batch in batches {
+        for record in batch.records {
+            let offset = batch.base_offset + (record.offset_delta as i64);
 
-        let producer = offset_producer.get(&offset).map(|v| v.0).unwrap();
+            let producer = offset_producer.get(&offset).map(|v| v.0).unwrap();
 
-        assert_eq!(producer.id, batches[0].producer_id);
-        assert_eq!(producer.epoch, batches[0].producer_epoch);
+            assert_eq!(producer.id, batch.producer_id);
+            assert_eq!(producer.epoch, batch.producer_epoch);
 
-        assert_eq!(
-            offset_producer
-                .get(&offset)
-                .map(|(_producer, key, _value)| key)
-                .cloned(),
-            record.key()
-        );
+            assert_eq!(
+                offset_producer
+                    .get(&offset)
+                    .map(|(_producer, key, _value)| key)
+                    .cloned(),
+                record.key()
+            );
 
-        assert_eq!(
-            offset_producer
-                .get(&offset)
-                .map(|(_producer, _key, value)| value)
-                .cloned(),
-            record.value()
-        );
+            assert_eq!(
+                offset_producer
+                    .get(&offset)
+                    .map(|(_producer, _key, value)| value)
+                    .cloned(),
+                record.value()
+            );
+        }
     }
 
     Ok(())
@@ -390,7 +415,8 @@ pub async fn with_multiple_txn(
             },
             false,
         )
-        .await?;
+        .await
+        .inspect_err(|err| error!(?err, topic_name, num_partitions, replication_factor))?;
     debug!(?topic_id);
 
     let transaction_timeout_ms = 10_000;
@@ -413,7 +439,8 @@ pub async fn with_multiple_txn(
                 Some(-1),
                 Some(-1),
             )
-            .await?;
+            .await
+            .inspect_err(|err| error!(?err, transaction_id, transaction_timeout_ms))?;
         debug!(transaction, ?txn_producer);
 
         let add_partitions = sc
@@ -427,7 +454,16 @@ pub async fn with_multiple_txn(
                 }]
                 .into(),
             })
-            .await?;
+            .await
+            .inspect_err(|err| {
+                error!(
+                    ?err,
+                    transaction_id,
+                    ?txn_producer,
+                    topic_name,
+                    partition_index
+                )
+            })?;
 
         assert_eq!(
             [AddPartitionsToTxnTopicResult {
@@ -469,7 +505,8 @@ pub async fn with_multiple_txn(
             let offset = sc
                 .produce(Some(transaction_id.as_str()), &topition, batch)
                 .await
-                .inspect(|offset| debug!(?offset, ?txn_producer, ?key, ?value))?;
+                .inspect(|offset| debug!(offset, ?txn_producer, base_sequence, ?key, ?value))
+                .inspect_err(|err| error!(?err, ?txn_producer, base_sequence, ?key, ?value))?;
 
             assert_eq!(
                 None,
@@ -487,7 +524,8 @@ pub async fn with_multiple_txn(
                 txn_producer.epoch,
                 true
             )
-            .await?
+            .await
+            .inspect_err(|err| error!(?err, transaction_id, ?txn_producer))?
         );
 
         let last_offset_in_tx = offset_producer
@@ -532,11 +570,11 @@ pub async fn with_multiple_txn(
                     })
                     .map_err(Into::into)
             })
-        })?;
+        })
+        .inspect_err(|err| error!(?err, ?topition, offset, min_bytes, max_bytes, ?isolation))?;
 
     debug!(min_bytes, max_bytes, ?isolation, ?batches);
 
-    assert_eq!(transactions, batches.len() as i32);
     assert_eq!(
         offset_producer.first_key_value().unwrap().0,
         &batches[0].base_offset
@@ -550,24 +588,26 @@ pub async fn with_multiple_txn(
             .sum::<i32>()
     );
 
-    for record in &batches[0].records {
-        let offset = batches[0].base_offset + (record.offset_delta as i64);
+    for batch in batches {
+        for record in batch.records {
+            let offset = batch.base_offset + (record.offset_delta as i64);
 
-        assert_eq!(
-            offset_producer
-                .get(&offset)
-                .map(|(_producer, key, _value)| key)
-                .cloned(),
-            record.key()
-        );
+            assert_eq!(
+                offset_producer
+                    .get(&offset)
+                    .map(|(_producer, key, _value)| key)
+                    .cloned(),
+                record.key()
+            );
 
-        assert_eq!(
-            offset_producer
-                .get(&offset)
-                .map(|(_producer, _key, value)| value)
-                .cloned(),
-            record.value()
-        );
+            assert_eq!(
+                offset_producer
+                    .get(&offset)
+                    .map(|(_producer, _key, value)| value)
+                    .cloned(),
+                record.value()
+            );
+        }
     }
 
     Ok(())
@@ -579,6 +619,59 @@ mod pg {
 
     fn storage_container(cluster: impl Into<String>, node: i32) -> Result<StorageContainer> {
         common::storage_container(StorageType::Postgres, cluster, node)
+    }
+
+    #[tokio::test]
+    async fn simple_non_txn() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = thread_rng().gen_range(0..i32::MAX);
+
+        super::simple_non_txn(
+            cluster_id,
+            broker_id,
+            storage_container(cluster_id, broker_id)?,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn with_txn() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = thread_rng().gen_range(0..i32::MAX);
+
+        super::with_txn(
+            cluster_id,
+            broker_id,
+            storage_container(cluster_id, broker_id)?,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn with_multiple_txn() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = thread_rng().gen_range(0..i32::MAX);
+
+        super::with_multiple_txn(
+            cluster_id,
+            broker_id,
+            storage_container(cluster_id, broker_id)?,
+        )
+        .await
+    }
+}
+
+mod in_memory {
+    use super::*;
+
+    fn storage_container(cluster: impl Into<String>, node: i32) -> Result<StorageContainer> {
+        common::storage_container(StorageType::InMemory, cluster, node)
     }
 
     #[tokio::test]

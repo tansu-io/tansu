@@ -159,12 +159,6 @@ mod tests {
     use tansu_storage::dynostore::DynoStore;
     use tracing::subscriber::DefaultGuard;
 
-    #[cfg(miri)]
-    fn init_tracing() -> Result<()> {
-        Ok(())
-    }
-
-    #[cfg(not(miri))]
     fn init_tracing() -> Result<DefaultGuard> {
         use std::{fs::File, sync::Arc, thread};
 
