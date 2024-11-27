@@ -129,10 +129,10 @@ impl Meta {
         transaction_id: &str,
         producer_id: ProducerId,
         producer_epoch: ProducerEpoch,
-    ) -> Result<BTreeMap<TxnId, Option<TxnState>>> {
+    ) -> Result<Vec<TxnId>> {
         let candidates = self.produced(transaction_id, producer_id, producer_epoch)?;
 
-        let mut overlapping = BTreeMap::new();
+        let mut overlapping = Vec::new();
 
         'candidates: for (candidate_id, txn) in self.transactions.iter() {
             for (epoch, txn_detail) in txn.epochs.iter() {
@@ -142,6 +142,10 @@ impl Meta {
                 {
                     continue;
                 }
+
+                let Some(state) = txn_detail.state else {
+                    continue;
+                };
 
                 for (topic, partitions) in txn_detail.produces.iter() {
                     for (partition, offset_range) in partitions.iter() {
@@ -153,17 +157,13 @@ impl Meta {
 
                         if let Some(candidate) = candidates.get(&tp) {
                             if offset_range.offset_start < candidate.offset_end {
-                                assert_eq!(
-                                    None,
-                                    overlapping.insert(
-                                        TxnId {
-                                            transaction: candidate_id.to_owned(),
-                                            producer_id: txn.producer,
-                                            producer_epoch: *epoch,
-                                        },
-                                        txn_detail.state
-                                    )
-                                );
+                                overlapping.push(TxnId {
+                                    transaction: candidate_id.to_owned(),
+                                    producer_id: txn.producer,
+                                    producer_epoch: *epoch,
+                                    state,
+                                });
+
                                 continue 'candidates;
                             }
                         }
@@ -181,11 +181,12 @@ struct ProducerDetail {
     sequences: BTreeMap<ProducerEpoch, BTreeMap<String, BTreeMap<i32, Sequence>>>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 struct TxnId {
     transaction: String,
     producer_id: ProducerId,
     producer_epoch: ProducerEpoch,
+    state: TxnState,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -2264,7 +2265,7 @@ impl Storage for DynoStore {
                     return Err(Error::Api(ErrorCode::ProducerFenced));
                 }
 
-                let overlaps =
+                let mut overlaps =
                     meta.overlapping_transactions(transaction_id, producer_id, producer_epoch)?;
                 debug!(?overlaps);
 
@@ -2273,19 +2274,20 @@ impl Storage for DynoStore {
                     BTreeMap<Topic, BTreeMap<Partition, TxnCommitOffset>>,
                 > = BTreeMap::new();
 
-                if overlaps
-                    .iter()
-                    .all(|(_, status)| status.is_some_and(|status| status.is_prepared()))
-                {
+                if overlaps.iter().all(|txn_id| txn_id.state.is_prepared()) {
                     let txn_ids = {
-                        let mut txns: Vec<_> = overlaps.into_keys().collect();
-                        txns.push(TxnId {
+                        overlaps.push(TxnId {
                             transaction: transaction_id.into(),
                             producer_id,
                             producer_epoch,
+                            state: if committed {
+                                TxnState::PrepareCommit
+                            } else {
+                                TxnState::PrepareAbort
+                            },
                         });
 
-                        txns
+                        overlaps
                     };
 
                     for txn_id in txn_ids {
@@ -2316,15 +2318,20 @@ impl Storage for DynoStore {
                                     }
                                 }
 
-                                for (group, topics) in txn_detail.offsets.iter() {
-                                    for (topic, partitions) in topics.iter() {
-                                        for (partition, committed_offset) in partitions {
-                                            _ = offsets_to_commit
-                                                .entry(group.to_owned())
-                                                .or_default()
-                                                .entry(topic.to_owned())
-                                                .or_default()
-                                                .insert(*partition, committed_offset.to_owned());
+                                if txn_id.state == TxnState::PrepareCommit {
+                                    for (group, topics) in txn_detail.offsets.iter() {
+                                        for (topic, partitions) in topics.iter() {
+                                            for (partition, committed_offset) in partitions {
+                                                _ = offsets_to_commit
+                                                    .entry(group.to_owned())
+                                                    .or_default()
+                                                    .entry(topic.to_owned())
+                                                    .or_default()
+                                                    .insert(
+                                                        *partition,
+                                                        committed_offset.to_owned(),
+                                                    );
+                                            }
                                         }
                                     }
                                 }

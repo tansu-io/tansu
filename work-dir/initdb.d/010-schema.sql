@@ -200,8 +200,6 @@ create table if not exists consumer_group (
   name text not null,
   unique (cluster, name),
 
-  e_tag uuid not null,
-  detail json not null,
   last_updated timestamp default current_timestamp not null,
   created_at timestamp default current_timestamp not null
 );
@@ -209,16 +207,37 @@ create table if not exists consumer_group (
 create or replace view v_consumer_group as
 select
 c.name as cluster,
-cg.name as consumer_group,
-cg.e_tag as e_tag,
-cg.detail->'generation_id' as generation_id,
-cg.detail->'rebalance_timeout_ms' as rebalance_timeout_ms,
-cg.detail->'session_timeout_ms' as session_timeout_ms,
-cg.detail->'skip_assignment' as skip_assignment,
-array(select json_object_keys(cg.detail->'members')) as members
+cg.name as consumer_group
 from
 cluster c
 join consumer_group cg on cg.cluster = c.id;
+
+create table if not exists consumer_group_detail (
+  id int generated always as identity primary key,
+  consumer_group int references consumer_group(id),
+  unique (consumer_group),
+
+  e_tag uuid not null,
+  detail json not null,
+  last_updated timestamp default current_timestamp not null,
+  created_at timestamp default current_timestamp not null
+);
+
+create or replace view v_consumer_group_detail as
+select
+c.name as cluster,
+cg.name as consumer_group,
+cgd.e_tag as e_tag,
+cgd.detail->'generation_id' as generation_id,
+cgd.detail->'rebalance_timeout_ms' as rebalance_timeout_ms,
+cgd.detail->'session_timeout_ms' as session_timeout_ms,
+cgd.detail->'skip_assignment' as skip_assignment,
+array(select json_object_keys(cgd.detail->'members')) as members
+from
+cluster c
+join consumer_group cg on cg.cluster = c.id
+join consumer_group_detail cgd on cgd.consumer_group = cg.id;
+
 
 create table if not exists consumer_offset (
   id int generated always as identity primary key,

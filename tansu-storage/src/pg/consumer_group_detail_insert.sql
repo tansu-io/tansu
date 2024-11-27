@@ -14,13 +14,26 @@
 -- You should have received a copy of the GNU Affero General Public License
 -- along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-select cg.e_tag, cg.detail
+-- prepare cg_update (text, text, uuid, uuid, json) as
+insert into consumer_group_detail
+(consumer_group, e_tag, detail)
 
-from
+select cg.id, $4, $5
 
-cluster c
+from cluster c
 join consumer_group cg on cg.cluster = c.id
-join consumer_group_detail cgd on cgd.consumer_group = cg.id
 
-where cg.name = $1
-and c.name = $2;
+where c.name = $1
+and cg.name = $2
+
+on conflict (consumer_group)
+
+do update set
+
+detail = excluded.detail,
+last_updated = excluded.last_updated,
+e_tag = $4
+
+where consumer_group_detail.e_tag = $3
+
+returning $2, $1, e_tag, detail;

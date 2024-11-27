@@ -2105,6 +2105,13 @@ impl Storage for Postgres {
             .await
             .inspect_err(|err| error!(?err))?;
 
+        _ = tx.execute(&prepared, &[&self.cluster, &group_id]).await?;
+
+        let prepared = tx
+            .prepare(include_str!("pg/consumer_group_detail_insert.sql"))
+            .await
+            .inspect_err(|err| error!(?err))?;
+
         let existing_e_tag = version
             .as_ref()
             .map_or(Ok(Uuid::new_v4()), |version| {
@@ -2556,6 +2563,15 @@ impl Storage for Postgres {
         } else {
             (None, None)
         };
+
+        let prepared = tx
+            .prepare(include_str!("pg/consumer_group_insert.sql"))
+            .await
+            .inspect_err(|err| error!(?err))?;
+
+        _ = tx
+            .execute(&prepared, &[&self.cluster, &offsets.group_id])
+            .await?;
 
         debug!(?producer_id, ?producer_epoch);
 

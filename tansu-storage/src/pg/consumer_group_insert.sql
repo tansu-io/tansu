@@ -16,20 +16,10 @@
 
 -- prepare cg_update (text, text, uuid, uuid, json) as
 insert into consumer_group
-(cluster, name, e_tag, detail)
+(cluster, name)
 
-select c.id, $2, $4, $5
+select c.id, $2
 from cluster c
 where c.name = $1
 
-on conflict (cluster, name)
-
-do update set
-
-detail = excluded.detail,
-last_updated = excluded.last_updated,
-e_tag = $4
-
-where consumer_group.e_tag = $3
-
-returning name, cluster, e_tag, detail;
+on conflict (cluster, name) do nothing;
