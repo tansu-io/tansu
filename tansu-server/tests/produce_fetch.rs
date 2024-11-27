@@ -614,7 +614,6 @@ pub async fn with_multiple_txn(
 }
 
 mod pg {
-
     use super::*;
 
     fn storage_container(cluster: impl Into<String>, node: i32) -> Result<StorageContainer> {
