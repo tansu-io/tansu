@@ -194,13 +194,17 @@ struct Txn {
     epochs: BTreeMap<ProducerEpoch, TxnDetail>,
 }
 
+type Group = String;
+type Topic = String;
+type Partition = i32;
+
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 struct TxnDetail {
     transaction_timeout_ms: i32,
     started_at: Option<SystemTime>,
     state: Option<TxnState>,
-    produces: BTreeMap<String, BTreeMap<i32, Option<TxnProduceOffset>>>,
-    offsets: BTreeMap<String, BTreeMap<i32, TxnCommitOffset>>,
+    produces: BTreeMap<Topic, BTreeMap<Partition, Option<TxnProduceOffset>>>,
+    offsets: BTreeMap<Group, BTreeMap<Topic, BTreeMap<Partition, TxnCommitOffset>>>,
 }
 
 impl From<&TxnDetail> for BTreeMap<Topition, Offset> {
@@ -2092,6 +2096,8 @@ impl Storage for DynoStore {
                         for partition in partitions {
                             _ = txn_detail
                                 .offsets
+                                .entry(offsets.group_id.clone())
+                                .or_default()
                                 .entry(topic.name.clone())
                                 .or_default()
                                 .insert(
@@ -2237,7 +2243,8 @@ impl Storage for DynoStore {
                 })?;
         }
 
-        self.meta
+        let offsets_to_commit = self
+            .meta
             .with_mut(&self.object_store, |meta| {
                 debug!(transactions = ?meta.transactions);
 
@@ -2260,6 +2267,11 @@ impl Storage for DynoStore {
                 let overlaps =
                     meta.overlapping_transactions(transaction_id, producer_id, producer_epoch)?;
                 debug!(?overlaps);
+
+                let mut offsets_to_commit: BTreeMap<
+                    Group,
+                    BTreeMap<Topic, BTreeMap<Partition, TxnCommitOffset>>,
+                > = BTreeMap::new();
 
                 if overlaps
                     .iter()
@@ -2284,7 +2296,7 @@ impl Storage for DynoStore {
                                 debug!(?txn_detail);
 
                                 match txn_detail.state {
-                                    Some(TxnState::PrepareCommit) => {
+                                    None | Some(TxnState::PrepareCommit) => {
                                         _ = txn_detail.state.replace(TxnState::Committed);
                                     }
 
@@ -2304,6 +2316,19 @@ impl Storage for DynoStore {
                                     }
                                 }
 
+                                for (group, topics) in txn_detail.offsets.iter() {
+                                    for (topic, partitions) in topics.iter() {
+                                        for (partition, committed_offset) in partitions {
+                                            _ = offsets_to_commit
+                                                .entry(group.to_owned())
+                                                .or_default()
+                                                .entry(topic.to_owned())
+                                                .or_default()
+                                                .insert(*partition, committed_offset.to_owned());
+                                        }
+                                    }
+                                }
+
                                 txn_detail.produces.clear();
                                 txn_detail.offsets.clear();
                                 _ = txn_detail.started_at.take();
@@ -2312,11 +2337,33 @@ impl Storage for DynoStore {
                     }
                 }
 
-                Ok(())
+                Ok(offsets_to_commit)
             })
             .await
             .inspect(|outcome| debug!(?outcome))
             .inspect_err(|err| error!(?err))?;
+
+        debug!(?offsets_to_commit);
+
+        for (group, topics) in offsets_to_commit.iter() {
+            let mut offsets = vec![];
+
+            for (topic, partitions) in topics.iter() {
+                for (partition, txn_co) in partitions {
+                    let tp = Topition::new(topic.to_owned(), *partition);
+                    let ocr = OffsetCommitRequest {
+                        offset: txn_co.committed_offset,
+                        leader_epoch: txn_co.leader_epoch,
+                        timestamp: None,
+                        metadata: txn_co.metadata.clone(),
+                    };
+
+                    offsets.push((tp, ocr));
+                }
+            }
+
+            _ = self.offset_commit(group, None, &offsets[..]).await?;
+        }
 
         Ok(ErrorCode::None)
     }
