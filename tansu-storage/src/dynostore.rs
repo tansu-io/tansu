@@ -46,7 +46,7 @@ use tansu_kafka_sans_io::{
     BatchAttribute, ConfigResource, ConfigSource, ConfigType, ControlBatch, Decoder, Encoder,
     EndTransactionMarker, ErrorCode, IsolationLevel,
 };
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 use uuid::Uuid;
 
 use crate::{
@@ -89,9 +89,103 @@ impl ConditionData<Meta> {
     }
 }
 
+impl Meta {
+    fn produced(
+        &self,
+        transaction_id: &str,
+        producer_id: ProducerId,
+        producer_epoch: ProducerEpoch,
+    ) -> Result<BTreeMap<Topition, TxnProduceOffset>> {
+        let Some(txn) = self.transactions.get(transaction_id) else {
+            return Err(Error::Api(ErrorCode::TransactionalIdNotFound));
+        };
+
+        if txn.producer != producer_id {
+            return Err(Error::Api(ErrorCode::UnknownProducerId));
+        }
+
+        let Some(txn_detail) = txn.epochs.get(&producer_epoch) else {
+            return Err(Error::Api(ErrorCode::ProducerFenced));
+        };
+
+        let mut produced = BTreeMap::new();
+
+        for (topic, partitions) in txn_detail.produces.iter() {
+            for (partition, offset_range) in partitions.iter() {
+                let Some(offset_range) = offset_range else {
+                    continue;
+                };
+
+                let tp = Topition::new(topic.to_owned(), *partition);
+                assert_eq!(None, produced.insert(tp, *offset_range));
+            }
+        }
+
+        Ok(produced)
+    }
+
+    fn overlapping_transactions(
+        &self,
+        transaction_id: &str,
+        producer_id: ProducerId,
+        producer_epoch: ProducerEpoch,
+    ) -> Result<BTreeMap<TxnId, Option<TxnState>>> {
+        let candidates = self.produced(transaction_id, producer_id, producer_epoch)?;
+
+        let mut overlapping = BTreeMap::new();
+
+        'candidates: for (candidate_id, txn) in self.transactions.iter() {
+            for (epoch, txn_detail) in txn.epochs.iter() {
+                if transaction_id == candidate_id
+                    && producer_id == txn.producer
+                    && producer_epoch == *epoch
+                {
+                    continue;
+                }
+
+                for (topic, partitions) in txn_detail.produces.iter() {
+                    for (partition, offset_range) in partitions.iter() {
+                        let Some(offset_range) = offset_range else {
+                            continue;
+                        };
+
+                        let tp = Topition::new(topic.to_owned(), *partition);
+
+                        if let Some(candidate) = candidates.get(&tp) {
+                            if offset_range.offset_start < candidate.offset_end {
+                                assert_eq!(
+                                    None,
+                                    overlapping.insert(
+                                        TxnId {
+                                            transaction: candidate_id.to_owned(),
+                                            producer_id: txn.producer,
+                                            producer_epoch: *epoch,
+                                        },
+                                        txn_detail.state
+                                    )
+                                );
+                                continue 'candidates;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(overlapping)
+    }
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 struct ProducerDetail {
     sequences: BTreeMap<ProducerEpoch, BTreeMap<String, BTreeMap<i32, Sequence>>>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+struct TxnId {
+    transaction: String,
+    producer_id: ProducerId,
+    producer_epoch: ProducerEpoch,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -128,7 +222,9 @@ impl From<&TxnDetail> for BTreeMap<Topition, Offset> {
     }
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Copy, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize,
+)]
 struct TxnProduceOffset {
     offset_start: Offset,
     offset_end: Offset,
@@ -831,7 +927,9 @@ impl Storage for DynoStore {
                         }
                     }
                 })
-                .await?;
+                .await
+                .inspect(|outcome| debug!(transaction_id, ?topition, ?outcome))
+                .inspect_err(|err| error!(?err, transaction_id, ?topition))?;
 
             if transaction_id.is_none() {
                 deflated.producer_id = -1;
@@ -847,14 +945,15 @@ impl Storage for DynoStore {
                 topition,
             ))
             .with_mut(&self.object_store, |watermark| {
-                debug!(?watermark);
                 let offset = watermark.high.map_or(0, |high| high + 1);
                 watermark.high = watermark.high.map_or(Some(0), |high| {
                     Some(high + deflated.last_offset_delta as i64 + 1i64)
                 });
                 Ok(offset)
             })
-            .await?;
+            .await
+            .inspect(|offset| debug!(offset, transaction_id, ?topition))
+            .inspect_err(|err| error!(?err, transaction_id, ?topition))?;
 
         let attributes = BatchAttribute::try_from(deflated.attributes)?;
 
@@ -863,10 +962,14 @@ impl Storage for DynoStore {
                 self.meta
                     .with_mut(&self.object_store, |meta| {
                         if let Some(transaction) = meta.transactions.get_mut(transaction_id) {
+                            debug!(?transaction);
+
                             if let Some(txn_detail) =
                                 transaction.epochs.get_mut(&deflated.producer_epoch)
                             {
-                                let offset_end = deflated.last_offset_delta as i64 + 1i64;
+                                debug!(?txn_detail);
+
+                                let offset_end = offset + deflated.last_offset_delta as i64;
 
                                 _ = txn_detail
                                     .produces
@@ -874,12 +977,14 @@ impl Storage for DynoStore {
                                     .or_default()
                                     .entry(topition.partition)
                                     .and_modify(|entry| {
-                                        entry
-                                            .get_or_insert(TxnProduceOffset {
-                                                offset_start: offset,
-                                                offset_end,
-                                            })
-                                            .offset_end = offset_end;
+                                        let range = entry.get_or_insert(TxnProduceOffset {
+                                            offset_start: offset,
+                                            offset_end,
+                                        });
+
+                                        if offset_end > range.offset_end {
+                                            range.offset_end = offset_end;
+                                        }
                                     })
                                     .or_insert(Some(TxnProduceOffset {
                                         offset_start: offset,
@@ -890,7 +995,9 @@ impl Storage for DynoStore {
 
                         Ok(())
                     })
-                    .await?;
+                    .await
+                    .inspect(|outcome| debug!(?outcome, transaction_id, ?topition))
+                    .inspect_err(|err| error!(?err, transaction_id, ?topition))?;
             }
         }
 
@@ -913,7 +1020,8 @@ impl Storage for DynoStore {
                 },
             )
             .await
-            .inspect_err(|error| error!(?error))?;
+            .inspect(|outcome| debug!(?outcome, transaction_id, ?topition))
+            .inspect_err(|error| error!(?error, transaction_id, ?topition))?;
 
         Ok(offset)
     }
@@ -1973,6 +2081,8 @@ impl Storage for DynoStore {
         let produced = self
             .meta
             .with_mut(&self.object_store, |meta| {
+                debug!(transactions = ?meta.transactions);
+
                 let Some(transaction) = meta.transactions.get_mut(transaction_id) else {
                     return Err(Error::Api(ErrorCode::TransactionalIdNotFound));
                 };
@@ -2005,6 +2115,8 @@ impl Storage for DynoStore {
 
                     for (topic, partitions) in &txn_detail.produces {
                         for (partition, offset_range) in partitions {
+                            debug!(?topic, partition, ?offset_range);
+
                             if offset_range.is_some() {
                                 produced.push(Topition::new(topic.to_owned(), *partition));
                             }
@@ -2014,7 +2126,9 @@ impl Storage for DynoStore {
 
                 Ok(produced)
             })
-            .await?;
+            .await
+            .inspect(|produced| debug!(?produced))
+            .inspect_err(|err| error!(?err))?;
 
         for topition in produced {
             debug!(?topition);
@@ -2024,6 +2138,7 @@ impl Storage for DynoStore {
             } else {
                 ControlBatch::default().abort().try_into()?
             };
+
             let end_transaction_marker: Bytes = EndTransactionMarker::default().try_into()?;
 
             let batch = inflated::Batch::builder()
@@ -2045,8 +2160,111 @@ impl Storage for DynoStore {
                 .and_then(TryInto::try_into)
                 .inspect(|deflated| debug!(?deflated))?;
 
-            _ = self.produce(Some(transaction_id), &topition, batch).await?;
+            _ = self
+                .produce(Some(transaction_id), &topition, batch)
+                .await
+                .inspect(|offset| {
+                    debug!(
+                        offset,
+                        ?topition,
+                        producer_id,
+                        producer_epoch,
+                        transaction_id,
+                        committed,
+                    )
+                })
+                .inspect_err(|err| {
+                    error!(
+                        ?err,
+                        ?topition,
+                        producer_id,
+                        producer_epoch,
+                        transaction_id,
+                        committed,
+                    )
+                })?;
         }
+
+        self.meta
+            .with_mut(&self.object_store, |meta| {
+                debug!(transactions = ?meta.transactions);
+
+                let Some(transaction) = meta.transactions.get_mut(transaction_id) else {
+                    return Err(Error::Api(ErrorCode::TransactionalIdNotFound));
+                };
+
+                if transaction.producer != producer_id {
+                    return Err(Error::Api(ErrorCode::UnknownProducerId));
+                }
+
+                let Some(current_epoch) = transaction.epochs.last_entry() else {
+                    return Err(Error::Api(ErrorCode::ProducerFenced));
+                };
+
+                if &producer_epoch != current_epoch.key() {
+                    return Err(Error::Api(ErrorCode::ProducerFenced));
+                }
+
+                let overlaps =
+                    meta.overlapping_transactions(transaction_id, producer_id, producer_epoch)?;
+                debug!(?overlaps);
+
+                if overlaps
+                    .iter()
+                    .all(|(_, status)| status.is_some_and(|status| status.is_prepared()))
+                {
+                    let txn_ids = {
+                        let mut txns: Vec<_> = overlaps.into_keys().collect();
+                        txns.push(TxnId {
+                            transaction: transaction_id.into(),
+                            producer_id,
+                            producer_epoch,
+                        });
+
+                        txns
+                    };
+
+                    for txn_id in txn_ids {
+                        debug!(?txn_id);
+
+                        if let Some(txn) = meta.transactions.get_mut(txn_id.transaction.as_str()) {
+                            if let Some(txn_detail) = txn.epochs.get_mut(&txn_id.producer_epoch) {
+                                debug!(?txn_detail);
+
+                                match txn_detail.state {
+                                    Some(TxnState::PrepareCommit) => {
+                                        _ = txn_detail.state.replace(TxnState::Committed);
+                                    }
+
+                                    Some(TxnState::PrepareAbort) => {
+                                        _ = txn_detail.state.replace(TxnState::Aborted);
+                                    }
+
+                                    otherwise => {
+                                        warn!(
+                                            transaction = txn_id.transaction,
+                                            producer = txn_id.producer_id,
+                                            epoch = txn_id.producer_epoch,
+                                            ?otherwise,
+                                        );
+
+                                        continue;
+                                    }
+                                }
+
+                                txn_detail.produces.clear();
+                                txn_detail.offsets.clear();
+                                _ = txn_detail.started_at.take();
+                            }
+                        }
+                    }
+                }
+
+                Ok(())
+            })
+            .await
+            .inspect(|outcome| debug!(?outcome))
+            .inspect_err(|err| error!(?err))?;
 
         Ok(ErrorCode::None)
     }
