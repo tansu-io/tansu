@@ -16,7 +16,7 @@
 
 select
 
-w.low, w.high, w.stable
+w.low, w.high
 
 from
 

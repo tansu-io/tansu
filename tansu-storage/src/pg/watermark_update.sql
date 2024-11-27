@@ -19,8 +19,7 @@ update watermark w
 set
 
 low = $4,
-high = $5,
-stable = $6
+high = $5
 
 from
 

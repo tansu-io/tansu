@@ -1032,9 +1032,17 @@ impl Storage for DynoStore {
         offset: i64,
         min_bytes: u32,
         max_bytes: u32,
-        isolation: IsolationLevel,
+        isolation_level: IsolationLevel,
     ) -> Result<Vec<deflated::Batch>> {
-        debug!(?topition, ?offset, ?min_bytes, ?max_bytes, ?isolation);
+        debug!(?topition, ?offset, ?min_bytes, ?max_bytes, ?isolation_level);
+
+        let high_watermark = self.offset_stage(topition).await.map(|offset_stage| {
+            if isolation_level == IsolationLevel::ReadCommitted {
+                offset_stage.last_stable
+            } else {
+                offset_stage.high_watermark
+            }
+        })?;
 
         let location = Path::from(format!(
             "clusters/{}/topics/{}/partitions/{:0>10}/records/",
@@ -1058,6 +1066,10 @@ impl Storage for DynoStore {
             };
 
             let offset = i64::from_str(&offset.as_ref()[0..20])?;
+
+            if offset > high_watermark {
+                break;
+            }
 
             _ = offsets.insert(offset);
         }
@@ -1103,6 +1115,42 @@ impl Storage for DynoStore {
     async fn offset_stage(&mut self, topition: &Topition) -> Result<OffsetStage> {
         debug!(?topition);
 
+        let stable = self
+            .meta
+            .with(&self.object_store, |meta| {
+                Ok(meta
+                    .transactions
+                    .values()
+                    .flat_map(|txn| {
+                        txn.epochs
+                            .values()
+                            .filter(|detail| {
+                                detail.state.is_some_and(|state| {
+                                    state != TxnState::Committed && state != TxnState::Aborted
+                                })
+                            })
+                            .map(BTreeMap::<Topition, Offset>::from)
+                            .collect::<Vec<_>>()
+                    })
+                    .reduce(|mut acc, e| {
+                        debug!(?acc, ?e);
+                        for (topition, offset_start) in e.iter() {
+                            _ = acc
+                                .entry(topition.to_owned())
+                                .and_modify(|existing_offset_start| {
+                                    if *existing_offset_start > *offset_start {
+                                        *existing_offset_start = *offset_start
+                                    }
+                                })
+                                .or_insert(*offset_start);
+                        }
+
+                        acc
+                    })
+                    .unwrap_or(BTreeMap::new()))
+            })
+            .await?;
+
         self.watermarks
             .entry(topition.to_owned())
             .or_insert(ConditionData::<Watermark>::new(
@@ -1110,10 +1158,14 @@ impl Storage for DynoStore {
                 topition,
             ))
             .with(&self.object_store, |watermark| {
+                let high_watermark = watermark.high.unwrap_or(0);
+                let log_start = watermark.low.unwrap_or(0);
+                let last_stable = stable.get(topition).copied().unwrap_or(high_watermark);
+
                 Ok(OffsetStage {
-                    last_stable: -1,
-                    high_watermark: watermark.high.unwrap_or(0),
-                    log_start: watermark.low.unwrap_or(0),
+                    last_stable,
+                    high_watermark,
+                    log_start,
                 })
             })
             .await

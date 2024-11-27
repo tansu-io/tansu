@@ -293,7 +293,7 @@ impl Postgres {
         &mut self,
         topition: &Topition,
         tx: &Transaction<'_>,
-    ) -> Result<(Option<i64>, Option<i64>, Option<i64>)> {
+    ) -> Result<(Option<i64>, Option<i64>)> {
         let prepared = tx
             .prepare(include_str!("pg/watermark_select_for_update.sql"))
             .await
@@ -311,8 +311,6 @@ impl Postgres {
                 row.try_get::<_, Option<i64>>(0)
                     .inspect_err(|err| error!(?err))?,
                 row.try_get::<_, Option<i64>>(1)
-                    .inspect_err(|err| error!(?err))?,
-                row.try_get::<_, Option<i64>>(2)
                     .inspect_err(|err| error!(?err))?,
             ))
         } else {
@@ -338,23 +336,9 @@ impl Postgres {
                 .inspect_err(|err| error!(?err))?;
         }
 
-        let prepared = tx
-            .prepare(include_str!("pg/txn_topition_select_txns.sql"))
-            .await
-            .inspect_err(|err| error!(?err))?;
+        let (low, high) = self.watermark_select_for_update(topition, tx).await?;
 
-        let topition_is_in_a_txn = tx
-            .query_one(&prepared, &[&self.cluster, &topic, &partition])
-            .await
-            .and_then(|row| row.try_get::<_, i64>(0))
-            .inspect_err(|err| error!(?err))
-            .inspect(|in_progress_transactions| debug!(?in_progress_transactions))
-            .is_ok_and(|in_progress_transactions| in_progress_transactions > 0);
-        debug!(?topition_is_in_a_txn);
-
-        let (low, high, stable) = self.watermark_select_for_update(topition, tx).await?;
-
-        debug!(?low, ?high, ?stable);
+        debug!(?low, ?high);
 
         let insert_record = tx
             .prepare(include_str!("pg/record_insert.sql"))
@@ -458,12 +442,6 @@ impl Postgres {
             .await
             .inspect_err(|err| error!(?err))?;
 
-        let stable = if topition_is_in_a_txn {
-            stable.unwrap_or_default()
-        } else {
-            stable.map_or(records_len - 1, |high| high + records_len)
-        };
-
         _ = tx
             .execute(
                 &prepared,
@@ -473,7 +451,6 @@ impl Postgres {
                     &partition,
                     &low.unwrap_or_default(),
                     &high.map_or(records_len - 1, |high| high + records_len),
-                    &stable,
                 ],
             )
             .await
@@ -634,28 +611,6 @@ impl Postgres {
 
             for txn in txns {
                 debug!(?txn);
-
-                if txn.status == TxnState::PrepareCommit {
-                    let prepared = tx
-                        .prepare(include_str!("pg/watermark_insert_from_txn.sql"))
-                        .await
-                        .inspect(|prepared| debug!(?prepared))
-                        .inspect_err(|err| error!(?err))?;
-
-                    _ = tx
-                        .execute(
-                            &prepared,
-                            &[
-                                &self.cluster,
-                                &txn.name,
-                                &txn.producer_id,
-                                &txn.producer_epoch,
-                            ],
-                        )
-                        .await
-                        .inspect(|n| debug!(cluster = ?self.cluster, ?txn, ?n))
-                        .inspect_err(|err| error!(?err))?;
-                }
 
                 let prepared = tx
                     .prepare(include_str!("pg/txn_produce_offset_delete_by_txn.sql"))
@@ -1307,12 +1262,12 @@ impl Storage for Postgres {
         offset: i64,
         _min_bytes: u32,
         max_bytes: u32,
-        isolation: IsolationLevel,
+        isolation_level: IsolationLevel,
     ) -> Result<Vec<deflated::Batch>> {
-        debug!(cluster = self.cluster, ?topition, offset, ?isolation);
+        debug!(cluster = self.cluster, ?topition, offset, ?isolation_level);
 
         let high_watermark = self.offset_stage(topition).await.map(|offset_stage| {
-            if isolation == IsolationLevel::ReadCommitted {
+            if isolation_level == IsolationLevel::ReadCommitted {
                 offset_stage.last_stable
             } else {
                 offset_stage.high_watermark
@@ -1522,17 +1477,11 @@ impl Storage for Postgres {
             .unwrap_or_default();
 
         let last_stable = row
-            .try_get::<_, Option<i64>>(2)
+            .try_get::<_, Option<i64>>(1)
             .inspect_err(|err| error!(?topition, ?prepared, ?err))?
-            .unwrap_or_default();
+            .unwrap_or(high_watermark);
 
-        debug!(
-            cluster = self.cluster,
-            ?topition,
-            log_start,
-            high_watermark,
-            last_stable
-        );
+        debug!(cluster = self.cluster, ?topition, log_start, high_watermark,);
 
         Ok(OffsetStage {
             last_stable,

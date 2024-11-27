@@ -129,13 +129,6 @@ create table if not exists watermark (
   low bigint,
   high bigint,
 
-  -- Last Stable Offset Tracking: To do this, the broker must maintain in
-  -- memory the set of active transactions along with their initial
-  -- offsets. The LSO is always equal to the minimum of the initial offsets
-  -- across all active transactions.
-  --
-  stable bigint,
-
   last_updated timestamp default current_timestamp not null,
   created_at timestamp default current_timestamp not null
 );
@@ -146,7 +139,6 @@ c.name as cluster,
 t.name as topic,
 tp.partition as partition,
 w.low as low,
-w.stable as stable,
 w.high as high
 from
 cluster c
