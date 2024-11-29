@@ -153,6 +153,7 @@ where
                     match broker.stream_handler(stream).await {
                         Err(Error::Io(ref io))
                             if io.kind() == ErrorKind::UnexpectedEof
+                                || io.kind() == ErrorKind::BrokenPipe
                                 || io.kind() == ErrorKind::ConnectionReset => {}
 
                         Err(error) => {
