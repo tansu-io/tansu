@@ -14,7 +14,7 @@
 -- You should have received a copy of the GNU Affero General Public License
 -- along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-select cg.e_tag, cg.detail
+select cgd.e_tag, cgd.detail
 
 from
 
