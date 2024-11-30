@@ -553,7 +553,7 @@ impl<'s, S, O> LogSegmentIter<'s, S, O> {
     }
 }
 
-impl<'s, S, O> Iterator for LogSegmentIter<'s, S, O>
+impl<S, O> Iterator for LogSegmentIter<'_, S, O>
 where
     S: Read + Seek + Send + Truncate + Write,
     O: Offset,
@@ -739,7 +739,7 @@ pub struct MemorySegmentProvider<'data> {
     pub data: &'data [u8],
 }
 
-impl<'data> Default for MemorySegmentProvider<'data> {
+impl Default for MemorySegmentProvider<'_> {
     fn default() -> Self {
         Self {
             index_interval_bytes: 8_192,
@@ -757,7 +757,7 @@ impl<'data> MemorySegmentProvider<'data> {
     }
 }
 
-impl<'data> SegmentProvider for MemorySegmentProvider<'data> {
+impl SegmentProvider for MemorySegmentProvider<'_> {
     fn init(&self) -> Result<BTreeMap<Topition, BTreeMap<i64, Box<dyn Segment>>>> {
         Ok(BTreeMap::new())
     }

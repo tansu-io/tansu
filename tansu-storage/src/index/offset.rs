@@ -36,7 +36,7 @@ impl<'data> MemoryOffsetProvider<'data> {
     }
 }
 
-impl<'data> OffsetProvider for MemoryOffsetProvider<'data> {
+impl OffsetProvider for MemoryOffsetProvider<'_> {
     fn provide_offset(&self, tpo: &TopitionOffset) -> Result<Box<dyn Offset>> {
         debug!(?tpo);
 

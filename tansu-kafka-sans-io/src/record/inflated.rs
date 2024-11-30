@@ -324,7 +324,7 @@ impl Builder {
             digest: Digest<'a, u32>,
         }
 
-        impl<'a> io::Write for CrcUpdate<'a> {
+        impl io::Write for CrcUpdate<'_> {
             fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
                 self.digest.update(buf);
                 Ok(buf.len())

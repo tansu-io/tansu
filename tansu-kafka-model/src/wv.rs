@@ -34,7 +34,7 @@ where
 }
 
 impl<'a> As<'a, &'a str> for Wv<'a> {
-    fn as_a(&'a self, name: &str) -> Result<&str> {
+    fn as_a(&'a self, name: &str) -> Result<&'a str> {
         self.as_option(name)
             .and_then(|maybe| maybe.ok_or(Error::Message(name.into())))
     }

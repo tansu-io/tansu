@@ -123,7 +123,7 @@ impl CrcData {
             digest: Digest<'a, u32>,
         }
 
-        impl<'a> std::io::Write for CrcUpdate<'a> {
+        impl std::io::Write for CrcUpdate<'_> {
             fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
                 self.digest.update(buf);
                 Ok(buf.len())
