@@ -4,7 +4,11 @@ on:
   push:
     branches:
       - main
+    tags:
+      - "v*"
   pull_request:
+    branches:
+      - main
 env:
   REGISTRY: ghcr.io
 jobs:
@@ -21,6 +25,14 @@ jobs:
           - postgres:16
     steps:
       - uses: actions/checkout@v4
+      - uses: docker/metadata-action@v5
+        with:
+          images: ${{env.REGISTRY}}/${{github.repository}}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
       - run: docker compose up --detach db
         env:
           POSTGRES_IMAGE: ${{matrix.pg}}
@@ -45,4 +57,5 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{env.REGISTRY}}/${{github.repository}}:latest
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
