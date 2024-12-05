@@ -14,7 +14,6 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use bytes::Bytes;
-//use pretty_assertions::assert_eq;
 use serde::Deserialize;
 use std::{fs::File, io::Cursor, sync::Arc, thread};
 use tansu_kafka_sans_io::{
@@ -27,6 +26,7 @@ use tansu_kafka_sans_io::{
         EpochEndOffset, FetchableTopicResponse, LeaderIdAndEpoch, PartitionData, SnapshotId,
     },
     join_group_response::JoinGroupResponseMember,
+    list_transactions_response::TransactionState,
     metadata_request::MetadataRequestTopic,
     metadata_response::{MetadataResponseBroker, MetadataResponsePartition, MetadataResponseTopic},
     offset_fetch_response::{OffsetFetchResponsePartition, OffsetFetchResponseTopic},
@@ -3659,6 +3659,78 @@ fn list_partition_reassignments_request_v0_000() -> Result<()> {
             }
         },
         Frame::deserialize(&mut deserializer)?
+    );
+
+    Ok(())
+}
+
+#[ignore]
+#[test]
+fn list_transactions_request_v1_000() -> Result<()> {
+    let _guard = init_tracing()?;
+
+    let v = vec![
+        0, 0, 0, 35, 0, 66, 0, 1, 0, 0, 0, 4, 0, 13, 97, 100, 109, 105, 110, 99, 108, 105, 101,
+        110, 116, 45, 49, 0, 1, 1, 255, 255, 255, 255, 255, 255, 255, 255, 0,
+    ];
+
+    let mut c = Cursor::new(v);
+    let mut deserializer = Decoder::request(&mut c);
+
+    assert_eq!(
+        Frame {
+            size: 35,
+            header: Header::Request {
+                api_key: 66,
+                api_version: 1,
+                correlation_id: 4,
+                client_id: Some("adminclient-1".into())
+            },
+            body: Body::ListTransactionsRequest {
+                state_filters: Some([].into()),
+                producer_id_filters: Some([].into()),
+                duration_filter: Some(-1),
+            }
+        },
+        Frame::deserialize(&mut deserializer)?
+    );
+
+    Ok(())
+}
+
+#[test]
+fn list_transactions_response_v1_000() -> Result<()> {
+    let _guard = init_tracing()?;
+
+    let api_key = 66;
+    let api_version = 1;
+
+    let v = vec![
+        0, 0, 0, 70, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 1, 2, 32, 108, 105, 98, 114, 100, 107, 97,
+        102, 107, 97, 95, 116, 114, 97, 110, 115, 97, 99, 116, 105, 111, 110, 115, 95, 101, 120,
+        97, 109, 112, 108, 101, 0, 0, 0, 0, 0, 0, 0, 0, 15, 67, 111, 109, 112, 108, 101, 116, 101,
+        67, 111, 109, 109, 105, 116, 0, 0,
+    ];
+
+    assert_eq!(
+        Frame {
+            size: 70,
+            header: Header::Response { correlation_id: 4 },
+            body: Body::ListTransactionsResponse {
+                throttle_time_ms: 0,
+                error_code: 0,
+                unknown_state_filters: Some([].into()),
+                transaction_states: Some(
+                    [TransactionState {
+                        transactional_id: "librdkafka_transactions_example".into(),
+                        producer_id: 0,
+                        transaction_state: "CompleteCommit".into()
+                    }]
+                    .into()
+                )
+            }
+        },
+        Frame::response_from_bytes(&v, api_key, api_version)?
     );
 
     Ok(())

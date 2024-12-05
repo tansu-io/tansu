@@ -13,42 +13,47 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::collections::BTreeSet;
-use std::io::BufReader;
-use std::sync::Arc;
-use std::{collections::BTreeMap, fmt::Debug, io::Cursor, str::FromStr, time::Duration};
+use std::{
+    collections::{btree_map::Entry, BTreeMap, BTreeSet},
+    fmt::Debug,
+    io::{BufReader, Cursor},
+    str::FromStr,
+    sync::Arc,
+    time::{Duration, SystemTime},
+};
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::stream::TryStreamExt;
-use futures::StreamExt;
+use futures::{stream::TryStreamExt, StreamExt};
 use object_store::{
-    path::Path, Attribute, AttributeValue, Attributes, ObjectStore, PutMode, PutOptions,
-    PutPayload, TagSet, UpdateVersion,
+    path::Path, Attribute, AttributeValue, Attributes, DynObjectStore, GetOptions, ObjectStore,
+    PutMode, PutOptions, PutPayload, PutResult, TagSet, UpdateVersion,
 };
-use object_store::{DynObjectStore, PutResult};
 use rand::{prelude::*, thread_rng};
-use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
-use tansu_kafka_sans_io::describe_configs_response::DescribeConfigsResourceResult;
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tansu_kafka_sans_io::{
+    add_partitions_to_txn_response::{
+        AddPartitionsToTxnPartitionResult, AddPartitionsToTxnTopicResult,
+    },
     create_topics_request::CreatableTopic,
     delete_records_request::DeleteRecordsTopic,
     delete_records_response::DeleteRecordsTopicResult,
     describe_cluster_response::DescribeClusterBroker,
-    describe_configs_response::DescribeConfigsResult,
+    describe_configs_response::{DescribeConfigsResourceResult, DescribeConfigsResult},
     metadata_response::{MetadataResponseBroker, MetadataResponsePartition, MetadataResponseTopic},
-    record::{deflated, inflated},
-    ConfigResource, Encoder, ErrorCode,
+    record::{deflated, inflated, Record},
+    txn_offset_commit_response::{TxnOffsetCommitResponsePartition, TxnOffsetCommitResponseTopic},
+    BatchAttribute, ConfigResource, ConfigSource, ConfigType, ControlBatch, Decoder, Encoder,
+    EndTransactionMarker, ErrorCode, IsolationLevel,
 };
-use tansu_kafka_sans_io::{ConfigSource, ConfigType, Decoder};
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 use uuid::Uuid;
 
 use crate::{
     BrokerRegistationRequest, Error, GroupDetail, ListOffsetRequest, ListOffsetResponse,
-    MetadataResponse, OffsetCommitRequest, OffsetStage, Result, Storage, TopicId, Topition,
-    UpdateError, Version, NULL_TOPIC_ID,
+    MetadataResponse, OffsetCommitRequest, OffsetStage, ProducerIdResponse, Result, Storage,
+    TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse, TxnOffsetCommitRequest,
+    TxnState, UpdateError, Version, NULL_TOPIC_ID,
 };
 
 const APPLICATION_JSON: &str = "application/json";
@@ -57,8 +62,353 @@ const APPLICATION_JSON: &str = "application/json";
 pub struct DynoStore {
     cluster: String,
     node: i32,
+    watermarks: BTreeMap<Topition, ConditionData<Watermark>>,
+    meta: ConditionData<Meta>,
 
     object_store: Arc<DynObjectStore>,
+}
+
+type ProducerId = i64;
+type ProducerEpoch = i16;
+type Offset = i64;
+type Sequence = i32;
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+struct Meta {
+    producers: BTreeMap<ProducerId, ProducerDetail>,
+    transactions: BTreeMap<String, Txn>,
+}
+
+impl ConditionData<Meta> {
+    fn new(cluster: &str) -> Self {
+        Self {
+            path: Path::from(format!("clusters/{}/meta.json", cluster)),
+            data: Meta::default(),
+            ..Default::default()
+        }
+    }
+}
+
+impl Meta {
+    fn produced(
+        &self,
+        transaction_id: &str,
+        producer_id: ProducerId,
+        producer_epoch: ProducerEpoch,
+    ) -> Result<BTreeMap<Topition, TxnProduceOffset>> {
+        let Some(txn) = self.transactions.get(transaction_id) else {
+            return Err(Error::Api(ErrorCode::TransactionalIdNotFound));
+        };
+
+        if txn.producer != producer_id {
+            return Err(Error::Api(ErrorCode::UnknownProducerId));
+        }
+
+        let Some(txn_detail) = txn.epochs.get(&producer_epoch) else {
+            return Err(Error::Api(ErrorCode::ProducerFenced));
+        };
+
+        let mut produced = BTreeMap::new();
+
+        for (topic, partitions) in txn_detail.produces.iter() {
+            for (partition, offset_range) in partitions.iter() {
+                let Some(offset_range) = offset_range else {
+                    continue;
+                };
+
+                let tp = Topition::new(topic.to_owned(), *partition);
+                assert_eq!(None, produced.insert(tp, *offset_range));
+            }
+        }
+
+        Ok(produced)
+    }
+
+    fn overlapping_transactions(
+        &self,
+        transaction_id: &str,
+        producer_id: ProducerId,
+        producer_epoch: ProducerEpoch,
+    ) -> Result<Vec<TxnId>> {
+        let candidates = self.produced(transaction_id, producer_id, producer_epoch)?;
+
+        let mut overlapping = Vec::new();
+
+        'candidates: for (candidate_id, txn) in self.transactions.iter() {
+            for (epoch, txn_detail) in txn.epochs.iter() {
+                if transaction_id == candidate_id
+                    && producer_id == txn.producer
+                    && producer_epoch == *epoch
+                {
+                    continue;
+                }
+
+                let Some(state) = txn_detail.state else {
+                    continue;
+                };
+
+                for (topic, partitions) in txn_detail.produces.iter() {
+                    for (partition, offset_range) in partitions.iter() {
+                        let Some(offset_range) = offset_range else {
+                            continue;
+                        };
+
+                        let tp = Topition::new(topic.to_owned(), *partition);
+
+                        if let Some(candidate) = candidates.get(&tp) {
+                            if offset_range.offset_start < candidate.offset_end {
+                                overlapping.push(TxnId {
+                                    transaction: candidate_id.to_owned(),
+                                    producer_id: txn.producer,
+                                    producer_epoch: *epoch,
+                                    state,
+                                });
+
+                                continue 'candidates;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(overlapping)
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+struct ProducerDetail {
+    sequences: BTreeMap<ProducerEpoch, BTreeMap<String, BTreeMap<i32, Sequence>>>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+struct TxnId {
+    transaction: String,
+    producer_id: ProducerId,
+    producer_epoch: ProducerEpoch,
+    state: TxnState,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+struct Txn {
+    producer: ProducerId,
+    epochs: BTreeMap<ProducerEpoch, TxnDetail>,
+}
+
+type Group = String;
+type Topic = String;
+type Partition = i32;
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+struct TxnDetail {
+    transaction_timeout_ms: i32,
+    started_at: Option<SystemTime>,
+    state: Option<TxnState>,
+    produces: BTreeMap<Topic, BTreeMap<Partition, Option<TxnProduceOffset>>>,
+    offsets: BTreeMap<Group, BTreeMap<Topic, BTreeMap<Partition, TxnCommitOffset>>>,
+}
+
+impl From<&TxnDetail> for BTreeMap<Topition, Offset> {
+    fn from(value: &TxnDetail) -> Self {
+        let mut result = BTreeMap::new();
+
+        for (topic, partitions) in value.produces.iter() {
+            for (partition, offset_range) in partitions.iter() {
+                let Some(offset_range) = offset_range else {
+                    continue;
+                };
+
+                let tp = Topition::new(topic.to_owned(), *partition);
+                assert_eq!(None, result.insert(tp, offset_range.offset_start));
+            }
+        }
+
+        result
+    }
+}
+
+#[derive(
+    Clone, Copy, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize,
+)]
+struct TxnProduceOffset {
+    offset_start: Offset,
+    offset_end: Offset,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+struct TxnCommitOffset {
+    committed_offset: Offset,
+    leader_epoch: Option<i32>,
+    metadata: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct ConditionData<D> {
+    path: Path,
+    version: Option<UpdateVersion>,
+    tags: TagSet,
+    attributes: Attributes,
+    data: D,
+}
+
+impl<D> ConditionData<D>
+where
+    D: Clone + Debug + DeserializeOwned + Send + Serialize + Sync,
+{
+    async fn get(&mut self, object_store: &impl ObjectStore) -> Result<()> {
+        debug!(?self);
+
+        let get_result = object_store
+            .get(&self.path)
+            .await
+            .inspect_err(|error| error!(?error, ?self))
+            .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
+
+        self.version = Some(UpdateVersion {
+            e_tag: get_result.meta.e_tag.clone(),
+            version: get_result.meta.version.clone(),
+        });
+
+        let encoded = get_result
+            .bytes()
+            .await
+            .inspect_err(|error| error!(?error, ?self))
+            .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
+
+        self.data = serde_json::from_slice::<D>(&encoded[..])
+            .inspect_err(|error| error!(?error, ?self))
+            .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
+
+        debug!(?self);
+
+        Ok(())
+    }
+
+    async fn with_mut<E, F>(&mut self, object_store: &impl ObjectStore, f: F) -> Result<E>
+    where
+        E: Debug,
+        F: Fn(&mut D) -> Result<E>,
+    {
+        debug!(?self);
+
+        loop {
+            let outcome = f(&mut self.data);
+            debug!(?self, ?outcome);
+
+            let payload = serde_json::to_vec(&self.data)
+                .map(Bytes::from)
+                .map(PutPayload::from)
+                .inspect_err(|err| error!(?err, data = ?self.data))?;
+
+            match object_store
+                .put_opts(&self.path, payload, PutOptions::from(&*self))
+                .await
+                .inspect_err(|error| match error {
+                    object_store::Error::AlreadyExists { .. }
+                    | object_store::Error::Precondition { .. } => {
+                        debug!(?error, ?self)
+                    }
+
+                    _ => error!(?error, ?self),
+                })
+                .inspect(|put_result| debug!(?self, ?put_result))
+            {
+                Ok(result) => {
+                    debug!(?self, ?result);
+
+                    self.version = Some(UpdateVersion {
+                        e_tag: result.e_tag,
+                        version: result.version,
+                    });
+
+                    return outcome;
+                }
+
+                Err(pre_condition @ object_store::Error::Precondition { .. }) => {
+                    debug!(?self, ?pre_condition);
+                    self.get(object_store).await?;
+                    continue;
+                }
+
+                Err(already_exists @ object_store::Error::AlreadyExists { .. }) => {
+                    debug!(?self, ?already_exists);
+                    self.get(object_store).await?;
+                    continue;
+                }
+
+                Err(error) => {
+                    return {
+                        error!(?self, ?error);
+                        Err(Error::Api(ErrorCode::UnknownServerError))
+                    }
+                }
+            }
+        }
+    }
+
+    async fn with<E, F>(&mut self, object_store: &impl ObjectStore, f: F) -> Result<E>
+    where
+        F: Fn(&D) -> Result<E>,
+    {
+        debug!(?self);
+
+        match object_store
+            .get_opts(
+                &self.path,
+                GetOptions {
+                    if_none_match: self
+                        .version
+                        .as_ref()
+                        .and_then(|version| version.e_tag.clone()),
+                    ..GetOptions::default()
+                },
+            )
+            .await
+        {
+            Ok(get_result) => {
+                self.version = Some(UpdateVersion {
+                    e_tag: get_result.meta.e_tag.clone(),
+                    version: get_result.meta.version.clone(),
+                });
+
+                let encoded = get_result
+                    .bytes()
+                    .await
+                    .inspect_err(|error| error!(?error, ?self))
+                    .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
+
+                self.data = serde_json::from_slice::<D>(&encoded[..])
+                    .inspect_err(|error| error!(?error, ?self))
+                    .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
+
+                Ok(())
+            }
+
+            Err(object_store::Error::NotModified { .. }) => Ok(()),
+
+            Err(object_store::Error::NotFound { .. }) => {
+                self.with_mut(object_store, |_| Ok(())).await
+            }
+
+            Err(error) => {
+                error!(?self, ?error);
+                Err(Error::Api(ErrorCode::UnknownServerError))
+            }
+        }
+        .and(f(&self.data))
+    }
+}
+
+impl<D> From<&ConditionData<D>> for PutOptions {
+    fn from(value: &ConditionData<D>) -> Self {
+        Self {
+            mode: value.version.as_ref().map_or(PutMode::Create, |existing| {
+                PutMode::Update(existing.to_owned())
+            }),
+            tags: value.tags.to_owned(),
+            attributes: value.attributes.to_owned(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -69,9 +419,47 @@ struct TopicMetadata {
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 struct Watermark {
-    low: i64,
-    high: i64,
-    stable: i64,
+    low: Option<i64>,
+    high: Option<i64>,
+}
+
+impl ConditionData<Watermark> {
+    fn new(cluster: &str, topition: &Topition) -> Self {
+        Self {
+            path: Path::from(format!(
+                "clusters/{}/topics/{}/partitions/{:0>10}/watermark.json",
+                cluster, topition.topic, topition.partition,
+            )),
+            data: Watermark::default(),
+            ..Default::default()
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+struct WatermarkSequence {
+    epoch: i16,
+    sequence: i32,
+    updated: SystemTime,
+}
+
+impl Default for WatermarkSequence {
+    fn default() -> Self {
+        Self {
+            epoch: 0,
+            sequence: 0,
+            updated: SystemTime::now(),
+        }
+    }
+}
+
+fn json_content_type() -> Attributes {
+    let mut attributes = Attributes::new();
+    _ = attributes.insert(
+        Attribute::ContentType,
+        AttributeValue::from(APPLICATION_JSON),
+    );
+    attributes
 }
 
 impl DynoStore {
@@ -79,35 +467,10 @@ impl DynoStore {
         Self {
             cluster: cluster.into(),
             node,
+            watermarks: BTreeMap::new(),
+            meta: ConditionData::<Meta>::new(cluster),
             object_store: Arc::new(object_store),
         }
-    }
-
-    async fn get_watermark(&self, topition: &Topition) -> Result<Watermark> {
-        debug!(?topition);
-        let location = Path::from(format!(
-            "clusters/{}/topics/{}/partitions/{:0>10}/watermark.json",
-            self.cluster, topition.topic, topition.partition,
-        ));
-
-        let get_result = self
-            .object_store
-            .get(&location)
-            .await
-            .inspect(|get_result| debug!(?get_result, ?topition))
-            .inspect_err(|error| error!(?error, ?location))
-            .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
-
-        let encoded = get_result
-            .bytes()
-            .await
-            .inspect_err(|error| error!(?error, ?location))
-            .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
-
-        serde_json::from_slice::<Watermark>(&encoded[..])
-            .inspect(|watermark| debug!(?watermark, ?topition))
-            .inspect_err(|error| error!(?error, ?location))
-            .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))
     }
 
     async fn topic_metadata(&self, topic: &TopicId) -> Result<TopicMetadata> {
@@ -171,9 +534,9 @@ impl DynoStore {
         update_version: Option<UpdateVersion>,
     ) -> Result<PutResult, UpdateError<P>>
     where
-        P: Serialize + DeserializeOwned + Debug,
+        P: PartialEq + Serialize + DeserializeOwned + Debug,
     {
-        debug!(?location, ?attributes, ?update_version, ?value);
+        debug!(%location, ?attributes, ?update_version, ?value);
 
         let options = PutOptions {
             mode: update_version.map_or(PutMode::Create, PutMode::Update),
@@ -189,7 +552,7 @@ impl DynoStore {
             .object_store
             .put_opts(location, payload, options)
             .await
-            .inspect_err(|error| debug!(?location, ?error))
+            .inspect_err(|error| debug!(%location, ?error))
         {
             Ok(put_result) => Ok(put_result),
 
@@ -198,7 +561,9 @@ impl DynoStore {
                 let (current, version) = self
                     .get(location)
                     .await
-                    .inspect_err(|error| error!(?location, ?error))?;
+                    .inspect_err(|error| error!(%location, ?error))?;
+
+                debug!(%location, ?value, ?current);
 
                 Err(UpdateError::Outdated { current, version })
             }
@@ -206,11 +571,41 @@ impl DynoStore {
             Err(otherwise) => Err(otherwise.into()),
         }
     }
+
+    fn txn_offset_commit_response_error(
+        offsets: &TxnOffsetCommitRequest,
+        error_code: ErrorCode,
+    ) -> Result<Vec<TxnOffsetCommitResponseTopic>> {
+        let mut responses = vec![];
+
+        for topic in &offsets.topics {
+            let mut partition_responses = vec![];
+
+            if let Some(partitions) = topic.partitions.as_deref() {
+                for partition in partitions {
+                    partition_responses.push(TxnOffsetCommitResponsePartition {
+                        partition_index: partition.partition_index,
+                        error_code: error_code.into(),
+                    });
+                }
+            }
+
+            responses.push(TxnOffsetCommitResponseTopic {
+                name: topic.name.to_string(),
+                partitions: Some(partition_responses),
+            });
+        }
+
+        Ok(responses)
+    }
 }
 
 #[async_trait]
 impl Storage for DynoStore {
-    async fn register_broker(&self, broker_registration: BrokerRegistationRequest) -> Result<()> {
+    async fn register_broker(
+        &mut self,
+        broker_registration: BrokerRegistationRequest,
+    ) -> Result<()> {
         debug!(?broker_registration);
 
         let payload = serde_json::to_vec(&broker_registration)
@@ -222,16 +617,10 @@ impl Storage for DynoStore {
             self.cluster, self.node
         ));
 
-        let mut attributes = Attributes::new();
-        _ = attributes.insert(
-            Attribute::ContentType,
-            AttributeValue::from(APPLICATION_JSON),
-        );
-
         let options = PutOptions {
             mode: PutMode::Overwrite,
             tags: TagSet::default(),
-            attributes,
+            attributes: json_content_type(),
         };
 
         let put_result = self
@@ -239,12 +628,12 @@ impl Storage for DynoStore {
             .put_opts(&location, payload, options)
             .await?;
 
-        debug!(?location, ?put_result);
+        debug!(%location, ?put_result);
 
         Ok(())
     }
 
-    async fn create_topic(&self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {
+    async fn create_topic(&mut self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {
         debug!(?topic, ?validate_only);
 
         let id = Uuid::now_v7();
@@ -255,16 +644,10 @@ impl Storage for DynoStore {
             .map(Bytes::from)
             .map(PutPayload::from)?;
 
-        let mut attributes = Attributes::new();
-        _ = attributes.insert(
-            Attribute::ContentType,
-            AttributeValue::from(APPLICATION_JSON),
-        );
-
         let options = PutOptions {
             mode: PutMode::Create,
             tags: TagSet::default(),
-            attributes,
+            attributes: json_content_type(),
         };
 
         match (
@@ -316,23 +699,17 @@ impl Storage for DynoStore {
                         self.cluster, td.topic.name, partition,
                     ));
 
-                    let mut attributes = Attributes::new();
-                    _ = attributes.insert(
-                        Attribute::ContentType,
-                        AttributeValue::from(APPLICATION_JSON),
-                    );
-
                     let options = PutOptions {
                         mode: PutMode::Create,
                         tags: TagSet::default(),
-                        attributes,
+                        attributes: json_content_type(),
                     };
 
                     match self
                         .object_store
                         .put_opts(&location, payload.clone(), options)
                         .await
-                        .inspect(|put_result| debug!(?location, ?put_result))
+                        .inspect(|put_result| debug!(%location, ?put_result))
                         .inspect_err(|error| match error {
                             object_store::Error::AlreadyExists { .. } => {
                                 debug!(?error, ?td, ?validate_only)
@@ -362,14 +739,14 @@ impl Storage for DynoStore {
     }
 
     async fn delete_records(
-        &self,
+        &mut self,
         topics: &[DeleteRecordsTopic],
     ) -> Result<Vec<DeleteRecordsTopicResult>> {
         debug!(?topics);
         todo!()
     }
 
-    async fn delete_topic(&self, topic: &TopicId) -> Result<ErrorCode> {
+    async fn delete_topic(&mut self, topic: &TopicId) -> Result<ErrorCode> {
         debug!(?topic);
 
         if let Ok(metadata) = self.topic_metadata(topic).await {
@@ -445,9 +822,9 @@ impl Storage for DynoStore {
         }
     }
 
-    async fn brokers(&self) -> Result<Vec<DescribeClusterBroker>> {
+    async fn brokers(&mut self) -> Result<Vec<DescribeClusterBroker>> {
         let location = Path::from(format!("clusters/{}/brokers/", self.cluster));
-        debug!(?location);
+        debug!(%location);
 
         let mut brokers = vec![];
 
@@ -463,7 +840,7 @@ impl Storage for DynoStore {
                 .object_store
                 .get(&meta.location)
                 .await
-                .inspect_err(|error| error!(?error, ?location))
+                .inspect_err(|error| error!(?error, %location))
             else {
                 continue;
             };
@@ -471,14 +848,14 @@ impl Storage for DynoStore {
             let Ok(encoded) = get_result
                 .bytes()
                 .await
-                .inspect_err(|error| error!(?error, ?location))
+                .inspect_err(|error| error!(?error, %location))
             else {
                 continue;
             };
 
             let Ok(broker_registration) =
                 serde_json::from_slice::<BrokerRegistationRequest>(&encoded[..])
-                    .inspect_err(|error| error!(?error, ?location))
+                    .inspect_err(|error| error!(?error, %location))
             else {
                 continue;
             };
@@ -502,181 +879,366 @@ impl Storage for DynoStore {
         Ok(brokers)
     }
 
-    async fn produce(&self, topition: &Topition, deflated: deflated::Batch) -> Result<i64> {
-        debug!(?topition, ?deflated);
+    async fn produce(
+        &mut self,
+        transaction_id: Option<&str>,
+        topition: &Topition,
+        deflated: deflated::Batch,
+    ) -> Result<i64> {
+        debug!(?transaction_id, ?topition, ?deflated);
 
-        let location = Path::from(format!(
-            "clusters/{}/topics/{}/partitions/{:0>10}/watermark.json",
-            self.cluster, topition.topic, topition.partition,
-        ));
-
-        loop {
-            let get_result = self
-                .object_store
-                .get(&location)
-                .await
-                .inspect_err(|error| error!(?error, ?location))
-                .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
-
-            let update_version = UpdateVersion {
-                e_tag: get_result.meta.e_tag.clone(),
-                version: get_result.meta.version.clone(),
-            };
-
-            let encoded = get_result
-                .bytes()
-                .await
-                .inspect_err(|error| error!(?error, ?location))
-                .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
-
-            let original = serde_json::from_slice::<Watermark>(&encoded[..])
-                .inspect_err(|error| error!(?error, ?location))
-                .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
-
-            let mut updated = original.clone();
-            updated.high += deflated.record_count as i64;
-
-            let payload = serde_json::to_vec(&updated)
-                .map(Bytes::from)
-                .map(PutPayload::from)?;
-
-            let mut attributes = Attributes::new();
-            _ = attributes.insert(
-                Attribute::ContentType,
-                AttributeValue::from(APPLICATION_JSON),
-            );
-
-            let options = PutOptions {
-                mode: PutMode::Update(update_version),
-                tags: TagSet::default(),
-                attributes,
-            };
-
-            match self
-                .object_store
-                .put_opts(&location, payload, options)
-                .await
-                .inspect_err(|error| error!(?error, ?location))
-                .inspect(|put_result| debug!(?location, ?put_result))
-            {
-                Ok(_) => {
-                    let location = Path::from(format!(
-                        "clusters/{}/topics/{}/partitions/{:0>10}/records/{:0>20}.batch",
-                        self.cluster, topition.topic, topition.partition, original.high,
-                    ));
-
-                    let payload = self.encode(deflated)?;
-                    let attributes = Attributes::new();
-
-                    let options = PutOptions {
-                        mode: PutMode::Create,
-                        tags: TagSet::default(),
-                        attributes,
+        if deflated.is_idempotent() {
+            self.meta
+                .with_mut(&self.object_store, |meta| {
+                    let Some(pd) = meta.producers.get_mut(&deflated.producer_id) else {
+                        debug!(producer_id = deflated.producer_id, ?meta.producers);
+                        return Err(Error::Api(ErrorCode::UnknownProducerId));
                     };
 
-                    _ = self
-                        .object_store
-                        .put_opts(&location, payload, options)
-                        .await
-                        .inspect_err(|error| error!(?error))?;
+                    let Some(mut current) = pd.sequences.last_entry() else {
+                        debug!(last_entry = ?pd.sequences.last_entry());
+                        return Err(Error::Api(ErrorCode::UnknownServerError));
+                    };
 
-                    return Ok(original.high);
-                }
-                Err(object_store::Error::Precondition { .. }) => continue,
-                Err(error) => {
-                    return {
-                        error!(?error);
-                        Err(Error::Api(ErrorCode::UnknownServerError))
+                    if current.key() != &deflated.producer_epoch {
+                        debug!(current = ?current.key(), producer_epoch = deflated.producer_epoch);
+                        return Err(Error::Api(ErrorCode::ProducerFenced));
                     }
-                }
+
+                    let sequences = current.get_mut();
+                    debug!(?sequences);
+
+                    match sequences
+                        .entry(topition.topic.clone())
+                        .or_default()
+                        .entry(topition.partition)
+                        .or_default()
+                    {
+                        sequence if *sequence < deflated.base_sequence => {
+                            debug!(?sequence, base_sequence = deflated.base_sequence);
+
+                            Err(Error::Api(ErrorCode::OutOfOrderSequenceNumber))
+                        }
+
+                        sequence if *sequence > deflated.base_sequence => {
+                            debug!(?sequence, base_sequence = deflated.base_sequence);
+
+                            Err(Error::Api(ErrorCode::DuplicateSequenceNumber))
+                        }
+
+                        sequence => {
+                            debug!(?sequence, delta = deflated.last_offset_delta + 1);
+
+                            *sequence += deflated.last_offset_delta + 1;
+                            Ok(())
+                        }
+                    }
+                })
+                .await
+                .inspect(|outcome| debug!(transaction_id, ?topition, ?outcome))
+                .inspect_err(|err| error!(?err, transaction_id, ?topition))?;
+        }
+
+        let offset = self
+            .watermarks
+            .entry(topition.to_owned())
+            .or_insert(ConditionData::<Watermark>::new(
+                self.cluster.as_str(),
+                topition,
+            ))
+            .with_mut(&self.object_store, |watermark| {
+                debug!(?watermark);
+
+                let offset = watermark.high.unwrap_or_default();
+                watermark.high = watermark
+                    .high
+                    .map_or(Some(deflated.last_offset_delta as i64 + 1i64), |high| {
+                        Some(high + deflated.last_offset_delta as i64 + 1i64)
+                    });
+
+                debug!(?watermark);
+
+                Ok(offset)
+            })
+            .await
+            .inspect(|offset| debug!(offset, transaction_id, ?topition))
+            .inspect_err(|err| error!(?err, transaction_id, ?topition))?;
+
+        let attributes = BatchAttribute::try_from(deflated.attributes)?;
+
+        if let Some(transaction_id) = transaction_id {
+            if attributes.transaction {
+                self.meta
+                    .with_mut(&self.object_store, |meta| {
+                        if let Some(transaction) = meta.transactions.get_mut(transaction_id) {
+                            debug!(?transaction);
+
+                            if let Some(txn_detail) =
+                                transaction.epochs.get_mut(&deflated.producer_epoch)
+                            {
+                                debug!(?txn_detail);
+
+                                let offset_end = offset + deflated.last_offset_delta as i64;
+
+                                _ = txn_detail
+                                    .produces
+                                    .entry(topition.topic.clone())
+                                    .or_default()
+                                    .entry(topition.partition)
+                                    .and_modify(|entry| {
+                                        let range = entry.get_or_insert(TxnProduceOffset {
+                                            offset_start: offset,
+                                            offset_end,
+                                        });
+
+                                        if offset_end > range.offset_end {
+                                            range.offset_end = offset_end;
+                                        }
+                                    })
+                                    .or_insert(Some(TxnProduceOffset {
+                                        offset_start: offset,
+                                        offset_end,
+                                    }));
+                            }
+                        }
+
+                        Ok(())
+                    })
+                    .await
+                    .inspect(|outcome| debug!(?outcome, transaction_id, ?topition))
+                    .inspect_err(|err| error!(?err, transaction_id, ?topition))?;
             }
         }
-    }
-
-    async fn fetch(
-        &self,
-        topition: &'_ Topition,
-        offset: i64,
-        min_bytes: u32,
-        max_bytes: u32,
-    ) -> Result<deflated::Batch> {
-        debug!(?topition, ?offset, ?min_bytes, ?max_bytes);
-
-        let location = Path::from(format!(
-            "clusters/{}/topics/{}/partitions/{:0>10}/records/",
-            self.cluster, topition.topic, topition.partition
-        ));
-
-        let mut offsets = BTreeSet::new();
-
-        let mut list_stream = self.object_store.list(Some(&location));
-
-        while let Some(meta) = list_stream
-            .next()
-            .await
-            .inspect(|meta| debug!(?meta))
-            .transpose()
-            .inspect_err(|error| error!(?error, ?topition, ?offset, ?min_bytes, ?max_bytes))
-            .map_err(|_| Error::Api(ErrorCode::UnknownServerError))?
-        {
-            let Some(offset) = meta.location.parts().last() else {
-                continue;
-            };
-
-            let offset = i64::from_str(&offset.as_ref()[0..20])?;
-            _ = offsets.insert(offset);
-        }
-
-        let greater_or_equal = offsets.split_off(&offset);
-
-        let Some(offset) = greater_or_equal.first() else {
-            return inflated::Batch::builder()
-                .build()
-                .and_then(TryInto::try_into)
-                .map_err(Into::into);
-        };
 
         let location = Path::from(format!(
             "clusters/{}/topics/{}/partitions/{:0>10}/records/{:0>20}.batch",
             self.cluster, topition.topic, topition.partition, offset,
         ));
 
-        let get_result = self
-            .object_store
-            .get(&location)
-            .await
-            .inspect_err(|error| error!(?error, ?topition, ?offset, ?min_bytes, ?max_bytes))
-            .map_err(|_| Error::Api(ErrorCode::UnknownServerError))?;
+        let payload = self.encode(deflated)?;
 
-        get_result
-            .bytes()
+        _ = self
+            .object_store
+            .put_opts(
+                &location,
+                payload,
+                PutOptions {
+                    mode: PutMode::Create,
+                    tags: TagSet::default(),
+                    attributes: Attributes::new(),
+                },
+            )
             .await
-            .inspect_err(|error| error!(?error, ?location))
-            .map_err(|_| Error::Api(ErrorCode::UnknownServerError))
-            .and_then(|encoded| self.decode(encoded))
-            .map(|mut deflated| {
-                deflated.base_offset = *offset;
-                deflated
-            })
+            .inspect(|outcome| debug!(?outcome, transaction_id, ?topition))
+            .inspect_err(|error| error!(?error, transaction_id, ?topition))?;
+
+        Ok(offset)
     }
 
-    async fn offset_stage(&self, topition: &Topition) -> Result<OffsetStage> {
+    async fn fetch(
+        &mut self,
+        topition: &'_ Topition,
+        offset: i64,
+        min_bytes: u32,
+        max_bytes: u32,
+        isolation_level: IsolationLevel,
+    ) -> Result<Vec<deflated::Batch>> {
+        let high_watermark = self.offset_stage(topition).await.map(|offset_stage| {
+            if isolation_level == IsolationLevel::ReadCommitted {
+                offset_stage.last_stable
+            } else {
+                offset_stage.high_watermark
+            }
+        })?;
+
+        debug!(
+            ?topition,
+            ?offset,
+            ?min_bytes,
+            ?max_bytes,
+            ?isolation_level,
+            high_watermark
+        );
+
+        let mut offsets = BTreeSet::new();
+
+        if offset < high_watermark {
+            let location = Path::from(format!(
+                "clusters/{}/topics/{}/partitions/{:0>10}/records/",
+                self.cluster, topition.topic, topition.partition
+            ));
+
+            let mut list_stream = self.object_store.list(Some(&location));
+
+            while let Some(meta) = list_stream
+                .next()
+                .await
+                .inspect(|meta| debug!(?meta))
+                .transpose()
+                .inspect_err(|error| error!(?error, ?topition, ?offset, ?min_bytes, ?max_bytes))
+                .map_err(|_| Error::Api(ErrorCode::UnknownServerError))?
+            {
+                let Some(offset) = meta.location.parts().last() else {
+                    continue;
+                };
+
+                let offset = i64::from_str(&offset.as_ref()[0..20])?;
+                debug!(offset);
+
+                if offset < high_watermark {
+                    _ = offsets.insert(offset);
+                }
+            }
+        }
+
+        let mut batches = vec![];
+
+        let mut bytes = max_bytes as usize;
+
+        for offset in offsets.split_off(&offset) {
+            debug!(?offset);
+
+            let location = Path::from(format!(
+                "clusters/{}/topics/{}/partitions/{:0>10}/records/{:0>20}.batch",
+                self.cluster, topition.topic, topition.partition, offset,
+            ));
+
+            let get_result = self
+                .object_store
+                .get(&location)
+                .await
+                .inspect_err(|error| error!(?error, ?topition, ?offset, ?min_bytes, ?max_bytes))
+                .map_err(|_| Error::Api(ErrorCode::UnknownServerError))?;
+
+            if get_result.meta.size > bytes {
+                break;
+            } else {
+                bytes = bytes.saturating_sub(get_result.meta.size);
+            }
+
+            let mut batch = get_result
+                .bytes()
+                .await
+                .inspect_err(|error| error!(?error, %location))
+                .map_err(|_| Error::Api(ErrorCode::UnknownServerError))
+                .and_then(|encoded| self.decode(encoded))?;
+            batch.base_offset = offset;
+            batches.push(batch);
+        }
+
+        Ok(batches)
+    }
+
+    async fn offset_stage(&mut self, topition: &Topition) -> Result<OffsetStage> {
         debug!(?topition);
 
-        self.get_watermark(topition)
-            .await
-            .map(|watermark| OffsetStage {
-                last_stable: watermark.stable,
-                high_watermark: watermark.high,
-                log_start: watermark.low,
+        let stable = self
+            .meta
+            .with(&self.object_store, |meta| {
+                Ok(meta
+                    .transactions
+                    .values()
+                    .flat_map(|txn| {
+                        debug!(?txn);
+
+                        txn.epochs
+                            .values()
+                            .filter(|detail| {
+                                detail.state.is_some_and(|state| {
+                                    state != TxnState::Committed && state != TxnState::Aborted
+                                })
+                            })
+                            .map(BTreeMap::<Topition, Offset>::from)
+                            .collect::<Vec<_>>()
+                    })
+                    .reduce(|mut acc, e| {
+                        debug!(?acc, ?e);
+
+                        for (topition, offset_start) in e.iter() {
+                            _ = acc
+                                .entry(topition.to_owned())
+                                .and_modify(|existing_offset_start| {
+                                    if *existing_offset_start > *offset_start {
+                                        *existing_offset_start = *offset_start
+                                    }
+                                })
+                                .or_insert(*offset_start);
+                        }
+
+                        acc
+                    })
+                    .unwrap_or(BTreeMap::new()))
             })
+            .await?;
+
+        debug!(?stable);
+
+        self.watermarks
+            .entry(topition.to_owned())
+            .or_insert(ConditionData::<Watermark>::new(
+                self.cluster.as_str(),
+                topition,
+            ))
+            .with(&self.object_store, |watermark| {
+                debug!(?watermark);
+                let high_watermark = watermark.high.unwrap_or(0);
+                let log_start = watermark.low.unwrap_or(0);
+                let last_stable = stable.get(topition).copied().unwrap_or(high_watermark);
+
+                Ok(OffsetStage {
+                    last_stable,
+                    high_watermark,
+                    log_start,
+                })
+            })
+            .await
     }
 
     async fn list_offsets(
-        &self,
+        &mut self,
+        isolation_level: IsolationLevel,
         offsets: &[(Topition, ListOffsetRequest)],
     ) -> Result<Vec<(Topition, ListOffsetResponse)>> {
-        debug!(?offsets);
+        debug!(?offsets, ?isolation_level);
+
+        let stable = if isolation_level == IsolationLevel::ReadCommitted {
+            self.meta
+                .with(&self.object_store, |meta| {
+                    Ok(meta
+                        .transactions
+                        .values()
+                        .flat_map(|txn| {
+                            txn.epochs
+                                .values()
+                                .filter(|detail| {
+                                    detail.state.is_some_and(|state| {
+                                        state != TxnState::Committed && state != TxnState::Aborted
+                                    })
+                                })
+                                .map(BTreeMap::<Topition, Offset>::from)
+                                .collect::<Vec<_>>()
+                        })
+                        .reduce(|mut acc, e| {
+                            debug!(?acc, ?e);
+                            for (topition, offset_start) in e.iter() {
+                                _ = acc
+                                    .entry(topition.to_owned())
+                                    .and_modify(|existing_offset_start| {
+                                        if *existing_offset_start > *offset_start {
+                                            *existing_offset_start = *offset_start
+                                        }
+                                    })
+                                    .or_insert(*offset_start);
+                            }
+
+                            acc
+                        })
+                        .unwrap_or(BTreeMap::new()))
+                })
+                .await?
+        } else {
+            BTreeMap::new()
+        };
 
         let mut responses = vec![];
 
@@ -685,22 +1247,44 @@ impl Storage for DynoStore {
                 topition.to_owned(),
                 match offset_request {
                     ListOffsetRequest::Earliest => {
-                        self.get_watermark(topition)
-                            .await
-                            .map(|watermark| ListOffsetResponse {
-                                error_code: ErrorCode::None,
-                                timestamp: None,
-                                offset: Some(watermark.low),
-                            })?
+                        self.watermarks
+                            .entry(topition.to_owned())
+                            .or_insert(ConditionData::<Watermark>::new(
+                                self.cluster.as_str(),
+                                topition,
+                            ))
+                            .with(&self.object_store, |watermark| {
+                                Ok(ListOffsetResponse {
+                                    error_code: ErrorCode::None,
+                                    timestamp: None,
+                                    offset: Some(watermark.low.unwrap_or(0)),
+                                })
+                            })
+                            .await?
                     }
                     ListOffsetRequest::Latest => {
-                        self.get_watermark(topition)
-                            .await
-                            .map(|watermark| ListOffsetResponse {
+                        if let Some(offset) = stable.get(topition) {
+                            ListOffsetResponse {
                                 error_code: ErrorCode::None,
                                 timestamp: None,
-                                offset: Some(watermark.high),
-                            })?
+                                offset: Some(*offset),
+                            }
+                        } else {
+                            self.watermarks
+                                .entry(topition.to_owned())
+                                .or_insert(ConditionData::<Watermark>::new(
+                                    self.cluster.as_str(),
+                                    topition,
+                                ))
+                                .with(&self.object_store, |watermark| {
+                                    Ok(ListOffsetResponse {
+                                        error_code: ErrorCode::None,
+                                        timestamp: None,
+                                        offset: Some(watermark.high.unwrap_or(0)),
+                                    })
+                                })
+                                .await?
+                        }
                     }
                     ListOffsetRequest::Timestamp(..) => todo!(),
                 },
@@ -711,7 +1295,7 @@ impl Storage for DynoStore {
     }
 
     async fn offset_commit(
-        &self,
+        &mut self,
         group_id: &str,
         retention_time_ms: Option<Duration>,
         offsets: &[(Topition, OffsetCommitRequest)],
@@ -730,16 +1314,10 @@ impl Storage for DynoStore {
                 .map(Bytes::from)
                 .map(PutPayload::from)?;
 
-            let mut attributes = Attributes::new();
-            _ = attributes.insert(
-                Attribute::ContentType,
-                AttributeValue::from(APPLICATION_JSON),
-            );
-
             let options = PutOptions {
                 mode: PutMode::Overwrite,
                 tags: TagSet::default(),
-                attributes,
+                attributes: json_content_type(),
             };
 
             let error_code = self
@@ -755,7 +1333,7 @@ impl Storage for DynoStore {
     }
 
     async fn offset_fetch(
-        &self,
+        &mut self,
         group_id: Option<&str>,
         topics: &[Topition],
         require_stable: Option<bool>,
@@ -798,7 +1376,7 @@ impl Storage for DynoStore {
         Ok(responses)
     }
 
-    async fn metadata(&self, topics: Option<&[TopicId]>) -> Result<MetadataResponse> {
+    async fn metadata(&mut self, topics: Option<&[TopicId]>) -> Result<MetadataResponse> {
         debug!(?topics);
 
         let location = Path::from(format!("clusters/{}/brokers/", self.cluster));
@@ -817,7 +1395,7 @@ impl Storage for DynoStore {
                 .object_store
                 .get(&meta.location)
                 .await
-                .inspect_err(|error| error!(?error, ?location))
+                .inspect_err(|error| error!(?error, %location))
             else {
                 continue;
             };
@@ -825,14 +1403,14 @@ impl Storage for DynoStore {
             let Ok(encoded) = payload
                 .bytes()
                 .await
-                .inspect_err(|error| error!(?error, ?location))
+                .inspect_err(|error| error!(?error, %location))
             else {
                 continue;
             };
 
             let Ok(broker_registration) =
                 serde_json::from_slice::<BrokerRegistationRequest>(&encoded[..])
-                    .inspect_err(|error| error!(?error, ?location))
+                    .inspect_err(|error| error!(?error, %location))
             else {
                 continue;
             };
@@ -861,7 +1439,7 @@ impl Storage for DynoStore {
                     let response = match self
                         .topic_metadata(topic)
                         .await
-                        .inspect_err(|error| error!(?error, ?location))
+                        .inspect_err(|error| error!(?error, %location))
                     {
                         Ok(topic_metadata) => {
                             let name = Some(topic_metadata.topic.name.to_owned());
@@ -963,7 +1541,7 @@ impl Storage for DynoStore {
 
             _ => {
                 let location = Path::from(format!("clusters/{}/topics/", self.cluster));
-                debug!(?location);
+                debug!(%location);
 
                 let mut responses = vec![];
 
@@ -971,7 +1549,7 @@ impl Storage for DynoStore {
                     .object_store
                     .list_with_delimiter(Some(&location))
                     .await
-                    .inspect_err(|error| error!(?error, ?location))
+                    .inspect_err(|error| error!(?error, %location))
                 else {
                     return Ok(MetadataResponse {
                         cluster: Some(self.cluster.clone()),
@@ -990,7 +1568,7 @@ impl Storage for DynoStore {
                         .object_store
                         .get(&meta.location)
                         .await
-                        .inspect_err(|error| error!(?error, ?location))
+                        .inspect_err(|error| error!(?error, %location))
                     else {
                         continue;
                     };
@@ -998,13 +1576,13 @@ impl Storage for DynoStore {
                     let Ok(encoded) = payload
                         .bytes()
                         .await
-                        .inspect_err(|error| error!(?error, ?location))
+                        .inspect_err(|error| error!(?error, %location))
                     else {
                         continue;
                     };
 
                     let Ok(topic_metadata) = serde_json::from_slice::<TopicMetadata>(&encoded[..])
-                        .inspect_err(|error| error!(?error, ?location))
+                        .inspect_err(|error| error!(?error, %location))
                     else {
                         continue;
                     };
@@ -1080,7 +1658,7 @@ impl Storage for DynoStore {
     }
 
     async fn describe_config(
-        &self,
+        &mut self,
         name: &str,
         resource: ConfigResource,
         keys: Option<&[String]>,
@@ -1119,7 +1697,7 @@ impl Storage for DynoStore {
     }
 
     async fn update_group(
-        &self,
+        &mut self,
         group_id: &str,
         detail: GroupDetail,
         version: Option<Version>,
@@ -1131,14 +1709,705 @@ impl Storage for DynoStore {
             self.cluster, group_id,
         ));
 
-        let mut attributes = Attributes::new();
-        _ = attributes.insert(
-            Attribute::ContentType,
-            AttributeValue::from(APPLICATION_JSON),
+        self.put(
+            &location,
+            detail,
+            json_content_type(),
+            version.map(Into::into),
+        )
+        .await
+        .map(Into::into)
+    }
+
+    async fn init_producer(
+        &mut self,
+        transaction_id: Option<&str>,
+        transaction_timeout_ms: i32,
+        producer_id: Option<i64>,
+        producer_epoch: Option<i16>,
+    ) -> Result<ProducerIdResponse> {
+        debug!(
+            ?transaction_id,
+            ?transaction_timeout_ms,
+            ?producer_id,
+            ?producer_epoch,
         );
 
-        self.put(&location, detail, attributes, version.map(Into::into))
+        #[derive(Clone, Debug)]
+        enum InitProducer {
+            Completed(ProducerIdResponse),
+            NeedToRollback {
+                producer_id: i64,
+                producer_epoch: i16,
+            },
+        }
+
+        if let Some(transaction_id) = transaction_id {
+            match self
+                .meta
+                .with_mut(&self.object_store, |meta| {
+                    debug!(?meta);
+                    match (producer_id, producer_epoch) {
+                        (Some(-1), Some(-1)) => {
+                            match meta.transactions.entry(transaction_id.to_string()) {
+                                Entry::Vacant(vacant) => {
+                                    let id = meta
+                                        .producers
+                                        .last_key_value()
+                                        .map_or(1.into(), |(k, _v)| k + 1);
+
+                                    let mut pd = ProducerDetail::default();
+                                    assert_eq!(None, pd.sequences.insert(0, BTreeMap::new()));
+                                    assert_eq!(None, meta.producers.insert(id, pd));
+
+                                    let mut epochs = BTreeMap::new();
+                                    assert_eq!(
+                                        None,
+                                        epochs.insert(
+                                            0,
+                                            TxnDetail {
+                                                transaction_timeout_ms,
+                                                ..Default::default()
+                                            },
+                                        )
+                                    );
+
+                                    _ = vacant.insert(Txn {
+                                        producer: id,
+                                        epochs,
+                                    });
+
+                                    Ok(InitProducer::Completed(ProducerIdResponse {
+                                        id,
+                                        epoch: 0,
+                                        error: ErrorCode::None,
+                                    }))
+                                }
+
+                                Entry::Occupied(mut occupied) => {
+                                    if let Some((current_epoch, txn_detail)) =
+                                        occupied.get().epochs.last_key_value()
+                                    {
+                                        if txn_detail.state == Some(TxnState::Begin) {
+                                            Ok(InitProducer::NeedToRollback {
+                                                producer_id: occupied.get().producer,
+                                                producer_epoch: *current_epoch,
+                                            })
+                                        } else {
+                                            let id = occupied.get().producer;
+                                            let epoch = current_epoch + 1;
+
+                                            _ = meta.producers.entry(id).and_modify(|pd| {
+                                                assert_eq!(
+                                                    None,
+                                                    pd.sequences.insert(epoch, BTreeMap::new())
+                                                );
+                                            });
+
+                                            assert_eq!(
+                                                None,
+                                                occupied.get_mut().epochs.insert(
+                                                    epoch,
+                                                    TxnDetail {
+                                                        transaction_timeout_ms,
+                                                        ..Default::default()
+                                                    }
+                                                )
+                                            );
+
+                                            Ok(InitProducer::Completed(ProducerIdResponse {
+                                                id,
+                                                epoch,
+                                                error: ErrorCode::None,
+                                            }))
+                                        }
+                                    } else {
+                                        todo!()
+                                    }
+                                }
+                            }
+                        }
+
+                        (producer, epoch) => {
+                            error!(?producer, ?epoch);
+                            Ok(InitProducer::Completed(ProducerIdResponse {
+                                id: -1,
+                                epoch: -1,
+                                error: ErrorCode::UnknownServerError,
+                            }))
+                        }
+                    }
+                })
+                .await?
+            {
+                InitProducer::Completed(completed) => Ok(completed),
+                InitProducer::NeedToRollback {
+                    producer_id: rollback_producer_id,
+                    producer_epoch: rollback_producer_epoch,
+                } => {
+                    let error_code = self
+                        .txn_end(
+                            transaction_id,
+                            rollback_producer_id,
+                            rollback_producer_epoch,
+                            false,
+                        )
+                        .await?;
+
+                    debug!(?rollback_producer_id, ?rollback_producer_epoch, ?error_code);
+
+                    if error_code == ErrorCode::None {
+                        return self
+                            .init_producer(
+                                Some(transaction_id),
+                                transaction_timeout_ms,
+                                producer_id,
+                                producer_epoch,
+                            )
+                            .await;
+                    } else {
+                        Ok(ProducerIdResponse {
+                            id: -1,
+                            epoch: -1,
+                            error: ErrorCode::UnknownServerError,
+                        })
+                    }
+                }
+            }
+        } else {
+            self.meta
+                .with_mut(&self.object_store, |meta| {
+                    debug!(?meta);
+                    match (producer_id, producer_epoch) {
+                        (Some(-1), Some(-1)) => {
+                            let producer = meta
+                                .producers
+                                .last_key_value()
+                                .map_or(1.into(), |(k, _v)| k + 1);
+
+                            let epoch = 0;
+                            let mut pd = ProducerDetail::default();
+                            assert_eq!(None, pd.sequences.insert(epoch, BTreeMap::new()));
+                            debug!(?producer, ?pd);
+                            assert_eq!(None, meta.producers.insert(producer, pd));
+
+                            Ok(ProducerIdResponse {
+                                id: producer,
+                                epoch,
+                                ..Default::default()
+                            })
+                        }
+
+                        (producer, epoch) => {
+                            error!(?producer, ?epoch);
+                            Ok(ProducerIdResponse {
+                                id: -1,
+                                epoch: -1,
+                                error: ErrorCode::UnknownServerError,
+                            })
+                        }
+                    }
+                })
+                .await
+        }
+    }
+
+    async fn txn_add_offsets(
+        &mut self,
+        transaction_id: &str,
+        producer_id: i64,
+        producer_epoch: i16,
+        group_id: &str,
+    ) -> Result<ErrorCode> {
+        debug!(transaction_id, producer_id, producer_epoch, group_id);
+
+        Ok(ErrorCode::None)
+    }
+
+    async fn txn_add_partitions(
+        &mut self,
+        partitions: TxnAddPartitionsRequest,
+    ) -> Result<TxnAddPartitionsResponse> {
+        debug!(?partitions);
+
+        match partitions {
+            TxnAddPartitionsRequest::VersionZeroToThree {
+                transaction_id,
+                producer_id,
+                producer_epoch,
+                ref topics,
+            } => {
+                self.meta
+                    .with_mut(&self.object_store, |meta| {
+                        let Some(transaction) = meta.transactions.get_mut(&transaction_id) else {
+                            let mut results = vec![];
+
+                            for topic in topics {
+                                let mut results_by_partition = vec![];
+
+                                for partition_index in topic.partitions.as_deref().unwrap_or(&[]) {
+                                    results_by_partition.push(AddPartitionsToTxnPartitionResult {
+                                        partition_index: *partition_index,
+                                        partition_error_code: ErrorCode::TransactionalIdNotFound
+                                            .into(),
+                                    });
+                                }
+
+                                results.push(AddPartitionsToTxnTopicResult {
+                                    name: topic.name.clone(),
+                                    results_by_partition: Some(results_by_partition),
+                                })
+                            }
+
+                            return Ok(TxnAddPartitionsResponse::VersionZeroToThree(results));
+                        };
+
+                        if transaction.producer != producer_id {
+                            let mut results = vec![];
+
+                            for topic in topics {
+                                let mut results_by_partition = vec![];
+
+                                for partition_index in topic.partitions.as_deref().unwrap_or(&[]) {
+                                    results_by_partition.push(AddPartitionsToTxnPartitionResult {
+                                        partition_index: *partition_index,
+                                        partition_error_code: ErrorCode::UnknownProducerId.into(),
+                                    });
+                                }
+
+                                results.push(AddPartitionsToTxnTopicResult {
+                                    name: topic.name.clone(),
+                                    results_by_partition: Some(results_by_partition),
+                                })
+                            }
+
+                            return Ok(TxnAddPartitionsResponse::VersionZeroToThree(results));
+                        }
+
+                        let Some(mut current_epoch) = transaction.epochs.last_entry() else {
+                            let mut results = vec![];
+
+                            for topic in topics {
+                                let mut results_by_partition = vec![];
+
+                                for partition_index in topic.partitions.as_deref().unwrap_or(&[]) {
+                                    results_by_partition.push(AddPartitionsToTxnPartitionResult {
+                                        partition_index: *partition_index,
+                                        partition_error_code: ErrorCode::ProducerFenced.into(),
+                                    });
+                                }
+
+                                results.push(AddPartitionsToTxnTopicResult {
+                                    name: topic.name.clone(),
+                                    results_by_partition: Some(results_by_partition),
+                                })
+                            }
+
+                            return Ok(TxnAddPartitionsResponse::VersionZeroToThree(results));
+                        };
+
+                        if &producer_epoch != current_epoch.key() {
+                            let mut results = vec![];
+
+                            for topic in topics {
+                                let mut results_by_partition = vec![];
+
+                                for partition_index in topic.partitions.as_deref().unwrap_or(&[]) {
+                                    results_by_partition.push(AddPartitionsToTxnPartitionResult {
+                                        partition_index: *partition_index,
+                                        partition_error_code: ErrorCode::ProducerFenced.into(),
+                                    });
+                                }
+
+                                results.push(AddPartitionsToTxnTopicResult {
+                                    name: topic.name.clone(),
+                                    results_by_partition: Some(results_by_partition),
+                                })
+                            }
+
+                            return Ok(TxnAddPartitionsResponse::VersionZeroToThree(results));
+                        }
+
+                        let txn_detail = current_epoch.get_mut();
+
+                        let mut results = vec![];
+
+                        for topic in topics {
+                            let mut results_by_partition = vec![];
+
+                            for partition_index in topic.partitions.as_deref().unwrap_or(&[]) {
+                                _ = txn_detail
+                                    .produces
+                                    .entry(topic.name.clone())
+                                    .or_default()
+                                    .entry(*partition_index)
+                                    .or_default();
+
+                                results_by_partition.push(AddPartitionsToTxnPartitionResult {
+                                    partition_index: *partition_index,
+                                    partition_error_code: i16::from(ErrorCode::None),
+                                });
+                            }
+
+                            results.push(AddPartitionsToTxnTopicResult {
+                                name: topic.name.clone(),
+                                results_by_partition: Some(results_by_partition),
+                            })
+                        }
+
+                        txn_detail.started_at = Some(SystemTime::now());
+                        txn_detail.state = Some(TxnState::Begin);
+
+                        Ok(TxnAddPartitionsResponse::VersionZeroToThree(results))
+                    })
+                    .await
+            }
+
+            TxnAddPartitionsRequest::VersionFourPlus { .. } => {
+                todo!()
+            }
+        }
+    }
+
+    async fn txn_offset_commit(
+        &mut self,
+        offsets: TxnOffsetCommitRequest,
+    ) -> Result<Vec<TxnOffsetCommitResponseTopic>> {
+        debug!(?offsets);
+        self.meta
+            .with_mut(&self.object_store, |meta| {
+                let Some(transaction) = meta.transactions.get_mut(&offsets.transaction_id) else {
+                    return Self::txn_offset_commit_response_error(
+                        &offsets,
+                        ErrorCode::TransactionalIdNotFound,
+                    );
+                };
+
+                if transaction.producer != offsets.producer_id {
+                    return Self::txn_offset_commit_response_error(
+                        &offsets,
+                        ErrorCode::UnknownProducerId,
+                    );
+                }
+
+                let Some(mut current_epoch) = transaction.epochs.last_entry() else {
+                    return Self::txn_offset_commit_response_error(
+                        &offsets,
+                        ErrorCode::ProducerFenced,
+                    );
+                };
+
+                if &offsets.producer_epoch != current_epoch.key() {
+                    return Self::txn_offset_commit_response_error(
+                        &offsets,
+                        ErrorCode::ProducerFenced,
+                    );
+                }
+
+                let txn_detail = current_epoch.get_mut();
+
+                let mut responses = vec![];
+
+                for topic in &offsets.topics {
+                    let mut partition_responses = vec![];
+
+                    if let Some(partitions) = topic.partitions.as_deref() {
+                        for partition in partitions {
+                            _ = txn_detail
+                                .offsets
+                                .entry(offsets.group_id.clone())
+                                .or_default()
+                                .entry(topic.name.clone())
+                                .or_default()
+                                .insert(
+                                    partition.partition_index,
+                                    TxnCommitOffset {
+                                        committed_offset: partition.committed_offset,
+                                        leader_epoch: partition.committed_leader_epoch,
+                                        metadata: partition.committed_metadata.clone(),
+                                    },
+                                );
+
+                            partition_responses.push(TxnOffsetCommitResponsePartition {
+                                partition_index: partition.partition_index,
+                                error_code: ErrorCode::None.into(),
+                            });
+                        }
+                    }
+
+                    responses.push(TxnOffsetCommitResponseTopic {
+                        name: topic.name.to_string(),
+                        partitions: Some(partition_responses),
+                    });
+                }
+
+                Ok(responses)
+            })
             .await
-            .map(Into::into)
+    }
+
+    async fn txn_end(
+        &mut self,
+        transaction_id: &str,
+        producer_id: i64,
+        producer_epoch: i16,
+        committed: bool,
+    ) -> Result<ErrorCode> {
+        debug!(transaction_id, producer_id, producer_epoch, committed);
+
+        let produced = self
+            .meta
+            .with_mut(&self.object_store, |meta| {
+                debug!(transactions = ?meta.transactions);
+
+                let Some(transaction) = meta.transactions.get_mut(transaction_id) else {
+                    return Err(Error::Api(ErrorCode::TransactionalIdNotFound));
+                };
+
+                if transaction.producer != producer_id {
+                    return Err(Error::Api(ErrorCode::UnknownProducerId));
+                }
+
+                let Some(mut current_epoch) = transaction.epochs.last_entry() else {
+                    return Err(Error::Api(ErrorCode::ProducerFenced));
+                };
+
+                if &producer_epoch != current_epoch.key() {
+                    return Err(Error::Api(ErrorCode::ProducerFenced));
+                }
+
+                let txn_detail = current_epoch.get_mut();
+
+                let mut produced = vec![];
+
+                if txn_detail.state == Some(TxnState::Begin) {
+                    assert_eq!(
+                        Some(TxnState::Begin),
+                        txn_detail.state.replace(if committed {
+                            TxnState::PrepareCommit
+                        } else {
+                            TxnState::PrepareAbort
+                        })
+                    );
+
+                    for (topic, partitions) in &txn_detail.produces {
+                        for (partition, offset_range) in partitions {
+                            debug!(?topic, partition, ?offset_range);
+
+                            if offset_range.is_some() {
+                                produced.push(Topition::new(topic.to_owned(), *partition));
+                            }
+                        }
+                    }
+                }
+
+                Ok(produced)
+            })
+            .await
+            .inspect(|produced| debug!(?produced))
+            .inspect_err(|err| error!(?err))?;
+
+        for topition in produced {
+            debug!(?topition);
+
+            let control_batch: Bytes = if committed {
+                ControlBatch::default().commit().try_into()?
+            } else {
+                ControlBatch::default().abort().try_into()?
+            };
+
+            let end_transaction_marker: Bytes = EndTransactionMarker::default().try_into()?;
+
+            let batch = inflated::Batch::builder()
+                .record(
+                    Record::builder()
+                        .key(control_batch.into())
+                        .value(end_transaction_marker.into()),
+                )
+                .attributes(
+                    BatchAttribute::default()
+                        .control(true)
+                        .transaction(true)
+                        .into(),
+                )
+                .producer_id(producer_id)
+                .producer_epoch(producer_epoch)
+                .base_sequence(-1)
+                .build()
+                .and_then(TryInto::try_into)
+                .inspect(|deflated| debug!(?deflated))?;
+
+            _ = self
+                .produce(Some(transaction_id), &topition, batch)
+                .await
+                .inspect(|offset| {
+                    debug!(
+                        offset,
+                        ?topition,
+                        producer_id,
+                        producer_epoch,
+                        transaction_id,
+                        committed,
+                    )
+                })
+                .inspect_err(|err| {
+                    error!(
+                        ?err,
+                        ?topition,
+                        producer_id,
+                        producer_epoch,
+                        transaction_id,
+                        committed,
+                    )
+                })?;
+        }
+
+        let offsets_to_commit = self
+            .meta
+            .with_mut(&self.object_store, |meta| {
+                debug!(transactions = ?meta.transactions);
+
+                let Some(transaction) = meta.transactions.get_mut(transaction_id) else {
+                    return Err(Error::Api(ErrorCode::TransactionalIdNotFound));
+                };
+
+                if transaction.producer != producer_id {
+                    return Err(Error::Api(ErrorCode::UnknownProducerId));
+                }
+
+                let Some(current_epoch) = transaction.epochs.last_entry() else {
+                    return Err(Error::Api(ErrorCode::ProducerFenced));
+                };
+
+                if &producer_epoch != current_epoch.key() {
+                    return Err(Error::Api(ErrorCode::ProducerFenced));
+                }
+
+                let mut overlaps =
+                    meta.overlapping_transactions(transaction_id, producer_id, producer_epoch)?;
+                debug!(?overlaps);
+
+                let mut offsets_to_commit: BTreeMap<
+                    Group,
+                    BTreeMap<Topic, BTreeMap<Partition, TxnCommitOffset>>,
+                > = BTreeMap::new();
+
+                if overlaps.iter().all(|txn_id| txn_id.state.is_prepared()) {
+                    let txn_ids = {
+                        overlaps.push(TxnId {
+                            transaction: transaction_id.into(),
+                            producer_id,
+                            producer_epoch,
+                            state: if committed {
+                                TxnState::PrepareCommit
+                            } else {
+                                TxnState::PrepareAbort
+                            },
+                        });
+
+                        overlaps
+                    };
+
+                    for txn_id in txn_ids {
+                        debug!(?txn_id);
+
+                        if let Some(txn) = meta.transactions.get_mut(txn_id.transaction.as_str()) {
+                            if let Some(txn_detail) = txn.epochs.get_mut(&txn_id.producer_epoch) {
+                                debug!(?txn_detail);
+
+                                match txn_detail.state {
+                                    None | Some(TxnState::PrepareCommit) => {
+                                        _ = txn_detail.state.replace(TxnState::Committed);
+                                    }
+
+                                    Some(TxnState::PrepareAbort) => {
+                                        _ = txn_detail.state.replace(TxnState::Aborted);
+                                    }
+
+                                    otherwise => {
+                                        warn!(
+                                            transaction = txn_id.transaction,
+                                            producer = txn_id.producer_id,
+                                            epoch = txn_id.producer_epoch,
+                                            ?otherwise,
+                                        );
+
+                                        continue;
+                                    }
+                                }
+
+                                if txn_id.state == TxnState::PrepareCommit {
+                                    for (group, topics) in txn_detail.offsets.iter() {
+                                        for (topic, partitions) in topics.iter() {
+                                            for (partition, committed_offset) in partitions {
+                                                _ = offsets_to_commit
+                                                    .entry(group.to_owned())
+                                                    .or_default()
+                                                    .entry(topic.to_owned())
+                                                    .or_default()
+                                                    .insert(
+                                                        *partition,
+                                                        committed_offset.to_owned(),
+                                                    );
+                                            }
+                                        }
+                                    }
+                                }
+
+                                txn_detail.produces.clear();
+                                txn_detail.offsets.clear();
+                                _ = txn_detail.started_at.take();
+                            }
+                        }
+                    }
+                }
+
+                Ok(offsets_to_commit)
+            })
+            .await
+            .inspect(|outcome| debug!(?outcome))
+            .inspect_err(|err| error!(?err))?;
+
+        debug!(?offsets_to_commit);
+
+        for (group, topics) in offsets_to_commit.iter() {
+            let mut offsets = vec![];
+
+            for (topic, partitions) in topics.iter() {
+                for (partition, txn_co) in partitions {
+                    let tp = Topition::new(topic.to_owned(), *partition);
+                    let ocr = OffsetCommitRequest {
+                        offset: txn_co.committed_offset,
+                        leader_epoch: txn_co.leader_epoch,
+                        timestamp: None,
+                        metadata: txn_co.metadata.clone(),
+                    };
+
+                    offsets.push((tp, ocr));
+                }
+            }
+
+            _ = self.offset_commit(group, None, &offsets[..]).await?;
+        }
+
+        Ok(ErrorCode::None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn int_key_b_tree_map() -> Result<()> {
+        let mut b = BTreeMap::new();
+        assert_eq!(None, b.insert(65, "a"));
+
+        let encoded = serde_json::to_vec(&b)?;
+
+        let decoded = serde_json::from_slice::<BTreeMap<i32, &str>>(&encoded[..])?;
+        assert_eq!(Some(&"a"), decoded.get(&65));
+
+        Ok(())
     }
 }

@@ -69,7 +69,7 @@ impl<'a> ReadPosition<'a> {
     }
 }
 
-impl<'a> Read for ReadPosition<'a> {
+impl Read for ReadPosition<'_> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         match self.reader.read(buf) {
             Ok(count) => {
@@ -338,13 +338,13 @@ impl<'de> Decoder<'de> {
     }
 }
 
-impl<'de> fmt::Debug for Decoder<'de> {
+impl fmt::Debug for Decoder<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(stringify!(Self)).finish()
     }
 }
 
-impl<'de, 'a> Deserializer<'de> for &'a mut Decoder<'de> {
+impl<'de> Deserializer<'de> for &mut Decoder<'de> {
     type Error = Error;
 
     fn deserialize_any<V>(self, visitor: V) -> Result<V::Value, Self::Error>
@@ -1016,7 +1016,7 @@ impl<'de, 'a> Batch<'de, 'a> {
     }
 }
 
-impl<'de, 'a> SeqAccess<'de> for Batch<'de, 'a> {
+impl<'de> SeqAccess<'de> for Batch<'de, '_> {
     type Error = Error;
 
     fn next_element_seed<T>(&mut self, seed: T) -> Result<Option<T::Value>, Self::Error>
@@ -1049,7 +1049,7 @@ impl<'de, 'a> Seq<'de, 'a> {
     }
 }
 
-impl<'de, 'a> SeqAccess<'de> for Seq<'de, 'a> {
+impl<'de> SeqAccess<'de> for Seq<'de, '_> {
     type Error = Error;
 
     fn next_element_seed<T>(&mut self, seed: T) -> Result<Option<T::Value>, Self::Error>
@@ -1094,7 +1094,7 @@ impl<'de, 'a> Struct<'de, 'a> {
     }
 }
 
-impl<'de, 'a> SeqAccess<'de> for Struct<'de, 'a> {
+impl<'de> SeqAccess<'de> for Struct<'de, '_> {
     type Error = Error;
 
     fn next_element_seed<T>(&mut self, seed: T) -> Result<Option<T::Value>, Self::Error>
@@ -1139,7 +1139,7 @@ impl<'de, 'a> Enum<'de, 'a> {
     }
 }
 
-impl<'de, 'a> EnumAccess<'de> for Enum<'de, 'a> {
+impl<'de> EnumAccess<'de> for Enum<'de, '_> {
     type Error = Error;
     type Variant = Self;
 
@@ -1152,7 +1152,7 @@ impl<'de, 'a> EnumAccess<'de> for Enum<'de, 'a> {
     }
 }
 
-impl<'de, 'a> VariantAccess<'de> for Enum<'de, 'a> {
+impl<'de> VariantAccess<'de> for Enum<'de, '_> {
     type Error = Error;
 
     fn unit_variant(self) -> Result<(), Self::Error> {

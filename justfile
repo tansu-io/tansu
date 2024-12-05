@@ -9,7 +9,7 @@ test:
     cargo test --workspace --all-targets
 
 clippy:
-    cargo clippy --all-targets
+    cargo clippy --all-targets -- -D warnings
 
 fmt:
     cargo fmt --all
@@ -118,7 +118,7 @@ tansu-1:
         --work-dir work-dir/tansu-1 2>&1 | tee tansu.log
 
 kafka-proxy:
-    docker run -d -p 19092:9092 apache/kafka:3.8.0
+    docker run -d -p 19092:9092 apache/kafka:3.9.0
 
 proxy:
     ./target/debug/tansu-proxy 2>&1 | tee proxy.log

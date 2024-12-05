@@ -66,6 +66,23 @@ pub struct Batch {
     pub record_data: Bytes,
 }
 
+impl Batch {
+    const TRANSACTIONAL_BITMASK: i16 = 0b1_0000i16;
+    const CONTROL_BITMASK: i16 = 0b10_0000i16;
+
+    pub fn is_transactional(&self) -> bool {
+        self.attributes & Self::TRANSACTIONAL_BITMASK == Self::TRANSACTIONAL_BITMASK
+    }
+
+    pub fn is_control(&self) -> bool {
+        self.attributes & Self::CONTROL_BITMASK == Self::CONTROL_BITMASK
+    }
+
+    pub fn is_idempotent(&self) -> bool {
+        self.producer_id != -1 && self.base_sequence != -1
+    }
+}
+
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct CrcData {
     pub attributes: i16,
@@ -106,7 +123,7 @@ impl CrcData {
             digest: Digest<'a, u32>,
         }
 
-        impl<'a> std::io::Write for CrcUpdate<'a> {
+        impl std::io::Write for CrcUpdate<'_> {
             fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
                 self.digest.update(buf);
                 Ok(buf.len())
@@ -372,6 +389,8 @@ impl<'de> Deserialize<'de> for Batch {
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
+
+    use crate::{record::inflated, BatchAttribute, ControlBatch, EndTransactionMarker};
 
     use super::*;
 
@@ -720,6 +739,120 @@ mod tests {
             }],
             records
         );
+
+        Ok(())
+    }
+
+    #[test]
+    pub fn is_transactional() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let batch = Batch {
+            base_offset: 0,
+            batch_length: 68,
+            partition_leader_epoch: 0,
+            magic: 2,
+            crc: 3650210183,
+            attributes: 16,
+            last_offset_delta: 0,
+            base_timestamp: 1729509915759,
+            max_timestamp: 1729509915759,
+            producer_id: 5,
+            producer_epoch: 0,
+            base_sequence: 0,
+            record_count: 1,
+            record_data: Bytes::from_static(b"$\0\0\0\x08\0\0\0\0\x10test0-ok\0"),
+        };
+
+        assert!(batch.is_transactional());
+
+        Ok(())
+    }
+
+    #[test]
+    pub fn is_transactional_control() -> Result<()> {
+        use crate::record::inflated;
+
+        let _guard = init_tracing()?;
+
+        let deflated = Batch {
+            base_offset: 1,
+            batch_length: 66,
+            partition_leader_epoch: 0,
+            magic: 2,
+            crc: 820655041,
+            attributes: 48,
+            last_offset_delta: 0,
+            base_timestamp: 1729509916024,
+            max_timestamp: 1729509916024,
+            producer_id: 5,
+            producer_epoch: 0,
+            base_sequence: -1,
+            record_count: 1,
+            record_data: Bytes::from_static(b" \0\0\0\x08\0\0\0\x01\x0c\0\0\0\0\0\0\0"),
+        };
+
+        assert!(deflated.is_transactional());
+        assert!(deflated.is_control());
+
+        let inflated = inflated::Batch::try_from(deflated)?;
+
+        assert_eq!(1, inflated.records.len());
+        assert_eq!(
+            Some(Bytes::from_static(b"\0\0\0\x01")),
+            inflated.records[0].key
+        );
+
+        let control_batch = ControlBatch::try_from(inflated.records[0].clone().key().unwrap())?;
+        assert_eq!(0, control_batch.version);
+        assert!(control_batch.is_commit());
+        assert!(!control_batch.is_abort());
+
+        assert_eq!(
+            Some(Bytes::from_static(b"\0\0\0\0\0\0")),
+            inflated.records[0].value
+        );
+
+        let txn_marker =
+            EndTransactionMarker::try_from(inflated.records[0].clone().value.unwrap())?;
+        assert_eq!(0, txn_marker.version);
+        assert_eq!(0, txn_marker.coordinator_epoch);
+
+        Ok(())
+    }
+
+    #[test]
+    fn deflate() -> Result<()> {
+        let key = Bytes::copy_from_slice("Lorem ipsum dolor sit amet".as_bytes());
+        let value = Bytes::copy_from_slice("consectetur adipiscing elit".as_bytes());
+
+        let producer_id = 54345;
+        let producer_epoch = 32123;
+        let base_sequence = 78987;
+        let base_offset = 9876789;
+        let attributes: i16 = BatchAttribute::default().transaction(true).into();
+
+        let batch: Batch = inflated::Batch::builder()
+            .record(
+                Record::builder()
+                    .key(key.clone().into())
+                    .value(value.clone().into()),
+            )
+            .attributes(attributes)
+            .producer_id(producer_id)
+            .producer_epoch(producer_epoch)
+            .base_offset(base_offset)
+            .base_sequence(base_sequence)
+            .build()
+            .and_then(TryInto::try_into)
+            .inspect(|deflated| debug!(?deflated))?;
+
+        assert_eq!(base_sequence, batch.base_sequence);
+        assert_eq!(producer_id, batch.producer_id);
+        assert_eq!(producer_epoch, batch.producer_epoch);
+        assert_eq!(attributes, batch.attributes);
+        assert_eq!(1, batch.record_count);
+        assert_eq!(base_offset, batch.base_offset);
 
         Ok(())
     }

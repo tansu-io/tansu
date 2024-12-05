@@ -28,11 +28,9 @@ pub mod list_partition_reassignments;
 pub mod metadata;
 pub mod produce;
 pub mod telemetry;
+pub mod txn;
 
-use crate::{
-    coordinator::group::{Coordinator, OffsetCommit},
-    Error, Result,
-};
+use crate::{coordinator::group::Coordinator, Error, Result};
 use api_versions::ApiVersionsRequest;
 use create_topic::CreateTopic;
 use delete_records::DeleteRecordsRequest;
@@ -47,14 +45,17 @@ use list_partition_reassignments::ListPartitionReassignmentsRequest;
 use metadata::MetadataRequest;
 use produce::ProduceRequest;
 use std::io::ErrorKind;
-use tansu_kafka_sans_io::{broker_registration_request::Listener, Body, Frame, Header};
+use tansu_kafka_sans_io::{
+    broker_registration_request::Listener, Body, Frame, Header, IsolationLevel,
+};
 use tansu_storage::{BrokerRegistationRequest, Storage};
 use telemetry::GetTelemetrySubscriptionsRequest;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
 };
-use tracing::{debug, error, info};
+use tracing::{debug, debug_span, error, info, span, Instrument, Level, Span};
+use txn::{add_offsets::AddOffsets, add_partitions::AddPartitions};
 use url::Url;
 use uuid::Uuid;
 
@@ -146,17 +147,24 @@ where
             let mut broker = self.clone();
 
             _ = tokio::spawn(async move {
-                match broker.stream_handler(stream).await {
-                    Err(ref error @ Error::Io(ref io)) if io.kind() == ErrorKind::UnexpectedEof => {
-                        info!(?error);
-                    }
+                let span = span!(Level::DEBUG, "peer", addr = %addr);
 
-                    Err(error) => {
-                        error!(?error);
-                    }
+                async move {
+                    match broker.stream_handler(stream).await {
+                        Err(Error::Io(ref io))
+                            if io.kind() == ErrorKind::UnexpectedEof
+                                || io.kind() == ErrorKind::BrokenPipe
+                                || io.kind() == ErrorKind::ConnectionReset => {}
 
-                    Ok(_) => {}
+                        Err(error) => {
+                            error!(?error);
+                        }
+
+                        Ok(_) => {}
+                    }
                 }
+                .instrument(span)
+                .await
             });
         }
     }
@@ -171,9 +179,7 @@ where
                 .read_exact(&mut size)
                 .await
                 .inspect_err(|error| match error.kind() {
-                    ErrorKind::UnexpectedEof => {
-                        info!(?error);
-                    }
+                    ErrorKind::UnexpectedEof | ErrorKind::ConnectionReset => (),
 
                     _ => error!(?error),
                 })?;
@@ -219,20 +225,24 @@ where
                 body,
                 ..
             } => {
-                debug!(?api_key, ?api_version, ?correlation_id);
-                let body = self
-                    .response_for(client_id.as_deref(), body, correlation_id)
-                    .await
-                    .inspect_err(|err| error!(?err))?;
-                debug!(?body, ?correlation_id);
-                Frame::response(
-                    Header::Response { correlation_id },
-                    body,
-                    api_key,
-                    api_version,
-                )
-                .inspect_err(|err| error!(?err))
-                .map_err(Into::into)
+                let span = request_span(api_key, api_version, correlation_id, &body);
+
+                async move {
+                    Frame::response(
+                        Header::Response { correlation_id },
+                        self.response_for(client_id.as_deref(), body, correlation_id)
+                            .await
+                            .inspect(|body| debug!(?body))
+                            .inspect_err(|err| error!(?err))?,
+                        api_key,
+                        api_version,
+                    )
+                    .inspect(|response| debug!(?response))
+                    .inspect_err(|err| error!(?err))
+                    .map_err(Into::into)
+                }
+                .instrument(span)
+                .await
             }
 
             _ => unimplemented!(),
@@ -415,13 +425,20 @@ where
                     ?producer_epoch,
                 );
 
-                let init_producer_id = InitProducerIdRequest;
-                Ok(init_producer_id.response(
-                    transactional_id.as_deref(),
-                    transaction_timeout_ms,
-                    producer_id,
-                    producer_epoch,
-                ))
+                InitProducerIdRequest::with_storage(self.storage.clone())
+                    .response(
+                        transactional_id.as_deref(),
+                        transaction_timeout_ms,
+                        producer_id,
+                        producer_epoch,
+                    )
+                    .await
+                    .map(|response| Body::InitProducerIdResponse {
+                        throttle_time_ms: 0,
+                        error_code: response.error.into(),
+                        producer_id: response.id,
+                        producer_epoch: response.epoch,
+                    })
             }
 
             Body::JoinGroupRequest {
@@ -479,6 +496,11 @@ where
             } => {
                 debug!(?replica_id, ?isolation_level, ?topics);
 
+                let isolation_level = isolation_level
+                    .map_or(Ok(IsolationLevel::ReadUncommitted), |isolation_level| {
+                        IsolationLevel::try_from(isolation_level)
+                    })?;
+
                 ListOffsetsRequest::with_storage(self.storage.clone())
                     .response(replica_id, isolation_level, topics.as_deref())
                     .await
@@ -516,7 +538,7 @@ where
                     ?topics
                 );
 
-                let detail = OffsetCommit {
+                let detail = crate::coordinator::group::OffsetCommit {
                     group_id: group_id.as_str(),
                     generation_id_or_member_epoch,
                     member_id: member_id.as_deref(),
@@ -555,6 +577,11 @@ where
                 ProduceRequest::with_storage(self.storage.clone())
                     .response(transactional_id, acks, timeout_ms, topic_data)
                     .await
+                    .map(|response| Body::ProduceResponse {
+                        responses: response.responses,
+                        throttle_time_ms: response.throttle_time_ms,
+                        node_endpoints: response.node_endpoints,
+                    })
             }
 
             Body::SyncGroupRequest {
@@ -579,7 +606,251 @@ where
                     .await
             }
 
-            _ => unimplemented!(),
+            Body::AddOffsetsToTxnRequest {
+                transactional_id,
+                producer_id,
+                producer_epoch,
+                group_id,
+            } => {
+                debug!(?transactional_id, ?producer_id, ?producer_epoch, ?group_id);
+
+                AddOffsets::with_storage(self.storage.clone())
+                    .response(
+                        transactional_id.as_str(),
+                        producer_id,
+                        producer_epoch,
+                        group_id.as_str(),
+                    )
+                    .await
+            }
+
+            add_partitions @ Body::AddPartitionsToTxnRequest { .. } => {
+                AddPartitions::with_storage(self.storage.clone())
+                    .response(add_partitions.try_into()?)
+                    .await
+            }
+
+            Body::TxnOffsetCommitRequest {
+                transactional_id,
+                group_id,
+                producer_id,
+                producer_epoch,
+                generation_id,
+                member_id,
+                group_instance_id,
+                topics,
+            } => {
+                debug!(
+                    ?transactional_id,
+                    ?group_id,
+                    ?producer_id,
+                    ?producer_epoch,
+                    ?generation_id,
+                    ?member_id,
+                    ?group_instance_id,
+                    ?topics,
+                );
+
+                txn::offset_commit::OffsetCommit::with_storage(self.storage.clone())
+                    .response(
+                        transactional_id.as_str(),
+                        group_id.as_str(),
+                        producer_id,
+                        producer_epoch,
+                        generation_id,
+                        member_id,
+                        group_instance_id,
+                        topics,
+                    )
+                    .await
+            }
+
+            Body::EndTxnRequest {
+                transactional_id,
+                producer_id,
+                producer_epoch,
+                committed,
+            } => self
+                .storage
+                .txn_end(
+                    transactional_id.as_str(),
+                    producer_id,
+                    producer_epoch,
+                    committed,
+                )
+                .await
+                .map(|error_code| Body::EndTxnResponse {
+                    throttle_time_ms: 0,
+                    error_code: i16::from(error_code),
+                })
+                .map_err(Into::into),
+
+            request => {
+                error!(?request);
+                unimplemented!("{request:?}")
+            }
         }
+    }
+}
+
+fn request_span(api_key: i16, api_version: i16, correlation_id: i32, body: &Body) -> Span {
+    match body {
+        Body::AddOffsetsToTxnRequest {
+            transactional_id,
+            producer_id,
+            producer_epoch,
+            group_id,
+            ..
+        } => {
+            debug_span!(
+                "add_offsets_to_txn",
+                api_key,
+                api_version,
+                correlation_id,
+                transactional_id,
+                producer_id,
+                producer_epoch,
+                group_id,
+            )
+        }
+
+        Body::AddPartitionsToTxnRequest { .. } => {
+            debug_span!(
+                "add_partitions_to_txn",
+                api_key,
+                api_version,
+                correlation_id,
+            )
+        }
+
+        Body::ApiVersionsRequest { .. } => {
+            debug_span!("api_versions", api_key, api_version, correlation_id,)
+        }
+
+        Body::CreateTopicsRequest { .. } => {
+            debug_span!("create_topics", api_key, api_version, correlation_id)
+        }
+
+        Body::DeleteTopicsRequest { .. } => {
+            debug_span!("delete_topics", api_key, api_version, correlation_id)
+        }
+
+        Body::EndTxnRequest {
+            transactional_id,
+            producer_id,
+            producer_epoch,
+            committed,
+        } => {
+            debug_span!(
+                "end_txn",
+                api_key,
+                api_version,
+                correlation_id,
+                transactional_id,
+                producer_id,
+                producer_epoch,
+                committed
+            )
+        }
+
+        Body::FetchRequest { .. } => {
+            debug_span!("fetch", api_key, api_version, correlation_id)
+        }
+
+        Body::FindCoordinatorRequest { .. } => {
+            debug_span!("find_coordinator", api_key, api_version, correlation_id)
+        }
+
+        Body::InitProducerIdRequest {
+            transactional_id,
+            producer_id,
+            producer_epoch,
+            ..
+        } => {
+            debug_span!(
+                "init_producer_id",
+                api_key,
+                api_version,
+                correlation_id,
+                transactional_id,
+                producer_id,
+                producer_epoch,
+            )
+        }
+
+        Body::JoinGroupRequest {
+            group_id,
+            member_id,
+            group_instance_id,
+            ..
+        } => debug_span!(
+            "join_group",
+            correlation_id,
+            group_id,
+            member_id,
+            group_instance_id,
+        ),
+
+        Body::LeaveGroupRequest { .. } => {
+            debug_span!("leave_group", api_key, api_version, correlation_id)
+        }
+
+        Body::ListOffsetsRequest { .. } => {
+            debug_span!("list_offsets", api_key, api_version, correlation_id)
+        }
+
+        Body::MetadataRequest { .. } => {
+            debug_span!("metadata", api_key, api_version, correlation_id,)
+        }
+
+        Body::OffsetFetchRequest { .. } => {
+            debug_span!("offset_fetch", api_key, api_version, correlation_id,)
+        }
+
+        Body::ProduceRequest { .. } => {
+            debug_span!("produce", api_key, api_version, correlation_id)
+        }
+
+        Body::SyncGroupRequest {
+            group_id,
+            generation_id,
+            member_id,
+            group_instance_id,
+            ..
+        } => debug_span!(
+            "sync_group",
+            correlation_id,
+            group_id,
+            generation_id,
+            member_id,
+            group_instance_id,
+        ),
+
+        Body::TxnOffsetCommitRequest {
+            transactional_id,
+            group_id,
+            producer_id,
+            producer_epoch,
+            generation_id,
+            member_id,
+            group_instance_id,
+            ..
+        } => {
+            debug_span!(
+                "txn_offset_commit",
+                api_key,
+                api_version,
+                correlation_id,
+                transactional_id,
+                group_id,
+                producer_id,
+                producer_epoch,
+                generation_id,
+                member_id,
+                group_instance_id,
+            )
+        }
+
+        _ => debug_span!("request", api_key, api_version, correlation_id,),
     }
 }

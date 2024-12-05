@@ -134,21 +134,7 @@ impl Connection {
 
             debug!(?request_buffer);
 
-            self.origin.write_all(&request_buffer).await?;
-
-            _ = self.origin.read_exact(&mut size).await?;
-
-            let mut response_buffer: Vec<u8> = vec![0u8; Self::frame_length(size)];
-            response_buffer[0..size.len()].copy_from_slice(&size[..]);
-            _ = self
-                .origin
-                .read_exact(&mut response_buffer[size.len()..])
-                .await?;
-            debug!(?response_buffer);
-
-            self.proxy.write_all(&response_buffer).await?;
-
-            if let Ok(
+            let Ok(
                 request @ Frame {
                     header:
                         Header::Request {
@@ -159,14 +145,31 @@ impl Connection {
                     ..
                 },
             ) = Frame::request_from_bytes(&request_buffer)
-            {
-                debug!(?request);
-                debug!(?request.body);
+            else {
+                continue;
+            };
 
-                let response = Frame::response_from_bytes(&response_buffer, api_key, api_version)?;
-                debug!(?response);
-                debug!(?response.body);
-            }
+            debug!(?request);
+            debug!(body = ?request.body);
+
+            self.origin.write_all(&request_buffer).await?;
+
+            _ = self.origin.read_exact(&mut size).await?;
+
+            let mut response_buffer: Vec<u8> = vec![0u8; Self::frame_length(size)];
+            response_buffer[0..size.len()].copy_from_slice(&size[..]);
+            _ = self
+                .origin
+                .read_exact(&mut response_buffer[size.len()..])
+                .await?;
+
+            let response = Frame::response_from_bytes(&response_buffer, api_key, api_version)?;
+            debug!(?response);
+            debug!(body = ?response.body);
+
+            debug!(?response_buffer);
+
+            self.proxy.write_all(&response_buffer).await?;
         }
     }
 }

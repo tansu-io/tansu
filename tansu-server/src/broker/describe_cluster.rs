@@ -16,6 +16,7 @@
 use crate::Result;
 use tansu_kafka_sans_io::{Body, ErrorCode};
 use tansu_storage::Storage;
+use tracing::debug;
 
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct DescribeClusterRequest<S> {
@@ -28,13 +29,14 @@ where
     S: Storage,
 {
     pub async fn response(
-        &self,
+        &mut self,
         include_cluster_authorized_operations: bool,
         endpoint_type: Option<i8>,
     ) -> Result<Body> {
-        let _ = include_cluster_authorized_operations;
+        debug!(?include_cluster_authorized_operations, ?endpoint_type);
 
         let brokers = self.storage.brokers().await?;
+        debug!(?brokers);
 
         Ok(Body::DescribeClusterResponse {
             throttle_time_ms: 0,

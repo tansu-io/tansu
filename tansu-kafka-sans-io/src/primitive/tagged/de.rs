@@ -64,13 +64,13 @@ impl<'de> Decoder<'de> {
     }
 }
 
-impl<'de> fmt::Debug for Decoder<'de> {
+impl fmt::Debug for Decoder<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(stringify!(Self)).finish()
     }
 }
 
-impl<'de, 'a> Deserializer<'de> for &'a mut Decoder<'de> {
+impl<'de> Deserializer<'de> for &mut Decoder<'de> {
     type Error = Error;
 
     fn deserialize_any<V>(self, visitor: V) -> Result<V::Value, Self::Error>
@@ -431,7 +431,7 @@ impl<'de, 'a> Seq<'de, 'a> {
     }
 }
 
-impl<'de, 'a> SeqAccess<'de> for Seq<'de, 'a> {
+impl<'de> SeqAccess<'de> for Seq<'de, '_> {
     type Error = Error;
 
     fn next_element_seed<T>(&mut self, seed: T) -> Result<Option<T::Value>, Self::Error>
@@ -468,7 +468,7 @@ impl<'de, 'a> Struct<'de, 'a> {
     }
 }
 
-impl<'de, 'a> SeqAccess<'de> for Struct<'de, 'a> {
+impl<'de> SeqAccess<'de> for Struct<'de, '_> {
     type Error = Error;
 
     fn next_element_seed<T>(&mut self, seed: T) -> Result<Option<T::Value>, Self::Error>

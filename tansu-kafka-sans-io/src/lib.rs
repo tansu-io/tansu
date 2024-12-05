@@ -19,7 +19,7 @@ pub mod primitive;
 pub mod record;
 pub mod ser;
 
-use bytes::{Buf, Bytes};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 pub use de::Decoder;
 use flate2::read::GzDecoder;
 use primitive::tagged::TagBuffer;
@@ -93,6 +93,7 @@ pub enum Error {
     EnvVar(VarError),
     FromUtf8(string::FromUtf8Error),
     InvalidAckValue(i16),
+    InvalidCoordinatorType(i8),
     InvalidIsolationLevel(i8),
     Io(io::Error),
     Message(String),
@@ -981,9 +982,12 @@ impl Display for ErrorCode {
 }
 
 #[non_exhaustive]
-#[derive(Clone, Copy, Eq, Hash, Debug, Ord, PartialEq, PartialOrd)]
+#[derive(
+    Clone, Copy, Default, Deserialize, Eq, Hash, Debug, Ord, PartialEq, PartialOrd, Serialize,
+)]
 pub enum ErrorCode {
     UnknownServerError,
+    #[default]
     None,
     OffsetOutOfRange,
     CorruptMessage,
@@ -1106,8 +1110,9 @@ pub enum ErrorCode {
     InvalidRegistration,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum IsolationLevel {
+    #[default]
     ReadUncommitted,
     ReadCommitted,
 }
@@ -1120,6 +1125,15 @@ impl TryFrom<i8> for IsolationLevel {
             0 => Ok(Self::ReadUncommitted),
             1 => Ok(Self::ReadCommitted),
             _ => Err(Error::InvalidIsolationLevel(value)),
+        }
+    }
+}
+
+impl From<&IsolationLevel> for i8 {
+    fn from(value: &IsolationLevel) -> Self {
+        match value {
+            IsolationLevel::ReadUncommitted => 0,
+            IsolationLevel::ReadCommitted => 1,
         }
     }
 }
@@ -1140,6 +1154,36 @@ impl TryFrom<i16> for Ack {
             0 => Ok(Self::None),
             1 => Ok(Self::Leader),
             _ => Err(Error::InvalidAckValue(value)),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+pub enum TimestampType {
+    #[default]
+    CreateTime,
+    LogAppendTime,
+}
+
+impl TimestampType {
+    const TIMESTAMP_TYPE_BITMASK: i16 = 8;
+}
+
+impl From<i16> for TimestampType {
+    fn from(value: i16) -> Self {
+        if value & Self::TIMESTAMP_TYPE_BITMASK == Self::TIMESTAMP_TYPE_BITMASK {
+            Self::LogAppendTime
+        } else {
+            Self::CreateTime
+        }
+    }
+}
+
+impl From<TimestampType> for i16 {
+    fn from(value: TimestampType) -> Self {
+        match value {
+            TimestampType::CreateTime => 0,
+            TimestampType::LogAppendTime => TimestampType::TIMESTAMP_TYPE_BITMASK,
         }
     }
 }
@@ -1223,6 +1267,173 @@ impl Compression {
     }
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct BatchAttribute {
+    pub compression: Compression,
+    pub timestamp: TimestampType,
+    pub transaction: bool,
+    pub control: bool,
+    pub delete_horizon: bool,
+}
+
+impl BatchAttribute {
+    const TRANSACTION_BITMASK: i16 = 16;
+    const CONTROL_BITMASK: i16 = 32;
+    const DELETE_HORIZON_BITMASK: i16 = 64;
+
+    pub fn compression(self, compression: Compression) -> Self {
+        Self {
+            compression,
+            ..self
+        }
+    }
+
+    pub fn timestamp(self, timestamp: TimestampType) -> Self {
+        Self { timestamp, ..self }
+    }
+
+    pub fn transaction(self, transaction: bool) -> Self {
+        Self {
+            transaction,
+            ..self
+        }
+    }
+
+    pub fn control(self, control: bool) -> Self {
+        Self { control, ..self }
+    }
+
+    pub fn delete_horizon(self, delete_horizon: bool) -> Self {
+        Self {
+            delete_horizon,
+            ..self
+        }
+    }
+}
+
+impl From<BatchAttribute> for i16 {
+    fn from(value: BatchAttribute) -> Self {
+        let mut attributes = i16::from(value.compression);
+        attributes |= i16::from(value.timestamp);
+
+        if value.transaction {
+            attributes |= BatchAttribute::TRANSACTION_BITMASK;
+        }
+
+        if value.control {
+            attributes |= BatchAttribute::CONTROL_BITMASK;
+        }
+
+        if value.delete_horizon {
+            attributes |= BatchAttribute::DELETE_HORIZON_BITMASK;
+        }
+
+        attributes
+    }
+}
+
+impl TryFrom<i16> for BatchAttribute {
+    type Error = Error;
+
+    fn try_from(value: i16) -> Result<Self, Self::Error> {
+        Compression::try_from(value).map(|compression| {
+            Self::default()
+                .compression(compression)
+                .timestamp(TimestampType::from(value))
+                .transaction(value & Self::TRANSACTION_BITMASK == Self::TRANSACTION_BITMASK)
+                .control(value & Self::CONTROL_BITMASK == Self::CONTROL_BITMASK)
+                .delete_horizon(
+                    value & Self::DELETE_HORIZON_BITMASK == Self::DELETE_HORIZON_BITMASK,
+                )
+        })
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct ControlBatch {
+    pub version: i16,
+    pub r#type: i16,
+}
+
+impl ControlBatch {
+    const ABORT: i16 = 0;
+    const COMMIT: i16 = 1;
+
+    pub fn is_abort(&self) -> bool {
+        self.r#type == Self::ABORT
+    }
+
+    pub fn is_commit(&self) -> bool {
+        self.r#type == Self::COMMIT
+    }
+
+    pub fn version(self, version: i16) -> Self {
+        Self { version, ..self }
+    }
+
+    pub fn commit(self) -> Self {
+        Self {
+            r#type: Self::COMMIT,
+            ..self
+        }
+    }
+
+    pub fn abort(self) -> Self {
+        Self {
+            r#type: Self::ABORT,
+            ..self
+        }
+    }
+}
+
+impl TryFrom<Bytes> for ControlBatch {
+    type Error = Error;
+
+    fn try_from(value: Bytes) -> Result<Self, Self::Error> {
+        let mut c = Cursor::new(value);
+        let mut deserializer = Decoder::new(&mut c);
+        Self::deserialize(&mut deserializer)
+    }
+}
+
+impl TryFrom<ControlBatch> for Bytes {
+    type Error = Error;
+
+    fn try_from(value: ControlBatch) -> Result<Self, Self::Error> {
+        let mut b = BytesMut::new().writer();
+        let mut serializer = Encoder::new(&mut b);
+        value.serialize(&mut serializer)?;
+        Ok(Bytes::from(b.into_inner()))
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct EndTransactionMarker {
+    pub version: i16,
+    pub coordinator_epoch: i32,
+}
+
+impl TryFrom<Bytes> for EndTransactionMarker {
+    type Error = Error;
+
+    fn try_from(value: Bytes) -> Result<Self, Self::Error> {
+        let mut c = Cursor::new(value);
+        let mut deserializer = Decoder::new(&mut c);
+        Self::deserialize(&mut deserializer)
+    }
+}
+
+impl TryFrom<EndTransactionMarker> for Bytes {
+    type Error = Error;
+
+    fn try_from(value: EndTransactionMarker) -> Result<Self, Self::Error> {
+        let mut b = BytesMut::new().writer();
+        let mut serializer = Encoder::new(&mut b);
+        value.serialize(&mut serializer)?;
+        Ok(Bytes::from(b.into_inner()))
+    }
+}
+
 pub enum EndpointType {
     Unknown,
     Broker,
@@ -1249,6 +1460,25 @@ impl From<EndpointType> for i8 {
     }
 }
 
+pub enum CoordinatorType {
+    Group,
+    Transaction,
+    Share,
+}
+
+impl TryFrom<i8> for CoordinatorType {
+    type Error = Error;
+
+    fn try_from(value: i8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Group),
+            1 => Ok(Self::Transaction),
+            2 => Ok(Self::Share),
+            otherwise => Err(Error::InvalidCoordinatorType(otherwise)),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ConfigResource {
     Group,
@@ -1268,6 +1498,16 @@ impl From<i8> for ConfigResource {
             16 => Self::ClientMetric,
             32 => Self::Group,
             _ => Self::Unknown,
+        }
+    }
+}
+
+impl From<CoordinatorType> for i8 {
+    fn from(value: CoordinatorType) -> Self {
+        match value {
+            CoordinatorType::Group => 0,
+            CoordinatorType::Transaction => 1,
+            CoordinatorType::Share => 2,
         }
     }
 }
@@ -1403,6 +1643,46 @@ pub fn to_timestamp(system_time: SystemTime) -> Result<i64> {
         .map_err(Into::into)
         .map(|since_epoch| since_epoch.as_millis())
         .and_then(|since_epoch| i64::try_from(since_epoch).map_err(Into::into))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn batch_attribute() {
+        assert_eq!(0, i16::from(BatchAttribute::default()));
+        assert_eq!(
+            0,
+            i16::from(BatchAttribute::default().compression(Compression::None))
+        );
+        assert_eq!(
+            1,
+            i16::from(BatchAttribute::default().compression(Compression::Gzip))
+        );
+        assert_eq!(
+            2,
+            i16::from(BatchAttribute::default().compression(Compression::Snappy))
+        );
+        assert_eq!(
+            3,
+            i16::from(BatchAttribute::default().compression(Compression::Lz4))
+        );
+        assert_eq!(
+            4,
+            i16::from(BatchAttribute::default().compression(Compression::Zstd))
+        );
+        assert_eq!(
+            8,
+            i16::from(BatchAttribute::default().timestamp(TimestampType::LogAppendTime))
+        );
+        assert_eq!(16, i16::from(BatchAttribute::default().transaction(true)));
+        assert_eq!(32, i16::from(BatchAttribute::default().control(true)));
+        assert_eq!(
+            64,
+            i16::from(BatchAttribute::default().delete_horizon(true))
+        );
+    }
 }
 
 include!(concat!(env!("OUT_DIR"), "/generate.rs"));

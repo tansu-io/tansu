@@ -37,7 +37,7 @@ impl<'data> MemoryTimeProvider<'data> {
     }
 }
 
-impl<'data> TimeProvider for MemoryTimeProvider<'data> {
+impl TimeProvider for MemoryTimeProvider<'_> {
     fn provide_time(&self, tpo: &TopitionOffset) -> Result<Box<dyn Time>> {
         debug!(?tpo);
 

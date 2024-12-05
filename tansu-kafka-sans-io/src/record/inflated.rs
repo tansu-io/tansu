@@ -16,7 +16,7 @@
 use crate::{
     primitive::ByteSize,
     record::{codec::Sequence, deflated, Record},
-    Compression, Encoder, Error, Result,
+    to_timestamp, Compression, Encoder, Error, Result,
 };
 use bytes::Bytes;
 use crc::{Crc, Digest, CRC_32_ISCSI};
@@ -24,6 +24,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
     io,
+    time::SystemTime,
 };
 use tracing::debug;
 
@@ -204,29 +205,31 @@ impl From<Batch> for Builder {
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Builder {
-    base_offset: i64,
-    partition_leader_epoch: i32,
-    magic: i8,
-    attributes: i16,
-    last_offset_delta: i32,
-    base_timestamp: i64,
-    max_timestamp: i64,
-    producer_id: i64,
-    producer_epoch: i16,
-    base_sequence: i32,
-    records: Sequence<super::Builder>,
+    pub base_offset: i64,
+    pub partition_leader_epoch: i32,
+    pub magic: i8,
+    pub attributes: i16,
+    pub last_offset_delta: i32,
+    pub base_timestamp: i64,
+    pub max_timestamp: i64,
+    pub producer_id: i64,
+    pub producer_epoch: i16,
+    pub base_sequence: i32,
+    pub records: Sequence<super::Builder>,
 }
 
 impl Default for Builder {
     fn default() -> Self {
+        let base_timestamp = to_timestamp(SystemTime::now()).unwrap_or_default();
+
         Self {
             base_offset: 0,
             partition_leader_epoch: -1,
             magic: 2,
             attributes: 0,
             last_offset_delta: 0,
-            base_timestamp: 1_707_058_170_165,
-            max_timestamp: 1_707_058_170_165,
+            base_timestamp,
+            max_timestamp: base_timestamp,
             producer_id: -1,
             producer_epoch: 0,
             base_sequence: 0,
@@ -324,7 +327,7 @@ impl Builder {
             digest: Digest<'a, u32>,
         }
 
-        impl<'a> io::Write for CrcUpdate<'a> {
+        impl io::Write for CrcUpdate<'_> {
             fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
                 self.digest.update(buf);
                 Ok(buf.len())

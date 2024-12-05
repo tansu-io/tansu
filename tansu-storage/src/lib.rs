@@ -35,6 +35,8 @@ use std::{
     time::{Duration, SystemTime, SystemTimeError},
 };
 use tansu_kafka_sans_io::{
+    add_partitions_to_txn_request::{AddPartitionsToTxnTopic, AddPartitionsToTxnTransaction},
+    add_partitions_to_txn_response::{AddPartitionsToTxnResult, AddPartitionsToTxnTopicResult},
     broker_registration_request::{Feature, Listener},
     create_topics_request::CreatableTopic,
     delete_records_request::DeleteRecordsTopic,
@@ -48,8 +50,12 @@ use tansu_kafka_sans_io::{
     metadata_response::{MetadataResponseBroker, MetadataResponseTopic},
     offset_commit_request::OffsetCommitRequestPartition,
     record::deflated,
-    to_system_time, to_timestamp, ConfigResource, ErrorCode,
+    to_system_time, to_timestamp,
+    txn_offset_commit_request::TxnOffsetCommitRequestTopic,
+    txn_offset_commit_response::TxnOffsetCommitResponseTopic,
+    Body, ConfigResource, ErrorCode, IsolationLevel,
 };
+use tracing::debug;
 use uuid::Uuid;
 
 pub mod dynostore;
@@ -146,8 +152,14 @@ pub enum Error {
     #[error("try from slice: {0}")]
     TryFromSlice(#[from] TryFromSliceError),
 
+    #[error("body: {0:?}")]
+    UnexpectedBody(Body),
+
     #[error("url: {0}")]
     Url(#[from] url::ParseError),
+
+    #[error("state: {0}")]
+    UnknownTxnState(String),
 }
 
 impl<T> From<PoisonError<T>> for Error {
@@ -273,9 +285,9 @@ pub enum ListOffsetRequest {
 
 #[derive(Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ListOffsetResponse {
-    error_code: ErrorCode,
-    timestamp: Option<SystemTime>,
-    offset: Option<i64>,
+    pub error_code: ErrorCode,
+    pub timestamp: Option<SystemTime>,
+    pub offset: Option<i64>,
 }
 
 impl Default for ListOffsetResponse {
@@ -528,10 +540,10 @@ impl Default for GroupState {
 pub struct GroupDetail {
     pub session_timeout_ms: i32,
     pub rebalance_timeout_ms: Option<i32>,
-    pub group_instance_id: Option<String>,
     pub members: BTreeMap<String, GroupMember>,
     pub generation_id: i32,
     pub skip_assignment: Option<bool>,
+    pub inception: SystemTime,
     pub state: GroupState,
 }
 
@@ -540,10 +552,10 @@ impl Default for GroupDetail {
         Self {
             session_timeout_ms: 45_000,
             rebalance_timeout_ms: None,
-            group_instance_id: None,
             members: BTreeMap::new(),
             generation_id: -1,
             skip_assignment: Some(false),
+            inception: SystemTime::now(),
             state: GroupState::default(),
         }
     }
@@ -555,6 +567,155 @@ pub struct Version {
     version: Option<String>,
 }
 
+#[derive(Copy, Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct ProducerIdResponse {
+    pub error: ErrorCode,
+    pub id: i64,
+    pub epoch: i16,
+}
+
+impl Default for ProducerIdResponse {
+    fn default() -> Self {
+        Self {
+            error: ErrorCode::None,
+            id: 1,
+            epoch: 0,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+pub enum TxnAddPartitionsRequest {
+    VersionZeroToThree {
+        transaction_id: String,
+        producer_id: i64,
+        producer_epoch: i16,
+        topics: Vec<AddPartitionsToTxnTopic>,
+    },
+
+    VersionFourPlus {
+        transactions: Vec<AddPartitionsToTxnTransaction>,
+    },
+}
+
+impl TryFrom<Body> for TxnAddPartitionsRequest {
+    type Error = Error;
+
+    fn try_from(value: Body) -> result::Result<Self, Self::Error> {
+        match value {
+            Body::AddPartitionsToTxnRequest {
+                transactions: None,
+                v_3_and_below_transactional_id: Some(transactional_id),
+                v_3_and_below_producer_id: Some(producer_id),
+                v_3_and_below_producer_epoch: Some(producer_epoch),
+                v_3_and_below_topics: Some(topics),
+            } => Ok(Self::VersionZeroToThree {
+                transaction_id: transactional_id,
+                producer_id,
+                producer_epoch,
+                topics,
+            }),
+
+            Body::AddPartitionsToTxnRequest {
+                transactions: Some(transactions),
+                v_3_and_below_transactional_id: None,
+                v_3_and_below_producer_id: None,
+                v_3_and_below_producer_epoch: None,
+                v_3_and_below_topics: None,
+            } => Ok(Self::VersionFourPlus { transactions }),
+
+            unexpected => Err(Error::UnexpectedBody(unexpected)),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+pub enum TxnAddPartitionsResponse {
+    VersionZeroToThree(Vec<AddPartitionsToTxnTopicResult>),
+    VersionFourPlus(Vec<AddPartitionsToTxnResult>),
+}
+
+impl TxnAddPartitionsResponse {
+    pub fn zero_to_three(&self) -> &[AddPartitionsToTxnTopicResult] {
+        match self {
+            Self::VersionZeroToThree(result) => result.as_slice(),
+            Self::VersionFourPlus(_) => &[][..],
+        }
+    }
+
+    pub fn four_plus(&self) -> &[AddPartitionsToTxnResult] {
+        match self {
+            Self::VersionZeroToThree(_) => &[][..],
+            Self::VersionFourPlus(result) => result.as_slice(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct TxnOffsetCommitRequest {
+    pub transaction_id: String,
+    pub group_id: String,
+    pub producer_id: i64,
+    pub producer_epoch: i16,
+    pub generation_id: Option<i32>,
+    pub member_id: Option<String>,
+    pub group_instance_id: Option<String>,
+    pub topics: Vec<TxnOffsetCommitRequestTopic>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+pub enum TxnState {
+    Begin,
+    PrepareCommit,
+    PrepareAbort,
+    Committed,
+    Aborted,
+}
+
+impl TxnState {
+    pub fn is_prepared(&self) -> bool {
+        match self {
+            Self::PrepareAbort | Self::PrepareCommit => true,
+            _otherwise => false,
+        }
+    }
+}
+
+impl FromStr for TxnState {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "ABORTED" => Ok(TxnState::Aborted),
+            "BEGIN" => Ok(TxnState::Begin),
+            "COMMITTED" => Ok(TxnState::Committed),
+            "PREPARE_ABORT" => Ok(TxnState::PrepareAbort),
+            "PREPARE_COMMIT" => Ok(TxnState::PrepareCommit),
+            otherwise => Err(Error::UnknownTxnState(otherwise.to_owned())),
+        }
+    }
+}
+
+impl TryFrom<String> for TxnState {
+    type Error = Error;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::from_str(&value)
+    }
+}
+
+impl From<TxnState> for String {
+    fn from(value: TxnState) -> Self {
+        match value {
+            TxnState::Begin => "BEGIN".into(),
+            TxnState::PrepareCommit => "PREPARE_COMMIT".into(),
+            TxnState::PrepareAbort => "PREPARE_ABORT".into(),
+            TxnState::Committed => "COMMITTED".into(),
+            TxnState::Aborted => "ABORTED".into(),
+        }
+    }
+}
+
 #[async_trait]
 pub trait StorageProvider {
     async fn provide_storage(&mut self) -> impl Storage;
@@ -562,65 +723,109 @@ pub trait StorageProvider {
 
 #[async_trait]
 pub trait Storage: Clone + Debug + Send + Sync + 'static {
-    async fn register_broker(&self, broker_registration: BrokerRegistationRequest) -> Result<()>;
+    async fn register_broker(
+        &mut self,
+        broker_registration: BrokerRegistationRequest,
+    ) -> Result<()>;
 
-    async fn create_topic(&self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid>;
+    async fn create_topic(&mut self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid>;
 
     async fn delete_records(
-        &self,
+        &mut self,
         topics: &[DeleteRecordsTopic],
     ) -> Result<Vec<DeleteRecordsTopicResult>>;
 
-    async fn delete_topic(&self, topic: &TopicId) -> Result<ErrorCode>;
+    async fn delete_topic(&mut self, topic: &TopicId) -> Result<ErrorCode>;
 
-    async fn brokers(&self) -> Result<Vec<DescribeClusterBroker>>;
+    async fn brokers(&mut self) -> Result<Vec<DescribeClusterBroker>>;
 
-    async fn produce(&self, topition: &Topition, batch: deflated::Batch) -> Result<i64>;
+    async fn produce(
+        &mut self,
+        transaction_id: Option<&str>,
+        topition: &Topition,
+        batch: deflated::Batch,
+    ) -> Result<i64>;
 
     async fn fetch(
-        &self,
+        &mut self,
         topition: &'_ Topition,
         offset: i64,
         min_bytes: u32,
         max_bytes: u32,
-    ) -> Result<deflated::Batch>;
+        isolation: IsolationLevel,
+    ) -> Result<Vec<deflated::Batch>>;
 
-    async fn offset_stage(&self, topition: &Topition) -> Result<OffsetStage>;
+    async fn offset_stage(&mut self, topition: &Topition) -> Result<OffsetStage>;
 
     async fn list_offsets(
-        &self,
+        &mut self,
+        isolation_level: IsolationLevel,
         offsets: &[(Topition, ListOffsetRequest)],
     ) -> Result<Vec<(Topition, ListOffsetResponse)>>;
 
     async fn offset_commit(
-        &self,
+        &mut self,
         group_id: &str,
         retention_time_ms: Option<Duration>,
         offsets: &[(Topition, OffsetCommitRequest)],
     ) -> Result<Vec<(Topition, ErrorCode)>>;
 
     async fn offset_fetch(
-        &self,
+        &mut self,
         group_id: Option<&str>,
         topics: &[Topition],
         require_stable: Option<bool>,
     ) -> Result<BTreeMap<Topition, i64>>;
 
-    async fn metadata(&self, topics: Option<&[TopicId]>) -> Result<MetadataResponse>;
+    async fn metadata(&mut self, topics: Option<&[TopicId]>) -> Result<MetadataResponse>;
 
     async fn describe_config(
-        &self,
+        &mut self,
         name: &str,
         resource: ConfigResource,
         keys: Option<&[String]>,
     ) -> Result<DescribeConfigsResult>;
 
     async fn update_group(
-        &self,
+        &mut self,
         group_id: &str,
         detail: GroupDetail,
         version: Option<Version>,
     ) -> Result<Version, UpdateError<GroupDetail>>;
+
+    async fn init_producer(
+        &mut self,
+        transaction_id: Option<&str>,
+        transaction_timeout_ms: i32,
+        producer_id: Option<i64>,
+        producer_epoch: Option<i16>,
+    ) -> Result<ProducerIdResponse>;
+
+    async fn txn_add_offsets(
+        &mut self,
+        transaction_id: &str,
+        producer_id: i64,
+        producer_epoch: i16,
+        group_id: &str,
+    ) -> Result<ErrorCode>;
+
+    async fn txn_add_partitions(
+        &mut self,
+        partitions: TxnAddPartitionsRequest,
+    ) -> Result<TxnAddPartitionsResponse>;
+
+    async fn txn_offset_commit(
+        &mut self,
+        offsets: TxnOffsetCommitRequest,
+    ) -> Result<Vec<TxnOffsetCommitResponseTopic>>;
+
+    async fn txn_end(
+        &mut self,
+        transaction_id: &str,
+        producer_id: i64,
+        producer_epoch: i16,
+        committed: bool,
+    ) -> Result<ErrorCode>;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -642,14 +847,17 @@ pub enum StorageContainer {
 
 #[async_trait]
 impl Storage for StorageContainer {
-    async fn register_broker(&self, broker_registration: BrokerRegistationRequest) -> Result<()> {
+    async fn register_broker(
+        &mut self,
+        broker_registration: BrokerRegistationRequest,
+    ) -> Result<()> {
         match self {
             Self::Postgres(pg) => pg.register_broker(broker_registration).await,
             Self::DynoStore(dyn_store) => dyn_store.register_broker(broker_registration).await,
         }
     }
 
-    async fn create_topic(&self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {
+    async fn create_topic(&mut self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {
         match self {
             Self::Postgres(pg) => pg.create_topic(topic, validate_only).await,
             Self::DynoStore(dyn_store) => dyn_store.create_topic(topic, validate_only).await,
@@ -657,7 +865,7 @@ impl Storage for StorageContainer {
     }
 
     async fn delete_records(
-        &self,
+        &mut self,
         topics: &[DeleteRecordsTopic],
     ) -> Result<Vec<DeleteRecordsTopicResult>> {
         match self {
@@ -666,45 +874,54 @@ impl Storage for StorageContainer {
         }
     }
 
-    async fn delete_topic(&self, topic: &TopicId) -> Result<ErrorCode> {
+    async fn delete_topic(&mut self, topic: &TopicId) -> Result<ErrorCode> {
         match self {
             Self::Postgres(pg) => pg.delete_topic(topic).await,
             Self::DynoStore(dyn_store) => dyn_store.delete_topic(topic).await,
         }
     }
 
-    async fn brokers(&self) -> Result<Vec<DescribeClusterBroker>> {
+    async fn brokers(&mut self) -> Result<Vec<DescribeClusterBroker>> {
         match self {
             Self::Postgres(pg) => pg.brokers().await,
             Self::DynoStore(dyn_store) => dyn_store.brokers().await,
         }
     }
 
-    async fn produce(&self, topition: &Topition, batch: deflated::Batch) -> Result<i64> {
+    async fn produce(
+        &mut self,
+        transaction_id: Option<&str>,
+        topition: &Topition,
+        batch: deflated::Batch,
+    ) -> Result<i64> {
         match self {
-            Self::Postgres(pg) => pg.produce(topition, batch).await,
-            Self::DynoStore(dyn_store) => dyn_store.produce(topition, batch).await,
+            Self::Postgres(pg) => pg.produce(transaction_id, topition, batch).await,
+            Self::DynoStore(dyn_store) => dyn_store.produce(transaction_id, topition, batch).await,
         }
     }
 
     async fn fetch(
-        &self,
+        &mut self,
         topition: &'_ Topition,
         offset: i64,
         min_bytes: u32,
         max_bytes: u32,
-    ) -> Result<deflated::Batch> {
+        isolation: IsolationLevel,
+    ) -> Result<Vec<deflated::Batch>> {
         match self {
-            Self::Postgres(pg) => pg.fetch(topition, offset, min_bytes, max_bytes).await,
+            Self::Postgres(pg) => {
+                pg.fetch(topition, offset, min_bytes, max_bytes, isolation)
+                    .await
+            }
             Self::DynoStore(dyn_store) => {
                 dyn_store
-                    .fetch(topition, offset, min_bytes, max_bytes)
+                    .fetch(topition, offset, min_bytes, max_bytes, isolation)
                     .await
             }
         }
     }
 
-    async fn offset_stage(&self, topition: &Topition) -> Result<OffsetStage> {
+    async fn offset_stage(&mut self, topition: &Topition) -> Result<OffsetStage> {
         match self {
             Self::Postgres(pg) => pg.offset_stage(topition).await,
             Self::DynoStore(dyn_store) => dyn_store.offset_stage(topition).await,
@@ -712,17 +929,18 @@ impl Storage for StorageContainer {
     }
 
     async fn list_offsets(
-        &self,
+        &mut self,
+        isolation_level: IsolationLevel,
         offsets: &[(Topition, ListOffsetRequest)],
     ) -> Result<Vec<(Topition, ListOffsetResponse)>> {
         match self {
-            Self::Postgres(pg) => pg.list_offsets(offsets).await,
-            Self::DynoStore(dyn_store) => dyn_store.list_offsets(offsets).await,
+            Self::Postgres(pg) => pg.list_offsets(isolation_level, offsets).await,
+            Self::DynoStore(dyn_store) => dyn_store.list_offsets(isolation_level, offsets).await,
         }
     }
 
     async fn offset_commit(
-        &self,
+        &mut self,
         group_id: &str,
         retention_time_ms: Option<Duration>,
         offsets: &[(Topition, OffsetCommitRequest)],
@@ -738,7 +956,7 @@ impl Storage for StorageContainer {
     }
 
     async fn offset_fetch(
-        &self,
+        &mut self,
         group_id: Option<&str>,
         topics: &[Topition],
         require_stable: Option<bool>,
@@ -753,7 +971,7 @@ impl Storage for StorageContainer {
         }
     }
 
-    async fn metadata(&self, topics: Option<&[TopicId]>) -> Result<MetadataResponse> {
+    async fn metadata(&mut self, topics: Option<&[TopicId]>) -> Result<MetadataResponse> {
         match self {
             Self::Postgres(pg) => pg.metadata(topics).await,
             Self::DynoStore(dyn_store) => dyn_store.metadata(topics).await,
@@ -761,7 +979,7 @@ impl Storage for StorageContainer {
     }
 
     async fn describe_config(
-        &self,
+        &mut self,
         name: &str,
         resource: ConfigResource,
         keys: Option<&[String]>,
@@ -773,7 +991,7 @@ impl Storage for StorageContainer {
     }
 
     async fn update_group(
-        &self,
+        &mut self,
         group_id: &str,
         detail: GroupDetail,
         version: Option<Version>,
@@ -781,6 +999,103 @@ impl Storage for StorageContainer {
         match self {
             Self::Postgres(pg) => pg.update_group(group_id, detail, version).await,
             Self::DynoStore(dyn_store) => dyn_store.update_group(group_id, detail, version).await,
+        }
+    }
+
+    async fn init_producer(
+        &mut self,
+        transaction_id: Option<&str>,
+        transaction_timeout_ms: i32,
+        producer_id: Option<i64>,
+        producer_epoch: Option<i16>,
+    ) -> Result<ProducerIdResponse> {
+        debug!(
+            ?transaction_id,
+            ?transaction_timeout_ms,
+            ?producer_id,
+            ?producer_epoch
+        );
+
+        match self {
+            Self::Postgres(pg) => {
+                pg.init_producer(
+                    transaction_id,
+                    transaction_timeout_ms,
+                    producer_id,
+                    producer_epoch,
+                )
+                .await
+            }
+            Self::DynoStore(dyn_store) => {
+                dyn_store
+                    .init_producer(
+                        transaction_id,
+                        transaction_timeout_ms,
+                        producer_id,
+                        producer_epoch,
+                    )
+                    .await
+            }
+        }
+    }
+
+    async fn txn_add_offsets(
+        &mut self,
+        transaction_id: &str,
+        producer_id: i64,
+        producer_epoch: i16,
+        group_id: &str,
+    ) -> Result<ErrorCode> {
+        match self {
+            Self::Postgres(pg) => {
+                pg.txn_add_offsets(transaction_id, producer_id, producer_epoch, group_id)
+                    .await
+            }
+            Self::DynoStore(dyn_store) => {
+                dyn_store
+                    .txn_add_offsets(transaction_id, producer_id, producer_epoch, group_id)
+                    .await
+            }
+        }
+    }
+
+    async fn txn_add_partitions(
+        &mut self,
+        partitions: TxnAddPartitionsRequest,
+    ) -> Result<TxnAddPartitionsResponse> {
+        match self {
+            Self::Postgres(pg) => pg.txn_add_partitions(partitions).await,
+            Self::DynoStore(dyn_store) => dyn_store.txn_add_partitions(partitions).await,
+        }
+    }
+
+    async fn txn_offset_commit(
+        &mut self,
+        offsets: TxnOffsetCommitRequest,
+    ) -> Result<Vec<TxnOffsetCommitResponseTopic>> {
+        match self {
+            Self::Postgres(pg) => pg.txn_offset_commit(offsets).await,
+            Self::DynoStore(dyn_store) => dyn_store.txn_offset_commit(offsets).await,
+        }
+    }
+
+    async fn txn_end(
+        &mut self,
+        transaction_id: &str,
+        producer_id: i64,
+        producer_epoch: i16,
+        committed: bool,
+    ) -> Result<ErrorCode> {
+        match self {
+            Self::Postgres(pg) => {
+                pg.txn_end(transaction_id, producer_id, producer_epoch, committed)
+                    .await
+            }
+            Self::DynoStore(dyn_store) => {
+                dyn_store
+                    .txn_end(transaction_id, producer_id, producer_epoch, committed)
+                    .await
+            }
         }
     }
 }

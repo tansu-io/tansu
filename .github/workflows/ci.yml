@@ -17,8 +17,13 @@ jobs:
       matrix:
         os:
           - ubuntu-latest
+        pg:
+          - postgres:16
     steps:
       - uses: actions/checkout@v4
+      - run: docker compose up --detach db
+        env:
+          POSTGRES_IMAGE: ${{matrix.pg}}
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: clippy, rustfmt

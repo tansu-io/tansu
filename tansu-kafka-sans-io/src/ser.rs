@@ -98,7 +98,7 @@ pub struct Encoder<'a> {
     meta: Meta,
 }
 
-impl<'a> fmt::Debug for Encoder<'a> {
+impl fmt::Debug for Encoder<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(stringify!(Self)).finish()
     }
@@ -261,7 +261,7 @@ impl<'a> Encoder<'a> {
     }
 }
 
-impl<'a> Serializer for &'a mut Encoder<'_> {
+impl Serializer for &mut Encoder<'_> {
     type Ok = ();
     type Error = Error;
 
@@ -692,7 +692,7 @@ impl<'a> Serializer for &'a mut Encoder<'_> {
     }
 }
 
-impl<'a> SerializeSeq for &'a mut Encoder<'_> {
+impl SerializeSeq for &mut Encoder<'_> {
     type Ok = ();
 
     type Error = Error;
@@ -710,7 +710,7 @@ impl<'a> SerializeSeq for &'a mut Encoder<'_> {
     }
 }
 
-impl<'a> SerializeTuple for &'a mut Encoder<'_> {
+impl SerializeTuple for &mut Encoder<'_> {
     type Ok = ();
 
     type Error = Error;
@@ -733,7 +733,7 @@ impl<'a> SerializeTuple for &'a mut Encoder<'_> {
     }
 }
 
-impl<'a> SerializeTupleStruct for &'a mut Encoder<'_> {
+impl SerializeTupleStruct for &mut Encoder<'_> {
     type Ok = ();
 
     type Error = Error;
@@ -756,7 +756,7 @@ impl<'a> SerializeTupleStruct for &'a mut Encoder<'_> {
     }
 }
 
-impl<'a> SerializeTupleVariant for &'a mut Encoder<'_> {
+impl SerializeTupleVariant for &mut Encoder<'_> {
     type Ok = ();
 
     type Error = Error;
@@ -779,7 +779,7 @@ impl<'a> SerializeTupleVariant for &'a mut Encoder<'_> {
     }
 }
 
-impl<'a> SerializeMap for &'a mut Encoder<'_> {
+impl SerializeMap for &mut Encoder<'_> {
     type Ok = ();
 
     type Error = Error;
@@ -814,7 +814,7 @@ impl<'a> SerializeMap for &'a mut Encoder<'_> {
     }
 }
 
-impl<'a> SerializeStruct for &'a mut Encoder<'_> {
+impl SerializeStruct for &mut Encoder<'_> {
     type Ok = ();
     type Error = Error;
 
@@ -857,7 +857,7 @@ impl<'a> SerializeStruct for &'a mut Encoder<'_> {
     }
 }
 
-impl<'a> SerializeStructVariant for &'a mut Encoder<'_> {
+impl SerializeStructVariant for &mut Encoder<'_> {
     type Ok = ();
     type Error = Error;
 

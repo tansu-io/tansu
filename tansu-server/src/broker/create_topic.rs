@@ -34,7 +34,7 @@ where
     }
 
     async fn create_topic(
-        &self,
+        &mut self,
         mut topic: CreatableTopic,
         validate_only: bool,
     ) -> CreatableTopicResult {
@@ -97,7 +97,7 @@ where
     }
 
     pub async fn response(
-        &self,
+        &mut self,
         creatable: Option<Vec<CreatableTopic>>,
         validate_only: bool,
     ) -> Result<Vec<CreatableTopicResult>> {
@@ -130,7 +130,7 @@ mod tests {
 
         let storage = DynoStore::new(cluster, node, InMemory::new());
 
-        let create_topic = CreateTopic::with_storage(storage);
+        let mut create_topic = CreateTopic::with_storage(storage);
 
         let name = "pqr";
         let num_partitions = 5;
@@ -169,7 +169,7 @@ mod tests {
 
         let storage = DynoStore::new(cluster, node, InMemory::new());
 
-        let create_topic = CreateTopic::with_storage(storage);
+        let mut create_topic = CreateTopic::with_storage(storage);
 
         let name = "pqr";
         let num_partitions = -1;
@@ -208,7 +208,7 @@ mod tests {
 
         let storage = DynoStore::new(cluster, node, InMemory::new());
 
-        let create_topic = CreateTopic::with_storage(storage);
+        let mut create_topic = CreateTopic::with_storage(storage);
 
         let name = "pqr";
         let num_partitions = 5;

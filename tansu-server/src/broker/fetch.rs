@@ -48,7 +48,7 @@ where
         max_wait_ms: Duration,
         min_bytes: u32,
         max_bytes: &mut u32,
-        isolation: Option<IsolationLevel>,
+        isolation: IsolationLevel,
         topic: &str,
         fetch_partition: &FetchPartition,
     ) -> Result<PartitionData> {
@@ -65,7 +65,9 @@ where
 
         let mut batches = Vec::new();
 
-        for offset in fetch_partition.fetch_offset.. {
+        let mut offset = fetch_partition.fetch_offset;
+
+        loop {
             if *max_bytes == 0 {
                 break;
             }
@@ -74,14 +76,18 @@ where
 
             let mut fetched = self
                 .storage
-                .fetch(&tp, offset, min_bytes, *max_bytes)
+                .fetch(&tp, offset, min_bytes, *max_bytes, isolation)
                 .await
                 .inspect(|r| debug!(?tp, ?offset, ?r))
-                .inspect_err(|error| error!(?tp, ?error))
-                .map_or(Vec::new(), |batch| vec![batch]);
+                .inspect_err(|error| error!(?tp, ?error))?;
 
             *max_bytes =
                 u32::try_from(fetched.byte_size()).map(|bytes| max_bytes.saturating_sub(bytes))?;
+
+            offset += fetched
+                .iter()
+                .map(|batch| batch.record_count as i64)
+                .sum::<i64>();
 
             debug!(?offset, ?fetched);
 
@@ -158,7 +164,7 @@ where
         max_wait_ms: Duration,
         min_bytes: u32,
         max_bytes: &mut u32,
-        isolation: Option<IsolationLevel>,
+        isolation: IsolationLevel,
         fetch: &FetchTopic,
         _is_first: bool,
     ) -> Result<FetchableTopicResponse> {
@@ -204,7 +210,7 @@ where
         max_wait: Duration,
         min_bytes: u32,
         max_bytes: &mut u32,
-        isolation: Option<IsolationLevel>,
+        isolation: IsolationLevel,
         topics: &[FetchTopic],
     ) -> Result<Vec<FetchableTopicResponse>> {
         debug!(?max_wait, ?min_bytes, ?isolation, ?topics);
@@ -261,7 +267,7 @@ where
         }
     }
 
-    pub(crate) async fn response(
+    pub async fn response(
         &mut self,
         max_wait_ms: i32,
         min_bytes: i32,
@@ -272,9 +278,10 @@ where
         debug!(?max_wait_ms, ?min_bytes, ?max_bytes, ?topics);
 
         let responses = Some(if let Some(topics) = topics {
-            let isolation_level = isolation_level.map_or(Ok(None), |isolation| {
-                IsolationLevel::try_from(isolation).map(Some)
-            })?;
+            let isolation_level = isolation_level
+                .map_or(Ok(IsolationLevel::ReadUncommitted), |isolation| {
+                    IsolationLevel::try_from(isolation)
+                })?;
 
             let max_wait_ms = u64::try_from(max_wait_ms).map(Duration::from_millis)?;
 

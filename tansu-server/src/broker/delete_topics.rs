@@ -34,7 +34,7 @@ where
     }
 
     pub async fn response(
-        &self,
+        &mut self,
         topics: Option<Vec<DeleteTopicState>>,
         topic_names: Option<Vec<String>>,
     ) -> Result<Vec<DeletableTopicResult>> {
@@ -88,7 +88,7 @@ mod tests {
         let cluster = "abc";
         let node = 12321;
 
-        let storage = DynoStore::new(cluster, node, InMemory::new());
+        let mut storage = DynoStore::new(cluster, node, InMemory::new());
 
         let topic = "pqr";
 
@@ -105,7 +105,7 @@ mod tests {
         let cluster = "abc";
         let node = 12321;
 
-        let storage = DynoStore::new(cluster, node, InMemory::new());
+        let mut storage = DynoStore::new(cluster, node, InMemory::new());
 
         let topic = Uuid::new_v4();
 

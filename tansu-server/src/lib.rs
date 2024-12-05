@@ -35,6 +35,7 @@ use tansu_kafka_sans_io::{
     ErrorCode,
 };
 use thiserror::Error;
+use tracing_subscriber::filter::ParseError;
 use url::Url;
 use uuid::Uuid;
 
@@ -156,6 +157,7 @@ pub enum Error {
     Message(String),
     Model(#[from] tansu_kafka_model::Error),
     ObjectStore(#[from] object_store::Error),
+    ParseFilter(#[from] ParseError),
     ParseInt(#[from] std::num::ParseIntError),
     Poison,
     Pool(#[from] deadpool_postgres::PoolError),
