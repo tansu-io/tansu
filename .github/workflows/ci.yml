@@ -49,7 +49,7 @@ jobs:
           buildkitd-flags: --debug
       - uses: docker/login-action@v3
         with:
-          registry: ghcr.io
+          registry: ${{env.REGISTRY}}
           username: ${{github.actor}}
           password: ${{secrets.GITHUB_TOKEN}}
       - uses: docker/build-push-action@v6
