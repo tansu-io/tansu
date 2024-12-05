@@ -182,7 +182,7 @@ async fn produce() -> Result<()> {
 
     assert_eq!(1, after_produce_latest.len());
     assert_eq!(ErrorCode::None, after_produce_latest[0].1.error_code);
-    assert_eq!(Some(offset), after_produce_latest[0].1.offset);
+    assert_eq!(Some(offset + 1), after_produce_latest[0].1.offset);
 
     assert_eq!(
         ErrorCode::None,

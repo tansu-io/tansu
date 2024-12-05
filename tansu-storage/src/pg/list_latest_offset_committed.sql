@@ -55,7 +55,7 @@ union
 
 select
 
-2 as o, r.offset_id, r.timestamp
+2 as o, r.offset_id + 1, r.timestamp
 
 from
 
@@ -63,7 +63,7 @@ cluster c
 join topic t on t.cluster = c.id
 join topition tp on tp.topic = t.id
 join watermark w on w.topition = tp.id
-join record r on r.topition = tp.id and r.offset_id = w.high
+join record r on r.topition = tp.id and r.offset_id = w.high - 1
 
 where
 

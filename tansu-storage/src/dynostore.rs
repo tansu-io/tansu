@@ -534,9 +534,9 @@ impl DynoStore {
         update_version: Option<UpdateVersion>,
     ) -> Result<PutResult, UpdateError<P>>
     where
-        P: Serialize + DeserializeOwned + Debug,
+        P: PartialEq + Serialize + DeserializeOwned + Debug,
     {
-        debug!(?location, ?attributes, ?update_version, ?value);
+        debug!(%location, ?attributes, ?update_version, ?value);
 
         let options = PutOptions {
             mode: update_version.map_or(PutMode::Create, PutMode::Update),
@@ -552,7 +552,7 @@ impl DynoStore {
             .object_store
             .put_opts(location, payload, options)
             .await
-            .inspect_err(|error| debug!(?location, ?error))
+            .inspect_err(|error| debug!(%location, ?error))
         {
             Ok(put_result) => Ok(put_result),
 
@@ -561,7 +561,9 @@ impl DynoStore {
                 let (current, version) = self
                     .get(location)
                     .await
-                    .inspect_err(|error| error!(?location, ?error))?;
+                    .inspect_err(|error| error!(%location, ?error))?;
+
+                debug!(%location, ?value, ?current);
 
                 Err(UpdateError::Outdated { current, version })
             }
@@ -626,7 +628,7 @@ impl Storage for DynoStore {
             .put_opts(&location, payload, options)
             .await?;
 
-        debug!(?location, ?put_result);
+        debug!(%location, ?put_result);
 
         Ok(())
     }
@@ -707,7 +709,7 @@ impl Storage for DynoStore {
                         .object_store
                         .put_opts(&location, payload.clone(), options)
                         .await
-                        .inspect(|put_result| debug!(?location, ?put_result))
+                        .inspect(|put_result| debug!(%location, ?put_result))
                         .inspect_err(|error| match error {
                             object_store::Error::AlreadyExists { .. } => {
                                 debug!(?error, ?td, ?validate_only)
@@ -822,7 +824,7 @@ impl Storage for DynoStore {
 
     async fn brokers(&mut self) -> Result<Vec<DescribeClusterBroker>> {
         let location = Path::from(format!("clusters/{}/brokers/", self.cluster));
-        debug!(?location);
+        debug!(%location);
 
         let mut brokers = vec![];
 
@@ -838,7 +840,7 @@ impl Storage for DynoStore {
                 .object_store
                 .get(&meta.location)
                 .await
-                .inspect_err(|error| error!(?error, ?location))
+                .inspect_err(|error| error!(?error, %location))
             else {
                 continue;
             };
@@ -846,14 +848,14 @@ impl Storage for DynoStore {
             let Ok(encoded) = get_result
                 .bytes()
                 .await
-                .inspect_err(|error| error!(?error, ?location))
+                .inspect_err(|error| error!(?error, %location))
             else {
                 continue;
             };
 
             let Ok(broker_registration) =
                 serde_json::from_slice::<BrokerRegistationRequest>(&encoded[..])
-                    .inspect_err(|error| error!(?error, ?location))
+                    .inspect_err(|error| error!(?error, %location))
             else {
                 continue;
             };
@@ -881,7 +883,7 @@ impl Storage for DynoStore {
         &mut self,
         transaction_id: Option<&str>,
         topition: &Topition,
-        mut deflated: deflated::Batch,
+        deflated: deflated::Batch,
     ) -> Result<i64> {
         debug!(?transaction_id, ?topition, ?deflated);
 
@@ -935,11 +937,6 @@ impl Storage for DynoStore {
                 .await
                 .inspect(|outcome| debug!(transaction_id, ?topition, ?outcome))
                 .inspect_err(|err| error!(?err, transaction_id, ?topition))?;
-
-            if transaction_id.is_none() {
-                deflated.producer_id = -1;
-                deflated.producer_epoch = -1;
-            }
         }
 
         let offset = self
@@ -950,10 +947,17 @@ impl Storage for DynoStore {
                 topition,
             ))
             .with_mut(&self.object_store, |watermark| {
-                let offset = watermark.high.map_or(0, |high| high + 1);
-                watermark.high = watermark.high.map_or(Some(0), |high| {
-                    Some(high + deflated.last_offset_delta as i64 + 1i64)
-                });
+                debug!(?watermark);
+
+                let offset = watermark.high.unwrap_or_default();
+                watermark.high = watermark
+                    .high
+                    .map_or(Some(deflated.last_offset_delta as i64 + 1i64), |high| {
+                        Some(high + deflated.last_offset_delta as i64 + 1i64)
+                    });
+
+                debug!(?watermark);
+
                 Ok(offset)
             })
             .await
@@ -1039,8 +1043,6 @@ impl Storage for DynoStore {
         max_bytes: u32,
         isolation_level: IsolationLevel,
     ) -> Result<Vec<deflated::Batch>> {
-        debug!(?topition, ?offset, ?min_bytes, ?max_bytes, ?isolation_level);
-
         let high_watermark = self.offset_stage(topition).await.map(|offset_stage| {
             if isolation_level == IsolationLevel::ReadCommitted {
                 offset_stage.last_stable
@@ -1049,34 +1051,44 @@ impl Storage for DynoStore {
             }
         })?;
 
-        let location = Path::from(format!(
-            "clusters/{}/topics/{}/partitions/{:0>10}/records/",
-            self.cluster, topition.topic, topition.partition
-        ));
+        debug!(
+            ?topition,
+            ?offset,
+            ?min_bytes,
+            ?max_bytes,
+            ?isolation_level,
+            high_watermark
+        );
 
         let mut offsets = BTreeSet::new();
 
-        let mut list_stream = self.object_store.list(Some(&location));
+        if offset < high_watermark {
+            let location = Path::from(format!(
+                "clusters/{}/topics/{}/partitions/{:0>10}/records/",
+                self.cluster, topition.topic, topition.partition
+            ));
 
-        while let Some(meta) = list_stream
-            .next()
-            .await
-            .inspect(|meta| debug!(?meta))
-            .transpose()
-            .inspect_err(|error| error!(?error, ?topition, ?offset, ?min_bytes, ?max_bytes))
-            .map_err(|_| Error::Api(ErrorCode::UnknownServerError))?
-        {
-            let Some(offset) = meta.location.parts().last() else {
-                continue;
-            };
+            let mut list_stream = self.object_store.list(Some(&location));
 
-            let offset = i64::from_str(&offset.as_ref()[0..20])?;
+            while let Some(meta) = list_stream
+                .next()
+                .await
+                .inspect(|meta| debug!(?meta))
+                .transpose()
+                .inspect_err(|error| error!(?error, ?topition, ?offset, ?min_bytes, ?max_bytes))
+                .map_err(|_| Error::Api(ErrorCode::UnknownServerError))?
+            {
+                let Some(offset) = meta.location.parts().last() else {
+                    continue;
+                };
 
-            if offset > high_watermark {
-                break;
+                let offset = i64::from_str(&offset.as_ref()[0..20])?;
+                debug!(offset);
+
+                if offset < high_watermark {
+                    _ = offsets.insert(offset);
+                }
             }
-
-            _ = offsets.insert(offset);
         }
 
         let mut batches = vec![];
@@ -1107,7 +1119,7 @@ impl Storage for DynoStore {
             let mut batch = get_result
                 .bytes()
                 .await
-                .inspect_err(|error| error!(?error, ?location))
+                .inspect_err(|error| error!(?error, %location))
                 .map_err(|_| Error::Api(ErrorCode::UnknownServerError))
                 .and_then(|encoded| self.decode(encoded))?;
             batch.base_offset = offset;
@@ -1127,6 +1139,8 @@ impl Storage for DynoStore {
                     .transactions
                     .values()
                     .flat_map(|txn| {
+                        debug!(?txn);
+
                         txn.epochs
                             .values()
                             .filter(|detail| {
@@ -1139,6 +1153,7 @@ impl Storage for DynoStore {
                     })
                     .reduce(|mut acc, e| {
                         debug!(?acc, ?e);
+
                         for (topition, offset_start) in e.iter() {
                             _ = acc
                                 .entry(topition.to_owned())
@@ -1156,6 +1171,8 @@ impl Storage for DynoStore {
             })
             .await?;
 
+        debug!(?stable);
+
         self.watermarks
             .entry(topition.to_owned())
             .or_insert(ConditionData::<Watermark>::new(
@@ -1163,6 +1180,7 @@ impl Storage for DynoStore {
                 topition,
             ))
             .with(&self.object_store, |watermark| {
+                debug!(?watermark);
                 let high_watermark = watermark.high.unwrap_or(0);
                 let log_start = watermark.low.unwrap_or(0);
                 let last_stable = stable.get(topition).copied().unwrap_or(high_watermark);
@@ -1377,7 +1395,7 @@ impl Storage for DynoStore {
                 .object_store
                 .get(&meta.location)
                 .await
-                .inspect_err(|error| error!(?error, ?location))
+                .inspect_err(|error| error!(?error, %location))
             else {
                 continue;
             };
@@ -1385,14 +1403,14 @@ impl Storage for DynoStore {
             let Ok(encoded) = payload
                 .bytes()
                 .await
-                .inspect_err(|error| error!(?error, ?location))
+                .inspect_err(|error| error!(?error, %location))
             else {
                 continue;
             };
 
             let Ok(broker_registration) =
                 serde_json::from_slice::<BrokerRegistationRequest>(&encoded[..])
-                    .inspect_err(|error| error!(?error, ?location))
+                    .inspect_err(|error| error!(?error, %location))
             else {
                 continue;
             };
@@ -1421,7 +1439,7 @@ impl Storage for DynoStore {
                     let response = match self
                         .topic_metadata(topic)
                         .await
-                        .inspect_err(|error| error!(?error, ?location))
+                        .inspect_err(|error| error!(?error, %location))
                     {
                         Ok(topic_metadata) => {
                             let name = Some(topic_metadata.topic.name.to_owned());
@@ -1523,7 +1541,7 @@ impl Storage for DynoStore {
 
             _ => {
                 let location = Path::from(format!("clusters/{}/topics/", self.cluster));
-                debug!(?location);
+                debug!(%location);
 
                 let mut responses = vec![];
 
@@ -1531,7 +1549,7 @@ impl Storage for DynoStore {
                     .object_store
                     .list_with_delimiter(Some(&location))
                     .await
-                    .inspect_err(|error| error!(?error, ?location))
+                    .inspect_err(|error| error!(?error, %location))
                 else {
                     return Ok(MetadataResponse {
                         cluster: Some(self.cluster.clone()),
@@ -1550,7 +1568,7 @@ impl Storage for DynoStore {
                         .object_store
                         .get(&meta.location)
                         .await
-                        .inspect_err(|error| error!(?error, ?location))
+                        .inspect_err(|error| error!(?error, %location))
                     else {
                         continue;
                     };
@@ -1558,13 +1576,13 @@ impl Storage for DynoStore {
                     let Ok(encoded) = payload
                         .bytes()
                         .await
-                        .inspect_err(|error| error!(?error, ?location))
+                        .inspect_err(|error| error!(?error, %location))
                     else {
                         continue;
                     };
 
                     let Ok(topic_metadata) = serde_json::from_slice::<TopicMetadata>(&encoded[..])
-                        .inspect_err(|error| error!(?error, ?location))
+                        .inspect_err(|error| error!(?error, %location))
                     else {
                         continue;
                     };

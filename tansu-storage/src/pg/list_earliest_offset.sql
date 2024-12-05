@@ -32,4 +32,4 @@ where
 
 c.name = $1
 and t.name = $2
-and tp.partition = $3
+and tp.partition = $3;

@@ -16,6 +16,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Debug,
+    hash::{Hash, Hasher},
     marker::PhantomData,
     ops::Deref,
     time::SystemTime,
@@ -123,9 +124,37 @@ pub trait Group: Debug + Send {
 }
 
 #[derive(Clone, Debug)]
-pub enum Wrapper<O: Storage> {
+pub enum Wrapper<O> {
     Forming(Inner<O, Forming>),
     Formed(Inner<O, Formed>),
+}
+
+impl<O> PartialEq for Wrapper<O> {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Forming(sinner), Self::Forming(oinner)) => sinner == oinner,
+            (Self::Formed(sinner), Self::Formed(oinner)) => sinner == oinner,
+            _ => false,
+        }
+    }
+}
+
+impl<O> Hash for Wrapper<O>
+where
+    O: Storage,
+{
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            Self::Forming(inner) => {
+                state.write_u8(3);
+                inner.hash(state)
+            }
+            Self::Formed(inner) => {
+                state.write_u8(5);
+                inner.hash(state)
+            }
+        }
+    }
 }
 
 impl<O> From<Inner<O, Forming>> for Wrapper<O>
@@ -313,6 +342,13 @@ where
         }
     }
 
+    pub fn inception(&self) -> SystemTime {
+        match self {
+            Self::Forming(inner) => inner.inception,
+            Self::Formed(inner) => inner.inception,
+        }
+    }
+
     pub fn session_timeout_ms(&self) -> i32 {
         match self {
             Self::Forming(inner) => inner.session_timeout_ms,
@@ -357,14 +393,14 @@ where
 
     fn members(&self) -> Vec<JoinGroupResponseMember> {
         match self {
-            Wrapper::Forming(inner) => inner
+            Self::Forming(inner) => inner
                 .members
                 .values()
                 .cloned()
                 .map(|member| member.join_response)
                 .collect(),
 
-            Wrapper::Formed(inner) => inner
+            Self::Formed(inner) => inner
                 .members
                 .values()
                 .cloned()
@@ -373,11 +409,15 @@ where
         }
     }
 
+    fn is_forming(&self) -> bool {
+        matches!(self, Self::Forming(..))
+    }
+
     #[cfg(test)]
     fn assignments(&self) -> Option<BTreeMap<String, Bytes>> {
         match self {
-            Wrapper::Forming(..) => None,
-            Wrapper::Formed(inner) => Some(inner.state.assignments.clone()),
+            Self::Forming(..) => None,
+            Self::Formed(inner) => Some(inner.state.assignments.clone()),
         }
     }
 
@@ -385,15 +425,15 @@ where
         debug!(?group_id, ?now);
 
         match self {
-            Wrapper::Forming(mut inner) => {
+            Self::Forming(mut inner) => {
                 _ = inner.missed_heartbeat(group_id, now);
-                Wrapper::Forming(inner)
+                Self::Forming(inner)
             }
-            Wrapper::Formed(mut inner) => {
+            Self::Formed(mut inner) => {
                 if inner.missed_heartbeat(group_id, now) {
                     info!("missed heartbeat for {group_id} in {}", inner.generation_id);
 
-                    Wrapper::Forming(Inner {
+                    Self::Forming(Inner {
                         session_timeout_ms: inner.session_timeout_ms,
                         rebalance_timeout_ms: inner.rebalance_timeout_ms,
                         members: inner.members,
@@ -408,7 +448,7 @@ where
                         inception: inner.inception,
                     })
                 } else {
-                    Wrapper::Formed(inner)
+                    Self::Formed(inner)
                 }
             }
         }
@@ -622,7 +662,7 @@ where
 }
 
 #[derive(Clone, Debug)]
-pub struct Controller<O: Storage> {
+pub struct Controller<O> {
     storage: O,
     wrappers: BTreeMap<String, (Wrapper<O>, Option<Version>)>,
 }
@@ -642,7 +682,7 @@ where
 #[async_trait]
 impl<O> Coordinator for Controller<O>
 where
-    O: Storage + Clone,
+    O: Storage,
 {
     async fn join(
         &mut self,
@@ -668,10 +708,14 @@ where
             ?reason,
         );
 
+        let started_at = SystemTime::now();
+
         let mut iteration = 0;
 
         loop {
-            let (mut wrapper, version) = self.wrappers.remove(group_id).unwrap_or_else(|| {
+            let now = SystemTime::now();
+
+            let (mut original, version) = self.wrappers.remove(group_id).unwrap_or_else(|| {
                 debug!(?iteration, ?group_id);
 
                 let inner = Inner {
@@ -688,24 +732,22 @@ where
                 (Wrapper::Forming(inner), None)
             });
 
-            let now = SystemTime::now();
-
             if group_instance_id.is_none() {
-                wrapper = wrapper.missed_heartbeat(group_id, now);
+                original = original.missed_heartbeat(group_id, now);
             }
 
             if iteration == 0
                 && !member_id.is_empty()
-                && wrapper.leader().is_some_and(|leader| leader != member_id)
+                && original.leader().is_some_and(|leader| leader != member_id)
                 && group_instance_id.is_none()
             {
                 debug!(?member_id);
                 sleep(Duration::from_millis(PAUSE_MS as u64)).await;
             }
 
-            debug!(?group_id, ?wrapper, ?version, ?iteration);
+            debug!(?group_id, ?original, ?version, ?iteration);
 
-            let (wrapper, body) = wrapper
+            let (updated, body) = original
                 .join(
                     now,
                     client_id,
@@ -720,25 +762,46 @@ where
                 )
                 .await;
 
-            debug!(?group_id, ?wrapper, ?version, ?iteration);
+            debug!(group_id, ?updated, ?version, iteration,);
 
             match self
                 .storage
-                .update_group(group_id, GroupDetail::from(&wrapper), version)
+                .update_group(group_id, GroupDetail::from(&updated), version)
                 .await
             {
                 Ok(version) => {
-                    debug!(?group_id, ?version, ?iteration);
+                    let elapsed = SystemTime::now()
+                        .duration_since(started_at)
+                        .map(|duration| duration.as_millis())
+                        .unwrap_or(0);
+
+                    debug!(
+                        group_id,
+                        ?version,
+                        iteration,
+                        elapsed,
+                        is_forming = updated.is_forming()
+                    );
 
                     _ = self
                         .wrappers
-                        .insert(group_id.to_owned(), (wrapper, Some(version)));
+                        .insert(group_id.to_owned(), (updated, Some(version)));
 
-                    return Ok(body);
+                    if group_instance_id.is_some() && elapsed < PAUSE_MS {
+                        let pause = PAUSE_MS.saturating_sub(elapsed);
+                        debug!(pause);
+
+                        sleep(Duration::from_millis(pause as u64)).await;
+
+                        iteration += 1;
+                        continue;
+                    } else {
+                        return Ok(body);
+                    }
                 }
 
                 Err(UpdateError::Outdated { current, version }) => {
-                    debug!(?group_id, ?current, ?version, ?iteration);
+                    debug!(group_id, ?current, ?version, iteration);
 
                     _ = self.wrappers.insert(
                         group_id.to_owned(),
@@ -791,22 +854,25 @@ where
             ?assignments
         );
 
+        let started_at = SystemTime::now();
+
         let mut iteration = 0;
 
         loop {
-            let (mut wrapper, version) = self
+            let now = SystemTime::now();
+
+            let (mut original, version) = self
                 .wrappers
                 .remove(group_id)
                 .unwrap_or((Wrapper::Forming(Inner::new(self.storage.clone())), None));
 
-            debug!(?group_id, ?wrapper, ?version, ?iteration);
+            debug!(?group_id, ?original, ?version, ?iteration);
 
-            let now = SystemTime::now();
             if group_instance_id.is_none() {
-                wrapper = wrapper.missed_heartbeat(group_id, now);
+                original = original.missed_heartbeat(group_id, now);
             }
 
-            let (wrapper, body) = wrapper
+            let (updated, body) = original
                 .sync(
                     now,
                     group_id,
@@ -819,21 +885,41 @@ where
                 )
                 .await;
 
-            debug!(?group_id, ?wrapper, ?version, ?iteration);
-
+            debug!(group_id, ?updated, ?version, iteration,);
             match self
                 .storage
-                .update_group(group_id, GroupDetail::from(&wrapper), version)
+                .update_group(group_id, GroupDetail::from(&updated), version)
                 .await
             {
                 Ok(version) => {
-                    debug!(?group_id, ?version);
+                    let elapsed = SystemTime::now()
+                        .duration_since(started_at)
+                        .map(|duration| duration.as_millis())
+                        .unwrap_or(0);
+
+                    debug!(
+                        group_id,
+                        ?version,
+                        iteration,
+                        elapsed,
+                        is_forming = updated.is_forming()
+                    );
 
                     _ = self
                         .wrappers
-                        .insert(group_id.to_owned(), (wrapper, Some(version)));
+                        .insert(group_id.to_owned(), (updated, Some(version)));
 
-                    return Ok(body);
+                    if group_instance_id.is_some() && elapsed < PAUSE_MS {
+                        let pause = PAUSE_MS.saturating_sub(elapsed);
+                        debug!(pause);
+
+                        sleep(Duration::from_millis(pause as u64)).await;
+
+                        iteration += 1;
+                        continue;
+                    } else {
+                        return Ok(body);
+                    }
                 }
 
                 Err(UpdateError::Outdated { current, version }) => {
@@ -892,8 +978,7 @@ where
             let wrapper = wrapper.missed_heartbeat(group_id, now);
 
             let (wrapper, body) = wrapper.leave(now, group_id, member_id, members).await;
-
-            debug!(?group_id, ?wrapper, ?version, ?iteration);
+            debug!(group_id, ?wrapper, ?version, iteration,);
 
             match self
                 .storage
@@ -959,8 +1044,7 @@ where
             let now = SystemTime::now();
 
             let (wrapper, body) = wrapper.offset_commit(now, &offset_commit).await;
-
-            debug!(?group_id, ?wrapper, ?version, ?iteration);
+            debug!(group_id, ?wrapper, ?version, iteration,);
 
             match self
                 .storage
@@ -1058,7 +1142,7 @@ where
                 wrapper = wrapper.missed_heartbeat(group_id, now);
             }
 
-            debug!(?group_id, ?wrapper, ?version, ?iteration);
+            debug!(group_id, ?wrapper, ?version, iteration,);
 
             match self
                 .storage
@@ -1135,6 +1219,36 @@ pub struct Inner<O, S> {
     storage: O,
     skip_assignment: Option<bool>,
     inception: SystemTime,
+}
+
+impl<O, S> PartialEq for Inner<O, S>
+where
+    S: PartialEq,
+{
+    fn eq(&self, other: &Self) -> bool {
+        self.session_timeout_ms == other.session_timeout_ms
+            && self.rebalance_timeout_ms == other.rebalance_timeout_ms
+            && self.members == other.members
+            && self.generation_id == other.generation_id
+            && self.state == other.state
+            && self.skip_assignment == other.skip_assignment
+            && self.inception == other.inception
+    }
+}
+
+impl<O, S> Hash for Inner<O, S>
+where
+    S: Hash,
+{
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.session_timeout_ms.hash(state);
+        self.rebalance_timeout_ms.hash(state);
+        self.members.hash(state);
+        self.generation_id.hash(state);
+        self.state.hash(state);
+        self.skip_assignment.hash(state);
+        self.inception.hash(state);
+    }
 }
 
 impl<O> Inner<O, PhantomData<Forming>>
@@ -1529,6 +1643,8 @@ where
         );
 
         let Some(protocols) = protocols else {
+            debug!(join_outcome = ?ErrorCode::InvalidRequest);
+
             let body = Body::JoinGroupResponse {
                 throttle_time_ms: Some(0),
                 error_code: ErrorCode::InvalidRequest.into(),
@@ -1555,6 +1671,8 @@ where
 
                 protocol
             } else {
+                debug!(join_outcome = ?ErrorCode::InconsistentGroupProtocol);
+
                 let body = Body::JoinGroupResponse {
                     throttle_time_ms: Some(0),
                     error_code: ErrorCode::InconsistentGroupProtocol.into(),
@@ -1585,7 +1703,7 @@ where
             } else {
                 format!("{}", Uuid::new_v4())
             };
-            debug!(?member_id);
+            debug!(?member_id, join_outcome = ?ErrorCode::MemberIdRequired);
 
             let body = Body::JoinGroupResponse {
                 throttle_time_ms: Some(0),
@@ -1693,68 +1811,45 @@ where
             _ = self.state.leader.replace(member_id.clone());
         }
 
-        let body = match (
-            group_instance_id,
-            now.duration_since(self.inception)
-                .map(|duration| duration.as_millis())
-                .unwrap_or(0),
-        ) {
-            (Some(_), elapsed) if PAUSE_MS > elapsed => {
-                let remaining = (PAUSE_MS - elapsed) as u64;
-                debug!(?member_id, ?remaining);
-                sleep(Duration::from_millis(remaining)).await;
-
-                Body::JoinGroupResponse {
-                    throttle_time_ms: Some(0),
-                    error_code: ErrorCode::NotCoordinator.into(),
-                    generation_id: -1,
-                    protocol_type: None,
-                    protocol_name: None,
-                    leader: "".into(),
-                    skip_assignment: self.skip_assignment,
-                    member_id: "".into(),
-                    members: Some([].into()),
-                }
-            }
-
-            (_, _) => Body::JoinGroupResponse {
-                throttle_time_ms: Some(0),
-                error_code: ErrorCode::None.into(),
-                generation_id: self.generation_id,
-                protocol_type: self.state.protocol_type.clone(),
-                protocol_name: self.state.protocol_name.clone(),
-                leader: self
+        let body = Body::JoinGroupResponse {
+            throttle_time_ms: Some(0),
+            error_code: ErrorCode::None.into(),
+            generation_id: self.generation_id,
+            protocol_type: self.state.protocol_type.clone(),
+            protocol_name: self.state.protocol_name.clone(),
+            leader: self
+                .state
+                .leader
+                .as_ref()
+                .map_or(String::from(""), |leader| leader.clone()),
+            skip_assignment: self.skip_assignment,
+            members: Some(
+                if self
                     .state
                     .leader
                     .as_ref()
-                    .map_or(String::from(""), |leader| leader.clone()),
-                skip_assignment: self.skip_assignment,
-                members: Some(
-                    if self
-                        .state
-                        .leader
-                        .as_ref()
-                        .is_some_and(|leader| leader == member_id.as_str())
-                    {
-                        self.members
-                            .values()
-                            .cloned()
-                            .map(|member| member.join_response)
-                            .collect()
-                    } else {
-                        [].into()
-                    },
-                ),
-                member_id,
-            },
+                    .is_some_and(|leader| leader == member_id.as_str())
+                {
+                    self.members
+                        .values()
+                        .cloned()
+                        .map(|member| member.join_response)
+                        .collect()
+                } else {
+                    [].into()
+                },
+            ),
+            member_id,
         };
+
+        debug!(join_outcome = ?ErrorCode::None);
 
         (self, body)
     }
 
     async fn sync(
         mut self,
-        now: SystemTime,
+        _now: SystemTime,
         group_id: &str,
         generation_id: i32,
         member_id: &str,
@@ -1774,7 +1869,7 @@ where
         );
 
         if !self.members.contains_key(member_id) {
-            debug!(?self.members);
+            debug!(?self.members, sync_outcome = ?ErrorCode::UnknownMemberId);
 
             let body = Body::SyncGroupResponse {
                 throttle_time_ms: Some(0),
@@ -1790,7 +1885,7 @@ where
         debug!(?member_id);
 
         if generation_id > self.generation_id {
-            debug!(self.generation_id);
+            debug!(self.generation_id, sync_outcome = ?ErrorCode::IllegalGeneration);
 
             let body = Body::SyncGroupResponse {
                 throttle_time_ms: Some(0),
@@ -1804,7 +1899,7 @@ where
         }
 
         if generation_id < self.generation_id {
-            debug!(self.generation_id);
+            debug!(self.generation_id, sync_outcome = ?ErrorCode::RebalanceInProgress);
 
             let body = Body::SyncGroupResponse {
                 throttle_time_ms: Some(0),
@@ -1817,18 +1912,13 @@ where
             return (self.into(), body);
         }
 
-        _ = self
-            .members
-            .entry(member_id.to_owned())
-            .and_modify(|member| _ = member.last_contact.replace(now));
-
         if self
             .state
             .leader
             .as_ref()
             .is_some_and(|leader_id| member_id != leader_id.as_str())
         {
-            debug!(?self.state.leader);
+            debug!(?self.state.leader, sync_outcome = ?ErrorCode::RebalanceInProgress);
 
             let body = Body::SyncGroupResponse {
                 throttle_time_ms: Some(0),
@@ -1842,6 +1932,8 @@ where
         }
 
         let Some(assignments) = assignments else {
+            debug!(sync_outcome = ?ErrorCode::RebalanceInProgress);
+
             let body = Body::SyncGroupResponse {
                 throttle_time_ms: Some(0),
                 error_code: ErrorCode::RebalanceInProgress.into(),
@@ -1873,6 +1965,8 @@ where
                 .unwrap_or(Bytes::from_static(b"")),
         };
 
+        debug!(sync_outcome = ?ErrorCode::None, sync_assignment = assignments.contains_key(member_id));
+
         let state = Inner {
             session_timeout_ms: self.session_timeout_ms,
             rebalance_timeout_ms: self.rebalance_timeout_ms,
@@ -1889,8 +1983,6 @@ where
             skip_assignment: self.skip_assignment,
             inception: self.inception,
         };
-
-        debug!(?state);
 
         (state.into(), body)
     }
@@ -2125,6 +2217,8 @@ where
         );
 
         let Some(protocols) = protocols else {
+            debug!(join_outcome = ?ErrorCode::InvalidRequest);
+
             let body = Body::JoinGroupResponse {
                 throttle_time_ms: Some(0),
                 error_code: ErrorCode::InvalidRequest.into(),
@@ -2144,6 +2238,8 @@ where
             .iter()
             .find(|protocol| protocol.name == self.state.protocol_name)
         else {
+            debug!(join_outcome = ?ErrorCode::InconsistentGroupProtocol);
+
             let body = Body::JoinGroupResponse {
                 throttle_time_ms: Some(0),
                 error_code: ErrorCode::InconsistentGroupProtocol.into(),
@@ -2165,7 +2261,7 @@ where
             } else {
                 format!("{}", Uuid::new_v4())
             };
-            debug!(?member_id);
+            debug!(?member_id, join_outcome = ?ErrorCode::MemberIdRequired);
 
             let body = Body::JoinGroupResponse {
                 throttle_time_ms: Some(0),
@@ -2268,6 +2364,8 @@ where
                     }
                 };
 
+                debug!(join_outcome = ?ErrorCode::None);
+
                 (state, body)
             }
 
@@ -2331,6 +2429,8 @@ where
                         members,
                     }
                 };
+
+                debug!(join_outcome = ?ErrorCode::None);
 
                 (state, body)
             }
@@ -2399,6 +2499,8 @@ where
                     }
                 };
 
+                debug!(join_outcome = ?ErrorCode::None);
+
                 (state, body)
             }
         }
@@ -2406,7 +2508,7 @@ where
 
     async fn sync(
         mut self,
-        now: SystemTime,
+        _now: SystemTime,
         group_id: &str,
         generation_id: i32,
         member_id: &str,
@@ -2422,6 +2524,8 @@ where
         let _ = assignments;
 
         if !self.members.contains_key(member_id) {
+            debug!(sync_outcome = ?ErrorCode::UnknownMemberId);
+
             let body = Body::SyncGroupResponse {
                 throttle_time_ms: Some(0),
                 error_code: ErrorCode::UnknownMemberId.into(),
@@ -2436,6 +2540,8 @@ where
         debug!(?member_id);
 
         if generation_id > self.generation_id {
+            debug!(sync_outcome = ?ErrorCode::IllegalGeneration);
+
             let body = Body::SyncGroupResponse {
                 throttle_time_ms: Some(0),
                 error_code: ErrorCode::IllegalGeneration.into(),
@@ -2448,6 +2554,8 @@ where
         }
 
         if generation_id < self.generation_id {
+            debug!(sync_outcome = ?ErrorCode::RebalanceInProgress);
+
             let body = Body::SyncGroupResponse {
                 throttle_time_ms: Some(0),
                 error_code: ErrorCode::RebalanceInProgress.into(),
@@ -2458,11 +2566,6 @@ where
 
             return (self, body);
         }
-
-        _ = self
-            .members
-            .entry(member_id.to_owned())
-            .and_modify(|member| _ = member.last_contact.replace(now));
 
         let body = Body::SyncGroupResponse {
             throttle_time_ms: Some(0),
@@ -2476,6 +2579,8 @@ where
                 .cloned()
                 .unwrap_or(Bytes::from_static(b"")),
         };
+
+        debug!(sync_outcome = ?ErrorCode::None, sync_assignment = self.state.assignments.contains_key(member_id));
 
         (self, body)
     }

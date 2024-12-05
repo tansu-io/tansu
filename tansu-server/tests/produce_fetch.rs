@@ -97,8 +97,6 @@ pub async fn simple_non_txn(
             .await
             .inspect(|offset| debug!(?offset))?;
 
-        debug!(offset);
-
         assert_eq!(None, offset_producer.insert(offset, (producer, value)));
     }
 
@@ -129,8 +127,6 @@ pub async fn simple_non_txn(
     debug!(min_bytes, max_bytes, ?isolation, ?batches);
 
     assert!(!batches.is_empty());
-    assert!(batches.iter().all(|batch| batch.producer_id == -1));
-    assert!(batches.iter().all(|batch| batch.producer_epoch == -1));
     assert_eq!(
         offset_producer.first_key_value().unwrap().0,
         &batches[0].base_offset

@@ -438,7 +438,7 @@ pub async fn simple_txn_produce_commit(
         assert_eq!(partition_index, list_offsets_after[0].0.partition());
         assert_eq!(ErrorCode::None, list_offsets_after[0].1.error_code);
 
-        let offset = i64::from(num_records * num_transactions) - 1;
+        let offset = i64::from(num_records * num_transactions);
 
         assert_eq!(Some(offset), list_offsets_after[0].1.offset);
     }
@@ -517,7 +517,7 @@ pub async fn simple_txn_produce_commit(
 
         // end txn marker is now present for txn 1
         //
-        let offset = i64::from(num_records * num_transactions);
+        let offset = i64::from(num_records * num_transactions) + 1;
 
         assert_eq!(Some(offset), list_offsets_after[0].1.offset);
     }
@@ -548,7 +548,7 @@ pub async fn simple_txn_produce_commit(
 
         // end txn marker is now present for txn 1
         //
-        let offset = i64::from(num_records * num_transactions);
+        let offset = i64::from(num_records * num_transactions) + 1;
         assert_eq!(Some(offset), list_offsets_after[0].1.offset);
     }
 
@@ -721,7 +721,7 @@ pub async fn simple_txn_produce_abort(
         assert_eq!(partition_index, list_offsets_after[0].0.partition());
         assert_eq!(ErrorCode::None, list_offsets_after[0].1.error_code);
 
-        let offset = i64::from(num_records * num_transactions) - 1;
+        let offset = i64::from(num_records * num_transactions);
 
         assert_eq!(Some(offset), list_offsets_after[0].1.offset);
     }
@@ -800,7 +800,7 @@ pub async fn simple_txn_produce_abort(
 
         // end txn marker is now present for txn 1
         //
-        let offset = i64::from(num_records * num_transactions);
+        let offset = i64::from(num_records * num_transactions) + 1;
         assert_eq!(Some(offset), list_offsets_after[0].1.offset);
     }
 
@@ -830,7 +830,7 @@ pub async fn simple_txn_produce_abort(
 
         // end txn marker is now present for txn 1
         //
-        let offset = i64::from(num_records * num_transactions);
+        let offset = i64::from(num_records * num_transactions) + 1;
         assert_eq!(Some(offset), list_offsets_after[0].1.offset);
     }
 
@@ -1005,7 +1005,7 @@ pub async fn with_overlap(
         assert_eq!(partition_index, list_offsets_after[0].0.partition());
         assert_eq!(ErrorCode::None, list_offsets_after[0].1.error_code);
 
-        let offset = i64::from(num_records * num_transactions) - 1;
+        let offset = i64::from(num_records * num_transactions);
 
         assert_eq!(Some(offset), list_offsets_after[0].1.offset);
     }
@@ -1084,7 +1084,7 @@ pub async fn with_overlap(
 
         // end txn marker is now present for txn 1
         //
-        let offset = i64::from(num_records * num_transactions);
+        let offset = i64::from(num_records * num_transactions) + 1;
 
         assert_eq!(Some(offset), list_offsets_after[0].1.offset);
     }
@@ -1165,7 +1165,7 @@ pub async fn with_overlap(
 
         // end txn marker is now present for txn 2
         //
-        let offset: i64 = i64::from(num_records * num_transactions) + 1;
+        let offset: i64 = i64::from(num_records * num_transactions) + 2;
 
         assert_eq!(Some(offset), list_offsets_after[0].1.offset);
     }
@@ -1194,7 +1194,7 @@ pub async fn with_overlap(
 
         // end txn marker is now present for txn 2
         //
-        let offset: i64 = i64::from(num_records * num_transactions) + 1;
+        let offset: i64 = i64::from(num_records * num_transactions) + 2;
 
         assert_eq!(Some(offset), list_offsets_after[0].1.offset);
     }
@@ -1336,10 +1336,9 @@ pub async fn init_producer_twice(
         assert_eq!(topic_name, list_offsets_after[0].0.topic());
         assert_eq!(partition_index, list_offsets_after[0].0.partition());
         assert_eq!(ErrorCode::None, list_offsets_after[0].1.error_code);
-        assert_eq!(
-            Some((num_records * num_transactions - 1) as i64),
-            list_offsets_after[0].1.offset
-        );
+
+        let offset = i64::from(num_records * num_transactions);
+        assert_eq!(Some(offset), list_offsets_after[0].1.offset);
     }
 
     {
@@ -1383,10 +1382,12 @@ pub async fn init_producer_twice(
         assert_eq!(topic_name, list_offsets[0].0.topic());
         assert_eq!(partition_index, list_offsets[0].0.partition());
         assert_eq!(ErrorCode::None, list_offsets[0].1.error_code);
+
+        let offset = i64::from(num_records * num_transactions) + 1;
         assert_eq!(
             // end txn marker is now present for transactions[0], but it overlaps with [1]
             //
-            Some((num_records * num_transactions) as i64),
+            Some(offset),
             list_offsets[0].1.offset
         );
     }
@@ -1463,10 +1464,12 @@ pub async fn init_producer_twice(
         assert_eq!(topic_name, list_offsets[0].0.topic());
         assert_eq!(partition_index, list_offsets[0].0.partition());
         assert_eq!(ErrorCode::None, list_offsets[0].1.error_code);
+
+        let offset = i64::from(num_records * num_transactions) + 2;
         assert_eq!(
             // end txn marker is now present for transactions[1]
             //
-            Some((num_records * num_transactions + 1) as i64),
+            Some(offset),
             list_offsets[0].1.offset
         );
     }

@@ -424,7 +424,7 @@ async fn simple_txn_commit() -> Result<()> {
         list_offsets_after_produce[0].0.partition()
     );
     assert_eq!(ErrorCode::None, list_offsets_after_produce[0].1.error_code);
-    assert_eq!(Some(records - 1), list_offsets_after_produce[0].1.offset);
+    assert_eq!(Some(records), list_offsets_after_produce[0].1.offset);
 
     // read committed offset is at 0
     //
@@ -502,7 +502,7 @@ async fn simple_txn_commit() -> Result<()> {
     );
     assert_eq!(ErrorCode::None, list_offsets_after_produce[0].1.error_code);
     // includes the produced end txn marker as part of the transaction
-    assert_eq!(Some(records), list_offsets_after_produce[0].1.offset);
+    assert_eq!(Some(records + 1), list_offsets_after_produce[0].1.offset);
 
     // read committed offset has updated to high watermark
     //
@@ -519,7 +519,7 @@ async fn simple_txn_commit() -> Result<()> {
         list_offsets_after_produce[0].0.partition()
     );
     assert_eq!(ErrorCode::None, list_offsets_after_produce[0].1.error_code);
-    assert_eq!(Some(records), list_offsets_after_produce[0].1.offset);
+    assert_eq!(Some(records + 1), list_offsets_after_produce[0].1.offset);
 
     // assert_eq!(
     //     ErrorCode::None,

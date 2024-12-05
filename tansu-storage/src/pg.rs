@@ -16,6 +16,7 @@
 use std::{
     cmp::Ordering,
     collections::BTreeMap,
+    hash::{DefaultHasher, Hash, Hasher},
     marker::PhantomData,
     str::FromStr,
     time::{Duration, SystemTime},
@@ -354,11 +355,11 @@ impl Postgres {
 
         let attributes = BatchAttribute::try_from(inflated.attributes)?;
 
-        let records_len = i64::try_from(inflated.records.len())?;
+        let last_offset_delta = i64::from(inflated.last_offset_delta);
 
         for (delta, record) in inflated.records.iter().enumerate() {
             let delta = i64::try_from(delta)?;
-            let offset = high.map_or(delta, |high| high + delta + 1);
+            let offset = high.unwrap_or_default() + delta;
             let key = record.key.as_deref();
             let value = record.value.as_deref();
 
@@ -372,6 +373,7 @@ impl Postgres {
                         &topic,
                         &partition,
                         &offset,
+                        &inflated.attributes,
                         &if transaction_id.is_none() {
                             None
                         } else {
@@ -389,7 +391,25 @@ impl Postgres {
                 )
                 .await
                 .inspect(|n| debug!(?n))
-                .inspect_err(|err| error!(?err, ?topic, ?partition, ?offset, ?key, ?value))?;
+                .inspect_err(|err| error!(?err, ?topic, ?partition, ?offset, ?key, ?value))
+                .map_err(|error| {
+                    if let Some(db_error) = error.as_db_error() {
+                        debug!(
+                            schema = db_error.schema(),
+                            table = db_error.table(),
+                            constraint = db_error.constraint()
+                        );
+                    }
+
+                    if error
+                        .code()
+                        .is_some_and(|code| *code == SqlState::UNIQUE_VIOLATION)
+                    {
+                        Error::Api(ErrorCode::UnknownServerError)
+                    } else {
+                        error.into()
+                    }
+                })?;
 
             for header in record.headers.iter().as_ref() {
                 let key = header.key.as_deref();
@@ -415,7 +435,7 @@ impl Postgres {
                     .inspect_err(|err| error!(?err))?;
 
                 let offset_start = high.unwrap_or_default();
-                let offset_end = high.map_or(records_len - 1, |high| high + records_len);
+                let offset_end = high.map_or(last_offset_delta, |high| high + last_offset_delta);
 
                 _ = tx
                     .execute(
@@ -450,14 +470,14 @@ impl Postgres {
                     &topic,
                     &partition,
                     &low.unwrap_or_default(),
-                    &high.map_or(records_len - 1, |high| high + records_len),
+                    &high.map_or(last_offset_delta + 1, |high| high + last_offset_delta + 1),
                 ],
             )
             .await
             .inspect(|n| debug!(?n))
             .inspect_err(|err| error!(?err))?;
 
-        Ok(high.map_or(0, |high| high + 1))
+        Ok(high.unwrap_or_default())
     }
 
     async fn end_in_tx(
@@ -473,7 +493,6 @@ impl Postgres {
         let prepared = tx
             .prepare(include_str!("pg/txn_select_produced_topitions.sql"))
             .await
-            .inspect(|prepared| debug!(?prepared))
             .inspect_err(|err| error!(?err))?;
 
         let mut overlaps = vec![];
@@ -489,7 +508,6 @@ impl Postgres {
                 ],
             )
             .await
-            .inspect(|n| debug!(?self.cluster, ?transaction_id, ?producer_id, ?producer_epoch, ?n))
             .inspect_err(|err| error!(?err))?
         {
             let topic = row.try_get::<_, String>(0)?;
@@ -536,7 +554,6 @@ impl Postgres {
                     "pg/txn_produce_offset_select_offset_range.sql"
                 ))
                 .await
-                .inspect(|prepared| debug!(?prepared))
                 .inspect_err(|err| error!(?err))?;
 
             let row = tx
@@ -563,7 +580,6 @@ impl Postgres {
                     "pg/txn_produce_offset_select_overlapping_txn.sql"
                 ))
                 .await
-                .inspect(|prepared| debug!(?prepared))
                 .inspect_err(|err| error!(?err))?;
 
             let rows = tx
@@ -583,7 +599,7 @@ impl Postgres {
                 .inspect_err(|err| error!(?err))?;
 
             for row in rows {
-                overlaps.push(Txn::try_from(row)?);
+                overlaps.push(Txn::try_from(row).inspect(|txn| debug!(?txn))?);
             }
         }
 
@@ -615,7 +631,6 @@ impl Postgres {
                 let prepared = tx
                     .prepare(include_str!("pg/txn_produce_offset_delete_by_txn.sql"))
                     .await
-                    .inspect(|prepared| debug!(?prepared))
                     .inspect_err(|err| error!(?err))?;
 
                 _ = tx
@@ -635,7 +650,6 @@ impl Postgres {
                 let prepared = tx
                     .prepare(include_str!("pg/txn_topition_delete_by_txn.sql"))
                     .await
-                    .inspect(|prepared| debug!(?prepared))
                     .inspect_err(|err| error!(?err))?;
 
                 _ = tx
@@ -656,7 +670,6 @@ impl Postgres {
                     let prepared = tx
                         .prepare(include_str!("pg/consumer_offset_insert_from_txn.sql"))
                         .await
-                        .inspect(|prepared| debug!(?prepared))
                         .inspect_err(|err| error!(?err))?;
 
                     _ = tx
@@ -677,7 +690,6 @@ impl Postgres {
                 let prepared = tx
                     .prepare(include_str!("pg/txn_offset_commit_tp_delete_by_txn.sql"))
                     .await
-                    .inspect(|prepared| debug!(?prepared))
                     .inspect_err(|err| error!(?err))?;
 
                 _ = tx
@@ -697,7 +709,6 @@ impl Postgres {
                 let prepared = tx
                     .prepare(include_str!("pg/txn_offset_commit_delete_by_txn.sql"))
                     .await
-                    .inspect(|prepared| debug!(?prepared))
                     .inspect_err(|err| error!(?err))?;
 
                 _ = tx
@@ -717,7 +728,6 @@ impl Postgres {
                 let prepared = tx
                     .prepare(include_str!("pg/txn_status_update.sql"))
                     .await
-                    .inspect(|prepared| debug!(?prepared))
                     .inspect_err(|err| error!(?err))?;
 
                 let outcome = if txn.status == TxnState::PrepareCommit {
@@ -740,7 +750,7 @@ impl Postgres {
                         ],
                     )
                     .await
-                    .inspect(|n| debug!(cluster = self.cluster, ?txn, n))
+                    .inspect(|n| debug!(cluster = self.cluster, ?txn, n, outcome))
                     .inspect_err(|err| error!(?err))?;
             }
         } else {
@@ -749,7 +759,6 @@ impl Postgres {
             let prepared = tx
                 .prepare(include_str!("pg/txn_status_update.sql"))
                 .await
-                .inspect(|prepared| debug!(?prepared))
                 .inspect_err(|err| error!(?err))?;
 
             let outcome = if committed {
@@ -773,7 +782,7 @@ impl Postgres {
                 .inspect(|n| {
                     debug!(
                         cluster = self.cluster,
-                        transaction_id, producer_id, producer_epoch, n
+                        transaction_id, producer_id, producer_epoch, outcome, n
                     )
                 })
                 .inspect_err(|err| error!(?err))?;
@@ -805,14 +814,13 @@ impl Storage for Postgres {
             ))
             .await?;
 
-        debug!(?prepared);
-
         let row = tx
             .query_one(&prepared, &[&broker_registration.cluster_id])
             .await?;
 
-        let cluster_id: i32 = row.get(0);
-        debug!(?cluster_id);
+        let cluster_id = row
+            .try_get::<_, i32>(0)
+            .inspect(|cluster| debug!(cluster))?;
 
         let prepared = tx
             .prepare(concat!(
@@ -826,7 +834,6 @@ impl Storage for Postgres {
                 " returning id"
             ))
             .await?;
-        debug!(?prepared);
 
         let row = tx
             .query_one(
@@ -839,16 +846,18 @@ impl Storage for Postgres {
             )
             .await?;
 
-        let broker_id: i32 = row.get(0);
-        debug!(?broker_id);
+        let broker_id = row
+            .try_get::<_, i32>(0)
+            .inspect(|broker_id| debug!(broker_id))?;
 
         let prepared = tx
             .prepare(concat!("delete from listener where broker=$1",))
             .await?;
-        debug!(?prepared);
 
-        let rows = tx.execute(&prepared, &[&broker_id]).await?;
-        debug!(?rows);
+        _ = tx
+            .execute(&prepared, &[&broker_id])
+            .await
+            .inspect(|rows| debug!(rows))?;
 
         let prepared = tx
             .prepare(concat!(
@@ -859,12 +868,10 @@ impl Storage for Postgres {
             ))
             .await?;
 
-        debug!(?prepared);
-
         for listener in broker_registration.listeners {
             debug!(?listener);
 
-            let rows = tx
+            _ = tx
                 .execute(
                     &prepared,
                     &[
@@ -874,9 +881,8 @@ impl Storage for Postgres {
                         &(listener.port as i32),
                     ],
                 )
-                .await?;
-
-            debug!(?rows);
+                .await
+                .inspect(|rows| debug!(rows))?;
         }
 
         tx.commit().await?;
@@ -950,6 +956,14 @@ impl Storage for Postgres {
             .inspect_err(|err| error!(?err, ?topic, ?validate_only))
             .map(|row| row.get(0))
             .map_err(|error| {
+                if let Some(db_error) = error.as_db_error() {
+                    debug!(
+                        schema = db_error.schema(),
+                        table = db_error.table(),
+                        constraint = db_error.constraint()
+                    );
+                }
+
                 if error
                     .code()
                     .is_some_and(|code| *code == SqlState::UNIQUE_VIOLATION)
@@ -1260,12 +1274,10 @@ impl Storage for Postgres {
         &mut self,
         topition: &Topition,
         offset: i64,
-        _min_bytes: u32,
+        min_bytes: u32,
         max_bytes: u32,
         isolation_level: IsolationLevel,
     ) -> Result<Vec<deflated::Batch>> {
-        debug!(cluster = self.cluster, ?topition, offset, ?isolation_level);
-
         let high_watermark = self.offset_stage(topition).await.map(|offset_stage| {
             if isolation_level == IsolationLevel::ReadCommitted {
                 offset_stage.last_stable
@@ -1273,6 +1285,16 @@ impl Storage for Postgres {
                 offset_stage.high_watermark
             }
         })?;
+
+        debug!(
+            cluster = self.cluster,
+            ?topition,
+            offset,
+            ?isolation_level,
+            high_watermark,
+            min_bytes,
+            max_bytes
+        );
 
         let c = self.connection().await?;
 
@@ -1314,66 +1336,88 @@ impl Storage for Postgres {
 
         if let Some(first) = records.first() {
             let mut batch_builder = inflated::Batch::builder()
-                .base_offset(first.try_get::<_, i64>(0).inspect_err(|err| error!(?err))?)
+                .base_offset(
+                    first
+                        .try_get::<_, i64>(0)
+                        .inspect(|base_offset| debug!(base_offset))
+                        .inspect_err(|err| error!(?err))?,
+                )
+                .attributes(
+                    first
+                        .try_get::<_, Option<i16>>(1)
+                        .map(|attributes| attributes.unwrap_or(0))
+                        .inspect_err(|err| error!(?err))?,
+                )
                 .base_timestamp(
                     first
-                        .try_get::<_, SystemTime>(1)
+                        .try_get::<_, SystemTime>(2)
                         .map_err(Error::from)
                         .and_then(|system_time| to_timestamp(system_time).map_err(Into::into))
                         .inspect_err(|err| error!(?err))?,
                 )
                 .producer_id(
                     first
-                        .try_get::<_, Option<i64>>(5)
+                        .try_get::<_, Option<i64>>(6)
                         .map(|producer_id| producer_id.unwrap_or(-1))
                         .inspect_err(|err| error!(?err))?,
                 )
                 .producer_epoch(
                     first
-                        .try_get::<_, Option<i16>>(6)
+                        .try_get::<_, Option<i16>>(7)
                         .map(|producer_epoch| producer_epoch.unwrap_or(-1))
                         .inspect_err(|err| error!(?err))?,
                 );
 
             for record in records.iter() {
-                debug!(?record);
+                let attributes = record
+                    .try_get::<_, Option<i16>>(1)
+                    .map(|attributes| attributes.unwrap_or(0))
+                    .inspect_err(|err| error!(?err))?;
 
                 let producer_id = record
-                    .try_get::<_, Option<i64>>(5)
+                    .try_get::<_, Option<i64>>(6)
                     .map(|producer_id| producer_id.unwrap_or(-1))
                     .inspect_err(|err| error!(?err))?;
                 let producer_epoch = record
-                    .try_get::<_, Option<i16>>(6)
+                    .try_get::<_, Option<i16>>(7)
                     .map(|producer_epoch| producer_epoch.unwrap_or(-1))
                     .inspect_err(|err| error!(?err))?;
 
-                if batch_builder.producer_id != producer_id
+                if batch_builder.attributes != attributes
+                    || batch_builder.producer_id != producer_id
                     || batch_builder.producer_epoch != producer_epoch
                 {
                     batches.push(batch_builder.build().and_then(TryInto::try_into)?);
 
                     batch_builder = inflated::Batch::builder()
-                        .base_offset(first.try_get::<_, i64>(0).inspect_err(|err| error!(?err))?)
+                        .base_offset(
+                            record
+                                .try_get::<_, i64>(0)
+                                .inspect(|base_offset| debug!(base_offset))
+                                .inspect_err(|err| error!(?err))?,
+                        )
                         .base_timestamp(
-                            first
-                                .try_get::<_, SystemTime>(1)
+                            record
+                                .try_get::<_, SystemTime>(2)
                                 .map_err(Error::from)
                                 .and_then(|system_time| {
                                     to_timestamp(system_time).map_err(Into::into)
                                 })
                                 .inspect_err(|err| error!(?err))?,
                         )
+                        .attributes(attributes)
                         .producer_id(producer_id)
                         .producer_epoch(producer_epoch);
                 }
 
                 let offset = record
                     .try_get::<_, i64>(0)
+                    .inspect(|offset| debug!(offset))
                     .inspect_err(|err| error!(?err))?;
                 let offset_delta = i32::try_from(offset - batch_builder.base_offset)?;
 
                 let timestamp_delta = first
-                    .try_get::<_, SystemTime>(1)
+                    .try_get::<_, SystemTime>(2)
                     .map_err(Error::from)
                     .and_then(|system_time| {
                         to_timestamp(system_time)
@@ -1384,13 +1428,13 @@ impl Storage for Postgres {
                     .inspect_err(|err| error!(?err))?;
 
                 let k = record
-                    .try_get::<_, Option<&[u8]>>(2)
+                    .try_get::<_, Option<&[u8]>>(3)
                     .map(|o| o.map(Bytes::copy_from_slice))
                     .inspect(|k| debug!(?k))
                     .inspect_err(|err| error!(?err))?;
 
                 let v = record
-                    .try_get::<_, Option<&[u8]>>(3)
+                    .try_get::<_, Option<&[u8]>>(4)
                     .map(|o| o.map(Bytes::copy_from_slice))
                     .inspect(|v| debug!(?v))
                     .inspect_err(|err| error!(?err))?;
@@ -1434,7 +1478,9 @@ impl Storage for Postgres {
                     record_builder = record_builder.header(header_builder);
                 }
 
-                batch_builder = batch_builder.record(record_builder);
+                batch_builder = batch_builder
+                    .record(record_builder)
+                    .last_offset_delta(offset_delta);
             }
 
             batches.push(batch_builder.build().and_then(TryInto::try_into)?);
@@ -1572,7 +1618,7 @@ impl Storage for Postgres {
         isolation_level: IsolationLevel,
         offsets: &[(Topition, ListOffsetRequest)],
     ) -> Result<Vec<(Topition, ListOffsetResponse)>> {
-        debug!(cluster = self.cluster, ?offsets);
+        debug!(cluster = self.cluster, ?isolation_level, ?offsets);
 
         let c = self.connection().await?;
 
@@ -1594,11 +1640,7 @@ impl Storage for Postgres {
 
             debug!(?query);
 
-            let prepared = c
-                .prepare(query)
-                .await
-                .inspect_err(|err| error!(?err))
-                .inspect(|prepared| debug!(?prepared))?;
+            let prepared = c.prepare(query).await.inspect_err(|err| error!(?err))?;
 
             let list_offset = match offset_type {
                 ListOffsetRequest::Earliest | ListOffsetRequest::Latest => c
@@ -1628,8 +1670,7 @@ impl Storage for Postgres {
             .inspect(|result| debug!(?result))?
             .map_or_else(
                 || {
-                    // this might need to be -1..
-                    let timestamp = Some(SystemTime::now());
+                    let timestamp = None;
                     let offset = Some(0);
                     debug!(
                         cluster = self.cluster,
@@ -2114,7 +2155,7 @@ impl Storage for Postgres {
 
         let existing_e_tag = version
             .as_ref()
-            .map_or(Ok(Uuid::new_v4()), |version| {
+            .map_or(Ok(Uuid::from_u128(0)), |version| {
                 version
                     .e_tag
                     .as_ref()
@@ -2125,7 +2166,7 @@ impl Storage for Postgres {
             .inspect_err(|err| error!(?err))
             .inspect(|existing_e_tag| debug!(?existing_e_tag))?;
 
-        let new_e_tag = Uuid::new_v4();
+        let new_e_tag = default_hash(&detail);
         debug!(?new_e_tag);
 
         let detail = serde_json::to_value(detail).inspect(|detail| debug!(?detail))?;
@@ -2679,4 +2720,13 @@ impl Storage for Postgres {
 
         Ok(error_code)
     }
+}
+
+fn default_hash<H>(h: &H) -> Uuid
+where
+    H: Hash,
+{
+    let mut s = DefaultHasher::new();
+    h.hash(&mut s);
+    Uuid::from_u128(s.finish() as u128)
 }

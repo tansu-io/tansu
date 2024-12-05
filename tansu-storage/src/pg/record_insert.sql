@@ -15,11 +15,11 @@
 -- along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 insert into record
-(topition, offset_id, producer_id, producer_epoch, timestamp, k, v)
+(topition, offset_id, attributes, producer_id, producer_epoch, timestamp, k, v)
 
 select
 
-tp.id, $4, $5, $6, $7, $8, $9
+tp.id, $4, $5, $6, $7, $8, $9, $10
 
 from
 

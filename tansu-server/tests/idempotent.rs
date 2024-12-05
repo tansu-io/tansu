@@ -191,6 +191,7 @@ async fn non_txn_idempotent(
                                 .value(Bytes::from_static(b"Lorem ipsum dolor sit amet").into())
                         )
                         .producer_id(producer.id)
+                        .producer_epoch(producer.epoch)
                 )?
             )
             .await?

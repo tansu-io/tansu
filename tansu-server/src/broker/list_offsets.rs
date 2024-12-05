@@ -89,8 +89,8 @@ where
                                                     old_style_offsets: None,
                                                     timestamp: offset
                                                         .timestamp()
-                                                        .unwrap_or(Some(0))
-                                                        .or(Some(0)),
+                                                        .unwrap_or(Some(-1))
+                                                        .or(Some(-1)),
                                                     offset: offset.offset().or(Some(0)),
                                                     leader_epoch: Some(0),
                                                 })

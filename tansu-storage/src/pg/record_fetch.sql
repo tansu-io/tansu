@@ -19,6 +19,7 @@ with sized as (
 select
 
 r.offset_id,
+r.attributes,
 r.timestamp,
 r.k,
 r.v,
@@ -39,6 +40,6 @@ c.name = $1
 and t.name = $2
 and tp.partition = $3
 and r.offset_id >= $4
-and r.offset_id <= $6)
+and r.offset_id < $6)
 
 select * from sized where bytes < $5;

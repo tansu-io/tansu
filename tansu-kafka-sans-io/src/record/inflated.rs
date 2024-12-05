@@ -16,7 +16,7 @@
 use crate::{
     primitive::ByteSize,
     record::{codec::Sequence, deflated, Record},
-    Compression, Encoder, Error, Result,
+    to_timestamp, Compression, Encoder, Error, Result,
 };
 use bytes::Bytes;
 use crc::{Crc, Digest, CRC_32_ISCSI};
@@ -24,6 +24,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
     io,
+    time::SystemTime,
 };
 use tracing::debug;
 
@@ -219,14 +220,16 @@ pub struct Builder {
 
 impl Default for Builder {
     fn default() -> Self {
+        let base_timestamp = to_timestamp(SystemTime::now()).unwrap_or_default();
+
         Self {
             base_offset: 0,
             partition_leader_epoch: -1,
             magic: 2,
             attributes: 0,
             last_offset_delta: 0,
-            base_timestamp: 1_707_058_170_165,
-            max_timestamp: 1_707_058_170_165,
+            base_timestamp,
+            max_timestamp: base_timestamp,
             producer_id: -1,
             producer_epoch: 0,
             base_sequence: 0,
