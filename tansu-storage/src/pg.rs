@@ -45,6 +45,7 @@ use tansu_kafka_sans_io::{
 };
 use tokio_postgres::{error::SqlState, Config, NoTls, Row, Transaction};
 use tracing::{debug, error};
+use url::Url;
 use uuid::Uuid;
 
 use crate::{
@@ -58,47 +59,63 @@ use crate::{
 pub struct Postgres {
     cluster: String,
     node: i32,
+    advertised_listener: Url,
     pool: Pool,
 }
 
 #[derive(Clone, Default, Debug)]
-pub struct Builder<C, N, P> {
+pub struct Builder<C, N, L, P> {
     cluster: C,
     node: N,
+    advertised_listener: L,
     pool: P,
 }
 
-impl<C, N, P> Builder<C, N, P> {
-    pub fn cluster(self, cluster: impl Into<String>) -> Builder<String, N, P> {
+impl<C, N, L, P> Builder<C, N, L, P> {
+    pub fn cluster(self, cluster: impl Into<String>) -> Builder<String, N, L, P> {
         Builder {
             cluster: cluster.into(),
             node: self.node,
+            advertised_listener: self.advertised_listener,
             pool: self.pool,
         }
     }
 }
 
-impl<C, N, P> Builder<C, N, P> {
-    pub fn node(self, node: i32) -> Builder<C, i32, P> {
+impl<C, N, L, P> Builder<C, N, L, P> {
+    pub fn node(self, node: i32) -> Builder<C, i32, L, P> {
         Builder {
             cluster: self.cluster,
             node,
+            advertised_listener: self.advertised_listener,
             pool: self.pool,
         }
     }
 }
 
-impl Builder<String, i32, Pool> {
+impl<C, N, L, P> Builder<C, N, L, P> {
+    pub fn advertised_listener(self, advertised_listener: Url) -> Builder<C, N, Url, P> {
+        Builder {
+            cluster: self.cluster,
+            node: self.node,
+            advertised_listener,
+            pool: self.pool,
+        }
+    }
+}
+
+impl Builder<String, i32, Url, Pool> {
     pub fn build(self) -> Postgres {
         Postgres {
             cluster: self.cluster,
             node: self.node,
+            advertised_listener: self.advertised_listener,
             pool: self.pool,
         }
     }
 }
 
-impl<C, N> FromStr for Builder<C, N, Pool>
+impl<C, N> FromStr for Builder<C, N, Url, Pool>
 where
     C: Default,
     N: Default,
@@ -113,6 +130,7 @@ where
         };
 
         let mgr = Manager::from_config(pg_config, NoTls, mgr_config);
+        let advertised_listener = Url::parse("tcp://127.0.0.1/")?;
 
         Pool::builder(mgr)
             .max_size(16)
@@ -120,6 +138,7 @@ where
             .map(|pool| Self {
                 pool,
                 node: N::default(),
+                advertised_listener,
                 cluster: C::default(),
             })
             .map_err(Into::into)
@@ -161,7 +180,7 @@ impl TryFrom<Row> for Txn {
 impl Postgres {
     pub fn builder(
         connection: &str,
-    ) -> Result<Builder<PhantomData<String>, PhantomData<i32>, Pool>> {
+    ) -> Result<Builder<PhantomData<String>, PhantomData<i32>, Url, Pool>> {
         debug!(connection);
         Builder::from_str(connection)
     }
@@ -1720,31 +1739,16 @@ impl Storage for Postgres {
 
         let c = self.connection().await.inspect_err(|err| error!(?err))?;
 
-        let prepared = c
-            .prepare(include_str!("pg/broker_metadata_select.sql"))
-            .await
-            .inspect_err(|err| error!(?err))?;
-
-        let rows = c
-            .query(&prepared, &[&self.cluster])
-            .await
-            .inspect_err(|err| error!(?err))?;
-
-        let mut brokers = vec![];
-
-        for row in rows {
-            let node_id = row.try_get::<_, i32>(0)?;
-            let host = row.try_get::<_, String>(1)?;
-            let port = row.try_get::<_, i32>(2)?;
-            let rack = row.try_get::<_, Option<String>>(3)?;
-
-            brokers.push(MetadataResponseBroker {
-                node_id,
-                host,
-                port,
-                rack,
-            });
-        }
+        let brokers = vec![MetadataResponseBroker {
+            node_id: self.node,
+            host: self
+                .advertised_listener
+                .host_str()
+                .unwrap_or("0.0.0.0")
+                .into(),
+            port: self.advertised_listener.port().unwrap_or(9092).into(),
+            rack: None,
+        }];
 
         debug!(?brokers);
 

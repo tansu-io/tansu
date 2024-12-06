@@ -113,7 +113,6 @@ tansu-1:
         --kafka-cluster-id ${CLUSTER_ID} \
         --kafka-listener-url tcp://0.0.0.0:9092/ \
         --kafka-advertised-listener-url tcp:://127.0.0.1:9092/ \
-        --kafka-node-id ${NODE_ID} \
         --storage-engine ${STORAGE_ENGINE} \
         --work-dir work-dir/tansu-1 2>&1 | tee tansu.log
 

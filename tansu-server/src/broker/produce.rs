@@ -216,6 +216,7 @@ mod tests {
 
         let cluster = "abc";
         let node = 12321;
+
         let topic = "pqr";
         let index = 0;
 

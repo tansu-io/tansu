@@ -64,26 +64,13 @@ impl FromStr for KeyValue<String, Url> {
     }
 }
 
+const NODE_ID: i32 = 111;
+
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Cli {
-    #[arg(long, default_value = "tcp://0.0.0.0:4567")]
-    raft_listener_url: Url,
-
-    #[arg(long, default_value = "10000")]
-    raft_election_timeout: ElectionTimeout,
-
-    #[arg(long = "raft-peer-url")]
-    raft_peers: Vec<Url>,
-
     #[arg(long)]
     kafka_cluster_id: String,
-
-    #[arg(long)]
-    kafka_rack: Option<String>,
-
-    #[arg(long, default_value = "100")]
-    kafka_node_id: i32,
 
     #[arg(long, default_value = "tcp://0.0.0.0:9092")]
     kafka_listener_url: Url,
@@ -119,7 +106,10 @@ async fn main() -> Result<()> {
         "postgres" | "postgresql" => {
             Postgres::builder(args.storage_engine.value.to_string().as_str())
                 .map(|builder| builder.cluster(args.kafka_cluster_id.as_str()))
-                .map(|builder| builder.node(args.kafka_node_id))
+                .map(|builder| builder.node(NODE_ID))
+                .map(|builder| {
+                    builder.advertised_listener(args.kafka_advertised_listener_url.clone())
+                })
                 .map(|builder| builder.build())
                 .map(StorageContainer::Postgres)
                 .map_err(Into::into)
@@ -133,21 +123,17 @@ async fn main() -> Result<()> {
                 .with_conditional_put(S3ConditionalPut::ETagMatch)
                 .build()
                 .map(|object_store| {
-                    DynoStore::new(
-                        args.kafka_cluster_id.as_str(),
-                        args.kafka_node_id,
-                        object_store,
-                    )
+                    DynoStore::new(args.kafka_cluster_id.as_str(), NODE_ID, object_store)
+                        .advertised_listener(args.kafka_advertised_listener_url.clone())
                 })
                 .map(StorageContainer::DynoStore)
                 .map_err(Into::into)
         }
 
-        "memory" => Ok(StorageContainer::DynoStore(DynoStore::new(
-            args.kafka_cluster_id.as_str(),
-            args.kafka_node_id,
-            InMemory::new(),
-        ))),
+        "memory" => Ok(StorageContainer::DynoStore(
+            DynoStore::new(args.kafka_cluster_id.as_str(), NODE_ID, InMemory::new())
+                .advertised_listener(args.kafka_advertised_listener_url.clone()),
+        )),
 
         _unsupported => Err(Error::UnsupportedStorageUrl(args.storage_engine.value)),
     }?;
@@ -156,11 +142,10 @@ async fn main() -> Result<()> {
         let groups = Controller::with_storage(storage.clone())?;
 
         let mut broker = Broker::new(
-            args.kafka_node_id,
+            NODE_ID,
             &args.kafka_cluster_id,
             args.kafka_listener_url,
             args.kafka_advertised_listener_url,
-            args.kafka_rack,
             storage,
             groups,
         );

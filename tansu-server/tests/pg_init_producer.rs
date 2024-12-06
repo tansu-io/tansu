@@ -18,6 +18,7 @@ use rand::{prelude::*, thread_rng};
 use tansu_server::Result;
 use tansu_storage::Storage;
 use tracing::debug;
+use url::Url;
 use uuid::Uuid;
 
 mod common;
@@ -30,7 +31,16 @@ async fn with_txn() -> Result<()> {
 
     let cluster_id = Uuid::now_v7();
     let broker_id = rng.gen_range(0..i32::MAX);
-    let mut sc = storage_container(StorageType::Postgres, cluster_id, broker_id)?;
+    let mut sc = Url::parse("tcp://127.0.0.1/")
+        .map_err(Into::into)
+        .and_then(|advertised_listener| {
+            storage_container(
+                StorageType::Postgres,
+                cluster_id,
+                broker_id,
+                advertised_listener,
+            )
+        })?;
 
     register_broker(&cluster_id, broker_id, &mut sc).await?;
 

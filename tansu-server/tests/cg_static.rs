@@ -20,6 +20,7 @@ use tansu_kafka_sans_io::{join_group_request::JoinGroupRequestProtocol, ErrorCod
 use tansu_server::{coordinator::group::administrator::Controller, Result};
 use tansu_storage::StorageContainer;
 use tracing::debug;
+use url::Url;
 use uuid::Uuid;
 
 mod common;
@@ -173,8 +174,12 @@ pub async fn rejoin_with_empty_member_id(
 mod pg {
     use super::*;
 
-    fn storage_container(cluster_id: Uuid, broker_id: i32) -> Result<StorageContainer> {
-        common::storage_container(StorageType::Postgres, cluster_id, broker_id)
+    fn storage_container(cluster: Uuid, node: i32) -> Result<StorageContainer> {
+        Url::parse("tcp://127.0.0.1/")
+            .map_err(Into::into)
+            .and_then(|advertised_listener| {
+                common::storage_container(StorageType::Postgres, cluster, node, advertised_listener)
+            })
     }
 
     #[ignore]
@@ -213,8 +218,12 @@ mod pg {
 mod in_memory {
     use super::*;
 
-    fn storage_container(cluster_id: Uuid, broker_id: i32) -> Result<StorageContainer> {
-        common::storage_container(StorageType::InMemory, cluster_id, broker_id)
+    fn storage_container(cluster: Uuid, node: i32) -> Result<StorageContainer> {
+        Url::parse("tcp://127.0.0.1/")
+            .map_err(Into::into)
+            .and_then(|advertised_listener| {
+                common::storage_container(StorageType::InMemory, cluster, node, advertised_listener)
+            })
     }
 
     #[ignore]
