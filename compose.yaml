@@ -40,7 +40,7 @@ services:
       AWS_ALLOW_HTTP: ${AWS_ALLOW_HTTP}
     command: --kafka-cluster-id ${CLUSTER_ID}
       --kafka-listener-url tcp://0.0.0.0:9092/
-      --kafka-advertised-listener-url ${KAFKA_ADVERTISED_LISTENER_URL}
+      --kafka-advertised-listener-url tcp://${KAFKA_ADVERTISED_LISTENER_URL}
       --kafka-node-id ${NODE_ID}
       --storage-engine ${STORAGE_ENGINE}
       --work-dir /data

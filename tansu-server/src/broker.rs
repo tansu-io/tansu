@@ -127,7 +127,7 @@ where
     }
 
     pub async fn listen(&self) -> Result<()> {
-        debug!("listener: {}", self.listener.as_str());
+        debug!(listener = %self.listener, advertised_listener = %self.advertised_listener);
 
         let listener = TcpListener::bind(format!(
             "{}:{}",
