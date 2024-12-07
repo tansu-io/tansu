@@ -30,6 +30,7 @@ use tansu_kafka_sans_io::{
 use tansu_server::Result;
 use tansu_storage::{Storage, StorageContainer, Topition, TxnAddPartitionsRequest};
 use tracing::{debug, error};
+use url::Url;
 use uuid::Uuid;
 
 pub mod common;
@@ -613,7 +614,11 @@ mod pg {
     use super::*;
 
     fn storage_container(cluster: impl Into<String>, node: i32) -> Result<StorageContainer> {
-        common::storage_container(StorageType::Postgres, cluster, node)
+        Url::parse("tcp://127.0.0.1/")
+            .map_err(Into::into)
+            .and_then(|advertised_listener| {
+                common::storage_container(StorageType::Postgres, cluster, node, advertised_listener)
+            })
     }
 
     #[tokio::test]
@@ -666,7 +671,11 @@ mod in_memory {
     use super::*;
 
     fn storage_container(cluster: impl Into<String>, node: i32) -> Result<StorageContainer> {
-        common::storage_container(StorageType::InMemory, cluster, node)
+        Url::parse("tcp://127.0.0.1/")
+            .map_err(Into::into)
+            .and_then(|advertised_listener| {
+                common::storage_container(StorageType::InMemory, cluster, node, advertised_listener)
+            })
     }
 
     #[tokio::test]

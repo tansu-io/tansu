@@ -47,6 +47,7 @@ use tansu_kafka_sans_io::{
     EndTransactionMarker, ErrorCode, IsolationLevel,
 };
 use tracing::{debug, error, warn};
+use url::Url;
 use uuid::Uuid;
 
 use crate::{
@@ -62,6 +63,7 @@ const APPLICATION_JSON: &str = "application/json";
 pub struct DynoStore {
     cluster: String,
     node: i32,
+    advertised_listener: Url,
     watermarks: BTreeMap<Topition, ConditionData<Watermark>>,
     meta: ConditionData<Meta>,
 
@@ -467,9 +469,17 @@ impl DynoStore {
         Self {
             cluster: cluster.into(),
             node,
+            advertised_listener: Url::parse("tcp://127.0.0.1/").unwrap(),
             watermarks: BTreeMap::new(),
             meta: ConditionData::<Meta>::new(cluster),
             object_store: Arc::new(object_store),
+        }
+    }
+
+    pub fn advertised_listener(self, advertised_listener: Url) -> Self {
+        Self {
+            advertised_listener,
+            ..self
         }
     }
 
@@ -607,29 +617,6 @@ impl Storage for DynoStore {
         broker_registration: BrokerRegistationRequest,
     ) -> Result<()> {
         debug!(?broker_registration);
-
-        let payload = serde_json::to_vec(&broker_registration)
-            .map(Bytes::from)
-            .map(PutPayload::from)?;
-
-        let location = Path::from(format!(
-            "clusters/{}/brokers/{}.json",
-            self.cluster, self.node
-        ));
-
-        let options = PutOptions {
-            mode: PutMode::Overwrite,
-            tags: TagSet::default(),
-            attributes: json_content_type(),
-        };
-
-        let put_result = self
-            .object_store
-            .put_opts(&location, payload, options)
-            .await?;
-
-        debug!(%location, ?put_result);
-
         Ok(())
     }
 
@@ -823,60 +810,23 @@ impl Storage for DynoStore {
     }
 
     async fn brokers(&mut self) -> Result<Vec<DescribeClusterBroker>> {
-        let location = Path::from(format!("clusters/{}/brokers/", self.cluster));
-        debug!(%location);
+        debug!(cluster = self.cluster);
 
-        let mut brokers = vec![];
+        let broker_id = self.node;
+        let host = self
+            .advertised_listener
+            .host_str()
+            .unwrap_or("0.0.0.0")
+            .into();
+        let port = self.advertised_listener.port().unwrap_or(9092).into();
+        let rack = None;
 
-        let mut list_stream = self.object_store.list(Some(&location));
-
-        while let Some(meta) = list_stream
-            .next()
-            .await
-            .inspect(|meta| debug!(?meta))
-            .transpose()?
-        {
-            let Ok(get_result) = self
-                .object_store
-                .get(&meta.location)
-                .await
-                .inspect_err(|error| error!(?error, %location))
-            else {
-                continue;
-            };
-
-            let Ok(encoded) = get_result
-                .bytes()
-                .await
-                .inspect_err(|error| error!(?error, %location))
-            else {
-                continue;
-            };
-
-            let Ok(broker_registration) =
-                serde_json::from_slice::<BrokerRegistationRequest>(&encoded[..])
-                    .inspect_err(|error| error!(?error, %location))
-            else {
-                continue;
-            };
-
-            let Some(listener) = broker_registration
-                .listeners
-                .iter()
-                .find(|listener| listener.name.as_str() == "broker")
-            else {
-                continue;
-            };
-
-            brokers.push(DescribeClusterBroker {
-                broker_id: broker_registration.broker_id,
-                host: listener.host.clone(),
-                port: listener.port as i32,
-                rack: broker_registration.rack,
-            });
-        }
-
-        Ok(brokers)
+        Ok(vec![DescribeClusterBroker {
+            broker_id,
+            host,
+            port,
+            rack,
+        }])
     }
 
     async fn produce(
@@ -1379,57 +1329,16 @@ impl Storage for DynoStore {
     async fn metadata(&mut self, topics: Option<&[TopicId]>) -> Result<MetadataResponse> {
         debug!(?topics);
 
-        let location = Path::from(format!("clusters/{}/brokers/", self.cluster));
-
-        let mut brokers = vec![];
-
-        let mut list_stream = self.object_store.list(Some(&location));
-
-        while let Some(meta) = list_stream
-            .next()
-            .await
-            .inspect(|meta| debug!(?meta))
-            .transpose()?
-        {
-            let Ok(payload) = self
-                .object_store
-                .get(&meta.location)
-                .await
-                .inspect_err(|error| error!(?error, %location))
-            else {
-                continue;
-            };
-
-            let Ok(encoded) = payload
-                .bytes()
-                .await
-                .inspect_err(|error| error!(?error, %location))
-            else {
-                continue;
-            };
-
-            let Ok(broker_registration) =
-                serde_json::from_slice::<BrokerRegistationRequest>(&encoded[..])
-                    .inspect_err(|error| error!(?error, %location))
-            else {
-                continue;
-            };
-
-            let Some(listener) = broker_registration
-                .listeners
-                .iter()
-                .find(|listener| listener.name.as_str() == "broker")
-            else {
-                continue;
-            };
-
-            brokers.push(MetadataResponseBroker {
-                node_id: broker_registration.broker_id,
-                host: listener.host.clone(),
-                port: listener.port as i32,
-                rack: broker_registration.rack,
-            });
-        }
+        let brokers = vec![MetadataResponseBroker {
+            node_id: self.node,
+            host: self
+                .advertised_listener
+                .host_str()
+                .unwrap_or("0.0.0.0")
+                .into(),
+            port: self.advertised_listener.port().unwrap_or(9092).into(),
+            rack: None,
+        }];
 
         let responses = match topics {
             Some(topics) if !topics.is_empty() => {
@@ -1439,7 +1348,7 @@ impl Storage for DynoStore {
                     let response = match self
                         .topic_metadata(topic)
                         .await
-                        .inspect_err(|error| error!(?error, %location))
+                        .inspect_err(|error| error!(?error))
                     {
                         Ok(topic_metadata) => {
                             let name = Some(topic_metadata.topic.name.to_owned());
@@ -1505,7 +1414,7 @@ impl Storage for DynoStore {
                                 error_code: ErrorCode::UnknownTopicOrPartition.into(),
                                 name: match topic {
                                     TopicId::Name(name) => Some(name.into()),
-                                    TopicId::Id(_) => Some("".into()),
+                                    TopicId::Id(_) => None,
                                 },
                                 topic_id: Some(match topic {
                                     TopicId::Name(_) => NULL_TOPIC_ID,

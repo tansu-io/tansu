@@ -5,13 +5,11 @@ services:
     environment:
       PGUSER: postgres
       POSTGRES_PASSWORD: postgres
-    command: -c wal_level=logical
     ports:
       - 5432:5432
     volumes:
       - db:/var/lib/postgresql/data
-      - ./work-dir/initdb.d/:/docker-entrypoint-initdb.d/
-      - ./work-dir/data:/mnt
+      - ./etc/initdb.d/:/docker-entrypoint-initdb.d/
     healthcheck:
       test: /usr/bin/pg_isready
       interval: 5s
@@ -40,23 +38,17 @@ services:
       AWS_ALLOW_HTTP: ${AWS_ALLOW_HTTP}
     command: --kafka-cluster-id ${CLUSTER_ID}
       --kafka-listener-url tcp://0.0.0.0:9092/
-      --kafka-advertised-listener-url ${KAFKA_ADVERTISED_LISTENER_URL}
+      --kafka-advertised-listener-url tcp://${ADVERTISED_LISTENER}
       --kafka-node-id ${NODE_ID}
       --storage-engine ${STORAGE_ENGINE}
-      --work-dir /data
-    volumes:
-      - raft:/data
     ports:
       - 9092:9092
-      - 4567:4567
     links:
       - db
       - minio
     pull_policy: missing
 volumes:
   db:
-    driver: local
-  raft:
     driver: local
   minio:
     driver: local

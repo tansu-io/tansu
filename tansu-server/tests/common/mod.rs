@@ -42,6 +42,7 @@ use tansu_storage::{
 };
 use tracing::{debug, subscriber::DefaultGuard};
 use tracing_subscriber::EnvFilter;
+use url::Url;
 use uuid::Uuid;
 
 pub(crate) fn init_tracing() -> Result<DefaultGuard> {
@@ -83,20 +84,21 @@ pub(crate) fn storage_container(
     storage_type: StorageType,
     cluster: impl Into<String>,
     node: i32,
+    advertised_listener: Url,
 ) -> Result<StorageContainer> {
     match storage_type {
         StorageType::Postgres => Postgres::builder("postgres://postgres:postgres@localhost")
             .map(|builder| builder.cluster(cluster))
             .map(|builder| builder.node(node))
+            .map(|builder| builder.advertised_listener(advertised_listener))
             .map(|builder| builder.build())
             .map(StorageContainer::Postgres)
             .map_err(Into::into),
 
-        StorageType::InMemory => Ok(StorageContainer::DynoStore(DynoStore::new(
-            cluster.into().as_str(),
-            node,
-            InMemory::new(),
-        ))),
+        StorageType::InMemory => Ok(StorageContainer::DynoStore(
+            DynoStore::new(cluster.into().as_str(), node, InMemory::new())
+                .advertised_listener(advertised_listener),
+        )),
     }
 }
 

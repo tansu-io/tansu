@@ -45,6 +45,7 @@ use tansu_kafka_sans_io::{
 };
 use tokio_postgres::{error::SqlState, Config, NoTls, Row, Transaction};
 use tracing::{debug, error};
+use url::Url;
 use uuid::Uuid;
 
 use crate::{
@@ -58,47 +59,63 @@ use crate::{
 pub struct Postgres {
     cluster: String,
     node: i32,
+    advertised_listener: Url,
     pool: Pool,
 }
 
 #[derive(Clone, Default, Debug)]
-pub struct Builder<C, N, P> {
+pub struct Builder<C, N, L, P> {
     cluster: C,
     node: N,
+    advertised_listener: L,
     pool: P,
 }
 
-impl<C, N, P> Builder<C, N, P> {
-    pub fn cluster(self, cluster: impl Into<String>) -> Builder<String, N, P> {
+impl<C, N, L, P> Builder<C, N, L, P> {
+    pub fn cluster(self, cluster: impl Into<String>) -> Builder<String, N, L, P> {
         Builder {
             cluster: cluster.into(),
             node: self.node,
+            advertised_listener: self.advertised_listener,
             pool: self.pool,
         }
     }
 }
 
-impl<C, N, P> Builder<C, N, P> {
-    pub fn node(self, node: i32) -> Builder<C, i32, P> {
+impl<C, N, L, P> Builder<C, N, L, P> {
+    pub fn node(self, node: i32) -> Builder<C, i32, L, P> {
         Builder {
             cluster: self.cluster,
             node,
+            advertised_listener: self.advertised_listener,
             pool: self.pool,
         }
     }
 }
 
-impl Builder<String, i32, Pool> {
+impl<C, N, L, P> Builder<C, N, L, P> {
+    pub fn advertised_listener(self, advertised_listener: Url) -> Builder<C, N, Url, P> {
+        Builder {
+            cluster: self.cluster,
+            node: self.node,
+            advertised_listener,
+            pool: self.pool,
+        }
+    }
+}
+
+impl Builder<String, i32, Url, Pool> {
     pub fn build(self) -> Postgres {
         Postgres {
             cluster: self.cluster,
             node: self.node,
+            advertised_listener: self.advertised_listener,
             pool: self.pool,
         }
     }
 }
 
-impl<C, N> FromStr for Builder<C, N, Pool>
+impl<C, N> FromStr for Builder<C, N, Url, Pool>
 where
     C: Default,
     N: Default,
@@ -113,6 +130,7 @@ where
         };
 
         let mgr = Manager::from_config(pg_config, NoTls, mgr_config);
+        let advertised_listener = Url::parse("tcp://127.0.0.1/")?;
 
         Pool::builder(mgr)
             .max_size(16)
@@ -120,6 +138,7 @@ where
             .map(|pool| Self {
                 pool,
                 node: N::default(),
+                advertised_listener,
                 cluster: C::default(),
             })
             .map_err(Into::into)
@@ -161,7 +180,7 @@ impl TryFrom<Row> for Txn {
 impl Postgres {
     pub fn builder(
         connection: &str,
-    ) -> Result<Builder<PhantomData<String>, PhantomData<i32>, Pool>> {
+    ) -> Result<Builder<PhantomData<String>, PhantomData<i32>, Url, Pool>> {
         debug!(connection);
         Builder::from_str(connection)
     }
@@ -800,92 +819,23 @@ impl Storage for Postgres {
     ) -> Result<()> {
         debug!(cluster = self.cluster, ?broker_registration);
 
-        let mut c = self.connection().await?;
-        let tx = c.transaction().await?;
+        let c = self.connection().await?;
 
-        let prepared = tx
+        let prepared = c
             .prepare(concat!(
                 "insert into cluster",
                 " (name) values ($1)",
                 " on conflict (name)",
                 " do update set",
                 " last_updated = excluded.last_updated",
-                " returning id"
             ))
-            .await?;
-
-        let row = tx
-            .query_one(&prepared, &[&broker_registration.cluster_id])
-            .await?;
-
-        let cluster_id = row
-            .try_get::<_, i32>(0)
-            .inspect(|cluster| debug!(cluster))?;
-
-        let prepared = tx
-            .prepare(concat!(
-                "insert into broker",
-                " (cluster, node, rack, incarnation)",
-                " values ($1, $2, $3, gen_random_uuid())",
-                " on conflict (cluster, node)",
-                " do update set",
-                " incarnation = excluded.incarnation",
-                ", last_updated = excluded.last_updated",
-                " returning id"
-            ))
-            .await?;
-
-        let row = tx
-            .query_one(
-                &prepared,
-                &[
-                    &cluster_id,
-                    &broker_registration.broker_id,
-                    &broker_registration.rack,
-                ],
-            )
-            .await?;
-
-        let broker_id = row
-            .try_get::<_, i32>(0)
-            .inspect(|broker_id| debug!(broker_id))?;
-
-        let prepared = tx
-            .prepare(concat!("delete from listener where broker=$1",))
-            .await?;
-
-        _ = tx
-            .execute(&prepared, &[&broker_id])
             .await
-            .inspect(|rows| debug!(rows))?;
+            .inspect_err(|err| error!(?err))?;
 
-        let prepared = tx
-            .prepare(concat!(
-                "insert into listener",
-                " (broker, name, host, port)",
-                " values ($1, $2, $3, $4)",
-                " returning id"
-            ))
-            .await?;
-
-        for listener in broker_registration.listeners {
-            debug!(?listener);
-
-            _ = tx
-                .execute(
-                    &prepared,
-                    &[
-                        &broker_id,
-                        &listener.name,
-                        &listener.host.as_str(),
-                        &(listener.port as i32),
-                    ],
-                )
-                .await
-                .inspect(|rows| debug!(rows))?;
-        }
-
-        tx.commit().await?;
+        _ = c
+            .execute(&prepared, &[&broker_registration.cluster_id])
+            .await
+            .inspect_err(|err| error!(?err))?;
 
         Ok(())
     }
@@ -893,42 +843,21 @@ impl Storage for Postgres {
     async fn brokers(&mut self) -> Result<Vec<DescribeClusterBroker>> {
         debug!(cluster = self.cluster);
 
-        let c = self.connection().await?;
+        let broker_id = self.node;
+        let host = self
+            .advertised_listener
+            .host_str()
+            .unwrap_or("0.0.0.0")
+            .into();
+        let port = self.advertised_listener.port().unwrap_or(9092).into();
+        let rack = None;
 
-        let prepared = c
-            .prepare(concat!(
-                "select",
-                " node, host, port, rack",
-                " from broker, cluster, listener",
-                " where",
-                " cluster.name = $1",
-                " and listener.name = $2",
-                " and broker.cluster = cluster.id",
-                " and listener.broker = broker.id"
-            ))
-            .await?;
-
-        let mut brokers = vec![];
-
-        let rows = c
-            .query(&prepared, &[&self.cluster.as_str(), &"broker"])
-            .await?;
-
-        for row in rows {
-            let broker_id = row.try_get::<_, i32>(0)?;
-            let host = row.try_get::<_, String>(1)?;
-            let port = row.try_get::<_, i32>(2)?;
-            let rack = row.try_get::<_, Option<String>>(3)?;
-
-            brokers.push(DescribeClusterBroker {
-                broker_id,
-                host,
-                port,
-                rack,
-            });
-        }
-
-        Ok(brokers)
+        Ok(vec![DescribeClusterBroker {
+            broker_id,
+            host,
+            port,
+            rack,
+        }])
     }
 
     async fn create_topic(&mut self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {
@@ -1720,31 +1649,16 @@ impl Storage for Postgres {
 
         let c = self.connection().await.inspect_err(|err| error!(?err))?;
 
-        let prepared = c
-            .prepare(include_str!("pg/broker_metadata_select.sql"))
-            .await
-            .inspect_err(|err| error!(?err))?;
-
-        let rows = c
-            .query(&prepared, &[&self.cluster])
-            .await
-            .inspect_err(|err| error!(?err))?;
-
-        let mut brokers = vec![];
-
-        for row in rows {
-            let node_id = row.try_get::<_, i32>(0)?;
-            let host = row.try_get::<_, String>(1)?;
-            let port = row.try_get::<_, i32>(2)?;
-            let rack = row.try_get::<_, Option<String>>(3)?;
-
-            brokers.push(MetadataResponseBroker {
-                node_id,
-                host,
-                port,
-                rack,
-            });
-        }
+        let brokers = vec![MetadataResponseBroker {
+            node_id: self.node,
+            host: self
+                .advertised_listener
+                .host_str()
+                .unwrap_or("0.0.0.0")
+                .into(),
+            port: self.advertised_listener.port().unwrap_or(9092).into(),
+            rack: None,
+        }];
 
         debug!(?brokers);
 

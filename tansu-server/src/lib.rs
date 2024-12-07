@@ -20,7 +20,7 @@ use std::{
     fmt, io,
     num::TryFromIntError,
     result,
-    str::{FromStr, Utf8Error},
+    str::Utf8Error,
     string::FromUtf8Error,
     sync::{Arc, PoisonError},
 };
@@ -29,9 +29,6 @@ use serde::{Deserialize, Serialize};
 use tansu_kafka_sans_io::{
     broker_registration_request::Listener,
     create_topics_request::{CreatableReplicaAssignment, CreatableTopic},
-    fetch_request::FetchTopic,
-    list_partition_reassignments_request::ListPartitionReassignmentsTopics,
-    produce_request::TopicProduceData,
     ErrorCode,
 };
 use thiserror::Error;
@@ -41,68 +38,6 @@ use uuid::Uuid;
 
 pub mod broker;
 pub mod coordinator;
-
-#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
-pub enum TopicId {
-    Name(String),
-    Id(Uuid),
-}
-
-impl From<&FetchTopic> for TopicId {
-    fn from(value: &FetchTopic) -> Self {
-        if let Some(ref topic) = value.topic {
-            Self::Name(topic.to_string())
-        } else if let Some(topic_id) = value.topic_id {
-            Self::Id(Uuid::from_bytes(topic_id))
-        } else {
-            todo!()
-        }
-    }
-}
-
-impl From<&ListPartitionReassignmentsTopics> for TopicId {
-    fn from(value: &ListPartitionReassignmentsTopics) -> Self {
-        Self::Name(value.name.to_owned())
-    }
-}
-
-impl From<&TopicProduceData> for TopicId {
-    fn from(value: &TopicProduceData) -> Self {
-        Self::Name(value.name.to_owned())
-    }
-}
-
-impl From<&CreatableTopic> for TopicId {
-    fn from(value: &CreatableTopic) -> Self {
-        Self::Name(value.name.to_owned())
-    }
-}
-
-impl From<&str> for TopicId {
-    fn from(value: &str) -> Self {
-        Self::Name(value.to_string())
-    }
-}
-
-impl From<String> for TopicId {
-    fn from(value: String) -> Self {
-        Self::Name(value)
-    }
-}
-
-impl FromStr for TopicId {
-    type Err = Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(Self::Name(s.to_string()))
-    }
-}
-
-impl From<[u8; 16]> for TopicId {
-    fn from(value: [u8; 16]) -> Self {
-        Self::Id(Uuid::from_bytes(value))
-    }
-}
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct TopicDetail {

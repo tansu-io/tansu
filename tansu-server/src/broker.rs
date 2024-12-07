@@ -66,8 +66,6 @@ pub struct Broker<G, S> {
     incarnation_id: Uuid,
     listener: Url,
     advertised_listener: Url,
-    #[allow(dead_code)]
-    rack: Option<String>,
     storage: S,
     groups: G,
 }
@@ -83,7 +81,6 @@ where
         cluster_id: &str,
         listener: Url,
         advertised_listener: Url,
-        rack: Option<String>,
         storage: S,
         groups: G,
     ) -> Self {
@@ -95,7 +92,6 @@ where
             incarnation_id,
             listener,
             advertised_listener,
-            rack,
             storage,
             groups,
         }
@@ -131,7 +127,7 @@ where
     }
 
     pub async fn listen(&self) -> Result<()> {
-        debug!("listener: {}", self.listener.as_str());
+        debug!(listener = %self.listener, advertised_listener = %self.advertised_listener);
 
         let listener = TcpListener::bind(format!(
             "{}:{}",
