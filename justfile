@@ -17,9 +17,6 @@ fmt:
 miri:
     cargo +nightly miri test --no-fail-fast --all-features
 
-work-dir:
-    rm -rf work-dir/tansu-*/*
-
 docker-build:
     docker build --tag ghcr.io/tansu-io/tansu --no-cache --progress plain .
 
@@ -75,7 +72,7 @@ docker-run-postgres:
         --publish 5432:5432 \
         --env PGUSER=postgres \
         --env POSTGRES_PASSWORD=postgres \
-        --volume ./work-dir/initdb.d/:/docker-entrypoint-initdb.d/ \
+        --volume ./etc/initdb.d/:/docker-entrypoint-initdb.d/ \
         postgres:16.4
 
 docker-run:
@@ -108,17 +105,16 @@ test-topic-produce:
 test-topic-consume:
     kafka-console-consumer --bootstrap-server localhost:9092 --consumer-property fetch.max.wait.ms=15000 --group test-consumer-group --topic test --from-beginning --property print.timestamp=true --property print.key=true --property print.offset=true --property print.partition=true --property print.headers=true --property print.value=true
 
-tansu-1:
+tansu-server:
     ./target/debug/tansu-server \
         --kafka-cluster-id ${CLUSTER_ID} \
         --kafka-advertised-listener-url tcp://${ADVERTISED_LISTENER} \
-        --storage-engine ${STORAGE_ENGINE} \
-        --work-dir work-dir/tansu-1 2>&1 | tee tansu.log
+        --storage-engine ${STORAGE_ENGINE} 2>&1 | tee tansu.log
 
 kafka-proxy:
     docker run -d -p 19092:9092 apache/kafka:3.9.0
 
-proxy:
+tansu-proxy:
     ./target/debug/tansu-proxy 2>&1 | tee proxy.log
 
 

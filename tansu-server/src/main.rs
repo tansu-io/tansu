@@ -13,7 +13,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::{path::PathBuf, str::FromStr, time::Duration};
+use std::{str::FromStr, time::Duration};
 
 use clap::Parser;
 use object_store::{
@@ -80,9 +80,6 @@ struct Cli {
 
     #[arg(long, default_value = "pg=postgres://postgres:postgres@localhost")]
     storage_engine: KeyValue<String, Url>,
-
-    #[arg(long, default_value = ".")]
-    work_dir: PathBuf,
 }
 
 #[tokio::main]
