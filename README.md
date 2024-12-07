@@ -48,13 +48,13 @@ for AWS S3][object-store-dynamo-conditional-put] instead.
 
 ### configuration
 
-The `storage-engine` parameter is a named S3 URL that specifies the bucket
-to be used. The following will configure a S3 storage engine called "minio"
+The `storage-engine` parameter is a S3 URL that specifies the bucket
+to be used. The following will configure a S3 storage engine
 using the "tansu" bucket (full context is in
 [compose.yaml](compose.yaml)):
 
 ```shell
---storage-engine minio=s3://tansu/
+--storage-engine s3://tansu/
 ```
 
 First time startup, with the above `compose.yaml`, you'll need to
@@ -142,10 +142,10 @@ Switch to the PostgreSQL storage engine by updating [.env](.env):
 
 ```env
 # minio storage engine
-# STORAGE_ENGINE="minio=s3://tansu/"
+# STORAGE_ENGINE="s3://tansu/"
 
 # PostgreSQL storage engine
-STORAGE_ENGINE="pg=postgres://postgres:postgres@db"
+STORAGE_ENGINE="postgres://postgres:postgres@db"
 ```
 
 Bring Tansu back up:
