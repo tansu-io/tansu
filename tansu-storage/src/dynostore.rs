@@ -617,29 +617,6 @@ impl Storage for DynoStore {
         broker_registration: BrokerRegistationRequest,
     ) -> Result<()> {
         debug!(?broker_registration);
-
-        let payload = serde_json::to_vec(&broker_registration)
-            .map(Bytes::from)
-            .map(PutPayload::from)?;
-
-        let location = Path::from(format!(
-            "clusters/{}/brokers/{}.json",
-            self.cluster, self.node
-        ));
-
-        let options = PutOptions {
-            mode: PutMode::Overwrite,
-            tags: TagSet::default(),
-            attributes: json_content_type(),
-        };
-
-        let put_result = self
-            .object_store
-            .put_opts(&location, payload, options)
-            .await?;
-
-        debug!(%location, ?put_result);
-
         Ok(())
     }
 
@@ -833,60 +810,23 @@ impl Storage for DynoStore {
     }
 
     async fn brokers(&mut self) -> Result<Vec<DescribeClusterBroker>> {
-        let location = Path::from(format!("clusters/{}/brokers/", self.cluster));
-        debug!(%location);
+        debug!(cluster = self.cluster);
 
-        let mut brokers = vec![];
+        let broker_id = self.node;
+        let host = self
+            .advertised_listener
+            .host_str()
+            .unwrap_or("0.0.0.0")
+            .into();
+        let port = self.advertised_listener.port().unwrap_or(9092).into();
+        let rack = None;
 
-        let mut list_stream = self.object_store.list(Some(&location));
-
-        while let Some(meta) = list_stream
-            .next()
-            .await
-            .inspect(|meta| debug!(?meta))
-            .transpose()?
-        {
-            let Ok(get_result) = self
-                .object_store
-                .get(&meta.location)
-                .await
-                .inspect_err(|error| error!(?error, %location))
-            else {
-                continue;
-            };
-
-            let Ok(encoded) = get_result
-                .bytes()
-                .await
-                .inspect_err(|error| error!(?error, %location))
-            else {
-                continue;
-            };
-
-            let Ok(broker_registration) =
-                serde_json::from_slice::<BrokerRegistationRequest>(&encoded[..])
-                    .inspect_err(|error| error!(?error, %location))
-            else {
-                continue;
-            };
-
-            let Some(listener) = broker_registration
-                .listeners
-                .iter()
-                .find(|listener| listener.name.as_str() == "broker")
-            else {
-                continue;
-            };
-
-            brokers.push(DescribeClusterBroker {
-                broker_id: broker_registration.broker_id,
-                host: listener.host.clone(),
-                port: listener.port as i32,
-                rack: broker_registration.rack,
-            });
-        }
-
-        Ok(brokers)
+        Ok(vec![DescribeClusterBroker {
+            broker_id,
+            host,
+            port,
+            rack,
+        }])
     }
 
     async fn produce(
@@ -1474,7 +1414,7 @@ impl Storage for DynoStore {
                                 error_code: ErrorCode::UnknownTopicOrPartition.into(),
                                 name: match topic {
                                     TopicId::Name(name) => Some(name.into()),
-                                    TopicId::Id(_) => Some("".into()),
+                                    TopicId::Id(_) => None,
                                 },
                                 topic_id: Some(match topic {
                                     TopicId::Name(_) => NULL_TOPIC_ID,

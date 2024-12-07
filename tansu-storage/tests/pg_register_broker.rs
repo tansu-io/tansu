@@ -56,6 +56,7 @@ fn storage_container(cluster: impl Into<String>, node: i32) -> Result<StorageCon
         .map(StorageContainer::Postgres)
 }
 
+#[ignore]
 #[tokio::test]
 async fn register_broker() -> Result<()> {
     let _guard = init_tracing()?;

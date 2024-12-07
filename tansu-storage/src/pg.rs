@@ -819,92 +819,23 @@ impl Storage for Postgres {
     ) -> Result<()> {
         debug!(cluster = self.cluster, ?broker_registration);
 
-        let mut c = self.connection().await?;
-        let tx = c.transaction().await?;
+        let c = self.connection().await?;
 
-        let prepared = tx
+        let prepared = c
             .prepare(concat!(
                 "insert into cluster",
                 " (name) values ($1)",
                 " on conflict (name)",
                 " do update set",
                 " last_updated = excluded.last_updated",
-                " returning id"
             ))
-            .await?;
-
-        let row = tx
-            .query_one(&prepared, &[&broker_registration.cluster_id])
-            .await?;
-
-        let cluster_id = row
-            .try_get::<_, i32>(0)
-            .inspect(|cluster| debug!(cluster))?;
-
-        let prepared = tx
-            .prepare(concat!(
-                "insert into broker",
-                " (cluster, node, rack, incarnation)",
-                " values ($1, $2, $3, gen_random_uuid())",
-                " on conflict (cluster, node)",
-                " do update set",
-                " incarnation = excluded.incarnation",
-                ", last_updated = excluded.last_updated",
-                " returning id"
-            ))
-            .await?;
-
-        let row = tx
-            .query_one(
-                &prepared,
-                &[
-                    &cluster_id,
-                    &broker_registration.broker_id,
-                    &broker_registration.rack,
-                ],
-            )
-            .await?;
-
-        let broker_id = row
-            .try_get::<_, i32>(0)
-            .inspect(|broker_id| debug!(broker_id))?;
-
-        let prepared = tx
-            .prepare(concat!("delete from listener where broker=$1",))
-            .await?;
-
-        _ = tx
-            .execute(&prepared, &[&broker_id])
             .await
-            .inspect(|rows| debug!(rows))?;
+            .inspect_err(|err| error!(?err))?;
 
-        let prepared = tx
-            .prepare(concat!(
-                "insert into listener",
-                " (broker, name, host, port)",
-                " values ($1, $2, $3, $4)",
-                " returning id"
-            ))
-            .await?;
-
-        for listener in broker_registration.listeners {
-            debug!(?listener);
-
-            _ = tx
-                .execute(
-                    &prepared,
-                    &[
-                        &broker_id,
-                        &listener.name,
-                        &listener.host.as_str(),
-                        &(listener.port as i32),
-                    ],
-                )
-                .await
-                .inspect(|rows| debug!(rows))?;
-        }
-
-        tx.commit().await?;
+        _ = c
+            .execute(&prepared, &[&broker_registration.cluster_id])
+            .await
+            .inspect_err(|err| error!(?err))?;
 
         Ok(())
     }
@@ -912,42 +843,21 @@ impl Storage for Postgres {
     async fn brokers(&mut self) -> Result<Vec<DescribeClusterBroker>> {
         debug!(cluster = self.cluster);
 
-        let c = self.connection().await?;
+        let broker_id = self.node;
+        let host = self
+            .advertised_listener
+            .host_str()
+            .unwrap_or("0.0.0.0")
+            .into();
+        let port = self.advertised_listener.port().unwrap_or(9092).into();
+        let rack = None;
 
-        let prepared = c
-            .prepare(concat!(
-                "select",
-                " node, host, port, rack",
-                " from broker, cluster, listener",
-                " where",
-                " cluster.name = $1",
-                " and listener.name = $2",
-                " and broker.cluster = cluster.id",
-                " and listener.broker = broker.id"
-            ))
-            .await?;
-
-        let mut brokers = vec![];
-
-        let rows = c
-            .query(&prepared, &[&self.cluster.as_str(), &"broker"])
-            .await?;
-
-        for row in rows {
-            let broker_id = row.try_get::<_, i32>(0)?;
-            let host = row.try_get::<_, String>(1)?;
-            let port = row.try_get::<_, i32>(2)?;
-            let rack = row.try_get::<_, Option<String>>(3)?;
-
-            brokers.push(DescribeClusterBroker {
-                broker_id,
-                host,
-                port,
-                rack,
-            });
-        }
-
-        Ok(brokers)
+        Ok(vec![DescribeClusterBroker {
+            broker_id,
+            host,
+            port,
+            rack,
+        }])
     }
 
     async fn create_topic(&mut self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {

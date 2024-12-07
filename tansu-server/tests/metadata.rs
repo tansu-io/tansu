@@ -616,3 +616,120 @@ mod pg {
         .await
     }
 }
+
+mod in_memory {
+    use common::{init_tracing, StorageType};
+    use rand::{prelude::*, thread_rng};
+
+    use super::*;
+
+    fn storage_container(
+        cluster: impl Into<String>,
+        node: i32,
+        advertised_listener: Url,
+    ) -> Result<StorageContainer> {
+        common::storage_container(StorageType::InMemory, cluster, node, advertised_listener)
+    }
+
+    #[tokio::test]
+    async fn topics_none() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster = Uuid::now_v7();
+        let node = thread_rng().gen_range(0..i32::MAX);
+        let advertised_listener = Url::parse("tcp://example.com:9092/")?;
+
+        super::topics_none(
+            cluster,
+            node,
+            advertised_listener.clone(),
+            storage_container(cluster, node, advertised_listener)?,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn topics_some_empty() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster = Uuid::now_v7();
+        let node = thread_rng().gen_range(0..i32::MAX);
+        let advertised_listener = Url::parse("tcp://example.com:9092/")?;
+
+        super::topics_some_empty(
+            cluster,
+            node,
+            advertised_listener.clone(),
+            storage_container(cluster, node, advertised_listener)?,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn topics_some_matching_by_name() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster = Uuid::now_v7();
+        let node = thread_rng().gen_range(0..i32::MAX);
+        let advertised_listener = Url::parse("tcp://example.com:9092/")?;
+
+        super::topics_some_matching_by_name(
+            cluster,
+            node,
+            advertised_listener.clone(),
+            storage_container(cluster, node, advertised_listener)?,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn topics_some_not_matching_by_name() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster = Uuid::now_v7();
+        let node = thread_rng().gen_range(0..i32::MAX);
+        let advertised_listener = Url::parse("tcp://example.com:9092/")?;
+
+        super::topics_some_not_matching_by_name(
+            cluster,
+            node,
+            advertised_listener.clone(),
+            storage_container(cluster, node, advertised_listener)?,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn topics_some_matching_by_id() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster = Uuid::now_v7();
+        let node = thread_rng().gen_range(0..i32::MAX);
+        let advertised_listener = Url::parse("tcp://example.com:9092/")?;
+
+        super::topics_some_matching_by_id(
+            cluster,
+            node,
+            advertised_listener.clone(),
+            storage_container(cluster, node, advertised_listener)?,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn topics_some_not_matching_by_id() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster = Uuid::now_v7();
+        let node = thread_rng().gen_range(0..i32::MAX);
+        let advertised_listener = Url::parse("tcp://example.com:9092/")?;
+
+        super::topics_some_not_matching_by_id(
+            cluster,
+            node,
+            advertised_listener.clone(),
+            storage_container(cluster, node, advertised_listener)?,
+        )
+        .await
+    }
+}

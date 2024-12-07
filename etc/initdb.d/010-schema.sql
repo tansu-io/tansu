@@ -23,52 +23,6 @@ create table if not exists cluster (
     created_at timestamp default current_timestamp not null
 );
 
-create table if not exists broker (
-    id int generated always as identity primary key,
-    cluster int references cluster (id) not null,
-    node int not null,
-    unique (cluster, node),
-    rack text,
-    incarnation uuid not null,
-    last_updated timestamp default current_timestamp not null,
-    created_at timestamp default current_timestamp not null
-);
-
-create
-or replace view v_broker as
-select
-    c.name as cluster,
-    b.node as node,
-    b.rack as rack,
-    b.incarnation as incarnation
-from
-    cluster c
-    join broker b on b.cluster = c.id;
-
-create table if not exists listener (
-    id int generated always as identity primary key,
-    broker int references broker (id) not null,
-    name text not null,
-    unique (broker, name),
-    host text not null,
-    port int not null,
-    last_updated timestamp default current_timestamp not null,
-    created_at timestamp default current_timestamp not null
-);
-
-create
-or replace view v_listener as
-select
-    c.name as cluster,
-    b.node as node,
-    l.name as name,
-    l.host as host,
-    l.port as port
-from
-    cluster c
-    join broker b on b.cluster = c.id
-    join listener l on l.broker = b.id;
-
 create table if not exists topic (
     id int generated always as identity primary key,
     cluster int references cluster (id) not null,
