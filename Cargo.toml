@@ -6,7 +6,6 @@ members = [
     "tansu-proxy",
     "tansu-server",
     "tansu-storage",
-    "tansu-varint",
 ]
 
 [workspace.package]
@@ -70,10 +69,7 @@ regex = "1.11.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1"
 snap = "1.1.1"
-strum = { version = "0.26", features = ["derive"] }
-strum_macros = "0.26"
 syn = { version = "2.0", features = ["full"] }
-tarpc = { version = "0.34", features = ["full"] }
 tempfile = "3"
 thiserror = "1.0"
 time = { version = "0.3.37", features = ["formatting", "macros"] }
@@ -85,8 +81,6 @@ tokio-postgres = { version = "0.7.12", features = [
 tracing = "0.1"
 tracing-core = { version = "0.1" }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-typetag = "0.2"
-ulid = "1.1.3"
 url = { version = "2.5.4", features = ["serde"] }
 uuid = { version = "1.11.0", features = ["serde", "v4", "v7"] }
 zstd = "0.13.2"

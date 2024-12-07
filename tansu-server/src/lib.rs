@@ -13,9 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-#[cfg_attr(feature = "nightly-features", feature(error_generic_member_access))]
-#[cfg(feature = "nightly-features")]
-use std::backtrace::Backtrace;
 use std::{
     fmt, io,
     num::TryFromIntError,
@@ -141,19 +138,13 @@ pub struct BrokerDetail {
 #[derive(Error, Debug)]
 pub enum Error {
     Api(ErrorCode),
-    ClientRpc(#[from] tarpc::client::RpcError),
     Custom(String),
     EmptyCoordinatorWrapper,
     EmptyJoinGroupRequestProtocol,
     ExpectedJoinGroupRequestProtocol(&'static str),
     Io(Arc<io::Error>),
     Json(#[from] serde_json::Error),
-    KafkaProtocol {
-        #[from]
-        source: tansu_kafka_sans_io::Error,
-        #[cfg(feature = "nightly-features")]
-        backtrace: Backtrace,
-    },
+    KafkaProtocol(#[from] tansu_kafka_sans_io::Error),
     Message(String),
     Model(#[from] tansu_kafka_model::Error),
     ObjectStore(#[from] object_store::Error),
