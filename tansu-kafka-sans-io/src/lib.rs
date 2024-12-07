@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-#![cfg_attr(feature = "nightly-features", feature(error_generic_member_access))]
 pub mod de;
 pub mod primitive;
 pub mod record;
@@ -26,8 +25,6 @@ use primitive::tagged::TagBuffer;
 use record::deflated::Frame as RecordBatch;
 pub use ser::Encoder;
 use serde::{Deserialize, Serialize};
-#[cfg(feature = "nightly-features")]
-use std::backtrace::Backtrace;
 use std::{
     collections::HashMap,
     env::VarError,
@@ -105,12 +102,7 @@ pub enum Error {
     StringWithoutLength,
     SystemTime(SystemTimeError),
     TansuKafkaModel(tansu_kafka_model::Error),
-    TryFromInt {
-        #[from]
-        source: num::TryFromIntError,
-        #[cfg(feature = "nightly-features")]
-        backtrace: Backtrace,
-    },
+    TryFromInt(#[from] num::TryFromIntError),
     UnexpectedTaggedHeader(HeaderMezzanine),
     UnknownApiErrorCode(i16),
     UnknownCompressionType(i16),
