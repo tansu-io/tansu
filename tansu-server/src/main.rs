@@ -42,28 +42,6 @@ impl FromStr for ElectionTimeout {
     }
 }
 
-#[derive(Clone, Debug)]
-struct KeyValue<K, V> {
-    #[allow(dead_code)]
-    key: K,
-    value: V,
-}
-
-impl FromStr for KeyValue<String, Url> {
-    type Err = Error;
-
-    fn from_str(kv: &str) -> std::result::Result<Self, Self::Err> {
-        kv.split_once('=')
-            .ok_or(Error::Custom("kv: {kv}".into()))
-            .and_then(|(k, v)| {
-                Url::try_from(v).map_err(Into::into).map(|value| Self {
-                    key: k.to_owned(),
-                    value,
-                })
-            })
-    }
-}
-
 const NODE_ID: i32 = 111;
 
 #[derive(Parser, Debug)]
@@ -79,7 +57,7 @@ struct Cli {
     kafka_advertised_listener_url: Url,
 
     #[arg(long, default_value = "pg=postgres://postgres:postgres@localhost")]
-    storage_engine: KeyValue<String, Url>,
+    storage_engine: Url,
 }
 
 #[tokio::main]
@@ -99,21 +77,17 @@ async fn main() -> Result<()> {
 
     let mut set = JoinSet::new();
 
-    let storage = match args.storage_engine.value.scheme() {
-        "postgres" | "postgresql" => {
-            Postgres::builder(args.storage_engine.value.to_string().as_str())
-                .map(|builder| builder.cluster(args.kafka_cluster_id.as_str()))
-                .map(|builder| builder.node(NODE_ID))
-                .map(|builder| {
-                    builder.advertised_listener(args.kafka_advertised_listener_url.clone())
-                })
-                .map(|builder| builder.build())
-                .map(StorageContainer::Postgres)
-                .map_err(Into::into)
-        }
+    let storage = match args.storage_engine.scheme() {
+        "postgres" | "postgresql" => Postgres::builder(args.storage_engine.to_string().as_str())
+            .map(|builder| builder.cluster(args.kafka_cluster_id.as_str()))
+            .map(|builder| builder.node(NODE_ID))
+            .map(|builder| builder.advertised_listener(args.kafka_advertised_listener_url.clone()))
+            .map(|builder| builder.build())
+            .map(StorageContainer::Postgres)
+            .map_err(Into::into),
 
         "s3" => {
-            let bucket_name = args.storage_engine.value.host_str().unwrap_or("tansu");
+            let bucket_name = args.storage_engine.host_str().unwrap_or("tansu");
 
             AmazonS3Builder::from_env()
                 .with_bucket_name(bucket_name)
@@ -132,7 +106,7 @@ async fn main() -> Result<()> {
                 .advertised_listener(args.kafka_advertised_listener_url.clone()),
         )),
 
-        _unsupported => Err(Error::UnsupportedStorageUrl(args.storage_engine.value)),
+        _unsupported => Err(Error::UnsupportedStorageUrl(args.storage_engine)),
     }?;
 
     {
