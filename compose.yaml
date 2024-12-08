@@ -1,7 +1,7 @@
 ---
 services:
   db:
-    image: ${POSTGRES_IMAGE:-postgres:16.4}
+    image: ${POSTGRES_IMAGE:-postgres:17}
     environment:
       PGUSER: postgres
       POSTGRES_PASSWORD: postgres
@@ -27,7 +27,7 @@ services:
       - 9000:9000
       - 9001:9001
   tansu:
-    image: ghcr.io/tansu-io/tansu
+    image: ghcr.io/tansu-io/tansu:0.1.0-pre.2
     restart: unless-stopped
     environment:
       RUST_BACKTRACE: ${RUST_BACKTRACE}
@@ -39,7 +39,6 @@ services:
     command: --kafka-cluster-id ${CLUSTER_ID}
       --kafka-listener-url tcp://0.0.0.0:9092/
       --kafka-advertised-listener-url tcp://${ADVERTISED_LISTENER}
-      --kafka-node-id ${NODE_ID}
       --storage-engine ${STORAGE_ENGINE}
     ports:
       - 9092:9092
