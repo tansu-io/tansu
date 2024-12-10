@@ -24,7 +24,7 @@ use std::{
     array::TryFromSliceError,
     collections::BTreeMap,
     ffi::OsString,
-    fmt::Debug,
+    fmt::{self, Debug, Display, Formatter},
     fs::DirEntry,
     io,
     num::{ParseIntError, TryFromIntError},
@@ -38,14 +38,18 @@ use tansu_kafka_sans_io::{
     add_partitions_to_txn_request::{AddPartitionsToTxnTopic, AddPartitionsToTxnTransaction},
     add_partitions_to_txn_response::{AddPartitionsToTxnResult, AddPartitionsToTxnTopicResult},
     broker_registration_request::{Feature, Listener},
+    consumer_group_describe_response,
     create_topics_request::CreatableTopic,
+    delete_groups_response::DeletableGroupResult,
     delete_records_request::DeleteRecordsTopic,
     delete_records_response::DeleteRecordsTopicResult,
     delete_topics_request::DeleteTopicState,
     describe_cluster_response::DescribeClusterBroker,
     describe_configs_response::DescribeConfigsResult,
+    describe_groups_response,
     fetch_request::FetchTopic,
     join_group_response::JoinGroupResponseMember,
+    list_groups_response::ListedGroup,
     metadata_request::MetadataRequestTopic,
     metadata_response::{MetadataResponseBroker, MetadataResponseTopic},
     offset_commit_request::OffsetCommitRequestPartition,
@@ -350,6 +354,12 @@ pub struct OffsetCommitRequest {
     metadata: Option<String>,
 }
 
+impl OffsetCommitRequest {
+    pub fn offset(self, offset: i64) -> Self {
+        Self { offset, ..self }
+    }
+}
+
 impl TryFrom<&OffsetCommitRequestPartition> for OffsetCommitRequest {
     type Error = Error;
 
@@ -526,12 +536,69 @@ pub enum GroupState {
     },
 }
 
+impl GroupState {
+    pub fn protocol_type(&self) -> Option<String> {
+        match self {
+            Self::Forming { protocol_type, .. } => protocol_type.clone(),
+            Self::Formed { protocol_type, .. } => Some(protocol_type.clone()),
+        }
+    }
+
+    pub fn protocol_name(&self) -> Option<String> {
+        match self {
+            Self::Forming { protocol_name, .. } => protocol_name.clone(),
+            Self::Formed { protocol_name, .. } => Some(protocol_name.clone()),
+        }
+    }
+
+    pub fn leader(&self) -> Option<String> {
+        match self {
+            Self::Forming { leader, .. } => leader.clone(),
+            Self::Formed { leader, .. } => Some(leader.clone()),
+        }
+    }
+
+    pub fn assignments(&self) -> BTreeMap<String, Bytes> {
+        match self {
+            Self::Forming { .. } => BTreeMap::new(),
+            Self::Formed { assignments, .. } => assignments.clone(),
+        }
+    }
+}
+
 impl Default for GroupState {
     fn default() -> Self {
         Self::Forming {
             protocol_type: None,
             protocol_name: Some("".into()),
             leader: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+pub enum ConsumerGroupState {
+    Unknown,
+    PreparingRebalance,
+    CompletingRebalance,
+    Stable,
+    Dead,
+    Empty,
+    Assigning,
+    Reconciling,
+}
+
+impl Display for ConsumerGroupState {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unknown => f.write_str("Unknown"),
+            Self::PreparingRebalance => f.write_str("PreparingRebalance"),
+            Self::CompletingRebalance => f.write_str("CompletingRebalance"),
+            Self::Stable => f.write_str("Stable"),
+            Self::Dead => f.write_str("Dead"),
+            Self::Empty => f.write_str("Empty"),
+            Self::Assigning => f.write_str("Assigning"),
+            Self::Reconciling => f.write_str("Reconciling"),
         }
     }
 }
@@ -557,6 +624,174 @@ impl Default for GroupDetail {
             skip_assignment: Some(false),
             inception: SystemTime::now(),
             state: GroupState::default(),
+        }
+    }
+}
+
+impl From<&GroupDetail> for ConsumerGroupState {
+    fn from(value: &GroupDetail) -> Self {
+        match value {
+            GroupDetail { members, .. } if members.is_empty() => Self::Empty,
+
+            GroupDetail {
+                state: GroupState::Forming { leader: None, .. },
+                ..
+            } => Self::Assigning,
+
+            GroupDetail {
+                state: GroupState::Formed { .. },
+                ..
+            } => Self::Stable,
+
+            _ => {
+                debug!(unknown = ?value);
+                Self::Unknown
+            }
+        }
+    }
+}
+
+impl From<&GroupDetail> for consumer_group_describe_response::DescribedGroup {
+    fn from(value: &GroupDetail) -> Self {
+        let assignor_name = match value.state {
+            GroupState::Forming { ref leader, .. } => leader.clone().unwrap_or_default(),
+            GroupState::Formed { ref leader, .. } => leader.clone(),
+        };
+
+        let group_state = ConsumerGroupState::from(value).to_string();
+
+        Self {
+            error_code: ErrorCode::None.into(),
+            error_message: Some(ErrorCode::None.to_string()),
+            group_id: Default::default(),
+            group_state,
+            group_epoch: -1,
+            assignment_epoch: -1,
+            assignor_name,
+            members: Some([].into()),
+            authorized_operations: -1,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+pub enum GroupDetailResponse {
+    ErrorCode(ErrorCode),
+    Found(GroupDetail),
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct NamedGroupDetail {
+    name: String,
+    response: GroupDetailResponse,
+}
+
+impl NamedGroupDetail {
+    pub fn error_code(name: String, error_code: ErrorCode) -> Self {
+        Self {
+            name,
+            response: GroupDetailResponse::ErrorCode(error_code),
+        }
+    }
+
+    pub fn found(name: String, found: GroupDetail) -> Self {
+        Self {
+            name,
+            response: GroupDetailResponse::Found(found),
+        }
+    }
+}
+
+impl From<&NamedGroupDetail> for consumer_group_describe_response::DescribedGroup {
+    fn from(value: &NamedGroupDetail) -> Self {
+        match value {
+            NamedGroupDetail {
+                name,
+                response: GroupDetailResponse::Found(group_detail),
+            } => {
+                let assignor_name = match group_detail.state {
+                    GroupState::Forming { ref leader, .. } => leader.clone().unwrap_or_default(),
+                    GroupState::Formed { ref leader, .. } => leader.clone(),
+                };
+
+                let group_state = ConsumerGroupState::from(group_detail).to_string();
+
+                Self {
+                    error_code: ErrorCode::None.into(),
+                    error_message: Some(ErrorCode::None.to_string()),
+                    group_id: name.into(),
+                    group_state,
+                    group_epoch: -1,
+                    assignment_epoch: -1,
+                    assignor_name,
+                    members: Some([].into()),
+                    authorized_operations: -1,
+                }
+            }
+
+            NamedGroupDetail {
+                name,
+                response: GroupDetailResponse::ErrorCode(error_code),
+            } => Self {
+                error_code: (*error_code).into(),
+                error_message: Some(error_code.to_string()),
+                group_id: name.into(),
+                group_state: "Unknown".into(),
+                group_epoch: -1,
+                assignment_epoch: -1,
+                assignor_name: "".into(),
+                members: Some([].into()),
+                authorized_operations: -1,
+            },
+        }
+    }
+}
+
+impl From<&NamedGroupDetail> for describe_groups_response::DescribedGroup {
+    fn from(value: &NamedGroupDetail) -> Self {
+        match value {
+            NamedGroupDetail {
+                name,
+                response: GroupDetailResponse::Found(group_detail),
+            } => {
+                let group_state = ConsumerGroupState::from(group_detail).to_string();
+
+                let members = group_detail
+                    .members
+                    .keys()
+                    .map(|member_id| describe_groups_response::DescribedGroupMember {
+                        member_id: member_id.into(),
+                        group_instance_id: None,
+                        client_id: "".into(),
+                        client_host: "".into(),
+                        member_metadata: Bytes::new(),
+                        member_assignment: Bytes::new(),
+                    })
+                    .collect::<Vec<_>>();
+
+                Self {
+                    error_code: ErrorCode::None.into(),
+                    group_id: name.clone(),
+                    group_state,
+                    protocol_type: group_detail.state.protocol_type().unwrap_or_default(),
+                    protocol_data: "".into(),
+                    members: Some(members),
+                    authorized_operations: Some(-1),
+                }
+            }
+
+            NamedGroupDetail {
+                name,
+                response: GroupDetailResponse::ErrorCode(error_code),
+            } => Self {
+                error_code: (*error_code).into(),
+                group_id: name.clone(),
+                group_state: "Unknown".into(),
+                protocol_type: "".into(),
+                protocol_data: "".into(),
+                members: Some(vec![]),
+                authorized_operations: Some(-1),
+            },
         }
     }
 }
@@ -777,6 +1012,11 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
         require_stable: Option<bool>,
     ) -> Result<BTreeMap<Topition, i64>>;
 
+    async fn committed_offset_topitions(
+        &mut self,
+        group_id: &str,
+    ) -> Result<BTreeMap<Topition, i64>>;
+
     async fn metadata(&mut self, topics: Option<&[TopicId]>) -> Result<MetadataResponse>;
 
     async fn describe_config(
@@ -785,6 +1025,19 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
         resource: ConfigResource,
         keys: Option<&[String]>,
     ) -> Result<DescribeConfigsResult>;
+
+    async fn list_groups(&mut self, states_filter: Option<&[String]>) -> Result<Vec<ListedGroup>>;
+
+    async fn delete_groups(
+        &mut self,
+        group_ids: Option<&[String]>,
+    ) -> Result<Vec<DeletableGroupResult>>;
+
+    async fn describe_groups(
+        &mut self,
+        group_ids: Option<&[String]>,
+        include_authorized_operations: bool,
+    ) -> Result<Vec<NamedGroupDetail>>;
 
     async fn update_group(
         &mut self,
@@ -955,6 +1208,16 @@ impl Storage for StorageContainer {
         }
     }
 
+    async fn committed_offset_topitions(
+        &mut self,
+        group_id: &str,
+    ) -> Result<BTreeMap<Topition, i64>> {
+        match self {
+            Self::Postgres(inner) => inner.committed_offset_topitions(group_id).await,
+            Self::DynoStore(inner) => inner.committed_offset_topitions(group_id).await,
+        }
+    }
+
     async fn offset_fetch(
         &mut self,
         group_id: Option<&str>,
@@ -987,6 +1250,42 @@ impl Storage for StorageContainer {
         match self {
             Self::Postgres(pg) => pg.describe_config(name, resource, keys).await,
             Self::DynoStore(dyn_store) => dyn_store.describe_config(name, resource, keys).await,
+        }
+    }
+
+    async fn list_groups(&mut self, states_filter: Option<&[String]>) -> Result<Vec<ListedGroup>> {
+        match self {
+            Self::Postgres(pg) => pg.list_groups(states_filter).await,
+            Self::DynoStore(dyn_store) => dyn_store.list_groups(states_filter).await,
+        }
+    }
+
+    async fn delete_groups(
+        &mut self,
+        group_ids: Option<&[String]>,
+    ) -> Result<Vec<DeletableGroupResult>> {
+        match self {
+            Self::Postgres(inner) => inner.delete_groups(group_ids).await,
+            Self::DynoStore(inner) => inner.delete_groups(group_ids).await,
+        }
+    }
+
+    async fn describe_groups(
+        &mut self,
+        group_ids: Option<&[String]>,
+        include_authorized_operations: bool,
+    ) -> Result<Vec<NamedGroupDetail>> {
+        match self {
+            Self::Postgres(inner) => {
+                inner
+                    .describe_groups(group_ids, include_authorized_operations)
+                    .await
+            }
+            Self::DynoStore(inner) => {
+                inner
+                    .describe_groups(group_ids, include_authorized_operations)
+                    .await
+            }
         }
     }
 

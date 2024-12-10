@@ -20,9 +20,9 @@ insert into consumer_offset
 select cg.id, tp.id, $5, $6, $7, $8
 
 from cluster c
-join consumer_group cg on cg.cluster = c.id
 join topic t on t.cluster = c.id
 join topition tp on tp.topic = t.id
+join consumer_group cg on cg.cluster = c.id
 
 where c.name = $1
 and t.name = $2

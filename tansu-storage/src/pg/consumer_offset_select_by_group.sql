@@ -14,7 +14,9 @@
 -- You should have received a copy of the GNU Affero General Public License
 -- along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-select co.committed_offset
+-- prepare consumer_offset_select_by_group (text, text) as
+
+select t.name, tp.partition, co.committed_offset
 
 from cluster c
 join consumer_group cg on cg.cluster = c.id
@@ -23,6 +25,4 @@ join topition tp on tp.topic = t.id
 join consumer_offset co on co.consumer_group = cg.id and co.topition = tp.id
 
 where c.name = $1
-and cg.name = $2
-and t.name = $3
-and tp.partition = $4;
+and cg.name = $2;

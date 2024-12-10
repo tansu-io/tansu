@@ -22,4 +22,6 @@ select c.id, $2
 from cluster c
 where c.name = $1
 
-on conflict (cluster, name) do nothing;
+on conflict (cluster, name)
+do update set
+last_updated = excluded.last_updated;
