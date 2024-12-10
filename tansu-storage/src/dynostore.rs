@@ -35,7 +35,6 @@ use tansu_kafka_sans_io::{
     add_partitions_to_txn_response::{
         AddPartitionsToTxnPartitionResult, AddPartitionsToTxnTopicResult,
     },
-    consumer_group_describe_response::DescribedGroup,
     create_topics_request::CreatableTopic,
     delete_groups_response::DeletableGroupResult,
     delete_records_request::DeleteRecordsTopic,
@@ -55,9 +54,9 @@ use uuid::Uuid;
 
 use crate::{
     BrokerRegistationRequest, Error, GroupDetail, ListOffsetRequest, ListOffsetResponse,
-    MetadataResponse, OffsetCommitRequest, OffsetStage, ProducerIdResponse, Result, Storage,
-    TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse, TxnOffsetCommitRequest,
-    TxnState, UpdateError, Version, NULL_TOPIC_ID,
+    MetadataResponse, NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse,
+    Result, Storage, TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse,
+    TxnOffsetCommitRequest, TxnState, UpdateError, Version, NULL_TOPIC_ID,
 };
 
 const APPLICATION_JSON: &str = "application/json";
@@ -1696,7 +1695,7 @@ impl Storage for DynoStore {
                 listed_groups.push(ListedGroup {
                     group_id: group_id.as_ref().into(),
                     protocol_type: "consumer".into(),
-                    group_state: None,
+                    group_state: Some("Unknown".into()),
                 });
             }
         }
@@ -1767,9 +1766,44 @@ impl Storage for DynoStore {
         &mut self,
         group_ids: Option<&[String]>,
         include_authorized_operations: bool,
-    ) -> Result<Vec<DescribedGroup>> {
+    ) -> Result<Vec<NamedGroupDetail>> {
         debug!(?group_ids, include_authorized_operations);
-        Ok(vec![])
+        let mut results = vec![];
+        if let Some(group_ids) = group_ids {
+            for group_id in group_ids {
+                let location = Path::from(format!(
+                    "clusters/{}/groups/consumers/{}.json",
+                    self.cluster, group_id,
+                ));
+
+                match self
+                    .get::<GroupDetail>(&location)
+                    .await
+                    .inspect(|o| debug!(?o, group_id))
+                    .inspect_err(|err| error!(?err, group_id))
+                {
+                    Ok((group_detail, _)) => {
+                        results.push(NamedGroupDetail::found(group_id.into(), group_detail));
+                    }
+
+                    Err(Error::ObjectStore(object_store::Error::NotFound { .. })) => {
+                        results.push(NamedGroupDetail::found(
+                            group_id.into(),
+                            GroupDetail::default(),
+                        ));
+                    }
+
+                    Err(_) => {
+                        results.push(NamedGroupDetail::error_code(
+                            group_id.into(),
+                            ErrorCode::UnknownServerError,
+                        ));
+                    }
+                }
+            }
+        }
+
+        Ok(results)
     }
 
     async fn update_group(

@@ -31,7 +31,6 @@ use tansu_kafka_sans_io::{
     add_partitions_to_txn_response::{
         AddPartitionsToTxnPartitionResult, AddPartitionsToTxnTopicResult,
     },
-    consumer_group_describe_response::DescribedGroup,
     create_topics_request::CreatableTopic,
     delete_groups_response::DeletableGroupResult,
     delete_records_request::DeleteRecordsTopic,
@@ -52,8 +51,8 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::{
-    BrokerRegistationRequest, Error, GroupDetail, GroupState, ListOffsetRequest,
-    ListOffsetResponse, MetadataResponse, OffsetCommitRequest, OffsetStage, ProducerIdResponse,
+    BrokerRegistationRequest, Error, GroupDetail, ListOffsetRequest, ListOffsetResponse,
+    MetadataResponse, NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse,
     Result, Storage, TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse,
     TxnOffsetCommitRequest, TxnState, UpdateError, Version, NULL_TOPIC_ID,
 };
@@ -838,6 +837,7 @@ impl Storage for Postgres {
         _ = c
             .execute(&prepared, &[&broker_registration.cluster_id])
             .await
+            .inspect(|n| debug!(cluster = self.cluster, n))
             .inspect_err(|err| error!(?err))?;
 
         Ok(())
@@ -1617,6 +1617,15 @@ impl Storage for Postgres {
                 )
                 .await
                 .and_then(|maybe| maybe.map_or(Ok(-1), |row| row.try_get::<_, i64>(0)))
+                .inspect(|offset| {
+                    debug!(
+                        cluster = self.cluster,
+                        group_id,
+                        topic = topic.topic,
+                        partition = topic.partition,
+                        offset
+                    )
+                })
                 .inspect_err(|err| {
                     error!(
                         ?err,
@@ -1627,7 +1636,7 @@ impl Storage for Postgres {
                     )
                 })?;
 
-            _ = offsets.insert(topic.to_owned(), offset);
+            assert_eq!(None, offsets.insert(topic.to_owned(), offset));
         }
 
         Ok(offsets)
@@ -2227,7 +2236,7 @@ impl Storage for Postgres {
         &mut self,
         group_ids: Option<&[String]>,
         include_authorized_operations: bool,
-    ) -> Result<Vec<DescribedGroup>> {
+    ) -> Result<Vec<NamedGroupDetail>> {
         debug!(?group_ids, include_authorized_operations);
 
         let mut results = vec![];
@@ -2254,54 +2263,12 @@ impl Storage for Postgres {
                     let current = serde_json::from_value::<GroupDetail>(value)
                         .inspect(|current| debug!(?current))?;
 
-                    let group_state = match current {
-                        GroupDetail { members, .. } if members.is_empty() => "Empty",
-
-                        GroupDetail {
-                            state: GroupState::Forming { leader: None, .. },
-                            ..
-                        } => "Assigning",
-
-                        GroupDetail {
-                            state: GroupState::Formed { .. },
-                            ..
-                        } => "Stable",
-
-                        _ => {
-                            debug!(unknown = ?current);
-                            "Unknown"
-                        }
-                    }
-                    .into();
-
-                    let assignor_name = match current.state {
-                        GroupState::Forming { leader, .. } => leader.unwrap_or_default(),
-                        GroupState::Formed { leader, .. } => leader,
-                    };
-
-                    results.push(DescribedGroup {
-                        error_code: ErrorCode::None.into(),
-                        error_message: Some(ErrorCode::None.to_string()),
-                        group_id: group_id.into(),
-                        group_state,
-                        group_epoch: -1,
-                        assignment_epoch: -1,
-                        assignor_name,
-                        members: Some([].into()),
-                        authorized_operations: -1,
-                    })
+                    results.push(NamedGroupDetail::found(group_id.into(), current));
                 } else {
-                    results.push(DescribedGroup {
-                        error_code: ErrorCode::GroupIdNotFound.into(),
-                        error_message: Some(ErrorCode::GroupIdNotFound.to_string()),
-                        group_id: group_id.into(),
-                        group_state: "unknown".into(),
-                        group_epoch: -1,
-                        assignment_epoch: -1,
-                        assignor_name: "unknown".into(),
-                        members: Some([].into()),
-                        authorized_operations: -1,
-                    })
+                    results.push(NamedGroupDetail::error_code(
+                        group_id.into(),
+                        ErrorCode::GroupIdNotFound,
+                    ));
                 }
             }
         }

@@ -46,7 +46,8 @@ use metadata::MetadataRequest;
 use produce::ProduceRequest;
 use std::io::ErrorKind;
 use tansu_kafka_sans_io::{
-    broker_registration_request::Listener, Body, ErrorCode, Frame, Header, IsolationLevel,
+    broker_registration_request::Listener, consumer_group_describe_response,
+    describe_groups_response, Body, ErrorCode, Frame, Header, IsolationLevel,
 };
 use tansu_storage::{BrokerRegistationRequest, Storage};
 use telemetry::GetTelemetrySubscriptionsRequest;
@@ -254,6 +255,30 @@ where
         debug!(?body, ?correlation_id);
 
         match body {
+            Body::AddOffsetsToTxnRequest {
+                transactional_id,
+                producer_id,
+                producer_epoch,
+                group_id,
+            } => {
+                debug!(?transactional_id, ?producer_id, ?producer_epoch, ?group_id);
+
+                AddOffsets::with_storage(self.storage.clone())
+                    .response(
+                        transactional_id.as_str(),
+                        producer_id,
+                        producer_epoch,
+                        group_id.as_str(),
+                    )
+                    .await
+            }
+
+            add_partitions @ Body::AddPartitionsToTxnRequest { .. } => {
+                AddPartitions::with_storage(self.storage.clone())
+                    .response(add_partitions.try_into()?)
+                    .await
+            }
+
             Body::ApiVersionsRequest {
                 client_software_name,
                 client_software_version,
@@ -266,6 +291,26 @@ where
                     client_software_version.as_deref(),
                 ))
             }
+
+            Body::ConsumerGroupDescribeRequest {
+                group_ids,
+                include_authorized_operations,
+            } => self
+                .storage
+                .describe_groups(group_ids.as_deref(), include_authorized_operations)
+                .await
+                .map(|described| {
+                    described
+                        .iter()
+                        .map(consumer_group_describe_response::DescribedGroup::from)
+                        .collect::<Vec<_>>()
+                })
+                .map(Some)
+                .map(|groups| Body::ConsumerGroupDescribeResponse {
+                    throttle_time_ms: 0,
+                    groups,
+                })
+                .map_err(Into::into),
 
             Body::CreateTopicsRequest {
                 validate_only,
@@ -282,6 +327,17 @@ where
                         topics,
                     })
             }
+
+            Body::DeleteGroupsRequest { groups_names } => self
+                .storage
+                .delete_groups(groups_names.as_deref())
+                .await
+                .map(Some)
+                .map(|results| Body::DeleteGroupsResponse {
+                    throttle_time_ms: 0,
+                    results,
+                })
+                .map_err(Into::into),
 
             Body::DeleteRecordsRequest { topics, .. } => {
                 debug!(?topics);
@@ -337,27 +393,25 @@ where
                     .await
             }
 
-            Body::DeleteGroupsRequest { groups_names } => self
-                .storage
-                .delete_groups(groups_names.as_deref())
-                .await
-                .map(Some)
-                .map(|results| Body::DeleteGroupsResponse {
-                    throttle_time_ms: 0,
-                    results,
-                })
-                .map_err(Into::into),
-
-            Body::ConsumerGroupDescribeRequest {
-                group_ids,
+            Body::DescribeGroupsRequest {
+                groups,
                 include_authorized_operations,
             } => self
                 .storage
-                .describe_groups(group_ids.as_deref(), include_authorized_operations)
+                .describe_groups(
+                    groups.as_deref(),
+                    include_authorized_operations.unwrap_or(false),
+                )
                 .await
+                .map(|described| {
+                    described
+                        .iter()
+                        .map(describe_groups_response::DescribedGroup::from)
+                        .collect::<Vec<_>>()
+                })
                 .map(Some)
-                .map(|groups| Body::ConsumerGroupDescribeResponse {
-                    throttle_time_ms: 0,
+                .map(|groups| Body::DescribeGroupsResponse {
+                    throttle_time_ms: Some(0),
                     groups,
                 })
                 .map_err(Into::into),
@@ -638,30 +692,6 @@ where
                         protocol_name.as_deref(),
                         assignments.as_deref(),
                     )
-                    .await
-            }
-
-            Body::AddOffsetsToTxnRequest {
-                transactional_id,
-                producer_id,
-                producer_epoch,
-                group_id,
-            } => {
-                debug!(?transactional_id, ?producer_id, ?producer_epoch, ?group_id);
-
-                AddOffsets::with_storage(self.storage.clone())
-                    .response(
-                        transactional_id.as_str(),
-                        producer_id,
-                        producer_epoch,
-                        group_id.as_str(),
-                    )
-                    .await
-            }
-
-            add_partitions @ Body::AddPartitionsToTxnRequest { .. } => {
-                AddPartitions::with_storage(self.storage.clone())
-                    .response(add_partitions.try_into()?)
                     .await
             }
 
