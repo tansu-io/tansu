@@ -38,7 +38,9 @@ use tansu_kafka_sans_io::{
     add_partitions_to_txn_request::{AddPartitionsToTxnTopic, AddPartitionsToTxnTransaction},
     add_partitions_to_txn_response::{AddPartitionsToTxnResult, AddPartitionsToTxnTopicResult},
     broker_registration_request::{Feature, Listener},
+    consumer_group_describe_response::DescribedGroup,
     create_topics_request::CreatableTopic,
+    delete_groups_response::DeletableGroupResult,
     delete_records_request::DeleteRecordsTopic,
     delete_records_response::DeleteRecordsTopicResult,
     delete_topics_request::DeleteTopicState,
@@ -46,6 +48,7 @@ use tansu_kafka_sans_io::{
     describe_configs_response::DescribeConfigsResult,
     fetch_request::FetchTopic,
     join_group_response::JoinGroupResponseMember,
+    list_groups_response::ListedGroup,
     metadata_request::MetadataRequestTopic,
     metadata_response::{MetadataResponseBroker, MetadataResponseTopic},
     offset_commit_request::OffsetCommitRequestPartition,
@@ -348,6 +351,12 @@ pub struct OffsetCommitRequest {
     leader_epoch: Option<i32>,
     timestamp: Option<SystemTime>,
     metadata: Option<String>,
+}
+
+impl OffsetCommitRequest {
+    pub fn offset(self, offset: i64) -> Self {
+        Self { offset, ..self }
+    }
 }
 
 impl TryFrom<&OffsetCommitRequestPartition> for OffsetCommitRequest {
@@ -777,6 +786,11 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
         require_stable: Option<bool>,
     ) -> Result<BTreeMap<Topition, i64>>;
 
+    async fn committed_offset_topitions(
+        &mut self,
+        group_id: &str,
+    ) -> Result<BTreeMap<Topition, i64>>;
+
     async fn metadata(&mut self, topics: Option<&[TopicId]>) -> Result<MetadataResponse>;
 
     async fn describe_config(
@@ -785,6 +799,19 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
         resource: ConfigResource,
         keys: Option<&[String]>,
     ) -> Result<DescribeConfigsResult>;
+
+    async fn list_groups(&mut self, states_filter: Option<&[String]>) -> Result<Vec<ListedGroup>>;
+
+    async fn delete_groups(
+        &mut self,
+        group_ids: Option<&[String]>,
+    ) -> Result<Vec<DeletableGroupResult>>;
+
+    async fn describe_groups(
+        &mut self,
+        group_ids: Option<&[String]>,
+        include_authorized_operations: bool,
+    ) -> Result<Vec<DescribedGroup>>;
 
     async fn update_group(
         &mut self,
@@ -955,6 +982,16 @@ impl Storage for StorageContainer {
         }
     }
 
+    async fn committed_offset_topitions(
+        &mut self,
+        group_id: &str,
+    ) -> Result<BTreeMap<Topition, i64>> {
+        match self {
+            Self::Postgres(inner) => inner.committed_offset_topitions(group_id).await,
+            Self::DynoStore(inner) => inner.committed_offset_topitions(group_id).await,
+        }
+    }
+
     async fn offset_fetch(
         &mut self,
         group_id: Option<&str>,
@@ -987,6 +1024,42 @@ impl Storage for StorageContainer {
         match self {
             Self::Postgres(pg) => pg.describe_config(name, resource, keys).await,
             Self::DynoStore(dyn_store) => dyn_store.describe_config(name, resource, keys).await,
+        }
+    }
+
+    async fn list_groups(&mut self, states_filter: Option<&[String]>) -> Result<Vec<ListedGroup>> {
+        match self {
+            Self::Postgres(pg) => pg.list_groups(states_filter).await,
+            Self::DynoStore(dyn_store) => dyn_store.list_groups(states_filter).await,
+        }
+    }
+
+    async fn delete_groups(
+        &mut self,
+        group_ids: Option<&[String]>,
+    ) -> Result<Vec<DeletableGroupResult>> {
+        match self {
+            Self::Postgres(inner) => inner.delete_groups(group_ids).await,
+            Self::DynoStore(inner) => inner.delete_groups(group_ids).await,
+        }
+    }
+
+    async fn describe_groups(
+        &mut self,
+        group_ids: Option<&[String]>,
+        include_authorized_operations: bool,
+    ) -> Result<Vec<DescribedGroup>> {
+        match self {
+            Self::Postgres(inner) => {
+                inner
+                    .describe_groups(group_ids, include_authorized_operations)
+                    .await
+            }
+            Self::DynoStore(inner) => {
+                inner
+                    .describe_groups(group_ids, include_authorized_operations)
+                    .await
+            }
         }
     }
 

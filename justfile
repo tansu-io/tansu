@@ -82,28 +82,37 @@ docker-rm-f:
     docker rm --force tansu
 
 list-topics:
-    kafka-topics --bootstrap-server 127.0.0.1:9092 --list
+    kafka-topics --bootstrap-server localhost:9092 --list
 
 test-topic-describe:
-    kafka-topics --bootstrap-server 127.0.0.1:9092 --describe --topic test
+    kafka-topics --bootstrap-server localhost:9092 --describe --topic test
 
 test-topic-create:
-    kafka-topics --bootstrap-server 127.0.0.1:9092 --config cleanup.policy=compact --partitions=3 --replication-factor=1 --create --topic test
+    kafka-topics --bootstrap-server localhost:9092 --config cleanup.policy=compact --partitions=3 --replication-factor=1 --create --topic test
 
 test-topic-delete:
-    kafka-topics --bootstrap-server 127.0.0.1:9092 --delete --topic test
+    kafka-topics --bootstrap-server localhost:9092 --delete --topic test
 
 test-topic-get-offsets-earliest:
-    kafka-get-offsets --bootstrap-server 127.0.0.1:9092 --topic test --time earliest
+    kafka-get-offsets --bootstrap-server localhost:9092 --topic test --time earliest
 
 test-topic-get-offsets-latest:
-    kafka-get-offsets --bootstrap-server 127.0.0.1:9092 --topic test --time latest
+    kafka-get-offsets --bootstrap-server localhost:9092 --topic test --time latest
 
 test-topic-produce:
     echo "h1:pqr,h2:jkl,h3:uio	qwerty	poiuy\nh1:def,h2:lmn,h3:xyz	asdfgh	lkj\nh1:stu,h2:fgh,h3:ijk	zxcvbn	mnbvc" | kafka-console-producer --bootstrap-server localhost:9092 --topic test --property parse.headers=true --property parse.key=true
 
 test-topic-consume:
     kafka-console-consumer --bootstrap-server localhost:9092 --consumer-property fetch.max.wait.ms=15000 --group test-consumer-group --topic test --from-beginning --property print.timestamp=true --property print.key=true --property print.offset=true --property print.partition=true --property print.headers=true --property print.value=true
+
+test-consumer-group-describe:
+    kafka-consumer-groups --bootstrap-server localhost:9092 --group test-consumer-group --describe
+
+consumer-group-list:
+    kafka-consumer-groups --bootstrap-server localhost:9092 --list
+
+test-reset-offsets-to-earliest:
+    kafka-consumer-groups --bootstrap-server localhost:9092 --group test-consumer-group --topic test:0 --reset-offsets --to-earliest --execute
 
 tansu-server:
     ./target/debug/tansu-server \

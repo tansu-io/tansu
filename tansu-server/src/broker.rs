@@ -46,7 +46,7 @@ use metadata::MetadataRequest;
 use produce::ProduceRequest;
 use std::io::ErrorKind;
 use tansu_kafka_sans_io::{
-    broker_registration_request::Listener, Body, Frame, Header, IsolationLevel,
+    broker_registration_request::Listener, Body, ErrorCode, Frame, Header, IsolationLevel,
 };
 use tansu_storage::{BrokerRegistationRequest, Storage};
 use telemetry::GetTelemetrySubscriptionsRequest;
@@ -337,6 +337,31 @@ where
                     .await
             }
 
+            Body::DeleteGroupsRequest { groups_names } => self
+                .storage
+                .delete_groups(groups_names.as_deref())
+                .await
+                .map(Some)
+                .map(|results| Body::DeleteGroupsResponse {
+                    throttle_time_ms: 0,
+                    results,
+                })
+                .map_err(Into::into),
+
+            Body::ConsumerGroupDescribeRequest {
+                group_ids,
+                include_authorized_operations,
+            } => self
+                .storage
+                .describe_groups(group_ids.as_deref(), include_authorized_operations)
+                .await
+                .map(Some)
+                .map(|groups| Body::ConsumerGroupDescribeResponse {
+                    throttle_time_ms: 0,
+                    groups,
+                })
+                .map_err(Into::into),
+
             Body::FetchRequest {
                 max_wait_ms,
                 min_bytes,
@@ -483,6 +508,20 @@ where
                 self.groups
                     .leave(&group_id, member_id.as_deref(), members.as_deref())
                     .await
+            }
+
+            Body::ListGroupsRequest { states_filter } => {
+                debug!(?states_filter);
+                self.storage
+                    .list_groups(states_filter.as_deref())
+                    .await
+                    .map(Some)
+                    .map(|groups| Body::ListGroupsResponse {
+                        throttle_time_ms: Some(0),
+                        error_code: ErrorCode::None.into(),
+                        groups,
+                    })
+                    .map_err(Into::into)
             }
 
             Body::ListOffsetsRequest {

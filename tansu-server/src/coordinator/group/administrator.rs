@@ -1369,6 +1369,8 @@ where
         groups: Option<&[OffsetFetchRequestGroup]>,
         require_stable: Option<bool>,
     ) -> Result<Body> {
+        debug!(?group_id, ?topics, ?groups, ?require_stable);
+
         let topics = if let Some(topics) = topics {
             let topics: Vec<Topition> = topics
                 .iter()
@@ -1431,7 +1433,9 @@ where
             let mut responses = vec![];
 
             for group in groups {
-                if let Some(topics) = group.topics.as_ref().map(|topics| {
+                debug!(?group);
+
+                let response = if let Some(topics) = group.topics.as_ref().map(|topics| {
                     topics
                         .iter()
                         .flat_map(|topic| {
@@ -1450,52 +1454,59 @@ where
                         })
                         .collect::<Vec<_>>()
                 }) {
-                    let response = self
-                        .storage
+                    self.storage
                         .offset_fetch(
                             Some(group.group_id.as_str()),
                             topics.deref(),
                             require_stable,
                         )
                         .await
-                        .map(|offsets| OffsetFetchResponseGroup {
-                            group_id: group.group_id.clone(),
-                            topics: Some(
-                                offsets
-                                    .iter()
-                                    .fold(BTreeSet::new(), |mut topics, (topition, _)| {
-                                        _ = topics.insert(topition.topic());
-                                        topics
-                                    })
-                                    .iter()
-                                    .map(|topic_name| OffsetFetchResponseTopics {
-                                        name: (*topic_name).into(),
-                                        partitions: Some(
-                                            offsets
-                                                .iter()
-                                                .filter_map(|(topition, offset)| {
-                                                    if topition.topic() == *topic_name {
-                                                        Some(OffsetFetchResponsePartitions {
-                                                            partition_index: topition.partition(),
-                                                            committed_offset: *offset,
-                                                            committed_leader_epoch: -1,
-                                                            metadata: None,
-                                                            error_code: ErrorCode::None.into(),
-                                                        })
-                                                    } else {
-                                                        None
-                                                    }
-                                                })
-                                                .collect(),
-                                        ),
-                                    })
-                                    .collect(),
-                            ),
-                            error_code: ErrorCode::None.into(),
-                        })?;
-
-                    responses.push(response);
+                        .inspect(|offsets| debug!(?offsets))
+                        .inspect_err(|err| error!(?err, ?group))
+                } else {
+                    self.storage
+                        .committed_offset_topitions(&group.group_id)
+                        .await
+                        .inspect(|offsets| debug!(?offsets))
+                        .inspect_err(|err| error!(?err, ?group))
                 }
+                .map(|offsets| OffsetFetchResponseGroup {
+                    group_id: group.group_id.clone(),
+                    topics: Some(
+                        offsets
+                            .iter()
+                            .fold(BTreeSet::new(), |mut topics, (topition, _)| {
+                                _ = topics.insert(topition.topic());
+                                topics
+                            })
+                            .iter()
+                            .map(|topic_name| OffsetFetchResponseTopics {
+                                name: (*topic_name).into(),
+                                partitions: Some(
+                                    offsets
+                                        .iter()
+                                        .filter_map(|(topition, offset)| {
+                                            if topition.topic() == *topic_name {
+                                                Some(OffsetFetchResponsePartitions {
+                                                    partition_index: topition.partition(),
+                                                    committed_offset: *offset,
+                                                    committed_leader_epoch: -1,
+                                                    metadata: None,
+                                                    error_code: ErrorCode::None.into(),
+                                                })
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                        .collect(),
+                                ),
+                            })
+                            .collect(),
+                    ),
+                    error_code: ErrorCode::None.into(),
+                })?;
+
+                responses.push(response);
             }
 
             Some(responses)
@@ -3069,7 +3080,7 @@ mod tests {
                             (0..=2)
                                 .map(|partition_index| OffsetCommitResponsePartition {
                                     partition_index,
-                                    error_code: ErrorCode::None.into(),
+                                    error_code: ErrorCode::UnknownTopicOrPartition.into(),
                                 })
                                 .collect(),
                         ),

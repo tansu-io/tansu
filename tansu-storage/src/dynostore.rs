@@ -35,11 +35,14 @@ use tansu_kafka_sans_io::{
     add_partitions_to_txn_response::{
         AddPartitionsToTxnPartitionResult, AddPartitionsToTxnTopicResult,
     },
+    consumer_group_describe_response::DescribedGroup,
     create_topics_request::CreatableTopic,
+    delete_groups_response::DeletableGroupResult,
     delete_records_request::DeleteRecordsTopic,
     delete_records_response::DeleteRecordsTopicResult,
     describe_cluster_response::DescribeClusterBroker,
     describe_configs_response::{DescribeConfigsResourceResult, DescribeConfigsResult},
+    list_groups_response::ListedGroup,
     metadata_response::{MetadataResponseBroker, MetadataResponsePartition, MetadataResponseTopic},
     record::{deflated, inflated, Record},
     txn_offset_commit_response::{TxnOffsetCommitResponsePartition, TxnOffsetCommitResponseTopic},
@@ -1255,31 +1258,101 @@ impl Storage for DynoStore {
         let mut responses = vec![];
 
         for (topition, offset_commit) in offsets {
-            let location = Path::from(format!(
-                "clusters/{}/groups/consumers/{}/offsets/{}/partitions/{:0>10}.json",
-                self.cluster, group_id, topition.topic, topition.partition,
-            ));
-
-            let payload = serde_json::to_vec(&offset_commit)
-                .map(Bytes::from)
-                .map(PutPayload::from)?;
-
-            let options = PutOptions {
-                mode: PutMode::Overwrite,
-                tags: TagSet::default(),
-                attributes: json_content_type(),
-            };
-
-            let error_code = self
+            if self
                 .object_store
-                .put_opts(&location, payload, options)
+                .head(&Path::from(format!(
+                    "clusters/{}/topics/{}.json",
+                    self.cluster, topition.topic,
+                )))
                 .await
-                .map_or(ErrorCode::UnknownServerError, |_| ErrorCode::None);
+                .is_ok()
+            {
+                let location = Path::from(format!(
+                    "clusters/{}/groups/consumers/{}/offsets/{}/partitions/{:0>10}.json",
+                    self.cluster, group_id, topition.topic, topition.partition,
+                ));
 
-            responses.push((topition.to_owned(), error_code));
+                let payload = serde_json::to_vec(&offset_commit)
+                    .map(Bytes::from)
+                    .map(PutPayload::from)?;
+
+                let options = PutOptions {
+                    mode: PutMode::Overwrite,
+                    tags: TagSet::default(),
+                    attributes: json_content_type(),
+                };
+
+                let error_code = self
+                    .object_store
+                    .put_opts(&location, payload, options)
+                    .await
+                    .inspect_err(|err| error!(?err))
+                    .inspect(|outcome| debug!(?outcome))
+                    .map_or(ErrorCode::UnknownServerError, |_| ErrorCode::None);
+
+                responses.push((topition.to_owned(), error_code));
+            } else {
+                responses.push((topition.to_owned(), ErrorCode::UnknownTopicOrPartition));
+            }
         }
 
         Ok(responses)
+    }
+
+    async fn committed_offset_topitions(
+        &mut self,
+        group_id: &str,
+    ) -> Result<BTreeMap<Topition, i64>> {
+        debug!(group_id);
+
+        let mut topitions = vec![];
+
+        {
+            let location = Path::from(format!(
+                "clusters/{}/groups/consumers/{}/offsets/",
+                self.cluster, group_id,
+            ));
+
+            let mut list_stream = self.object_store.list(Some(&location));
+
+            while let Some(meta) = list_stream
+                .next()
+                .await
+                .inspect(|meta| debug!(?meta))
+                .transpose()
+                .inspect_err(|error| error!(?error))
+                .map_err(|_| Error::Api(ErrorCode::UnknownServerError))?
+            {
+                debug!(?meta);
+                let Some(topic): Option<String> = meta
+                    .location
+                    .parts()
+                    .nth(6)
+                    .inspect(|topic| debug!(?topic))
+                    .map(|topic| topic.as_ref().into())
+                else {
+                    continue;
+                };
+
+                let Some(partition) = meta
+                    .location
+                    .parts()
+                    .nth(8)
+                    .inspect(|partition| debug!(?partition))
+                    .map(|partition| i32::from_str(&partition.as_ref()[0..10]))
+                    .transpose()?
+                else {
+                    continue;
+                };
+
+                debug!(topic, partition);
+
+                topitions.push(Topition::new(topic, partition));
+            }
+        }
+
+        self.offset_fetch(Some(group_id), topitions.as_ref(), Some(false))
+            .await
     }
 
     async fn offset_fetch(
@@ -1603,6 +1676,100 @@ impl Storage for DynoStore {
 
             _ => todo!(),
         }
+    }
+
+    async fn list_groups(&mut self, states_filter: Option<&[String]>) -> Result<Vec<ListedGroup>> {
+        debug!(?states_filter);
+
+        let location = Path::from(format!("clusters/{}/groups/consumers/", self.cluster,));
+        let list_result = self
+            .object_store
+            .list_with_delimiter(Some(&location))
+            .await
+            .inspect(|list_result| debug!(?list_result))
+            .inspect_err(|error| error!(?error, cluster = self.cluster))?;
+
+        let mut listed_groups = vec![];
+
+        for prefix in list_result.common_prefixes {
+            if let Some(group_id) = prefix.parts().last() {
+                listed_groups.push(ListedGroup {
+                    group_id: group_id.as_ref().into(),
+                    protocol_type: "consumer".into(),
+                    group_state: None,
+                });
+            }
+        }
+
+        Ok(listed_groups)
+    }
+
+    async fn delete_groups(
+        &mut self,
+        group_ids: Option<&[String]>,
+    ) -> Result<Vec<DeletableGroupResult>> {
+        debug!(?group_ids);
+
+        let mut results = vec![];
+
+        if let Some(group_ids) = group_ids {
+            for group_id in group_ids {
+                let location = Path::from(format!(
+                    "clusters/{}/groups/consumers/{}.json",
+                    self.cluster, group_id,
+                ));
+
+                let had_group_state = self
+                    .object_store
+                    .delete(&location)
+                    .await
+                    .inspect(|outcome| debug!(group_id, ?outcome))
+                    .inspect_err(|err| error!(group_id, ?err))
+                    .is_ok();
+
+                debug!(group_id, had_group_state);
+
+                let prefix = Path::from(format!(
+                    "clusters/{}/groups/consumers/{}",
+                    self.cluster, group_id,
+                ));
+
+                let locations = self
+                    .object_store
+                    .list(Some(&prefix))
+                    .map_ok(|m| m.location)
+                    .boxed();
+
+                let deleted_committed_offsets = self
+                    .object_store
+                    .delete_stream(locations)
+                    .try_collect::<Vec<Path>>()
+                    .await?;
+
+                debug!(group_id, ?deleted_committed_offsets);
+
+                results.push(DeletableGroupResult {
+                    group_id: group_id.into(),
+                    error_code: if had_group_state || !deleted_committed_offsets.is_empty() {
+                        ErrorCode::None
+                    } else {
+                        ErrorCode::GroupIdNotFound
+                    }
+                    .into(),
+                });
+            }
+        }
+
+        Ok(results)
+    }
+
+    async fn describe_groups(
+        &mut self,
+        group_ids: Option<&[String]>,
+        include_authorized_operations: bool,
+    ) -> Result<Vec<DescribedGroup>> {
+        debug!(?group_ids, include_authorized_operations);
+        Ok(vec![])
     }
 
     async fn update_group(

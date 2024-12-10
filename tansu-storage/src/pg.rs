@@ -31,11 +31,14 @@ use tansu_kafka_sans_io::{
     add_partitions_to_txn_response::{
         AddPartitionsToTxnPartitionResult, AddPartitionsToTxnTopicResult,
     },
+    consumer_group_describe_response::DescribedGroup,
     create_topics_request::CreatableTopic,
+    delete_groups_response::DeletableGroupResult,
     delete_records_request::DeleteRecordsTopic,
     delete_records_response::{DeleteRecordsPartitionResult, DeleteRecordsTopicResult},
     describe_cluster_response::DescribeClusterBroker,
     describe_configs_response::{DescribeConfigsResourceResult, DescribeConfigsResult},
+    list_groups_response::ListedGroup,
     metadata_response::{MetadataResponseBroker, MetadataResponsePartition, MetadataResponseTopic},
     record::{deflated, inflated, Header, Record},
     to_system_time, to_timestamp,
@@ -49,10 +52,10 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::{
-    BrokerRegistationRequest, Error, GroupDetail, ListOffsetRequest, ListOffsetResponse,
-    MetadataResponse, OffsetCommitRequest, OffsetStage, ProducerIdResponse, Result, Storage,
-    TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse, TxnOffsetCommitRequest,
-    TxnState, UpdateError, Version, NULL_TOPIC_ID,
+    BrokerRegistationRequest, Error, GroupDetail, GroupState, ListOffsetRequest,
+    ListOffsetResponse, MetadataResponse, OffsetCommitRequest, OffsetStage, ProducerIdResponse,
+    Result, Storage, TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse,
+    TxnOffsetCommitRequest, TxnState, UpdateError, Version, NULL_TOPIC_ID,
 };
 
 #[derive(Clone, Debug)]
@@ -1476,7 +1479,14 @@ impl Storage for Postgres {
         let mut c = self.connection().await?;
         let tx = c.transaction().await?;
 
-        let prepared = tx
+        let mut cg_inserted = false;
+
+        let topition_select = tx
+            .prepare(include_str!("pg/topition_select.sql"))
+            .await
+            .inspect_err(|err| error!(?err))?;
+
+        let consumer_offset_insert = tx
             .prepare(include_str!("pg/consumer_offset_insert.sql"))
             .await
             .inspect_err(|err| error!(?err))?;
@@ -1484,29 +1494,102 @@ impl Storage for Postgres {
         let mut responses = vec![];
 
         for (topition, offset) in offsets {
-            _ = tx
-                .execute(
-                    &prepared,
-                    &[
-                        &self.cluster,
-                        &topition.topic(),
-                        &topition.partition(),
-                        &group,
-                        &offset.offset,
-                        &offset.leader_epoch,
-                        &offset.timestamp,
-                        &offset.metadata,
-                    ],
+            debug!(?topition, ?offset);
+
+            if tx
+                .query_opt(
+                    &topition_select,
+                    &[&self.cluster, &topition.topic(), &topition.partition()],
                 )
                 .await
-                .inspect_err(|err| error!(?err))?;
+                .inspect_err(|err| error!(?err))?
+                .is_some()
+            {
+                if !cg_inserted {
+                    let consumer_group_insert = tx
+                        .prepare(include_str!("pg/consumer_group_insert.sql"))
+                        .await
+                        .inspect_err(|err| error!(?err))?;
 
-            responses.push((topition.to_owned(), ErrorCode::None));
+                    let rows = tx
+                        .execute(&consumer_group_insert, &[&self.cluster, &group])
+                        .await
+                        .inspect_err(|err| error!(?err))?;
+                    debug!(rows);
+
+                    cg_inserted = true;
+                }
+
+                let rows = tx
+                    .execute(
+                        &consumer_offset_insert,
+                        &[
+                            &self.cluster,
+                            &topition.topic(),
+                            &topition.partition(),
+                            &group,
+                            &offset.offset,
+                            &offset.leader_epoch,
+                            &offset.timestamp,
+                            &offset.metadata,
+                        ],
+                    )
+                    .await
+                    .inspect_err(|err| error!(?err))?;
+
+                debug!(?rows);
+
+                responses.push((
+                    topition.to_owned(),
+                    if rows == 0 {
+                        ErrorCode::UnknownTopicOrPartition
+                    } else {
+                        ErrorCode::None
+                    },
+                ));
+            } else {
+                responses.push((topition.to_owned(), ErrorCode::UnknownTopicOrPartition))
+            }
         }
 
         tx.commit().await.inspect_err(|err| error!(?err))?;
 
         Ok(responses)
+    }
+
+    async fn committed_offset_topitions(
+        &mut self,
+        group_id: &str,
+    ) -> Result<BTreeMap<Topition, i64>> {
+        debug!(group_id);
+
+        let mut results = BTreeMap::new();
+
+        let c = self.connection().await?;
+
+        let prepared = c
+            .prepare(include_str!("pg/consumer_offset_select_by_group.sql"))
+            .await
+            .inspect_err(|err| error!(?err))?;
+
+        for row in c
+            .query(&prepared, &[&self.cluster, &group_id])
+            .await
+            .inspect_err(|err| error!(?err))?
+        {
+            let topic = row.try_get::<_, String>(0)?;
+            let partition = row.try_get::<_, i32>(1)?;
+            let offset = row.try_get::<_, i64>(2)?;
+
+            debug!(group_id, topic, partition, offset);
+
+            assert_eq!(
+                None,
+                results.insert(Topition::new(topic, partition), offset)
+            );
+        }
+
+        Ok(results)
     }
 
     async fn offset_fetch(
@@ -1533,8 +1616,16 @@ impl Storage for Postgres {
                     &[&self.cluster, &group_id, &topic.topic(), &topic.partition()],
                 )
                 .await
-                .inspect_err(|err| error!(?err))?
-                .map_or(Ok(-1), |row| row.try_get::<_, i64>(0))?;
+                .and_then(|maybe| maybe.map_or(Ok(-1), |row| row.try_get::<_, i64>(0)))
+                .inspect_err(|err| {
+                    error!(
+                        ?err,
+                        cluster = self.cluster,
+                        group_id,
+                        topic = topic.topic,
+                        partition = topic.partition
+                    )
+                })?;
 
             _ = offsets.insert(topic.to_owned(), offset);
         }
@@ -2042,6 +2133,180 @@ impl Storage for Postgres {
                 configs: Some([].into()),
             })
         }
+    }
+
+    async fn list_groups(&mut self, states_filter: Option<&[String]>) -> Result<Vec<ListedGroup>> {
+        debug!(?states_filter);
+
+        let c = self.connection().await.inspect_err(|err| error!(?err))?;
+
+        let prepared = c
+            .prepare(include_str!("pg/consumer_group_select.sql"))
+            .await
+            .inspect_err(|err| {
+                error!(?err, cluster = self.cluster);
+            })?;
+
+        let mut listed_groups = vec![];
+
+        for row in c
+            .query(&prepared, &[&self.cluster])
+            .await
+            .inspect_err(|err| error!(?err))?
+        {
+            let group_id = row.try_get::<_, String>(0)?;
+
+            listed_groups.push(ListedGroup {
+                group_id,
+                protocol_type: "consumer".into(),
+                group_state: Some("unknown".into()),
+            });
+        }
+
+        Ok(listed_groups)
+    }
+
+    async fn delete_groups(
+        &mut self,
+        group_ids: Option<&[String]>,
+    ) -> Result<Vec<DeletableGroupResult>> {
+        debug!(?group_ids);
+
+        let mut results = vec![];
+
+        if let Some(group_ids) = group_ids {
+            let c = self.connection().await?;
+
+            let consumer_offset = c
+                .prepare(include_str!("pg/consumer_offset_delete_by_cg.sql"))
+                .await
+                .inspect_err(|err| error!(?err))?;
+
+            let group_detail = c
+                .prepare(include_str!("pg/consumer_group_detail_delete_by_cg.sql"))
+                .await
+                .inspect_err(|err| error!(?err))?;
+
+            let group = c
+                .prepare(include_str!("pg/consumer_group_delete.sql"))
+                .await
+                .inspect_err(|err| error!(?err))?;
+
+            for group_id in group_ids {
+                _ = c
+                    .execute(&consumer_offset, &[&self.cluster, &group_id])
+                    .await
+                    .inspect_err(|err| error!(?err))?;
+
+                _ = c
+                    .execute(&group_detail, &[&self.cluster, &group_id])
+                    .await
+                    .inspect_err(|err| error!(?err))?;
+
+                let rows = c
+                    .execute(&group, &[&self.cluster, &group_id])
+                    .await
+                    .inspect_err(|err| error!(?err))?;
+
+                results.push(DeletableGroupResult {
+                    group_id: group_id.into(),
+                    error_code: if rows == 0 {
+                        ErrorCode::GroupIdNotFound
+                    } else {
+                        ErrorCode::None
+                    }
+                    .into(),
+                });
+            }
+        }
+
+        Ok(results)
+    }
+
+    async fn describe_groups(
+        &mut self,
+        group_ids: Option<&[String]>,
+        include_authorized_operations: bool,
+    ) -> Result<Vec<DescribedGroup>> {
+        debug!(?group_ids, include_authorized_operations);
+
+        let mut results = vec![];
+        let c = self.connection().await.inspect_err(|err| error!(?err))?;
+
+        let prepared = c
+            .prepare(include_str!("pg/consumer_group_select_by_name.sql"))
+            .await
+            .inspect_err(|err| {
+                error!(?err, cluster = self.cluster);
+            })?;
+
+        if let Some(group_ids) = group_ids {
+            for group_id in group_ids {
+                if let Some(row) = c
+                    .query_opt(&prepared, &[&self.cluster, group_id])
+                    .await
+                    .inspect_err(|err| error!(?err, group_id))?
+                {
+                    let value = row
+                        .try_get::<_, Value>(1)
+                        .inspect_err(|err| error!(?err, group_id))?;
+
+                    let current = serde_json::from_value::<GroupDetail>(value)
+                        .inspect(|current| debug!(?current))?;
+
+                    let group_state = match current {
+                        GroupDetail { members, .. } if members.is_empty() => "Empty",
+
+                        GroupDetail {
+                            state: GroupState::Forming { leader: None, .. },
+                            ..
+                        } => "Assigning",
+
+                        GroupDetail {
+                            state: GroupState::Formed { .. },
+                            ..
+                        } => "Stable",
+
+                        _ => {
+                            debug!(unknown = ?current);
+                            "Unknown"
+                        }
+                    }
+                    .into();
+
+                    let assignor_name = match current.state {
+                        GroupState::Forming { leader, .. } => leader.unwrap_or_default(),
+                        GroupState::Formed { leader, .. } => leader,
+                    };
+
+                    results.push(DescribedGroup {
+                        error_code: ErrorCode::None.into(),
+                        error_message: Some(ErrorCode::None.to_string()),
+                        group_id: group_id.into(),
+                        group_state,
+                        group_epoch: -1,
+                        assignment_epoch: -1,
+                        assignor_name,
+                        members: Some([].into()),
+                        authorized_operations: -1,
+                    })
+                } else {
+                    results.push(DescribedGroup {
+                        error_code: ErrorCode::GroupIdNotFound.into(),
+                        error_message: Some(ErrorCode::GroupIdNotFound.to_string()),
+                        group_id: group_id.into(),
+                        group_state: "unknown".into(),
+                        group_epoch: -1,
+                        assignment_epoch: -1,
+                        assignor_name: "unknown".into(),
+                        members: Some([].into()),
+                        authorized_operations: -1,
+                    })
+                }
+            }
+        }
+
+        Ok(results)
     }
 
     async fn update_group(
