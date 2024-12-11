@@ -14,6 +14,7 @@
 -- You should have received a copy of the GNU Affero General Public License
 -- along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+-- prepare consumer_offset_select(text, text, text, integer) as
 select co.committed_offset
 
 from cluster c

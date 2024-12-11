@@ -18,4 +18,5 @@ delete from consumer_offset
 using cluster c, consumer_group cg
 where c.name = $1
 and cg.name = $2
-and cg.cluster = c.id;
+and cg.cluster = c.id
+and consumer_offset.consumer_group = cg.id;

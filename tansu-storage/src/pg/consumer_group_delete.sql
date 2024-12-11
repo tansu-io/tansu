@@ -15,6 +15,7 @@
 -- along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 delete from consumer_group
-using cluster c, consumer_group cg
+using cluster c
 where c.name = $1
-and cg.name = $2;
+and consumer_group.name = $2
+and consumer_group.cluster = c.id;

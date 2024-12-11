@@ -21,4 +21,4 @@ and t.name = $2
 and cg.cluster = c.id
 and tp.topic = t.id
 and consumer_offset.topition = tp.id
-and consumer_offset.consumer_group = cg.id
+and consumer_offset.consumer_group = cg.id;
