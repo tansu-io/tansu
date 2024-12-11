@@ -27,7 +27,7 @@ services:
       - 9000:9000
       - 9001:9001
   tansu:
-    image: ghcr.io/tansu-io/tansu:0.1.0-pre.2
+    image: ghcr.io/tansu-io/tansu:0.1.0
     restart: unless-stopped
     environment:
       RUST_BACKTRACE: ${RUST_BACKTRACE}

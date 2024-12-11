@@ -51,14 +51,16 @@ for AWS S3][object-store-dynamo-conditional-put] instead.
 The `storage-engine` parameter is a S3 URL that specifies the bucket
 to be used. The following will configure a S3 storage engine
 using the "tansu" bucket (full context is in
-[compose.yaml](compose.yaml)):
+[compose.yaml](compose.yaml) and [.env](.env)):
+
+Edit `.env` so that `STORAGE_ENGINE` is defined as:
 
 ```shell
---storage-engine s3://tansu/
+STORAGE_ENGINE="s3://tansu/"
 ```
 
-First time startup, with the above `compose.yaml`, you'll need to
-create a bucket, an access key and a secret in minio.
+First time startup, you'll need to create a bucket, an access key
+and a secret in minio.
 
 Just bring minio up, without tansu:
 
@@ -129,6 +131,14 @@ kafka-console-consumer \
   --property print.value=true
 ```
 
+Describe the consumer groups:
+
+```shell
+kafka-consumer-groups \
+  --bootstrap-server localhost:9092 \
+  --list
+```
+
 ## PostgreSQL
 
 To switch between the minio and PostgreSQL examples, firstly
@@ -144,7 +154,7 @@ Switch to the PostgreSQL storage engine by updating [.env](.env):
 # minio storage engine
 # STORAGE_ENGINE="s3://tansu/"
 
-# PostgreSQL storage engine
+# PostgreSQL storage engine -- NB: @db and NOT @localhost :)
 STORAGE_ENGINE="postgres://postgres:postgres@db"
 ```
 
