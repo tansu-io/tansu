@@ -682,8 +682,8 @@ pub enum GroupDetailResponse {
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct NamedGroupDetail {
-    name: String,
-    response: GroupDetailResponse,
+    pub name: String,
+    pub response: GroupDetailResponse,
 }
 
 impl NamedGroupDetail {

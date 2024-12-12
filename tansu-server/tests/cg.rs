@@ -17,7 +17,9 @@ use common::{alphanumeric_string, init_tracing, register_broker, StorageType};
 use rand::{prelude::*, thread_rng};
 use tansu_kafka_sans_io::{create_topics_request::CreatableTopic, ErrorCode};
 use tansu_server::Result;
-use tansu_storage::{OffsetCommitRequest, Storage, StorageContainer, Topition};
+use tansu_storage::{
+    GroupDetailResponse, OffsetCommitRequest, Storage, StorageContainer, Topition,
+};
 use tracing::debug;
 use url::Url;
 use uuid::Uuid;
@@ -87,6 +89,11 @@ pub async fn offset_commit(
     let groups = sc.list_groups(None).await?;
     assert_eq!(1, groups.len());
     assert_eq!(group_id, groups[0].group_id);
+
+    let groups = sc.describe_groups(Some(&[group_id.clone()]), false).await?;
+    assert_eq!(1, groups.len());
+    assert_eq!(group_id, groups[0].name);
+    assert!(matches!(groups[0].response, GroupDetailResponse::Found(..)));
 
     Ok(())
 }
