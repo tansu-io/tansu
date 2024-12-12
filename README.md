@@ -85,7 +85,7 @@ AWS_ACCESS_KEY_ID="access key"
 AWS_SECRET_ACCESS_KEY="secret"
 
 # The endpoint URL of the S3 service:
-AWS_ENDPOINT="http://localhost:9000"
+AWS_ENDPOINT="http://minio:9000"
 
 # Allow HTTP requests to the S3 service:
 AWS_ALLOW_HTTP="true"
