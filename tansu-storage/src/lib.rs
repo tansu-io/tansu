@@ -716,6 +716,25 @@ impl From<&NamedGroupDetail> for consumer_group_describe_response::DescribedGrou
 
                 let group_state = ConsumerGroupState::from(group_detail).to_string();
 
+                let members = group_detail
+                    .members
+                    .iter()
+                    .map(
+                        |(member_id, group_member)| consumer_group_describe_response::Member {
+                            member_id: member_id.into(),
+                            instance_id: group_member.join_response.group_instance_id.clone(),
+                            rack_id: None,
+                            member_epoch: -1,
+                            client_id: "".into(),
+                            client_host: "".into(),
+                            subscribed_topic_names: todo!(),
+                            subscribed_topic_regex: todo!(),
+                            assignment: todo!(),
+                            target_assignment: todo!(),
+                        },
+                    )
+                    .collect();
+
                 Self {
                     error_code: ErrorCode::None.into(),
                     error_message: Some(ErrorCode::None.to_string()),
@@ -724,7 +743,7 @@ impl From<&NamedGroupDetail> for consumer_group_describe_response::DescribedGrou
                     group_epoch: -1,
                     assignment_epoch: -1,
                     assignor_name,
-                    members: Some([].into()),
+                    members: Some(members),
                     authorized_operations: -1,
                 }
             }
@@ -1416,6 +1435,92 @@ mod tests {
         let topition = Topition::from_str("test-topic-0000000-eFC79C8-2147483647")?;
         assert_eq!("test-topic-0000000-eFC79C8", topition.topic());
         assert_eq!(i32::MAX, topition.partition());
+        Ok(())
+    }
+
+    #[test]
+    fn ngd_forming_no_leader_and_no_members() -> Result<()> {
+        let name = "abc";
+        let ngd = NamedGroupDetail::found(
+            name.into(),
+            GroupDetail {
+                session_timeout_ms: 45000,
+                rebalance_timeout_ms: Some(300000),
+                members: BTreeMap::new(),
+                generation_id: 1,
+                skip_assignment: Some(false),
+                inception: SystemTime::now(),
+                state: GroupState::Forming {
+                    protocol_type: Some("consumer".into()),
+                    protocol_name: Some("range".into()),
+                    leader: None,
+                },
+            },
+        );
+
+        let cgdr = consumer_group_describe_response::DescribedGroup::from(&ngd);
+        assert_eq!(i16::from(ErrorCode::None), cgdr.error_code);
+        assert_eq!(String::from(name), cgdr.group_id);
+        assert_eq!(String::from("Empty"), cgdr.group_state);
+        assert_eq!(-1, cgdr.group_epoch);
+        assert_eq!(-1, cgdr.assignment_epoch);
+        assert!(cgdr.members.map(|members| members.is_empty()).unwrap());
+        assert_eq!(-1, cgdr.authorized_operations);
+
+        Ok(())
+    }
+
+    #[test]
+    fn ngd_formed_leader_assignments_members() -> Result<()> {
+        let name = "pqr";
+        let leader = "console-consumer-93fd78f3-2205-4d0a-adab-35bf5f5dbb39";
+
+        let mut members = BTreeMap::new();
+        assert_eq!(None, members.insert(leader.into(),
+            GroupMember {
+                join_response: JoinGroupResponseMember {
+                    member_id: leader.into(),
+                    group_instance_id: None,
+                    metadata: Bytes::from_static(b"\0\x03\0\0\0\x01\0\x04test\xff\xff\xff\xff\0\0\0\0\xff\xff\xff\xff\xff\xff"),
+                },
+                last_contact: Some(SystemTime::now()),
+            }));
+
+        let mut assignments = BTreeMap::new();
+        assert_eq!(None, assignments.insert(
+            leader.into(),
+            Bytes::from_static(
+                b"\0\x03\0\0\0\x01\0\x04test\0\0\0\x03\0\0\0\0\0\0\0\x01\0\0\0\x02\xff\xff\xff\xff",
+            ),
+        ));
+
+        let ngd = NamedGroupDetail::found(
+            name.into(),
+            GroupDetail {
+                session_timeout_ms: 45000,
+                rebalance_timeout_ms: Some(300000),
+                members,
+                generation_id: 0,
+                skip_assignment: Some(false),
+                inception: SystemTime::now(),
+                state: GroupState::Formed {
+                    protocol_type: "consumer".into(),
+                    protocol_name: "range".into(),
+                    leader: leader.into(),
+                    assignments,
+                },
+            },
+        );
+
+        let cgdr = consumer_group_describe_response::DescribedGroup::from(&ngd);
+        assert_eq!(i16::from(ErrorCode::None), cgdr.error_code);
+        assert_eq!(String::from(name), cgdr.group_id);
+        assert_eq!(String::from("Stable"), cgdr.group_state);
+        assert_eq!(-1, cgdr.group_epoch);
+        assert_eq!(-1, cgdr.assignment_epoch);
+        assert!(cgdr.members.map(|members| members.is_empty()).unwrap());
+        assert_eq!(-1, cgdr.authorized_operations);
+
         Ok(())
     }
 }
