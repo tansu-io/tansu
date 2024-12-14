@@ -24,7 +24,7 @@ use tansu_kafka_sans_io::{
     ErrorCode,
 };
 use tansu_server::{coordinator::group::administrator::Controller, Result};
-use tansu_storage::StorageContainer;
+use tansu_storage::{GroupDetailResponse, Storage, StorageContainer};
 use tracing::debug;
 use url::Url;
 use uuid::Uuid;
@@ -115,6 +115,16 @@ pub async fn lifecycle(cluster_id: Uuid, broker_id: i32, mut sc: StorageContaine
     )
     .await?;
     debug!(?first_member);
+
+    let groups = sc.list_groups(None).await?;
+    assert_eq!(1, groups.len());
+    assert_eq!(group_id, groups[0].group_id);
+
+    let groups = sc.describe_groups(Some(&[group_id.clone()]), false).await?;
+    assert_eq!(1, groups.len());
+    debug!(groups = ?groups[0]);
+    assert_eq!(group_id, groups[0].name);
+    assert!(matches!(groups[0].response, GroupDetailResponse::Found(..)));
 
     let first_member_assignment_01 = common::random_bytes(15);
 
