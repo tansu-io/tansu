@@ -16,7 +16,7 @@
 use std::{
     collections::{btree_map::Entry, BTreeMap, BTreeSet},
     fmt::Debug,
-    io::{BufReader, Cursor},
+    io::Cursor,
     str::FromStr,
     sync::Arc,
     time::{Duration, SystemTime},
@@ -48,6 +48,7 @@ use tansu_kafka_sans_io::{
     BatchAttribute, ConfigResource, ConfigSource, ConfigType, ControlBatch, Decoder, Encoder,
     EndTransactionMarker, ErrorCode, IsolationLevel,
 };
+use tansu_schema_registry::Registry;
 use tracing::{debug, error, warn};
 use url::Url;
 use uuid::Uuid;
@@ -66,6 +67,7 @@ pub struct DynoStore {
     cluster: String,
     node: i32,
     advertised_listener: Url,
+    schemas: Option<Registry>,
     watermarks: BTreeMap<Topition, ConditionData<Watermark>>,
     meta: ConditionData<Meta>,
 
@@ -472,6 +474,7 @@ impl DynoStore {
             cluster: cluster.into(),
             node,
             advertised_listener: Url::parse("tcp://127.0.0.1/").unwrap(),
+            schemas: None,
             watermarks: BTreeMap::new(),
             meta: ConditionData::<Meta>::new(cluster),
             object_store: Arc::new(object_store),
@@ -483,6 +486,10 @@ impl DynoStore {
             advertised_listener,
             ..self
         }
+    }
+
+    pub fn schemas(self, schemas: Option<Registry>) -> Self {
+        Self { schemas, ..self }
     }
 
     async fn topic_metadata(&self, topic: &TopicId) -> Result<TopicMetadata> {
@@ -530,10 +537,11 @@ impl DynoStore {
         let get_result = self.object_store.get(location).await?;
         let meta = get_result.meta.clone();
 
-        let encoded = get_result.bytes().await?;
-        let r = BufReader::new(&encoded[..]);
-
-        let payload = serde_json::from_reader(r)?;
+        let payload = get_result
+            .bytes()
+            .await
+            .map_err(Into::into)
+            .and_then(|encoded| serde_json::from_reader(&encoded[..]).map_err(Error::from))?;
 
         Ok((payload, meta.into()))
     }
@@ -889,6 +897,12 @@ impl Storage for DynoStore {
                 .await
                 .inspect(|outcome| debug!(transaction_id, ?topition, ?outcome))
                 .inspect_err(|err| error!(?err, transaction_id, ?topition))?;
+        }
+
+        if let Some(ref schemas) = self.schemas {
+            let inflated = inflated::Batch::try_from(&deflated)?;
+
+            schemas.validate(topition.topic(), &inflated).await?;
         }
 
         let offset = self

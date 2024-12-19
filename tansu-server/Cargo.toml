@@ -13,6 +13,7 @@ bytes.workspace = true
 clap.workspace = true
 deadpool-postgres.workspace = true
 futures.workspace = true
+jsonschema.workspace = true
 object_store.workspace = true
 opentelemetry-jaeger.workspace = true
 opentelemetry.workspace = true
@@ -22,6 +23,7 @@ serde.workspace = true
 serde_json.workspace = true
 tansu-kafka-model = { path = "../tansu-kafka-model" }
 tansu-kafka-sans-io = { path = "../tansu-kafka-sans-io" }
+tansu-schema-registry = { path = "../tansu-schema-registry" }
 tansu-storage = { path = "../tansu-storage" }
 thiserror.workspace = true
 tokio-postgres.workspace = true

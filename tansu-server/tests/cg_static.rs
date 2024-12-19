@@ -178,7 +178,13 @@ mod pg {
         Url::parse("tcp://127.0.0.1/")
             .map_err(Into::into)
             .and_then(|advertised_listener| {
-                common::storage_container(StorageType::Postgres, cluster, node, advertised_listener)
+                common::storage_container(
+                    StorageType::Postgres,
+                    cluster,
+                    node,
+                    advertised_listener,
+                    None,
+                )
             })
     }
 
@@ -222,7 +228,13 @@ mod in_memory {
         Url::parse("tcp://127.0.0.1/")
             .map_err(Into::into)
             .and_then(|advertised_listener| {
-                common::storage_container(StorageType::InMemory, cluster, node, advertised_listener)
+                common::storage_container(
+                    StorageType::InMemory,
+                    cluster,
+                    node,
+                    advertised_listener,
+                    None,
+                )
             })
     }
 
