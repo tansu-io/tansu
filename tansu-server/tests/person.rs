@@ -172,7 +172,7 @@ mod pg {
         let current_dir = env::current_dir()?;
         debug!(?current_dir);
 
-        let schemas = Url::parse("file://./tests")
+        let schemas = Url::parse("file://../etc/schemas")
             .map_err(Error::from)
             .and_then(|url| Registry::try_from(url).map_err(Into::into))
             .map(Some)?;

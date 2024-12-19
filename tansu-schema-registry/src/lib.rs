@@ -136,8 +136,10 @@ impl TryFrom<Url> for Registry {
                     .map(Registry::new)
             }
 
-            ("file", Some(".")) => {
+            ("file", Some(domain)) => {
                 let mut path = env::current_dir().inspect(|current_dir| debug!(?current_dir))?;
+
+                path.push(domain);
 
                 if let Some(relative) = storage.path().strip_prefix("/") {
                     path.push(relative);
