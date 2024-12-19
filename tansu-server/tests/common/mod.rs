@@ -33,6 +33,7 @@ use tansu_kafka_sans_io::{
     sync_group_request::SyncGroupRequestAssignment,
     Body, ErrorCode,
 };
+use tansu_schema_registry::Registry;
 use tansu_server::{
     coordinator::group::{administrator::Controller, Coordinator},
     Error, Result,
@@ -85,19 +86,22 @@ pub(crate) fn storage_container(
     cluster: impl Into<String>,
     node: i32,
     advertised_listener: Url,
+    schemas: Option<Registry>,
 ) -> Result<StorageContainer> {
     match storage_type {
         StorageType::Postgres => Postgres::builder("postgres://postgres:postgres@localhost")
             .map(|builder| builder.cluster(cluster))
             .map(|builder| builder.node(node))
             .map(|builder| builder.advertised_listener(advertised_listener))
+            .map(|builder| builder.schemas(schemas))
             .map(|builder| builder.build())
             .map(StorageContainer::Postgres)
             .map_err(Into::into),
 
         StorageType::InMemory => Ok(StorageContainer::DynoStore(
             DynoStore::new(cluster.into().as_str(), node, InMemory::new())
-                .advertised_listener(advertised_listener),
+                .advertised_listener(advertised_listener)
+                .schemas(schemas),
         )),
     }
 }

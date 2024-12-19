@@ -257,63 +257,77 @@ impl ByteSize for Builder {
 
 impl Builder {
     #[must_use]
-    pub fn base_offset(mut self, base_offset: i64) -> Self {
-        self.base_offset = base_offset;
-        self
+    pub fn base_offset(self, base_offset: i64) -> Self {
+        Self {
+            base_offset,
+            ..self
+        }
     }
 
     #[must_use]
-    pub fn partition_leader_epoch(mut self, partition_leader_epoch: i32) -> Self {
-        self.partition_leader_epoch = partition_leader_epoch;
-        self
+    pub fn partition_leader_epoch(self, partition_leader_epoch: i32) -> Self {
+        Self {
+            partition_leader_epoch,
+            ..self
+        }
     }
 
     #[must_use]
-    pub fn magic(mut self, magic: i8) -> Self {
-        self.magic = magic;
-        self
+    pub fn magic(self, magic: i8) -> Self {
+        Self { magic, ..self }
     }
 
     #[must_use]
-    pub fn attributes(mut self, attributes: i16) -> Self {
-        self.attributes = attributes;
-        self
+    pub fn attributes(self, attributes: i16) -> Self {
+        Self { attributes, ..self }
     }
 
     #[must_use]
-    pub fn last_offset_delta(mut self, last_offset_delta: i32) -> Self {
-        self.last_offset_delta = last_offset_delta;
-        self
+    pub fn last_offset_delta(self, last_offset_delta: i32) -> Self {
+        Self {
+            last_offset_delta,
+            ..self
+        }
     }
 
     #[must_use]
-    pub fn base_timestamp(mut self, base_timestamp: i64) -> Self {
-        self.base_timestamp = base_timestamp;
-        self
+    pub fn base_timestamp(self, base_timestamp: i64) -> Self {
+        Self {
+            base_timestamp,
+            ..self
+        }
     }
 
     #[must_use]
-    pub fn max_timestamp(mut self, max_timestamp: i64) -> Self {
-        self.max_timestamp = max_timestamp;
-        self
+    pub fn max_timestamp(self, max_timestamp: i64) -> Self {
+        Self {
+            max_timestamp,
+            ..self
+        }
     }
 
     #[must_use]
-    pub fn producer_id(mut self, producer_id: i64) -> Self {
-        self.producer_id = producer_id;
-        self
+    pub fn producer_id(self, producer_id: i64) -> Self {
+        Self {
+            producer_id,
+            ..self
+        }
     }
 
     #[must_use]
-    pub fn producer_epoch(mut self, producer_epoch: i16) -> Self {
-        self.producer_epoch = producer_epoch;
-        self
+    pub fn producer_epoch(self, producer_epoch: i16) -> Self {
+        Self {
+            producer_epoch,
+            ..self
+        }
     }
 
     #[must_use]
-    pub fn base_sequence(mut self, base_sequence: i32) -> Self {
-        self.base_sequence = base_sequence;
-        self
+    pub fn base_sequence(self, base_sequence: i32) -> Self {
+        Self {
+            base_sequence,
+            ..self
+        }
     }
 
     #[must_use]

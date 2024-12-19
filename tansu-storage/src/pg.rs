@@ -45,6 +45,7 @@ use tansu_kafka_sans_io::{
     BatchAttribute, ConfigResource, ConfigSource, ConfigType, ControlBatch, EndTransactionMarker,
     ErrorCode, IsolationLevel,
 };
+use tansu_schema_registry::Registry;
 use tokio_postgres::{error::SqlState, Config, NoTls, Row, Transaction};
 use tracing::{debug, error};
 use url::Url;
@@ -63,6 +64,7 @@ pub struct Postgres {
     node: i32,
     advertised_listener: Url,
     pool: Pool,
+    schemas: Option<Registry>,
 }
 
 #[derive(Clone, Default, Debug)]
@@ -71,6 +73,7 @@ pub struct Builder<C, N, L, P> {
     node: N,
     advertised_listener: L,
     pool: P,
+    schemas: Option<Registry>,
 }
 
 impl<C, N, L, P> Builder<C, N, L, P> {
@@ -80,6 +83,7 @@ impl<C, N, L, P> Builder<C, N, L, P> {
             node: self.node,
             advertised_listener: self.advertised_listener,
             pool: self.pool,
+            schemas: self.schemas,
         }
     }
 }
@@ -91,6 +95,7 @@ impl<C, N, L, P> Builder<C, N, L, P> {
             node,
             advertised_listener: self.advertised_listener,
             pool: self.pool,
+            schemas: self.schemas,
         }
     }
 }
@@ -102,7 +107,12 @@ impl<C, N, L, P> Builder<C, N, L, P> {
             node: self.node,
             advertised_listener,
             pool: self.pool,
+            schemas: self.schemas,
         }
+    }
+
+    pub fn schemas(self, schemas: Option<Registry>) -> Builder<C, N, L, P> {
+        Self { schemas, ..self }
     }
 }
 
@@ -113,6 +123,7 @@ impl Builder<String, i32, Url, Pool> {
             node: self.node,
             advertised_listener: self.advertised_listener,
             pool: self.pool,
+            schemas: self.schemas,
         }
     }
 }
@@ -142,6 +153,7 @@ where
                 node: N::default(),
                 advertised_listener,
                 cluster: C::default(),
+                schemas: None,
             })
             .map_err(Into::into)
     }
@@ -373,6 +385,10 @@ impl Postgres {
             .inspect_err(|err| error!(?err))?;
 
         let inflated = inflated::Batch::try_from(deflated).inspect_err(|err| error!(?err))?;
+
+        if let Some(ref schemas) = self.schemas {
+            schemas.validate(topition.topic(), &inflated).await?;
+        }
 
         let attributes = BatchAttribute::try_from(inflated.attributes)?;
 

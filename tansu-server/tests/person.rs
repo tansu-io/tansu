@@ -14,74 +14,29 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use bytes::Bytes;
-use common::{alphanumeric_string, init_tracing, register_broker, StorageType};
+use common::register_broker;
 use rand::{prelude::*, thread_rng};
+use serde_json::json;
 use tansu_kafka_sans_io::{
     create_topics_request::CreatableTopic,
-    record::{inflated, Record},
-    IsolationLevel,
+    record::{inflated::Batch, Record},
+    ErrorCode,
 };
 use tansu_server::Result;
-use tansu_storage::{ListOffsetRequest, Storage, StorageContainer, Topition};
-use tracing::debug;
-use url::Url;
+use tansu_storage::{Error, Storage, StorageContainer, Topition};
+use tracing::{debug, error};
 use uuid::Uuid;
 
 pub mod common;
 
-pub async fn new_topic(cluster_id: Uuid, broker_id: i32, mut sc: StorageContainer) -> Result<()> {
-    register_broker(&cluster_id, broker_id, &mut sc).await?;
-
-    let topic_name: String = alphanumeric_string(15);
-    debug!(?topic_name);
-
-    let num_partitions = 6;
-    let replication_factor = 0;
-    let assignments = Some([].into());
-    let configs = Some([].into());
-
-    let topic_id = sc
-        .create_topic(
-            CreatableTopic {
-                name: topic_name.clone(),
-                num_partitions,
-                replication_factor,
-                assignments: assignments.clone(),
-                configs: configs.clone(),
-            },
-            false,
-        )
-        .await?;
-    debug!(?topic_id);
-
-    let offsets = (0..num_partitions)
-        .map(|partition| {
-            (
-                Topition::new(topic_name.clone(), partition),
-                ListOffsetRequest::Latest,
-            )
-        })
-        .collect::<Vec<_>>();
-
-    for (_toptition, response) in sc
-        .list_offsets(IsolationLevel::ReadUncommitted, &offsets[..])
-        .await?
-    {
-        assert_eq!(Some(0), response.offset);
-        assert_eq!(None, response.timestamp);
-    }
-
-    Ok(())
-}
-
-pub async fn single_record(
+pub async fn person_valid(
     cluster_id: Uuid,
     broker_id: i32,
     mut sc: StorageContainer,
 ) -> Result<()> {
     register_broker(&cluster_id, broker_id, &mut sc).await?;
 
-    let topic_name: String = alphanumeric_string(15);
+    let topic_name = "person";
     debug!(?topic_name);
 
     let num_partitions = 6;
@@ -92,7 +47,7 @@ pub async fn single_record(
     let topic_id = sc
         .create_topic(
             CreatableTopic {
-                name: topic_name.clone(),
+                name: topic_name.into(),
                 num_partitions,
                 replication_factor,
                 assignments: assignments.clone(),
@@ -104,39 +59,124 @@ pub async fn single_record(
     debug!(?topic_id);
 
     let partition_index = thread_rng().gen_range(0..num_partitions);
-    let topition = Topition::new(topic_name.clone(), partition_index);
+    let topition = Topition::new(topic_name.to_owned(), partition_index);
 
-    let value = Bytes::copy_from_slice(alphanumeric_string(15).as_bytes());
+    let key = serde_json::to_vec(&json!({
+          "code": "ABC-123"
+        }
+    ))
+    .map(Bytes::from)?;
 
-    let batch = inflated::Batch::builder()
-        .record(Record::builder().value(value.clone().into()))
+    let value = serde_json::to_vec(&json!({
+      "firstName": "John",
+      "lastName": "Doe",
+      "age": 21
+    }))
+    .map(Bytes::from)?;
+
+    let batch = Batch::builder()
+        .record(
+            Record::builder()
+                .key(key.clone().into())
+                .value(value.clone().into()),
+        )
         .build()
         .and_then(TryInto::try_into)
         .inspect(|deflated| debug!(?deflated))?;
 
-    assert_eq!(
-        0,
+    let _offset = sc
+        .produce(None, &topition, batch)
+        .await
+        .inspect(|offset| debug!(?offset))?;
+
+    Ok(())
+}
+
+pub async fn person_invalid(
+    cluster_id: Uuid,
+    broker_id: i32,
+    mut sc: StorageContainer,
+) -> Result<()> {
+    register_broker(&cluster_id, broker_id, &mut sc).await?;
+
+    let topic_name = "person";
+    debug!(?topic_name);
+
+    let num_partitions = 6;
+    let replication_factor = 0;
+    let assignments = Some([].into());
+    let configs = Some([].into());
+
+    let topic_id = sc
+        .create_topic(
+            CreatableTopic {
+                name: topic_name.into(),
+                num_partitions,
+                replication_factor,
+                assignments: assignments.clone(),
+                configs: configs.clone(),
+            },
+            false,
+        )
+        .await?;
+    debug!(?topic_id);
+
+    let partition_index = thread_rng().gen_range(0..num_partitions);
+    let topition = Topition::new(topic_name.to_owned(), partition_index);
+
+    let key = serde_json::to_vec(&json!({
+          "code": "ABC-123"
+        }
+    ))
+    .map(Bytes::from)?;
+
+    let value = serde_json::to_vec(&json!({
+      "firstName": "John",
+      "lastName": "Doe",
+      "age": -1,
+    }))
+    .map(Bytes::from)?;
+
+    let batch = Batch::builder()
+        .record(
+            Record::builder()
+                .key(key.clone().into())
+                .value(value.clone().into()),
+        )
+        .build()
+        .and_then(TryInto::try_into)
+        .inspect(|deflated| debug!(?deflated))?;
+
+    assert!(matches!(
         sc.produce(None, &topition, batch)
             .await
-            .inspect(|offset| debug!(?offset))?
-    );
-
-    let offsets = [(topition.clone(), ListOffsetRequest::Latest)];
-
-    let responses = sc
-        .list_offsets(IsolationLevel::ReadUncommitted, &offsets[..])
-        .await?;
-
-    assert_eq!(1, responses.len());
-    assert_eq!(Some(1), responses[0].1.offset);
+            .inspect(|offset| debug!(?offset))
+            .inspect_err(|err| error!(?err)),
+        Err(Error::Api(ErrorCode::InvalidRecord))
+    ));
 
     Ok(())
 }
 
 mod pg {
+    use std::env;
+
+    use common::{init_tracing, StorageType};
+    use tansu_schema_registry::Registry;
+    use tansu_server::Error;
+    use url::Url;
+
     use super::*;
 
     fn storage_container(cluster: impl Into<String>, node: i32) -> Result<StorageContainer> {
+        let current_dir = env::current_dir()?;
+        debug!(?current_dir);
+
+        let schemas = Url::parse("file://./tests")
+            .map_err(Error::from)
+            .and_then(|url| Registry::try_from(url).map_err(Into::into))
+            .map(Some)?;
+
         Url::parse("tcp://127.0.0.1/")
             .map_err(Into::into)
             .and_then(|advertised_listener| {
@@ -145,19 +185,19 @@ mod pg {
                     cluster,
                     node,
                     advertised_listener,
-                    None,
+                    schemas,
                 )
             })
     }
 
     #[tokio::test]
-    async fn new_topic() -> Result<()> {
+    async fn person_valid() -> Result<()> {
         let _guard = init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
         let broker_id = thread_rng().gen_range(0..i32::MAX);
 
-        super::new_topic(
+        super::person_valid(
             cluster_id,
             broker_id,
             storage_container(cluster_id, broker_id)?,
@@ -166,61 +206,13 @@ mod pg {
     }
 
     #[tokio::test]
-    async fn single_record() -> Result<()> {
+    async fn person_invalid() -> Result<()> {
         let _guard = init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
         let broker_id = thread_rng().gen_range(0..i32::MAX);
 
-        super::single_record(
-            cluster_id,
-            broker_id,
-            storage_container(cluster_id, broker_id)?,
-        )
-        .await
-    }
-}
-
-mod in_memory {
-    use super::*;
-
-    fn storage_container(cluster: impl Into<String>, node: i32) -> Result<StorageContainer> {
-        Url::parse("tcp://127.0.0.1/")
-            .map_err(Into::into)
-            .and_then(|advertised_listener| {
-                common::storage_container(
-                    StorageType::InMemory,
-                    cluster,
-                    node,
-                    advertised_listener,
-                    None,
-                )
-            })
-    }
-
-    #[tokio::test]
-    async fn new_topic() -> Result<()> {
-        let _guard = init_tracing()?;
-
-        let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
-
-        super::new_topic(
-            cluster_id,
-            broker_id,
-            storage_container(cluster_id, broker_id)?,
-        )
-        .await
-    }
-
-    #[tokio::test]
-    async fn single_record() -> Result<()> {
-        let _guard = init_tracing()?;
-
-        let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
-
-        super::single_record(
+        super::person_invalid(
             cluster_id,
             broker_id,
             storage_container(cluster_id, broker_id)?,
