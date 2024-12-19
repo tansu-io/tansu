@@ -107,6 +107,43 @@ impl TryFrom<deflated::Batch> for Batch {
     }
 }
 
+impl TryFrom<&deflated::Batch> for Batch {
+    type Error = Error;
+
+    fn try_from(value: &deflated::Batch) -> Result<Self, Self::Error> {
+        let base_offset = value.base_offset;
+        let batch_length = value.batch_length;
+        let partition_leader_epoch = value.partition_leader_epoch;
+        let magic = value.magic;
+        let crc = value.crc;
+        let attributes = value.attributes;
+        let last_offset_delta = value.last_offset_delta;
+        let base_timestamp = value.base_timestamp;
+        let max_timestamp = value.max_timestamp;
+        let producer_id = value.producer_id;
+        let producer_epoch = value.producer_epoch;
+        let base_sequence = value.base_sequence;
+
+        let records: Vec<Record> = value.try_into()?;
+
+        Ok(Self {
+            base_offset,
+            batch_length,
+            partition_leader_epoch,
+            magic,
+            crc,
+            attributes,
+            last_offset_delta,
+            base_timestamp,
+            max_timestamp,
+            producer_id,
+            producer_epoch,
+            base_sequence,
+            records,
+        })
+    }
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct Compaction {
     pub batch: Batch,

@@ -125,8 +125,8 @@ impl TryFrom<Url> for Registry {
     fn try_from(storage: Url) -> Result<Self, Self::Error> {
         debug!(%storage);
 
-        match (storage.scheme(), storage.domain()) {
-            ("s3", _) => {
+        match storage.scheme() {
+            "s3" => {
                 let bucket_name = storage.host_str().unwrap_or("schema");
 
                 AmazonS3Builder::from_env()
@@ -136,10 +136,12 @@ impl TryFrom<Url> for Registry {
                     .map(Registry::new)
             }
 
-            ("file", Some(domain)) => {
+            "file" => {
                 let mut path = env::current_dir().inspect(|current_dir| debug!(?current_dir))?;
 
-                path.push(domain);
+                if let Some(domain) = storage.domain() {
+                    path.push(domain);
+                }
 
                 if let Some(relative) = storage.path().strip_prefix("/") {
                     path.push(relative);
@@ -154,7 +156,7 @@ impl TryFrom<Url> for Registry {
                     .map(Registry::new)
             }
 
-            ("memory", _) => Ok(Registry::new(InMemory::new())),
+            "memory" => Ok(Registry::new(InMemory::new())),
 
             _unsupported => Err(Error::UnsupportedSchemaRegistryUrl(storage)),
         }

@@ -67,10 +67,7 @@ pub struct DynoStore {
     cluster: String,
     node: i32,
     advertised_listener: Url,
-
-    #[allow(dead_code)]
     schemas: Option<Registry>,
-
     watermarks: BTreeMap<Topition, ConditionData<Watermark>>,
     meta: ConditionData<Meta>,
 
@@ -900,6 +897,12 @@ impl Storage for DynoStore {
                 .await
                 .inspect(|outcome| debug!(transaction_id, ?topition, ?outcome))
                 .inspect_err(|err| error!(?err, transaction_id, ?topition))?;
+        }
+
+        if let Some(ref schemas) = self.schemas {
+            let inflated = inflated::Batch::try_from(&deflated)?;
+
+            schemas.validate(topition.topic(), &inflated).await?;
         }
 
         let offset = self
