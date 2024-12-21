@@ -511,7 +511,13 @@ mod pg {
         node: i32,
         advertised_listener: Url,
     ) -> Result<StorageContainer> {
-        common::storage_container(StorageType::Postgres, cluster, node, advertised_listener)
+        common::storage_container(
+            StorageType::Postgres,
+            cluster,
+            node,
+            advertised_listener,
+            None,
+        )
     }
 
     #[tokio::test]
@@ -628,7 +634,13 @@ mod in_memory {
         node: i32,
         advertised_listener: Url,
     ) -> Result<StorageContainer> {
-        common::storage_container(StorageType::InMemory, cluster, node, advertised_listener)
+        common::storage_container(
+            StorageType::InMemory,
+            cluster,
+            node,
+            advertised_listener,
+            None,
+        )
     }
 
     #[tokio::test]

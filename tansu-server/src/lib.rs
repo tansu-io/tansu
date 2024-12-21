@@ -22,53 +22,14 @@ use std::{
     sync::{Arc, PoisonError},
 };
 
-use serde::{Deserialize, Serialize};
-use tansu_kafka_sans_io::{
-    broker_registration_request::Listener,
-    create_topics_request::{CreatableReplicaAssignment, CreatableTopic},
-    ErrorCode,
-};
+use jsonschema::ValidationError;
+use tansu_kafka_sans_io::ErrorCode;
 use thiserror::Error;
 use tracing_subscriber::filter::ParseError;
 use url::Url;
-use uuid::Uuid;
 
 pub mod broker;
 pub mod coordinator;
-
-#[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
-pub struct TopicDetail {
-    id: [u8; 16],
-    creatable_topic: CreatableTopic,
-}
-
-impl TopicDetail {
-    pub fn id(&self) -> [u8; 16] {
-        self.id
-    }
-
-    pub fn name(&self) -> &str {
-        self.creatable_topic.name.as_str()
-    }
-
-    pub fn replica_assignments(&self) -> Option<&[CreatableReplicaAssignment]> {
-        self.creatable_topic.assignments.as_deref()
-    }
-}
-
-#[derive(
-    Copy, Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize,
-)]
-pub struct NodeDetail {
-    port: u16,
-}
-
-#[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
-pub struct BrokerDetail {
-    incarnation_id: Uuid,
-    listeners: Option<Vec<Listener>>,
-    rack: Option<String>,
-}
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -87,6 +48,7 @@ pub enum Error {
     ParseInt(#[from] std::num::ParseIntError),
     Poison,
     Pool(#[from] deadpool_postgres::PoolError),
+    SchemaRegistry(#[from] tansu_schema_registry::Error),
     Storage(#[from] tansu_storage::Error),
     StringUtf8(#[from] FromUtf8Error),
     TokioPostgres(#[from] tokio_postgres::error::Error),
@@ -95,6 +57,7 @@ pub enum Error {
     Url(#[from] url::ParseError),
     Utf8(#[from] Utf8Error),
     Uuid(#[from] uuid::Error),
+    SchemaValidation,
 }
 
 impl From<io::Error> for Error {
@@ -106,6 +69,12 @@ impl From<io::Error> for Error {
 impl<T> From<PoisonError<T>> for Error {
     fn from(_value: PoisonError<T>) -> Self {
         Self::Poison
+    }
+}
+
+impl From<ValidationError<'_>> for Error {
+    fn from(_value: ValidationError<'_>) -> Self {
+        Self::SchemaValidation
     }
 }
 

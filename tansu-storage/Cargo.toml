@@ -17,11 +17,13 @@ futures-util.workspace = true
 futures.workspace = true
 glob.workspace = true
 object_store.workspace = true
+protobuf.workspace = true
 rand.workspace = true
 regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tansu-kafka-sans-io = { path = "../tansu-kafka-sans-io" }
+tansu-schema-registry = { path = "../tansu-schema-registry" }
 thiserror.workspace = true
 tokio-postgres.workspace = true
 tokio.workspace = true

@@ -24,7 +24,7 @@ ADD / /usr/src/
 RUN cargo build --package ${PACKAGE} --release
 
 RUN <<EOF
-mkdir /image /data
+mkdir /image /image/schema
 
 # copy any dynamically linked libaries used
 for lib in $(ldd target/release/* 2>/dev/null|grep "=>"|awk '{print $3}'|sort|uniq); do
@@ -47,5 +47,5 @@ cp -v target/release/${PACKAGE} /image
 EOF
 
 FROM scratch
-COPY --from=builder /image /data /
+COPY --from=builder /image /
 ENTRYPOINT [ "/tansu-server" ]
