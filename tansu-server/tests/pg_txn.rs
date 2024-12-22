@@ -60,6 +60,7 @@ async fn simple_txn_commit() -> Result<()> {
                 cluster_id,
                 broker_id,
                 advertised_listener,
+                None,
             )
         })?;
 

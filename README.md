@@ -10,6 +10,7 @@ Features:
 
 - Kafka API compatible
 - Elastic stateless brokers: no more planning and reassigning partitions to a broker
+- Embedded JSON [schema registration and validation](docs/schema-registry.md) of messages
 - Consensus free without the overhead of [Raft][raft-consensus] or [ZooKeeper][apache-zookeeper]
 - All brokers are the leader and ISR of any topic partition
 - All brokers are the transaction and group coordinator

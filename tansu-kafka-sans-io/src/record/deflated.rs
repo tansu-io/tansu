@@ -257,6 +257,31 @@ impl TryFrom<Batch> for Vec<Record> {
     }
 }
 
+impl TryFrom<&Batch> for Vec<Record> {
+    type Error = Error;
+
+    fn try_from(batch: &Batch) -> Result<Self, Self::Error> {
+        let record_count = usize::try_from(batch.record_count)?;
+
+        debug!(?record_count);
+        debug!(?batch.record_data);
+
+        let mut reader = batch
+            .compression()
+            .and_then(|compression| compression.inflator(batch.record_data.clone().reader()))?;
+
+        let mut decoder = Decoder::new(&mut reader);
+        let mut records = Vec::with_capacity(record_count);
+
+        for i in 0..record_count {
+            let record = Record::deserialize(&mut decoder)?;
+            records.push(record);
+        }
+
+        Ok(records)
+    }
+}
+
 const FIXED_BATCH_LENGTH: usize =
     // partition leader epoch
     size_of::<i32>()
