@@ -44,7 +44,7 @@ struct Cli {
     storage_engine: Url,
 
     #[arg(long)]
-    schema: Option<Url>,
+    schema_registry: Option<Url>,
 }
 
 #[tokio::main]
@@ -65,7 +65,7 @@ async fn main() -> Result<()> {
     let mut set = JoinSet::new();
 
     let schemas = args
-        .schema
+        .schema_registry
         .map_or(Ok(None), |schema| Registry::try_from(schema).map(Some))?;
 
     let storage = match args.storage_engine.scheme() {

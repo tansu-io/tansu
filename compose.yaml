@@ -43,7 +43,7 @@ services:
       --kafka-listener-url tcp://0.0.0.0:9092/
       --kafka-advertised-listener-url tcp://${ADVERTISED_LISTENER}
       --storage-engine ${STORAGE_ENGINE}
-      --schema file:///schema
+      --schema-registry file:///schema
     ports:
       - 9092:9092
     links:
