@@ -32,18 +32,6 @@ docker-compose-tansu-up:
 docker-compose-tansu-down:
     docker compose down --volumes tansu
 
-docker-compose-sr-up:
-    docker compose up --detach sr
-
-docker-compose-sr-down:
-    docker compose down --volumes sr
-
-docker-compose-c3-up:
-    docker compose up --detach c3
-
-docker-compose-c3-down:
-    docker compose down --volumes c3
-
 docker-compose-db-up:
     docker compose up --detach db
 
@@ -114,10 +102,21 @@ consumer-group-list:
 test-reset-offsets-to-earliest:
     kafka-consumer-groups --bootstrap-server localhost:9092 --group test-consumer-group --topic test:0 --reset-offsets --to-earliest --execute
 
+person-topic-create:
+    kafka-topics --bootstrap-server localhost:9092 --partitions=3 --replication-factor=1 --create --topic person
+
+person-topic-produce-valid:
+    echo 'h1:pqr,h2:jkl,h3:uio	{"code": "ABC-123"}	{"firstName": "John", "lastName": "Doe", "age": 21}' | kafka-console-producer --bootstrap-server localhost:9092 --topic person --property parse.headers=true --property parse.key=true
+
+person-topic-produce-invalid:
+    echo 'h1:pqr,h2:jkl,h3:uio	{"code": "ABC-123"}	{"firstName": "John", "lastName": "Doe", "age": -1}' | kafka-console-producer --bootstrap-server localhost:9092 --topic person --property parse.headers=true --property parse.key=true
+
+
 tansu-server:
     ./target/debug/tansu-server \
         --kafka-cluster-id ${CLUSTER_ID} \
         --kafka-advertised-listener-url tcp://${ADVERTISED_LISTENER} \
+        --schema-registry file://./etc/schema \
         --storage-engine ${STORAGE_ENGINE} 2>&1 | tee tansu.log
 
 kafka-proxy:
