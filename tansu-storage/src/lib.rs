@@ -59,7 +59,7 @@ use tansu_kafka_sans_io::{
     txn_offset_commit_response::TxnOffsetCommitResponseTopic,
     Body, ConfigResource, ErrorCode, IsolationLevel,
 };
-use tracing::debug;
+use tracing::{debug, debug_span, Instrument};
 use uuid::Uuid;
 
 pub mod dynostore;
@@ -1124,10 +1124,17 @@ impl Storage for StorageContainer {
     }
 
     async fn create_topic(&mut self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {
-        match self {
-            Self::Postgres(pg) => pg.create_topic(topic, validate_only).await,
-            Self::DynoStore(dyn_store) => dyn_store.create_topic(topic, validate_only).await,
+        let span = debug_span!("create_topic", ?topic, validate_only);
+
+        async move {
+            match self {
+                Self::Postgres(pg) => pg.create_topic(topic, validate_only),
+                Self::DynoStore(dyn_store) => dyn_store.create_topic(topic, validate_only),
+            }
+            .await
         }
+        .instrument(span)
+        .await
     }
 
     async fn delete_records(

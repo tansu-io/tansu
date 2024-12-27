@@ -32,23 +32,17 @@ docker-compose-tansu-up:
 docker-compose-tansu-down:
     docker compose down --volumes tansu
 
-docker-compose-sr-up:
-    docker compose up --detach sr
-
-docker-compose-sr-down:
-    docker compose down --volumes sr
-
-docker-compose-c3-up:
-    docker compose up --detach c3
-
-docker-compose-c3-down:
-    docker compose down --volumes c3
-
 docker-compose-db-up:
     docker compose up --detach db
 
 docker-compose-db-down:
     docker compose down --volumes db
+
+docker-compose-jaeger-up:
+    docker compose up --detach jaeger
+
+docker-compose-jaeger-down:
+    docker compose down --volumes jaeger
 
 docker-compose-up:
     docker compose up --detach

@@ -19,11 +19,12 @@ use object_store::{
     memory::InMemory,
 };
 use tansu_schema_registry::Registry;
-use tansu_server::{broker::Broker, coordinator::group::administrator::Controller, Error, Result};
+use tansu_server::{
+    broker::Broker, coordinator::group::administrator::Controller, telemetry, Error, Result,
+};
 use tansu_storage::{dynostore::DynoStore, pg::Postgres, StorageContainer};
 use tokio::task::JoinSet;
 use tracing::debug;
-use tracing_subscriber::{fmt::format::FmtSpan, prelude::*, EnvFilter};
 use url::Url;
 
 const NODE_ID: i32 = 111;
@@ -49,16 +50,7 @@ struct Cli {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::fmt::layer()
-                .with_level(true)
-                .with_line_number(true)
-                .with_thread_ids(false)
-                .with_span_events(FmtSpan::NONE),
-        )
-        .with(EnvFilter::from_default_env())
-        .init();
+    let _guard = telemetry::init_tracing_subscriber()?;
 
     let args = Cli::parse();
 

@@ -3,7 +3,8 @@ resolver = "2"
 members = [
     "tansu-kafka-model",
     "tansu-kafka-sans-io",
-    "tansu-proxy", "tansu-schema-registry",
+    "tansu-proxy",
+    "tansu-schema-registry",
     "tansu-server",
     "tansu-storage",
 ]
@@ -58,9 +59,11 @@ jsonschema = "0.26.2"
 lazy_static = "1.4.0"
 lz4 = "1.28.0"
 object_store = { version = "0.11.1", features = ["aws"] }
-opentelemetry = { version = "0.21.0" }
-opentelemetry-jaeger = { version = "0.20.0", features = ["rt-tokio"] }
-opentelemetry_sdk = "0.21.2"
+opentelemetry = { version = "0.27.0" }
+opentelemetry-jaeger = { version = "0.22.0", features = ["rt-tokio"] }
+opentelemetry-otlp = "0.27.0"
+opentelemetry-semantic-conventions = "0.27.0"
+opentelemetry_sdk = { version = "0.27.0", features = ["rt-tokio"] }
 pretty_assertions = "1"
 prettyplease = "0.2.25"
 proc-macro2 = "1.0.92"
@@ -82,6 +85,7 @@ tokio-postgres = { version = "0.7.12", features = [
 ] }
 tracing = "0.1"
 tracing-core = { version = "0.1" }
+tracing-opentelemetry = "0.28.0"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = { version = "2.5.4", features = ["serde"] }
 uuid = { version = "1.11.0", features = ["serde", "v4", "v7"] }
