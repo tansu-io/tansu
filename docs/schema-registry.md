@@ -29,7 +29,7 @@ Starting Tansu with schema validation enabled:
 ❯ just tansu-server
 ./target/debug/tansu-server --kafka-cluster-id ${CLUSTER_ID}
                             --kafka-advertised-listener-url tcp://${ADVERTISED_LISTENER}
-                            --schema file://./etc/schemas
+                            --schema-registry file://./etc/schemas
                             --storage-engine ${STORAGE_ENGINE} 2>&1 | tee tansu.log
 ```
 
