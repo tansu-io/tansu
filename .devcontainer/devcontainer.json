@@ -23,6 +23,8 @@
 
     "ghcr.io/devcontainers/features/common-utils:2": {},
 
-    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {},
+
+    "ghcr.io/devcontainers/features/github-cli:1": {}
   }
 }
