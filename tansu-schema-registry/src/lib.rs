@@ -29,9 +29,11 @@ use url::Url;
 use tracing_subscriber::filter::ParseError;
 
 mod json;
+mod proto;
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
+    Anyhow(#[from] anyhow::Error),
     Api(ErrorCode),
     Io(#[from] io::Error),
     KafkaSansIo(#[from] tansu_kafka_sans_io::Error),
@@ -40,6 +42,11 @@ pub enum Error {
 
     #[cfg(test)]
     ParseFilter(#[from] ParseError),
+
+    #[cfg(test)]
+    ProtobufJsonMapping(#[from] protobuf_json_mapping::ParseError),
+
+    Protobuf(#[from] protobuf::Error),
 
     SchemaValidation,
     SerdeJson(#[from] serde_json::Error),
