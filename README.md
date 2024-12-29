@@ -25,29 +25,7 @@ For data durability:
   streaming transaction logs files to an archive
 - The memory storage engine is designed for ephemeral non-production environments
 
-## S3
-
-Tansu requires that the underlying S3 service support conditional
-PUT requests. While
-[AWS S3 does now support conditional writes][aws-s3-conditional-writes],
-the support is
-[limited to not overwriting an existing object][aws-s3-conditional-requests].
-To have stateless brokers we need to
-[use a compare and set operation][tigris-conditional-writes],
-which is not currently available in AWS S3.
-
-Much like the Kafka protocol, the S3 protocol allows vendors to
-differentiate. Different levels of service while retaining
-compatibility with the underlying API. You can use [minio][min-io],
-[r2][cloudflare-r2] or [tigis][tigris-conditional-writes],
-among a number of other vendors supporting conditional put.
-
-Tansu uses [object store][crates-io-object-store], providing a
-multi-cloud API for storage. There is an alternative option to use a
-[DynamoDB-based commit protocol, to provide conditional write support
-for AWS S3][object-store-dynamo-conditional-put] instead.
-
-### configuration
+## configuration
 
 The `storage-engine` parameter is a S3 URL that specifies the bucket
 to be used. The following will configure a S3 storage engine
@@ -109,6 +87,18 @@ kafka-topics \
   --create --topic test
 ```
 
+Describe the `test` topic:
+
+```shell
+kafka-topics \
+  --bootstrap-server localhost:9092 \
+  --describe \
+  --topic test
+```
+
+Note that node 111 is the leader and ISR for each topic partition.
+This node represents the broker handling your request. All brokers are node 111.
+
 Producer:
 
 ```shell
@@ -117,11 +107,12 @@ echo "hello world" | kafka-console-producer \
     --topic test
 ```
 
-Consumer:
+Group consumer using `test-consumer-group`:
 
 ```shell
 kafka-console-consumer \
   --bootstrap-server localhost:9092 \
+  --group test-consumer-group \
   --topic test \
   --from-beginning \
   --property print.timestamp=true \
@@ -132,12 +123,13 @@ kafka-console-consumer \
   --property print.value=true
 ```
 
-Describe the consumer groups:
+Describe the consumer `test-consumer-group` group:
 
 ```shell
 kafka-consumer-groups \
   --bootstrap-server localhost:9092 \
-  --list
+  --group test-consumer-group \
+  --describe
 ```
 
 ## PostgreSQL
@@ -189,6 +181,7 @@ Consumer:
 ```shell
 kafka-console-consumer \
   --bootstrap-server localhost:9092 \
+  --group test-consumer-group \
   --topic test \
   --from-beginning \
   --property print.timestamp=true \
