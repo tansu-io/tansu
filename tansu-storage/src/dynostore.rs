@@ -54,10 +54,11 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::{
-    BrokerRegistationRequest, Error, GroupDetail, ListOffsetRequest, ListOffsetResponse,
-    MetadataResponse, NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse,
-    Result, Storage, TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse,
-    TxnOffsetCommitRequest, TxnState, UpdateError, Version, NULL_TOPIC_ID,
+    BrokerRegistationRequest, ConsumerGroupState, Error, GroupDetail, ListOffsetRequest,
+    ListOffsetResponse, MetadataResponse, NamedGroupDetail, OffsetCommitRequest, OffsetStage,
+    ProducerIdResponse, Result, Storage, TopicId, Topition, TxnAddPartitionsRequest,
+    TxnAddPartitionsResponse, TxnOffsetCommitRequest, TxnState, UpdateError, Version,
+    NULL_TOPIC_ID,
 };
 
 const APPLICATION_JSON: &str = "application/json";
@@ -1702,19 +1703,62 @@ impl Storage for DynoStore {
             .inspect(|list_result| debug!(?list_result))
             .inspect_err(|error| error!(?error, cluster = self.cluster))?;
 
-        let mut listed_groups = vec![];
+        let mut listed_groups = BTreeMap::new();
 
         for prefix in list_result.common_prefixes {
             if let Some(group_id) = prefix.parts().last() {
-                listed_groups.push(ListedGroup {
-                    group_id: group_id.as_ref().into(),
-                    protocol_type: "consumer".into(),
-                    group_state: Some("Unknown".into()),
-                });
+                _ = listed_groups.insert(
+                    group_id.as_ref().to_string(),
+                    ListedGroup {
+                        group_id: group_id.as_ref().into(),
+                        protocol_type: "consumer".into(),
+                        group_state: Some("Unknown".into()),
+                    },
+                );
             }
         }
 
-        Ok(listed_groups)
+        for object in list_result.objects {
+            debug!(path = %object.location, parts = object.location.parts().count());
+
+            if object.location.parts().count() != 5 {
+                continue;
+            }
+
+            let Some(filename) = object.location.parts().last() else {
+                continue;
+            };
+
+            debug!(?filename);
+
+            if !filename.as_ref().ends_with(".json") {
+                continue;
+            }
+
+            match filename.as_ref().rsplit_once(".") {
+                Some((group_id, "json")) => {
+                    _ = listed_groups.insert(
+                        group_id.into(),
+                        ListedGroup {
+                            group_id: group_id.into(),
+                            protocol_type: "consumer".into(),
+                            group_state: self
+                                .get::<GroupDetail>(&object.location)
+                                .await
+                                .inspect(|o| debug!(?o))
+                                .inspect_err(|err| error!(?err))
+                                .map(|gd_v| gd_v.0)
+                                .map(|gd| ConsumerGroupState::from(&gd).to_string())
+                                .map(Some)?,
+                        },
+                    );
+                }
+                Some((prefix, extension)) => debug!(prefix, extension),
+                None => (),
+            }
+        }
+
+        Ok(listed_groups.into_values().collect())
     }
 
     async fn delete_groups(

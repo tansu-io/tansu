@@ -2272,12 +2272,16 @@ impl Storage for Postgres {
                     .await
                     .inspect_err(|err| error!(?err, group_id))?
                 {
-                    let value = row
-                        .try_get::<_, Value>(1)
+                    let current = row
+                        .try_get::<_, Option<Value>>(1)
+                        .map_err(Error::from)
+                        .and_then(|maybe| {
+                            maybe.map_or(Ok(GroupDetail::default()), |value| {
+                                serde_json::from_value::<GroupDetail>(value).map_err(Into::into)
+                            })
+                        })
+                        .inspect(|group_detail| debug!(group_id, ?group_detail))
                         .inspect_err(|err| error!(?err, group_id))?;
-
-                    let current = serde_json::from_value::<GroupDetail>(value)
-                        .inspect(|current| debug!(?current))?;
 
                     results.push(NamedGroupDetail::found(group_id.into(), current));
                 } else {
