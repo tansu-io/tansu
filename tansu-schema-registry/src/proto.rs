@@ -13,63 +13,105 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::fs;
+use std::io::Write;
 
-use crate::Result;
+use crate::{Error, Result, Validator};
 use bytes::Bytes;
-use protobuf::{reflect::FileDescriptor, CodedInputStream, MessageDyn};
-use tempfile::tempdir;
+use protobuf::{
+    reflect::{FileDescriptor, MessageDescriptor},
+    CodedInputStream,
+};
+use tansu_kafka_sans_io::{record::inflated::Batch, ErrorCode};
+use tempfile::{tempdir, NamedTempFile};
+use tracing::{debug, error};
 
-fn make_fd(proto: &str) -> Result<Option<FileDescriptor>> {
-    let temp_dir = tempdir()?;
-    let temp_file = temp_dir.path().join("example.proto");
-
-    fs::write(&temp_file, proto)?;
-
-    protobuf_parse::Parser::new()
-        .pure()
-        .include(temp_dir.path().to_path_buf())
-        .input(&temp_file)
-        .parse_and_typecheck()
-        .map_err(Into::into)
-        .and_then(|mut parsed| {
-            parsed
-                .file_descriptors
-                .pop()
-                .map(|file_descriptor_proto| {
-                    FileDescriptor::new_dynamic(file_descriptor_proto, &[])
-                })
-                .transpose()
-                .map_err(Into::into)
-        })
+pub(crate) struct Schema {
+    file_descriptor: FileDescriptor,
 }
 
-fn decode(
-    fd: &FileDescriptor,
-    message_name: &str,
-    encoded: Bytes,
-) -> Result<Option<Box<dyn MessageDyn>>> {
-    fd.message_by_package_relative_name(message_name)
-        .map(|message_descriptor| {
-            let mut message = message_descriptor.new_instance();
+fn validate(message_descriptor: Option<MessageDescriptor>, encoded: Option<Bytes>) -> Result<()> {
+    message_descriptor.map_or(Ok(()), |message_descriptor| {
+        let mut message = message_descriptor.new_instance();
+
+        encoded.map_or(Err(Error::Api(ErrorCode::InvalidRecord)), |encoded| {
             message
                 .merge_from_dyn(&mut CodedInputStream::from_tokio_bytes(&encoded))
-                .map(|()| message)
-                .map_err(Into::into)
+                .inspect_err(|err| error!(?err))
+                .map_err(|_err| Error::Api(ErrorCode::InvalidRecord))
         })
-        .transpose()
+    })
+}
+
+impl Validator for Schema {
+    fn validate(&self, batch: &Batch) -> Result<()> {
+        debug!(?batch);
+
+        for record in &batch.records {
+            debug!(?record);
+
+            validate(
+                self.file_descriptor.message_by_package_relative_name("Key"),
+                record.key.clone(),
+            )
+            .and(validate(
+                self.file_descriptor
+                    .message_by_package_relative_name("Value"),
+                record.value.clone(),
+            ))
+            .inspect_err(|err| error!(?err))?
+        }
+
+        Ok(())
+    }
+}
+
+impl TryFrom<Bytes> for Schema {
+    type Error = Error;
+
+    fn try_from(proto: Bytes) -> Result<Self, Self::Error> {
+        make_fd(proto).map(|file_descriptor| Self { file_descriptor })
+    }
+}
+
+fn make_fd(proto: Bytes) -> Result<FileDescriptor> {
+    tempdir().map_err(Into::into).and_then(|temp_dir| {
+        NamedTempFile::new_in(&temp_dir)
+            .map_err(Into::into)
+            .and_then(|mut temp_file| {
+                temp_file.write_all(&proto).map_err(Into::into).and(
+                    protobuf_parse::Parser::new()
+                        .pure()
+                        .input(&temp_file)
+                        .include(&temp_dir)
+                        .parse_and_typecheck()
+                        .map_err(Into::into)
+                        .and_then(|mut parsed| {
+                            parsed.file_descriptors.pop().map_or(
+                                Err(Error::ProtobufFileDescriptorMissing(proto)),
+                                |file_descriptor_proto| {
+                                    FileDescriptor::new_dynamic(file_descriptor_proto, &[])
+                                        .map_err(Into::into)
+                                },
+                            )
+                        }),
+                )
+            })
+    })
 }
 
 #[cfg(test)]
 mod tests {
-
-    use crate::Error;
+    use crate::Registry;
 
     use super::*;
     use bytes::{BufMut, BytesMut};
-    use protobuf::reflect::ReflectFieldRef;
+    use object_store::{memory::InMemory, path::Path, ObjectStore, PutPayload};
     use protobuf_json_mapping::parse_dyn_from_str;
     use serde_json::{json, Value};
+    use std::{fs::File, sync::Arc, thread};
+    use tansu_kafka_sans_io::record::Record;
+    use tracing::subscriber::DefaultGuard;
+    use tracing_subscriber::EnvFilter;
 
     fn encode_from_value(
         fd: &FileDescriptor,
@@ -94,80 +136,388 @@ mod tests {
             .transpose()
     }
 
-    #[test]
-    fn make_fd_from_proto3() -> Result<()> {
-        let message_name = "Person";
+    fn init_tracing() -> Result<DefaultGuard> {
+        Ok(tracing::subscriber::set_default(
+            tracing_subscriber::fmt()
+                .with_level(true)
+                .with_line_number(true)
+                .with_thread_names(false)
+                .with_env_filter(
+                    EnvFilter::from_default_env()
+                        .add_directive(format!("{}=debug", env!("CARGO_CRATE_NAME")).parse()?),
+                )
+                .with_writer(
+                    thread::current()
+                        .name()
+                        .ok_or(Error::Message(String::from("unnamed thread")))
+                        .and_then(|name| {
+                            File::create(format!("../logs/{}/{name}.log", env!("CARGO_PKG_NAME"),))
+                                .map_err(Into::into)
+                        })
+                        .map(Arc::new)?,
+                )
+                .finish(),
+        ))
+    }
 
-        let proto = r#"
+    #[tokio::test]
+    async fn key_only_invalid_record() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let topic = "def";
+
+        let proto = Bytes::from_static(
+            br#"
             syntax = 'proto3';
 
-            message Person {
+            message Key {
+              int32 id = 1;
+            }
+
+            message Value {
               string name = 1;
-              int32 id = 2;
-              string email = 3;
+              string email = 2;
             }
-            "#;
+            "#,
+        );
 
-        let file_descriptor = make_fd(proto)?.unwrap();
+        let object_store = InMemory::new();
+        let location = Path::from(format!("{topic}.proto"));
+        let payload = PutPayload::from(proto.clone());
+        _ = object_store.put(&location, payload).await?;
 
-        let md = file_descriptor
-            .message_by_package_relative_name(message_name)
-            .unwrap();
-        let fd = md.field_by_name("name").unwrap();
-        let _field_type = fd.runtime_field_type();
+        let registry = Registry::new(object_store);
 
-        let encoded =
-            encode_from_value(&file_descriptor, message_name, &json!({"id": 12321}))?.unwrap();
+        let file_descriptor = make_fd(proto)?;
 
-        let decoded = decode(&file_descriptor, message_name, encoded)?.unwrap();
-        let field_descriptor = decoded.descriptor_dyn().field_by_name("id").unwrap();
+        let key = encode_from_value(&file_descriptor, "Key", &json!({"id": 12321}))?.unwrap();
 
-        match field_descriptor.get_reflect(decoded.as_ref()) {
-            ReflectFieldRef::Optional(reflect_optional_ref) => {
-                assert!(matches!(
-                    reflect_optional_ref.value(),
-                    Some(protobuf::reflect::ReflectValueRef::I32(12321))
-                ));
-            }
-            ReflectFieldRef::Repeated(_reflect_repeated_ref) => todo!(),
-            ReflectFieldRef::Map(_reflect_map_ref) => todo!(),
-        }
+        let batch = Batch::builder()
+            .record(Record::builder().key(key.clone().into()))
+            .build()?;
+
+        assert!(matches!(
+            registry.validate(topic, &batch).await,
+            Err(Error::Api(ErrorCode::InvalidRecord))
+        ));
 
         Ok(())
     }
 
-    #[test]
-    fn make_fd_from_proto2() -> Result<()> {
-        let message_name = "Person";
+    #[tokio::test]
+    async fn value_only_invalid_record() -> Result<()> {
+        let _guard = init_tracing()?;
 
-        let proto = r#"
-            syntax = 'proto2';
+        let topic = "def";
 
-            message Person {
-                optional string name = 1;
-                optional int32 id = 2;
-                optional string email = 3;
-            }
-            "#;
+        let proto = Bytes::from_static(
+            br#"
+                syntax = 'proto3';
 
-        let file_descriptor = make_fd(proto)?.unwrap();
+                message Key {
+                  int32 id = 1;
+                }
 
-        let encoded =
-            encode_from_value(&file_descriptor, message_name, &json!({"id": 12321}))?.unwrap();
+                message Value {
+                  string name = 1;
+                  string email = 2;
+                }
+                "#,
+        );
 
-        let decoded = decode(&file_descriptor, message_name, encoded)?.unwrap();
-        let field_descriptor = decoded.descriptor_dyn().field_by_name("id").unwrap();
+        let object_store = InMemory::new();
+        let location = Path::from(format!("{topic}.proto"));
+        let payload = PutPayload::from(proto.clone());
+        _ = object_store.put(&location, payload).await?;
 
-        match field_descriptor.get_reflect(decoded.as_ref()) {
-            ReflectFieldRef::Optional(reflect_optional_ref) => {
-                assert!(matches!(
-                    reflect_optional_ref.value(),
-                    Some(protobuf::reflect::ReflectValueRef::I32(12321))
-                ));
-            }
-            ReflectFieldRef::Repeated(_reflect_repeated_ref) => todo!(),
-            ReflectFieldRef::Map(_reflect_map_ref) => todo!(),
-        }
+        let registry = Registry::new(object_store);
+
+        let file_descriptor = make_fd(proto)?;
+
+        let value = encode_from_value(
+            &file_descriptor,
+            "Value",
+            &json!({
+                "name": "alice",
+                "email": "alice@example.com"
+            }),
+        )?
+        .unwrap();
+
+        let batch = Batch::builder()
+            .record(Record::builder().value(value.clone().into()))
+            .build()?;
+
+        assert!(matches!(
+            registry.validate(topic, &batch).await,
+            Err(Error::Api(ErrorCode::InvalidRecord))
+        ));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn key_and_value() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let topic = "def";
+
+        let proto = Bytes::from_static(
+            br#"
+                syntax = 'proto3';
+
+                message Key {
+                  int32 id = 1;
+                }
+
+                message Value {
+                  string name = 1;
+                  string email = 2;
+                }
+                "#,
+        );
+
+        let object_store = InMemory::new();
+        let location = Path::from(format!("{topic}.proto"));
+        let payload = PutPayload::from(proto.clone());
+        _ = object_store.put(&location, payload).await?;
+
+        let registry = Registry::new(object_store);
+
+        let file_descriptor = make_fd(proto.clone())?;
+
+        let key = encode_from_value(&file_descriptor, "Key", &json!({"id": 12321}))?.unwrap();
+        let value = encode_from_value(
+            &file_descriptor,
+            "Value",
+            &json!({
+                "name": "alice",
+                "email": "alice@example.com"
+            }),
+        )?
+        .unwrap();
+
+        let batch = Batch::builder()
+            .record(
+                Record::builder()
+                    .key(key.clone().into())
+                    .value(value.clone().into()),
+            )
+            .build()?;
+
+        registry.validate(topic, &batch).await
+    }
+
+    #[tokio::test]
+    async fn no_schema() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let topic = "def";
+
+        let registry = Registry::new(InMemory::new());
+
+        let key = Bytes::from_static(b"Lorem ipsum dolor sit amet");
+        let value = Bytes::from_static(b"Consectetur adipiscing elit");
+
+        let batch = Batch::builder()
+            .record(
+                Record::builder()
+                    .key(key.clone().into())
+                    .value(value.clone().into()),
+            )
+            .build()?;
+
+        registry.validate(topic, &batch).await
+    }
+
+    #[tokio::test]
+    async fn empty_schema() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let topic = "def";
+
+        let proto = Bytes::from_static(br#"syntax = 'proto3';"#);
+
+        let object_store = InMemory::new();
+        let location = Path::from(format!("{topic}.proto"));
+        let payload = PutPayload::from(proto.clone());
+        _ = object_store.put(&location, payload).await?;
+
+        let registry = Registry::new(object_store);
+
+        let key = Bytes::from_static(b"Lorem ipsum dolor sit amet");
+        let value = Bytes::from_static(b"Consectetur adipiscing elit");
+
+        let batch = Batch::builder()
+            .record(
+                Record::builder()
+                    .key(key.clone().into())
+                    .value(value.clone().into()),
+            )
+            .build()?;
+
+        registry.validate(topic, &batch).await
+    }
+
+    #[tokio::test]
+    async fn key_schema_only() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let topic = "def";
+
+        let proto = Bytes::from_static(
+            br#"
+                syntax = 'proto3';
+
+                message Key {
+                  int32 id = 1;
+                }
+                "#,
+        );
+
+        let object_store = InMemory::new();
+        let location = Path::from(format!("{topic}.proto"));
+        let payload = PutPayload::from(proto.clone());
+        _ = object_store.put(&location, payload).await?;
+
+        let registry = Registry::new(object_store);
+
+        let file_descriptor = make_fd(proto.clone())?;
+
+        let key = encode_from_value(&file_descriptor, "Key", &json!({"id": 12321}))?.unwrap();
+        let value = Bytes::from_static(b"Consectetur adipiscing elit");
+
+        let batch = Batch::builder()
+            .record(
+                Record::builder()
+                    .key(key.clone().into())
+                    .value(value.clone().into()),
+            )
+            .build()?;
+
+        registry.validate(topic, &batch).await
+    }
+
+    #[tokio::test]
+    async fn bad_key() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let topic = "def";
+
+        let proto = Bytes::from_static(
+            br#"
+                syntax = 'proto3';
+
+                message Key {
+                  int32 id = 1;
+                }
+                "#,
+        );
+
+        let object_store = InMemory::new();
+        let location = Path::from(format!("{topic}.proto"));
+        let payload = PutPayload::from(proto.clone());
+        _ = object_store.put(&location, payload).await?;
+
+        let registry = Registry::new(object_store);
+
+        let key = Bytes::from_static(b"Lorem ipsum dolor sit amet");
+
+        let batch = Batch::builder()
+            .record(Record::builder().key(key.clone().into()))
+            .build()?;
+
+        assert!(matches!(
+            registry.validate(topic, &batch).await,
+            Err(Error::Api(ErrorCode::InvalidRecord))
+        ));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn value_schema_only() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let topic = "def";
+
+        let proto = Bytes::from_static(
+            br#"
+                syntax = 'proto3';
+
+                message Value {
+                  string name = 1;
+                  string email = 2;
+                }
+                "#,
+        );
+
+        let object_store = InMemory::new();
+        let location = Path::from(format!("{topic}.proto"));
+        let payload = PutPayload::from(proto.clone());
+        _ = object_store.put(&location, payload).await?;
+
+        let registry = Registry::new(object_store);
+
+        let file_descriptor = make_fd(proto.clone())?;
+
+        let key = Bytes::from_static(b"Lorem ipsum dolor sit amet");
+
+        let value = encode_from_value(
+            &file_descriptor,
+            "Value",
+            &json!({
+                "name": "alice",
+                "email": "alice@example.com"
+            }),
+        )?
+        .unwrap();
+
+        let batch = Batch::builder()
+            .record(
+                Record::builder()
+                    .key(key.clone().into())
+                    .value(value.clone().into()),
+            )
+            .build()?;
+
+        registry.validate(topic, &batch).await
+    }
+
+    #[tokio::test]
+    async fn bad_value() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let topic = "def";
+
+        let proto = Bytes::from_static(
+            br#"
+                syntax = 'proto3';
+
+                message Value {
+                  string name = 1;
+                  string email = 2;
+                }
+                "#,
+        );
+
+        let object_store = InMemory::new();
+        let location = Path::from(format!("{topic}.proto"));
+        let payload = PutPayload::from(proto.clone());
+        _ = object_store.put(&location, payload).await?;
+
+        let registry = Registry::new(object_store);
+
+        let value = Bytes::from_static(b"Consectetur adipiscing elit");
+
+        let batch = Batch::builder()
+            .record(Record::builder().value(value.clone().into()))
+            .build()?;
+
+        assert!(matches!(
+            registry.validate(topic, &batch).await,
+            Err(Error::Api(ErrorCode::InvalidRecord))
+        ));
 
         Ok(())
     }
