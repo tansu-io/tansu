@@ -20,7 +20,7 @@ use tansu_kafka_sans_io::{
     ErrorCode,
 };
 use tansu_storage::{Storage, Topition};
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ProduceRequest<S> {
@@ -72,8 +72,12 @@ where
                     .produce(transaction_id, &tp, batch)
                     .await
                     .map_err(Into::into)
-                    .inspect_err(|err| error!(?err))
-                {
+                    .inspect_err(|err| match err {
+                        storage_api @ Error::Storage(tansu_storage::Error::Api(_)) => {
+                            warn!(?storage_api)
+                        }
+                        otherwise => error!(?otherwise),
+                    }) {
                     Ok(base_offset) => PartitionProduceResponse {
                         index: partition.index,
                         error_code: ErrorCode::None.into(),

@@ -8,20 +8,48 @@ When a message is produced to a topic with an associated schema,
 the message is validated against the schema. If a message does not conform to its
 schema it is rejected with an `INVALID_RECORD` error.
 
-Within the schema registry the each topic has a directory containing `key.json`
-(the schema for the message key) and/or `value.json` (the schema for the message value).
+## JSON schema
 
-As an example, for a topic "person" that has schemas for both the key and value,
-the schema registry would be laid out as:
+An example JSON schema for the "person" topic:
 
-```shell
-person/key.json
-person/value.json
+```json
+{
+  "title": "Person",
+  "type": "object",
+  "properties": {
+
+    "key": {
+      "type": "string",
+      "pattern": "^[A-Z]{3}-\\d{3}$"
+    },
+
+    "value": {
+      "type": "object",
+      "properties": {
+        "firstName": {
+          "type": "string",
+          "description": "The person's first name."
+        },
+        "lastName": {
+          "type": "string",
+          "description": "The person's last name."
+        },
+        "age": {
+          "description": "Age in years which must be equal to or greater than zero.",
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}
 ```
+
+The schema must be an object, with properties for the message "key" and/or "value".
 
 The person schemas can be found in the `etc/schema` directory of the Tansu GitHub
 repository. This directory is also used when starting Tansu using
-the `just tansu-server` recipe or the Docker compose.
+the `just tansu-server` recipe or Docker compose.
 
 Starting Tansu with schema validation enabled:
 
@@ -49,14 +77,14 @@ Produce a message that is valid for the person schema:
 
 ```shell
 ❯ just person-topic-produce-valid
-echo 'h1:pqr,h2:jkl,h3:uio	{"code": "ABC-123"}	{"firstName": "John", "lastName": "Doe", "age": 21}' | kafka-console-producer --bootstrap-server localhost:9092 --topic person --property parse.headers=true --property parse.key=true
+echo 'h1:pqr,h2:jkl,h3:uio	"ABC-123"	{"firstName": "John", "lastName": "Doe", "age": 21}' | kafka-console-producer --bootstrap-server localhost:9092 --topic person --property parse.headers=true --property parse.key=true
 ```
 
 Produce a message that is invalid for the person schema (the `age` must be greater to equal to 0):
 
 ```shell
 ❯ just person-topic-produce-invalid
-echo 'h1:pqr,h2:jkl,h3:uio	{"code": "ABC-123"}	{"firstName": "John", "lastName": "Doe", "age": -1}' | kafka-console-producer --bootstrap-server localhost:9092 --topic person --property parse.headers=true --property parse.key=true
+echo 'h1:pqr,h2:jkl,h3:uio	"ABC-123"	{"firstName": "John", "lastName": "Doe", "age": -1}' | kafka-console-producer --bootstrap-server localhost:9092 --topic person --property parse.headers=true --property parse.key=true
 [2024-12-19 11:51:28,412] ERROR Error when sending message to topic person with key: 19 bytes, value: 51 bytes with error: (org.apache.kafka.clients.producer.internals.ErrorLoggingCallback)
 org.apache.kafka.common.InvalidRecordException: This record has failed the validation on broker and hence will be rejected.
 ```

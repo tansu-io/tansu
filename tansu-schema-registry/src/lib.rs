@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -36,6 +36,7 @@ pub enum Error {
     Anyhow(#[from] anyhow::Error),
     Api(ErrorCode),
     Io(#[from] io::Error),
+    JsonSchemaPropertiesMissing(Bytes),
     KafkaSansIo(#[from] tansu_kafka_sans_io::Error),
     Message(String),
     ObjectStore(#[from] object_store::Error),
@@ -71,12 +72,6 @@ impl fmt::Display for Error {
 }
 
 pub type Result<T, E = Error> = result::Result<T, E>;
-
-#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-struct Schema {
-    key: Option<Bytes>,
-    value: Option<Bytes>,
-}
 
 trait Validator {
     fn validate(&self, batch: &Batch) -> Result<()>;
@@ -125,19 +120,15 @@ impl Registry {
                 .await
                 .and_then(proto::Schema::try_from)
                 .and_then(|schema| schema.validate(batch))
-        } else if list_result.common_prefixes.contains(&Path::from(topic)) {
-            json::Schema::try_from(Schema {
-                key: self
-                    .get(&Path::from(format!("{topic}/key.json")))
-                    .await
-                    .ok(),
-
-                value: self
-                    .get(&Path::from(format!("{topic}/value.json")))
-                    .await
-                    .ok(),
-            })
-            .and_then(|schema| schema.validate(batch))
+        } else if list_result
+            .objects
+            .iter()
+            .any(|meta| meta.location == Path::from(format!("{topic}.json")))
+        {
+            self.get(&Path::from(format!("{topic}.json")))
+                .await
+                .and_then(json::Schema::try_from)
+                .and_then(|schema| schema.validate(batch))
         } else {
             Ok(())
         }
@@ -242,10 +233,15 @@ mod tests {
 
         let object_store = InMemory::new();
 
-        let location = Path::from("abc/key.json");
+        let location = Path::from("abc.json");
         let payload = serde_json::to_vec(&json!({
-            "type": "number",
-            "multipleOf": 10
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "number",
+                    "multipleOf": 10
+                }
+            }
         }))
         .map(Bytes::from)
         .map(PutPayload::from)?;

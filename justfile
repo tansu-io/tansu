@@ -106,11 +106,23 @@ person-topic-create:
     kafka-topics --bootstrap-server localhost:9092 --partitions=3 --replication-factor=1 --create --topic person
 
 person-topic-produce-valid:
-    echo 'h1:pqr,h2:jkl,h3:uio	{"code": "ABC-123"}	{"firstName": "John", "lastName": "Doe", "age": 21}' | kafka-console-producer --bootstrap-server localhost:9092 --topic person --property parse.headers=true --property parse.key=true
+    echo 'h1:pqr,h2:jkl,h3:uio	"ABC-123"	{"firstName": "John", "lastName": "Doe", "age": 21}' | kafka-console-producer --bootstrap-server localhost:9092 --topic person --property parse.headers=true --property parse.key=true
 
 person-topic-produce-invalid:
-    echo 'h1:pqr,h2:jkl,h3:uio	{"code": "ABC-123"}	{"firstName": "John", "lastName": "Doe", "age": -1}' | kafka-console-producer --bootstrap-server localhost:9092 --topic person --property parse.headers=true --property parse.key=true
+    echo 'h1:pqr,h2:jkl,h3:uio	"ABC-123"	{"firstName": "John", "lastName": "Doe", "age": -1}' | kafka-console-producer --bootstrap-server localhost:9092 --topic person --property parse.headers=true --property parse.key=true
 
+person-topic-consume:
+    kafka-console-consumer \
+        --bootstrap-server localhost:9092 \
+        --consumer-property fetch.max.wait.ms=15000 \
+        --group person-consumer-group --topic person \
+        --from-beginning \
+        --property print.timestamp=true \
+        --property print.key=true \
+        --property print.offset=true \
+        --property print.partition=true \
+        --property print.headers=true \
+        --property print.value=true
 
 tansu-server:
     ./target/debug/tansu-server \
