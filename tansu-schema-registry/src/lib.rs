@@ -29,9 +29,11 @@ use url::Url;
 use tracing_subscriber::filter::ParseError;
 
 mod json;
+mod proto;
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
+    Anyhow(#[from] anyhow::Error),
     Api(ErrorCode),
     Io(#[from] io::Error),
     KafkaSansIo(#[from] tansu_kafka_sans_io::Error),
@@ -40,6 +42,13 @@ pub enum Error {
 
     #[cfg(test)]
     ParseFilter(#[from] ParseError),
+
+    #[cfg(test)]
+    ProtobufJsonMapping(#[from] protobuf_json_mapping::ParseError),
+
+    Protobuf(#[from] protobuf::Error),
+
+    ProtobufFileDescriptorMissing(Bytes),
 
     SchemaValidation,
     SerdeJson(#[from] serde_json::Error),
@@ -104,18 +113,34 @@ impl Registry {
     }
 
     pub async fn validate(&self, topic: &str, batch: &Batch) -> Result<()> {
-        json::Schema::try_from(Schema {
-            key: self
-                .get(&Path::from(format!("{topic}/key.json")))
-                .await
-                .ok(),
+        let list_result = self.object_store.list_with_delimiter(None).await?;
+        debug!(common_prefixes = ?list_result.common_prefixes, objects = ?list_result.objects);
 
-            value: self
-                .get(&Path::from(format!("{topic}/value.json")))
+        if list_result
+            .objects
+            .iter()
+            .any(|meta| meta.location == Path::from(format!("{topic}.proto")))
+        {
+            self.get(&Path::from(format!("{topic}.proto")))
                 .await
-                .ok(),
-        })
-        .and_then(|schema| schema.validate(batch))
+                .and_then(proto::Schema::try_from)
+                .and_then(|schema| schema.validate(batch))
+        } else if list_result.common_prefixes.contains(&Path::from(topic)) {
+            json::Schema::try_from(Schema {
+                key: self
+                    .get(&Path::from(format!("{topic}/key.json")))
+                    .await
+                    .ok(),
+
+                value: self
+                    .get(&Path::from(format!("{topic}/value.json")))
+                    .await
+                    .ok(),
+            })
+            .and_then(|schema| schema.validate(batch))
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -199,22 +224,46 @@ mod tests {
         ))
     }
 
-    #[tokio::test]
-    async fn valid() -> Result<()> {
+    static DEF_PROTO: &[u8] = br#"
+      syntax = 'proto3';
+
+      message Key {
+        int32 id = 1;
+      }
+
+      message Value {
+        string name = 1;
+        string email = 2;
+      }
+    "#;
+
+    async fn populate() -> Result<Registry> {
         let _guard = init_tracing()?;
 
-        let object_store = Arc::new(InMemory::new());
-        let location = Path::from("test/key.json");
-        let payload = serde_json::to_vec(&json!({"type": "number",
-            "multipleOf": 10}))
+        let object_store = InMemory::new();
+
+        let location = Path::from("abc/key.json");
+        let payload = serde_json::to_vec(&json!({
+            "type": "number",
+            "multipleOf": 10
+        }))
         .map(Bytes::from)
         .map(PutPayload::from)?;
 
         _ = object_store.put(&location, payload).await?;
 
-        let registry = Registry {
-            object_store: object_store.clone(),
-        };
+        let location = Path::from("def.proto");
+        let payload = PutPayload::from(Bytes::from_static(DEF_PROTO));
+        _ = object_store.put(&location, payload).await?;
+
+        Ok(Registry::new(object_store))
+    }
+
+    #[tokio::test]
+    async fn abc_valid() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let registry = populate().await?;
 
         let key = Bytes::from_static(b"5450");
 
@@ -222,27 +271,15 @@ mod tests {
             .record(Record::builder().key(key.clone().into()))
             .build()?;
 
-        registry.validate("test", &batch).await?;
+        registry.validate("abc", &batch).await?;
 
         Ok(())
     }
 
     #[tokio::test]
-    async fn invalid() -> Result<()> {
+    async fn abc_invalid() -> Result<()> {
         let _guard = init_tracing()?;
-
-        let object_store = Arc::new(InMemory::new());
-        let location = Path::from("test/key.json");
-        let payload = serde_json::to_vec(&json!({"type": "number",
-            "multipleOf": 10}))
-        .map(Bytes::from)
-        .map(PutPayload::from)?;
-
-        _ = object_store.put(&location, payload).await?;
-
-        let registry = Registry {
-            object_store: object_store.clone(),
-        };
+        let registry = populate().await?;
 
         let key = Bytes::from_static(b"545");
 
@@ -252,7 +289,7 @@ mod tests {
 
         assert!(matches!(
             registry
-                .validate("test", &batch)
+                .validate("abc", &batch)
                 .await
                 .inspect_err(|err| error!(?err)),
             Err(Error::Api(ErrorCode::InvalidRecord))

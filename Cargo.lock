@@ -117,6 +117,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "anyhow"
+version = "1.0.95"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "34ac096ce696dc2fcabef30516bb13c0a68a11d30131d3df6f04711467681b04"
+
+[[package]]
 name = "async-trait"
 version = "0.1.83"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -824,6 +830,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c49c37c09c17a53d937dfbb742eb3a961d65a994e6bcdcf37e7399d0cc8ab5e"
 dependencies = [
  "digest",
+]
+
+[[package]]
+name = "home"
+version = "0.5.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "589533453244b0995c858700322199b2becb13b627df2851f64a2775d024abcf"
+dependencies = [
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1775,6 +1790,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "protobuf-json-mapping"
+version = "3.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9b445cf83c9303695e6c423d269759e139b6182d2f1171e18afda7078a764336"
+dependencies = [
+ "protobuf",
+ "protobuf-support",
+ "thiserror",
+]
+
+[[package]]
+name = "protobuf-parse"
+version = "3.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "322330e133eab455718444b4e033ebfac7c6528972c784fcde28d2cc783c6257"
+dependencies = [
+ "anyhow",
+ "indexmap",
+ "log",
+ "protobuf",
+ "protobuf-support",
+ "tempfile",
+ "thiserror",
+ "which",
+]
+
+[[package]]
 name = "protobuf-support"
 version = "3.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2447,13 +2489,18 @@ dependencies = [
 name = "tansu-schema-registry"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "bytes",
  "jsonschema",
  "object_store",
  "pretty_assertions",
+ "protobuf",
+ "protobuf-json-mapping",
+ "protobuf-parse",
  "serde",
  "serde_json",
  "tansu-kafka-sans-io",
+ "tempfile",
  "thiserror",
  "tokio",
  "tracing",
@@ -3077,6 +3124,18 @@ checksum = "77afa9a11836342370f4817622a2f0f418b134426d91a82dfb48f532d2ec13ef"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "which"
+version = "4.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "87ba24419a2078cd2b0f2ede2691b6c66d8e47836da3b6db8265ebad47afbfc7"
+dependencies = [
+ "either",
+ "home",
+ "once_cell",
+ "rustix",
 ]
 
 [[package]]
