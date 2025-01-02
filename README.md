@@ -10,7 +10,8 @@ Features:
 
 - Kafka API compatible
 - Elastic stateless brokers: no more planning and reassigning partitions to a broker
-- Embedded JSON [schema registration and validation](docs/schema-registry.md) of messages
+- Embedded [JSON Schema][json-schema-org] or [Protocol buffers][protocol-buffers]
+  [schema registration and validation](docs/schema-registry.md) of messages
 - Consensus free without the overhead of [Raft][raft-consensus] or [ZooKeeper][apache-zookeeper]
 - All brokers are the leader and ISR of any topic partition
 - All brokers are the transaction and group coordinator
@@ -27,7 +28,48 @@ For data durability:
 
 ## configuration
 
-The `storage-engine` parameter is a URL configuring the storage being used by Tansu:
+```shell
+Usage: tansu-server [OPTIONS] --kafka-cluster-id <KAFKA_CLUSTER_ID>
+
+Options:
+      --kafka-cluster-id <KAFKA_CLUSTER_ID>
+
+      --kafka-listener-url <KAFKA_LISTENER_URL>
+          [default: tcp://0.0.0.0:9092]
+      --kafka-advertised-listener-url <KAFKA_ADVERTISED_LISTENER_URL>
+          [default: tcp://localhost:9092]
+      --storage-engine <STORAGE_ENGINE>
+          [default: postgres://postgres:postgres@localhost]
+      --schema-registry <SCHEMA_REGISTRY>
+
+  -h, --help
+          Print help
+  -V, --version
+          Print version
+```
+
+The only mandatory parameter is `kafka-cluster-id` which identifies the cluster.
+All brokers in the same cluster should use the same cluster id.
+In Tansu, all brokers in the same cluster are equal.
+
+The `kafka-listener-url` defines the IPv4 address that Tansu will listen for connections.
+The default is `tcp://0.0.0.0:9092` causing Tansu to listen on port 9092 on all available interfaces.
+For a non-public server you might want to use `tcp://localhost:9092` instead.
+
+The `kafka-advertised-listener-url` defines the IPv4 address used in broker
+metadata advertisements used by Kafka API clients. This must be an address that is reachable by clients.
+This might be your load balancer, gateway or DNS name of the server running Tansu.
+
+The `schema-registry` is an optional URL defining the location of a schema registry.
+At present, tansu supports the s3 URL scheme, e.g., `s3://schema`
+or file based registries, e.g., `file://./etc/schema`.
+When this option is present, Tansu will validate any message produced to a
+topic that has an associated schema. Assuming the topic is called `person` any
+message produced will be validated against `person.proto` (protobuf) or `person.json` (JSON schema).
+If there is no schema associated with the topic, then this option has no effect.
+More details are [here](docs/schema-registry.md).
+
+The `storage-engine` parameter is a URL defining the storage being used by Tansu:
 
 - s3://tansu/ would use the "tansu" S3 bucket for storage
 - postgres://postgres:postgres@localhost would use PostgreSQL for storage
@@ -235,11 +277,13 @@ Tansu is licensed under the [GNU AGPL][agpl-license].
 [continuous-archiving]: https://www.postgresql.org/docs/current/continuous-archiving.html
 [crates-io-object-store]: https://crates.io/crates/object_store
 [github-com-tansu-io]: https://github.com/tansu-io/tansu
+[json-schema-org]: https://json-schema.org/
 [librdkafka]: https://github.com/confluentinc/librdkafka
 [min-io]: https://min.io
 [minio-create-access-key]: https://min.io/docs/minio/container/administration/console/security-and-access.html#id1
 [minio-create-bucket]: https://min.io/docs/minio/container/administration/console/managing-objects.html#creating-buckets
 [object-store-dynamo-conditional-put]: https://docs.rs/object_store/0.11.0/object_store/aws/struct.DynamoCommit.html
+[protocol-buffers]: https://protobuf.dev
 [raft-consensus]: https://raft.github.io
 [rust-lang-org]: https://www.rust-lang.org
 [tansu-issues]: https://github.com/tansu-io/tansu/issues

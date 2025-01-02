@@ -8,9 +8,15 @@ When a message is produced to a topic with an associated schema,
 the message is validated against the schema. If a message does not conform to its
 schema it is rejected with an `INVALID_RECORD` error.
 
+Each schema is found in the root directory of the registry, named after the topic.
+A `.json` extension is used for JSON schema, and `.proto` extension is used for Protocol buffers.
+For example the JSON schema for the person topic would be stored in `person.json`,
+whereas the protocol buffer schema for the employee topic would be in `employee.proto`.
+
 ## JSON schema
 
-An example JSON schema for the "person" topic:
+An example JSON schema for the "person" topic.
+This schema is stored in the root directory of the registry as `person.json`:
 
 ```json
 {
@@ -91,7 +97,52 @@ A schema that allows any message key, but restricts the message value could look
 }
 ```
 
-The person schemas can be found in the `etc/schema` directory of the Tansu GitHub
+## Protocol Buffers
+
+An example protocol buffer schema for the "employee" topic.
+This schema is stored in the root directory of the registry as `employee.proto`:
+
+```protobuf
+syntax = 'proto3';
+
+message Key {
+  int32 id = 1;
+}
+
+message Value {
+  string name = 1;
+  string email = 2;
+}
+```
+
+The schema should contain message definitions for the `Key` and/or `Value`.
+
+A schema that covers the message key, but allows any message value could look like:
+
+```protobuf
+syntax = 'proto3';
+
+message Key {
+  int32 id = 1;
+}
+```
+
+A schema that allows any message key, but restricts the message value could look like:
+
+```protobuf
+syntax = 'proto3';
+
+message Value {
+  string name = 1;
+  string email = 2;
+}
+```
+
+### Example
+
+This example uses JSON schema as it is simpler to use with the Apache Kafka command line tools.
+
+The person schema can be found in the `etc/schema` directory of the Tansu GitHub
 repository. This directory is also used when starting Tansu using
 the `just tansu-server` recipe or Docker compose.
 
