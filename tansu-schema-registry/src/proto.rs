@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -13,65 +13,33 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+use std::io::Write;
+
 use crate::{Error, Result, Validator};
 use bytes::Bytes;
-use serde_json::Value;
+use protobuf::{
+    reflect::{FileDescriptor, MessageDescriptor},
+    CodedInputStream,
+};
 use tansu_kafka_sans_io::{record::inflated::Batch, ErrorCode};
-use tracing::{debug, warn};
+use tempfile::{tempdir, NamedTempFile};
+use tracing::{debug, error};
 
 pub(crate) struct Schema {
-    key: Option<jsonschema::Validator>,
-    value: Option<jsonschema::Validator>,
+    file_descriptor: FileDescriptor,
 }
 
-fn validate(validator: Option<&jsonschema::Validator>, encoded: Option<Bytes>) -> Result<()> {
-    debug!(validator = ?validator, ?encoded);
+fn validate(message_descriptor: Option<MessageDescriptor>, encoded: Option<Bytes>) -> Result<()> {
+    message_descriptor.map_or(Ok(()), |message_descriptor| {
+        let mut message = message_descriptor.new_instance();
 
-    validator
-        .map_or(Ok(()), |validator| {
-            encoded.map_or(Err(Error::Api(ErrorCode::InvalidRecord)), |encoded| {
-                serde_json::from_reader(&encoded[..])
-                    .map_err(|err| {
-                        warn!(?err, ?encoded);
-                        Error::Api(ErrorCode::InvalidRecord)
-                    })
-                    .inspect(|instance| debug!(?instance))
-                    .and_then(|instance| {
-                        validator
-                            .validate(&instance)
-                            .inspect_err(|err| warn!(?err, ?validator, %instance))
-                            .map_err(|_err| Error::Api(ErrorCode::InvalidRecord))
-                    })
-            })
+        encoded.map_or(Err(Error::Api(ErrorCode::InvalidRecord)), |encoded| {
+            message
+                .merge_from_dyn(&mut CodedInputStream::from_tokio_bytes(&encoded))
+                .inspect_err(|err| error!(?err))
+                .map_err(|_err| Error::Api(ErrorCode::InvalidRecord))
         })
-        .inspect(|r| debug!(?r))
-        .inspect_err(|err| warn!(?err))
-}
-
-impl TryFrom<Bytes> for Schema {
-    type Error = Error;
-
-    fn try_from(encoded: Bytes) -> Result<Self, Self::Error> {
-        serde_json::from_slice::<Value>(&encoded[..])
-            .map_err(Into::into)
-            .map(|schema| {
-                schema.get("properties").map_or(
-                    Self {
-                        key: None,
-                        value: None,
-                    },
-                    |properties| Self {
-                        key: properties
-                            .get("key")
-                            .and_then(|schema| jsonschema::validator_for(schema).ok()),
-
-                        value: properties
-                            .get("value")
-                            .and_then(|schema| jsonschema::validator_for(schema).ok()),
-                    },
-                )
-            })
-    }
+    })
 }
 
 impl Validator for Schema {
@@ -81,12 +49,54 @@ impl Validator for Schema {
         for record in &batch.records {
             debug!(?record);
 
-            validate(self.key.as_ref(), record.key.clone())
-                .and(validate(self.value.as_ref(), record.value.clone()))?
+            validate(
+                self.file_descriptor.message_by_package_relative_name("Key"),
+                record.key.clone(),
+            )
+            .and(validate(
+                self.file_descriptor
+                    .message_by_package_relative_name("Value"),
+                record.value.clone(),
+            ))
+            .inspect_err(|err| error!(?err))?
         }
 
         Ok(())
     }
+}
+
+impl TryFrom<Bytes> for Schema {
+    type Error = Error;
+
+    fn try_from(proto: Bytes) -> Result<Self, Self::Error> {
+        make_fd(proto).map(|file_descriptor| Self { file_descriptor })
+    }
+}
+
+fn make_fd(proto: Bytes) -> Result<FileDescriptor> {
+    tempdir().map_err(Into::into).and_then(|temp_dir| {
+        NamedTempFile::new_in(&temp_dir)
+            .map_err(Into::into)
+            .and_then(|mut temp_file| {
+                temp_file.write_all(&proto).map_err(Into::into).and(
+                    protobuf_parse::Parser::new()
+                        .pure()
+                        .input(&temp_file)
+                        .include(&temp_dir)
+                        .parse_and_typecheck()
+                        .map_err(Into::into)
+                        .and_then(|mut parsed| {
+                            parsed.file_descriptors.pop().map_or(
+                                Err(Error::ProtobufFileDescriptorMissing(proto)),
+                                |file_descriptor_proto| {
+                                    FileDescriptor::new_dynamic(file_descriptor_proto, &[])
+                                        .map_err(Into::into)
+                                },
+                            )
+                        }),
+                )
+            })
+    })
 }
 
 #[cfg(test)]
@@ -94,12 +104,37 @@ mod tests {
     use crate::Registry;
 
     use super::*;
+    use bytes::{BufMut, BytesMut};
     use object_store::{memory::InMemory, path::Path, ObjectStore, PutPayload};
-    use serde_json::json;
+    use protobuf_json_mapping::parse_dyn_from_str;
+    use serde_json::{json, Value};
     use std::{fs::File, sync::Arc, thread};
     use tansu_kafka_sans_io::record::Record;
     use tracing::subscriber::DefaultGuard;
     use tracing_subscriber::EnvFilter;
+
+    fn encode_from_value(
+        fd: &FileDescriptor,
+        message_name: &str,
+        json: &Value,
+    ) -> Result<Option<Bytes>> {
+        fd.message_by_package_relative_name(message_name)
+            .map(|message_descriptor| {
+                serde_json::to_string(json)
+                    .map_err(Error::from)
+                    .and_then(|json| {
+                        parse_dyn_from_str(&message_descriptor, json.as_str()).map_err(Into::into)
+                    })
+                    .and_then(|message| {
+                        let mut w = BytesMut::new().writer();
+                        message
+                            .write_to_writer_dyn(&mut w)
+                            .map(|()| Bytes::from(w.into_inner()))
+                            .map_err(Into::into)
+                    })
+            })
+            .transpose()
+    }
 
     fn init_tracing() -> Result<DefaultGuard> {
         Ok(tracing::subscriber::set_default(
@@ -131,36 +166,31 @@ mod tests {
 
         let topic = "def";
 
-        let payload = serde_json::to_vec(&json!({
-            "type": "object",
-            "properties": {
-                "key": {
-                    "type": "number"
-                },
-                "value": {
-                    "type": "object",
-                    "properties": {
-                        "name": {
-                            "type": "string",
-                        },
-                        "email": {
-                            "type": "string",
-                            "format": "email"
-                        }
-                    }
-                }
+        let proto = Bytes::from_static(
+            br#"
+            syntax = 'proto3';
+
+            message Key {
+              int32 id = 1;
             }
-        }))
-        .map(Bytes::from)
-        .map(PutPayload::from)?;
+
+            message Value {
+              string name = 1;
+              string email = 2;
+            }
+            "#,
+        );
 
         let object_store = InMemory::new();
-        let location = Path::from(format!("{topic}.json"));
+        let location = Path::from(format!("{topic}.proto"));
+        let payload = PutPayload::from(proto.clone());
         _ = object_store.put(&location, payload).await?;
 
         let registry = Registry::new(object_store);
 
-        let key = serde_json::to_vec(&json!(12320)).map(Bytes::from)?;
+        let file_descriptor = make_fd(proto)?;
+
+        let key = encode_from_value(&file_descriptor, "Key", &json!({"id": 12321}))?.unwrap();
 
         let batch = Batch::builder()
             .record(Record::builder().key(key.clone().into()))
@@ -180,39 +210,39 @@ mod tests {
 
         let topic = "def";
 
-        let payload = serde_json::to_vec(&json!({
-            "type": "object",
-            "properties": {
-                "key": {
-                    "type": "number"
-                },
-                "value": {
-                    "type": "object",
-                    "properties": {
-                        "name": {
-                            "type": "string",
-                        },
-                        "email": {
-                            "type": "string",
-                            "format": "email"
-                        }
-                    }
+        let proto = Bytes::from_static(
+            br#"
+                syntax = 'proto3';
+
+                message Key {
+                  int32 id = 1;
                 }
-            }
-        }))
-        .map(Bytes::from)
-        .map(PutPayload::from)?;
+
+                message Value {
+                  string name = 1;
+                  string email = 2;
+                }
+                "#,
+        );
 
         let object_store = InMemory::new();
-        let location = Path::from(format!("{topic}.json"));
+        let location = Path::from(format!("{topic}.proto"));
+        let payload = PutPayload::from(proto.clone());
         _ = object_store.put(&location, payload).await?;
 
         let registry = Registry::new(object_store);
 
-        let value = serde_json::to_vec(&json!({
-            "name": "alice",
-            "email": "alice@example.com"}))
-        .map(Bytes::from)?;
+        let file_descriptor = make_fd(proto)?;
+
+        let value = encode_from_value(
+            &file_descriptor,
+            "Value",
+            &json!({
+                "name": "alice",
+                "email": "alice@example.com"
+            }),
+        )?
+        .unwrap();
 
         let batch = Batch::builder()
             .record(Record::builder().value(value.clone().into()))
@@ -232,41 +262,40 @@ mod tests {
 
         let topic = "def";
 
-        let payload = serde_json::to_vec(&json!({
-            "type": "object",
-            "properties": {
-                "key": {
-                    "type": "number"
-                },
-                "value": {
-                    "type": "object",
-                    "properties": {
-                        "name": {
-                            "type": "string",
-                        },
-                        "email": {
-                            "type": "string",
-                            "format": "email"
-                        }
-                    }
+        let proto = Bytes::from_static(
+            br#"
+                syntax = 'proto3';
+
+                message Key {
+                  int32 id = 1;
                 }
-            }
-        }))
-        .map(Bytes::from)
-        .map(PutPayload::from)?;
+
+                message Value {
+                  string name = 1;
+                  string email = 2;
+                }
+                "#,
+        );
 
         let object_store = InMemory::new();
-        let location = Path::from(format!("{topic}.json"));
+        let location = Path::from(format!("{topic}.proto"));
+        let payload = PutPayload::from(proto.clone());
         _ = object_store.put(&location, payload).await?;
 
         let registry = Registry::new(object_store);
 
-        let key = serde_json::to_vec(&json!(12320)).map(Bytes::from)?;
+        let file_descriptor = make_fd(proto.clone())?;
 
-        let value = serde_json::to_vec(&json!({
+        let key = encode_from_value(&file_descriptor, "Key", &json!({"id": 12321}))?.unwrap();
+        let value = encode_from_value(
+            &file_descriptor,
+            "Value",
+            &json!({
                 "name": "alice",
-                "email": "alice@example.com"}))
-        .map(Bytes::from)?;
+                "email": "alice@example.com"
+            }),
+        )?
+        .unwrap();
 
         let batch = Batch::builder()
             .record(
@@ -307,12 +336,11 @@ mod tests {
 
         let topic = "def";
 
-        let payload = serde_json::to_vec(&json!({}))
-            .map(Bytes::from)
-            .map(PutPayload::from)?;
+        let proto = Bytes::from_static(br#"syntax = 'proto3';"#);
 
         let object_store = InMemory::new();
-        let location = Path::from(format!("{topic}.json"));
+        let location = Path::from(format!("{topic}.proto"));
+        let payload = PutPayload::from(proto.clone());
         _ = object_store.put(&location, payload).await?;
 
         let registry = Registry::new(object_store);
@@ -337,25 +365,26 @@ mod tests {
 
         let topic = "def";
 
-        let payload = serde_json::to_vec(&json!({
-            "type": "object",
-            "properties": {
-                "key": {
-                    "type": "number"
-                },
-            }
-        }))
-        .map(Bytes::from)
-        .map(PutPayload::from)?;
+        let proto = Bytes::from_static(
+            br#"
+                syntax = 'proto3';
+
+                message Key {
+                  int32 id = 1;
+                }
+                "#,
+        );
 
         let object_store = InMemory::new();
-        let location = Path::from(format!("{topic}.json"));
+        let location = Path::from(format!("{topic}.proto"));
+        let payload = PutPayload::from(proto.clone());
         _ = object_store.put(&location, payload).await?;
 
         let registry = Registry::new(object_store);
 
-        let key = serde_json::to_vec(&json!(12320)).map(Bytes::from)?;
+        let file_descriptor = make_fd(proto.clone())?;
 
+        let key = encode_from_value(&file_descriptor, "Key", &json!({"id": 12321}))?.unwrap();
         let value = Bytes::from_static(b"Consectetur adipiscing elit");
 
         let batch = Batch::builder()
@@ -375,19 +404,19 @@ mod tests {
 
         let topic = "def";
 
-        let payload = serde_json::to_vec(&json!({
-            "type": "object",
-            "properties": {
-                "key": {
-                    "type": "number"
-                },
-            }
-        }))
-        .map(Bytes::from)
-        .map(PutPayload::from)?;
+        let proto = Bytes::from_static(
+            br#"
+                syntax = 'proto3';
+
+                message Key {
+                  int32 id = 1;
+                }
+                "#,
+        );
 
         let object_store = InMemory::new();
-        let location = Path::from(format!("{topic}.json"));
+        let location = Path::from(format!("{topic}.proto"));
+        let payload = PutPayload::from(proto.clone());
         _ = object_store.put(&location, payload).await?;
 
         let registry = Registry::new(object_store);
@@ -412,38 +441,37 @@ mod tests {
 
         let topic = "def";
 
-        let payload = serde_json::to_vec(&json!({
-            "type": "object",
-            "properties": {
-                "value": {
-                    "type": "object",
-                    "properties": {
-                        "name": {
-                            "type": "string",
-                        },
-                        "email": {
-                            "type": "string",
-                            "format": "email"
-                        }
-                    }
+        let proto = Bytes::from_static(
+            br#"
+                syntax = 'proto3';
+
+                message Value {
+                  string name = 1;
+                  string email = 2;
                 }
-            }
-        }))
-        .map(Bytes::from)
-        .map(PutPayload::from)?;
+                "#,
+        );
 
         let object_store = InMemory::new();
-        let location = Path::from(format!("{topic}.json"));
+        let location = Path::from(format!("{topic}.proto"));
+        let payload = PutPayload::from(proto.clone());
         _ = object_store.put(&location, payload).await?;
 
         let registry = Registry::new(object_store);
 
+        let file_descriptor = make_fd(proto.clone())?;
+
         let key = Bytes::from_static(b"Lorem ipsum dolor sit amet");
 
-        let value = serde_json::to_vec(&json!({
-                    "name": "alice",
-                    "email": "alice@example.com"}))
-        .map(Bytes::from)?;
+        let value = encode_from_value(
+            &file_descriptor,
+            "Value",
+            &json!({
+                "name": "alice",
+                "email": "alice@example.com"
+            }),
+        )?
+        .unwrap();
 
         let batch = Batch::builder()
             .record(
@@ -462,28 +490,20 @@ mod tests {
 
         let topic = "def";
 
-        let payload = serde_json::to_vec(&json!({
-            "type": "object",
-            "properties": {
-                "value": {
-                    "type": "object",
-                    "properties": {
-                        "name": {
-                            "type": "string",
-                        },
-                        "email": {
-                            "type": "string",
-                            "format": "email"
-                        }
-                    }
+        let proto = Bytes::from_static(
+            br#"
+                syntax = 'proto3';
+
+                message Value {
+                  string name = 1;
+                  string email = 2;
                 }
-            }
-        }))
-        .map(Bytes::from)
-        .map(PutPayload::from)?;
+                "#,
+        );
 
         let object_store = InMemory::new();
-        let location = Path::from(format!("{topic}.json"));
+        let location = Path::from(format!("{topic}.proto"));
+        let payload = PutPayload::from(proto.clone());
         _ = object_store.put(&location, payload).await?;
 
         let registry = Registry::new(object_store);
