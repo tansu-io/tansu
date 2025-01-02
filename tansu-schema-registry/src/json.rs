@@ -31,7 +31,10 @@ fn validate(validator: Option<&jsonschema::Validator>, encoded: Option<Bytes>) -
         .map_or(Ok(()), |validator| {
             encoded.map_or(Err(Error::Api(ErrorCode::InvalidRecord)), |encoded| {
                 serde_json::from_reader(&encoded[..])
-                    .map_err(Error::from)
+                    .map_err(|err| {
+                        warn!(?err, ?encoded);
+                        Error::Api(ErrorCode::InvalidRecord)
+                    })
                     .inspect(|instance| debug!(?instance))
                     .and_then(|instance| {
                         validator
@@ -51,19 +54,20 @@ impl TryFrom<Bytes> for Schema {
     fn try_from(encoded: Bytes) -> Result<Self, Self::Error> {
         serde_json::from_slice::<Value>(&encoded[..])
             .map_err(Into::into)
-            .and_then(|schema| {
+            .map(|schema| {
                 schema.get("properties").map_or(
-                    Err(Error::JsonSchemaPropertiesMissing(encoded)),
-                    |properties| {
-                        Ok(Self {
-                            key: properties
-                                .get("key")
-                                .and_then(|schema| jsonschema::validator_for(schema).ok()),
+                    Self {
+                        key: None,
+                        value: None,
+                    },
+                    |properties| Self {
+                        key: properties
+                            .get("key")
+                            .and_then(|schema| jsonschema::validator_for(schema).ok()),
 
-                            value: properties
-                                .get("value")
-                                .and_then(|schema| jsonschema::validator_for(schema).ok()),
-                        })
+                        value: properties
+                            .get("value")
+                            .and_then(|schema| jsonschema::validator_for(schema).ok()),
                     },
                 )
             })
@@ -131,11 +135,19 @@ mod tests {
             "type": "object",
             "properties": {
                 "key": {
-                    "type": "number",
-                    "multipleOf": 10
+                    "type": "number"
                 },
                 "value": {
-                    "type": "string"
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                        },
+                        "email": {
+                            "type": "string",
+                            "format": "email"
+                        }
+                    }
                 }
             }
         }))
@@ -148,10 +160,338 @@ mod tests {
 
         let registry = Registry::new(object_store);
 
-        let key = serde_json::to_vec(&json!(12321)).map(Bytes::from)?;
+        let key = serde_json::to_vec(&json!(12320)).map(Bytes::from)?;
 
         let batch = Batch::builder()
             .record(Record::builder().key(key.clone().into()))
+            .build()?;
+
+        assert!(matches!(
+            registry.validate(topic, &batch).await,
+            Err(Error::Api(ErrorCode::InvalidRecord))
+        ));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn value_only_invalid_record() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let topic = "def";
+
+        let payload = serde_json::to_vec(&json!({
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "number"
+                },
+                "value": {
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                        },
+                        "email": {
+                            "type": "string",
+                            "format": "email"
+                        }
+                    }
+                }
+            }
+        }))
+        .map(Bytes::from)
+        .map(PutPayload::from)?;
+
+        let object_store = InMemory::new();
+        let location = Path::from(format!("{topic}.json"));
+        _ = object_store.put(&location, payload).await?;
+
+        let registry = Registry::new(object_store);
+
+        let value = serde_json::to_vec(&json!({
+            "name": "alice",
+            "email": "alice@example.com"}))
+        .map(Bytes::from)?;
+
+        let batch = Batch::builder()
+            .record(Record::builder().value(value.clone().into()))
+            .build()?;
+
+        assert!(matches!(
+            registry.validate(topic, &batch).await,
+            Err(Error::Api(ErrorCode::InvalidRecord))
+        ));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn key_and_value() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let topic = "def";
+
+        let payload = serde_json::to_vec(&json!({
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "number"
+                },
+                "value": {
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                        },
+                        "email": {
+                            "type": "string",
+                            "format": "email"
+                        }
+                    }
+                }
+            }
+        }))
+        .map(Bytes::from)
+        .map(PutPayload::from)?;
+
+        let object_store = InMemory::new();
+        let location = Path::from(format!("{topic}.json"));
+        _ = object_store.put(&location, payload).await?;
+
+        let registry = Registry::new(object_store);
+
+        let key = serde_json::to_vec(&json!(12320)).map(Bytes::from)?;
+
+        let value = serde_json::to_vec(&json!({
+                "name": "alice",
+                "email": "alice@example.com"}))
+        .map(Bytes::from)?;
+
+        let batch = Batch::builder()
+            .record(
+                Record::builder()
+                    .key(key.clone().into())
+                    .value(value.clone().into()),
+            )
+            .build()?;
+
+        registry.validate(topic, &batch).await
+    }
+
+    #[tokio::test]
+    async fn no_schema() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let topic = "def";
+
+        let registry = Registry::new(InMemory::new());
+
+        let key = Bytes::from_static(b"Lorem ipsum dolor sit amet");
+        let value = Bytes::from_static(b"Consectetur adipiscing elit");
+
+        let batch = Batch::builder()
+            .record(
+                Record::builder()
+                    .key(key.clone().into())
+                    .value(value.clone().into()),
+            )
+            .build()?;
+
+        registry.validate(topic, &batch).await
+    }
+
+    #[tokio::test]
+    async fn empty_schema() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let topic = "def";
+
+        let payload = serde_json::to_vec(&json!({}))
+            .map(Bytes::from)
+            .map(PutPayload::from)?;
+
+        let object_store = InMemory::new();
+        let location = Path::from(format!("{topic}.json"));
+        _ = object_store.put(&location, payload).await?;
+
+        let registry = Registry::new(object_store);
+
+        let key = Bytes::from_static(b"Lorem ipsum dolor sit amet");
+        let value = Bytes::from_static(b"Consectetur adipiscing elit");
+
+        let batch = Batch::builder()
+            .record(
+                Record::builder()
+                    .key(key.clone().into())
+                    .value(value.clone().into()),
+            )
+            .build()?;
+
+        registry.validate(topic, &batch).await
+    }
+
+    #[tokio::test]
+    async fn key_schema_only() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let topic = "def";
+
+        let payload = serde_json::to_vec(&json!({
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "number"
+                },
+            }
+        }))
+        .map(Bytes::from)
+        .map(PutPayload::from)?;
+
+        let object_store = InMemory::new();
+        let location = Path::from(format!("{topic}.json"));
+        _ = object_store.put(&location, payload).await?;
+
+        let registry = Registry::new(object_store);
+
+        let key = serde_json::to_vec(&json!(12320)).map(Bytes::from)?;
+
+        let value = Bytes::from_static(b"Consectetur adipiscing elit");
+
+        let batch = Batch::builder()
+            .record(
+                Record::builder()
+                    .key(key.clone().into())
+                    .value(value.clone().into()),
+            )
+            .build()?;
+
+        registry.validate(topic, &batch).await
+    }
+
+    #[tokio::test]
+    async fn bad_key() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let topic = "def";
+
+        let payload = serde_json::to_vec(&json!({
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "number"
+                },
+            }
+        }))
+        .map(Bytes::from)
+        .map(PutPayload::from)?;
+
+        let object_store = InMemory::new();
+        let location = Path::from(format!("{topic}.json"));
+        _ = object_store.put(&location, payload).await?;
+
+        let registry = Registry::new(object_store);
+
+        let key = Bytes::from_static(b"Lorem ipsum dolor sit amet");
+
+        let batch = Batch::builder()
+            .record(Record::builder().key(key.clone().into()))
+            .build()?;
+
+        assert!(matches!(
+            registry.validate(topic, &batch).await,
+            Err(Error::Api(ErrorCode::InvalidRecord))
+        ));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn value_schema_only() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let topic = "def";
+
+        let payload = serde_json::to_vec(&json!({
+            "type": "object",
+            "properties": {
+                "value": {
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                        },
+                        "email": {
+                            "type": "string",
+                            "format": "email"
+                        }
+                    }
+                }
+            }
+        }))
+        .map(Bytes::from)
+        .map(PutPayload::from)?;
+
+        let object_store = InMemory::new();
+        let location = Path::from(format!("{topic}.json"));
+        _ = object_store.put(&location, payload).await?;
+
+        let registry = Registry::new(object_store);
+
+        let key = Bytes::from_static(b"Lorem ipsum dolor sit amet");
+
+        let value = serde_json::to_vec(&json!({
+                    "name": "alice",
+                    "email": "alice@example.com"}))
+        .map(Bytes::from)?;
+
+        let batch = Batch::builder()
+            .record(
+                Record::builder()
+                    .key(key.clone().into())
+                    .value(value.clone().into()),
+            )
+            .build()?;
+
+        registry.validate(topic, &batch).await
+    }
+
+    #[tokio::test]
+    async fn bad_value() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let topic = "def";
+
+        let payload = serde_json::to_vec(&json!({
+            "type": "object",
+            "properties": {
+                "value": {
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                        },
+                        "email": {
+                            "type": "string",
+                            "format": "email"
+                        }
+                    }
+                }
+            }
+        }))
+        .map(Bytes::from)
+        .map(PutPayload::from)?;
+
+        let object_store = InMemory::new();
+        let location = Path::from(format!("{topic}.json"));
+        _ = object_store.put(&location, payload).await?;
+
+        let registry = Registry::new(object_store);
+
+        let value = Bytes::from_static(b"Consectetur adipiscing elit");
+
+        let batch = Batch::builder()
+            .record(Record::builder().value(value.clone().into()))
             .build()?;
 
         assert!(matches!(

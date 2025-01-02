@@ -47,6 +47,50 @@ An example JSON schema for the "person" topic:
 
 The schema must be an object, with properties for the message "key" and/or "value".
 
+A schema that covers the message key, but allows any message value could look like:
+
+```json
+{
+  "title": "Person",
+  "type": "object",
+  "properties": {
+    "key": {
+      "type": "string",
+      "pattern": "^[A-Z]{3}-\\d{3}$"
+    },
+  }
+}
+```
+
+A schema that allows any message key, but restricts the message value could look like:
+
+```json
+{
+  "title": "Person",
+  "type": "object",
+  "properties": {
+    "value": {
+      "type": "object",
+      "properties": {
+        "firstName": {
+          "type": "string",
+          "description": "The person's first name."
+        },
+        "lastName": {
+          "type": "string",
+          "description": "The person's last name."
+        },
+        "age": {
+          "description": "Age in years which must be equal to or greater than zero.",
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}
+```
+
 The person schemas can be found in the `etc/schema` directory of the Tansu GitHub
 repository. This directory is also used when starting Tansu using
 the `just tansu-server` recipe or Docker compose.
@@ -96,9 +140,9 @@ The server log contains the reason for the message being rejected:
 2024-12-19T11:51:28.407524Z DEBUG peer{addr=127.0.0.1:60095}:produce{api_key=0 api_version=11 correlation_id=5}: tansu_schema_registry::json: 56: r=()
 2024-12-19T11:51:28.407546Z DEBUG peer{addr=127.0.0.1:60095}:produce{api_key=0 api_version=11 correlation_id=5}: tansu_schema_registry::json: 40: validator=Some(Validator { root: SchemaNode { validators: Keyword, location: Location(""), absolute_path: Some(Uri { scheme: "https", authority: Some(Authority { userinfo: None, host: "example.com", host_parsed: RegName("example.com"), port: None }), path: "/person.schema.json", query: None, fragment: None }) }, config: CompilationConfig { draft: None, content_media_type: [], content_encoding: [] } }) encoded=Some(b"{\"firstName\": \"John\", \"lastName\": \"Doe\", \"age\": -1}")
 2024-12-19T11:51:28.407589Z DEBUG peer{addr=127.0.0.1:60095}:produce{api_key=0 api_version=11 correlation_id=5}: tansu_schema_registry::json: 47: instance=Object {"age": Number(-1), "firstName": String("John"), "lastName": String("Doe")}
-2024-12-19T11:51:28.407626Z ERROR peer{addr=127.0.0.1:60095}:produce{api_key=0 api_version=11 correlation_id=5}: tansu_schema_registry::json: 51: err=ValidationError { instance: Number(-1), kind: Minimum { limit: Number(0) }, instance_path: Location("/age"), schema_path: Location("/properties/age/minimum") }
-2024-12-19T11:51:28.407652Z ERROR peer{addr=127.0.0.1:60095}:produce{api_key=0 api_version=11 correlation_id=5}: tansu_schema_registry::json: 57: err=Api(InvalidRecord)
-2024-12-19T11:51:28.407724Z ERROR peer{addr=127.0.0.1:60095}:produce{api_key=0 api_version=11 correlation_id=5}: tansu_server::broker::produce: 75: err=Storage(Api(InvalidRecord))
+2024-12-19T11:51:28.407626Z  WARN peer{addr=127.0.0.1:60095}:produce{api_key=0 api_version=11 correlation_id=5}: tansu_schema_registry::json: 51: err=ValidationError { instance: Number(-1), kind: Minimum { limit: Number(0) }, instance_path: Location("/age"), schema_path: Location("/properties/age/minimum") }
+2024-12-19T11:51:28.407652Z  WARN peer{addr=127.0.0.1:60095}:produce{api_key=0 api_version=11 correlation_id=5}: tansu_schema_registry::json: 57: err=Api(InvalidRecord)
+2024-12-19T11:51:28.407724Z  WARN peer{addr=127.0.0.1:60095}:produce{api_key=0 api_version=11 correlation_id=5}: tansu_server::broker::produce: 75: err=Storage(Api(InvalidRecord))
 ```
 
 [json-schema-org]: https://json-schema.org/

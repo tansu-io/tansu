@@ -36,7 +36,6 @@ pub enum Error {
     Anyhow(#[from] anyhow::Error),
     Api(ErrorCode),
     Io(#[from] io::Error),
-    JsonSchemaPropertiesMissing(Bytes),
     KafkaSansIo(#[from] tansu_kafka_sans_io::Error),
     Message(String),
     ObjectStore(#[from] object_store::Error),
