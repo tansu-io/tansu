@@ -27,8 +27,15 @@ For data durability:
 
 ## configuration
 
-The `storage-engine` parameter is a S3 URL that specifies the bucket
-to be used. The following will configure a S3 storage engine
+The `storage-engine` parameter is a URL configuring the storage being used by Tansu:
+
+- s3://tansu/ would use the "tansu" S3 bucket for storage
+- postgres://postgres:postgres@localhost would use PostgreSQL for storage
+- memory://tansu/ for ephemeral environments using memory for storage
+
+### s3
+
+The following will configure a S3 storage engine
 using the "tansu" bucket (full context is in
 [compose.yaml](compose.yaml) and [.env](.env)):
 
@@ -132,7 +139,7 @@ kafka-consumer-groups \
   --describe
 ```
 
-## PostgreSQL
+### PostgreSQL
 
 To switch between the minio and PostgreSQL examples, firstly
 shutdown Tansu:
