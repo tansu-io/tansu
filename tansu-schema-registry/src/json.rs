@@ -13,7 +13,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use crate::{Error, Result};
+use crate::{Error, Result, Validator};
 use bytes::Bytes;
 use serde_json::Value;
 use tansu_kafka_sans_io::{record::inflated::Batch, ErrorCode};
@@ -74,7 +74,7 @@ impl TryFrom<Bytes> for Schema {
     }
 }
 
-impl super::Validator for Schema {
+impl Validator for Schema {
     fn validate(&self, batch: &Batch) -> Result<()> {
         debug!(?batch);
 
