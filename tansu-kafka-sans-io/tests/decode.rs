@@ -5747,3 +5747,88 @@ fn describe_topic_partitions_request_v0_000() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn describe_topic_partitions_response_v0_000() -> Result<()> {
+    use tansu_kafka_sans_io::describe_topic_partitions_response::{
+        DescribeTopicPartitionsResponsePartition, DescribeTopicPartitionsResponseTopic,
+    };
+
+    let _guard = init_tracing()?;
+
+    let v = vec![
+        0, 0, 0, 126, 0, 0, 0, 5, 0, 0, 0, 0, 0, 2, 0, 0, 5, 116, 101, 115, 116, 113, 142, 248, 9,
+        90, 152, 68, 142, 161, 218, 25, 210, 166, 234, 204, 62, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+        0, 0, 0, 0, 2, 0, 0, 0, 1, 2, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0,
+        0, 0, 2, 0, 0, 0, 1, 2, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0, 0,
+        2, 0, 0, 0, 1, 2, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 13, 248, 0, 255, 0,
+    ];
+
+    let api_key = 75;
+    let api_version = 0;
+
+    assert_eq!(
+        Frame {
+            size: 126,
+            header: Header::Response { correlation_id: 5 },
+            body: Body::DescribeTopicPartitionsResponse {
+                throttle_time_ms: 0,
+                topics: Some(
+                    [DescribeTopicPartitionsResponseTopic {
+                        error_code: 0,
+                        name: Some("test".into()),
+                        topic_id: [
+                            113, 142, 248, 9, 90, 152, 68, 142, 161, 218, 25, 210, 166, 234, 204,
+                            62
+                        ],
+                        is_internal: false,
+                        partitions: Some(
+                            [
+                                DescribeTopicPartitionsResponsePartition {
+                                    error_code: 0,
+                                    partition_index: 0,
+                                    leader_id: 1,
+                                    leader_epoch: 0,
+                                    replica_nodes: Some([1].into()),
+                                    isr_nodes: Some([1].into()),
+                                    eligible_leader_replicas: Some([].into()),
+                                    last_known_elr: Some([].into()),
+                                    offline_replicas: Some([].into())
+                                },
+                                DescribeTopicPartitionsResponsePartition {
+                                    error_code: 0,
+                                    partition_index: 1,
+                                    leader_id: 1,
+                                    leader_epoch: 0,
+                                    replica_nodes: Some([1].into()),
+                                    isr_nodes: Some([1].into()),
+                                    eligible_leader_replicas: Some([].into()),
+                                    last_known_elr: Some([].into()),
+                                    offline_replicas: Some([].into())
+                                },
+                                DescribeTopicPartitionsResponsePartition {
+                                    error_code: 0,
+                                    partition_index: 2,
+                                    leader_id: 1,
+                                    leader_epoch: 0,
+                                    replica_nodes: Some([1].into()),
+                                    isr_nodes: Some([1].into()),
+                                    eligible_leader_replicas: Some([].into()),
+                                    last_known_elr: Some([].into()),
+                                    offline_replicas: Some([].into())
+                                }
+                            ]
+                            .into()
+                        ),
+                        topic_authorized_operations: 3576
+                    }]
+                    .into()
+                ),
+                next_cursor: None
+            }
+        },
+        Frame::response_from_bytes(&v, api_key, api_version)?
+    );
+
+    Ok(())
+}
