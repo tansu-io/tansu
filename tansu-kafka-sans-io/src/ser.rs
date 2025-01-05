@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -250,6 +250,11 @@ impl<'a> Encoder<'a> {
     }
 
     #[must_use]
+    fn is_structure(&self) -> bool {
+        self.meta.field.is_some_and(|field| field.is_structure())
+    }
+
+    #[must_use]
     fn is_string(&self) -> bool {
         self.in_header() && self.field.is_some_and(|field| field == "client_id")
             || self.meta.field.is_some_and(|field| field.kind.is_string())
@@ -493,10 +498,12 @@ impl Serializer for &mut Encoder<'_> {
 
     fn serialize_none(self) -> Result<Self::Ok, Self::Error> {
         debug!(
-            "serialize none for name: {}, valid: {}, nullable: {}",
-            self.field_name(),
-            self.is_valid(),
-            self.is_nullable()
+            name = self.field_name(),
+            is_valid = self.is_valid(),
+            is_nullable = self.is_nullable(),
+            is_structure = self.is_structure(),
+            is_sequence = self.is_sequence(),
+            is_flexible = self.is_flexible(),
         );
 
         if self.in_header()
@@ -511,7 +518,9 @@ impl Serializer for &mut Encoder<'_> {
                 self.serialize_i32(0)
             }
         } else if self.is_valid() && self.is_nullable() {
-            if self.is_flexible() {
+            if self.is_structure() && !self.is_sequence() {
+                self.serialize_i8(-1)
+            } else if self.is_flexible() {
                 self.unsigned_varint(0)
             } else if self.is_sequence() {
                 self.serialize_i32(-1)

@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -244,6 +244,11 @@ impl<'de> Decoder<'de> {
             .is_some_and(|field| field.kind.is_sequence())
     }
 
+    #[must_use]
+    fn is_structure(&self) -> bool {
+        self.meta.field.is_some_and(|field| field.is_structure())
+    }
+
     fn is_records(&self) -> bool {
         self.meta.field.is_some_and(|field| field.kind.is_records())
     }
@@ -441,9 +446,9 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
         let v = i32::from_be_bytes(buf);
 
         debug!(
-            "field: {}, value: {v}:{}",
-            self.field_name(),
-            type_name::<V::Value>(),
+            field = self.field_name(),
+            v,
+            type_name = type_name::<V::Value>(),
         );
         visitor.visit_i32(v)
     }
@@ -671,12 +676,13 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
         V: Visitor<'de>,
     {
         debug!(
-            "deserialize_option, field: {}, flexible: {}, valid: {}, string: {}, sequence: {}",
-            self.field_name(),
-            self.is_flexible(),
-            self.is_valid(),
-            self.is_string(),
-            self.is_sequence(),
+            field = self.field_name(),
+            is_flexible = self.is_flexible(),
+            is_valid = self.is_valid(),
+            is_string = self.is_string(),
+            is_sequence = self.is_sequence(),
+            is_nullable = self.is_nullable(),
+            is_structure = self.is_structure(),
         );
 
         if self.is_valid() {
@@ -757,6 +763,16 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
                         self.length = Some(length.try_into()?);
                         visitor.visit_some(self)
                     }
+                }
+            } else if self.is_nullable() && self.is_structure() {
+                let mut buf = [0u8; 1];
+                self.reader.read_exact(&mut buf)?;
+
+                if (buf[0] as i8) < 0 {
+                    visitor.visit_none()
+                } else {
+                    self.length = None;
+                    visitor.visit_some(self)
                 }
             } else {
                 self.length = None;
@@ -876,19 +892,16 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
     where
         V: Visitor<'de>,
     {
-        debug!(
-            "name: {name}, len: {len}, visitor: {}",
-            type_name_of_val(&visitor)
-        );
-        todo!()
+        debug!(name, len, visitor = type_name_of_val(&visitor));
+        unimplemented!()
     }
 
     fn deserialize_map<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,
     {
-        debug!("visitor: {}", type_name_of_val(&visitor));
-        todo!()
+        debug!(visitor = type_name_of_val(&visitor));
+        unimplemented!()
     }
 
     fn deserialize_struct<V>(
@@ -900,14 +913,14 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
     where
         V: Visitor<'de>,
     {
-        debug!("deserialize_struct, name: {name}, fields: {:?}", fields,);
+        debug!(name, ?fields);
 
         self.containers
             .push_front(Container::Struct { name, fields });
 
         let outcome = if let Some(mm) = self.meta.message {
             if let Some(fm) = mm.structures().get(name) {
-                debug!("deserialize_struct, name: {name}");
+                debug!(deserialize_struct = name);
 
                 _ = self.meta.field.replace(*fm);
                 self.meta.parse.push_front(fm.fields.into());
@@ -1110,14 +1123,12 @@ impl<'de> SeqAccess<'de> for Struct<'de, '_> {
         }
 
         debug!(
-            "struct name: {} field: {}, flexible: {}, seed type name: {}, meta.field: {}, \
-             records: {}",
-            self.name,
+            struct = self.name,
             field,
-            self.de.is_flexible(),
-            type_name::<T::Value>(),
-            self.de.meta.field.is_some(),
-            self.de.is_records(),
+            is_flexible = self.de.is_flexible(),
+            type_name = type_name::<T::Value>(),
+            meta_field = self.de.meta.field.is_some(),
+            is_records = self.de.is_records(),
         );
 
         self.de.path.push_front(field);
