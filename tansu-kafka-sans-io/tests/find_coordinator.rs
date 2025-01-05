@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -13,12 +13,17 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+use common::init_tracing;
 use std::collections::BTreeMap;
 use tansu_kafka_model::{MessageKind, VersionRange};
 use tansu_kafka_sans_io::MESSAGE_META;
 
+pub mod common;
+
 #[test]
 fn check_message_meta() {
+    let _guard = init_tracing().unwrap();
+
     assert!(BTreeMap::from(MESSAGE_META).contains_key("FindCoordinatorRequest"));
 
     let meta = BTreeMap::from(MESSAGE_META);
@@ -27,7 +32,7 @@ fn check_message_meta() {
     assert_eq!(10, message.api_key);
     assert_eq!(MessageKind::Request, message.message_kind);
 
-    assert_eq!(VersionRange { start: 0, end: 5 }, message.version.valid);
+    assert_eq!(VersionRange { start: 0, end: 6 }, message.version.valid);
 
     assert_eq!(
         Some(VersionRange { start: 0, end: 3 }),

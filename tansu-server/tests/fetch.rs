@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -78,6 +78,7 @@ pub async fn empty_topic(cluster_id: Uuid, broker_id: i32, mut sc: StorageContai
             last_fetched_epoch: Some(-1),
             log_start_offset: Some(-1),
             partition_max_bytes: 50 * 1024,
+            replica_directory_id: None,
         }]),
     }];
 
@@ -251,6 +252,7 @@ pub async fn simple_non_txn(
             last_fetched_epoch: Some(-1),
             log_start_offset: Some(-1),
             partition_max_bytes: 50 * 1024,
+            replica_directory_id: None,
         }]),
     }];
 

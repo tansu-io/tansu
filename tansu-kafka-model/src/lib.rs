@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -786,13 +786,21 @@ impl MessageMeta {
     pub fn structures(&self) -> BTreeMap<&str, &FieldMeta> {
         self.fields.iter().filter(|(_, fm)| fm.is_structure()).fold(
             BTreeMap::new(),
-            |mut acc, (_, fm)| {
+            |mut acc, (name, fm)| {
+                debug!(name = self.name, field = ?name, kind = ?fm.kind.0);
+
                 if let Some(kind) = fm.kind.kind_of_sequence() {
-                    _ = acc.insert(kind.name(), fm);
+                    if !kind.is_primitive() {
+                        _ = acc.insert(kind.name(), fm);
+                    }
+                } else {
+                    _ = acc.insert(fm.kind.name(), fm);
                 }
 
                 let mut children = fm.structures();
+                debug!(name = self.name, field = ?name, children = ?children.keys().collect::<Vec<_>>());
                 acc.append(&mut children);
+
                 acc
             },
         )
@@ -833,15 +841,18 @@ impl FieldMeta {
         self.kind
             .kind_of_sequence()
             .map_or(false, |sk| !sk.is_primitive())
+            || !self.fields.is_empty()
     }
 
     #[must_use]
     pub fn structures(&self) -> BTreeMap<&str, &FieldMeta> {
         self.fields.iter().filter(|(_, fm)| fm.is_structure()).fold(
             BTreeMap::new(),
-            |mut acc, (_, fm)| {
+            |mut acc, (_name, fm)| {
                 if let Some(kind) = fm.kind.kind_of_sequence() {
-                    _ = acc.insert(kind.name(), fm);
+                    if !kind.is_primitive() {
+                        _ = acc.insert(kind.name(), fm);
+                    }
                 }
 
                 let mut children = fm.structures();
@@ -849,6 +860,13 @@ impl FieldMeta {
                 acc
             },
         )
+    }
+
+    pub fn field(&self, name: &str) -> Option<&FieldMeta> {
+        self.fields
+            .iter()
+            .find(|field| name == field.0)
+            .map(|(_, meta)| *meta)
     }
 }
 
@@ -900,6 +918,8 @@ fn as_str<'v>(value: &'v Value, name: &str) -> Result<&'v str> {
 #[cfg(test)]
 mod tests {
     use std::{any::type_name_of_val, collections::HashMap};
+
+    use serde_json::json;
 
     use super::*;
 
@@ -985,37 +1005,13 @@ mod tests {
 
     #[test]
     fn listener_from_value() -> Result<()> {
-        assert_eq!(
-            Listener::ZkBroker,
-            serde_json::from_str::<Value>(
-                r#"
-                "zkBroker"
-                "#
-            )
-            .map_err(Into::into)
-            .and_then(|v| Listener::try_from(&v))?
-        );
+        assert_eq!(Listener::ZkBroker, Listener::try_from(&json!("zkBroker"))?);
 
-        assert_eq!(
-            Listener::Broker,
-            serde_json::from_str::<Value>(
-                r#"
-                "broker"
-                "#
-            )
-            .map_err(Into::into)
-            .and_then(|v| Listener::try_from(&v))?
-        );
+        assert_eq!(Listener::Broker, Listener::try_from(&json!("broker"))?);
 
         assert_eq!(
             Listener::Controller,
-            serde_json::from_str::<Value>(
-                r#"
-                "controller"
-                "#
-            )
-            .map_err(Into::into)
-            .and_then(|v| Listener::try_from(&v))?
+            Listener::try_from(&json!("controller"))?
         );
 
         Ok(())
@@ -1025,28 +1021,18 @@ mod tests {
     fn message_kind_from_value() -> Result<()> {
         assert_eq!(
             MessageKind::Request,
-            serde_json::from_str::<Value>(
-                r#"
-                {
-                    "type": "request"
-                }
-                "#
-            )
-            .map_err(Into::into)
-            .and_then(|v| MessageKind::try_from(&v))?
+            MessageKind::try_from(&json!({
+                "type": "request"
+            }
+            ))?
         );
 
         assert_eq!(
             MessageKind::Response,
-            serde_json::from_str::<Value>(
-                r#"
-                {
-                    "type": "response"
-                }
-                "#
-            )
-            .map_err(Into::into)
-            .and_then(|v| MessageKind::try_from(&v))?
+            MessageKind::try_from(&json!({
+                "type": "response"
+            }
+            ))?
         );
 
         Ok(())
@@ -1311,8 +1297,7 @@ mod tests {
 
     #[test]
     fn tagged_message() -> Result<()> {
-        let m = serde_json::from_str::<Value>(
-            r#"
+        let m = Message::try_from(&Wv::from(&json!(
             {
               "apiKey": 63,
               "type": "request",
@@ -1335,9 +1320,7 @@ mod tests {
                   "about": "Log directories that failed and went offline." }
               ]
             }
-            "#,
-        ).map_err(Into::into)
-        .and_then(|v| Message::try_from(&Wv::from(&v)))?;
+        )))?;
 
         assert_eq!(MessageKind::Request, m.kind());
         assert!(m.has_tags());

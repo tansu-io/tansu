@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -2185,6 +2185,7 @@ impl Storage for Postgres {
                 group_id,
                 protocol_type: "consumer".into(),
                 group_state: Some("unknown".into()),
+                group_type: None,
             });
         }
 
