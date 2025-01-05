@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -14,8 +14,9 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use bytes::Bytes;
+use common::init_tracing;
 use serde::Deserialize;
-use std::{fs::File, io::Cursor, sync::Arc, thread};
+use std::io::Cursor;
 use tansu_kafka_sans_io::{
     de::Decoder,
     describe_configs_response::{
@@ -31,41 +32,11 @@ use tansu_kafka_sans_io::{
     metadata_response::{MetadataResponseBroker, MetadataResponsePartition, MetadataResponseTopic},
     offset_fetch_response::{OffsetFetchResponsePartition, OffsetFetchResponseTopic},
     record::{self, deflated, inflated, Record},
-    Body, Error, ErrorCode, Frame, Header, Result,
+    Body, ErrorCode, Frame, Header, Result,
 };
-use tracing::{debug, subscriber::DefaultGuard};
-use tracing_subscriber::fmt::format::FmtSpan;
+use tracing::debug;
 
-#[cfg(miri)]
-fn init_tracing() -> Result<()> {
-    Ok(())
-}
-
-#[cfg(not(miri))]
-fn init_tracing() -> Result<DefaultGuard> {
-    Ok(tracing::subscriber::set_default(
-        tracing_subscriber::fmt()
-            .with_level(true)
-            .with_line_number(true)
-            .with_thread_names(false)
-            .with_max_level(tracing::Level::DEBUG)
-            .with_span_events(FmtSpan::ACTIVE)
-            .with_writer(
-                thread::current()
-                    .name()
-                    .ok_or(Error::Message(String::from("unnamed thread")))
-                    .and_then(|name| {
-                        File::create(format!(
-                            "../logs/{}/decode-{name}.log",
-                            env!("CARGO_PKG_NAME")
-                        ))
-                        .map_err(Into::into)
-                    })
-                    .map(Arc::new)?,
-            )
-            .finish(),
-    ))
-}
+pub mod common;
 
 #[test]
 fn api_versions_request_v3_000() -> Result<()> {
@@ -675,7 +646,7 @@ fn api_versions_response_v3_000() -> Result<()> {
 
 #[test]
 fn create_topics_request_v7_000() -> Result<()> {
-    use tansu_kafka_sans_io::create_topics_request::{CreatableTopic, CreateableTopicConfig};
+    use tansu_kafka_sans_io::create_topics_request::{CreatableTopic, CreatableTopicConfig};
 
     let _guard = init_tracing()?;
 
@@ -709,7 +680,7 @@ fn create_topics_request_v7_000() -> Result<()> {
                         replication_factor: -1,
                         assignments: Some([].into()),
                         configs: Some(
-                            [CreateableTopicConfig {
+                            [CreatableTopicConfig {
                                 name: "cleanup.policy".into(),
                                 value: Some("compact".into()),
                             }]
@@ -2046,6 +2017,7 @@ fn fetch_request_v6_000() -> Result<()> {
                                 last_fetched_epoch: None,
                                 log_start_offset: Some(0),
                                 partition_max_bytes: 4096,
+                                replica_directory_id: None,
                             }]
                             .into()
                         ),
@@ -2113,7 +2085,8 @@ fn fetch_request_v12_000() -> Result<()> {
                                     fetch_offset: 0,
                                     last_fetched_epoch: Some(-1),
                                     log_start_offset: Some(-1),
-                                    partition_max_bytes: 1048576
+                                    partition_max_bytes: 1048576,
+                                    replica_directory_id: None,
                                 },
                                 FetchPartition {
                                     partition: 0,
@@ -2121,7 +2094,8 @@ fn fetch_request_v12_000() -> Result<()> {
                                     fetch_offset: 0,
                                     last_fetched_epoch: Some(-1),
                                     log_start_offset: Some(-1),
-                                    partition_max_bytes: 1048576
+                                    partition_max_bytes: 1048576,
+                                    replica_directory_id: None,
                                 },
                                 FetchPartition {
                                     partition: 2,
@@ -2129,7 +2103,8 @@ fn fetch_request_v12_000() -> Result<()> {
                                     fetch_offset: 0,
                                     last_fetched_epoch: Some(-1),
                                     log_start_offset: Some(-1),
-                                    partition_max_bytes: 1048576
+                                    partition_max_bytes: 1048576,
+                                    replica_directory_id: None,
                                 }
                             ]
                             .into()
@@ -2221,7 +2196,8 @@ fn fetch_request_v15_000() -> Result<()> {
                                     fetch_offset: 0,
                                     last_fetched_epoch: Some(-1),
                                     log_start_offset: Some(-1),
-                                    partition_max_bytes: 10485760
+                                    partition_max_bytes: 10485760,
+                                    replica_directory_id: None,
                                 },
                                 FetchPartition {
                                     partition: 6,
@@ -2229,7 +2205,8 @@ fn fetch_request_v15_000() -> Result<()> {
                                     fetch_offset: 0,
                                     last_fetched_epoch: Some(-1),
                                     log_start_offset: Some(-1),
-                                    partition_max_bytes: 10485760
+                                    partition_max_bytes: 10485760,
+                                    replica_directory_id: None,
                                 },
                                 FetchPartition {
                                     partition: 8,
@@ -2237,7 +2214,8 @@ fn fetch_request_v15_000() -> Result<()> {
                                     fetch_offset: 0,
                                     last_fetched_epoch: Some(-1),
                                     log_start_offset: Some(-1),
-                                    partition_max_bytes: 10485760
+                                    partition_max_bytes: 10485760,
+                                    replica_directory_id: None,
                                 },
                                 FetchPartition {
                                     partition: 11,
@@ -2245,7 +2223,8 @@ fn fetch_request_v15_000() -> Result<()> {
                                     fetch_offset: 0,
                                     last_fetched_epoch: Some(-1),
                                     log_start_offset: Some(-1),
-                                    partition_max_bytes: 10485760
+                                    partition_max_bytes: 10485760,
+                                    replica_directory_id: None,
                                 },
                                 FetchPartition {
                                     partition: 10,
@@ -2253,7 +2232,8 @@ fn fetch_request_v15_000() -> Result<()> {
                                     fetch_offset: 0,
                                     last_fetched_epoch: Some(-1),
                                     log_start_offset: Some(-1),
-                                    partition_max_bytes: 10485760
+                                    partition_max_bytes: 10485760,
+                                    replica_directory_id: None,
                                 },
                                 FetchPartition {
                                     partition: 13,
@@ -2261,7 +2241,8 @@ fn fetch_request_v15_000() -> Result<()> {
                                     fetch_offset: 0,
                                     last_fetched_epoch: Some(-1),
                                     log_start_offset: Some(-1),
-                                    partition_max_bytes: 10485760
+                                    partition_max_bytes: 10485760,
+                                    replica_directory_id: None,
                                 },
                                 FetchPartition {
                                     partition: 12,
@@ -2269,7 +2250,8 @@ fn fetch_request_v15_000() -> Result<()> {
                                     fetch_offset: 0,
                                     last_fetched_epoch: Some(-1),
                                     log_start_offset: Some(-1),
-                                    partition_max_bytes: 10485760
+                                    partition_max_bytes: 10485760,
+                                    replica_directory_id: None,
                                 },
                                 FetchPartition {
                                     partition: 15,
@@ -2277,7 +2259,8 @@ fn fetch_request_v15_000() -> Result<()> {
                                     fetch_offset: 0,
                                     last_fetched_epoch: Some(-1),
                                     log_start_offset: Some(-1),
-                                    partition_max_bytes: 10485760
+                                    partition_max_bytes: 10485760,
+                                    replica_directory_id: None,
                                 },
                                 FetchPartition {
                                     partition: 14,
@@ -2285,7 +2268,8 @@ fn fetch_request_v15_000() -> Result<()> {
                                     fetch_offset: 0,
                                     last_fetched_epoch: Some(-1),
                                     log_start_offset: Some(-1),
-                                    partition_max_bytes: 10485760
+                                    partition_max_bytes: 10485760,
+                                    replica_directory_id: None,
                                 },
                                 FetchPartition {
                                     partition: 1,
@@ -2293,7 +2277,8 @@ fn fetch_request_v15_000() -> Result<()> {
                                     fetch_offset: 0,
                                     last_fetched_epoch: Some(-1),
                                     log_start_offset: Some(-1),
-                                    partition_max_bytes: 10485760
+                                    partition_max_bytes: 10485760,
+                                    replica_directory_id: None,
                                 },
                                 FetchPartition {
                                     partition: 0,
@@ -2301,7 +2286,8 @@ fn fetch_request_v15_000() -> Result<()> {
                                     fetch_offset: 0,
                                     last_fetched_epoch: Some(-1),
                                     log_start_offset: Some(-1),
-                                    partition_max_bytes: 10485760
+                                    partition_max_bytes: 10485760,
+                                    replica_directory_id: None,
                                 },
                                 FetchPartition {
                                     partition: 3,
@@ -2309,7 +2295,8 @@ fn fetch_request_v15_000() -> Result<()> {
                                     fetch_offset: 0,
                                     last_fetched_epoch: Some(-1),
                                     log_start_offset: Some(-1),
-                                    partition_max_bytes: 10485760
+                                    partition_max_bytes: 10485760,
+                                    replica_directory_id: None,
                                 },
                                 FetchPartition {
                                     partition: 2,
@@ -2317,7 +2304,8 @@ fn fetch_request_v15_000() -> Result<()> {
                                     fetch_offset: 0,
                                     last_fetched_epoch: Some(-1),
                                     log_start_offset: Some(-1),
-                                    partition_max_bytes: 10485760
+                                    partition_max_bytes: 10485760,
+                                    replica_directory_id: None,
                                 },
                                 FetchPartition {
                                     partition: 5,
@@ -2325,7 +2313,8 @@ fn fetch_request_v15_000() -> Result<()> {
                                     fetch_offset: 0,
                                     last_fetched_epoch: Some(-1),
                                     log_start_offset: Some(-1),
-                                    partition_max_bytes: 10485760
+                                    partition_max_bytes: 10485760,
+                                    replica_directory_id: None,
                                 },
                                 FetchPartition {
                                     partition: 4,
@@ -2333,7 +2322,8 @@ fn fetch_request_v15_000() -> Result<()> {
                                     fetch_offset: 0,
                                     last_fetched_epoch: Some(-1),
                                     log_start_offset: Some(-1),
-                                    partition_max_bytes: 10485760
+                                    partition_max_bytes: 10485760,
+                                    replica_directory_id: None,
                                 },
                                 FetchPartition {
                                     partition: 9,
@@ -2341,7 +2331,8 @@ fn fetch_request_v15_000() -> Result<()> {
                                     fetch_offset: 28064,
                                     last_fetched_epoch: Some(-1),
                                     log_start_offset: Some(-1),
-                                    partition_max_bytes: 10485760
+                                    partition_max_bytes: 10485760,
+                                    replica_directory_id: None,
                                 }
                             ]
                             .into()
@@ -2444,7 +2435,8 @@ fn fetch_request_v16_001() -> Result<()> {
                                 fetch_offset: 0,
                                 last_fetched_epoch: Some(-1),
                                 log_start_offset: Some(-1),
-                                partition_max_bytes: 1048576
+                                partition_max_bytes: 1048576,
+                                replica_directory_id: None,
                             }]
                             .into()
                         )
@@ -3566,7 +3558,8 @@ fn list_groups_request_v4_000() -> Result<()> {
                 client_id: Some("adminclient-1".into()),
             },
             body: Body::ListGroupsRequest {
-                states_filter: Some([].into())
+                states_filter: Some([].into()),
+                types_filter: None,
             }
         },
         Frame::deserialize(&mut deserializer)?
@@ -5713,6 +5706,43 @@ pub fn sync_group_request_v5_000() -> Result<()> {
             }
         },
         Frame::deserialize(&mut deserializer)?
+    );
+
+    Ok(())
+}
+
+#[test]
+fn describe_topic_partitions_request_v0_000() -> Result<()> {
+    use tansu_kafka_sans_io::describe_topic_partitions_request::TopicRequest;
+
+    let _guard = init_tracing()?;
+
+    let v = vec![
+        0, 0, 0, 37, 0, 75, 0, 0, 0, 0, 0, 5, 0, 13, 97, 100, 109, 105, 110, 99, 108, 105, 101,
+        110, 116, 45, 49, 0, 2, 5, 116, 101, 115, 116, 0, 0, 0, 7, 208, 255, 0,
+    ];
+
+    assert_eq!(
+        Frame {
+            size: 37,
+            header: Header::Request {
+                api_key: 75,
+                api_version: 0,
+                correlation_id: 5,
+                client_id: Some("adminclient-1".into())
+            },
+            body: Body::DescribeTopicPartitionsRequest {
+                topics: Some(
+                    [TopicRequest {
+                        name: "test".into()
+                    }]
+                    .into()
+                ),
+                response_partition_limit: 2000,
+                cursor: None
+            }
+        },
+        Frame::request_from_bytes(&v)?
     );
 
     Ok(())

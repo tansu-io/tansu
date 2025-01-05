@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -13,41 +13,10 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::{fs::File, sync::Arc, thread};
-use tansu_kafka_sans_io::{Error, Frame, Result};
-use tracing::subscriber::DefaultGuard;
-use tracing_subscriber::fmt::format::FmtSpan;
+use common::init_tracing;
+use tansu_kafka_sans_io::{Frame, Result};
 
-#[cfg(miri)]
-fn init_tracing() -> Result<()> {
-    Ok(())
-}
-
-#[cfg(not(miri))]
-fn init_tracing() -> Result<DefaultGuard> {
-    Ok(tracing::subscriber::set_default(
-        tracing_subscriber::fmt()
-            .with_level(true)
-            .with_line_number(true)
-            .with_thread_names(false)
-            .with_max_level(tracing::Level::DEBUG)
-            .with_span_events(FmtSpan::ACTIVE)
-            .with_writer(
-                thread::current()
-                    .name()
-                    .ok_or(Error::Message(String::from("unnamed thread")))
-                    .and_then(|name| {
-                        File::create(format!(
-                            "../logs/{}/codec-{name}.log",
-                            env!("CARGO_PKG_NAME")
-                        ))
-                        .map_err(Into::into)
-                    })
-                    .map(Arc::new)?,
-            )
-            .finish(),
-    ))
-}
+pub mod common;
 
 #[test]
 fn api_versions_request_v3_000() -> Result<()> {

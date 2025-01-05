@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -36,6 +36,7 @@ use std::{
 };
 use tansu_kafka_model::{MessageKind, MessageMeta};
 use tracing::{debug, error, warn};
+use tracing_subscriber::filter::ParseError;
 
 #[derive(Debug)]
 pub struct RootMessageMeta {
@@ -97,6 +98,7 @@ pub enum Error {
     NoSuchField(&'static str),
     NoSuchMessage(&'static str),
     NoSuchRequest(i16),
+    ParseFilter(#[from] ParseError),
     Snap(#[from] snap::Error),
     StringWithoutApiVersion,
     StringWithoutLength,
