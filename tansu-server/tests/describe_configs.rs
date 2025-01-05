@@ -16,7 +16,7 @@
 use common::{alphanumeric_string, register_broker};
 use rand::{prelude::*, thread_rng};
 use tansu_kafka_sans_io::{
-    create_topics_request::{CreatableTopic, CreateableTopicConfig},
+    create_topics_request::{CreatableTopic, CreatableTopicConfig},
     describe_configs_request::DescribeConfigsResource,
     describe_configs_response::{DescribeConfigsResourceResult, DescribeConfigsResult},
 };
@@ -40,7 +40,7 @@ pub async fn single_topic(
     let replication_factor = 0;
     let assignments = Some([].into());
     let configs = Some(
-        [CreateableTopicConfig {
+        [CreatableTopicConfig {
             name: "cleanup.policy".into(),
             value: Some("compact".into()),
         }]
