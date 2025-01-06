@@ -90,7 +90,7 @@ pub async fn single_topic(
                     name: "cleanup.policy".into(),
                     value: Some("compact".into()),
                     read_only: false,
-                    is_default: Some(false),
+                    is_default: None,
                     config_source: Some(5),
                     is_sensitive: false,
                     synonyms: Some([].into()),
