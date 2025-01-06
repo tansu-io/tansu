@@ -2132,7 +2132,7 @@ impl Storage for Postgres {
                     name,
                     value,
                     read_only: false,
-                    is_default: Some(false),
+                    is_default: None,
                     config_source: Some(ConfigSource::DefaultConfig.into()),
                     is_sensitive: false,
                     synonyms: Some([].into()),
