@@ -391,6 +391,11 @@ where
                         include_documentation,
                     )
                     .await
+                    .map(Some)
+                    .map(|results| Body::DescribeConfigsResponse {
+                        throttle_time_ms: 0,
+                        results,
+                    })
             }
 
             Body::DescribeGroupsRequest {

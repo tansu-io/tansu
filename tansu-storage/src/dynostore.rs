@@ -1662,28 +1662,32 @@ impl Storage for DynoStore {
 
         match resource {
             ConfigResource::Topic => match self.topic_metadata(&TopicId::Name(name.into())).await {
-                Ok(topic_metadata) => Ok(DescribeConfigsResult {
-                    error_code: ErrorCode::None.into(),
-                    error_message: Some("None".into()),
-                    resource_type: i8::from(resource),
-                    resource_name: name.into(),
-                    configs: topic_metadata.topic.configs.map(|configs| {
-                        configs
-                            .iter()
-                            .map(|config| DescribeConfigsResourceResult {
-                                name: config.name.clone(),
-                                value: config.value.clone(),
-                                read_only: false,
-                                is_default: Some(false),
-                                config_source: Some(ConfigSource::DefaultConfig.into()),
-                                is_sensitive: false,
-                                synonyms: Some([].into()),
-                                config_type: Some(ConfigType::String.into()),
-                                documentation: Some("".into()),
-                            })
-                            .collect()
-                    }),
-                }),
+                Ok(topic_metadata) => {
+                    let error_code = ErrorCode::None;
+
+                    Ok(DescribeConfigsResult {
+                        error_code: error_code.into(),
+                        error_message: Some(error_code.to_string()),
+                        resource_type: i8::from(resource),
+                        resource_name: name.into(),
+                        configs: topic_metadata.topic.configs.map(|configs| {
+                            configs
+                                .iter()
+                                .map(|config| DescribeConfigsResourceResult {
+                                    name: config.name.clone(),
+                                    value: config.value.clone(),
+                                    read_only: false,
+                                    is_default: None,
+                                    config_source: Some(ConfigSource::DefaultConfig.into()),
+                                    is_sensitive: false,
+                                    synonyms: Some([].into()),
+                                    config_type: Some(ConfigType::String.into()),
+                                    documentation: Some("".into()),
+                                })
+                                .collect()
+                        }),
+                    })
+                }
                 Err(_) => todo!(),
             },
 

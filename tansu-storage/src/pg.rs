@@ -2100,7 +2100,7 @@ impl Storage for Postgres {
             .await
             .inspect_err(|err| error!(?err))?
         {
-            let id = row.try_get::<_, Uuid>(0)?;
+            let id = row.try_get::<_, i32>(0).inspect_err(|err| error!(?err))?;
 
             let prepared = c
                 .prepare(concat!(
@@ -2119,17 +2119,20 @@ impl Storage for Postgres {
             let mut configs = vec![];
 
             for row in rows {
-                let name = row.try_get::<_, String>(0)?;
+                let name = row
+                    .try_get::<_, String>(0)
+                    .inspect_err(|err| error!(?err))?;
                 let value = row
                     .try_get::<_, Option<String>>(1)
                     .map(|value| value.unwrap_or_default())
-                    .map(Some)?;
+                    .map(Some)
+                    .inspect_err(|err| error!(?err))?;
 
                 configs.push(DescribeConfigsResourceResult {
                     name,
                     value,
                     read_only: false,
-                    is_default: Some(false),
+                    is_default: None,
                     config_source: Some(ConfigSource::DefaultConfig.into()),
                     is_sensitive: false,
                     synonyms: Some([].into()),
