@@ -69,11 +69,12 @@ message produced will be validated against `person.proto` (protobuf) or `person.
 If there is no schema associated with the topic, then this option has no effect.
 More details are [here](docs/schema-registry.md).
 
-The `storage-engine` parameter is a URL defining the storage being used by Tansu:
+The `storage-engine` parameter is a URL defining the storage being used by Tansu,
+some examples:
 
-- s3://tansu/ would use the "tansu" S3 bucket for storage
-- postgres://postgres:postgres@localhost would use PostgreSQL for storage
-- memory://tansu/ for ephemeral environments using memory for storage
+- s3://tansu/
+- postgres://postgres:postgres@localhost
+- memory://tansu/
 
 ### s3
 
