@@ -215,7 +215,7 @@ impl<'de> Decoder<'de> {
         } else {
             self.meta.message.is_some_and(|meta| {
                 self.api_version
-                    .map_or(false, |api_version| meta.is_flexible(api_version))
+                    .is_some_and(|api_version| meta.is_flexible(api_version))
             })
         }
     }
@@ -601,9 +601,9 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
         debug!(
             "deserialize_string, field: {}, nullable: {}",
             self.field_name(),
-            self.meta.field.map_or(false, |field| self
+            self.meta.field.is_some_and(|field| self
                 .api_version
-                .map_or(false, |api_version| field.is_nullable(api_version)))
+                .is_some_and(|api_version| field.is_nullable(api_version)))
         );
 
         if self.length.is_none() {

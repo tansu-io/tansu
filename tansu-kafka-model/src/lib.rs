@@ -828,7 +828,7 @@ pub struct FieldMeta {
 impl FieldMeta {
     #[must_use]
     pub fn is_nullable(&self, version: i16) -> bool {
-        self.nullable.map_or(false, |range| range.within(version))
+        self.nullable.is_some_and(|range| range.within(version))
     }
 
     #[must_use]
@@ -840,7 +840,7 @@ impl FieldMeta {
     pub fn is_structure(&self) -> bool {
         self.kind
             .kind_of_sequence()
-            .map_or(false, |sk| !sk.is_primitive())
+            .is_some_and(|sk| !sk.is_primitive())
             || !self.fields.is_empty()
     }
 

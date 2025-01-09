@@ -220,25 +220,25 @@ impl<'a> Encoder<'a> {
         } else {
             self.meta.message.is_some_and(|meta| {
                 self.api_version
-                    .map_or(false, |api_version| meta.is_flexible(api_version))
+                    .is_some_and(|api_version| meta.is_flexible(api_version))
             })
         }
     }
 
     fn is_nullable(&self) -> bool {
-        self.api_version.map_or(false, |api_version| {
+        self.api_version.is_some_and(|api_version| {
             self.meta
                 .field
-                .map_or(false, |field| field.is_nullable(api_version))
+                .is_some_and(|field| field.is_nullable(api_version))
         })
     }
 
     #[must_use]
     fn is_valid(&self) -> bool {
-        self.api_version.map_or(false, |api_version| {
+        self.api_version.is_some_and(|api_version| {
             self.meta
                 .field
-                .map_or(false, |field| field.version.within(api_version))
+                .is_some_and(|field| field.version.within(api_version))
         })
     }
 
@@ -882,7 +882,7 @@ impl SerializeStructVariant for &mut Encoder<'_> {
         if let Some(fm) = self.field_meta(key) {
             if self
                 .api_version
-                .map_or(false, |api_version| fm.version.within(api_version))
+                .is_some_and(|api_version| fm.version.within(api_version))
             {
                 debug!("field name: {}, meta: {fm:?}", self.field_name());
 
