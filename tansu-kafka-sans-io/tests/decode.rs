@@ -4430,6 +4430,127 @@ fn metadata_response_v1_000() -> Result<()> {
 }
 
 #[test]
+fn metadata_request_v7_000() -> Result<()> {
+    let _guard = init_tracing()?;
+
+    let v = vec![
+        0, 0, 0, 21, 0, 3, 0, 7, 0, 0, 0, 0, 0, 6, 115, 97, 114, 97, 109, 97, 255, 255, 255, 255, 0,
+    ];
+
+    assert_eq!(
+        Frame {
+            size: 21,
+            header: Header::Request {
+                api_key: 3,
+                api_version: 7,
+                correlation_id: 0,
+                client_id: Some("sarama".into())
+            },
+            body: Body::MetadataRequest {
+                topics: None,
+                allow_auto_topic_creation: Some(false),
+                include_cluster_authorized_operations: None,
+                include_topic_authorized_operations: None
+            }
+        },
+        Frame::request_from_bytes(&v)?
+    );
+
+    Ok(())
+}
+
+#[test]
+fn metadata_response_v7_000() -> Result<()> {
+    // response captured by proxy
+    use tansu_kafka_sans_io::metadata_response::{MetadataResponseBroker, MetadataResponseTopic};
+
+    let _guard = init_tracing()?;
+
+    let v = vec![
+        0, 0, 0, 180, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 9, 108, 111, 99, 97, 108,
+        104, 111, 115, 116, 0, 0, 35, 132, 255, 255, 0, 22, 53, 76, 54, 103, 51, 110, 83, 104, 84,
+        45, 101, 77, 67, 116, 75, 45, 45, 88, 56, 54, 115, 119, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 4,
+        116, 101, 115, 116, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0,
+        0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0, 0, 0,
+        0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0,
+        0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0,
+    ];
+
+    let api_key = 3;
+    let api_version = 7;
+
+    let mut c = Cursor::new(v);
+    let mut deserializer = Decoder::response(&mut c, api_key, api_version);
+
+    assert_eq!(
+        Frame {
+            size: 180,
+            header: Header::Response { correlation_id: 0 },
+            body: Body::MetadataResponse {
+                throttle_time_ms: Some(0),
+                brokers: Some(
+                    [MetadataResponseBroker {
+                        node_id: 1,
+                        host: "localhost".into(),
+                        port: 9092,
+                        rack: None
+                    }]
+                    .into()
+                ),
+                cluster_id: Some("5L6g3nShT-eMCtK--X86sw".into()),
+                controller_id: Some(1),
+                topics: Some(
+                    [MetadataResponseTopic {
+                        error_code: 0,
+                        name: Some("test".into()),
+                        topic_id: None,
+                        is_internal: Some(false),
+                        partitions: Some(
+                            [
+                                MetadataResponsePartition {
+                                    error_code: 0,
+                                    partition_index: 1,
+                                    leader_id: 1,
+                                    leader_epoch: Some(0),
+                                    replica_nodes: Some([1].into()),
+                                    isr_nodes: Some([1].into()),
+                                    offline_replicas: Some([].into())
+                                },
+                                MetadataResponsePartition {
+                                    error_code: 0,
+                                    partition_index: 2,
+                                    leader_id: 1,
+                                    leader_epoch: Some(0),
+                                    replica_nodes: Some([1].into()),
+                                    isr_nodes: Some([1].into()),
+                                    offline_replicas: Some([].into())
+                                },
+                                MetadataResponsePartition {
+                                    error_code: 0,
+                                    partition_index: 0,
+                                    leader_id: 1,
+                                    leader_epoch: Some(0),
+                                    replica_nodes: Some([1].into()),
+                                    isr_nodes: Some([1].into()),
+                                    offline_replicas: Some([].into())
+                                }
+                            ]
+                            .into()
+                        ),
+                        topic_authorized_operations: None
+                    }]
+                    .into()
+                ),
+                cluster_authorized_operations: None
+            }
+        },
+        Frame::deserialize(&mut deserializer)?
+    );
+
+    Ok(())
+}
+
+#[test]
 fn metadata_request_v12_000() -> Result<()> {
     use tansu_kafka_sans_io::metadata_request::MetadataRequestTopic;
 
@@ -5024,6 +5145,124 @@ fn offset_for_leader_request_v0_000() -> Result<()> {
             }
         },
         Frame::deserialize(&mut deserializer)?
+    );
+
+    Ok(())
+}
+
+#[ignore]
+#[test]
+fn produce_request_v0_000() -> Result<()> {
+    use tansu_kafka_sans_io::produce_request::{PartitionProduceData, TopicProduceData};
+
+    let _guard = init_tracing()?;
+
+    let v = vec![
+        0, 0, 0, 136, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 115, 97, 114, 97, 109, 97, 0, 1, 0, 0, 39, 16,
+        0, 0, 0, 1, 0, 4, 116, 101, 115, 116, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 92, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 80, 14, 140, 97, 161, 0, 0, 255, 255, 255, 255, 0, 0, 0, 66, 181, 164,
+        112, 10, 42, 24, 68, 168, 93, 201, 190, 85, 75, 81, 82, 227, 134, 137, 91, 20, 86, 4, 92,
+        187, 141, 103, 65, 71, 241, 103, 73, 174, 19, 227, 180, 158, 176, 4, 27, 78, 34, 140, 106,
+        1, 209, 63, 255, 52, 206, 164, 132, 184, 32, 34, 45, 24, 162, 18, 187, 77, 19, 3, 161, 102,
+        20, 14,
+    ];
+
+    assert_eq!(
+        Frame {
+            size: 196,
+            header: Header::Request {
+                api_key: 0,
+                api_version: 3,
+                correlation_id: 1,
+                client_id: Some("samsa".into())
+            },
+            body: Body::ProduceRequest {
+                transactional_id: None,
+                acks: 0,
+                timeout_ms: 1000,
+                topic_data: Some(
+                    [TopicProduceData {
+                        name: "benchmark".into(),
+                        partition_data: Some(
+                            [PartitionProduceData {
+                                index: 0,
+                                records: Some(
+                                    inflated::Frame {
+                                        batches: [inflated::Batch {
+                                            base_offset: 0,
+                                            batch_length: 134,
+                                            partition_leader_epoch: -1,
+                                            magic: 2,
+                                            crc: 3256047807,
+                                            attributes: 0,
+                                            last_offset_delta: 4,
+                                            base_timestamp: 1724936044418,
+                                            max_timestamp: 1724936044418,
+                                            producer_id: -1,
+                                            producer_epoch: -1,
+                                            base_sequence: -1,
+                                            records: [
+                                                Record {
+                                                    length: 16,
+                                                    attributes: 0,
+                                                    timestamp_delta: 0,
+                                                    offset_delta: 0,
+                                                    key: Some(Bytes::from_static(b"")),
+                                                    value: Some(Bytes::from_static(b"0123456789")),
+                                                    headers: [].into()
+                                                },
+                                                Record {
+                                                    length: 16,
+                                                    attributes: 0,
+                                                    timestamp_delta: 0,
+                                                    offset_delta: 1,
+                                                    key: Some(Bytes::from_static(b"")),
+                                                    value: Some(Bytes::from_static(b"0123456789")),
+                                                    headers: [].into()
+                                                },
+                                                Record {
+                                                    length: 16,
+                                                    attributes: 0,
+                                                    timestamp_delta: 0,
+                                                    offset_delta: 2,
+                                                    key: Some(Bytes::from_static(b"")),
+                                                    value: Some(Bytes::from_static(b"0123456789")),
+                                                    headers: [].into()
+                                                },
+                                                Record {
+                                                    length: 16,
+                                                    attributes: 0,
+                                                    timestamp_delta: 0,
+                                                    offset_delta: 3,
+                                                    key: Some(Bytes::from_static(b"")),
+                                                    value: Some(Bytes::from_static(b"0123456789")),
+                                                    headers: [].into()
+                                                },
+                                                Record {
+                                                    length: 16,
+                                                    attributes: 0,
+                                                    timestamp_delta: 0,
+                                                    offset_delta: 4,
+                                                    key: Some(Bytes::from_static(b"")),
+                                                    value: Some(Bytes::from_static(b"0123456789")),
+                                                    headers: [].into()
+                                                }
+                                            ]
+                                            .into()
+                                        }]
+                                        .into()
+                                    }
+                                    .try_into()?
+                                )
+                            }]
+                            .into()
+                        )
+                    }]
+                    .into()
+                )
+            }
+        },
+        Frame::request_from_bytes(&v)?
     );
 
     Ok(())

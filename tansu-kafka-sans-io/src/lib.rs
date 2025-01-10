@@ -200,6 +200,7 @@ impl Frame {
     }
 
     pub fn request_from_bytes(bytes: &[u8]) -> Result<Frame> {
+        debug!(?bytes);
         let mut c = Cursor::new(bytes);
         let mut deserializer = Decoder::request(&mut c);
         Frame::deserialize(&mut deserializer)
@@ -271,7 +272,7 @@ impl TryFrom<HeaderMezzanine> for Header {
     type Error = Error;
 
     fn try_from(value: HeaderMezzanine) -> Result<Self, Self::Error> {
-        debug!("value: {value:?}");
+        debug!(?value);
 
         match value {
             HeaderMezzanine::Request {

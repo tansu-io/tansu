@@ -3537,6 +3537,236 @@ fn metadata_request_v12_000() -> Result<()> {
 }
 
 #[test]
+fn metadata_request_v7_000() -> Result<()> {
+    let _guard = init_tracing()?;
+
+    let mut c = Cursor::new(vec![]);
+    let mut serializer = Encoder::request(&mut c);
+
+    let frame = Frame {
+        size: 21,
+        header: Header::Request {
+            api_key: 3,
+            api_version: 7,
+            correlation_id: 0,
+            client_id: Some("sarama".into()),
+        },
+        body: Body::MetadataRequest {
+            topics: None,
+            allow_auto_topic_creation: Some(false),
+            include_cluster_authorized_operations: None,
+            include_topic_authorized_operations: None,
+        },
+    };
+
+    frame.serialize(&mut serializer)?;
+
+    assert_eq!(
+        vec![
+            0, 0, 0, 21, 0, 3, 0, 7, 0, 0, 0, 0, 0, 6, 115, 97, 114, 97, 109, 97, 255, 255, 255,
+            255, 0,
+        ],
+        c.into_inner(),
+    );
+
+    Ok(())
+}
+
+#[test]
+fn metadata_response_v7_0000() -> Result<()> {
+    use tansu_kafka_sans_io::metadata_response::{
+        MetadataResponseBroker, MetadataResponsePartition, MetadataResponseTopic,
+    };
+
+    let _guard = init_tracing()?;
+
+    let api_key = 3;
+    let api_version = 7;
+
+    let mut c = Cursor::new(vec![]);
+    let mut serializer = Encoder::response(&mut c, api_key, api_version);
+
+    let frame = Frame {
+        size: 180,
+        header: Header::Response { correlation_id: 0 },
+        body: Body::MetadataResponse {
+            throttle_time_ms: Some(0),
+            brokers: Some(
+                [MetadataResponseBroker {
+                    node_id: 1,
+                    host: "localhost".into(),
+                    port: 9092,
+                    rack: None,
+                }]
+                .into(),
+            ),
+            cluster_id: Some("5L6g3nShT-eMCtK--X86sw".into()),
+            controller_id: Some(1),
+            topics: Some(
+                [MetadataResponseTopic {
+                    error_code: 0,
+                    name: Some("test".into()),
+                    topic_id: None,
+                    is_internal: Some(false),
+                    partitions: Some(
+                        [
+                            MetadataResponsePartition {
+                                error_code: 0,
+                                partition_index: 1,
+                                leader_id: 1,
+                                leader_epoch: Some(0),
+                                replica_nodes: Some([1].into()),
+                                isr_nodes: Some([1].into()),
+                                offline_replicas: Some([].into()),
+                            },
+                            MetadataResponsePartition {
+                                error_code: 0,
+                                partition_index: 2,
+                                leader_id: 1,
+                                leader_epoch: Some(0),
+                                replica_nodes: Some([1].into()),
+                                isr_nodes: Some([1].into()),
+                                offline_replicas: Some([].into()),
+                            },
+                            MetadataResponsePartition {
+                                error_code: 0,
+                                partition_index: 0,
+                                leader_id: 1,
+                                leader_epoch: Some(0),
+                                replica_nodes: Some([1].into()),
+                                isr_nodes: Some([1].into()),
+                                offline_replicas: Some([].into()),
+                            },
+                        ]
+                        .into(),
+                    ),
+                    topic_authorized_operations: None,
+                }]
+                .into(),
+            ),
+            cluster_authorized_operations: None,
+        },
+    };
+
+    frame.serialize(&mut serializer)?;
+
+    assert_eq!(
+        vec![
+            0, 0, 0, 180, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 9, 108, 111, 99, 97,
+            108, 104, 111, 115, 116, 0, 0, 35, 132, 255, 255, 0, 22, 53, 76, 54, 103, 51, 110, 83,
+            104, 84, 45, 101, 77, 67, 116, 75, 45, 45, 88, 56, 54, 115, 119, 0, 0, 0, 1, 0, 0, 0,
+            1, 0, 0, 0, 4, 116, 101, 115, 116, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0,
+            0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0,
+            0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0,
+            0, 0, 0,
+        ],
+        c.into_inner(),
+    );
+
+    Ok(())
+}
+
+#[test]
+fn metadata_response_v7_0001() -> Result<()> {
+    use tansu_kafka_sans_io::metadata_response::{
+        MetadataResponseBroker, MetadataResponsePartition, MetadataResponseTopic,
+    };
+
+    let _guard = init_tracing()?;
+
+    let api_key = 3;
+    let api_version = 7;
+
+    let mut c = Cursor::new(vec![]);
+    let mut serializer = Encoder::response(&mut c, api_key, api_version);
+
+    // note that topic_id is not part of a v7 response
+    //
+    let frame = Frame {
+        size: 180,
+        header: Header::Response { correlation_id: 0 },
+        body: Body::MetadataResponse {
+            throttle_time_ms: Some(0),
+            brokers: Some(
+                [MetadataResponseBroker {
+                    node_id: 1,
+                    host: "localhost".into(),
+                    port: 9092,
+                    rack: None,
+                }]
+                .into(),
+            ),
+            cluster_id: Some("5L6g3nShT-eMCtK--X86sw".into()),
+            controller_id: Some(1),
+            topics: Some(
+                [MetadataResponseTopic {
+                    error_code: 0,
+                    name: Some("test".into()),
+                    topic_id: Some([
+                        118, 154, 146, 249, 19, 231, 73, 33, 136, 41, 108, 64, 151, 75, 30, 65,
+                    ]),
+                    is_internal: Some(false),
+                    partitions: Some(
+                        [
+                            MetadataResponsePartition {
+                                error_code: 0,
+                                partition_index: 1,
+                                leader_id: 1,
+                                leader_epoch: Some(0),
+                                replica_nodes: Some([1].into()),
+                                isr_nodes: Some([1].into()),
+                                offline_replicas: Some([].into()),
+                            },
+                            MetadataResponsePartition {
+                                error_code: 0,
+                                partition_index: 2,
+                                leader_id: 1,
+                                leader_epoch: Some(0),
+                                replica_nodes: Some([1].into()),
+                                isr_nodes: Some([1].into()),
+                                offline_replicas: Some([].into()),
+                            },
+                            MetadataResponsePartition {
+                                error_code: 0,
+                                partition_index: 0,
+                                leader_id: 1,
+                                leader_epoch: Some(0),
+                                replica_nodes: Some([1].into()),
+                                isr_nodes: Some([1].into()),
+                                offline_replicas: Some([].into()),
+                            },
+                        ]
+                        .into(),
+                    ),
+                    topic_authorized_operations: None,
+                }]
+                .into(),
+            ),
+            cluster_authorized_operations: None,
+        },
+    };
+
+    frame.serialize(&mut serializer)?;
+
+    assert_eq!(
+        vec![
+            0, 0, 0, 180, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 9, 108, 111, 99, 97,
+            108, 104, 111, 115, 116, 0, 0, 35, 132, 255, 255, 0, 22, 53, 76, 54, 103, 51, 110, 83,
+            104, 84, 45, 101, 77, 67, 116, 75, 45, 45, 88, 56, 54, 115, 119, 0, 0, 0, 1, 0, 0, 0,
+            1, 0, 0, 0, 4, 116, 101, 115, 116, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0,
+            0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0,
+            0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0,
+            0, 0, 0,
+        ],
+        c.into_inner(),
+    );
+
+    Ok(())
+}
+
+#[test]
 fn metadata_request_v12_001() -> Result<()> {
     let _guard = init_tracing()?;
 
@@ -3624,6 +3854,7 @@ fn metadata_response_v12_0000() -> Result<()> {
 
     Ok(())
 }
+
 #[test]
 fn offset_fetch_request_v3_000() -> Result<()> {
     use tansu_kafka_sans_io::offset_fetch_request::OffsetFetchRequestTopic;
