@@ -155,9 +155,9 @@ impl<'a> Encoder<'a> {
 
     fn field_meta(&self, name: &str) -> Option<&'static FieldMeta> {
         debug!(
-            "name: {name}, parse.front: {:?}, meta: {:?}",
-            self.meta.parse.front().and_then(|front| front.field(name)),
-            self.meta.message.and_then(|mm| mm.field(name))
+            name,
+            parse_front = ?self.meta.parse.front().and_then(|front| front.field(name)),
+            meta = ?self.meta.message.and_then(|mm| mm.field(name))
         );
 
         self.meta
@@ -835,22 +835,25 @@ impl SerializeStruct for &mut Encoder<'_> {
         _ = self.field.replace(key);
 
         debug!(
-            "serialize_field, name: {}, value: {}",
-            self.field_name(),
-            type_name_of_val(value)
+            field = self.field_name(),
+            type_name = type_name_of_val(value)
         );
 
         if let Some(fm) = self.field_meta(key) {
-            debug!("field name: {}, meta: {fm:?}", self.field_name());
+            debug!(field = self.field_name(), meta = ?fm, is_valid = self.is_valid());
 
             _ = self.meta.field.replace(fm);
             self.meta.parse.push_front(fm.fields.into());
-            let outcome = value.serialize(&mut **self);
+            let outcome = if self.is_valid() {
+                value.serialize(&mut **self)
+            } else {
+                Ok(())
+            };
             _ = self.meta.parse.pop_front();
             _ = self.meta.field.take();
             outcome
         } else {
-            debug!("field name: {}, has no field meta", self.field_name());
+            debug!(field = self.field_name());
 
             _ = self.meta.field.take();
             self.meta.parse.push_front(FieldLookup(&[]));
