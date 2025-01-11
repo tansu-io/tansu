@@ -2912,27 +2912,31 @@ fn remove_comments(commented: &str) -> String {
                 ("", _) => uncommented,
                 (before, _) => {
                     if uncommented.is_empty() {
-                        before.into()
+                        before.trim().into()
                     } else {
-                        format!("{uncommented}\n{before}")
+                        format!("{uncommented} {before}")
                     }
                 }
             }
         } else if uncommented.is_empty() {
-            line.into()
+            line.trim().into()
         } else {
-            format!("{uncommented}\n{line}")
+            format!("{uncommented} {}", line.trim())
         }
     })
 }
 
 #[cfg(test)]
 mod tests {
-
     #[test]
     fn remove_comments() {
         assert_eq!(String::from(""), super::remove_comments(""));
         assert_eq!(String::from("pqr"), super::remove_comments("-- abc\npqr"));
-        assert_eq!(String::from("abc "), super::remove_comments("abc -- def"))
+        assert_eq!(String::from("abc"), super::remove_comments("abc -- def"));
+        assert_eq!(String::from("abc def"), super::remove_comments("abc\ndef"));
+        assert_eq!(
+            String::from("abc def"),
+            super::remove_comments("abc \ndef ")
+        );
     }
 }
