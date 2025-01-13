@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -155,9 +155,9 @@ impl<'a> Encoder<'a> {
 
     fn field_meta(&self, name: &str) -> Option<&'static FieldMeta> {
         debug!(
-            "name: {name}, parse.front: {:?}, meta: {:?}",
-            self.meta.parse.front().and_then(|front| front.field(name)),
-            self.meta.message.and_then(|mm| mm.field(name))
+            name,
+            parse_front = ?self.meta.parse.front().and_then(|front| front.field(name)),
+            meta = ?self.meta.message.and_then(|mm| mm.field(name))
         );
 
         self.meta
@@ -220,25 +220,25 @@ impl<'a> Encoder<'a> {
         } else {
             self.meta.message.is_some_and(|meta| {
                 self.api_version
-                    .map_or(false, |api_version| meta.is_flexible(api_version))
+                    .is_some_and(|api_version| meta.is_flexible(api_version))
             })
         }
     }
 
     fn is_nullable(&self) -> bool {
-        self.api_version.map_or(false, |api_version| {
+        self.api_version.is_some_and(|api_version| {
             self.meta
                 .field
-                .map_or(false, |field| field.is_nullable(api_version))
+                .is_some_and(|field| field.is_nullable(api_version))
         })
     }
 
     #[must_use]
     fn is_valid(&self) -> bool {
-        self.api_version.map_or(false, |api_version| {
+        self.api_version.is_some_and(|api_version| {
             self.meta
                 .field
-                .map_or(false, |field| field.version.within(api_version))
+                .is_some_and(|field| field.version.within(api_version))
         })
     }
 
@@ -247,6 +247,11 @@ impl<'a> Encoder<'a> {
         self.meta
             .field
             .is_some_and(|field| field.kind.is_sequence())
+    }
+
+    #[must_use]
+    fn is_structure(&self) -> bool {
+        self.meta.field.is_some_and(|field| field.is_structure())
     }
 
     #[must_use]
@@ -493,10 +498,12 @@ impl Serializer for &mut Encoder<'_> {
 
     fn serialize_none(self) -> Result<Self::Ok, Self::Error> {
         debug!(
-            "serialize none for name: {}, valid: {}, nullable: {}",
-            self.field_name(),
-            self.is_valid(),
-            self.is_nullable()
+            name = self.field_name(),
+            is_valid = self.is_valid(),
+            is_nullable = self.is_nullable(),
+            is_structure = self.is_structure(),
+            is_sequence = self.is_sequence(),
+            is_flexible = self.is_flexible(),
         );
 
         if self.in_header()
@@ -511,7 +518,9 @@ impl Serializer for &mut Encoder<'_> {
                 self.serialize_i32(0)
             }
         } else if self.is_valid() && self.is_nullable() {
-            if self.is_flexible() {
+            if self.is_structure() && !self.is_sequence() {
+                self.serialize_i8(-1)
+            } else if self.is_flexible() {
                 self.unsigned_varint(0)
             } else if self.is_sequence() {
                 self.serialize_i32(-1)
@@ -826,22 +835,25 @@ impl SerializeStruct for &mut Encoder<'_> {
         _ = self.field.replace(key);
 
         debug!(
-            "serialize_field, name: {}, value: {}",
-            self.field_name(),
-            type_name_of_val(value)
+            field = self.field_name(),
+            type_name = type_name_of_val(value)
         );
 
         if let Some(fm) = self.field_meta(key) {
-            debug!("field name: {}, meta: {fm:?}", self.field_name());
+            debug!(field = self.field_name(), meta = ?fm, is_valid = self.is_valid());
 
             _ = self.meta.field.replace(fm);
             self.meta.parse.push_front(fm.fields.into());
-            let outcome = value.serialize(&mut **self);
+            let outcome = if self.is_valid() {
+                value.serialize(&mut **self)
+            } else {
+                Ok(())
+            };
             _ = self.meta.parse.pop_front();
             _ = self.meta.field.take();
             outcome
         } else {
-            debug!("field name: {}, has no field meta", self.field_name());
+            debug!(field = self.field_name());
 
             _ = self.meta.field.take();
             self.meta.parse.push_front(FieldLookup(&[]));
@@ -873,7 +885,7 @@ impl SerializeStructVariant for &mut Encoder<'_> {
         if let Some(fm) = self.field_meta(key) {
             if self
                 .api_version
-                .map_or(false, |api_version| fm.version.within(api_version))
+                .is_some_and(|api_version| fm.version.within(api_version))
             {
                 debug!("field name: {}, meta: {fm:?}", self.field_name());
 

@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -57,6 +57,12 @@ use crate::{
     Result, Storage, TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse,
     TxnOffsetCommitRequest, TxnState, UpdateError, Version, NULL_TOPIC_ID,
 };
+
+macro_rules! include_sql {
+    ($e: expr) => {
+        remove_comments(include_str!($e))
+    };
+}
 
 #[derive(Clone, Debug)]
 pub struct Postgres {
@@ -240,7 +246,7 @@ impl Postgres {
     ) -> Result<()> {
         debug!(transaction_id, ?deflated);
         let prepared = tx
-            .prepare(include_str!("pg/producer_epoch_current_for_producer.sql"))
+            .prepare(include_sql!("pg/producer_epoch_current_for_producer.sql").as_str())
             .await
             .inspect_err(|err| error!(?err))?;
 
@@ -254,7 +260,7 @@ impl Postgres {
                 .inspect_err(|err| error!(self.cluster, deflated.producer_id, ?err))?;
 
             let prepared = tx
-                .prepare(include_str!("pg/producer_select_for_update.sql"))
+                .prepare(include_sql!("pg/producer_select_for_update.sql").as_str())
                 .await
                 .inspect_err(|err| error!(?err))?;
 
@@ -296,7 +302,7 @@ impl Postgres {
             debug!(increment);
 
             let prepared = tx
-                .prepare(include_str!("pg/producer_detail_insert.sql"))
+                .prepare(include_sql!("pg/producer_detail_insert.sql").as_str())
                 .await
                 .inspect_err(|err| error!(?err))?;
 
@@ -329,7 +335,7 @@ impl Postgres {
         tx: &Transaction<'_>,
     ) -> Result<(Option<i64>, Option<i64>)> {
         let prepared = tx
-            .prepare(include_str!("pg/watermark_select_for_update.sql"))
+            .prepare(include_sql!("pg/watermark_select_for_update.sql").as_str())
             .await
             .inspect_err(|err| error!(?err))?;
 
@@ -375,12 +381,12 @@ impl Postgres {
         debug!(?low, ?high);
 
         let insert_record = tx
-            .prepare(include_str!("pg/record_insert.sql"))
+            .prepare(include_sql!("pg/record_insert.sql").as_str())
             .await
             .inspect_err(|err| error!(?err))?;
 
         let insert_header = tx
-            .prepare(include_str!("pg/header_insert.sql"))
+            .prepare(include_sql!("pg/header_insert.sql").as_str())
             .await
             .inspect_err(|err| error!(?err))?;
 
@@ -467,7 +473,7 @@ impl Postgres {
         if let Some(transaction_id) = transaction_id {
             if attributes.transaction {
                 let txn_produce_offset_insert = tx
-                    .prepare(include_str!("pg/txn_produce_offset_insert.sql"))
+                    .prepare(include_sql!("pg/txn_produce_offset_insert.sql").as_str())
                     .await
                     .inspect_err(|err| error!(?err))?;
 
@@ -495,7 +501,7 @@ impl Postgres {
         }
 
         let prepared = tx
-            .prepare(include_str!("pg/watermark_update.sql"))
+            .prepare(include_sql!("pg/watermark_update.sql").as_str())
             .await
             .inspect_err(|err| error!(?err))?;
 
@@ -528,7 +534,7 @@ impl Postgres {
         debug!(cluster = ?self.cluster, ?transaction_id, ?producer_id, ?producer_epoch, ?committed);
 
         let prepared = tx
-            .prepare(include_str!("pg/txn_select_produced_topitions.sql"))
+            .prepare(include_sql!("pg/txn_select_produced_topitions.sql").as_str())
             .await
             .inspect_err(|err| error!(?err))?;
 
@@ -587,9 +593,7 @@ impl Postgres {
             debug!(offset, ?topition);
 
             let prepared = tx
-                .prepare(include_str!(
-                    "pg/txn_produce_offset_select_offset_range.sql"
-                ))
+                .prepare(include_sql!("pg/txn_produce_offset_select_offset_range.sql").as_str())
                 .await
                 .inspect_err(|err| error!(?err))?;
 
@@ -613,9 +617,7 @@ impl Postgres {
             debug!(offset_start, offset_end);
 
             let prepared = tx
-                .prepare(include_str!(
-                    "pg/txn_produce_offset_select_overlapping_txn.sql"
-                ))
+                .prepare(include_sql!("pg/txn_produce_offset_select_overlapping_txn.sql").as_str())
                 .await
                 .inspect_err(|err| error!(?err))?;
 
@@ -666,7 +668,7 @@ impl Postgres {
                 debug!(?txn);
 
                 let prepared = tx
-                    .prepare(include_str!("pg/txn_produce_offset_delete_by_txn.sql"))
+                    .prepare(include_sql!("pg/txn_produce_offset_delete_by_txn.sql").as_str())
                     .await
                     .inspect_err(|err| error!(?err))?;
 
@@ -685,7 +687,7 @@ impl Postgres {
                     .inspect_err(|err| error!(?err))?;
 
                 let prepared = tx
-                    .prepare(include_str!("pg/txn_topition_delete_by_txn.sql"))
+                    .prepare(include_sql!("pg/txn_topition_delete_by_txn.sql").as_str())
                     .await
                     .inspect_err(|err| error!(?err))?;
 
@@ -705,7 +707,7 @@ impl Postgres {
 
                 if txn.status == TxnState::PrepareCommit {
                     let prepared = tx
-                        .prepare(include_str!("pg/consumer_offset_insert_from_txn.sql"))
+                        .prepare(include_sql!("pg/consumer_offset_insert_from_txn.sql").as_str())
                         .await
                         .inspect_err(|err| error!(?err))?;
 
@@ -725,7 +727,7 @@ impl Postgres {
                 }
 
                 let prepared = tx
-                    .prepare(include_str!("pg/txn_offset_commit_tp_delete_by_txn.sql"))
+                    .prepare(include_sql!("pg/txn_offset_commit_tp_delete_by_txn.sql").as_str())
                     .await
                     .inspect_err(|err| error!(?err))?;
 
@@ -744,7 +746,7 @@ impl Postgres {
                     .inspect_err(|err| error!(?err))?;
 
                 let prepared = tx
-                    .prepare(include_str!("pg/txn_offset_commit_delete_by_txn.sql"))
+                    .prepare(include_sql!("pg/txn_offset_commit_delete_by_txn.sql").as_str())
                     .await
                     .inspect_err(|err| error!(?err))?;
 
@@ -763,7 +765,7 @@ impl Postgres {
                     .inspect_err(|err| error!(?err))?;
 
                 let prepared = tx
-                    .prepare(include_str!("pg/txn_status_update.sql"))
+                    .prepare(include_sql!("pg/txn_status_update.sql").as_str())
                     .await
                     .inspect_err(|err| error!(?err))?;
 
@@ -794,7 +796,7 @@ impl Postgres {
             debug!(?overlaps);
 
             let prepared = tx
-                .prepare(include_str!("pg/txn_status_update.sql"))
+                .prepare(include_sql!("pg/txn_status_update.sql").as_str())
                 .await
                 .inspect_err(|err| error!(?err))?;
 
@@ -886,7 +888,7 @@ impl Storage for Postgres {
         let tx = c.transaction().await?;
 
         let prepared = tx
-            .prepare(include_str!("pg/topic_insert.sql"))
+            .prepare(include_sql!("pg/topic_insert.sql").as_str())
             .await
             .inspect_err(|err| error!(?err, ?topic, ?validate_only))?;
 
@@ -926,7 +928,7 @@ impl Storage for Postgres {
 
         for partition in 0..topic.num_partitions {
             let prepared = tx
-                .prepare(include_str!("pg/topition_insert.sql"))
+                .prepare(include_sql!("pg/topition_insert.sql").as_str())
                 .await
                 .inspect_err(|err| error!(?err))?;
 
@@ -938,7 +940,7 @@ impl Storage for Postgres {
 
         for partition in 0..topic.num_partitions {
             let prepared = tx
-                .prepare(include_str!("pg/watermark_insert.sql"))
+                .prepare(include_sql!("pg/watermark_insert.sql").as_str())
                 .await
                 .inspect_err(|err| error!(?err))?;
 
@@ -950,7 +952,7 @@ impl Storage for Postgres {
 
         if let Some(configs) = topic.configs {
             let prepared = tx
-                .prepare(include_str!("pg/topic_configuration_insert.sql"))
+                .prepare(include_sql!("pg/topic_configuration_insert.sql").as_str())
                 .await
                 .inspect_err(|err| error!(?err))?;
 
@@ -1116,7 +1118,7 @@ impl Storage for Postgres {
         let row = match topic {
             TopicId::Id(id) => {
                 let prepared = tx
-                    .prepare(include_str!("pg/topic_select_uuid.sql"))
+                    .prepare(include_sql!("pg/topic_select_uuid.sql").as_str())
                     .await
                     .inspect_err(|err| error!(?err))?;
 
@@ -1127,7 +1129,7 @@ impl Storage for Postgres {
 
             TopicId::Name(name) => {
                 let prepared = tx
-                    .prepare(include_str!("pg/topic_select_name.sql"))
+                    .prepare(include_sql!("pg/topic_select_name.sql").as_str())
                     .await
                     .inspect_err(|err| error!(?err))?;
 
@@ -1146,33 +1148,36 @@ impl Storage for Postgres {
         for (description, sql) in [
             (
                 "consumer offsets",
-                include_str!("pg/consumer_offset_delete_by_topic.sql"),
+                include_sql!("pg/consumer_offset_delete_by_topic.sql"),
             ),
             (
                 "watermarks",
-                include_str!("pg/watermark_delete_by_topic.sql"),
+                include_sql!("pg/watermark_delete_by_topic.sql"),
             ),
-            ("headers", include_str!("pg/header_delete_by_topic.sql")),
-            ("records", include_str!("pg/record_delete_by_topic.sql")),
+            ("headers", include_sql!("pg/header_delete_by_topic.sql")),
+            ("records", include_sql!("pg/record_delete_by_topic.sql")),
             (
                 "txn_offset_commit_tp",
-                include_str!("pg/txn_offset_commit_tp_delete_by_topic.sql"),
+                include_sql!("pg/txn_offset_commit_tp_delete_by_topic.sql"),
             ),
             (
                 "txn_produce_offset_delete",
-                include_str!("pg/txn_produce_offset_delete_by_topic.sql"),
+                include_sql!("pg/txn_produce_offset_delete_by_topic.sql"),
             ),
             (
                 "txn_topition",
-                include_str!("pg/txn_topition_delete_by_topic.sql"),
+                include_sql!("pg/txn_topition_delete_by_topic.sql"),
             ),
             (
                 "producer_detail",
-                include_str!("pg/producer_detail_delete_by_topic.sql"),
+                include_sql!("pg/producer_detail_delete_by_topic.sql"),
             ),
-            ("topitions", include_str!("pg/topition_delete_by_topic.sql")),
+            ("topitions", include_sql!("pg/topition_delete_by_topic.sql")),
         ] {
-            let prepared = tx.prepare(sql).await.inspect_err(|err| error!(?err))?;
+            let prepared = tx
+                .prepare(sql.as_str())
+                .await
+                .inspect_err(|err| error!(?err))?;
 
             let rows = tx
                 .execute(&prepared, &[&self.cluster, &topic_name])
@@ -1183,7 +1188,7 @@ impl Storage for Postgres {
         }
 
         let prepared = tx
-            .prepare(include_str!("pg/topic_delete_by.sql"))
+            .prepare(include_sql!("pg/topic_delete_by.sql").as_str())
             .await
             .inspect_err(|err| error!(?err))?;
 
@@ -1247,7 +1252,7 @@ impl Storage for Postgres {
         let c = self.connection().await?;
 
         let select_batch = c
-            .prepare(include_str!("pg/record_fetch.sql"))
+            .prepare(include_sql!("pg/record_fetch.sql").as_str())
             .await
             .inspect_err(|err| {
                 error!(
@@ -1261,7 +1266,7 @@ impl Storage for Postgres {
             })?;
 
         let select_headers = c
-            .prepare(include_str!("pg/header_fetch.sql"))
+            .prepare(include_sql!("pg/header_fetch.sql").as_str())
             .await
             .inspect_err(|err| error!(?err))?;
 
@@ -1448,7 +1453,7 @@ impl Storage for Postgres {
         let c = self.connection().await?;
 
         let prepared = c
-            .prepare(include_str!("pg/watermark_select.sql"))
+            .prepare(include_sql!("pg/watermark_select.sql").as_str())
             .await
             .inspect_err(|err| error!(?topition, ?err))?;
 
@@ -1498,12 +1503,12 @@ impl Storage for Postgres {
         let mut cg_inserted = false;
 
         let topition_select = tx
-            .prepare(include_str!("pg/topition_select.sql"))
+            .prepare(include_sql!("pg/topition_select.sql").as_str())
             .await
             .inspect_err(|err| error!(?err))?;
 
         let consumer_offset_insert = tx
-            .prepare(include_str!("pg/consumer_offset_insert.sql"))
+            .prepare(include_sql!("pg/consumer_offset_insert.sql").as_str())
             .await
             .inspect_err(|err| error!(?err))?;
 
@@ -1523,7 +1528,7 @@ impl Storage for Postgres {
             {
                 if !cg_inserted {
                     let consumer_group_insert = tx
-                        .prepare(include_str!("pg/consumer_group_insert.sql"))
+                        .prepare(include_sql!("pg/consumer_group_insert.sql").as_str())
                         .await
                         .inspect_err(|err| error!(?err))?;
 
@@ -1584,7 +1589,7 @@ impl Storage for Postgres {
         let c = self.connection().await?;
 
         let prepared = c
-            .prepare(include_str!("pg/consumer_offset_select_by_group.sql"))
+            .prepare(include_sql!("pg/consumer_offset_select_by_group.sql").as_str())
             .await
             .inspect_err(|err| error!(?err))?;
 
@@ -1619,7 +1624,7 @@ impl Storage for Postgres {
         let c = self.connection().await?;
 
         let prepared = c
-            .prepare(include_str!("pg/consumer_offset_select.sql"))
+            .prepare(include_sql!("pg/consumer_offset_select.sql").as_str())
             .await
             .inspect_err(|err| error!(?err))?;
 
@@ -1671,21 +1676,24 @@ impl Storage for Postgres {
 
         for (topition, offset_type) in offsets {
             let query = match (offset_type, isolation_level) {
-                (ListOffsetRequest::Earliest, _) => include_str!("pg/list_earliest_offset.sql"),
+                (ListOffsetRequest::Earliest, _) => include_sql!("pg/list_earliest_offset.sql"),
                 (ListOffsetRequest::Latest, IsolationLevel::ReadCommitted) => {
-                    include_str!("pg/list_latest_offset_committed.sql")
+                    include_sql!("pg/list_latest_offset_committed.sql")
                 }
                 (ListOffsetRequest::Latest, IsolationLevel::ReadUncommitted) => {
-                    include_str!("pg/list_latest_offset_uncommitted.sql")
+                    include_sql!("pg/list_latest_offset_uncommitted.sql")
                 }
                 (ListOffsetRequest::Timestamp(_), _) => {
-                    include_str!("pg/list_latest_offset_timestamp.sql")
+                    include_sql!("pg/list_latest_offset_timestamp.sql")
                 }
             };
 
             debug!(?query);
 
-            let prepared = c.prepare(query).await.inspect_err(|err| error!(?err))?;
+            let prepared = c
+                .prepare(query.as_str())
+                .await
+                .inspect_err(|err| error!(?err))?;
 
             let list_offset = match offset_type {
                 ListOffsetRequest::Earliest | ListOffsetRequest::Latest => c
@@ -1786,7 +1794,7 @@ impl Storage for Postgres {
                     responses.push(match topic {
                         TopicId::Name(name) => {
                             let prepared = c
-                                .prepare(include_str!("pg/topic_select_name.sql"))
+                                .prepare(include_sql!("pg/topic_select_name.sql").as_str())
                                 .await
                                 .inspect_err(|err| {
                                     error!(?err, cluster = self.cluster, ?name);
@@ -1886,7 +1894,7 @@ impl Storage for Postgres {
                         TopicId::Id(id) => {
                             debug!(?id);
                             let prepared = c
-                                .prepare(include_str!("pg/topic_select_uuid.sql"))
+                                .prepare(include_sql!("pg/topic_select_uuid.sql").as_str())
                                 .await
                                 .inspect_err(|error| error!(?error))?;
 
@@ -1977,7 +1985,7 @@ impl Storage for Postgres {
                 let mut responses = vec![];
 
                 let prepared = c
-                    .prepare(include_str!("pg/topic_by_cluster.sql"))
+                    .prepare(include_sql!("pg/topic_by_cluster.sql").as_str())
                     .await
                     .inspect_err(|err| error!(?err))?;
 
@@ -2100,7 +2108,7 @@ impl Storage for Postgres {
             .await
             .inspect_err(|err| error!(?err))?
         {
-            let id = row.try_get::<_, Uuid>(0)?;
+            let id = row.try_get::<_, i32>(0).inspect_err(|err| error!(?err))?;
 
             let prepared = c
                 .prepare(concat!(
@@ -2119,17 +2127,20 @@ impl Storage for Postgres {
             let mut configs = vec![];
 
             for row in rows {
-                let name = row.try_get::<_, String>(0)?;
+                let name = row
+                    .try_get::<_, String>(0)
+                    .inspect_err(|err| error!(?err))?;
                 let value = row
                     .try_get::<_, Option<String>>(1)
                     .map(|value| value.unwrap_or_default())
-                    .map(Some)?;
+                    .map(Some)
+                    .inspect_err(|err| error!(?err))?;
 
                 configs.push(DescribeConfigsResourceResult {
                     name,
                     value,
                     read_only: false,
-                    is_default: Some(false),
+                    is_default: None,
                     config_source: Some(ConfigSource::DefaultConfig.into()),
                     is_sensitive: false,
                     synonyms: Some([].into()),
@@ -2166,7 +2177,7 @@ impl Storage for Postgres {
         let c = self.connection().await.inspect_err(|err| error!(?err))?;
 
         let prepared = c
-            .prepare(include_str!("pg/consumer_group_select.sql"))
+            .prepare(include_sql!("pg/consumer_group_select.sql").as_str())
             .await
             .inspect_err(|err| {
                 error!(?err, cluster = self.cluster);
@@ -2185,6 +2196,7 @@ impl Storage for Postgres {
                 group_id,
                 protocol_type: "consumer".into(),
                 group_state: Some("unknown".into()),
+                group_type: None,
             });
         }
 
@@ -2203,17 +2215,17 @@ impl Storage for Postgres {
             let c = self.connection().await?;
 
             let consumer_offset = c
-                .prepare(include_str!("pg/consumer_offset_delete_by_cg.sql"))
+                .prepare(include_sql!("pg/consumer_offset_delete_by_cg.sql").as_str())
                 .await
                 .inspect_err(|err| error!(?err))?;
 
             let group_detail = c
-                .prepare(include_str!("pg/consumer_group_detail_delete_by_cg.sql"))
+                .prepare(include_sql!("pg/consumer_group_detail_delete_by_cg.sql").as_str())
                 .await
                 .inspect_err(|err| error!(?err))?;
 
             let group = c
-                .prepare(include_str!("pg/consumer_group_delete.sql"))
+                .prepare(include_sql!("pg/consumer_group_delete.sql").as_str())
                 .await
                 .inspect_err(|err| error!(?err))?;
 
@@ -2259,7 +2271,7 @@ impl Storage for Postgres {
         let c = self.connection().await.inspect_err(|err| error!(?err))?;
 
         let prepared = c
-            .prepare(include_str!("pg/consumer_group_select_by_name.sql"))
+            .prepare(include_sql!("pg/consumer_group_select_by_name.sql").as_str())
             .await
             .inspect_err(|err| {
                 error!(?err, cluster = self.cluster);
@@ -2304,14 +2316,14 @@ impl Storage for Postgres {
         let tx = c.transaction().await?;
 
         let prepared = tx
-            .prepare(include_str!("pg/consumer_group_insert.sql"))
+            .prepare(include_sql!("pg/consumer_group_insert.sql").as_str())
             .await
             .inspect_err(|err| error!(?err))?;
 
         _ = tx.execute(&prepared, &[&self.cluster, &group_id]).await?;
 
         let prepared = tx
-            .prepare(include_str!("pg/consumer_group_detail_insert.sql"))
+            .prepare(include_sql!("pg/consumer_group_detail_insert.sql").as_str())
             .await
             .inspect_err(|err| error!(?err))?;
 
@@ -2360,7 +2372,7 @@ impl Storage for Postgres {
                 .inspect(|version| debug!(?version))
         } else {
             let prepared = tx
-                .prepare(include_str!("pg/consumer_group_detail.sql"))
+                .prepare(include_sql!("pg/consumer_group_detail.sql").as_str())
                 .await
                 .inspect_err(|err| error!(?err))?;
 
@@ -2413,7 +2425,7 @@ impl Storage for Postgres {
                 let tx = c.transaction().await.inspect_err(|err| error!(?err))?;
 
                 let prepared = tx
-                    .prepare(include_str!("pg/producer_epoch_for_current_txn.sql"))
+                    .prepare(include_sql!("pg/producer_epoch_for_current_txn.sql").as_str())
                     .await
                     .inspect_err(|err| error!(?err))?;
 
@@ -2450,7 +2462,7 @@ impl Storage for Postgres {
                 }
 
                 let prepared = tx
-                    .prepare(include_str!("pg/txn_select_name.sql"))
+                    .prepare(include_sql!("pg/txn_select_name.sql").as_str())
                     .await
                     .inspect_err(|err| error!(?err))?;
 
@@ -2462,7 +2474,7 @@ impl Storage for Postgres {
                     let producer: i64 = row.try_get(0).inspect_err(|err| error!(?err))?;
 
                     let prepared = tx
-                        .prepare(include_str!("pg/producer_epoch_insert.sql"))
+                        .prepare(include_sql!("pg/producer_epoch_insert.sql").as_str())
                         .await
                         .inspect_err(|err| error!(?err))?;
 
@@ -2476,7 +2488,7 @@ impl Storage for Postgres {
                     (producer, epoch)
                 } else {
                     let prepared = tx
-                        .prepare(include_str!("pg/producer_insert.sql"))
+                        .prepare(include_sql!("pg/producer_insert.sql").as_str())
                         .await
                         .inspect_err(|err| error!(?err))?;
 
@@ -2488,7 +2500,7 @@ impl Storage for Postgres {
                     let producer: i64 = row.try_get(0).inspect_err(|err| error!(?err))?;
 
                     let prepared = tx
-                        .prepare(include_str!("pg/producer_epoch_insert.sql"))
+                        .prepare(include_sql!("pg/producer_epoch_insert.sql").as_str())
                         .await
                         .inspect_err(|err| error!(?err))?;
 
@@ -2500,7 +2512,7 @@ impl Storage for Postgres {
                     let epoch: i16 = row.try_get(0)?;
 
                     let prepared = tx
-                        .prepare(include_str!("pg/txn_insert.sql"))
+                        .prepare(include_sql!("pg/txn_insert.sql").as_str())
                         .await
                         .inspect_err(|err| error!(?err))?;
 
@@ -2522,7 +2534,7 @@ impl Storage for Postgres {
                 debug!(transaction_id, producer, epoch);
 
                 let prepared = tx
-                    .prepare(include_str!("pg/txn_detail_insert.sql"))
+                    .prepare(include_sql!("pg/txn_detail_insert.sql").as_str())
                     .await
                     .inspect_err(|err| error!(?err))?;
 
@@ -2574,7 +2586,7 @@ impl Storage for Postgres {
                 let tx = c.transaction().await.inspect_err(|err| error!(?err))?;
 
                 let prepared = tx
-                    .prepare(include_str!("pg/producer_insert.sql"))
+                    .prepare(include_sql!("pg/producer_insert.sql").as_str())
                     .await
                     .inspect_err(|err| error!(?err))?;
 
@@ -2586,7 +2598,7 @@ impl Storage for Postgres {
                 let producer = row.try_get(0)?;
 
                 let prepared = tx
-                    .prepare(include_str!("pg/producer_epoch_insert.sql"))
+                    .prepare(include_sql!("pg/producer_epoch_insert.sql").as_str())
                     .await
                     .inspect_err(|err| error!(?err))?;
 
@@ -2651,7 +2663,7 @@ impl Storage for Postgres {
                 let tx = c.transaction().await.inspect_err(|err| error!(?err))?;
 
                 let prepared = tx
-                    .prepare(include_str!("pg/txn_topition_insert.sql"))
+                    .prepare(include_sql!("pg/txn_topition_insert.sql").as_str())
                     .await
                     .inspect_err(|err| error!(?err))?;
 
@@ -2697,7 +2709,7 @@ impl Storage for Postgres {
                 }
 
                 let prepared = tx
-                    .prepare(include_str!("pg/txn_detail_update_started_at.sql"))
+                    .prepare(include_sql!("pg/txn_detail_update_started_at.sql").as_str())
                     .await
                     .inspect_err(|err| error!(?err))?;
 
@@ -2743,7 +2755,7 @@ impl Storage for Postgres {
         let tx = c.transaction().await.inspect_err(|err| error!(?err))?;
 
         let prepared = tx
-            .prepare(include_str!("pg/producer_epoch_for_current_txn.sql"))
+            .prepare(include_sql!("pg/producer_epoch_for_current_txn.sql").as_str())
             .await
             .inspect_err(|err| error!(?err))?;
 
@@ -2768,7 +2780,7 @@ impl Storage for Postgres {
         };
 
         let prepared = tx
-            .prepare(include_str!("pg/consumer_group_insert.sql"))
+            .prepare(include_sql!("pg/consumer_group_insert.sql").as_str())
             .await
             .inspect_err(|err| error!(?err))?;
 
@@ -2779,7 +2791,7 @@ impl Storage for Postgres {
         debug!(?producer_id, ?producer_epoch);
 
         let prepared = tx
-            .prepare(include_str!("pg/txn_offset_commit_insert.sql"))
+            .prepare(include_sql!("pg/txn_offset_commit_insert.sql").as_str())
             .await
             .inspect_err(|err| error!(?err))?;
 
@@ -2800,7 +2812,7 @@ impl Storage for Postgres {
             .inspect_err(|err| error!(?err))?;
 
         let prepared = tx
-            .prepare(include_str!("pg/txn_offset_commit_tp_insert.sql"))
+            .prepare(include_sql!("pg/txn_offset_commit_tp_insert.sql").as_str())
             .await
             .inspect_err(|err| error!(?err))?;
 
@@ -2891,4 +2903,40 @@ where
     let mut s = DefaultHasher::new();
     h.hash(&mut s);
     Uuid::from_u128(s.finish() as u128)
+}
+
+fn remove_comments(commented: &str) -> String {
+    commented.lines().fold(String::new(), |uncommented, line| {
+        if let Some(position) = line.find("--") {
+            match line.split_at(position) {
+                ("", _) => uncommented,
+                (before, _) => {
+                    if uncommented.is_empty() {
+                        before.trim().into()
+                    } else {
+                        format!("{uncommented} {before}")
+                    }
+                }
+            }
+        } else if uncommented.is_empty() {
+            line.trim().into()
+        } else {
+            format!("{uncommented} {}", line.trim())
+        }
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn remove_comments() {
+        assert_eq!(String::from(""), super::remove_comments(""));
+        assert_eq!(String::from("pqr"), super::remove_comments("-- abc\npqr"));
+        assert_eq!(String::from("abc"), super::remove_comments("abc -- def"));
+        assert_eq!(String::from("abc def"), super::remove_comments("abc\ndef"));
+        assert_eq!(
+            String::from("abc def"),
+            super::remove_comments("abc \ndef ")
+        );
+    }
 }

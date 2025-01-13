@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -38,7 +38,7 @@ struct Cli {
     #[arg(long, default_value = "tcp://0.0.0.0:9092")]
     kafka_listener_url: Url,
 
-    #[arg(long, default_value = "tcp://0.0.0.0:9092")]
+    #[arg(long, default_value = "tcp://localhost:9092")]
     kafka_advertised_listener_url: Url,
 
     #[arg(long, default_value = "postgres://postgres:postgres@localhost")]
