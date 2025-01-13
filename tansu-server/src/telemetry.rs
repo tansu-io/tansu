@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -56,6 +56,7 @@ fn init_tracer_provider() -> Result<TracerProvider> {
                 .build()
         })
 }
+
 #[derive(Debug)]
 pub struct Guard {
     tracer: TracerProvider,
