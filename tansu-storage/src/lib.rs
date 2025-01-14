@@ -469,7 +469,7 @@ impl From<DeleteTopicState> for TopicId {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
-pub struct BrokerRegistationRequest {
+pub struct BrokerRegistrationRequest {
     pub broker_id: i32,
     pub cluster_id: String,
     pub incarnation_id: Uuid,
@@ -973,7 +973,7 @@ pub trait StorageProvider {
 pub trait Storage: Clone + Debug + Send + Sync + 'static {
     async fn register_broker(
         &mut self,
-        broker_registration: BrokerRegistationRequest,
+        broker_registration: BrokerRegistrationRequest,
     ) -> Result<()>;
 
     async fn create_topic(&mut self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid>;
@@ -1115,7 +1115,7 @@ pub enum StorageContainer {
 impl Storage for StorageContainer {
     async fn register_broker(
         &mut self,
-        broker_registration: BrokerRegistationRequest,
+        broker_registration: BrokerRegistrationRequest,
     ) -> Result<()> {
         match self {
             Self::Postgres(pg) => pg.register_broker(broker_registration).await,

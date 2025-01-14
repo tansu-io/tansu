@@ -49,7 +49,7 @@ use tansu_kafka_sans_io::{
     broker_registration_request::Listener, consumer_group_describe_response,
     describe_groups_response, Body, ErrorCode, Frame, Header, IsolationLevel,
 };
-use tansu_storage::{BrokerRegistationRequest, Storage};
+use tansu_storage::{BrokerRegistrationRequest, Storage};
 use telemetry::GetTelemetrySubscriptionsRequest;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -105,7 +105,7 @@ where
 
     pub async fn register(&mut self) -> Result<()> {
         self.storage
-            .register_broker(BrokerRegistationRequest {
+            .register_broker(BrokerRegistrationRequest {
                 broker_id: self.node_id,
                 cluster_id: self.cluster_id.clone(),
                 incarnation_id: self.incarnation_id,

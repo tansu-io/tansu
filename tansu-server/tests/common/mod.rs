@@ -39,7 +39,7 @@ use tansu_server::{
     Error, Result,
 };
 use tansu_storage::{
-    dynostore::DynoStore, pg::Postgres, BrokerRegistationRequest, Storage, StorageContainer,
+    dynostore::DynoStore, pg::Postgres, BrokerRegistrationRequest, Storage, StorageContainer,
 };
 use tracing::{debug, subscriber::DefaultGuard};
 use tracing_subscriber::EnvFilter;
@@ -539,7 +539,7 @@ pub(crate) async fn register_broker(
     let port = rng.gen_range(1024..u16::MAX);
     let security_protocol = rng.gen_range(0..i16::MAX);
 
-    let broker_registration = BrokerRegistationRequest {
+    let broker_registration = BrokerRegistrationRequest {
         broker_id,
         cluster_id: cluster_id.to_owned().into(),
         incarnation_id,
