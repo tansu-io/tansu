@@ -26,7 +26,7 @@ RUN cargo build --package ${PACKAGE} --release
 RUN <<EOF
 mkdir /image /image/schema /image/tmp
 
-# copy any dynamically linked libaries used
+# copy any dynamically linked libraries used
 for lib in $(ldd target/release/* 2>/dev/null|grep "=>"|awk '{print $3}'|sort|uniq); do
     mkdir -p $(dirname /image$lib)
     cp -Lv $lib /image$lib

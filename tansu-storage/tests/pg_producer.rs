@@ -22,7 +22,7 @@ use tansu_kafka_sans_io::{
     ErrorCode, IsolationLevel,
 };
 use tansu_storage::{
-    pg::Postgres, BrokerRegistationRequest, Error, ListOffsetRequest, Result, Storage,
+    pg::Postgres, BrokerRegistrationRequest, Error, ListOffsetRequest, Result, Storage,
     StorageContainer, TopicId, Topition,
 };
 use tracing::{debug, subscriber::DefaultGuard};
@@ -77,7 +77,7 @@ async fn produce() -> Result<()> {
     let port = rng.gen_range(1024..u16::MAX);
     let security_protocol = rng.gen_range(0..i16::MAX);
 
-    let broker_registration = BrokerRegistationRequest {
+    let broker_registration = BrokerRegistrationRequest {
         broker_id,
         cluster_id: cluster_id.into(),
         incarnation_id,

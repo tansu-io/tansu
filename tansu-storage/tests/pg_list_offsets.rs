@@ -16,7 +16,7 @@
 use rand::{distributions::Alphanumeric, prelude::*, thread_rng};
 use tansu_kafka_sans_io::{broker_registration_request::Listener, ErrorCode, IsolationLevel};
 use tansu_storage::{
-    pg::Postgres, BrokerRegistationRequest, Error, ListOffsetRequest, Result, Storage,
+    pg::Postgres, BrokerRegistrationRequest, Error, ListOffsetRequest, Result, Storage,
     StorageContainer, Topition,
 };
 use tracing::subscriber::DefaultGuard;
@@ -71,7 +71,7 @@ async fn list_offset() -> Result<()> {
     let port = rng.gen_range(1024..u16::MAX);
     let security_protocol = rng.gen_range(0..i16::MAX);
 
-    let broker_registration = BrokerRegistationRequest {
+    let broker_registration = BrokerRegistrationRequest {
         broker_id,
         cluster_id: cluster_id.into(),
         incarnation_id,

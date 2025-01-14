@@ -54,7 +54,7 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::{
-    BrokerRegistationRequest, Error, GroupDetail, ListOffsetRequest, ListOffsetResponse,
+    BrokerRegistrationRequest, Error, GroupDetail, ListOffsetRequest, ListOffsetResponse,
     MetadataResponse, NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse,
     Result, Storage, TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse,
     TxnOffsetCommitRequest, TxnState, UpdateError, Version, NULL_TOPIC_ID,
@@ -624,7 +624,7 @@ impl DynoStore {
 impl Storage for DynoStore {
     async fn register_broker(
         &mut self,
-        broker_registration: BrokerRegistationRequest,
+        broker_registration: BrokerRegistrationRequest,
     ) -> Result<()> {
         debug!(?broker_registration);
         Ok(())
