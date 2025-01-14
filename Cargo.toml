@@ -64,7 +64,7 @@ opentelemetry-jaeger = { version = "0.20.0", features = ["rt-tokio"] }
 opentelemetry_sdk = "0.21.2"
 pretty_assertions = "1"
 prettyplease = "0.2.29"
-proc-macro2 = "1.0.92"
+proc-macro2 = "1.0.93"
 protobuf-json-mapping = "3.7.1"
 protobuf-parse = "3.7.1"
 protobuf = { version = "3.7.1", features = ["with-bytes"] }
