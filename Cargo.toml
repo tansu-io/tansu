@@ -65,8 +65,8 @@ opentelemetry-otlp = "0.27.0"
 opentelemetry-semantic-conventions = "0.27.0"
 opentelemetry_sdk = { version = "0.27.0", features = ["rt-tokio"] }
 pretty_assertions = "1"
-prettyplease = "0.2.27"
-proc-macro2 = "1.0.92"
+prettyplease = "0.2.29"
+proc-macro2 = "1.0.93"
 protobuf-json-mapping = "3.7.1"
 protobuf-parse = "3.7.1"
 protobuf = { version = "3.7.1", features = ["with-bytes"] }
