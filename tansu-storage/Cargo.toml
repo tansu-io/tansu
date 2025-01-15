@@ -3,6 +3,7 @@ name = "tansu-storage"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
+publish = false
 
 [lints]
 workspace = true

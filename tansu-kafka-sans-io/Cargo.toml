@@ -3,6 +3,7 @@ name = "tansu-kafka-sans-io"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
+publish = false
 
 [lints.clippy]
 all = "warn"
