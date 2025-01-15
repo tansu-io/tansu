@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -248,7 +248,7 @@ impl TryFrom<Batch> for Vec<Record> {
         let mut decoder = Decoder::new(&mut reader);
         let mut records = Vec::with_capacity(record_count);
 
-        for i in 0..record_count {
+        for _ in 0..record_count {
             let record = Record::deserialize(&mut decoder)?;
             records.push(record);
         }
@@ -273,7 +273,7 @@ impl TryFrom<&Batch> for Vec<Record> {
         let mut decoder = Decoder::new(&mut reader);
         let mut records = Vec::with_capacity(record_count);
 
-        for i in 0..record_count {
+        for _ in 0..record_count {
             let record = Record::deserialize(&mut decoder)?;
             records.push(record);
         }
@@ -376,7 +376,7 @@ impl<'de> Deserialize<'de> for Batch {
 
                 let mut record_data = BytesMut::with_capacity(record_data_size);
 
-                for n in 0..record_data_size {
+                for _ in 0..record_data_size {
                     let byte = seq
                         .next_element::<u8>()?
                         .ok_or(<A::Error as de::Error>::custom("record_data: {n}"))?;

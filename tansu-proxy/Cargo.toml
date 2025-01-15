@@ -4,8 +4,8 @@ edition.workspace = true
 version.workspace = true
 license.workspace = true
 
-[lints]
-workspace = true
+# [lints]
+# workspace = true
 
 [dependencies]
 clap.workspace = true
