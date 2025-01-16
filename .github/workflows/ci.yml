@@ -57,7 +57,7 @@ jobs:
       - uses: docker/metadata-action@v5
         id: meta
         env:
-          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: index,manifest,manifest-descriptor
         with:
           images: ${{env.REGISTRY}}/${{github.repository}}
           tags: |
