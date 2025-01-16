@@ -38,6 +38,12 @@ docker-compose-db-up:
 docker-compose-db-down:
     docker compose down --volumes db
 
+docker-compose-jaeger-up:
+    docker compose up --detach jaeger
+
+docker-compose-jaeger-down:
+    docker compose down --volumes jaeger
+
 docker-compose-up:
     docker compose up --detach
 

@@ -23,6 +23,7 @@ use std::{
 };
 
 use jsonschema::ValidationError;
+use opentelemetry::trace::TraceError;
 use tansu_kafka_sans_io::ErrorCode;
 use thiserror::Error;
 use tracing_subscriber::filter::ParseError;
@@ -30,6 +31,7 @@ use url::Url;
 
 pub mod broker;
 pub mod coordinator;
+pub mod telemetry;
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -51,6 +53,7 @@ pub enum Error {
     SchemaRegistry(#[from] tansu_schema_registry::Error),
     Storage(#[from] tansu_storage::Error),
     StringUtf8(#[from] FromUtf8Error),
+    OpenTelemetryTrace(TraceError),
     TokioPostgres(#[from] tokio_postgres::error::Error),
     TryFromInt(#[from] TryFromIntError),
     UnsupportedStorageUrl(Url),
@@ -75,6 +78,12 @@ impl<T> From<PoisonError<T>> for Error {
 impl From<ValidationError<'_>> for Error {
     fn from(_value: ValidationError<'_>) -> Self {
         Self::SchemaValidation
+    }
+}
+
+impl From<TraceError> for Error {
+    fn from(value: TraceError) -> Self {
+        Self::OpenTelemetryTrace(value)
     }
 }
 

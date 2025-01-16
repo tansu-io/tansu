@@ -27,7 +27,7 @@ services:
       - 9000:9000
       - 9001:9001
   tansu:
-    image: ghcr.io/tansu-io/tansu:latest
+    image: ${TANSU_IMAGE:-ghcr.io/tansu-io/tansu:latest}
     restart: unless-stopped
     environment:
       RUST_BACKTRACE: ${RUST_BACKTRACE}
@@ -50,6 +50,14 @@ services:
       - db
       - minio
     pull_policy: always
+  jaeger:
+    image: jaegertracing/all-in-one
+    ports:
+      - 16686:16686
+      - 4317:4317
+      - 4318:4318
+      - 5778:5778
+      - 9411:9411
 volumes:
   db:
     driver: local
