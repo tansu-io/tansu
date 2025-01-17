@@ -1147,8 +1147,12 @@ impl Storage for Postgres {
 
         for (description, sql) in [
             (
-                "consumer offsets",
+                "consumer_offsets",
                 include_sql!("pg/consumer_offset_delete_by_topic.sql"),
+            ),
+            (
+                "topic_configuration",
+                include_sql!("pg/topic_configuration_delete_by_topic.sql"),
             ),
             (
                 "watermarks",
