@@ -46,10 +46,10 @@ use metadata::MetadataRequest;
 use produce::ProduceRequest;
 use std::io::ErrorKind;
 use tansu_kafka_sans_io::{
-    broker_registration_request::Listener, consumer_group_describe_response,
-    describe_groups_response, Body, ErrorCode, Frame, Header, IsolationLevel,
+    consumer_group_describe_response, describe_groups_response, Body, ErrorCode, Frame, Header,
+    IsolationLevel,
 };
-use tansu_storage::{BrokerRegistationRequest, Storage};
+use tansu_storage::{BrokerRegistrationRequest, Storage};
 use telemetry::GetTelemetrySubscriptionsRequest;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -105,22 +105,10 @@ where
 
     pub async fn register(&mut self) -> Result<()> {
         self.storage
-            .register_broker(BrokerRegistationRequest {
+            .register_broker(BrokerRegistrationRequest {
                 broker_id: self.node_id,
                 cluster_id: self.cluster_id.clone(),
                 incarnation_id: self.incarnation_id,
-                listeners: [Listener {
-                    name: "broker".into(),
-                    host: self
-                        .advertised_listener
-                        .host_str()
-                        .unwrap_or("localhost")
-                        .to_owned(),
-                    port: self.advertised_listener.port().unwrap_or(9092),
-                    security_protocol: 0,
-                }]
-                .into(),
-                features: [].into(),
                 rack: None,
             })
             .await

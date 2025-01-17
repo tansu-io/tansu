@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -14,11 +14,9 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use rand::{distributions::Alphanumeric, prelude::*, thread_rng};
-use tansu_kafka_sans_io::{
-    broker_registration_request::Listener, create_topics_request::CreatableTopic, ErrorCode,
-};
+use tansu_kafka_sans_io::{create_topics_request::CreatableTopic, ErrorCode};
 use tansu_storage::{
-    pg::Postgres, BrokerRegistationRequest, Error, Result, Storage, StorageContainer, TopicId,
+    pg::Postgres, BrokerRegistrationRequest, Error, Result, Storage, StorageContainer, TopicId,
 };
 use tracing::subscriber::DefaultGuard;
 use uuid::Uuid;
@@ -69,20 +67,11 @@ async fn topic_lifecycle() -> Result<()> {
     let incarnation_id = Uuid::now_v7();
 
     let mut storage_container = storage_container(cluster_id, broker_id)?;
-    let port = rng.gen_range(1024..u16::MAX);
-    let security_protocol = rng.gen_range(0..i16::MAX);
 
-    let broker_registration = BrokerRegistationRequest {
+    let broker_registration = BrokerRegistrationRequest {
         broker_id,
         cluster_id: cluster_id.into(),
         incarnation_id,
-        listeners: vec![Listener {
-            name: "broker".into(),
-            host: "test.local".into(),
-            port,
-            security_protocol,
-        }],
-        features: vec![],
         rack: None,
     };
 

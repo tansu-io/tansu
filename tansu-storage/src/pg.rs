@@ -52,7 +52,7 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::{
-    BrokerRegistationRequest, Error, GroupDetail, ListOffsetRequest, ListOffsetResponse,
+    BrokerRegistrationRequest, Error, GroupDetail, ListOffsetRequest, ListOffsetResponse,
     MetadataResponse, NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse,
     Result, Storage, TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse,
     TxnOffsetCommitRequest, TxnState, UpdateError, Version, NULL_TOPIC_ID,
@@ -835,7 +835,7 @@ impl Postgres {
 impl Storage for Postgres {
     async fn register_broker(
         &mut self,
-        broker_registration: BrokerRegistationRequest,
+        broker_registration: BrokerRegistrationRequest,
     ) -> Result<()> {
         debug!(cluster = self.cluster, ?broker_registration);
 
@@ -1147,8 +1147,12 @@ impl Storage for Postgres {
 
         for (description, sql) in [
             (
-                "consumer offsets",
+                "consumer_offsets",
                 include_sql!("pg/consumer_offset_delete_by_topic.sql"),
+            ),
+            (
+                "topic_configuration",
+                include_sql!("pg/topic_configuration_delete_by_topic.sql"),
             ),
             (
                 "watermarks",

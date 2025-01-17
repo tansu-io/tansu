@@ -16,8 +16,8 @@
 
 -- Last Stable Offset Tracking: To do this, the broker must maintain in
 -- memory the set of active transactions along with their initial
--- offsets. The LSO is always equal to the minimum of the initial offsets
--- across all active transactions.
+-- offsets. The last stable offset is always equal to the minimum
+-- of the initial offsets across all active transactions.
 --
 
 -- prepare list_latest_offset (text, text, integer) as
