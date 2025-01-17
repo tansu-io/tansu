@@ -76,7 +76,7 @@ fn join_group_response() -> Result<()> {
 
     match Frame::response_from_bytes(&encoded, api_key, api_version) {
         Ok(Frame {
-            header: Header::Response { correlation_id },
+            header: Header::Response { .. },
             body:
                 Body::JoinGroupResponse {
                     throttle_time_ms: encoded_throttle_time_ms,
@@ -172,7 +172,7 @@ fn offset_fetch_response() -> Result<()> {
 
     match Frame::response_from_bytes(&encoded, api_key, api_version) {
         Ok(Frame {
-            header: Header::Response { correlation_id },
+            header: Header::Response { .. },
             body:
                 Body::OffsetFetchResponse {
                     throttle_time_ms,

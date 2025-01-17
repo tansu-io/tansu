@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -37,7 +37,6 @@ use std::{
 use tansu_kafka_sans_io::{
     add_partitions_to_txn_request::{AddPartitionsToTxnTopic, AddPartitionsToTxnTransaction},
     add_partitions_to_txn_response::{AddPartitionsToTxnResult, AddPartitionsToTxnTopicResult},
-    broker_registration_request::{Feature, Listener},
     consumer_group_describe_response,
     create_topics_request::CreatableTopic,
     delete_groups_response::DeletableGroupResult,
@@ -473,8 +472,6 @@ pub struct BrokerRegistrationRequest {
     pub broker_id: i32,
     pub cluster_id: String,
     pub incarnation_id: Uuid,
-    pub listeners: Vec<Listener>,
-    pub features: Vec<Feature>,
     pub rack: Option<String>,
 }
 
