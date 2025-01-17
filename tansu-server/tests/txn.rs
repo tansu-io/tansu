@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -30,7 +30,7 @@ use tansu_kafka_sans_io::{
 };
 use tansu_server::Result;
 use tansu_storage::{
-    ListOffsetRequest, Storage, StorageContainer, Topition, TxnAddPartitionsRequest,
+    ListOffsetRequest, Storage, StorageContainer, TopicId, Topition, TxnAddPartitionsRequest,
     TxnOffsetCommitRequest,
 };
 use tracing::{debug, error};
@@ -153,6 +153,11 @@ pub async fn simple_txn_commit_offset_commit(
     assert!(offsets.contains_key(&topition));
     assert_eq!(Some(&committed_offset), offsets.get(&topition));
 
+    assert_eq!(
+        ErrorCode::None,
+        sc.delete_topic(&TopicId::from(topic_id)).await?
+    );
+
     Ok(())
 }
 
@@ -269,6 +274,11 @@ pub async fn simple_txn_commit_offset_abort(
 
     assert!(offsets.contains_key(&topition));
     assert_eq!(Some(&-1), offsets.get(&topition));
+
+    assert_eq!(
+        ErrorCode::None,
+        sc.delete_topic(&TopicId::from(topic_id)).await?
+    );
 
     Ok(())
 }
@@ -553,6 +563,11 @@ pub async fn simple_txn_produce_commit(
         assert_eq!(Some(offset), list_offsets_after[0].1.offset);
     }
 
+    assert_eq!(
+        ErrorCode::None,
+        sc.delete_topic(&TopicId::from(topic_id)).await?
+    );
+
     Ok(())
 }
 
@@ -834,6 +849,11 @@ pub async fn simple_txn_produce_abort(
         let offset = i64::from(num_records * num_transactions) + 1;
         assert_eq!(Some(offset), list_offsets_after[0].1.offset);
     }
+
+    assert_eq!(
+        ErrorCode::None,
+        sc.delete_topic(&TopicId::from(topic_id)).await?
+    );
 
     Ok(())
 }
@@ -1200,6 +1220,11 @@ pub async fn with_overlap(
         assert_eq!(Some(offset), list_offsets_after[0].1.offset);
     }
 
+    assert_eq!(
+        ErrorCode::None,
+        sc.delete_topic(&TopicId::from(topic_id)).await?
+    );
+
     Ok(())
 }
 
@@ -1512,6 +1537,11 @@ pub async fn init_producer_twice(
     assert_eq!(
         Some(EndTransactionMarker::default().try_into()?),
         batches[0].records[0].value
+    );
+
+    assert_eq!(
+        ErrorCode::None,
+        sc.delete_topic(&TopicId::from(topic_id)).await?
     );
 
     Ok(())
