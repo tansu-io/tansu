@@ -59,6 +59,7 @@ use tansu_kafka_sans_io::{
     Body, ConfigResource, ErrorCode, IsolationLevel,
 };
 use tracing::{debug, debug_span, Instrument};
+use tracing_subscriber::filter::ParseError;
 use uuid::Uuid;
 
 pub mod dynostore;
@@ -115,6 +116,9 @@ pub enum Error {
 
     #[error("object store: {0:?}")]
     ObjectStore(#[from] object_store::Error),
+
+    #[error("parse filter: {0:?}")]
+    ParseFilter(#[from] ParseError),
 
     #[error("pattern")]
     Pattern(#[from] PatternError),

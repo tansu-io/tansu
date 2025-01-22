@@ -135,6 +135,7 @@ tansu-server:
         --kafka-cluster-id ${CLUSTER_ID} \
         --kafka-advertised-listener-url tcp://${ADVERTISED_LISTENER} \
         --schema-registry file://./etc/schema \
+        --prometheus-listener-url http://localhost:3000 \
         --storage-engine ${STORAGE_ENGINE} 2>&1 | tee tansu.log
 
 kafka-proxy:

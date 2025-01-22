@@ -1658,6 +1658,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "opentelemetry-prometheus"
+version = "0.27.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b834e966ea5e2d03dfe5f2253f03d22cce21403ee940265070eeee96cee0bcc"
+dependencies = [
+ "once_cell",
+ "opentelemetry 0.27.1",
+ "opentelemetry_sdk 0.27.1",
+ "prometheus",
+ "protobuf 2.28.0",
+ "tracing",
+]
+
+[[package]]
 name = "opentelemetry-proto"
 version = "0.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1943,6 +1957,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "prometheus"
+version = "0.13.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3d33c28a30771f7f96db69893f78b857f7450d7e0237e9c8fc6427a81bae7ed1"
+dependencies = [
+ "cfg-if",
+ "fnv",
+ "lazy_static",
+ "memchr",
+ "parking_lot",
+ "protobuf 2.28.0",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "prost"
 version = "0.13.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1967,6 +1996,12 @@ dependencies = [
 
 [[package]]
 name = "protobuf"
+version = "2.28.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "106dd99e98437432fed6519dedecfade6a06a73bb7b2a1e019fdd2bee5778d94"
+
+[[package]]
+name = "protobuf"
 version = "3.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a3a7c64d9bf75b1b8d981124c14c179074e8caa7dfe7b6a12e6222ddcd0c8f72"
@@ -1983,7 +2018,7 @@ version = "3.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b445cf83c9303695e6c423d269759e139b6182d2f1171e18afda7078a764336"
 dependencies = [
- "protobuf",
+ "protobuf 3.7.1",
  "protobuf-support",
  "thiserror 1.0.69",
 ]
@@ -1997,7 +2032,7 @@ dependencies = [
  "anyhow",
  "indexmap 2.7.0",
  "log",
- "protobuf",
+ "protobuf 3.7.1",
  "protobuf-support",
  "tempfile",
  "thiserror 1.0.69",
@@ -2686,8 +2721,10 @@ dependencies = [
  "bytes",
  "jsonschema",
  "object_store",
+ "opentelemetry 0.27.1",
+ "opentelemetry-semantic-conventions 0.27.0",
  "pretty_assertions",
- "protobuf",
+ "protobuf 3.7.1",
  "protobuf-json-mapping",
  "protobuf-parse",
  "serde",
@@ -2710,14 +2747,19 @@ dependencies = [
  "clap",
  "deadpool-postgres",
  "futures",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "jsonschema",
  "object_store",
  "opentelemetry 0.27.1",
  "opentelemetry-jaeger",
  "opentelemetry-otlp",
+ "opentelemetry-prometheus",
  "opentelemetry-semantic-conventions 0.27.0",
  "opentelemetry_sdk 0.27.1",
  "pretty_assertions",
+ "prometheus",
  "rand",
  "serde",
  "serde_json",
@@ -2749,7 +2791,9 @@ dependencies = [
  "futures-util",
  "glob",
  "object_store",
- "protobuf",
+ "opentelemetry 0.27.1",
+ "opentelemetry-semantic-conventions 0.27.0",
+ "protobuf 3.7.1",
  "rand",
  "regex",
  "serde",

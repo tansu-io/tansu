@@ -43,8 +43,17 @@ use init_producer_id::InitProducerIdRequest;
 use list_offsets::ListOffsetsRequest;
 use list_partition_reassignments::ListPartitionReassignmentsRequest;
 use metadata::MetadataRequest;
+use opentelemetry::{
+    global,
+    metrics::{Counter, Histogram},
+    InstrumentationScope, KeyValue,
+};
+use opentelemetry_semantic_conventions::{
+    resource::{SERVICE_INSTANCE_ID, SERVICE_NAMESPACE},
+    SCHEMA_URL,
+};
 use produce::ProduceRequest;
-use std::io::ErrorKind;
+use std::{io::ErrorKind, net::SocketAddr, time::SystemTime};
 use tansu_kafka_sans_io::{
     consumer_group_describe_response, describe_groups_response, Body, ErrorCode, Frame, Header,
     IsolationLevel,
@@ -69,6 +78,7 @@ pub struct Broker<G, S> {
     advertised_listener: Url,
     storage: S,
     groups: G,
+    metron: Metron,
 }
 
 impl<G, S> Broker<G, S>
@@ -84,9 +94,8 @@ where
         advertised_listener: Url,
         storage: S,
         groups: G,
+        incarnation_id: Uuid,
     ) -> Self {
-        let incarnation_id = Uuid::new_v4();
-
         Self {
             node_id,
             cluster_id: cluster_id.to_owned(),
@@ -95,6 +104,7 @@ where
             advertised_listener,
             storage,
             groups,
+            metron: Metron::new(cluster_id, incarnation_id),
         }
     }
 
@@ -135,7 +145,7 @@ where
                 let span = span!(Level::DEBUG, "peer", addr = %addr);
 
                 async move {
-                    match broker.stream_handler(stream).await {
+                    match broker.stream_handler(&addr, stream).await {
                         Err(Error::Io(ref io))
                             if io.kind() == ErrorKind::UnexpectedEof
                                 || io.kind() == ErrorKind::BrokenPipe
@@ -154,7 +164,7 @@ where
         }
     }
 
-    async fn stream_handler(&mut self, mut stream: TcpStream) -> Result<()> {
+    async fn stream_handler(&mut self, peer: &SocketAddr, mut stream: TcpStream) -> Result<()> {
         debug!(?stream);
 
         let mut size = [0u8; 4];
@@ -183,11 +193,32 @@ where
                 .inspect_err(|error| error!(?size, ?request, ?error))?;
             debug!(?request);
 
+            let request_start = SystemTime::now();
+
+            let attributes = [
+                KeyValue::new("cluster_id", self.cluster_id.clone()),
+                KeyValue::new("peer", peer.to_string()),
+            ];
+
+            self.metron
+                .request_size
+                .record(request.len() as u64, &attributes);
+
             let response = self
-                .process_request(&request)
+                .process_request(peer, &request)
                 .await
                 .inspect_err(|error| error!(?request, ?error))?;
             debug!(?response);
+
+            self.metron
+                .response_size
+                .record(response.len() as u64, &attributes);
+            self.metron.request_duration.record(
+                request_start
+                    .elapsed()
+                    .map_or(0, |duration| duration.as_millis() as u64),
+                &attributes,
+            );
 
             stream
                 .write_all(&response)
@@ -196,7 +227,7 @@ where
         }
     }
 
-    async fn process_request(&mut self, input: &[u8]) -> Result<Vec<u8>> {
+    async fn process_request(&mut self, peer: &SocketAddr, input: &[u8]) -> Result<Vec<u8>> {
         match Frame::request_from_bytes(input)? {
             Frame {
                 header:
@@ -211,6 +242,13 @@ where
                 ..
             } => {
                 let span = request_span(api_key, api_version, correlation_id, &body);
+
+                {
+                    let mut attributes = attributes(api_key, api_version, correlation_id, &body);
+                    attributes.push(KeyValue::new("cluster_id", self.cluster_id.clone()));
+                    attributes.push(KeyValue::new("peer", peer.to_string()));
+                    self.metron.api_requests.add(1, &attributes);
+                }
 
                 async move {
                     Frame::response(
@@ -754,6 +792,372 @@ where
     }
 }
 
+fn attributes(api_key: i16, api_version: i16, correlation_id: i32, body: &Body) -> Vec<KeyValue> {
+    let mut attributes = vec![
+        KeyValue::new("api_key", api_key as i64),
+        KeyValue::new("api_version", api_version as i64),
+        KeyValue::new("correlation_id", correlation_id as i64),
+    ];
+
+    match body {
+        Body::AddOffsetsToTxnRequest {
+            transactional_id,
+            producer_id,
+            producer_epoch,
+            group_id,
+            ..
+        } => attributes.append(&mut vec![
+            KeyValue::new("api_name", "add_offsets_to_txn"),
+            KeyValue::new("transactional_id", transactional_id.to_owned()),
+            KeyValue::new("producer_id", *producer_id),
+            KeyValue::new("producer_epoch", *producer_epoch as i64),
+            KeyValue::new("group_id", group_id.to_owned()),
+        ]),
+
+        Body::AddPartitionsToTxnRequest { .. } => attributes.append(&mut vec![KeyValue::new(
+            "api_name",
+            "add_partitions_to_txn",
+        )]),
+
+        Body::ApiVersionsRequest { .. } => {
+            attributes.append(&mut vec![KeyValue::new("api_name", "api_versions")])
+        }
+
+        Body::CreateTopicsRequest { .. } => {
+            attributes.append(&mut vec![KeyValue::new("api_name", "create_topics")])
+        }
+
+        Body::DeleteTopicsRequest { .. } => {
+            attributes.append(&mut vec![KeyValue::new("api_name", "delete_topics")])
+        }
+
+        Body::EndTxnRequest {
+            transactional_id,
+            producer_id,
+            producer_epoch,
+            committed,
+        } => attributes.append(&mut vec![
+            KeyValue::new("api_name", "end_txn"),
+            KeyValue::new("transactional_id", transactional_id.to_owned()),
+            KeyValue::new("producer_id", *producer_id),
+            KeyValue::new("producer_epoch", *producer_epoch as i64),
+            KeyValue::new("committed", *committed),
+        ]),
+
+        Body::FetchRequest {
+            max_wait_ms,
+            min_bytes,
+            max_bytes,
+            ..
+        } => {
+            attributes.append(&mut vec![
+                KeyValue::new("api_name", "fetch"),
+                KeyValue::new("max_wait_ms", *max_wait_ms as i64),
+                KeyValue::new("min_bytes", *min_bytes as i64),
+            ]);
+
+            if let Some(max_bytes) = max_bytes {
+                KeyValue::new("max_bytes", *max_bytes as i64);
+            }
+        }
+
+        Body::FindCoordinatorRequest { .. } => {
+            attributes.append(&mut vec![KeyValue::new("api_name", "find_coordinator")])
+        }
+
+        Body::InitProducerIdRequest {
+            transactional_id,
+            transaction_timeout_ms,
+            producer_id,
+            producer_epoch,
+        } => {
+            attributes.append(&mut vec![
+                KeyValue::new("api_name", "init_producer_id"),
+                KeyValue::new("transaction_timeout_ms", *transaction_timeout_ms as i64),
+            ]);
+
+            if let Some(transactional_id) = transactional_id {
+                attributes.push(KeyValue::new(
+                    "transactional_id",
+                    transactional_id.to_owned(),
+                ));
+            }
+
+            if let Some(producer_id) = producer_id {
+                attributes.push(KeyValue::new("producer_id", *producer_id))
+            }
+
+            if let Some(producer_epoch) = producer_epoch {
+                attributes.push(KeyValue::new("producer_epoch", *producer_epoch as i64))
+            }
+        }
+
+        Body::JoinGroupRequest {
+            group_id,
+            session_timeout_ms,
+            rebalance_timeout_ms,
+            member_id,
+            group_instance_id,
+            protocol_type,
+            reason,
+            ..
+        } => {
+            attributes.append(&mut vec![
+                KeyValue::new("api_name", "join_group"),
+                KeyValue::new("group_id", group_id.to_owned()),
+                KeyValue::new("session_timeout_ms", *session_timeout_ms as i64),
+                KeyValue::new("member_id", member_id.to_owned()),
+                KeyValue::new("protocol_type", protocol_type.to_owned()),
+            ]);
+
+            if let Some(rebalance_timeout_ms) = rebalance_timeout_ms {
+                attributes.push(KeyValue::new(
+                    "rebalance_timeout_ms",
+                    *rebalance_timeout_ms as i64,
+                ));
+            }
+
+            if let Some(group_instance_id) = group_instance_id {
+                attributes.push(KeyValue::new(
+                    "group_instance_id",
+                    group_instance_id.to_owned(),
+                ));
+            }
+
+            if let Some(reason) = reason {
+                attributes.push(KeyValue::new("reason", reason.to_owned()));
+            }
+        }
+
+        Body::LeaveGroupRequest {
+            group_id,
+            member_id,
+            members,
+        } => {
+            attributes.append(&mut vec![
+                KeyValue::new("api_name", "leave_group"),
+                KeyValue::new("group_id", group_id.to_owned()),
+                KeyValue::new(
+                    "members",
+                    members.as_ref().map_or(0, |members| members.len() as i64),
+                ),
+            ]);
+
+            if let Some(member_id) = member_id {
+                attributes.push(KeyValue::new("member_id", member_id.to_owned()));
+            }
+        }
+
+        Body::ListOffsetsRequest {
+            replica_id,
+            isolation_level,
+            topics,
+        } => {
+            attributes.append(&mut vec![
+                KeyValue::new("api_name", "list_offsets"),
+                KeyValue::new("replica_id", *replica_id as i64),
+                KeyValue::new(
+                    "topics",
+                    topics.as_ref().map_or(0, |topics| topics.len() as i64),
+                ),
+            ]);
+
+            if let Some(isolation_level) = isolation_level {
+                attributes.push(KeyValue::new("isolation_level", *isolation_level as i64));
+            }
+        }
+
+        Body::MetadataRequest {
+            topics,
+            allow_auto_topic_creation,
+            include_cluster_authorized_operations,
+            include_topic_authorized_operations,
+        } => {
+            attributes.append(&mut vec![
+                KeyValue::new("api_name", "metadata"),
+                KeyValue::new(
+                    "topics",
+                    topics.as_ref().map_or(0, |topics| topics.len() as i64),
+                ),
+            ]);
+
+            if let Some(allow_auto_topic_creation) = allow_auto_topic_creation {
+                attributes.push(KeyValue::new(
+                    "allow_auto_topic_creation",
+                    *allow_auto_topic_creation,
+                ));
+            }
+
+            if let Some(include_cluster_authorized_operations) =
+                include_cluster_authorized_operations
+            {
+                attributes.push(KeyValue::new(
+                    "include_cluster_authorized_operations",
+                    *include_cluster_authorized_operations,
+                ));
+            }
+
+            if let Some(include_topic_authorized_operations) = include_topic_authorized_operations {
+                attributes.push(KeyValue::new(
+                    "include_topic_authorized_operations",
+                    *include_topic_authorized_operations,
+                ));
+            }
+        }
+
+        Body::OffsetFetchRequest {
+            group_id,
+            topics,
+            groups,
+            require_stable,
+        } => {
+            attributes.append(&mut vec![
+                KeyValue::new("api_name", "offset_fetch"),
+                KeyValue::new(
+                    "topics",
+                    topics.as_ref().map_or(0, |topics| topics.len() as i64),
+                ),
+                KeyValue::new(
+                    "groups",
+                    groups.as_ref().map_or(0, |topics| topics.len() as i64),
+                ),
+            ]);
+
+            if let Some(group_id) = group_id {
+                attributes.push(KeyValue::new("group_id", group_id.to_owned()));
+            }
+
+            if let Some(require_stable) = require_stable {
+                attributes.push(KeyValue::new("require_stable", *require_stable));
+            }
+        }
+
+        Body::ProduceRequest {
+            transactional_id,
+            acks,
+            timeout_ms,
+            topic_data,
+        } => {
+            attributes.append(&mut vec![
+                KeyValue::new("api_name", "produce"),
+                KeyValue::new(
+                    "records",
+                    topic_data.as_ref().map_or(0, |topics| {
+                        topics
+                            .iter()
+                            .map(|topic| {
+                                topic.partition_data.as_ref().map_or(0, |partitions| {
+                                    partitions
+                                        .iter()
+                                        .map(|partition| {
+                                            partition.records.as_ref().map_or(0, |frame| {
+                                                frame
+                                                    .batches
+                                                    .iter()
+                                                    .map(|batch| batch.record_count as i64)
+                                                    .sum()
+                                            })
+                                        })
+                                        .sum()
+                                })
+                            })
+                            .sum()
+                    }),
+                ),
+                KeyValue::new("acks", *acks as i64),
+                KeyValue::new("timeout_ms", *timeout_ms as i64),
+            ]);
+
+            if let Some(transactional_id) = transactional_id {
+                attributes.push(KeyValue::new(
+                    "transactional_id",
+                    transactional_id.to_owned(),
+                ));
+            }
+        }
+
+        Body::SyncGroupRequest {
+            group_id,
+            generation_id,
+            member_id,
+            group_instance_id,
+            protocol_type,
+            protocol_name,
+            assignments,
+        } => {
+            attributes.append(&mut vec![
+                KeyValue::new("api_name", "sync_group"),
+                KeyValue::new("group_id", group_id.to_owned()),
+                KeyValue::new("generation_id", *generation_id as i64),
+                KeyValue::new("member_id", member_id.to_owned()),
+                KeyValue::new(
+                    "assignments",
+                    assignments
+                        .as_ref()
+                        .map_or(0, |assignments| assignments.len() as i64),
+                ),
+            ]);
+
+            if let Some(group_instance_id) = group_instance_id {
+                attributes.push(KeyValue::new(
+                    "group_instance_id",
+                    group_instance_id.to_owned(),
+                ));
+            }
+
+            if let Some(protocol_type) = protocol_type {
+                attributes.push(KeyValue::new("protocol_type", protocol_type.to_owned()));
+            }
+
+            if let Some(protocol_name) = protocol_name {
+                attributes.push(KeyValue::new("protocol_name", protocol_name.to_owned()));
+            }
+        }
+
+        Body::TxnOffsetCommitRequest {
+            transactional_id,
+            group_id,
+            producer_id,
+            producer_epoch,
+            generation_id,
+            member_id,
+            group_instance_id,
+            topics,
+        } => {
+            attributes.append(&mut vec![
+                KeyValue::new("api_name", "txn_offset_commit"),
+                KeyValue::new("transactional_id", transactional_id.to_owned()),
+                KeyValue::new("group_id", group_id.to_owned()),
+                KeyValue::new("producer_id", *producer_id),
+                KeyValue::new("producer_epoch", *producer_epoch as i64),
+                KeyValue::new(
+                    "topics",
+                    topics.as_ref().map_or(0, |topics| topics.len() as i64),
+                ),
+            ]);
+
+            if let Some(generation_id) = generation_id {
+                attributes.push(KeyValue::new("generation_id", *generation_id as i64));
+            }
+
+            if let Some(member_id) = member_id {
+                attributes.push(KeyValue::new("member_id", member_id.to_owned()));
+            }
+
+            if let Some(group_instance_id) = group_instance_id {
+                attributes.push(KeyValue::new(
+                    "group_instance_id",
+                    group_instance_id.to_owned(),
+                ));
+            }
+        }
+
+        _ => (),
+    };
+
+    attributes
+}
+
 fn request_span(api_key: i16, api_version: i16, correlation_id: i32, body: &Body) -> Span {
     match body {
         Body::AddOffsetsToTxnRequest {
@@ -913,5 +1317,50 @@ fn request_span(api_key: i16, api_version: i16, correlation_id: i32, body: &Body
         }
 
         _ => debug_span!("request", api_key, api_version, correlation_id,),
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Metron {
+    api_requests: Counter<u64>,
+    request_size: Histogram<u64>,
+    response_size: Histogram<u64>,
+    request_duration: Histogram<u64>,
+}
+
+impl Metron {
+    fn new(namespace: &str, instance_id: Uuid) -> Self {
+        let meter = global::meter_with_scope(
+            InstrumentationScope::builder(env!("CARGO_PKG_NAME"))
+                .with_version(env!("CARGO_PKG_VERSION"))
+                .with_schema_url(SCHEMA_URL)
+                .with_attributes([
+                    KeyValue::new(SERVICE_INSTANCE_ID, instance_id.to_string()),
+                    KeyValue::new(SERVICE_NAMESPACE, namespace.to_string()),
+                ])
+                .build(),
+        );
+
+        Self {
+            api_requests: meter
+                .u64_counter("api_requests")
+                .with_description("The number of API requests made")
+                .build(),
+            request_size: meter
+                .u64_histogram("request_size")
+                .with_unit("By")
+                .with_description("The API request size in bytes")
+                .build(),
+            response_size: meter
+                .u64_histogram("response_size")
+                .with_unit("By")
+                .with_description("The API response size in bytes")
+                .build(),
+            request_duration: meter
+                .u64_histogram("request_duration")
+                .with_unit("ms")
+                .with_description("The API request latencies in milliseconds")
+                .build(),
+        }
     }
 }

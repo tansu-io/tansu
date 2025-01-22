@@ -20,12 +20,13 @@ use object_store::{
 };
 use tansu_schema_registry::Registry;
 use tansu_server::{
-    broker::Broker, coordinator::group::administrator::Controller, telemetry, Error, Result,
+    broker::Broker, coordinator::group::administrator::Controller, otel, Error, Result,
 };
 use tansu_storage::{dynostore::DynoStore, pg::Postgres, StorageContainer};
 use tokio::task::JoinSet;
 use tracing::debug;
 use url::Url;
+use uuid::Uuid;
 
 const NODE_ID: i32 = 111;
 
@@ -46,15 +47,27 @@ struct Cli {
 
     #[arg(long)]
     schema_registry: Option<Url>,
+
+    #[arg(long)]
+    prometheus_listener_url: Option<Url>,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let _guard = telemetry::init_tracing_subscriber()?;
+    let instance_id = Uuid::now_v7();
+    let _guard = otel::init()?;
+
+    let mut set = JoinSet::new();
 
     let args = Cli::parse();
 
-    let mut set = JoinSet::new();
+    if let Some(prometheus_listener_url) = args.prometheus_listener_url {
+        debug!(%prometheus_listener_url);
+
+        _ = set.spawn(async move {
+            otel::prom::init(prometheus_listener_url).await.unwrap();
+        });
+    }
 
     let schemas = args
         .schema_registry
@@ -104,6 +117,7 @@ async fn main() -> Result<()> {
             args.kafka_advertised_listener_url,
             storage,
             groups,
+            instance_id,
         );
 
         debug!(?broker);
