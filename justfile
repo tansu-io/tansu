@@ -44,6 +44,12 @@ docker-compose-jaeger-up:
 docker-compose-jaeger-down:
     docker compose down --volumes jaeger
 
+docker-compose-prometheus-up:
+    docker compose up --detach prometheus
+
+docker-compose-prometheus-down:
+    docker compose down --volumes prometheus
+
 docker-compose-up:
     docker compose up --detach
 

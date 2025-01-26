@@ -37,7 +37,6 @@ services:
       AWS_ENDPOINT: ${AWS_ENDPOINT}
       AWS_ALLOW_HTTP: ${AWS_ALLOW_HTTP}
     volumes:
-      - db:/var/lib/postgresql/data
       - ./etc/schema/:/schema/
     command: --kafka-cluster-id ${CLUSTER_ID}
       --kafka-listener-url tcp://0.0.0.0:9092/
@@ -46,6 +45,7 @@ services:
       --schema-registry file:///schema
     ports:
       - 9092:9092
+      - 9100:9100
     links:
       - db
       - minio
@@ -58,6 +58,17 @@ services:
       - 4318:4318
       - 5778:5778
       - 9411:9411
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    ports:
+      - 9090:9090
+    command: --web.enable-otlp-receiver
+    configs:
+      - source: prometheus_yaml
+        target: /prometheus/prometheus.yml
+configs:
+  prometheus_yaml:
+    file: etc/prometheus.yaml
 volumes:
   db:
     driver: local
