@@ -38,6 +38,12 @@ docker-compose-db-up:
 docker-compose-db-down:
     docker compose down --volumes db
 
+docker-compose-jaeger-up:
+    docker compose up --detach jaeger
+
+docker-compose-jaeger-down:
+    docker compose down --volumes jaeger
+
 docker-compose-up:
     docker compose up --detach
 
@@ -129,6 +135,7 @@ tansu-server:
         --kafka-cluster-id ${CLUSTER_ID} \
         --kafka-advertised-listener-url tcp://${ADVERTISED_LISTENER} \
         --schema-registry file://./etc/schema \
+        --prometheus-listener-url http://localhost:3000 \
         --storage-engine ${STORAGE_ENGINE} 2>&1 | tee tansu.log
 
 kafka-proxy:

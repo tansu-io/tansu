@@ -15,7 +15,7 @@
 
 use std::{
     collections::{btree_map::Entry, BTreeMap, BTreeSet},
-    fmt::Debug,
+    fmt::{Debug, Display},
     io::Cursor,
     str::FromStr,
     sync::Arc,
@@ -24,11 +24,21 @@ use std::{
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::{stream::TryStreamExt, StreamExt};
-use object_store::{
-    path::Path, Attribute, AttributeValue, Attributes, DynObjectStore, GetOptions, ObjectStore,
-    PutMode, PutOptions, PutPayload, PutResult, TagSet, UpdateVersion,
+use futures::{
+    stream::{BoxStream, TryStreamExt},
+    StreamExt,
 };
+use object_store::{
+    path::Path, Attribute, AttributeValue, Attributes, DynObjectStore, GetOptions, GetResult,
+    ListResult, MultipartUpload, ObjectMeta, ObjectStore, PutMode, PutMultipartOpts, PutOptions,
+    PutPayload, PutResult, TagSet, UpdateVersion,
+};
+use opentelemetry::{
+    global,
+    metrics::{Counter, Histogram},
+    InstrumentationScope, KeyValue,
+};
+use opentelemetry_semantic_conventions::SCHEMA_URL;
 use rand::{prelude::*, thread_rng};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tansu_kafka_sans_io::{
@@ -477,7 +487,7 @@ impl DynoStore {
             schemas: None,
             watermarks: BTreeMap::new(),
             meta: ConditionData::<Meta>::new(cluster),
-            object_store: Arc::new(object_store),
+            object_store: Arc::new(Metron::new(object_store, cluster)),
         }
     }
 
@@ -2520,6 +2530,254 @@ impl Storage for DynoStore {
         }
 
         Ok(ErrorCode::None)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Metron<O> {
+    request_duration: Histogram<u64>,
+    request_error: Counter<u64>,
+
+    cluster: String,
+    object_store: O,
+}
+
+impl<O> Display for Metron<O> {
+    fn fmt(&self, _f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        todo!()
+    }
+}
+
+impl<O> Metron<O>
+where
+    O: ObjectStore,
+{
+    fn new(object_store: O, cluster: &str) -> Self {
+        let meter = global::meter_with_scope(
+            InstrumentationScope::builder(env!("CARGO_PKG_NAME"))
+                .with_version(env!("CARGO_PKG_VERSION"))
+                .with_schema_url(SCHEMA_URL)
+                .build(),
+        );
+
+        Self {
+            cluster: cluster.into(),
+            request_duration: meter
+                .u64_histogram("object_store_request_duration")
+                .with_unit("ms")
+                .with_description("The object store request latencies in milliseconds")
+                .build(),
+            request_error: meter
+                .u64_counter("object_store_request_error")
+                .with_description("The object store request errors")
+                .build(),
+
+            object_store,
+        }
+    }
+}
+
+#[async_trait]
+impl<O> ObjectStore for Metron<O>
+where
+    O: ObjectStore,
+{
+    async fn put_opts(
+        &self,
+        location: &Path,
+        payload: PutPayload,
+        opts: PutOptions,
+    ) -> Result<PutResult, object_store::Error> {
+        let execute_start = SystemTime::now();
+        let mut attributes = vec![
+            KeyValue::new("method", "put_opts"),
+            KeyValue::new("cluster", self.cluster.clone()),
+        ];
+
+        self.object_store
+            .put_opts(location, payload, opts)
+            .await
+            .inspect(|_put_result| {
+                self.request_duration.record(
+                    execute_start
+                        .elapsed()
+                        .map_or(0, |duration| duration.as_millis() as u64),
+                    attributes.as_ref(),
+                )
+            })
+            .inspect_err(|err| {
+                let mut additional = vec![KeyValue::new("reason", format!("{err:?}"))];
+                additional.append(&mut attributes);
+                self.request_error.add(1, &additional[..]);
+            })
+    }
+
+    async fn put_multipart_opts(
+        &self,
+        location: &Path,
+        opts: PutMultipartOpts,
+    ) -> Result<Box<dyn MultipartUpload>, object_store::Error> {
+        let execute_start = SystemTime::now();
+        let mut attributes = vec![
+            KeyValue::new("method", "put_multipart_opts"),
+            KeyValue::new("cluster", self.cluster.clone()),
+        ];
+
+        self.object_store
+            .put_multipart_opts(location, opts)
+            .await
+            .inspect(|_put_result| {
+                self.request_duration.record(
+                    execute_start
+                        .elapsed()
+                        .map_or(0, |duration| duration.as_millis() as u64),
+                    attributes.as_ref(),
+                )
+            })
+            .inspect_err(|err| {
+                let mut additional = vec![KeyValue::new("reason", format!("{err:?}"))];
+                additional.append(&mut attributes);
+                self.request_error.add(1, &additional[..]);
+            })
+    }
+
+    async fn get_opts(
+        &self,
+        location: &Path,
+        options: GetOptions,
+    ) -> Result<GetResult, object_store::Error> {
+        let execute_start = SystemTime::now();
+        let mut attributes = vec![
+            KeyValue::new("method", "get_opts"),
+            KeyValue::new("cluster", self.cluster.clone()),
+        ];
+
+        self.object_store
+            .get_opts(location, options)
+            .await
+            .inspect(|_get_result| {
+                self.request_duration.record(
+                    execute_start
+                        .elapsed()
+                        .map_or(0, |duration| duration.as_millis() as u64),
+                    attributes.as_ref(),
+                )
+            })
+            .inspect_err(|err| {
+                let mut additional = vec![KeyValue::new("reason", format!("{err:?}"))];
+                additional.append(&mut attributes);
+                self.request_error.add(1, &additional[..]);
+            })
+    }
+
+    async fn delete(&self, location: &Path) -> Result<(), object_store::Error> {
+        let execute_start = SystemTime::now();
+        let mut attributes = vec![
+            KeyValue::new("method", "delete"),
+            KeyValue::new("cluster", self.cluster.clone()),
+        ];
+
+        self.object_store
+            .delete(location)
+            .await
+            .inspect(|_get_result| {
+                self.request_duration.record(
+                    execute_start
+                        .elapsed()
+                        .map_or(0, |duration| duration.as_millis() as u64),
+                    attributes.as_ref(),
+                )
+            })
+            .inspect_err(|err| {
+                let mut additional = vec![KeyValue::new("reason", format!("{err:?}"))];
+                additional.append(&mut attributes);
+                self.request_error.add(1, &additional[..]);
+            })
+    }
+
+    fn list(
+        &self,
+        prefix: Option<&Path>,
+    ) -> BoxStream<'_, Result<ObjectMeta, object_store::Error>> {
+        self.object_store.list(prefix)
+    }
+
+    async fn list_with_delimiter(
+        &self,
+        prefix: Option<&Path>,
+    ) -> Result<ListResult, object_store::Error> {
+        let execute_start = SystemTime::now();
+        let mut attributes = vec![
+            KeyValue::new("method", "list_with_delimiter"),
+            KeyValue::new("cluster", self.cluster.clone()),
+        ];
+
+        self.object_store
+            .list_with_delimiter(prefix)
+            .await
+            .inspect(|_get_result| {
+                self.request_duration.record(
+                    execute_start
+                        .elapsed()
+                        .map_or(0, |duration| duration.as_millis() as u64),
+                    attributes.as_ref(),
+                )
+            })
+            .inspect_err(|err| {
+                let mut additional = vec![KeyValue::new("reason", format!("{err:?}"))];
+                additional.append(&mut attributes);
+                self.request_error.add(1, &additional[..]);
+            })
+    }
+
+    async fn copy(&self, from: &Path, to: &Path) -> Result<(), object_store::Error> {
+        let execute_start = SystemTime::now();
+        let mut attributes = vec![
+            KeyValue::new("method", "copy"),
+            KeyValue::new("cluster", self.cluster.clone()),
+        ];
+
+        self.object_store
+            .copy(from, to)
+            .await
+            .inspect(|_get_result| {
+                self.request_duration.record(
+                    execute_start
+                        .elapsed()
+                        .map_or(0, |duration| duration.as_millis() as u64),
+                    attributes.as_ref(),
+                )
+            })
+            .inspect_err(|err| {
+                let mut additional = vec![KeyValue::new("reason", format!("{err:?}"))];
+                additional.append(&mut attributes);
+                self.request_error.add(1, &additional[..]);
+            })
+    }
+
+    async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<(), object_store::Error> {
+        let execute_start = SystemTime::now();
+        let mut attributes = vec![
+            KeyValue::new("method", "copy_if_not_exists"),
+            KeyValue::new("cluster", self.cluster.clone()),
+        ];
+
+        self.object_store
+            .copy_if_not_exists(from, to)
+            .await
+            .inspect(|_get_result| {
+                self.request_duration.record(
+                    execute_start
+                        .elapsed()
+                        .map_or(0, |duration| duration.as_millis() as u64),
+                    attributes.as_ref(),
+                )
+            })
+            .inspect_err(|err| {
+                let mut additional = vec![KeyValue::new("reason", format!("{err:?}"))];
+                additional.append(&mut attributes);
+                self.request_error.add(1, &additional[..]);
+            })
     }
 }
 

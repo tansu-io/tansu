@@ -25,6 +25,12 @@ use std::{
 use async_trait::async_trait;
 use bytes::Bytes;
 use deadpool_postgres::{Manager, ManagerConfig, Object, Pool, RecyclingMethod};
+use opentelemetry::{
+    global,
+    metrics::{Counter, Histogram},
+    InstrumentationScope, KeyValue,
+};
+use opentelemetry_semantic_conventions::SCHEMA_URL;
 use rand::{prelude::*, thread_rng};
 use serde_json::Value;
 use tansu_kafka_sans_io::{
@@ -46,7 +52,7 @@ use tansu_kafka_sans_io::{
     ErrorCode, IsolationLevel,
 };
 use tansu_schema_registry::Registry;
-use tokio_postgres::{error::SqlState, Config, NoTls, Row, Transaction};
+use tokio_postgres::{error::SqlState, types::ToSql, Config, NoTls, Row, Transaction};
 use tracing::{debug, error};
 use url::Url;
 use uuid::Uuid;
@@ -71,6 +77,7 @@ pub struct Postgres {
     advertised_listener: Url,
     pool: Pool,
     schemas: Option<Registry>,
+    metron: Metron,
 }
 
 #[derive(Clone, Default, Debug)]
@@ -130,6 +137,7 @@ impl Builder<String, i32, Url, Pool> {
             advertised_listener: self.advertised_listener,
             pool: self.pool,
             schemas: self.schemas,
+            metron: Metron::new(),
         }
     }
 }
@@ -245,13 +253,12 @@ impl Postgres {
         tx: &Transaction<'_>,
     ) -> Result<()> {
         debug!(transaction_id, ?deflated);
-        let prepared = tx
-            .prepare(include_sql!("pg/producer_epoch_current_for_producer.sql").as_str())
-            .await
-            .inspect_err(|err| error!(?err))?;
-
-        if let Some(row) = tx
-            .query_opt(&prepared, &[&self.cluster, &deflated.producer_id])
+        if let Some(row) = self
+            .tx_prepare_query_opt(
+                tx,
+                include_sql!("pg/producer_epoch_current_for_producer.sql").as_str(),
+                &[&self.cluster, &deflated.producer_id],
+            )
             .await
             .inspect_err(|err| error!(?err))?
         {
@@ -259,14 +266,10 @@ impl Postgres {
                 .try_get::<_, i16>(0)
                 .inspect_err(|err| error!(self.cluster, deflated.producer_id, ?err))?;
 
-            let prepared = tx
-                .prepare(include_sql!("pg/producer_select_for_update.sql").as_str())
-                .await
-                .inspect_err(|err| error!(?err))?;
-
-            let row = tx
-                .query_one(
-                    &prepared,
+            let row = self
+                .tx_prepare_query_one(
+                    tx,
+                    include_sql!("pg/producer_select_for_update.sql").as_str(),
                     &[
                         &self.cluster,
                         &topition.topic(),
@@ -301,15 +304,11 @@ impl Postgres {
 
             debug!(increment);
 
-            let prepared = tx
-                .prepare(include_sql!("pg/producer_detail_insert.sql").as_str())
-                .await
-                .inspect_err(|err| error!(?err))?;
-
             assert_eq!(
                 1,
-                tx.execute(
-                    &prepared,
+                self.tx_prepare_execute(
+                    tx,
+                    include_sql!("pg/producer_detail_insert.sql").as_str(),
                     &[
                         &self.cluster,
                         &topition.topic(),
@@ -319,8 +318,7 @@ impl Postgres {
                         &increment,
                     ],
                 )
-                .await
-                .inspect_err(|err| error!(?err))?
+                .await?
             );
 
             Ok(())
@@ -334,14 +332,10 @@ impl Postgres {
         topition: &Topition,
         tx: &Transaction<'_>,
     ) -> Result<(Option<i64>, Option<i64>)> {
-        let prepared = tx
-            .prepare(include_sql!("pg/watermark_select_for_update.sql").as_str())
-            .await
-            .inspect_err(|err| error!(?err))?;
-
-        if let Some(row) = tx
-            .query_opt(
-                &prepared,
+        if let Some(row) = self
+            .tx_prepare_query_opt(
+                tx,
+                include_sql!("pg/watermark_select_for_update.sql").as_str(),
                 &[&self.cluster, &topition.topic(), &topition.partition()],
             )
             .await
@@ -356,6 +350,287 @@ impl Postgres {
         } else {
             Err(Error::Api(ErrorCode::UnknownTopicOrPartition))
         }
+    }
+
+    fn attributes_for_error(
+        &self,
+        sql: &str,
+        error: &tokio_postgres::error::Error,
+    ) -> Vec<KeyValue> {
+        let mut attributes = vec![
+            KeyValue::new("sql", sql.to_owned()),
+            KeyValue::new("cluster_id", self.cluster.clone()),
+        ];
+
+        if let Some(db_error) = error.as_db_error() {
+            if let Some(schema) = db_error.schema() {
+                attributes.push(KeyValue::new("schema", schema.to_owned()));
+            }
+
+            if let Some(table) = db_error.table() {
+                attributes.push(KeyValue::new("table", table.to_owned()));
+            }
+
+            if let Some(constraint) = db_error.constraint() {
+                attributes.push(KeyValue::new("constraint", constraint.to_owned()));
+            }
+        }
+
+        if let Some(code) = error.code() {
+            attributes.push(KeyValue::new("code", format!("{code:?}")));
+        }
+
+        attributes
+    }
+
+    async fn prepare_execute(
+        &self,
+        c: &Object,
+        sql: &str,
+        params: &[&(dyn ToSql + Sync)],
+    ) -> Result<u64, tokio_postgres::error::Error> {
+        let prepared = c.prepare(sql).await.inspect_err(|err| error!(?err))?;
+
+        let execute_start = SystemTime::now();
+        c.execute(&prepared, params)
+            .await
+            .inspect(|_n| {
+                self.metron.sql_duration.record(
+                    execute_start
+                        .elapsed()
+                        .map_or(0, |duration| duration.as_millis() as u64),
+                    &[
+                        KeyValue::new("sql", sql.to_owned()),
+                        KeyValue::new("cluster_id", self.cluster.clone()),
+                    ],
+                )
+            })
+            .inspect_err(|err| {
+                self.metron
+                    .sql_error
+                    .add(1, &self.attributes_for_error(sql, err)[..]);
+            })
+    }
+
+    async fn prepare_query(
+        &self,
+        c: &Object,
+        sql: &str,
+        params: &[&(dyn ToSql + Sync)],
+    ) -> Result<Vec<Row>, tokio_postgres::error::Error> {
+        debug!(sql);
+
+        let prepared = c.prepare(sql).await.inspect_err(|err| error!(?err))?;
+
+        let execute_start = SystemTime::now();
+
+        c.query(&prepared, params)
+            .await
+            .inspect(|_n| {
+                self.metron.sql_duration.record(
+                    execute_start
+                        .elapsed()
+                        .map_or(0, |duration| duration.as_millis() as u64),
+                    &[
+                        KeyValue::new("sql", sql.to_owned()),
+                        KeyValue::new("cluster_id", self.cluster.clone()),
+                    ],
+                )
+            })
+            .inspect_err(|err| {
+                self.metron
+                    .sql_error
+                    .add(1, &self.attributes_for_error(sql, err)[..]);
+            })
+    }
+
+    async fn prepare_query_one(
+        &self,
+        c: &Object,
+        sql: &str,
+        params: &[&(dyn ToSql + Sync)],
+    ) -> Result<Row, tokio_postgres::error::Error> {
+        debug!(sql);
+
+        let prepared = c.prepare(sql).await.inspect_err(|err| error!(?err))?;
+
+        let execute_start = SystemTime::now();
+
+        c.query_one(&prepared, params)
+            .await
+            .inspect(|_n| {
+                self.metron.sql_duration.record(
+                    execute_start
+                        .elapsed()
+                        .map_or(0, |duration| duration.as_millis() as u64),
+                    &[
+                        KeyValue::new("sql", sql.to_owned()),
+                        KeyValue::new("cluster_id", self.cluster.clone()),
+                    ],
+                )
+            })
+            .inspect_err(|err| {
+                self.metron
+                    .sql_error
+                    .add(1, &self.attributes_for_error(sql, err)[..]);
+            })
+    }
+
+    async fn prepare_query_opt(
+        &self,
+        c: &Object,
+        sql: &str,
+        params: &[&(dyn ToSql + Sync)],
+    ) -> Result<Option<Row>, tokio_postgres::error::Error> {
+        debug!(sql);
+
+        let prepared = c.prepare(sql).await.inspect_err(|err| error!(?err))?;
+
+        let execute_start = SystemTime::now();
+
+        c.query_opt(&prepared, params)
+            .await
+            .inspect(|_n| {
+                self.metron.sql_duration.record(
+                    execute_start
+                        .elapsed()
+                        .map_or(0, |duration| duration.as_millis() as u64),
+                    &[
+                        KeyValue::new("sql", sql.to_owned()),
+                        KeyValue::new("cluster_id", self.cluster.clone()),
+                    ],
+                )
+            })
+            .inspect_err(|err| {
+                self.metron
+                    .sql_error
+                    .add(1, &self.attributes_for_error(sql, err)[..]);
+            })
+    }
+
+    async fn tx_prepare_execute(
+        &self,
+        tx: &Transaction<'_>,
+        sql: &str,
+        params: &[&(dyn ToSql + Sync)],
+    ) -> Result<u64, tokio_postgres::error::Error> {
+        debug!(sql);
+
+        let prepared = tx.prepare(sql).await.inspect_err(|err| error!(?err))?;
+
+        let execute_start = SystemTime::now();
+
+        tx.execute(&prepared, params)
+            .await
+            .inspect(|_n| {
+                self.metron.sql_duration.record(
+                    execute_start
+                        .elapsed()
+                        .map_or(0, |duration| duration.as_millis() as u64),
+                    &[
+                        KeyValue::new("sql", sql.to_owned()),
+                        KeyValue::new("cluster_id", self.cluster.clone()),
+                    ],
+                )
+            })
+            .inspect_err(|err| {
+                self.metron
+                    .sql_error
+                    .add(1, &self.attributes_for_error(sql, err)[..]);
+            })
+    }
+
+    async fn tx_prepare_query(
+        &self,
+        tx: &Transaction<'_>,
+        sql: &str,
+        params: &[&(dyn ToSql + Sync)],
+    ) -> Result<Vec<Row>, tokio_postgres::error::Error> {
+        debug!(sql);
+
+        let prepared = tx.prepare(sql).await.inspect_err(|err| error!(?err))?;
+
+        let execute_start = SystemTime::now();
+        tx.query(&prepared, params)
+            .await
+            .inspect(|_n| {
+                self.metron.sql_duration.record(
+                    execute_start
+                        .elapsed()
+                        .map_or(0, |duration| duration.as_millis() as u64),
+                    &[
+                        KeyValue::new("sql", sql.to_owned()),
+                        KeyValue::new("cluster_id", self.cluster.clone()),
+                    ],
+                )
+            })
+            .inspect_err(|err| {
+                self.metron
+                    .sql_error
+                    .add(1, &self.attributes_for_error(sql, err)[..]);
+            })
+    }
+
+    async fn tx_prepare_query_one(
+        &self,
+        tx: &Transaction<'_>,
+        sql: &str,
+        params: &[&(dyn ToSql + Sync)],
+    ) -> Result<Row, tokio_postgres::error::Error> {
+        debug!(sql);
+
+        let prepared = tx.prepare(sql).await.inspect_err(|err| error!(?err))?;
+
+        let execute_start = SystemTime::now();
+        tx.query_one(&prepared, params)
+            .await
+            .inspect(|_n| {
+                self.metron.sql_duration.record(
+                    execute_start
+                        .elapsed()
+                        .map_or(0, |duration| duration.as_millis() as u64),
+                    &[
+                        KeyValue::new("sql", sql.to_owned()),
+                        KeyValue::new("cluster_id", self.cluster.clone()),
+                    ],
+                )
+            })
+            .inspect_err(|err| {
+                self.metron
+                    .sql_error
+                    .add(1, &self.attributes_for_error(sql, err)[..]);
+            })
+    }
+
+    async fn tx_prepare_query_opt(
+        &self,
+        tx: &Transaction<'_>,
+        sql: &str,
+        params: &[&(dyn ToSql + Sync)],
+    ) -> Result<Option<Row>, tokio_postgres::error::Error> {
+        debug!(sql);
+
+        let prepared = tx.prepare(sql).await.inspect_err(|err| error!(?err))?;
+
+        let execute_start = SystemTime::now();
+        tx.query_opt(&prepared, params)
+            .await
+            .inspect(|_n| {
+                self.metron.sql_duration.record(
+                    execute_start
+                        .elapsed()
+                        .map_or(0, |duration| duration.as_millis() as u64),
+                    &[
+                        KeyValue::new("sql", sql.to_owned()),
+                        KeyValue::new("cluster_id", self.cluster.clone()),
+                    ],
+                )
+            })
+            .inspect_err(|err| {
+                self.metron
+                    .sql_error
+                    .add(1, &self.attributes_for_error(sql, err)[..]);
+            })
     }
 
     async fn produce_in_tx(
@@ -380,16 +655,6 @@ impl Postgres {
 
         debug!(?low, ?high);
 
-        let insert_record = tx
-            .prepare(include_sql!("pg/record_insert.sql").as_str())
-            .await
-            .inspect_err(|err| error!(?err))?;
-
-        let insert_header = tx
-            .prepare(include_sql!("pg/header_insert.sql").as_str())
-            .await
-            .inspect_err(|err| error!(?err))?;
-
         let inflated = inflated::Batch::try_from(deflated).inspect_err(|err| error!(?err))?;
 
         if let Some(ref schemas) = self.schemas {
@@ -408,9 +673,10 @@ impl Postgres {
 
             debug!(?delta, ?record, ?offset);
 
-            _ = tx
-                .execute(
-                    &insert_record,
+            _ = self
+                .tx_prepare_execute(
+                    tx,
+                    include_sql!("pg/record_insert.sql").as_str(),
                     &[
                         &self.cluster,
                         &topic,
@@ -458,9 +724,10 @@ impl Postgres {
                 let key = header.key.as_deref();
                 let value = header.value.as_deref();
 
-                _ = tx
-                    .execute(
-                        &insert_header,
+                _ = self
+                    .tx_prepare_execute(
+                        tx,
+                        include_sql!("pg/header_insert.sql").as_str(),
                         &[&self.cluster, &topic, &partition, &offset, &key, &value],
                     )
                     .await
@@ -472,17 +739,12 @@ impl Postgres {
 
         if let Some(transaction_id) = transaction_id {
             if attributes.transaction {
-                let txn_produce_offset_insert = tx
-                    .prepare(include_sql!("pg/txn_produce_offset_insert.sql").as_str())
-                    .await
-                    .inspect_err(|err| error!(?err))?;
-
                 let offset_start = high.unwrap_or_default();
                 let offset_end = high.map_or(last_offset_delta, |high| high + last_offset_delta);
 
-                _ = tx
-                    .execute(
-                        &txn_produce_offset_insert,
+                _ = self
+                    .tx_prepare_execute(tx,
+                        include_sql!("pg/txn_produce_offset_insert.sql").as_str(),
                         &[
                             &self.cluster,
                             &transaction_id,
@@ -500,14 +762,10 @@ impl Postgres {
             }
         }
 
-        let prepared = tx
-            .prepare(include_sql!("pg/watermark_update.sql").as_str())
-            .await
-            .inspect_err(|err| error!(?err))?;
-
-        _ = tx
-            .execute(
-                &prepared,
+        _ = self
+            .tx_prepare_execute(
+                tx,
+                include_sql!("pg/watermark_update.sql").as_str(),
                 &[
                     &self.cluster,
                     &topic,
@@ -533,16 +791,12 @@ impl Postgres {
     ) -> Result<ErrorCode> {
         debug!(cluster = ?self.cluster, ?transaction_id, ?producer_id, ?producer_epoch, ?committed);
 
-        let prepared = tx
-            .prepare(include_sql!("pg/txn_select_produced_topitions.sql").as_str())
-            .await
-            .inspect_err(|err| error!(?err))?;
-
         let mut overlaps = vec![];
 
-        for row in tx
-            .query(
-                &prepared,
+        let rows = self
+            .tx_prepare_query(
+                tx,
+                include_sql!("pg/txn_select_produced_topitions.sql").as_str(),
                 &[
                     &self.cluster,
                     &transaction_id,
@@ -550,9 +804,9 @@ impl Postgres {
                     &producer_epoch,
                 ],
             )
-            .await
-            .inspect_err(|err| error!(?err))?
-        {
+            .await?;
+
+        for row in rows {
             let topic = row.try_get::<_, String>(0)?;
             let partition = row.try_get::<_, i32>(1)?;
 
@@ -592,14 +846,10 @@ impl Postgres {
 
             debug!(offset, ?topition);
 
-            let prepared = tx
-                .prepare(include_sql!("pg/txn_produce_offset_select_offset_range.sql").as_str())
-                .await
-                .inspect_err(|err| error!(?err))?;
-
-            let row = tx
-                .query_one(
-                    &prepared,
+            let row = self
+                .tx_prepare_query_one(
+                    tx,
+                    include_sql!("pg/txn_produce_offset_select_offset_range.sql").as_str(),
                     &[
                         &self.cluster,
                         &transaction_id,
@@ -609,21 +859,16 @@ impl Postgres {
                         &partition,
                     ],
                 )
-                .await
-                .inspect_err(|err| error!(?err))?;
+                .await?;
 
             let offset_start = row.try_get::<_, i64>(0)?;
             let offset_end = row.try_get::<_, i64>(1)?;
             debug!(offset_start, offset_end);
 
-            let prepared = tx
-                .prepare(include_sql!("pg/txn_produce_offset_select_overlapping_txn.sql").as_str())
-                .await
-                .inspect_err(|err| error!(?err))?;
-
-            let rows = tx
-                .query(
-                    &prepared,
+            let rows = self
+                .tx_prepare_query(
+                    tx,
+                    include_sql!("pg/txn_produce_offset_select_overlapping_txn.sql").as_str(),
                     &[
                         &self.cluster,
                         &transaction_id,
@@ -634,8 +879,7 @@ impl Postgres {
                         &offset_end,
                     ],
                 )
-                .await
-                .inspect_err(|err| error!(?err))?;
+                .await?;
 
             for row in rows {
                 overlaps.push(Txn::try_from(row).inspect(|txn| debug!(?txn))?);
@@ -667,14 +911,10 @@ impl Postgres {
             for txn in txns {
                 debug!(?txn);
 
-                let prepared = tx
-                    .prepare(include_sql!("pg/txn_produce_offset_delete_by_txn.sql").as_str())
-                    .await
-                    .inspect_err(|err| error!(?err))?;
-
-                _ = tx
-                    .execute(
-                        &prepared,
+                _ = self
+                    .tx_prepare_execute(
+                        tx,
+                        include_sql!("pg/txn_produce_offset_delete_by_txn.sql").as_str(),
                         &[
                             &self.cluster,
                             &txn.name,
@@ -682,18 +922,12 @@ impl Postgres {
                             &txn.producer_epoch,
                         ],
                     )
-                    .await
-                    .inspect(|n| debug!(?self.cluster, ?txn, ?n))
-                    .inspect_err(|err| error!(?err))?;
+                    .await?;
 
-                let prepared = tx
-                    .prepare(include_sql!("pg/txn_topition_delete_by_txn.sql").as_str())
-                    .await
-                    .inspect_err(|err| error!(?err))?;
-
-                _ = tx
-                    .execute(
-                        &prepared,
+                _ = self
+                    .tx_prepare_execute(
+                        tx,
+                        include_sql!("pg/txn_topition_delete_by_txn.sql").as_str(),
                         &[
                             &self.cluster,
                             &txn.name,
@@ -701,19 +935,13 @@ impl Postgres {
                             &txn.producer_epoch,
                         ],
                     )
-                    .await
-                    .inspect(|n| debug!(cluster = ?self.cluster, ?txn, ?n))
-                    .inspect_err(|err| error!(?err))?;
+                    .await?;
 
                 if txn.status == TxnState::PrepareCommit {
-                    let prepared = tx
-                        .prepare(include_sql!("pg/consumer_offset_insert_from_txn.sql").as_str())
-                        .await
-                        .inspect_err(|err| error!(?err))?;
-
-                    _ = tx
-                        .execute(
-                            &prepared,
+                    _ = self
+                        .tx_prepare_execute(
+                            tx,
+                            include_sql!("pg/consumer_offset_insert_from_txn.sql").as_str(),
                             &[
                                 &self.cluster,
                                 &txn.name,
@@ -721,19 +949,13 @@ impl Postgres {
                                 &txn.producer_epoch,
                             ],
                         )
-                        .await
-                        .inspect(|n| debug!(cluster = ?self.cluster, ?txn, ?n))
-                        .inspect_err(|err| error!(?err))?;
+                        .await?;
                 }
 
-                let prepared = tx
-                    .prepare(include_sql!("pg/txn_offset_commit_tp_delete_by_txn.sql").as_str())
-                    .await
-                    .inspect_err(|err| error!(?err))?;
-
-                _ = tx
-                    .execute(
-                        &prepared,
+                _ = self
+                    .tx_prepare_execute(
+                        tx,
+                        include_sql!("pg/txn_offset_commit_tp_delete_by_txn.sql").as_str(),
                         &[
                             &self.cluster,
                             &txn.name,
@@ -741,18 +963,12 @@ impl Postgres {
                             &txn.producer_epoch,
                         ],
                     )
-                    .await
-                    .inspect(|n| debug!(cluster = ?self.cluster, ?txn, ?n))
-                    .inspect_err(|err| error!(?err))?;
+                    .await?;
 
-                let prepared = tx
-                    .prepare(include_sql!("pg/txn_offset_commit_delete_by_txn.sql").as_str())
-                    .await
-                    .inspect_err(|err| error!(?err))?;
-
-                _ = tx
-                    .execute(
-                        &prepared,
+                _ = self
+                    .tx_prepare_execute(
+                        tx,
+                        include_sql!("pg/txn_offset_commit_delete_by_txn.sql").as_str(),
                         &[
                             &self.cluster,
                             &txn.name,
@@ -760,14 +976,7 @@ impl Postgres {
                             &txn.producer_epoch,
                         ],
                     )
-                    .await
-                    .inspect(|n| debug!(cluster = ?self.cluster, ?txn, ?n))
-                    .inspect_err(|err| error!(?err))?;
-
-                let prepared = tx
-                    .prepare(include_sql!("pg/txn_status_update.sql").as_str())
-                    .await
-                    .inspect_err(|err| error!(?err))?;
+                    .await?;
 
                 let outcome = if txn.status == TxnState::PrepareCommit {
                     String::from(TxnState::Committed)
@@ -777,9 +986,10 @@ impl Postgres {
                     String::from(txn.status)
                 };
 
-                _ = tx
-                    .execute(
-                        &prepared,
+                _ = self
+                    .tx_prepare_execute(
+                        tx,
+                        include_sql!("pg/txn_status_update.sql").as_str(),
                         &[
                             &self.cluster,
                             &txn.name,
@@ -788,17 +998,10 @@ impl Postgres {
                             &outcome,
                         ],
                     )
-                    .await
-                    .inspect(|n| debug!(cluster = self.cluster, ?txn, n, outcome))
-                    .inspect_err(|err| error!(?err))?;
+                    .await?;
             }
         } else {
             debug!(?overlaps);
-
-            let prepared = tx
-                .prepare(include_sql!("pg/txn_status_update.sql").as_str())
-                .await
-                .inspect_err(|err| error!(?err))?;
 
             let outcome = if committed {
                 String::from(TxnState::PrepareCommit)
@@ -806,25 +1009,24 @@ impl Postgres {
                 String::from(TxnState::PrepareAbort)
             };
 
-            _ = tx
-                .execute(
-                    &prepared,
-                    &[
-                        &self.cluster,
-                        &transaction_id,
-                        &producer_id,
-                        &producer_epoch,
-                        &outcome,
-                    ],
+            self.tx_prepare_execute(
+                tx,
+                include_sql!("pg/txn_status_update.sql").as_str(),
+                &[
+                    &self.cluster,
+                    &transaction_id,
+                    &producer_id,
+                    &producer_epoch,
+                    &outcome,
+                ],
+            )
+            .await
+            .inspect(|n| {
+                debug!(
+                    cluster = self.cluster,
+                    transaction_id, producer_id, producer_epoch, outcome, n
                 )
-                .await
-                .inspect(|n| {
-                    debug!(
-                        cluster = self.cluster,
-                        transaction_id, producer_id, producer_epoch, outcome, n
-                    )
-                })
-                .inspect_err(|err| error!(?err))?;
+            })?;
         }
 
         Ok(ErrorCode::None)
@@ -841,22 +1043,20 @@ impl Storage for Postgres {
 
         let c = self.connection().await?;
 
-        let prepared = c
-            .prepare(concat!(
-                "insert into cluster",
-                " (name) values ($1)",
-                " on conflict (name)",
-                " do update set",
-                " last_updated = excluded.last_updated",
-            ))
+        _ = self
+            .prepare_execute(
+                &c,
+                concat!(
+                    "insert into cluster",
+                    " (name) values ($1)",
+                    " on conflict (name)",
+                    " do update set",
+                    " last_updated = excluded.last_updated",
+                ),
+                &[&broker_registration.cluster_id],
+            )
             .await
-            .inspect_err(|err| error!(?err))?;
-
-        _ = c
-            .execute(&prepared, &[&broker_registration.cluster_id])
-            .await
-            .inspect(|n| debug!(cluster = self.cluster, n))
-            .inspect_err(|err| error!(?err))?;
+            .inspect(|n| debug!(cluster = self.cluster, n))?;
 
         Ok(())
     }
@@ -887,14 +1087,10 @@ impl Storage for Postgres {
         let mut c = self.connection().await?;
         let tx = c.transaction().await?;
 
-        let prepared = tx
-            .prepare(include_sql!("pg/topic_insert.sql").as_str())
-            .await
-            .inspect_err(|err| error!(?err, ?topic, ?validate_only))?;
-
-        let topic_uuid = tx
-            .query_one(
-                &prepared,
+        let topic_uuid = self
+            .tx_prepare_query_one(
+                &tx,
+                include_sql!("pg/topic_insert.sql").as_str(),
                 &[
                     &self.cluster,
                     &topic.name,
@@ -927,41 +1123,31 @@ impl Storage for Postgres {
         debug!(?topic_uuid, cluster = self.cluster, ?topic);
 
         for partition in 0..topic.num_partitions {
-            let prepared = tx
-                .prepare(include_sql!("pg/topition_insert.sql").as_str())
-                .await
-                .inspect_err(|err| error!(?err))?;
+            _ = self
+                .tx_prepare_query_one(
+                    &tx,
+                    include_sql!("pg/topition_insert.sql").as_str(),
+                    &[&self.cluster, &topic.name, &partition],
+                )
+                .await?;
 
-            _ = tx
-                .query_one(&prepared, &[&self.cluster, &topic.name, &partition])
-                .await
-                .inspect_err(|err| error!(?err))?;
-        }
-
-        for partition in 0..topic.num_partitions {
-            let prepared = tx
-                .prepare(include_sql!("pg/watermark_insert.sql").as_str())
-                .await
-                .inspect_err(|err| error!(?err))?;
-
-            _ = tx
-                .query_one(&prepared, &[&self.cluster, &topic.name, &partition])
-                .await
-                .inspect_err(|err| error!(?err))?;
+            _ = self
+                .tx_prepare_query_one(
+                    &tx,
+                    include_sql!("pg/watermark_insert.sql").as_str(),
+                    &[&self.cluster, &topic.name, &partition],
+                )
+                .await?;
         }
 
         if let Some(configs) = topic.configs {
-            let prepared = tx
-                .prepare(include_sql!("pg/topic_configuration_insert.sql").as_str())
-                .await
-                .inspect_err(|err| error!(?err))?;
-
             for config in configs {
                 debug!(?config);
 
-                _ = tx
-                    .execute(
-                        &prepared,
+                _ = self
+                    .tx_prepare_execute(
+                        &tx,
+                        include_sql!("pg/topic_configuration_insert.sql").as_str(),
                         &[
                             &self.cluster,
                             &topic.name,
@@ -990,7 +1176,7 @@ impl Storage for Postgres {
         let delete_records = c
             .prepare(concat!(
                 "delete from record",
-                " using  topic, cluster",
+                " using topic, cluster",
                 " where",
                 " cluster.name=$1",
                 " and topic.name = $2",
@@ -1117,25 +1303,21 @@ impl Storage for Postgres {
 
         let row = match topic {
             TopicId::Id(id) => {
-                let prepared = tx
-                    .prepare(include_sql!("pg/topic_select_uuid.sql").as_str())
-                    .await
-                    .inspect_err(|err| error!(?err))?;
-
-                tx.query_opt(&prepared, &[&self.cluster, &id])
-                    .await
-                    .inspect_err(|err| error!(?err))?
+                self.tx_prepare_query_opt(
+                    &tx,
+                    include_sql!("pg/topic_select_uuid.sql").as_str(),
+                    &[&self.cluster, &id],
+                )
+                .await?
             }
 
             TopicId::Name(name) => {
-                let prepared = tx
-                    .prepare(include_sql!("pg/topic_select_name.sql").as_str())
-                    .await
-                    .inspect_err(|err| error!(?err))?;
-
-                tx.query_opt(&prepared, &[&self.cluster, &name])
-                    .await
-                    .inspect_err(|err| error!(?err))?
+                self.tx_prepare_query_opt(
+                    &tx,
+                    include_sql!("pg/topic_select_name.sql").as_str(),
+                    &[&self.cluster, name],
+                )
+                .await?
             }
         };
 
@@ -1178,28 +1360,20 @@ impl Storage for Postgres {
             ),
             ("topitions", include_sql!("pg/topition_delete_by_topic.sql")),
         ] {
-            let prepared = tx
-                .prepare(sql.as_str())
-                .await
-                .inspect_err(|err| error!(?err))?;
-
-            let rows = tx
-                .execute(&prepared, &[&self.cluster, &topic_name])
-                .await
-                .inspect_err(|err| error!(?err))?;
+            let rows = self
+                .tx_prepare_execute(&tx, sql.as_str(), &[&self.cluster, &topic_name])
+                .await?;
 
             debug!(?topic, ?rows, ?description);
         }
 
-        let prepared = tx
-            .prepare(include_sql!("pg/topic_delete_by.sql").as_str())
-            .await
-            .inspect_err(|err| error!(?err))?;
-
-        _ = tx
-            .execute(&prepared, &[&self.cluster, &topic_name])
-            .await
-            .inspect_err(|err| error!(?err))?;
+        _ = self
+            .tx_prepare_execute(
+                &tx,
+                include_sql!("pg/topic_delete_by.sql").as_str(),
+                &[&self.cluster, &topic_name],
+            )
+            .await?;
 
         tx.commit().await.inspect_err(|err| error!(?err))?;
 
@@ -1255,28 +1429,10 @@ impl Storage for Postgres {
 
         let c = self.connection().await?;
 
-        let select_batch = c
-            .prepare(include_sql!("pg/record_fetch.sql").as_str())
-            .await
-            .inspect_err(|err| {
-                error!(
-                    ?err,
-                    cluster = self.cluster,
-                    ?topition,
-                    offset,
-                    max_bytes,
-                    high_watermark
-                )
-            })?;
-
-        let select_headers = c
-            .prepare(include_sql!("pg/header_fetch.sql").as_str())
-            .await
-            .inspect_err(|err| error!(?err))?;
-
-        let records = c
-            .query(
-                &select_batch,
+        let records = self
+            .prepare_query(
+                &c,
+                include_sql!("pg/record_fetch.sql").as_str(),
                 &[
                     &self.cluster,
                     &topition.topic(),
@@ -1402,9 +1558,10 @@ impl Storage for Postgres {
                     .key(k.into())
                     .value(v.into());
 
-                for header in c
-                    .query(
-                        &select_headers,
+                for header in self
+                    .prepare_query(
+                        &c,
+                        include_sql!("pg/header_fetch.sql").as_str(),
                         &[
                             &self.cluster,
                             &topition.topic(),
@@ -1456,32 +1613,28 @@ impl Storage for Postgres {
         debug!(cluster = self.cluster, ?topition);
         let c = self.connection().await?;
 
-        let prepared = c
-            .prepare(include_sql!("pg/watermark_select.sql").as_str())
-            .await
-            .inspect_err(|err| error!(?topition, ?err))?;
-
-        let row = c
-            .query_one(
-                &prepared,
+        let row = self
+            .prepare_query_one(
+                &c,
+                include_sql!("pg/watermark_select.sql").as_str(),
                 &[&self.cluster, &topition.topic(), &topition.partition()],
             )
             .await
-            .inspect_err(|err| error!(?topition, ?prepared, ?err))?;
+            .inspect_err(|err| error!(?topition, ?err))?;
 
         let log_start = row
             .try_get::<_, Option<i64>>(0)
-            .inspect_err(|err| error!(?topition, ?prepared, ?err))?
+            .inspect_err(|err| error!(?topition, ?err))?
             .unwrap_or_default();
 
         let high_watermark = row
             .try_get::<_, Option<i64>>(1)
-            .inspect_err(|err| error!(?topition, ?prepared, ?err))?
+            .inspect_err(|err| error!(?topition, ?err))?
             .unwrap_or_default();
 
         let last_stable = row
             .try_get::<_, Option<i64>>(1)
-            .inspect_err(|err| error!(?topition, ?prepared, ?err))?
+            .inspect_err(|err| error!(?topition, ?err))?
             .unwrap_or(high_watermark);
 
         debug!(cluster = self.cluster, ?topition, log_start, high_watermark,);
@@ -1506,24 +1659,15 @@ impl Storage for Postgres {
 
         let mut cg_inserted = false;
 
-        let topition_select = tx
-            .prepare(include_sql!("pg/topition_select.sql").as_str())
-            .await
-            .inspect_err(|err| error!(?err))?;
-
-        let consumer_offset_insert = tx
-            .prepare(include_sql!("pg/consumer_offset_insert.sql").as_str())
-            .await
-            .inspect_err(|err| error!(?err))?;
-
         let mut responses = vec![];
 
         for (topition, offset) in offsets {
             debug!(?topition, ?offset);
 
-            if tx
-                .query_opt(
-                    &topition_select,
+            if self
+                .tx_prepare_query_opt(
+                    &tx,
+                    include_sql!("pg/topition_select.sql").as_str(),
                     &[&self.cluster, &topition.topic(), &topition.partition()],
                 )
                 .await
@@ -1531,23 +1675,22 @@ impl Storage for Postgres {
                 .is_some()
             {
                 if !cg_inserted {
-                    let consumer_group_insert = tx
-                        .prepare(include_sql!("pg/consumer_group_insert.sql").as_str())
-                        .await
-                        .inspect_err(|err| error!(?err))?;
-
-                    let rows = tx
-                        .execute(&consumer_group_insert, &[&self.cluster, &group])
-                        .await
-                        .inspect_err(|err| error!(?err))?;
+                    let rows = self
+                        .tx_prepare_execute(
+                            &tx,
+                            include_sql!("pg/consumer_group_insert.sql").as_str(),
+                            &[&self.cluster, &group],
+                        )
+                        .await?;
                     debug!(rows);
 
                     cg_inserted = true;
                 }
 
-                let rows = tx
-                    .execute(
-                        &consumer_offset_insert,
+                let rows = self
+                    .tx_prepare_execute(
+                        &tx,
+                        include_sql!("pg/consumer_offset_insert.sql").as_str(),
                         &[
                             &self.cluster,
                             &topition.topic(),
@@ -1592,13 +1735,12 @@ impl Storage for Postgres {
 
         let c = self.connection().await?;
 
-        let prepared = c
-            .prepare(include_sql!("pg/consumer_offset_select_by_group.sql").as_str())
-            .await
-            .inspect_err(|err| error!(?err))?;
-
-        for row in c
-            .query(&prepared, &[&self.cluster, &group_id])
+        for row in self
+            .prepare_query(
+                &c,
+                include_sql!("pg/consumer_offset_select_by_group.sql").as_str(),
+                &[&self.cluster, &group_id],
+            )
             .await
             .inspect_err(|err| error!(?err))?
         {
@@ -1627,17 +1769,13 @@ impl Storage for Postgres {
 
         let c = self.connection().await?;
 
-        let prepared = c
-            .prepare(include_sql!("pg/consumer_offset_select.sql").as_str())
-            .await
-            .inspect_err(|err| error!(?err))?;
-
         let mut offsets = BTreeMap::new();
 
         for topic in topics {
-            let offset = c
-                .query_opt(
-                    &prepared,
+            let offset = self
+                .prepare_query_opt(
+                    &c,
+                    include_sql!("pg/consumer_offset_select.sql").as_str(),
                     &[&self.cluster, &group_id, &topic.topic(), &topic.partition()],
                 )
                 .await
@@ -1694,23 +1832,20 @@ impl Storage for Postgres {
 
             debug!(?query);
 
-            let prepared = c
-                .prepare(query.as_str())
-                .await
-                .inspect_err(|err| error!(?err))?;
-
             let list_offset = match offset_type {
-                ListOffsetRequest::Earliest | ListOffsetRequest::Latest => c
-                    .query_opt(
-                        &prepared,
+                ListOffsetRequest::Earliest | ListOffsetRequest::Latest => self
+                    .prepare_query_opt(
+                        &c,
+                        query.as_str(),
                         &[&self.cluster, &topition.topic(), &topition.partition()],
                     )
                     .await
                     .inspect_err(|err| error!(?err, cluster = self.cluster, ?topition)),
 
-                ListOffsetRequest::Timestamp(timestamp) => c
-                    .query_opt(
-                        &prepared,
+                ListOffsetRequest::Timestamp(timestamp) => self
+                    .prepare_query_opt(
+                        &c,
+                        query.as_str(),
                         &[
                             &self.cluster.as_str(),
                             &topition.topic(),
@@ -1797,15 +1932,12 @@ impl Storage for Postgres {
                 for topic in topics {
                     responses.push(match topic {
                         TopicId::Name(name) => {
-                            let prepared = c
-                                .prepare(include_sql!("pg/topic_select_name.sql").as_str())
-                                .await
-                                .inspect_err(|err| {
-                                    error!(?err, cluster = self.cluster, ?name);
-                                })?;
-
-                            match c
-                                .query_opt(&prepared, &[&self.cluster, &name.as_str()])
+                            match self
+                                .prepare_query_opt(
+                                    &c,
+                                    include_sql!("pg/topic_select_name.sql").as_str(),
+                                    &[&self.cluster, &name.as_str()],
+                                )
                                 .await
                                 .inspect_err(|err| error!(?err))
                             {
@@ -1897,12 +2029,14 @@ impl Storage for Postgres {
                         }
                         TopicId::Id(id) => {
                             debug!(?id);
-                            let prepared = c
-                                .prepare(include_sql!("pg/topic_select_uuid.sql").as_str())
+                            match self
+                                .prepare_query_one(
+                                    &c,
+                                    include_sql!("pg/topic_select_uuid.sql").as_str(),
+                                    &[&self.cluster, &id],
+                                )
                                 .await
-                                .inspect_err(|error| error!(?error))?;
-
-                            match c.query_one(&prepared, &[&self.cluster, &id]).await {
+                            {
                                 Ok(row) => {
                                     let error_code = ErrorCode::None.into();
                                     let topic_id = row
@@ -1988,13 +2122,12 @@ impl Storage for Postgres {
             _ => {
                 let mut responses = vec![];
 
-                let prepared = c
-                    .prepare(include_sql!("pg/topic_by_cluster.sql").as_str())
-                    .await
-                    .inspect_err(|err| error!(?err))?;
-
-                match c
-                    .query(&prepared, &[&self.cluster])
+                match self
+                    .prepare_query(
+                        &c,
+                        include_sql!("pg/topic_by_cluster.sql").as_str(),
+                        &[&self.cluster],
+                    )
                     .await
                     .inspect_err(|err| error!(?err))
                 {
@@ -2180,17 +2313,14 @@ impl Storage for Postgres {
 
         let c = self.connection().await.inspect_err(|err| error!(?err))?;
 
-        let prepared = c
-            .prepare(include_sql!("pg/consumer_group_select.sql").as_str())
-            .await
-            .inspect_err(|err| {
-                error!(?err, cluster = self.cluster);
-            })?;
-
         let mut listed_groups = vec![];
 
-        for row in c
-            .query(&prepared, &[&self.cluster])
+        for row in self
+            .prepare_query(
+                &c,
+                include_sql!("pg/consumer_group_select.sql").as_str(),
+                &[&self.cluster],
+            )
             .await
             .inspect_err(|err| error!(?err))?
         {
@@ -2274,17 +2404,14 @@ impl Storage for Postgres {
         let mut results = vec![];
         let c = self.connection().await.inspect_err(|err| error!(?err))?;
 
-        let prepared = c
-            .prepare(include_sql!("pg/consumer_group_select_by_name.sql").as_str())
-            .await
-            .inspect_err(|err| {
-                error!(?err, cluster = self.cluster);
-            })?;
-
         if let Some(group_ids) = group_ids {
             for group_id in group_ids {
-                if let Some(row) = c
-                    .query_opt(&prepared, &[&self.cluster, group_id])
+                if let Some(row) = self
+                    .prepare_query_opt(
+                        &c,
+                        include_sql!("pg/consumer_group_select_by_name.sql").as_str(),
+                        &[&self.cluster, group_id],
+                    )
                     .await
                     .inspect_err(|err| error!(?err, group_id))?
                 {
@@ -2319,17 +2446,13 @@ impl Storage for Postgres {
         let mut c = self.connection().await?;
         let tx = c.transaction().await?;
 
-        let prepared = tx
-            .prepare(include_sql!("pg/consumer_group_insert.sql").as_str())
-            .await
-            .inspect_err(|err| error!(?err))?;
-
-        _ = tx.execute(&prepared, &[&self.cluster, &group_id]).await?;
-
-        let prepared = tx
-            .prepare(include_sql!("pg/consumer_group_detail_insert.sql").as_str())
-            .await
-            .inspect_err(|err| error!(?err))?;
+        _ = self
+            .tx_prepare_execute(
+                &tx,
+                include_sql!("pg/consumer_group_insert.sql").as_str(),
+                &[&self.cluster, &group_id],
+            )
+            .await?;
 
         let existing_e_tag = version
             .as_ref()
@@ -2349,9 +2472,10 @@ impl Storage for Postgres {
 
         let detail = serde_json::to_value(detail).inspect(|detail| debug!(?detail))?;
 
-        let outcome = if let Some(row) = tx
-            .query_opt(
-                &prepared,
+        let outcome = if let Some(row) = self
+            .tx_prepare_query_opt(
+                &tx,
+                include_sql!("pg/consumer_group_detail_insert.sql").as_str(),
                 &[
                     &self.cluster,
                     &group_id,
@@ -2375,13 +2499,12 @@ impl Storage for Postgres {
                 })
                 .inspect(|version| debug!(?version))
         } else {
-            let prepared = tx
-                .prepare(include_sql!("pg/consumer_group_detail.sql").as_str())
-                .await
-                .inspect_err(|err| error!(?err))?;
-
-            let row = tx
-                .query_one(&prepared, &[&group_id, &self.cluster.as_str()])
+            let row = self
+                .tx_prepare_query_one(
+                    &tx,
+                    include_sql!("pg/consumer_group_detail.sql").as_str(),
+                    &[&group_id, &self.cluster.as_str()],
+                )
                 .await
                 .inspect(|row| debug!(?row))
                 .inspect_err(|err| error!(?err))?;
@@ -2428,13 +2551,12 @@ impl Storage for Postgres {
                 let mut c = self.connection().await.inspect_err(|err| error!(?err))?;
                 let tx = c.transaction().await.inspect_err(|err| error!(?err))?;
 
-                let prepared = tx
-                    .prepare(include_sql!("pg/producer_epoch_for_current_txn.sql").as_str())
-                    .await
-                    .inspect_err(|err| error!(?err))?;
-
-                if let Some(row) = tx
-                    .query_opt(&prepared, &[&self.cluster, &transaction_id])
+                if let Some(row) = self
+                    .tx_prepare_query_opt(
+                        &tx,
+                        include_sql!("pg/producer_epoch_for_current_txn.sql").as_str(),
+                        &[&self.cluster, &transaction_id],
+                    )
                     .await
                     .inspect_err(|err| error!(?err))?
                 {
@@ -2465,25 +2587,23 @@ impl Storage for Postgres {
                     }
                 }
 
-                let prepared = tx
-                    .prepare(include_sql!("pg/txn_select_name.sql").as_str())
-                    .await
-                    .inspect_err(|err| error!(?err))?;
-
-                let (producer, epoch) = if let Some(row) = tx
-                    .query_opt(&prepared, &[&self.cluster, &transaction_id])
+                let (producer, epoch) = if let Some(row) = self
+                    .tx_prepare_query_opt(
+                        &tx,
+                        include_sql!("pg/txn_select_name.sql").as_str(),
+                        &[&self.cluster, &transaction_id],
+                    )
                     .await
                     .inspect_err(|err| error!(?err))?
                 {
                     let producer: i64 = row.try_get(0).inspect_err(|err| error!(?err))?;
 
-                    let prepared = tx
-                        .prepare(include_sql!("pg/producer_epoch_insert.sql").as_str())
-                        .await
-                        .inspect_err(|err| error!(?err))?;
-
-                    let row = tx
-                        .query_one(&prepared, &[&self.cluster, &producer])
+                    let row = self
+                        .tx_prepare_query_one(
+                            &tx,
+                            include_sql!("pg/producer_epoch_insert.sql").as_str(),
+                            &[&self.cluster, &producer],
+                        )
                         .await
                         .inspect_err(|err| error!(self.cluster, producer, ?err))?;
 
@@ -2491,45 +2611,42 @@ impl Storage for Postgres {
 
                     (producer, epoch)
                 } else {
-                    let prepared = tx
-                        .prepare(include_sql!("pg/producer_insert.sql").as_str())
-                        .await
-                        .inspect_err(|err| error!(?err))?;
-
-                    let row = tx
-                        .query_one(&prepared, &[&self.cluster])
+                    let row = self
+                        .tx_prepare_query_one(
+                            &tx,
+                            include_sql!("pg/producer_insert.sql").as_str(),
+                            &[&self.cluster],
+                        )
                         .await
                         .inspect_err(|err| error!(?err))?;
 
                     let producer: i64 = row.try_get(0).inspect_err(|err| error!(?err))?;
 
-                    let prepared = tx
-                        .prepare(include_sql!("pg/producer_epoch_insert.sql").as_str())
-                        .await
-                        .inspect_err(|err| error!(?err))?;
-
-                    let row = tx
-                        .query_one(&prepared, &[&self.cluster, &producer])
+                    let row = self
+                        .tx_prepare_query_one(
+                            &tx,
+                            include_sql!("pg/producer_epoch_insert.sql").as_str(),
+                            &[&self.cluster, &producer],
+                        )
                         .await
                         .inspect_err(|err| error!(self.cluster, producer, ?err))?;
 
                     let epoch: i16 = row.try_get(0)?;
 
-                    let prepared = tx
-                        .prepare(include_sql!("pg/txn_insert.sql").as_str())
-                        .await
-                        .inspect_err(|err| error!(?err))?;
-
                     assert_eq!(
                         1,
-                        tx.execute(&prepared, &[&self.cluster, &transaction_id, &producer])
-                            .await
-                            .inspect_err(|err| error!(
-                                self.cluster,
-                                transaction_id,
-                                producer,
-                                ?err
-                            ))?
+                        self.tx_prepare_execute(
+                            &tx,
+                            include_sql!("pg/txn_insert.sql").as_str(),
+                            &[&self.cluster, &transaction_id, &producer]
+                        )
+                        .await
+                        .inspect_err(|err| error!(
+                            self.cluster,
+                            transaction_id,
+                            producer,
+                            ?err
+                        ))?
                     );
 
                     (producer, epoch)
@@ -2537,15 +2654,11 @@ impl Storage for Postgres {
 
                 debug!(transaction_id, producer, epoch);
 
-                let prepared = tx
-                    .prepare(include_sql!("pg/txn_detail_insert.sql").as_str())
-                    .await
-                    .inspect_err(|err| error!(?err))?;
-
                 assert_eq!(
                     1,
-                    tx.execute(
-                        &prepared,
+                    self.tx_prepare_execute(
+                        &tx,
+                        include_sql!("pg/txn_detail_insert.sql").as_str(),
                         &[
                             &self.cluster,
                             &transaction_id,
@@ -2589,25 +2702,23 @@ impl Storage for Postgres {
                 let mut c = self.connection().await.inspect_err(|err| error!(?err))?;
                 let tx = c.transaction().await.inspect_err(|err| error!(?err))?;
 
-                let prepared = tx
-                    .prepare(include_sql!("pg/producer_insert.sql").as_str())
-                    .await
-                    .inspect_err(|err| error!(?err))?;
-
-                let row = tx
-                    .query_one(&prepared, &[&self.cluster])
+                let row = self
+                    .tx_prepare_query_one(
+                        &tx,
+                        include_sql!("pg/producer_insert.sql").as_str(),
+                        &[&self.cluster],
+                    )
                     .await
                     .inspect_err(|err| error!(self.cluster, ?err))?;
 
                 let producer = row.try_get(0)?;
 
-                let prepared = tx
-                    .prepare(include_sql!("pg/producer_epoch_insert.sql").as_str())
-                    .await
-                    .inspect_err(|err| error!(?err))?;
-
-                let row = tx
-                    .query_one(&prepared, &[&self.cluster, &producer])
+                let row = self
+                    .tx_prepare_query_one(
+                        &tx,
+                        include_sql!("pg/producer_epoch_insert.sql").as_str(),
+                        &[&self.cluster, &producer],
+                    )
                     .await
                     .inspect_err(|err| error!(self.cluster, producer, ?err))?;
 
@@ -2666,20 +2777,16 @@ impl Storage for Postgres {
                 let mut c = self.connection().await.inspect_err(|err| error!(?err))?;
                 let tx = c.transaction().await.inspect_err(|err| error!(?err))?;
 
-                let prepared = tx
-                    .prepare(include_sql!("pg/txn_topition_insert.sql").as_str())
-                    .await
-                    .inspect_err(|err| error!(?err))?;
-
                 let mut results = vec![];
 
                 for topic in topics {
                     let mut results_by_partition = vec![];
 
                     for partition_index in topic.partitions.unwrap_or(vec![]) {
-                        _ = tx
-                            .execute(
-                                &prepared,
+                        _ = self
+                            .tx_prepare_execute(
+                                &tx,
+                                include_sql!("pg/txn_topition_insert.sql").as_str(),
                                 &[
                                     &self.cluster,
                                     &topic.name,
@@ -2712,14 +2819,10 @@ impl Storage for Postgres {
                     })
                 }
 
-                let prepared = tx
-                    .prepare(include_sql!("pg/txn_detail_update_started_at.sql").as_str())
-                    .await
-                    .inspect_err(|err| error!(?err))?;
-
-                _ = tx
-                    .execute(
-                        &prepared,
+                _ = self
+                    .tx_prepare_execute(
+                        &tx,
+                        include_sql!("pg/txn_detail_update_started_at.sql").as_str(),
                         &[
                             &self.cluster,
                             &transaction_id,
@@ -2758,13 +2861,12 @@ impl Storage for Postgres {
         let mut c = self.connection().await.inspect_err(|err| error!(?err))?;
         let tx = c.transaction().await.inspect_err(|err| error!(?err))?;
 
-        let prepared = tx
-            .prepare(include_sql!("pg/producer_epoch_for_current_txn.sql").as_str())
-            .await
-            .inspect_err(|err| error!(?err))?;
-
-        let (producer_id, producer_epoch) = if let Some(row) = tx
-            .query_opt(&prepared, &[&self.cluster, &offsets.transaction_id])
+        let (producer_id, producer_epoch) = if let Some(row) = self
+            .tx_prepare_query_opt(
+                &tx,
+                include_sql!("pg/producer_epoch_for_current_txn.sql").as_str(),
+                &[&self.cluster, &offsets.transaction_id],
+            )
             .await
             .inspect_err(|err| error!(?err))?
         {
@@ -2783,25 +2885,20 @@ impl Storage for Postgres {
             (None, None)
         };
 
-        let prepared = tx
-            .prepare(include_sql!("pg/consumer_group_insert.sql").as_str())
-            .await
-            .inspect_err(|err| error!(?err))?;
-
-        _ = tx
-            .execute(&prepared, &[&self.cluster, &offsets.group_id])
+        _ = self
+            .tx_prepare_execute(
+                &tx,
+                include_sql!("pg/consumer_group_insert.sql").as_str(),
+                &[&self.cluster, &offsets.group_id],
+            )
             .await?;
 
         debug!(?producer_id, ?producer_epoch);
 
-        let prepared = tx
-            .prepare(include_sql!("pg/txn_offset_commit_insert.sql").as_str())
-            .await
-            .inspect_err(|err| error!(?err))?;
-
-        _ = tx
-            .execute(
-                &prepared,
+        _ = self
+            .tx_prepare_execute(
+                &tx,
+                include_sql!("pg/txn_offset_commit_insert.sql").as_str(),
                 &[
                     &self.cluster,
                     &offsets.transaction_id,
@@ -2815,11 +2912,6 @@ impl Storage for Postgres {
             .await
             .inspect_err(|err| error!(?err))?;
 
-        let prepared = tx
-            .prepare(include_sql!("pg/txn_offset_commit_tp_insert.sql").as_str())
-            .await
-            .inspect_err(|err| error!(?err))?;
-
         let mut topics = vec![];
 
         for topic in offsets.topics {
@@ -2830,9 +2922,10 @@ impl Storage for Postgres {
                     if producer_epoch
                         .is_some_and(|producer_epoch| producer_epoch == offsets.producer_epoch)
                     {
-                        _ = tx
-                            .execute(
-                                &prepared,
+                        _ = self
+                            .tx_prepare_execute(
+                                &tx,
+                                include_sql!("pg/txn_offset_commit_tp_insert.sql").as_str(),
                                 &[
                                     &self.cluster,
                                     &offsets.transaction_id,
@@ -2922,6 +3015,8 @@ fn remove_comments(commented: &str) -> String {
                     }
                 }
             }
+        } else if line.trim().is_empty() {
+            uncommented
         } else if uncommented.is_empty() {
             line.trim().into()
         } else {
@@ -2930,17 +3025,83 @@ fn remove_comments(commented: &str) -> String {
     })
 }
 
+#[derive(Debug, Clone)]
+struct Metron {
+    sql_duration: Histogram<u64>,
+    sql_error: Counter<u64>,
+}
+
+impl Metron {
+    fn new() -> Self {
+        let meter = global::meter_with_scope(
+            InstrumentationScope::builder(env!("CARGO_PKG_NAME"))
+                .with_version(env!("CARGO_PKG_VERSION"))
+                .with_schema_url(SCHEMA_URL)
+                .build(),
+        );
+
+        Self {
+            sql_duration: meter
+                .u64_histogram("sql_duration")
+                .with_unit("ms")
+                .with_description("The SQL request latencies in milliseconds")
+                .build(),
+            sql_error: meter
+                .u64_counter("sql_error")
+                .with_description("The SQL error count")
+                .build(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::{Error, Result};
+    use tracing::subscriber::DefaultGuard;
+    use tracing_subscriber::EnvFilter;
+
+    fn init_tracing() -> Result<DefaultGuard> {
+        use std::{fs::File, sync::Arc, thread};
+
+        Ok(tracing::subscriber::set_default(
+            tracing_subscriber::fmt()
+                .with_level(true)
+                .with_line_number(true)
+                .with_thread_names(false)
+                .with_env_filter(EnvFilter::from_default_env().add_directive(
+                    format!("{}=debug", env!("CARGO_PKG_NAME").replace("-", "_")).parse()?,
+                ))
+                .with_writer(
+                    thread::current()
+                        .name()
+                        .ok_or(Error::Message(String::from("unnamed thread")))
+                        .and_then(|name| {
+                            File::create(format!("../logs/{}/{name}.log", env!("CARGO_PKG_NAME"),))
+                                .map_err(Into::into)
+                        })
+                        .map(Arc::new)?,
+                )
+                .finish(),
+        ))
+    }
+
     #[test]
-    fn remove_comments() {
+    fn remove_comments() -> Result<()> {
+        let _guard = init_tracing()?;
+
         assert_eq!(String::from(""), super::remove_comments(""));
         assert_eq!(String::from("pqr"), super::remove_comments("-- abc\npqr"));
         assert_eq!(String::from("abc"), super::remove_comments("abc -- def"));
         assert_eq!(String::from("abc def"), super::remove_comments("abc\ndef"));
         assert_eq!(
             String::from("abc def"),
+            super::remove_comments("abc\n\ndef")
+        );
+        assert_eq!(
+            String::from("abc def"),
             super::remove_comments("abc \ndef ")
         );
+
+        Ok(())
     }
 }

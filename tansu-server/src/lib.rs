@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -23,6 +23,7 @@ use std::{
 };
 
 use jsonschema::ValidationError;
+use opentelemetry::trace::TraceError;
 use tansu_kafka_sans_io::ErrorCode;
 use thiserror::Error;
 use tracing_subscriber::filter::ParseError;
@@ -30,6 +31,7 @@ use url::Url;
 
 pub mod broker;
 pub mod coordinator;
+pub mod otel;
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -38,10 +40,12 @@ pub enum Error {
     EmptyCoordinatorWrapper,
     EmptyJoinGroupRequestProtocol,
     ExpectedJoinGroupRequestProtocol(&'static str),
+    Hyper(#[from] hyper::http::Error),
     Io(Arc<io::Error>),
     Json(#[from] serde_json::Error),
     KafkaProtocol(#[from] tansu_kafka_sans_io::Error),
     Message(String),
+    Metric(#[from] opentelemetry_sdk::metrics::MetricError),
     Model(#[from] tansu_kafka_model::Error),
     ObjectStore(#[from] object_store::Error),
     ParseFilter(#[from] ParseError),
@@ -51,6 +55,8 @@ pub enum Error {
     SchemaRegistry(#[from] tansu_schema_registry::Error),
     Storage(#[from] tansu_storage::Error),
     StringUtf8(#[from] FromUtf8Error),
+    OpenTelemetryTrace(TraceError),
+    Prometheus(#[from] prometheus::Error),
     TokioPostgres(#[from] tokio_postgres::error::Error),
     TryFromInt(#[from] TryFromIntError),
     UnsupportedStorageUrl(Url),
@@ -75,6 +81,12 @@ impl<T> From<PoisonError<T>> for Error {
 impl From<ValidationError<'_>> for Error {
     fn from(_value: ValidationError<'_>) -> Self {
         Self::SchemaValidation
+    }
+}
+
+impl From<TraceError> for Error {
+    fn from(value: TraceError) -> Self {
+        Self::OpenTelemetryTrace(value)
     }
 }
 
