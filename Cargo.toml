@@ -79,7 +79,7 @@ tempfile = "3"
 thiserror = "1.0"
 time = { version = "0.3.37", features = ["formatting", "macros"] }
 tokio = { version = "1", features = ["full"] }
-tokio-postgres = { version = "0.7.12", features = [
+tokio-postgres = { version = "0.7.13", features = [
     "with-serde_json-1",
     "with-uuid-1",
 ] }
