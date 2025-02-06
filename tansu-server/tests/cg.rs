@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -14,7 +14,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use common::{alphanumeric_string, init_tracing, register_broker, StorageType};
-use rand::{prelude::*, thread_rng};
+use rand::{prelude::*, rng};
 use tansu_kafka_sans_io::{create_topics_request::CreatableTopic, ErrorCode};
 use tansu_server::Result;
 use tansu_storage::{OffsetCommitRequest, Storage, StorageContainer, Topition};
@@ -53,12 +53,12 @@ pub async fn offset_commit(
         .await?;
     debug!(?topic_id);
 
-    let partition_index = thread_rng().gen_range(0..num_partitions);
+    let partition_index = rng().random_range(0..num_partitions);
     let topition = Topition::new(topic_name.clone(), partition_index);
 
     let group_id: String = alphanumeric_string(15);
 
-    let offset = thread_rng().gen_range(0..i64::MAX);
+    let offset = rng().random_range(0..i64::MAX);
 
     let commit = sc
         .offset_commit(
@@ -120,12 +120,12 @@ pub async fn topic_delete_cascade_to_offset_commit(
         .await?;
     debug!(?topic_id);
 
-    let partition_index = thread_rng().gen_range(0..num_partitions);
+    let partition_index = rng().random_range(0..num_partitions);
     let topition = Topition::new(topic_name.clone(), partition_index);
 
     let group_id: String = alphanumeric_string(15);
 
-    let offset = thread_rng().gen_range(0..i64::MAX);
+    let offset = rng().random_range(0..i64::MAX);
 
     let commit = sc
         .offset_commit(
@@ -187,12 +187,12 @@ pub async fn consumer_group_delete_cascade_to_offset_commit(
         .await?;
     debug!(?topic_id);
 
-    let partition_index = thread_rng().gen_range(0..num_partitions);
+    let partition_index = rng().random_range(0..num_partitions);
     let topition = Topition::new(topic_name.clone(), partition_index);
 
     let group_id: String = alphanumeric_string(15);
 
-    let offset = thread_rng().gen_range(0..i64::MAX);
+    let offset = rng().random_range(0..i64::MAX);
 
     let commit = sc
         .offset_commit(
@@ -260,12 +260,12 @@ pub async fn offset_commit_unknown_topition(
 
     let num_partitions = 6;
 
-    let partition_index = thread_rng().gen_range(0..num_partitions);
+    let partition_index = rng().random_range(0..num_partitions);
     let topition = Topition::new(topic_name.clone(), partition_index);
 
     let group_id: String = alphanumeric_string(15);
 
-    let offset = thread_rng().gen_range(0..i64::MAX);
+    let offset = rng().random_range(0..i64::MAX);
 
     let commit = sc
         .offset_commit(
@@ -305,7 +305,7 @@ pub async fn offset_fetch_unknown_topition(
 
     let num_partitions = 6;
 
-    let partition_index = thread_rng().gen_range(0..num_partitions);
+    let partition_index = rng().random_range(0..num_partitions);
     let topition = Topition::new(topic_name.clone(), partition_index);
 
     let group_id: String = alphanumeric_string(15);
@@ -357,7 +357,7 @@ mod pg {
         let _guard = init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
+        let broker_id = rng().random_range(0..i32::MAX);
 
         super::offset_commit(
             cluster_id,
@@ -372,7 +372,7 @@ mod pg {
         let _guard = init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
+        let broker_id = rng().random_range(0..i32::MAX);
 
         super::topic_delete_cascade_to_offset_commit(
             cluster_id,
@@ -387,7 +387,7 @@ mod pg {
         let _guard = init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
+        let broker_id = rng().random_range(0..i32::MAX);
 
         super::consumer_group_delete_cascade_to_offset_commit(
             cluster_id,
@@ -402,7 +402,7 @@ mod pg {
         let _guard = init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
+        let broker_id = rng().random_range(0..i32::MAX);
 
         super::delete_unknown_consumer_group(
             cluster_id,
@@ -417,7 +417,7 @@ mod pg {
         let _guard = init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
+        let broker_id = rng().random_range(0..i32::MAX);
 
         super::offset_commit_unknown_topition(
             cluster_id,
@@ -432,7 +432,7 @@ mod pg {
         let _guard = init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
+        let broker_id = rng().random_range(0..i32::MAX);
 
         super::offset_fetch_unknown_topition(
             cluster_id,
@@ -447,7 +447,7 @@ mod pg {
         let _guard = init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
+        let broker_id = rng().random_range(0..i32::MAX);
 
         super::list_groups_none(
             cluster_id,
@@ -480,7 +480,7 @@ mod in_memory {
         let _guard = init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
+        let broker_id = rng().random_range(0..i32::MAX);
 
         super::offset_commit(
             cluster_id,
@@ -495,7 +495,7 @@ mod in_memory {
         let _guard = init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
+        let broker_id = rng().random_range(0..i32::MAX);
 
         super::topic_delete_cascade_to_offset_commit(
             cluster_id,
@@ -510,7 +510,7 @@ mod in_memory {
         let _guard = init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
+        let broker_id = rng().random_range(0..i32::MAX);
 
         super::consumer_group_delete_cascade_to_offset_commit(
             cluster_id,
@@ -526,7 +526,7 @@ mod in_memory {
         let _guard = init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
+        let broker_id = rng().random_range(0..i32::MAX);
 
         super::delete_unknown_consumer_group(
             cluster_id,
@@ -541,7 +541,7 @@ mod in_memory {
         let _guard = init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
+        let broker_id = rng().random_range(0..i32::MAX);
 
         super::offset_commit_unknown_topition(
             cluster_id,
@@ -556,7 +556,7 @@ mod in_memory {
         let _guard = init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
+        let broker_id = rng().random_range(0..i32::MAX);
 
         super::offset_fetch_unknown_topition(
             cluster_id,
@@ -571,7 +571,7 @@ mod in_memory {
         let _guard = init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
+        let broker_id = rng().random_range(0..i32::MAX);
 
         super::list_groups_none(
             cluster_id,

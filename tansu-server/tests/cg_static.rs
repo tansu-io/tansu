@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -15,7 +15,7 @@
 
 use bytes::Bytes;
 use common::{register_broker, StorageType, CLIENT_ID, COOPERATIVE_STICKY, PROTOCOL_TYPE, RANGE};
-use rand::{prelude::*, thread_rng};
+use rand::{prelude::*, rng};
 use tansu_kafka_sans_io::{join_group_request::JoinGroupRequestProtocol, ErrorCode};
 use tansu_server::{coordinator::group::administrator::Controller, Result};
 use tansu_storage::StorageContainer;
@@ -194,7 +194,7 @@ mod pg {
         let _guard = common::init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
+        let broker_id = rng().random_range(0..i32::MAX);
 
         super::join_with_empty_member_id(
             cluster_id,
@@ -210,7 +210,7 @@ mod pg {
         let _guard = common::init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
+        let broker_id = rng().random_range(0..i32::MAX);
 
         super::rejoin_with_empty_member_id(
             cluster_id,
@@ -244,7 +244,7 @@ mod in_memory {
         let _guard = common::init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
+        let broker_id = rng().random_range(0..i32::MAX);
 
         super::join_with_empty_member_id(
             cluster_id,
@@ -260,7 +260,7 @@ mod in_memory {
         let _guard = common::init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
+        let broker_id = rng().random_range(0..i32::MAX);
 
         super::rejoin_with_empty_member_id(
             cluster_id,

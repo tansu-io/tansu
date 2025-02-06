@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -14,7 +14,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use common::{alphanumeric_string, init_tracing, register_broker, storage_container, StorageType};
-use rand::{prelude::*, thread_rng};
+use rand::{prelude::*, rng};
 use tansu_server::Result;
 use tansu_storage::Storage;
 use tracing::debug;
@@ -27,10 +27,10 @@ mod common;
 async fn with_txn() -> Result<()> {
     let _guard = init_tracing()?;
 
-    let mut rng = thread_rng();
+    let mut rng = rng();
 
     let cluster_id = Uuid::now_v7();
-    let broker_id = rng.gen_range(0..i32::MAX);
+    let broker_id = rng.random_range(0..i32::MAX);
     let mut sc = Url::parse("tcp://127.0.0.1/")
         .map_err(Into::into)
         .and_then(|advertised_listener| {

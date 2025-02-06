@@ -13,7 +13,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use rand::{prelude::*, thread_rng};
+use rand::{prelude::*, rng};
 use tansu_storage::{
     pg::Postgres, BrokerRegistrationRequest, Error, Result, Storage, StorageContainer,
 };
@@ -60,14 +60,14 @@ fn storage_container(cluster: impl Into<String>, node: i32) -> Result<StorageCon
 async fn register_broker() -> Result<()> {
     let _guard = init_tracing()?;
 
-    let mut rng = thread_rng();
+    let mut rng = rng();
 
     let cluster_id = Uuid::now_v7();
-    let broker_id = rng.gen_range(0..i32::MAX);
+    let broker_id = rng.random_range(0..i32::MAX);
     let incarnation_id = Uuid::now_v7();
 
     let mut storage_container = storage_container(cluster_id, broker_id)?;
-    let port = rng.gen_range(1024..u16::MAX);
+    let port = rng.random_range(1024..u16::MAX);
 
     let broker_registration = BrokerRegistrationRequest {
         broker_id,
