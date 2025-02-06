@@ -29,7 +29,7 @@ use object_store::{
     path::Path, Attribute, AttributeValue, Attributes, DynObjectStore, GetOptions, ObjectStore,
     PutMode, PutOptions, PutPayload, PutResult, TagSet, UpdateVersion,
 };
-use rand::{prelude::*, thread_rng};
+use rand::{prelude::*, rng};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tansu_kafka_sans_io::{
     add_partitions_to_txn_response::{
@@ -1453,7 +1453,7 @@ impl Storage for DynoStore {
                                 ?replication_factor
                             );
 
-                            let mut rng = thread_rng();
+                            let mut rng = rng();
                             let mut broker_ids: Vec<_> =
                                 brokers.iter().map(|broker| broker.node_id).collect();
                             broker_ids.shuffle(&mut rng);
@@ -1598,7 +1598,7 @@ impl Storage for DynoStore {
                         ?replication_factor
                     );
 
-                    let mut rng = thread_rng();
+                    let mut rng = rng();
                     let mut broker_ids: Vec<_> =
                         brokers.iter().map(|broker| broker.node_id).collect();
                     broker_ids.shuffle(&mut rng);

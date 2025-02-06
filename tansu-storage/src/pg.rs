@@ -25,7 +25,7 @@ use std::{
 use async_trait::async_trait;
 use bytes::Bytes;
 use deadpool_postgres::{Manager, ManagerConfig, Object, Pool, RecyclingMethod};
-use rand::{prelude::*, thread_rng};
+use rand::{prelude::*, rng};
 use serde_json::Value;
 use tansu_kafka_sans_io::{
     add_partitions_to_txn_response::{
@@ -1829,7 +1829,7 @@ impl Storage for Postgres {
                                         ?replication_factor
                                     );
 
-                                    let mut rng = thread_rng();
+                                    let mut rng = rng();
                                     let mut broker_ids: Vec<_> =
                                         brokers.iter().map(|broker| broker.node_id).collect();
                                     broker_ids.shuffle(&mut rng);
@@ -1923,7 +1923,7 @@ impl Storage for Postgres {
                                         ?replication_factor
                                     );
 
-                                    let mut rng = thread_rng();
+                                    let mut rng = rng();
                                     let mut broker_ids: Vec<_> =
                                         brokers.iter().map(|broker| broker.node_id).collect();
                                     broker_ids.shuffle(&mut rng);
@@ -2019,7 +2019,7 @@ impl Storage for Postgres {
                                 ?replication_factor
                             );
 
-                            let mut rng = thread_rng();
+                            let mut rng = rng();
                             let mut broker_ids: Vec<_> =
                                 brokers.iter().map(|broker| broker.node_id).collect();
                             broker_ids.shuffle(&mut rng);

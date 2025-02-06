@@ -109,7 +109,7 @@ pub async fn create_with_config_delete(
 
 mod pg {
     use common::{init_tracing, StorageType};
-    use rand::{prelude::*, thread_rng};
+    use rand::{prelude::*, rng};
     use url::Url;
 
     use super::*;
@@ -133,7 +133,7 @@ mod pg {
         let _guard = init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
+        let broker_id = rng().random_range(0..i32::MAX);
 
         super::create_delete(
             cluster_id,
@@ -148,7 +148,7 @@ mod pg {
         let _guard = init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
+        let broker_id = rng().random_range(0..i32::MAX);
 
         super::create_with_config_delete(
             cluster_id,
@@ -161,7 +161,7 @@ mod pg {
 
 mod in_memory {
     use common::{init_tracing, StorageType};
-    use rand::{prelude::*, thread_rng};
+    use rand::{prelude::*, rng};
     use url::Url;
 
     use super::*;
@@ -185,7 +185,7 @@ mod in_memory {
         let _guard = init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
+        let broker_id = rng().random_range(0..i32::MAX);
 
         super::create_delete(
             cluster_id,
@@ -200,7 +200,7 @@ mod in_memory {
         let _guard = init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
+        let broker_id = rng().random_range(0..i32::MAX);
 
         super::create_with_config_delete(
             cluster_id,

@@ -17,9 +17,9 @@
 use bytes::Bytes;
 use object_store::memory::InMemory;
 use rand::{
-    distributions::{Alphanumeric, Standard},
+    distr::{Alphanumeric, StandardUniform},
     prelude::*,
-    thread_rng,
+    rng,
 };
 use tansu_kafka_sans_io::{
     fetch_response::{FetchableTopicResponse, NodeEndpoint},
@@ -106,7 +106,7 @@ pub(crate) fn storage_container(
 }
 
 pub(crate) fn alphanumeric_string(length: usize) -> String {
-    thread_rng()
+    rng()
         .sample_iter(&Alphanumeric)
         .take(length)
         .map(char::from)
@@ -114,8 +114,8 @@ pub(crate) fn alphanumeric_string(length: usize) -> String {
 }
 
 pub(crate) fn random_bytes(length: usize) -> Bytes {
-    thread_rng()
-        .sample_iter(Standard)
+    rng()
+        .sample_iter(StandardUniform)
         .take(length)
         .collect::<Vec<u8>>()
         .into()

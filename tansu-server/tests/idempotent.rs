@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -15,7 +15,7 @@
 
 use bytes::Bytes;
 use common::{alphanumeric_string, register_broker, StorageType};
-use rand::{prelude::*, thread_rng};
+use rand::{prelude::*, rng};
 use tansu_kafka_sans_io::{
     create_topics_request::CreatableTopic,
     produce_request::{PartitionProduceData, TopicProduceData},
@@ -525,7 +525,7 @@ mod pg {
         let _guard = common::init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
+        let broker_id = rng().random_range(0..i32::MAX);
 
         super::non_txn_idempotent_unknown_producer_id(
             cluster_id,
@@ -540,7 +540,7 @@ mod pg {
         let _guard = common::init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
+        let broker_id = rng().random_range(0..i32::MAX);
 
         super::non_txn_idempotent(
             cluster_id,
@@ -555,7 +555,7 @@ mod pg {
         let _guard = common::init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
+        let broker_id = rng().random_range(0..i32::MAX);
 
         super::non_txn_idempotent_duplicate_sequence(
             cluster_id,
@@ -569,7 +569,7 @@ mod pg {
     async fn non_txn_idempotent_sequence_out_of_order() -> Result<()> {
         let _guard = common::init_tracing()?;
         let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
+        let broker_id = rng().random_range(0..i32::MAX);
 
         super::non_txn_idempotent_sequence_out_of_order(
             cluster_id,
@@ -602,7 +602,7 @@ mod in_memory {
         let _guard = common::init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
+        let broker_id = rng().random_range(0..i32::MAX);
 
         super::non_txn_idempotent_unknown_producer_id(
             cluster_id,
@@ -617,7 +617,7 @@ mod in_memory {
         let _guard = common::init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
+        let broker_id = rng().random_range(0..i32::MAX);
 
         super::non_txn_idempotent(
             cluster_id,
@@ -632,7 +632,7 @@ mod in_memory {
         let _guard = common::init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
+        let broker_id = rng().random_range(0..i32::MAX);
 
         super::non_txn_idempotent_duplicate_sequence(
             cluster_id,
@@ -647,7 +647,7 @@ mod in_memory {
         let _guard = common::init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
+        let broker_id = rng().random_range(0..i32::MAX);
 
         super::non_txn_idempotent_sequence_out_of_order(
             cluster_id,
