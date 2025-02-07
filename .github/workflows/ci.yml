@@ -100,6 +100,7 @@ jobs:
             flags: ''
     steps:
       - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
       - if: ${{matrix.target == 'aarch64-unknown-linux-musl'}}
         run: |
           rustup target add aarch64-unknown-linux-musl
