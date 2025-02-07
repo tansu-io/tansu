@@ -95,7 +95,7 @@ jobs:
           - target: aarch64-apple-darwin
             os: macos-latest
             flags: ''
-          - target: x84_64-apple-darwin
+          - target: x86_64-apple-darwin
             os: macos-latest
             flags: ''
     steps:
@@ -103,10 +103,10 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - if: ${{matrix.target == 'aarch64-unknown-linux-musl'}}
         run: |
-          rustup target add aarch64-unknown-linux-musl
+          sudo rustup target add aarch64-unknown-linux-musl
           sudo apt update
-          apt install -y crossbuild-essential-arm64
-          apt install -y musl-tools
+          sudo apt install -y crossbuild-essential-arm64
+          sudo apt install -y musl-tools
       - if: ${{matrix.os == 'macos-latest'}}
         run: |
           rustup target add x86_64-apple-darwin
