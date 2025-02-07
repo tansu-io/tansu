@@ -113,12 +113,15 @@ jobs:
           rustup target add aarch64-apple-darwin
       - if: ${{matrix.target == 'x86_64-unknown-linux-musl'}}
         run: |
-          rustup target add x86_64-unknown-linux-musl
+          sudo apt update
+          sudo apt install -y musl-tools
+          sudo rustup target add x86_64-unknown-linux-musl
       - env:
           RUSTFLAGS: ${{matrix.flags}}
           TARGET: ${{matrix.target}}
         run: |
           cargo build --release --target ${{matrix.target}}
+          ls -R target
           tar --create --verbose --gzip --file=tansu-${TARGET}.tar.gz -C target/${TARGET}/release/ tansu{_server,_proxy}
       - uses: actions/upload-artifact@v4
         with:
