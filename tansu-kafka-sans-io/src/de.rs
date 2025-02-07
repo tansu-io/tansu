@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -215,7 +215,7 @@ impl<'de> Decoder<'de> {
         } else {
             self.meta.message.is_some_and(|meta| {
                 self.api_version
-                    .map_or(false, |api_version| meta.is_flexible(api_version))
+                    .is_some_and(|api_version| meta.is_flexible(api_version))
             })
         }
     }
@@ -242,6 +242,11 @@ impl<'de> Decoder<'de> {
         self.meta
             .field
             .is_some_and(|field| field.kind.is_sequence())
+    }
+
+    #[must_use]
+    fn is_structure(&self) -> bool {
+        self.meta.field.is_some_and(|field| field.is_structure())
     }
 
     fn is_records(&self) -> bool {
@@ -425,9 +430,9 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
         }
 
         debug!(
-            "field: {}, value: {v}:{}",
-            self.field_name(),
-            type_name::<V::Value>(),
+            field = self.field_name(),
+            value = v,
+            type_name = type_name::<V::Value>(),
         );
         visitor.visit_i16(v)
     }
@@ -441,9 +446,9 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
         let v = i32::from_be_bytes(buf);
 
         debug!(
-            "field: {}, value: {v}:{}",
-            self.field_name(),
-            type_name::<V::Value>(),
+            field = self.field_name(),
+            v,
+            type_name = type_name::<V::Value>(),
         );
         visitor.visit_i32(v)
     }
@@ -594,11 +599,10 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
         V: Visitor<'de>,
     {
         debug!(
-            "deserialize_string, field: {}, nullable: {}",
-            self.field_name(),
-            self.meta.field.map_or(false, |field| self
+            field = self.field_name(),
+            is_nullable = self.meta.field.is_some_and(|field| self
                 .api_version
-                .map_or(false, |api_version| field.is_nullable(api_version)))
+                .is_some_and(|api_version| field.is_nullable(api_version)))
         );
 
         if self.length.is_none() {
@@ -612,7 +616,7 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
             String::from_utf8(buf)
                 .map_err(Into::into)
                 .inspect(|v| {
-                    debug!(r#"field: {}, value: "{v}""#, self.field_name(),);
+                    debug!(field = self.field_name(), value = v);
                 })
                 .and_then(|s| visitor.visit_string(s))
         } else {
@@ -671,12 +675,14 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
         V: Visitor<'de>,
     {
         debug!(
-            "deserialize_option, field: {}, flexible: {}, valid: {}, string: {}, sequence: {}",
-            self.field_name(),
-            self.is_flexible(),
-            self.is_valid(),
-            self.is_string(),
-            self.is_sequence(),
+            field = self.field_name(),
+            is_flexible = self.is_flexible(),
+            is_valid = self.is_valid(),
+            is_string = self.is_string(),
+            is_sequence = self.is_sequence(),
+            is_nullable = self.is_nullable(),
+            is_structure = self.is_structure(),
+            is_records = self.is_records(),
         );
 
         if self.is_valid() {
@@ -697,7 +703,7 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
                     u32::from_be_bytes(buf)
                 };
 
-                debug!(?length);
+                debug!(length);
 
                 if length == 0 {
                     visitor.visit_none()
@@ -722,7 +728,7 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
                     self.reader.read_exact(&mut buf)?;
 
                     let length = i32::from_be_bytes(buf);
-                    debug!("length: {length}");
+                    debug!(length);
 
                     if length == -1 {
                         self.length = None;
@@ -748,7 +754,7 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
                     self.reader.read_exact(&mut buf)?;
 
                     let length = i16::from_be_bytes(buf);
-                    debug!("length: {length}");
+                    debug!(length);
 
                     if length == -1 {
                         self.length = None;
@@ -757,6 +763,16 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
                         self.length = Some(length.try_into()?);
                         visitor.visit_some(self)
                     }
+                }
+            } else if self.is_nullable() && self.is_structure() {
+                let mut buf = [0u8; 1];
+                self.reader.read_exact(&mut buf)?;
+
+                if (buf[0] as i8) < 0 {
+                    visitor.visit_none()
+                } else {
+                    self.length = None;
+                    visitor.visit_some(self)
                 }
             } else {
                 self.length = None;
@@ -773,11 +789,10 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
         V: Visitor<'de>,
     {
         debug!(
-            "visitor: {}, type name: {}",
-            type_name_of_val(&visitor),
-            type_name::<V::Value>(),
+            visitor = type_name_of_val(&visitor),
+            type_name = type_name::<V::Value>(),
         );
-        todo!()
+        unimplemented!()
     }
 
     fn deserialize_unit_struct<V>(
@@ -789,11 +804,11 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
         V: Visitor<'de>,
     {
         if let Some(field) = self.field {
-            debug!("struct: {:?}, field: {}", self.containers.front(), field);
+            debug!(r#struct = ?self.containers.front(), field);
         }
 
-        debug!("name: {name}, visitor: {}", type_name_of_val(&visitor));
-        todo!()
+        debug!(name, visitor = type_name_of_val(&visitor));
+        unimplemented!()
     }
 
     fn deserialize_newtype_struct<V>(
@@ -805,10 +820,10 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
         V: Visitor<'de>,
     {
         if let Some(field) = self.field {
-            debug!("struct: {:?}, field: {}", self.containers.front(), field);
+            debug!(r#struct = ?self.containers.front(), field);
         }
 
-        debug!("name: {name}, visitor: {}", type_name_of_val(&visitor));
+        debug!(name, visitor = type_name_of_val(&visitor));
         visitor.visit_newtype_struct(self)
     }
 
@@ -817,15 +832,14 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
         V: Visitor<'de>,
     {
         debug!(
-            "seq, type name: {}, length: {:?}, meta.field: {}, of primitive: {}, records: {}",
-            type_name::<V::Value>(),
-            self.length,
-            self.meta.field.is_some(),
-            self.meta.field.is_some_and(|field| field
+            type_name = type_name::<V::Value>(),
+            length = self.length,
+            meta_field = self.meta.field.is_some(),
+            is_seq_of_primitive = self.meta.field.is_some_and(|field| field
                 .kind
                 .kind_of_sequence()
                 .is_some_and(|seq| seq.is_primitive())),
-            self.is_records(),
+            is_records = self.is_records(),
         );
 
         self.in_seq_of_primitive = self.meta.field.is_some_and(|field| {
@@ -856,14 +870,10 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
         V: Visitor<'de>,
     {
         if let Some(field) = self.field {
-            debug!(
-                "tuple, struct: {:?}, field: {}",
-                self.containers.front(),
-                field
-            );
+            debug!(r#struct = ?self.containers.front(), field);
         }
 
-        debug!("len: {len}, visitor: {}", type_name_of_val(&visitor));
+        debug!(len, visitor = type_name_of_val(&visitor));
         visitor.visit_seq(Seq::new(self, Some(len)))
     }
 
@@ -876,19 +886,16 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
     where
         V: Visitor<'de>,
     {
-        debug!(
-            "name: {name}, len: {len}, visitor: {}",
-            type_name_of_val(&visitor)
-        );
-        todo!()
+        debug!(name, len, visitor = type_name_of_val(&visitor));
+        unimplemented!()
     }
 
     fn deserialize_map<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,
     {
-        debug!("visitor: {}", type_name_of_val(&visitor));
-        todo!()
+        debug!(visitor = type_name_of_val(&visitor));
+        unimplemented!()
     }
 
     fn deserialize_struct<V>(
@@ -900,14 +907,14 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
     where
         V: Visitor<'de>,
     {
-        debug!("deserialize_struct, name: {name}, fields: {:?}", fields,);
+        debug!(r#struct = name, ?fields);
 
         self.containers
             .push_front(Container::Struct { name, fields });
 
         let outcome = if let Some(mm) = self.meta.message {
             if let Some(fm) = mm.structures().get(name) {
-                debug!("deserialize_struct, name: {name}");
+                debug!(r#struct = name);
 
                 _ = self.meta.field.replace(*fm);
                 self.meta.parse.push_front(fm.fields.into());
@@ -952,7 +959,7 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
     where
         V: Visitor<'de>,
     {
-        debug!("enum, name: {name}",);
+        debug!(r#enum = name);
 
         self.containers
             .push_front(Container::Enum { name, variants });
@@ -968,9 +975,8 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
         V: Visitor<'de>,
     {
         debug!(
-            "deserialize_identifier, front: {:?}, meta.message.name: {:?}",
-            self.containers.front().map(Container::name),
-            self.meta.message.map(|message| message.name)
+            front = ?self.containers.front().map(Container::name),
+            message_name = self.meta.message.map(|message| message.name)
         );
 
         visitor.visit_str(match (self.containers.front(), self.meta.message) {
@@ -1110,14 +1116,12 @@ impl<'de> SeqAccess<'de> for Struct<'de, '_> {
         }
 
         debug!(
-            "struct name: {} field: {}, flexible: {}, seed type name: {}, meta.field: {}, \
-             records: {}",
-            self.name,
+            struct = self.name,
             field,
-            self.de.is_flexible(),
-            type_name::<T::Value>(),
-            self.de.meta.field.is_some(),
-            self.de.is_records(),
+            is_flexible = self.de.is_flexible(),
+            type_name = type_name::<T::Value>(),
+            meta_field = self.de.meta.field.is_some(),
+            is_records = self.de.is_records(),
         );
 
         self.de.path.push_front(field);
@@ -1163,16 +1167,16 @@ impl<'de> VariantAccess<'de> for Enum<'de, '_> {
     where
         T: DeserializeSeed<'de>,
     {
-        debug!("seed: {}", type_name_of_val(&seed));
-        todo!()
+        debug!(name = self.name, seed = type_name_of_val(&seed));
+        unimplemented!()
     }
 
     fn tuple_variant<V>(self, len: usize, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,
     {
-        debug!("len: {len}, visitor: {}", type_name_of_val(&visitor));
-        todo!()
+        debug!(name = self.name, len, visitor = type_name_of_val(&visitor));
+        unimplemented!()
     }
 
     fn struct_variant<V>(
@@ -1183,8 +1187,11 @@ impl<'de> VariantAccess<'de> for Enum<'de, '_> {
     where
         V: Visitor<'de>,
     {
-        debug!("fields: {fields:?}",);
-
+        debug!(
+            name = self.name,
+            ?fields,
+            visitor = type_name_of_val(&visitor)
+        );
         Deserializer::deserialize_struct(self.de, self.name, fields, visitor)
     }
 }

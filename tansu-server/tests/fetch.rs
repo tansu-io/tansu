@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 
 use bytes::Bytes;
 use common::{alphanumeric_string, init_tracing, register_broker, FetchResponse, StorageType};
-use rand::{prelude::*, thread_rng};
+use rand::{prelude::*, rng};
 use tansu_kafka_sans_io::{
     create_topics_request::CreatableTopic,
     fetch_request::{FetchPartition, FetchTopic},
@@ -61,7 +61,7 @@ pub async fn empty_topic(cluster_id: Uuid, broker_id: i32, mut sc: StorageContai
 
     let record_count = 0;
 
-    let partition_index = thread_rng().gen_range(0..num_partitions);
+    let partition_index = rng().random_range(0..num_partitions);
     let topition = Topition::new(topic_name.clone(), partition_index);
 
     let max_wait_ms = 500;
@@ -78,6 +78,7 @@ pub async fn empty_topic(cluster_id: Uuid, broker_id: i32, mut sc: StorageContai
             last_fetched_epoch: Some(-1),
             log_start_offset: Some(-1),
             partition_max_bytes: 50 * 1024,
+            replica_directory_id: None,
         }]),
     }];
 
@@ -163,7 +164,7 @@ pub async fn simple_non_txn(
 
     let transaction_timeout_ms = 10_000;
 
-    let partition_index = thread_rng().gen_range(0..num_partitions);
+    let partition_index = rng().random_range(0..num_partitions);
     let topition = Topition::new(topic_name.clone(), partition_index);
 
     let list_offsets = sc
@@ -251,6 +252,7 @@ pub async fn simple_non_txn(
             last_fetched_epoch: Some(-1),
             log_start_offset: Some(-1),
             partition_max_bytes: 50 * 1024,
+            replica_directory_id: None,
         }]),
     }];
 
@@ -318,7 +320,7 @@ mod pg {
         let _guard = init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
+        let broker_id = rng().random_range(0..i32::MAX);
 
         super::simple_non_txn(
             cluster_id,
@@ -333,7 +335,7 @@ mod pg {
         let _guard = init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
+        let broker_id = rng().random_range(0..i32::MAX);
 
         super::simple_non_txn(
             cluster_id,
@@ -366,7 +368,7 @@ mod in_memory {
         let _guard = init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
+        let broker_id = rng().random_range(0..i32::MAX);
 
         super::simple_non_txn(
             cluster_id,
@@ -381,7 +383,7 @@ mod in_memory {
         let _guard = init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
+        let broker_id = rng().random_range(0..i32::MAX);
 
         super::simple_non_txn(
             cluster_id,

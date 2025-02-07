@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -29,7 +29,7 @@ use object_store::{
     path::Path, Attribute, AttributeValue, Attributes, DynObjectStore, GetOptions, ObjectStore,
     PutMode, PutOptions, PutPayload, PutResult, TagSet, UpdateVersion,
 };
-use rand::{prelude::*, thread_rng};
+use rand::{prelude::*, rng};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tansu_kafka_sans_io::{
     add_partitions_to_txn_response::{
@@ -54,7 +54,7 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::{
-    BrokerRegistationRequest, Error, GroupDetail, ListOffsetRequest, ListOffsetResponse,
+    BrokerRegistrationRequest, Error, GroupDetail, ListOffsetRequest, ListOffsetResponse,
     MetadataResponse, NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse,
     Result, Storage, TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse,
     TxnOffsetCommitRequest, TxnState, UpdateError, Version, NULL_TOPIC_ID,
@@ -624,7 +624,7 @@ impl DynoStore {
 impl Storage for DynoStore {
     async fn register_broker(
         &mut self,
-        broker_registration: BrokerRegistationRequest,
+        broker_registration: BrokerRegistrationRequest,
     ) -> Result<()> {
         debug!(?broker_registration);
         Ok(())
@@ -1453,7 +1453,7 @@ impl Storage for DynoStore {
                                 ?replication_factor
                             );
 
-                            let mut rng = thread_rng();
+                            let mut rng = rng();
                             let mut broker_ids: Vec<_> =
                                 brokers.iter().map(|broker| broker.node_id).collect();
                             broker_ids.shuffle(&mut rng);
@@ -1598,7 +1598,7 @@ impl Storage for DynoStore {
                         ?replication_factor
                     );
 
-                    let mut rng = thread_rng();
+                    let mut rng = rng();
                     let mut broker_ids: Vec<_> =
                         brokers.iter().map(|broker| broker.node_id).collect();
                     broker_ids.shuffle(&mut rng);
@@ -1662,28 +1662,32 @@ impl Storage for DynoStore {
 
         match resource {
             ConfigResource::Topic => match self.topic_metadata(&TopicId::Name(name.into())).await {
-                Ok(topic_metadata) => Ok(DescribeConfigsResult {
-                    error_code: ErrorCode::None.into(),
-                    error_message: Some("None".into()),
-                    resource_type: i8::from(resource),
-                    resource_name: name.into(),
-                    configs: topic_metadata.topic.configs.map(|configs| {
-                        configs
-                            .iter()
-                            .map(|config| DescribeConfigsResourceResult {
-                                name: config.name.clone(),
-                                value: config.value.clone(),
-                                read_only: false,
-                                is_default: Some(false),
-                                config_source: Some(ConfigSource::DefaultConfig.into()),
-                                is_sensitive: false,
-                                synonyms: Some([].into()),
-                                config_type: Some(ConfigType::String.into()),
-                                documentation: Some("".into()),
-                            })
-                            .collect()
-                    }),
-                }),
+                Ok(topic_metadata) => {
+                    let error_code = ErrorCode::None;
+
+                    Ok(DescribeConfigsResult {
+                        error_code: error_code.into(),
+                        error_message: Some(error_code.to_string()),
+                        resource_type: i8::from(resource),
+                        resource_name: name.into(),
+                        configs: topic_metadata.topic.configs.map(|configs| {
+                            configs
+                                .iter()
+                                .map(|config| DescribeConfigsResourceResult {
+                                    name: config.name.clone(),
+                                    value: config.value.clone(),
+                                    read_only: false,
+                                    is_default: None,
+                                    config_source: Some(ConfigSource::DefaultConfig.into()),
+                                    is_sensitive: false,
+                                    synonyms: Some([].into()),
+                                    config_type: Some(ConfigType::String.into()),
+                                    documentation: Some("".into()),
+                                })
+                                .collect()
+                        }),
+                    })
+                }
                 Err(_) => todo!(),
             },
 
@@ -1710,6 +1714,7 @@ impl Storage for DynoStore {
                     group_id: group_id.as_ref().into(),
                     protocol_type: "consumer".into(),
                     group_state: Some("Unknown".into()),
+                    group_type: None,
                 });
             }
         }

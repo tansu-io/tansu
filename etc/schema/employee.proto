@@ -1,0 +1,10 @@
+syntax = 'proto3';
+
+message Key {
+  int32 id = 1;
+}
+
+message Value {
+  string name = 1;
+  string email = 2;
+}

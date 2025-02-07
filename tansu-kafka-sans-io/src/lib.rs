@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -36,6 +36,7 @@ use std::{
 };
 use tansu_kafka_model::{MessageKind, MessageMeta};
 use tracing::{debug, error, warn};
+use tracing_subscriber::filter::ParseError;
 
 #[derive(Debug)]
 pub struct RootMessageMeta {
@@ -97,6 +98,7 @@ pub enum Error {
     NoSuchField(&'static str),
     NoSuchMessage(&'static str),
     NoSuchRequest(i16),
+    ParseFilter(#[from] ParseError),
     Snap(#[from] snap::Error),
     StringWithoutApiVersion,
     StringWithoutLength,
@@ -198,6 +200,7 @@ impl Frame {
     }
 
     pub fn request_from_bytes(bytes: &[u8]) -> Result<Frame> {
+        debug!(?bytes);
         let mut c = Cursor::new(bytes);
         let mut deserializer = Decoder::request(&mut c);
         Frame::deserialize(&mut deserializer)
@@ -269,7 +272,7 @@ impl TryFrom<HeaderMezzanine> for Header {
     type Error = Error;
 
     fn try_from(value: HeaderMezzanine) -> Result<Self, Self::Error> {
-        debug!("value: {value:?}");
+        debug!(?value);
 
         match value {
             HeaderMezzanine::Request {

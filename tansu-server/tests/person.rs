@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -15,7 +15,7 @@
 
 use bytes::Bytes;
 use common::register_broker;
-use rand::{prelude::*, thread_rng};
+use rand::{prelude::*, rng};
 use serde_json::json;
 use tansu_kafka_sans_io::{
     create_topics_request::CreatableTopic,
@@ -58,14 +58,10 @@ pub async fn person_valid(
         .await?;
     debug!(?topic_id);
 
-    let partition_index = thread_rng().gen_range(0..num_partitions);
+    let partition_index = rng().random_range(0..num_partitions);
     let topition = Topition::new(topic_name.to_owned(), partition_index);
 
-    let key = serde_json::to_vec(&json!({
-          "code": "ABC-123"
-        }
-    ))
-    .map(Bytes::from)?;
+    let key = serde_json::to_vec(&json!("ABC-123")).map(Bytes::from)?;
 
     let value = serde_json::to_vec(&json!({
       "firstName": "John",
@@ -121,14 +117,10 @@ pub async fn person_invalid(
         .await?;
     debug!(?topic_id);
 
-    let partition_index = thread_rng().gen_range(0..num_partitions);
+    let partition_index = rng().random_range(0..num_partitions);
     let topition = Topition::new(topic_name.to_owned(), partition_index);
 
-    let key = serde_json::to_vec(&json!({
-          "code": "ABC-123"
-        }
-    ))
-    .map(Bytes::from)?;
+    let key = serde_json::to_vec(&json!("ABC-123")).map(Bytes::from)?;
 
     let value = serde_json::to_vec(&json!({
       "firstName": "John",
@@ -195,7 +187,7 @@ mod pg {
         let _guard = init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
+        let broker_id = rng().random_range(0..i32::MAX);
 
         super::person_valid(
             cluster_id,
@@ -210,7 +202,7 @@ mod pg {
         let _guard = init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
+        let broker_id = rng().random_range(0..i32::MAX);
 
         super::person_invalid(
             cluster_id,
@@ -258,7 +250,7 @@ mod in_memory {
         let _guard = init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
+        let broker_id = rng().random_range(0..i32::MAX);
 
         super::person_valid(
             cluster_id,
@@ -273,7 +265,7 @@ mod in_memory {
         let _guard = init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
+        let broker_id = rng().random_range(0..i32::MAX);
 
         super::person_invalid(
             cluster_id,

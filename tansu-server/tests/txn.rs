@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 
 use bytes::Bytes;
 use common::{alphanumeric_string, init_tracing, register_broker, StorageType};
-use rand::{prelude::*, thread_rng};
+use rand::{prelude::*, rng};
 use tansu_kafka_sans_io::{
     add_partitions_to_txn_request::AddPartitionsToTxnTopic,
     add_partitions_to_txn_response::{
@@ -30,7 +30,7 @@ use tansu_kafka_sans_io::{
 };
 use tansu_server::Result;
 use tansu_storage::{
-    ListOffsetRequest, Storage, StorageContainer, Topition, TxnAddPartitionsRequest,
+    ListOffsetRequest, Storage, StorageContainer, TopicId, Topition, TxnAddPartitionsRequest,
     TxnOffsetCommitRequest,
 };
 use tracing::{debug, error};
@@ -71,7 +71,7 @@ pub async fn simple_txn_commit_offset_commit(
 
     let transaction_timeout_ms = 10_000;
 
-    let partition_index = thread_rng().gen_range(0..num_partitions);
+    let partition_index = rng().random_range(0..num_partitions);
 
     let transaction_id = alphanumeric_string(10);
     let group_id = alphanumeric_string(10);
@@ -153,6 +153,11 @@ pub async fn simple_txn_commit_offset_commit(
     assert!(offsets.contains_key(&topition));
     assert_eq!(Some(&committed_offset), offsets.get(&topition));
 
+    assert_eq!(
+        ErrorCode::None,
+        sc.delete_topic(&TopicId::from(topic_id)).await?
+    );
+
     Ok(())
 }
 
@@ -188,7 +193,7 @@ pub async fn simple_txn_commit_offset_abort(
 
     let transaction_timeout_ms = 10_000;
 
-    let partition_index = thread_rng().gen_range(0..num_partitions);
+    let partition_index = rng().random_range(0..num_partitions);
 
     let transaction_id = alphanumeric_string(10);
     let group_id = alphanumeric_string(10);
@@ -270,6 +275,11 @@ pub async fn simple_txn_commit_offset_abort(
     assert!(offsets.contains_key(&topition));
     assert_eq!(Some(&-1), offsets.get(&topition));
 
+    assert_eq!(
+        ErrorCode::None,
+        sc.delete_topic(&TopicId::from(topic_id)).await?
+    );
+
     Ok(())
 }
 
@@ -305,7 +315,7 @@ pub async fn simple_txn_produce_commit(
 
     let transaction_timeout_ms = 10_000;
 
-    let partition_index = thread_rng().gen_range(0..num_partitions);
+    let partition_index = rng().random_range(0..num_partitions);
     let topition = Topition::new(topic_name.clone(), partition_index);
     let num_records = 6;
     let num_transactions = 1;
@@ -553,6 +563,11 @@ pub async fn simple_txn_produce_commit(
         assert_eq!(Some(offset), list_offsets_after[0].1.offset);
     }
 
+    assert_eq!(
+        ErrorCode::None,
+        sc.delete_topic(&TopicId::from(topic_id)).await?
+    );
+
     Ok(())
 }
 
@@ -588,7 +603,7 @@ pub async fn simple_txn_produce_abort(
 
     let transaction_timeout_ms = 10_000;
 
-    let partition_index = thread_rng().gen_range(0..num_partitions);
+    let partition_index = rng().random_range(0..num_partitions);
     let topition = Topition::new(topic_name.clone(), partition_index);
     let num_records = 6;
     let num_transactions = 1;
@@ -835,6 +850,11 @@ pub async fn simple_txn_produce_abort(
         assert_eq!(Some(offset), list_offsets_after[0].1.offset);
     }
 
+    assert_eq!(
+        ErrorCode::None,
+        sc.delete_topic(&TopicId::from(topic_id)).await?
+    );
+
     Ok(())
 }
 
@@ -872,7 +892,7 @@ pub async fn with_overlap(
 
     let transaction_timeout_ms = 10_000;
 
-    let partition_index = thread_rng().gen_range(0..num_partitions);
+    let partition_index = rng().random_range(0..num_partitions);
     let topition = Topition::new(topic_name.clone(), partition_index);
     let num_records = 6;
     let num_transactions = 2;
@@ -1200,6 +1220,11 @@ pub async fn with_overlap(
         assert_eq!(Some(offset), list_offsets_after[0].1.offset);
     }
 
+    assert_eq!(
+        ErrorCode::None,
+        sc.delete_topic(&TopicId::from(topic_id)).await?
+    );
+
     Ok(())
 }
 
@@ -1235,7 +1260,7 @@ pub async fn init_producer_twice(
 
     let transaction_timeout_ms = 10_000;
 
-    let partition_index = thread_rng().gen_range(0..num_partitions);
+    let partition_index = rng().random_range(0..num_partitions);
     let topition = Topition::new(topic_name.clone(), partition_index);
     let num_records = 6;
     let num_transactions = 2;
@@ -1514,6 +1539,11 @@ pub async fn init_producer_twice(
         batches[0].records[0].value
     );
 
+    assert_eq!(
+        ErrorCode::None,
+        sc.delete_topic(&TopicId::from(topic_id)).await?
+    );
+
     Ok(())
 }
 
@@ -1539,7 +1569,7 @@ mod pg {
         let _guard = init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
+        let broker_id = rng().random_range(0..i32::MAX);
 
         super::simple_txn_commit_offset_abort(
             cluster_id,
@@ -1554,7 +1584,7 @@ mod pg {
         let _guard = init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
+        let broker_id = rng().random_range(0..i32::MAX);
 
         super::simple_txn_commit_offset_commit(
             cluster_id,
@@ -1569,7 +1599,7 @@ mod pg {
         let _guard = init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
+        let broker_id = rng().random_range(0..i32::MAX);
 
         super::simple_txn_produce_commit(
             cluster_id,
@@ -1584,7 +1614,7 @@ mod pg {
         let _guard = init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
+        let broker_id = rng().random_range(0..i32::MAX);
 
         super::simple_txn_produce_abort(
             cluster_id,
@@ -1599,7 +1629,7 @@ mod pg {
         let _guard = init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
+        let broker_id = rng().random_range(0..i32::MAX);
 
         super::with_overlap(
             cluster_id,
@@ -1614,7 +1644,7 @@ mod pg {
         let _guard = init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
+        let broker_id = rng().random_range(0..i32::MAX);
 
         super::init_producer_twice(
             cluster_id,
@@ -1647,7 +1677,7 @@ mod in_memory {
         let _guard = init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
+        let broker_id = rng().random_range(0..i32::MAX);
 
         super::simple_txn_commit_offset_abort(
             cluster_id,
@@ -1662,7 +1692,7 @@ mod in_memory {
         let _guard = init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
+        let broker_id = rng().random_range(0..i32::MAX);
 
         super::simple_txn_commit_offset_commit(
             cluster_id,
@@ -1677,7 +1707,7 @@ mod in_memory {
         let _guard = init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
+        let broker_id = rng().random_range(0..i32::MAX);
 
         super::simple_txn_produce_commit(
             cluster_id,
@@ -1692,7 +1722,7 @@ mod in_memory {
         let _guard = init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
+        let broker_id = rng().random_range(0..i32::MAX);
 
         super::simple_txn_produce_abort(
             cluster_id,
@@ -1707,7 +1737,7 @@ mod in_memory {
         let _guard = init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
+        let broker_id = rng().random_range(0..i32::MAX);
 
         super::with_overlap(
             cluster_id,
@@ -1722,7 +1752,7 @@ mod in_memory {
         let _guard = init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
+        let broker_id = rng().random_range(0..i32::MAX);
 
         super::init_producer_twice(
             cluster_id,

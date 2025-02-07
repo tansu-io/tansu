@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -26,7 +26,7 @@ use std::{
     path::Path,
 };
 use syn::{Expr, Type};
-use tansu_kafka_model::{wv::Wv, CommonStruct, Field, Message};
+use tansu_kafka_model::{wv::Wv, CommonStruct, Field, Listener, Message};
 
 #[derive(Debug)]
 #[allow(dead_code)]
@@ -1225,10 +1225,24 @@ pub fn main() {
 
     let messages = all(files).unwrap_or_else(|e| panic!("all: {e:?}"));
 
-    let tagged = process(&messages, true);
-    let untagged = process(&messages, false);
+    let broker_api_keys = messages
+        .iter()
+        .filter(|m| {
+            m.listeners()
+                .is_some_and(|listeners| listeners.contains(&Listener::Broker))
+        })
+        .map(|m| m.api_key())
+        .collect::<Vec<_>>();
 
-    let message_meta = message_meta(&messages);
+    let broker_messages = messages
+        .into_iter()
+        .filter(|message| broker_api_keys.contains(&message.api_key()))
+        .collect::<Vec<_>>();
+
+    let tagged = process(&broker_messages, true);
+    let untagged = process(&broker_messages, false);
+
+    let message_meta = message_meta(&broker_messages);
 
     let out_dir = env::var_os("OUT_DIR").unwrap();
     let dest_path = Path::new(&out_dir).join("generate.rs");

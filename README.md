@@ -10,7 +10,8 @@ Features:
 
 - Kafka API compatible
 - Elastic stateless brokers: no more planning and reassigning partitions to a broker
-- Embedded JSON [schema registration and validation](docs/schema-registry.md) of messages
+- Embedded [JSON Schema][json-schema-org] or [Protocol buffers][protocol-buffers]
+  [schema registration and validation](docs/schema-registry.md) of messages
 - Consensus free without the overhead of [Raft][raft-consensus] or [ZooKeeper][apache-zookeeper]
 - All brokers are the leader and ISR of any topic partition
 - All brokers are the transaction and group coordinator
@@ -25,32 +26,59 @@ For data durability:
   streaming transaction logs files to an archive
 - The memory storage engine is designed for ephemeral non-production environments
 
-## S3
+## configuration
 
-Tansu requires that the underlying S3 service support conditional
-PUT requests. While
-[AWS S3 does now support conditional writes][aws-s3-conditional-writes],
-the support is
-[limited to not overwriting an existing object][aws-s3-conditional-requests].
-To have stateless brokers we need to
-[use a compare and set operation][tigris-conditional-writes],
-which is not currently available in AWS S3.
+```shell
+Usage: tansu-server [OPTIONS] --kafka-cluster-id <KAFKA_CLUSTER_ID>
 
-Much like the Kafka protocol, the S3 protocol allows vendors to
-differentiate. Different levels of service while retaining
-compatibility with the underlying API. You can use [minio][min-io],
-[r2][cloudflare-r2] or [tigis][tigris-conditional-writes],
-among a number of other vendors supporting conditional put.
+Options:
+      --kafka-cluster-id <KAFKA_CLUSTER_ID>
 
-Tansu uses [object store][crates-io-object-store], providing a
-multi-cloud API for storage. There is an alternative option to use a
-[DynamoDB-based commit protocol, to provide conditional write support
-for AWS S3][object-store-dynamo-conditional-put] instead.
+      --kafka-listener-url <KAFKA_LISTENER_URL>
+          [default: tcp://0.0.0.0:9092]
+      --kafka-advertised-listener-url <KAFKA_ADVERTISED_LISTENER_URL>
+          [default: tcp://localhost:9092]
+      --storage-engine <STORAGE_ENGINE>
+          [default: postgres://postgres:postgres@localhost]
+      --schema-registry <SCHEMA_REGISTRY>
 
-### configuration
+  -h, --help
+          Print help
+  -V, --version
+          Print version
+```
 
-The `storage-engine` parameter is a S3 URL that specifies the bucket
-to be used. The following will configure a S3 storage engine
+The only mandatory parameter is `kafka-cluster-id` which identifies the cluster.
+All brokers in the same cluster should use the same cluster id.
+In Tansu, all brokers in the same cluster are equal.
+
+The `kafka-listener-url` defines the IPv4 address that Tansu will listen for connections.
+The default is `tcp://0.0.0.0:9092` causing Tansu to listen on port 9092 on all available interfaces.
+For a non-public server you might want to use `tcp://localhost:9092` instead.
+
+The `kafka-advertised-listener-url` defines the IPv4 address used in broker
+metadata advertisements used by Kafka API clients. This must be an address that is reachable by clients.
+This might be your load balancer, gateway or DNS name of the server running Tansu.
+
+The `schema-registry` is an optional URL defining the location of a schema registry.
+At present, tansu supports the s3 URL scheme, e.g., `s3://schema`
+or file based registries, e.g., `file://./etc/schema`.
+When this option is present, Tansu will validate any message produced to a
+topic that has an associated schema. Assuming the topic is called `person` any
+message produced will be validated against `person.proto` (protobuf) or `person.json` (JSON schema).
+If there is no schema associated with the topic, then this option has no effect.
+More details are [here](docs/schema-registry.md).
+
+The `storage-engine` parameter is a URL defining the storage being used by Tansu,
+some examples:
+
+- s3://tansu/
+- postgres://postgres:postgres@localhost
+- memory://tansu/
+
+### s3
+
+The following will configure a S3 storage engine
 using the "tansu" bucket (full context is in
 [compose.yaml](compose.yaml) and [.env](.env)):
 
@@ -109,6 +137,18 @@ kafka-topics \
   --create --topic test
 ```
 
+Describe the `test` topic:
+
+```shell
+kafka-topics \
+  --bootstrap-server localhost:9092 \
+  --describe \
+  --topic test
+```
+
+Note that node 111 is the leader and ISR for each topic partition.
+This node represents the broker handling your request. All brokers are node 111.
+
 Producer:
 
 ```shell
@@ -117,11 +157,12 @@ echo "hello world" | kafka-console-producer \
     --topic test
 ```
 
-Consumer:
+Group consumer using `test-consumer-group`:
 
 ```shell
 kafka-console-consumer \
   --bootstrap-server localhost:9092 \
+  --group test-consumer-group \
   --topic test \
   --from-beginning \
   --property print.timestamp=true \
@@ -132,15 +173,16 @@ kafka-console-consumer \
   --property print.value=true
 ```
 
-Describe the consumer groups:
+Describe the consumer `test-consumer-group` group:
 
 ```shell
 kafka-consumer-groups \
   --bootstrap-server localhost:9092 \
-  --list
+  --group test-consumer-group \
+  --describe
 ```
 
-## PostgreSQL
+### PostgreSQL
 
 To switch between the minio and PostgreSQL examples, firstly
 shutdown Tansu:
@@ -189,6 +231,7 @@ Consumer:
 ```shell
 kafka-console-consumer \
   --bootstrap-server localhost:9092 \
+  --group test-consumer-group \
   --topic test \
   --from-beginning \
   --property print.timestamp=true \
@@ -235,11 +278,13 @@ Tansu is licensed under the [GNU AGPL][agpl-license].
 [continuous-archiving]: https://www.postgresql.org/docs/current/continuous-archiving.html
 [crates-io-object-store]: https://crates.io/crates/object_store
 [github-com-tansu-io]: https://github.com/tansu-io/tansu
+[json-schema-org]: https://json-schema.org/
 [librdkafka]: https://github.com/confluentinc/librdkafka
 [min-io]: https://min.io
 [minio-create-access-key]: https://min.io/docs/minio/container/administration/console/security-and-access.html#id1
 [minio-create-bucket]: https://min.io/docs/minio/container/administration/console/managing-objects.html#creating-buckets
 [object-store-dynamo-conditional-put]: https://docs.rs/object_store/0.11.0/object_store/aws/struct.DynamoCommit.html
+[protocol-buffers]: https://protobuf.dev
 [raft-consensus]: https://raft.github.io
 [rust-lang-org]: https://www.rust-lang.org
 [tansu-issues]: https://github.com/tansu-io/tansu/issues

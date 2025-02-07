@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -15,10 +15,11 @@
 
 use crate::Result;
 use tansu_kafka_sans_io::{
-    describe_configs_request::DescribeConfigsResource, Body, ConfigResource,
+    describe_configs_request::DescribeConfigsResource,
+    describe_configs_response::DescribeConfigsResult, ConfigResource,
 };
 use tansu_storage::Storage;
-use tracing::error;
+use tracing::{debug, error};
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct DescribeConfigsRequest<S> {
@@ -38,9 +39,8 @@ where
         resources: Option<&[DescribeConfigsResource]>,
         include_synonyms: Option<bool>,
         include_documentation: Option<bool>,
-    ) -> Result<Body> {
-        let _ = include_synonyms;
-        let _ = include_documentation;
+    ) -> Result<Vec<DescribeConfigsResult>> {
+        debug!(?resources, ?include_synonyms, ?include_documentation);
 
         let mut results = vec![];
 
@@ -59,9 +59,6 @@ where
             }
         }
 
-        Ok(Body::DescribeConfigsResponse {
-            throttle_time_ms: 0,
-            results: Some(results),
-        })
+        Ok(results)
     }
 }

@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -19,7 +19,7 @@ use common::{
     storage_container, sync_group, HeartbeatResponse, OffsetFetchResponse, StorageType, CLIENT_ID,
     COOPERATIVE_STICKY, PROTOCOL_TYPE, RANGE,
 };
-use rand::{prelude::*, thread_rng};
+use rand::{prelude::*, rng};
 use tansu_kafka_sans_io::{
     add_partitions_to_txn_request::AddPartitionsToTxnTopic,
     create_topics_request::CreatableTopic,
@@ -47,10 +47,10 @@ mod common;
 async fn simple_txn_commit() -> Result<()> {
     let _guard = init_tracing()?;
 
-    let mut rng = thread_rng();
+    let mut rng = rng();
 
     let cluster_id = Uuid::now_v7();
-    let broker_id = rng.gen_range(0..i32::MAX);
+    let broker_id = rng.random_range(0..i32::MAX);
 
     let mut sc = Url::parse("tcp://127.0.0.1/")
         .map_err(Into::into)
@@ -90,7 +90,7 @@ async fn simple_txn_commit() -> Result<()> {
         .await?;
     debug!(?input_topic_id);
 
-    let input_partition_index = rng.gen_range(0..num_partitions);
+    let input_partition_index = rng.random_range(0..num_partitions);
     let input_topition = Topition::new(input_topic_name.clone(), input_partition_index);
     let records = 6;
 
@@ -379,7 +379,7 @@ async fn simple_txn_commit() -> Result<()> {
         .await?
     );
 
-    let output_partition_index = rng.gen_range(0..num_partitions);
+    let output_partition_index = rng.random_range(0..num_partitions);
     let output_topition = Topition::new(output_topic_name.clone(), output_partition_index);
 
     // verify the high watermark of the output topic is 0

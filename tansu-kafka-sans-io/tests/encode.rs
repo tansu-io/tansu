@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -14,9 +14,10 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use bytes::Bytes;
+use common::init_tracing;
 use pretty_assertions::assert_eq;
 use serde::Serialize;
-use std::{fs::File, io::Cursor, sync::Arc, thread};
+use std::io::Cursor;
 use tansu_kafka_sans_io::{
     join_group_request::JoinGroupRequestProtocol,
     join_group_response::JoinGroupResponseMember,
@@ -25,41 +26,10 @@ use tansu_kafka_sans_io::{
         Record,
     },
     ser::Encoder,
-    Body, Error, Frame, Header, Result,
+    Body, Frame, Header, Result,
 };
-use tracing::subscriber::DefaultGuard;
-use tracing_subscriber::fmt::format::FmtSpan;
 
-#[cfg(miri)]
-fn init_tracing() -> Result<()> {
-    Ok(())
-}
-
-#[cfg(not(miri))]
-fn init_tracing() -> Result<DefaultGuard> {
-    Ok(tracing::subscriber::set_default(
-        tracing_subscriber::fmt()
-            .with_level(true)
-            .with_line_number(true)
-            .with_thread_names(false)
-            .with_max_level(tracing::Level::DEBUG)
-            .with_span_events(FmtSpan::ACTIVE)
-            .with_writer(
-                thread::current()
-                    .name()
-                    .ok_or(Error::Message(String::from("unnamed thread")))
-                    .and_then(|name| {
-                        File::create(format!(
-                            "../logs/{}/encode-{name}.log",
-                            env!("CARGO_PKG_NAME")
-                        ))
-                        .map_err(Into::into)
-                    })
-                    .map(Arc::new)?,
-            )
-            .finish(),
-    ))
-}
+pub mod common;
 
 #[test]
 fn api_versions_request_v3_000() -> Result<()> {
@@ -674,7 +644,7 @@ fn api_versions_response_v3_000() -> Result<()> {
 
 #[test]
 fn create_topics_request_v7_000() -> Result<()> {
-    use tansu_kafka_sans_io::create_topics_request::{CreatableTopic, CreateableTopicConfig};
+    use tansu_kafka_sans_io::create_topics_request::{CreatableTopic, CreatableTopicConfig};
 
     let _guard = init_tracing()?;
 
@@ -696,7 +666,7 @@ fn create_topics_request_v7_000() -> Result<()> {
                 replication_factor: -1,
                 assignments: Some([].into()),
                 configs: Some(
-                    [CreateableTopicConfig {
+                    [CreatableTopicConfig {
                         name: "cleanup.policy".into(),
                         value: Some("compact".into()),
                     }]
@@ -1166,6 +1136,1385 @@ fn describe_configs_request_v4_000() -> Result<()> {
 }
 
 #[test]
+fn describe_configs_request_v4_001() -> Result<()> {
+    use tansu_kafka_sans_io::describe_configs_request::DescribeConfigsResource;
+
+    let _guard = init_tracing()?;
+
+    let v = vec![
+        0, 0, 0, 40, 0, 32, 0, 4, 0, 0, 0, 3, 0, 13, 97, 100, 109, 105, 110, 99, 108, 105, 101,
+        110, 116, 45, 49, 0, 2, 2, 9, 95, 115, 99, 104, 101, 109, 97, 115, 0, 0, 1, 0, 0,
+    ];
+
+    let mut c = Cursor::new(vec![]);
+    let mut serializer = Encoder::request(&mut c);
+
+    let frame = Frame {
+        size: 40,
+        header: Header::Request {
+            api_key: 32,
+            api_version: 4,
+            correlation_id: 3,
+            client_id: Some("adminclient-1".into()),
+        },
+        body: Body::DescribeConfigsRequest {
+            resources: Some(
+                [DescribeConfigsResource {
+                    resource_type: 2,
+                    resource_name: "_schemas".into(),
+                    configuration_keys: None,
+                }]
+                .into(),
+            ),
+            include_synonyms: Some(true),
+            include_documentation: Some(false),
+        },
+    };
+
+    frame.serialize(&mut serializer)?;
+
+    assert_eq!(v, c.into_inner());
+
+    Ok(())
+}
+
+#[test]
+fn describe_configs_request_v4_002() -> Result<()> {
+    use tansu_kafka_sans_io::describe_configs_request::DescribeConfigsResource;
+
+    let _guard = init_tracing()?;
+
+    let v = vec![
+        0, 0, 0, 36, 0, 32, 0, 4, 0, 0, 0, 6, 0, 13, 97, 100, 109, 105, 110, 99, 108, 105, 101,
+        110, 116, 45, 49, 0, 2, 2, 5, 116, 101, 115, 116, 0, 0, 0, 0, 0,
+    ];
+
+    let mut c = Cursor::new(vec![]);
+    let mut serializer = Encoder::request(&mut c);
+
+    let frame = Frame {
+        size: 36,
+        header: Header::Request {
+            api_key: 32,
+            api_version: 4,
+            correlation_id: 6,
+            client_id: Some("adminclient-1".into()),
+        },
+        body: Body::DescribeConfigsRequest {
+            resources: Some(
+                [DescribeConfigsResource {
+                    resource_type: 2,
+                    resource_name: "test".into(),
+                    configuration_keys: None,
+                }]
+                .into(),
+            ),
+            include_synonyms: Some(false),
+            include_documentation: Some(false),
+        },
+    };
+
+    frame.serialize(&mut serializer)?;
+
+    assert_eq!(v, c.into_inner());
+
+    Ok(())
+}
+
+#[test]
+fn describe_configs_response_v4_001() -> Result<()> {
+    use tansu_kafka_sans_io::describe_configs_response::{
+        DescribeConfigsResourceResult, DescribeConfigsResult, DescribeConfigsSynonym,
+    };
+
+    let _guard = init_tracing()?;
+
+    let expected = vec![
+        0, 0, 9, 26, 0, 0, 0, 3, 0, 0, 0, 0, 0, 2, 0, 0, 1, 2, 9, 95, 115, 99, 104, 101, 109, 97,
+        115, 35, 17, 99, 111, 109, 112, 114, 101, 115, 115, 105, 111, 110, 46, 116, 121, 112, 101,
+        9, 112, 114, 111, 100, 117, 99, 101, 114, 0, 5, 0, 2, 17, 99, 111, 109, 112, 114, 101, 115,
+        115, 105, 111, 110, 46, 116, 121, 112, 101, 9, 112, 114, 111, 100, 117, 99, 101, 114, 5, 0,
+        2, 0, 0, 38, 108, 101, 97, 100, 101, 114, 46, 114, 101, 112, 108, 105, 99, 97, 116, 105,
+        111, 110, 46, 116, 104, 114, 111, 116, 116, 108, 101, 100, 46, 114, 101, 112, 108, 105, 99,
+        97, 115, 1, 0, 5, 0, 1, 7, 0, 0, 22, 114, 101, 109, 111, 116, 101, 46, 115, 116, 111, 114,
+        97, 103, 101, 46, 101, 110, 97, 98, 108, 101, 6, 102, 97, 108, 115, 101, 0, 5, 0, 1, 1, 0,
+        0, 30, 109, 101, 115, 115, 97, 103, 101, 46, 100, 111, 119, 110, 99, 111, 110, 118, 101,
+        114, 115, 105, 111, 110, 46, 101, 110, 97, 98, 108, 101, 5, 116, 114, 117, 101, 0, 5, 0, 2,
+        34, 108, 111, 103, 46, 109, 101, 115, 115, 97, 103, 101, 46, 100, 111, 119, 110, 99, 111,
+        110, 118, 101, 114, 115, 105, 111, 110, 46, 101, 110, 97, 98, 108, 101, 5, 116, 114, 117,
+        101, 5, 0, 1, 0, 0, 20, 109, 105, 110, 46, 105, 110, 115, 121, 110, 99, 46, 114, 101, 112,
+        108, 105, 99, 97, 115, 2, 49, 0, 5, 0, 2, 20, 109, 105, 110, 46, 105, 110, 115, 121, 110,
+        99, 46, 114, 101, 112, 108, 105, 99, 97, 115, 2, 49, 5, 0, 3, 0, 0, 18, 115, 101, 103, 109,
+        101, 110, 116, 46, 106, 105, 116, 116, 101, 114, 46, 109, 115, 2, 48, 0, 5, 0, 1, 5, 0, 0,
+        19, 108, 111, 99, 97, 108, 46, 114, 101, 116, 101, 110, 116, 105, 111, 110, 46, 109, 115,
+        3, 45, 50, 0, 5, 0, 2, 23, 108, 111, 103, 46, 108, 111, 99, 97, 108, 46, 114, 101, 116,
+        101, 110, 116, 105, 111, 110, 46, 109, 115, 3, 45, 50, 5, 0, 5, 0, 0, 15, 99, 108, 101, 97,
+        110, 117, 112, 46, 112, 111, 108, 105, 99, 121, 7, 100, 101, 108, 101, 116, 101, 0, 5, 0,
+        2, 19, 108, 111, 103, 46, 99, 108, 101, 97, 110, 117, 112, 46, 112, 111, 108, 105, 99, 121,
+        7, 100, 101, 108, 101, 116, 101, 5, 0, 7, 0, 0, 9, 102, 108, 117, 115, 104, 46, 109, 115,
+        20, 57, 50, 50, 51, 51, 55, 50, 48, 51, 54, 56, 53, 52, 55, 55, 53, 56, 48, 55, 0, 5, 0, 1,
+        5, 0, 0, 40, 102, 111, 108, 108, 111, 119, 101, 114, 46, 114, 101, 112, 108, 105, 99, 97,
+        116, 105, 111, 110, 46, 116, 104, 114, 111, 116, 116, 108, 101, 100, 46, 114, 101, 112,
+        108, 105, 99, 97, 115, 1, 0, 5, 0, 1, 7, 0, 0, 22, 99, 111, 109, 112, 114, 101, 115, 115,
+        105, 111, 110, 46, 108, 122, 52, 46, 108, 101, 118, 101, 108, 2, 57, 0, 5, 0, 2, 22, 99,
+        111, 109, 112, 114, 101, 115, 115, 105, 111, 110, 46, 108, 122, 52, 46, 108, 101, 118, 101,
+        108, 2, 57, 5, 0, 3, 0, 0, 14, 115, 101, 103, 109, 101, 110, 116, 46, 98, 121, 116, 101,
+        115, 11, 49, 48, 55, 51, 55, 52, 49, 56, 50, 52, 0, 4, 0, 3, 18, 108, 111, 103, 46, 115,
+        101, 103, 109, 101, 110, 116, 46, 98, 121, 116, 101, 115, 11, 49, 48, 55, 51, 55, 52, 49,
+        56, 50, 52, 4, 0, 18, 108, 111, 103, 46, 115, 101, 103, 109, 101, 110, 116, 46, 98, 121,
+        116, 101, 115, 11, 49, 48, 55, 51, 55, 52, 49, 56, 50, 52, 5, 0, 3, 0, 0, 13, 114, 101,
+        116, 101, 110, 116, 105, 111, 110, 46, 109, 115, 10, 54, 48, 52, 56, 48, 48, 48, 48, 48, 0,
+        5, 0, 1, 5, 0, 0, 23, 99, 111, 109, 112, 114, 101, 115, 115, 105, 111, 110, 46, 103, 122,
+        105, 112, 46, 108, 101, 118, 101, 108, 3, 45, 49, 0, 5, 0, 2, 23, 99, 111, 109, 112, 114,
+        101, 115, 115, 105, 111, 110, 46, 103, 122, 105, 112, 46, 108, 101, 118, 101, 108, 3, 45,
+        49, 5, 0, 3, 0, 0, 15, 102, 108, 117, 115, 104, 46, 109, 101, 115, 115, 97, 103, 101, 115,
+        2, 49, 0, 1, 0, 3, 15, 102, 108, 117, 115, 104, 46, 109, 101, 115, 115, 97, 103, 101, 115,
+        2, 49, 1, 0, 28, 108, 111, 103, 46, 102, 108, 117, 115, 104, 46, 105, 110, 116, 101, 114,
+        118, 97, 108, 46, 109, 101, 115, 115, 97, 103, 101, 115, 20, 57, 50, 50, 51, 51, 55, 50,
+        48, 51, 54, 56, 53, 52, 55, 55, 53, 56, 48, 55, 5, 0, 5, 0, 0, 23, 99, 111, 109, 112, 114,
+        101, 115, 115, 105, 111, 110, 46, 122, 115, 116, 100, 46, 108, 101, 118, 101, 108, 2, 51,
+        0, 5, 0, 2, 23, 99, 111, 109, 112, 114, 101, 115, 115, 105, 111, 110, 46, 122, 115, 116,
+        100, 46, 108, 101, 118, 101, 108, 2, 51, 5, 0, 3, 0, 0, 23, 109, 101, 115, 115, 97, 103,
+        101, 46, 102, 111, 114, 109, 97, 116, 46, 118, 101, 114, 115, 105, 111, 110, 8, 51, 46, 48,
+        45, 73, 86, 49, 0, 5, 0, 2, 27, 108, 111, 103, 46, 109, 101, 115, 115, 97, 103, 101, 46,
+        102, 111, 114, 109, 97, 116, 46, 118, 101, 114, 115, 105, 111, 110, 8, 51, 46, 48, 45, 73,
+        86, 49, 5, 0, 2, 0, 0, 22, 109, 97, 120, 46, 99, 111, 109, 112, 97, 99, 116, 105, 111, 110,
+        46, 108, 97, 103, 46, 109, 115, 20, 57, 50, 50, 51, 51, 55, 50, 48, 51, 54, 56, 53, 52, 55,
+        55, 53, 56, 48, 55, 0, 5, 0, 2, 34, 108, 111, 103, 46, 99, 108, 101, 97, 110, 101, 114, 46,
+        109, 97, 120, 46, 99, 111, 109, 112, 97, 99, 116, 105, 111, 110, 46, 108, 97, 103, 46, 109,
+        115, 20, 57, 50, 50, 51, 51, 55, 50, 48, 51, 54, 56, 53, 52, 55, 55, 53, 56, 48, 55, 5, 0,
+        5, 0, 0, 21, 102, 105, 108, 101, 46, 100, 101, 108, 101, 116, 101, 46, 100, 101, 108, 97,
+        121, 46, 109, 115, 6, 54, 48, 48, 48, 48, 0, 5, 0, 2, 28, 108, 111, 103, 46, 115, 101, 103,
+        109, 101, 110, 116, 46, 100, 101, 108, 101, 116, 101, 46, 100, 101, 108, 97, 121, 46, 109,
+        115, 6, 54, 48, 48, 48, 48, 5, 0, 5, 0, 0, 18, 109, 97, 120, 46, 109, 101, 115, 115, 97,
+        103, 101, 46, 98, 121, 116, 101, 115, 6, 54, 52, 48, 48, 48, 0, 1, 0, 3, 18, 109, 97, 120,
+        46, 109, 101, 115, 115, 97, 103, 101, 46, 98, 121, 116, 101, 115, 6, 54, 52, 48, 48, 48, 1,
+        0, 18, 109, 101, 115, 115, 97, 103, 101, 46, 109, 97, 120, 46, 98, 121, 116, 101, 115, 8,
+        49, 48, 52, 56, 53, 56, 56, 5, 0, 3, 0, 0, 22, 109, 105, 110, 46, 99, 111, 109, 112, 97,
+        99, 116, 105, 111, 110, 46, 108, 97, 103, 46, 109, 115, 2, 48, 0, 5, 0, 2, 34, 108, 111,
+        103, 46, 99, 108, 101, 97, 110, 101, 114, 46, 109, 105, 110, 46, 99, 111, 109, 112, 97, 99,
+        116, 105, 111, 110, 46, 108, 97, 103, 46, 109, 115, 2, 48, 5, 0, 5, 0, 0, 23, 109, 101,
+        115, 115, 97, 103, 101, 46, 116, 105, 109, 101, 115, 116, 97, 109, 112, 46, 116, 121, 112,
+        101, 11, 67, 114, 101, 97, 116, 101, 84, 105, 109, 101, 0, 5, 0, 2, 27, 108, 111, 103, 46,
+        109, 101, 115, 115, 97, 103, 101, 46, 116, 105, 109, 101, 115, 116, 97, 109, 112, 46, 116,
+        121, 112, 101, 11, 67, 114, 101, 97, 116, 101, 84, 105, 109, 101, 5, 0, 2, 0, 0, 22, 108,
+        111, 99, 97, 108, 46, 114, 101, 116, 101, 110, 116, 105, 111, 110, 46, 98, 121, 116, 101,
+        115, 3, 45, 50, 0, 5, 0, 2, 26, 108, 111, 103, 46, 108, 111, 99, 97, 108, 46, 114, 101,
+        116, 101, 110, 116, 105, 111, 110, 46, 98, 121, 116, 101, 115, 3, 45, 50, 5, 0, 5, 0, 0,
+        12, 112, 114, 101, 97, 108, 108, 111, 99, 97, 116, 101, 6, 102, 97, 108, 115, 101, 0, 5, 0,
+        2, 16, 108, 111, 103, 46, 112, 114, 101, 97, 108, 108, 111, 99, 97, 116, 101, 6, 102, 97,
+        108, 115, 101, 5, 0, 1, 0, 0, 26, 109, 105, 110, 46, 99, 108, 101, 97, 110, 97, 98, 108,
+        101, 46, 100, 105, 114, 116, 121, 46, 114, 97, 116, 105, 111, 4, 48, 46, 53, 0, 5, 0, 2,
+        32, 108, 111, 103, 46, 99, 108, 101, 97, 110, 101, 114, 46, 109, 105, 110, 46, 99, 108,
+        101, 97, 110, 97, 98, 108, 101, 46, 114, 97, 116, 105, 111, 4, 48, 46, 53, 5, 0, 6, 0, 0,
+        21, 105, 110, 100, 101, 120, 46, 105, 110, 116, 101, 114, 118, 97, 108, 46, 98, 121, 116,
+        101, 115, 5, 52, 48, 57, 54, 0, 5, 0, 2, 25, 108, 111, 103, 46, 105, 110, 100, 101, 120,
+        46, 105, 110, 116, 101, 114, 118, 97, 108, 46, 98, 121, 116, 101, 115, 5, 52, 48, 57, 54,
+        5, 0, 3, 0, 0, 31, 117, 110, 99, 108, 101, 97, 110, 46, 108, 101, 97, 100, 101, 114, 46,
+        101, 108, 101, 99, 116, 105, 111, 110, 46, 101, 110, 97, 98, 108, 101, 6, 102, 97, 108,
+        115, 101, 0, 5, 0, 2, 31, 117, 110, 99, 108, 101, 97, 110, 46, 108, 101, 97, 100, 101, 114,
+        46, 101, 108, 101, 99, 116, 105, 111, 110, 46, 101, 110, 97, 98, 108, 101, 6, 102, 97, 108,
+        115, 101, 5, 0, 1, 0, 0, 16, 114, 101, 116, 101, 110, 116, 105, 111, 110, 46, 98, 121, 116,
+        101, 115, 3, 45, 49, 0, 5, 0, 2, 20, 108, 111, 103, 46, 114, 101, 116, 101, 110, 116, 105,
+        111, 110, 46, 98, 121, 116, 101, 115, 3, 45, 49, 5, 0, 5, 0, 0, 20, 100, 101, 108, 101,
+        116, 101, 46, 114, 101, 116, 101, 110, 116, 105, 111, 110, 46, 109, 115, 9, 56, 54, 52, 48,
+        48, 48, 48, 48, 0, 5, 0, 2, 32, 108, 111, 103, 46, 99, 108, 101, 97, 110, 101, 114, 46,
+        100, 101, 108, 101, 116, 101, 46, 114, 101, 116, 101, 110, 116, 105, 111, 110, 46, 109,
+        115, 9, 56, 54, 52, 48, 48, 48, 48, 48, 5, 0, 5, 0, 0, 31, 109, 101, 115, 115, 97, 103,
+        101, 46, 116, 105, 109, 101, 115, 116, 97, 109, 112, 46, 97, 102, 116, 101, 114, 46, 109,
+        97, 120, 46, 109, 115, 20, 57, 50, 50, 51, 51, 55, 50, 48, 51, 54, 56, 53, 52, 55, 55, 53,
+        56, 48, 55, 0, 5, 0, 2, 35, 108, 111, 103, 46, 109, 101, 115, 115, 97, 103, 101, 46, 116,
+        105, 109, 101, 115, 116, 97, 109, 112, 46, 97, 102, 116, 101, 114, 46, 109, 97, 120, 46,
+        109, 115, 20, 57, 50, 50, 51, 51, 55, 50, 48, 51, 54, 56, 53, 52, 55, 55, 53, 56, 48, 55,
+        5, 0, 5, 0, 0, 32, 109, 101, 115, 115, 97, 103, 101, 46, 116, 105, 109, 101, 115, 116, 97,
+        109, 112, 46, 98, 101, 102, 111, 114, 101, 46, 109, 97, 120, 46, 109, 115, 20, 57, 50, 50,
+        51, 51, 55, 50, 48, 51, 54, 56, 53, 52, 55, 55, 53, 56, 48, 55, 0, 5, 0, 2, 36, 108, 111,
+        103, 46, 109, 101, 115, 115, 97, 103, 101, 46, 116, 105, 109, 101, 115, 116, 97, 109, 112,
+        46, 98, 101, 102, 111, 114, 101, 46, 109, 97, 120, 46, 109, 115, 20, 57, 50, 50, 51, 51,
+        55, 50, 48, 51, 54, 56, 53, 52, 55, 55, 53, 56, 48, 55, 5, 0, 5, 0, 0, 11, 115, 101, 103,
+        109, 101, 110, 116, 46, 109, 115, 10, 54, 48, 52, 56, 48, 48, 48, 48, 48, 0, 5, 0, 1, 5, 0,
+        0, 36, 109, 101, 115, 115, 97, 103, 101, 46, 116, 105, 109, 101, 115, 116, 97, 109, 112,
+        46, 100, 105, 102, 102, 101, 114, 101, 110, 99, 101, 46, 109, 97, 120, 46, 109, 115, 20,
+        57, 50, 50, 51, 51, 55, 50, 48, 51, 54, 56, 53, 52, 55, 55, 53, 56, 48, 55, 0, 5, 0, 2, 40,
+        108, 111, 103, 46, 109, 101, 115, 115, 97, 103, 101, 46, 116, 105, 109, 101, 115, 116, 97,
+        109, 112, 46, 100, 105, 102, 102, 101, 114, 101, 110, 99, 101, 46, 109, 97, 120, 46, 109,
+        115, 20, 57, 50, 50, 51, 51, 55, 50, 48, 51, 54, 56, 53, 52, 55, 55, 53, 56, 48, 55, 5, 0,
+        5, 0, 0, 20, 115, 101, 103, 109, 101, 110, 116, 46, 105, 110, 100, 101, 120, 46, 98, 121,
+        116, 101, 115, 9, 49, 48, 52, 56, 53, 55, 54, 48, 0, 5, 0, 2, 25, 108, 111, 103, 46, 105,
+        110, 100, 101, 120, 46, 115, 105, 122, 101, 46, 109, 97, 120, 46, 98, 121, 116, 101, 115,
+        9, 49, 48, 52, 56, 53, 55, 54, 48, 5, 0, 3, 0, 0, 0, 0,
+    ];
+
+    let api_key = 32;
+    let api_version = 4;
+
+    let header = Header::Response { correlation_id: 3 };
+    let body = Body::DescribeConfigsResponse {
+        throttle_time_ms: 0,
+        results: Some(
+            [DescribeConfigsResult {
+                error_code: 0,
+                error_message: Some("".into()),
+                resource_type: 2,
+                resource_name: "_schemas".into(),
+                configs: Some(
+                    [
+                        DescribeConfigsResourceResult {
+                            name: "compression.type".into(),
+                            value: Some("producer".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some(
+                                [DescribeConfigsSynonym {
+                                    name: "compression.type".into(),
+                                    value: Some("producer".into()),
+                                    source: 5,
+                                }]
+                                .into(),
+                            ),
+                            config_type: Some(2),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "leader.replication.throttled.replicas".into(),
+                            value: Some("".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some([].into()),
+                            config_type: Some(7),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "remote.storage.enable".into(),
+                            value: Some("false".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some([].into()),
+                            config_type: Some(1),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "message.downconversion.enable".into(),
+                            value: Some("true".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some(
+                                [DescribeConfigsSynonym {
+                                    name: "log.message.downconversion.enable".into(),
+                                    value: Some("true".into()),
+                                    source: 5,
+                                }]
+                                .into(),
+                            ),
+                            config_type: Some(1),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "min.insync.replicas".into(),
+                            value: Some("1".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some(
+                                [DescribeConfigsSynonym {
+                                    name: "min.insync.replicas".into(),
+                                    value: Some("1".into()),
+                                    source: 5,
+                                }]
+                                .into(),
+                            ),
+                            config_type: Some(3),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "segment.jitter.ms".into(),
+                            value: Some("0".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some([].into()),
+                            config_type: Some(5),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "local.retention.ms".into(),
+                            value: Some("-2".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some(
+                                [DescribeConfigsSynonym {
+                                    name: "log.local.retention.ms".into(),
+                                    value: Some("-2".into()),
+                                    source: 5,
+                                }]
+                                .into(),
+                            ),
+                            config_type: Some(5),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "cleanup.policy".into(),
+                            value: Some("delete".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some(
+                                [DescribeConfigsSynonym {
+                                    name: "log.cleanup.policy".into(),
+                                    value: Some("delete".into()),
+                                    source: 5,
+                                }]
+                                .into(),
+                            ),
+                            config_type: Some(7),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "flush.ms".into(),
+                            value: Some("9223372036854775807".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some([].into()),
+                            config_type: Some(5),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "follower.replication.throttled.replicas".into(),
+                            value: Some("".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some([].into()),
+                            config_type: Some(7),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "compression.lz4.level".into(),
+                            value: Some("9".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some(
+                                [DescribeConfigsSynonym {
+                                    name: "compression.lz4.level".into(),
+                                    value: Some("9".into()),
+                                    source: 5,
+                                }]
+                                .into(),
+                            ),
+                            config_type: Some(3),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "segment.bytes".into(),
+                            value: Some("1073741824".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(4),
+                            is_sensitive: false,
+                            synonyms: Some(
+                                [
+                                    DescribeConfigsSynonym {
+                                        name: "log.segment.bytes".into(),
+                                        value: Some("1073741824".into()),
+                                        source: 4,
+                                    },
+                                    DescribeConfigsSynonym {
+                                        name: "log.segment.bytes".into(),
+                                        value: Some("1073741824".into()),
+                                        source: 5,
+                                    },
+                                ]
+                                .into(),
+                            ),
+                            config_type: Some(3),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "retention.ms".into(),
+                            value: Some("604800000".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some([].into()),
+                            config_type: Some(5),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "compression.gzip.level".into(),
+                            value: Some("-1".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some(
+                                [DescribeConfigsSynonym {
+                                    name: "compression.gzip.level".into(),
+                                    value: Some("-1".into()),
+                                    source: 5,
+                                }]
+                                .into(),
+                            ),
+                            config_type: Some(3),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "flush.messages".into(),
+                            value: Some("1".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(1),
+                            is_sensitive: false,
+                            synonyms: Some(
+                                [
+                                    DescribeConfigsSynonym {
+                                        name: "flush.messages".into(),
+                                        value: Some("1".into()),
+                                        source: 1,
+                                    },
+                                    DescribeConfigsSynonym {
+                                        name: "log.flush.interval.messages".into(),
+                                        value: Some("9223372036854775807".into()),
+                                        source: 5,
+                                    },
+                                ]
+                                .into(),
+                            ),
+                            config_type: Some(5),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "compression.zstd.level".into(),
+                            value: Some("3".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some(
+                                [DescribeConfigsSynonym {
+                                    name: "compression.zstd.level".into(),
+                                    value: Some("3".into()),
+                                    source: 5,
+                                }]
+                                .into(),
+                            ),
+                            config_type: Some(3),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "message.format.version".into(),
+                            value: Some("3.0-IV1".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some(
+                                [DescribeConfigsSynonym {
+                                    name: "log.message.format.version".into(),
+                                    value: Some("3.0-IV1".into()),
+                                    source: 5,
+                                }]
+                                .into(),
+                            ),
+                            config_type: Some(2),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "max.compaction.lag.ms".into(),
+                            value: Some("9223372036854775807".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some(
+                                [DescribeConfigsSynonym {
+                                    name: "log.cleaner.max.compaction.lag.ms".into(),
+                                    value: Some("9223372036854775807".into()),
+                                    source: 5,
+                                }]
+                                .into(),
+                            ),
+                            config_type: Some(5),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "file.delete.delay.ms".into(),
+                            value: Some("60000".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some(
+                                [DescribeConfigsSynonym {
+                                    name: "log.segment.delete.delay.ms".into(),
+                                    value: Some("60000".into()),
+                                    source: 5,
+                                }]
+                                .into(),
+                            ),
+                            config_type: Some(5),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "max.message.bytes".into(),
+                            value: Some("64000".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(1),
+                            is_sensitive: false,
+                            synonyms: Some(
+                                [
+                                    DescribeConfigsSynonym {
+                                        name: "max.message.bytes".into(),
+                                        value: Some("64000".into()),
+                                        source: 1,
+                                    },
+                                    DescribeConfigsSynonym {
+                                        name: "message.max.bytes".into(),
+                                        value: Some("1048588".into()),
+                                        source: 5,
+                                    },
+                                ]
+                                .into(),
+                            ),
+                            config_type: Some(3),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "min.compaction.lag.ms".into(),
+                            value: Some("0".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some(
+                                [DescribeConfigsSynonym {
+                                    name: "log.cleaner.min.compaction.lag.ms".into(),
+                                    value: Some("0".into()),
+                                    source: 5,
+                                }]
+                                .into(),
+                            ),
+                            config_type: Some(5),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "message.timestamp.type".into(),
+                            value: Some("CreateTime".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some(
+                                [DescribeConfigsSynonym {
+                                    name: "log.message.timestamp.type".into(),
+                                    value: Some("CreateTime".into()),
+                                    source: 5,
+                                }]
+                                .into(),
+                            ),
+                            config_type: Some(2),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "local.retention.bytes".into(),
+                            value: Some("-2".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some(
+                                [DescribeConfigsSynonym {
+                                    name: "log.local.retention.bytes".into(),
+                                    value: Some("-2".into()),
+                                    source: 5,
+                                }]
+                                .into(),
+                            ),
+                            config_type: Some(5),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "preallocate".into(),
+                            value: Some("false".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some(
+                                [DescribeConfigsSynonym {
+                                    name: "log.preallocate".into(),
+                                    value: Some("false".into()),
+                                    source: 5,
+                                }]
+                                .into(),
+                            ),
+                            config_type: Some(1),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "min.cleanable.dirty.ratio".into(),
+                            value: Some("0.5".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some(
+                                [DescribeConfigsSynonym {
+                                    name: "log.cleaner.min.cleanable.ratio".into(),
+                                    value: Some("0.5".into()),
+                                    source: 5,
+                                }]
+                                .into(),
+                            ),
+                            config_type: Some(6),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "index.interval.bytes".into(),
+                            value: Some("4096".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some(
+                                [DescribeConfigsSynonym {
+                                    name: "log.index.interval.bytes".into(),
+                                    value: Some("4096".into()),
+                                    source: 5,
+                                }]
+                                .into(),
+                            ),
+                            config_type: Some(3),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "unclean.leader.election.enable".into(),
+                            value: Some("false".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some(
+                                [DescribeConfigsSynonym {
+                                    name: "unclean.leader.election.enable".into(),
+                                    value: Some("false".into()),
+                                    source: 5,
+                                }]
+                                .into(),
+                            ),
+                            config_type: Some(1),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "retention.bytes".into(),
+                            value: Some("-1".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some(
+                                [DescribeConfigsSynonym {
+                                    name: "log.retention.bytes".into(),
+                                    value: Some("-1".into()),
+                                    source: 5,
+                                }]
+                                .into(),
+                            ),
+                            config_type: Some(5),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "delete.retention.ms".into(),
+                            value: Some("86400000".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some(
+                                [DescribeConfigsSynonym {
+                                    name: "log.cleaner.delete.retention.ms".into(),
+                                    value: Some("86400000".into()),
+                                    source: 5,
+                                }]
+                                .into(),
+                            ),
+                            config_type: Some(5),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "message.timestamp.after.max.ms".into(),
+                            value: Some("9223372036854775807".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some(
+                                [DescribeConfigsSynonym {
+                                    name: "log.message.timestamp.after.max.ms".into(),
+                                    value: Some("9223372036854775807".into()),
+                                    source: 5,
+                                }]
+                                .into(),
+                            ),
+                            config_type: Some(5),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "message.timestamp.before.max.ms".into(),
+                            value: Some("9223372036854775807".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some(
+                                [DescribeConfigsSynonym {
+                                    name: "log.message.timestamp.before.max.ms".into(),
+                                    value: Some("9223372036854775807".into()),
+                                    source: 5,
+                                }]
+                                .into(),
+                            ),
+                            config_type: Some(5),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "segment.ms".into(),
+                            value: Some("604800000".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some([].into()),
+                            config_type: Some(5),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "message.timestamp.difference.max.ms".into(),
+                            value: Some("9223372036854775807".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some(
+                                [DescribeConfigsSynonym {
+                                    name: "log.message.timestamp.difference.max.ms".into(),
+                                    value: Some("9223372036854775807".into()),
+                                    source: 5,
+                                }]
+                                .into(),
+                            ),
+                            config_type: Some(5),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "segment.index.bytes".into(),
+                            value: Some("10485760".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some(
+                                [DescribeConfigsSynonym {
+                                    name: "log.index.size.max.bytes".into(),
+                                    value: Some("10485760".into()),
+                                    source: 5,
+                                }]
+                                .into(),
+                            ),
+                            config_type: Some(3),
+                            documentation: None,
+                        },
+                    ]
+                    .into(),
+                ),
+            }]
+            .into(),
+        ),
+    };
+
+    assert_eq!(
+        expected,
+        Frame::response(header, body, api_key, api_version)?
+    );
+
+    Ok(())
+}
+
+#[test]
+fn describe_configs_response_v4_002() -> Result<()> {
+    use tansu_kafka_sans_io::describe_configs_response::{
+        DescribeConfigsResourceResult, DescribeConfigsResult,
+    };
+
+    let _guard = init_tracing()?;
+
+    let expected = vec![
+        0, 0, 5, 79, 0, 0, 0, 6, 0, 0, 0, 0, 0, 2, 0, 0, 1, 2, 5, 116, 101, 115, 116, 37, 17, 99,
+        111, 109, 112, 114, 101, 115, 115, 105, 111, 110, 46, 116, 121, 112, 101, 9, 112, 114, 111,
+        100, 117, 99, 101, 114, 0, 5, 0, 1, 2, 0, 0, 29, 114, 101, 109, 111, 116, 101, 46, 108,
+        111, 103, 46, 100, 101, 108, 101, 116, 101, 46, 111, 110, 46, 100, 105, 115, 97, 98, 108,
+        101, 6, 102, 97, 108, 115, 101, 0, 5, 0, 1, 1, 0, 0, 38, 108, 101, 97, 100, 101, 114, 46,
+        114, 101, 112, 108, 105, 99, 97, 116, 105, 111, 110, 46, 116, 104, 114, 111, 116, 116, 108,
+        101, 100, 46, 114, 101, 112, 108, 105, 99, 97, 115, 1, 0, 5, 0, 1, 7, 0, 0, 22, 114, 101,
+        109, 111, 116, 101, 46, 115, 116, 111, 114, 97, 103, 101, 46, 101, 110, 97, 98, 108, 101,
+        6, 102, 97, 108, 115, 101, 0, 5, 0, 1, 1, 0, 0, 30, 109, 101, 115, 115, 97, 103, 101, 46,
+        100, 111, 119, 110, 99, 111, 110, 118, 101, 114, 115, 105, 111, 110, 46, 101, 110, 97, 98,
+        108, 101, 5, 116, 114, 117, 101, 0, 5, 0, 1, 1, 0, 0, 20, 109, 105, 110, 46, 105, 110, 115,
+        121, 110, 99, 46, 114, 101, 112, 108, 105, 99, 97, 115, 2, 49, 0, 5, 0, 1, 3, 0, 0, 18,
+        115, 101, 103, 109, 101, 110, 116, 46, 106, 105, 116, 116, 101, 114, 46, 109, 115, 2, 48,
+        0, 5, 0, 1, 5, 0, 0, 24, 114, 101, 109, 111, 116, 101, 46, 108, 111, 103, 46, 99, 111, 112,
+        121, 46, 100, 105, 115, 97, 98, 108, 101, 6, 102, 97, 108, 115, 101, 0, 5, 0, 1, 1, 0, 0,
+        19, 108, 111, 99, 97, 108, 46, 114, 101, 116, 101, 110, 116, 105, 111, 110, 46, 109, 115,
+        3, 45, 50, 0, 5, 0, 1, 5, 0, 0, 15, 99, 108, 101, 97, 110, 117, 112, 46, 112, 111, 108,
+        105, 99, 121, 8, 99, 111, 109, 112, 97, 99, 116, 0, 1, 0, 1, 7, 0, 0, 9, 102, 108, 117,
+        115, 104, 46, 109, 115, 20, 57, 50, 50, 51, 51, 55, 50, 48, 51, 54, 56, 53, 52, 55, 55, 53,
+        56, 48, 55, 0, 5, 0, 1, 5, 0, 0, 40, 102, 111, 108, 108, 111, 119, 101, 114, 46, 114, 101,
+        112, 108, 105, 99, 97, 116, 105, 111, 110, 46, 116, 104, 114, 111, 116, 116, 108, 101, 100,
+        46, 114, 101, 112, 108, 105, 99, 97, 115, 1, 0, 5, 0, 1, 7, 0, 0, 22, 99, 111, 109, 112,
+        114, 101, 115, 115, 105, 111, 110, 46, 108, 122, 52, 46, 108, 101, 118, 101, 108, 2, 57, 0,
+        5, 0, 1, 3, 0, 0, 14, 115, 101, 103, 109, 101, 110, 116, 46, 98, 121, 116, 101, 115, 11,
+        49, 48, 55, 51, 55, 52, 49, 56, 50, 52, 0, 4, 0, 1, 3, 0, 0, 13, 114, 101, 116, 101, 110,
+        116, 105, 111, 110, 46, 109, 115, 10, 54, 48, 52, 56, 48, 48, 48, 48, 48, 0, 5, 0, 1, 5, 0,
+        0, 23, 99, 111, 109, 112, 114, 101, 115, 115, 105, 111, 110, 46, 103, 122, 105, 112, 46,
+        108, 101, 118, 101, 108, 3, 45, 49, 0, 5, 0, 1, 3, 0, 0, 15, 102, 108, 117, 115, 104, 46,
+        109, 101, 115, 115, 97, 103, 101, 115, 20, 57, 50, 50, 51, 51, 55, 50, 48, 51, 54, 56, 53,
+        52, 55, 55, 53, 56, 48, 55, 0, 5, 0, 1, 5, 0, 0, 23, 99, 111, 109, 112, 114, 101, 115, 115,
+        105, 111, 110, 46, 122, 115, 116, 100, 46, 108, 101, 118, 101, 108, 2, 51, 0, 5, 0, 1, 3,
+        0, 0, 23, 109, 101, 115, 115, 97, 103, 101, 46, 102, 111, 114, 109, 97, 116, 46, 118, 101,
+        114, 115, 105, 111, 110, 8, 51, 46, 48, 45, 73, 86, 49, 0, 5, 0, 1, 2, 0, 0, 22, 109, 97,
+        120, 46, 99, 111, 109, 112, 97, 99, 116, 105, 111, 110, 46, 108, 97, 103, 46, 109, 115, 20,
+        57, 50, 50, 51, 51, 55, 50, 48, 51, 54, 56, 53, 52, 55, 55, 53, 56, 48, 55, 0, 5, 0, 1, 5,
+        0, 0, 21, 102, 105, 108, 101, 46, 100, 101, 108, 101, 116, 101, 46, 100, 101, 108, 97, 121,
+        46, 109, 115, 6, 54, 48, 48, 48, 48, 0, 5, 0, 1, 5, 0, 0, 18, 109, 97, 120, 46, 109, 101,
+        115, 115, 97, 103, 101, 46, 98, 121, 116, 101, 115, 8, 49, 48, 52, 56, 53, 56, 56, 0, 5, 0,
+        1, 3, 0, 0, 22, 109, 105, 110, 46, 99, 111, 109, 112, 97, 99, 116, 105, 111, 110, 46, 108,
+        97, 103, 46, 109, 115, 2, 48, 0, 5, 0, 1, 5, 0, 0, 23, 109, 101, 115, 115, 97, 103, 101,
+        46, 116, 105, 109, 101, 115, 116, 97, 109, 112, 46, 116, 121, 112, 101, 11, 67, 114, 101,
+        97, 116, 101, 84, 105, 109, 101, 0, 5, 0, 1, 2, 0, 0, 22, 108, 111, 99, 97, 108, 46, 114,
+        101, 116, 101, 110, 116, 105, 111, 110, 46, 98, 121, 116, 101, 115, 3, 45, 50, 0, 5, 0, 1,
+        5, 0, 0, 12, 112, 114, 101, 97, 108, 108, 111, 99, 97, 116, 101, 6, 102, 97, 108, 115, 101,
+        0, 5, 0, 1, 1, 0, 0, 26, 109, 105, 110, 46, 99, 108, 101, 97, 110, 97, 98, 108, 101, 46,
+        100, 105, 114, 116, 121, 46, 114, 97, 116, 105, 111, 4, 48, 46, 53, 0, 5, 0, 1, 6, 0, 0,
+        21, 105, 110, 100, 101, 120, 46, 105, 110, 116, 101, 114, 118, 97, 108, 46, 98, 121, 116,
+        101, 115, 5, 52, 48, 57, 54, 0, 5, 0, 1, 3, 0, 0, 31, 117, 110, 99, 108, 101, 97, 110, 46,
+        108, 101, 97, 100, 101, 114, 46, 101, 108, 101, 99, 116, 105, 111, 110, 46, 101, 110, 97,
+        98, 108, 101, 6, 102, 97, 108, 115, 101, 0, 5, 0, 1, 1, 0, 0, 16, 114, 101, 116, 101, 110,
+        116, 105, 111, 110, 46, 98, 121, 116, 101, 115, 3, 45, 49, 0, 5, 0, 1, 5, 0, 0, 20, 100,
+        101, 108, 101, 116, 101, 46, 114, 101, 116, 101, 110, 116, 105, 111, 110, 46, 109, 115, 9,
+        56, 54, 52, 48, 48, 48, 48, 48, 0, 5, 0, 1, 5, 0, 0, 31, 109, 101, 115, 115, 97, 103, 101,
+        46, 116, 105, 109, 101, 115, 116, 97, 109, 112, 46, 97, 102, 116, 101, 114, 46, 109, 97,
+        120, 46, 109, 115, 20, 57, 50, 50, 51, 51, 55, 50, 48, 51, 54, 56, 53, 52, 55, 55, 53, 56,
+        48, 55, 0, 5, 0, 1, 5, 0, 0, 32, 109, 101, 115, 115, 97, 103, 101, 46, 116, 105, 109, 101,
+        115, 116, 97, 109, 112, 46, 98, 101, 102, 111, 114, 101, 46, 109, 97, 120, 46, 109, 115,
+        20, 57, 50, 50, 51, 51, 55, 50, 48, 51, 54, 56, 53, 52, 55, 55, 53, 56, 48, 55, 0, 5, 0, 1,
+        5, 0, 0, 11, 115, 101, 103, 109, 101, 110, 116, 46, 109, 115, 10, 54, 48, 52, 56, 48, 48,
+        48, 48, 48, 0, 5, 0, 1, 5, 0, 0, 36, 109, 101, 115, 115, 97, 103, 101, 46, 116, 105, 109,
+        101, 115, 116, 97, 109, 112, 46, 100, 105, 102, 102, 101, 114, 101, 110, 99, 101, 46, 109,
+        97, 120, 46, 109, 115, 20, 57, 50, 50, 51, 51, 55, 50, 48, 51, 54, 56, 53, 52, 55, 55, 53,
+        56, 48, 55, 0, 5, 0, 1, 5, 0, 0, 20, 115, 101, 103, 109, 101, 110, 116, 46, 105, 110, 100,
+        101, 120, 46, 98, 121, 116, 101, 115, 9, 49, 48, 52, 56, 53, 55, 54, 48, 0, 5, 0, 1, 3, 0,
+        0, 0, 0,
+    ];
+
+    let api_key = 32;
+    let api_version = 4;
+
+    let header = Header::Response { correlation_id: 6 };
+    let body = Body::DescribeConfigsResponse {
+        throttle_time_ms: 0,
+        results: Some(
+            [DescribeConfigsResult {
+                error_code: 0,
+                error_message: Some("".into()),
+                resource_type: 2,
+                resource_name: "test".into(),
+                configs: Some(
+                    [
+                        DescribeConfigsResourceResult {
+                            name: "compression.type".into(),
+                            value: Some("producer".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some([].into()),
+                            config_type: Some(2),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "remote.log.delete.on.disable".into(),
+                            value: Some("false".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some([].into()),
+                            config_type: Some(1),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "leader.replication.throttled.replicas".into(),
+                            value: Some("".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some([].into()),
+                            config_type: Some(7),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "remote.storage.enable".into(),
+                            value: Some("false".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some([].into()),
+                            config_type: Some(1),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "message.downconversion.enable".into(),
+                            value: Some("true".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some([].into()),
+                            config_type: Some(1),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "min.insync.replicas".into(),
+                            value: Some("1".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some([].into()),
+                            config_type: Some(3),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "segment.jitter.ms".into(),
+                            value: Some("0".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some([].into()),
+                            config_type: Some(5),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "remote.log.copy.disable".into(),
+                            value: Some("false".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some([].into()),
+                            config_type: Some(1),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "local.retention.ms".into(),
+                            value: Some("-2".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some([].into()),
+                            config_type: Some(5),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "cleanup.policy".into(),
+                            value: Some("compact".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(1),
+                            is_sensitive: false,
+                            synonyms: Some([].into()),
+                            config_type: Some(7),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "flush.ms".into(),
+                            value: Some("9223372036854775807".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some([].into()),
+                            config_type: Some(5),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "follower.replication.throttled.replicas".into(),
+                            value: Some("".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some([].into()),
+                            config_type: Some(7),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "compression.lz4.level".into(),
+                            value: Some("9".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some([].into()),
+                            config_type: Some(3),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "segment.bytes".into(),
+                            value: Some("1073741824".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(4),
+                            is_sensitive: false,
+                            synonyms: Some([].into()),
+                            config_type: Some(3),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "retention.ms".into(),
+                            value: Some("604800000".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some([].into()),
+                            config_type: Some(5),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "compression.gzip.level".into(),
+                            value: Some("-1".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some([].into()),
+                            config_type: Some(3),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "flush.messages".into(),
+                            value: Some("9223372036854775807".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some([].into()),
+                            config_type: Some(5),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "compression.zstd.level".into(),
+                            value: Some("3".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some([].into()),
+                            config_type: Some(3),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "message.format.version".into(),
+                            value: Some("3.0-IV1".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some([].into()),
+                            config_type: Some(2),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "max.compaction.lag.ms".into(),
+                            value: Some("9223372036854775807".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some([].into()),
+                            config_type: Some(5),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "file.delete.delay.ms".into(),
+                            value: Some("60000".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some([].into()),
+                            config_type: Some(5),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "max.message.bytes".into(),
+                            value: Some("1048588".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some([].into()),
+                            config_type: Some(3),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "min.compaction.lag.ms".into(),
+                            value: Some("0".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some([].into()),
+                            config_type: Some(5),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "message.timestamp.type".into(),
+                            value: Some("CreateTime".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some([].into()),
+                            config_type: Some(2),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "local.retention.bytes".into(),
+                            value: Some("-2".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some([].into()),
+                            config_type: Some(5),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "preallocate".into(),
+                            value: Some("false".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some([].into()),
+                            config_type: Some(1),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "min.cleanable.dirty.ratio".into(),
+                            value: Some("0.5".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some([].into()),
+                            config_type: Some(6),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "index.interval.bytes".into(),
+                            value: Some("4096".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some([].into()),
+                            config_type: Some(3),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "unclean.leader.election.enable".into(),
+                            value: Some("false".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some([].into()),
+                            config_type: Some(1),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "retention.bytes".into(),
+                            value: Some("-1".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some([].into()),
+                            config_type: Some(5),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "delete.retention.ms".into(),
+                            value: Some("86400000".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some([].into()),
+                            config_type: Some(5),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "message.timestamp.after.max.ms".into(),
+                            value: Some("9223372036854775807".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some([].into()),
+                            config_type: Some(5),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "message.timestamp.before.max.ms".into(),
+                            value: Some("9223372036854775807".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some([].into()),
+                            config_type: Some(5),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "segment.ms".into(),
+                            value: Some("604800000".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some([].into()),
+                            config_type: Some(5),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "message.timestamp.difference.max.ms".into(),
+                            value: Some("9223372036854775807".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some([].into()),
+                            config_type: Some(5),
+                            documentation: None,
+                        },
+                        DescribeConfigsResourceResult {
+                            name: "segment.index.bytes".into(),
+                            value: Some("10485760".into()),
+                            read_only: false,
+                            is_default: None,
+                            config_source: Some(5),
+                            is_sensitive: false,
+                            synonyms: Some([].into()),
+                            config_type: Some(3),
+                            documentation: None,
+                        },
+                    ]
+                    .into(),
+                ),
+            }]
+            .into(),
+        ),
+    };
+
+    assert_eq!(
+        expected,
+        Frame::response(header, body, api_key, api_version)?
+    );
+
+    Ok(())
+}
+
+#[test]
+fn describe_configs_response_v4_003() -> Result<()> {
+    use tansu_kafka_sans_io::describe_configs_response::{
+        DescribeConfigsResourceResult, DescribeConfigsResult,
+    };
+
+    let _guard = init_tracing()?;
+
+    let expected = vec![
+        0, 0, 0, 61, 0, 0, 0, 7, 0, 0, 0, 0, 0, 2, 0, 0, 10, 78, 111, 32, 101, 114, 114, 111, 114,
+        46, 2, 5, 116, 101, 115, 116, 2, 15, 99, 108, 101, 97, 110, 117, 112, 46, 112, 111, 108,
+        105, 99, 121, 8, 99, 111, 109, 112, 97, 99, 116, 0, 5, 0, 1, 2, 1, 0, 0, 0,
+    ];
+
+    let api_key = 32;
+    let api_version = 4;
+
+    let header = Header::Response { correlation_id: 7 };
+    let body = Body::DescribeConfigsResponse {
+        throttle_time_ms: 0,
+        results: Some(
+            [DescribeConfigsResult {
+                error_code: 0,
+                error_message: Some("No error.".into()),
+                resource_type: 2,
+                resource_name: "test".into(),
+                configs: Some(
+                    [DescribeConfigsResourceResult {
+                        name: "cleanup.policy".into(),
+                        value: Some("compact".into()),
+                        read_only: false,
+                        is_default: None,
+                        config_source: Some(5),
+                        is_sensitive: false,
+                        synonyms: Some([].into()),
+                        config_type: Some(2),
+                        documentation: Some("".into()),
+                    }]
+                    .into(),
+                ),
+            }]
+            .into(),
+        ),
+    };
+
+    assert_eq!(
+        expected,
+        Frame::response(header, body, api_key, api_version)?
+    );
+
+    Ok(())
+}
+
+#[test]
 fn describe_groups_request_v1_000() -> Result<()> {
     let _guard = init_tracing()?;
 
@@ -1272,6 +2621,7 @@ fn fetch_request_v6_000() -> Result<()> {
                         last_fetched_epoch: None,
                         log_start_offset: Some(0),
                         partition_max_bytes: 4096,
+                        replica_directory_id: None,
                     }]
                     .into(),
                 ),
@@ -2032,6 +3382,7 @@ fn list_groups_request_v4_000() -> Result<()> {
         },
         body: Body::ListGroupsRequest {
             states_filter: Some([].into()),
+            types_filter: Some([].into()),
         },
     };
 
@@ -2186,6 +3537,236 @@ fn metadata_request_v12_000() -> Result<()> {
 }
 
 #[test]
+fn metadata_request_v7_000() -> Result<()> {
+    let _guard = init_tracing()?;
+
+    let mut c = Cursor::new(vec![]);
+    let mut serializer = Encoder::request(&mut c);
+
+    let frame = Frame {
+        size: 21,
+        header: Header::Request {
+            api_key: 3,
+            api_version: 7,
+            correlation_id: 0,
+            client_id: Some("sarama".into()),
+        },
+        body: Body::MetadataRequest {
+            topics: None,
+            allow_auto_topic_creation: Some(false),
+            include_cluster_authorized_operations: None,
+            include_topic_authorized_operations: None,
+        },
+    };
+
+    frame.serialize(&mut serializer)?;
+
+    assert_eq!(
+        vec![
+            0, 0, 0, 21, 0, 3, 0, 7, 0, 0, 0, 0, 0, 6, 115, 97, 114, 97, 109, 97, 255, 255, 255,
+            255, 0,
+        ],
+        c.into_inner(),
+    );
+
+    Ok(())
+}
+
+#[test]
+fn metadata_response_v7_0000() -> Result<()> {
+    use tansu_kafka_sans_io::metadata_response::{
+        MetadataResponseBroker, MetadataResponsePartition, MetadataResponseTopic,
+    };
+
+    let _guard = init_tracing()?;
+
+    let api_key = 3;
+    let api_version = 7;
+
+    let mut c = Cursor::new(vec![]);
+    let mut serializer = Encoder::response(&mut c, api_key, api_version);
+
+    let frame = Frame {
+        size: 180,
+        header: Header::Response { correlation_id: 0 },
+        body: Body::MetadataResponse {
+            throttle_time_ms: Some(0),
+            brokers: Some(
+                [MetadataResponseBroker {
+                    node_id: 1,
+                    host: "localhost".into(),
+                    port: 9092,
+                    rack: None,
+                }]
+                .into(),
+            ),
+            cluster_id: Some("5L6g3nShT-eMCtK--X86sw".into()),
+            controller_id: Some(1),
+            topics: Some(
+                [MetadataResponseTopic {
+                    error_code: 0,
+                    name: Some("test".into()),
+                    topic_id: None,
+                    is_internal: Some(false),
+                    partitions: Some(
+                        [
+                            MetadataResponsePartition {
+                                error_code: 0,
+                                partition_index: 1,
+                                leader_id: 1,
+                                leader_epoch: Some(0),
+                                replica_nodes: Some([1].into()),
+                                isr_nodes: Some([1].into()),
+                                offline_replicas: Some([].into()),
+                            },
+                            MetadataResponsePartition {
+                                error_code: 0,
+                                partition_index: 2,
+                                leader_id: 1,
+                                leader_epoch: Some(0),
+                                replica_nodes: Some([1].into()),
+                                isr_nodes: Some([1].into()),
+                                offline_replicas: Some([].into()),
+                            },
+                            MetadataResponsePartition {
+                                error_code: 0,
+                                partition_index: 0,
+                                leader_id: 1,
+                                leader_epoch: Some(0),
+                                replica_nodes: Some([1].into()),
+                                isr_nodes: Some([1].into()),
+                                offline_replicas: Some([].into()),
+                            },
+                        ]
+                        .into(),
+                    ),
+                    topic_authorized_operations: None,
+                }]
+                .into(),
+            ),
+            cluster_authorized_operations: None,
+        },
+    };
+
+    frame.serialize(&mut serializer)?;
+
+    assert_eq!(
+        vec![
+            0, 0, 0, 180, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 9, 108, 111, 99, 97,
+            108, 104, 111, 115, 116, 0, 0, 35, 132, 255, 255, 0, 22, 53, 76, 54, 103, 51, 110, 83,
+            104, 84, 45, 101, 77, 67, 116, 75, 45, 45, 88, 56, 54, 115, 119, 0, 0, 0, 1, 0, 0, 0,
+            1, 0, 0, 0, 4, 116, 101, 115, 116, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0,
+            0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0,
+            0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0,
+            0, 0, 0,
+        ],
+        c.into_inner(),
+    );
+
+    Ok(())
+}
+
+#[test]
+fn metadata_response_v7_0001() -> Result<()> {
+    use tansu_kafka_sans_io::metadata_response::{
+        MetadataResponseBroker, MetadataResponsePartition, MetadataResponseTopic,
+    };
+
+    let _guard = init_tracing()?;
+
+    let api_key = 3;
+    let api_version = 7;
+
+    let mut c = Cursor::new(vec![]);
+    let mut serializer = Encoder::response(&mut c, api_key, api_version);
+
+    // note that topic_id is not part of a v7 response
+    //
+    let frame = Frame {
+        size: 180,
+        header: Header::Response { correlation_id: 0 },
+        body: Body::MetadataResponse {
+            throttle_time_ms: Some(0),
+            brokers: Some(
+                [MetadataResponseBroker {
+                    node_id: 1,
+                    host: "localhost".into(),
+                    port: 9092,
+                    rack: None,
+                }]
+                .into(),
+            ),
+            cluster_id: Some("5L6g3nShT-eMCtK--X86sw".into()),
+            controller_id: Some(1),
+            topics: Some(
+                [MetadataResponseTopic {
+                    error_code: 0,
+                    name: Some("test".into()),
+                    topic_id: Some([
+                        118, 154, 146, 249, 19, 231, 73, 33, 136, 41, 108, 64, 151, 75, 30, 65,
+                    ]),
+                    is_internal: Some(false),
+                    partitions: Some(
+                        [
+                            MetadataResponsePartition {
+                                error_code: 0,
+                                partition_index: 1,
+                                leader_id: 1,
+                                leader_epoch: Some(0),
+                                replica_nodes: Some([1].into()),
+                                isr_nodes: Some([1].into()),
+                                offline_replicas: Some([].into()),
+                            },
+                            MetadataResponsePartition {
+                                error_code: 0,
+                                partition_index: 2,
+                                leader_id: 1,
+                                leader_epoch: Some(0),
+                                replica_nodes: Some([1].into()),
+                                isr_nodes: Some([1].into()),
+                                offline_replicas: Some([].into()),
+                            },
+                            MetadataResponsePartition {
+                                error_code: 0,
+                                partition_index: 0,
+                                leader_id: 1,
+                                leader_epoch: Some(0),
+                                replica_nodes: Some([1].into()),
+                                isr_nodes: Some([1].into()),
+                                offline_replicas: Some([].into()),
+                            },
+                        ]
+                        .into(),
+                    ),
+                    topic_authorized_operations: None,
+                }]
+                .into(),
+            ),
+            cluster_authorized_operations: None,
+        },
+    };
+
+    frame.serialize(&mut serializer)?;
+
+    assert_eq!(
+        vec![
+            0, 0, 0, 180, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 9, 108, 111, 99, 97,
+            108, 104, 111, 115, 116, 0, 0, 35, 132, 255, 255, 0, 22, 53, 76, 54, 103, 51, 110, 83,
+            104, 84, 45, 101, 77, 67, 116, 75, 45, 45, 88, 56, 54, 115, 119, 0, 0, 0, 1, 0, 0, 0,
+            1, 0, 0, 0, 4, 116, 101, 115, 116, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0,
+            0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0,
+            0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0,
+            0, 0, 0,
+        ],
+        c.into_inner(),
+    );
+
+    Ok(())
+}
+
+#[test]
 fn metadata_request_v12_001() -> Result<()> {
     let _guard = init_tracing()?;
 
@@ -2273,6 +3854,7 @@ fn metadata_response_v12_0000() -> Result<()> {
 
     Ok(())
 }
+
 #[test]
 fn offset_fetch_request_v3_000() -> Result<()> {
     use tansu_kafka_sans_io::offset_fetch_request::OffsetFetchRequestTopic;
@@ -2485,6 +4067,128 @@ fn produce_response_v9_000() -> Result<()> {
         ],
         Frame::response(header, body, 0, 9)?
     );
+
+    Ok(())
+}
+
+#[test]
+fn describe_topic_partitions_request_v0_000() -> Result<()> {
+    use tansu_kafka_sans_io::describe_topic_partitions_request::TopicRequest;
+
+    let _guard = init_tracing()?;
+
+    let frame = Frame {
+        size: 37,
+        header: Header::Request {
+            api_key: 75,
+            api_version: 0,
+            correlation_id: 5,
+            client_id: Some("adminclient-1".into()),
+        },
+        body: Body::DescribeTopicPartitionsRequest {
+            topics: Some(
+                [TopicRequest {
+                    name: "test".into(),
+                }]
+                .into(),
+            ),
+            response_partition_limit: 2000,
+            cursor: None,
+        },
+    };
+
+    let mut c = Cursor::new(vec![]);
+    let mut serializer = Encoder::request(&mut c);
+    frame.serialize(&mut serializer)?;
+
+    assert_eq!(
+        vec![
+            0, 0, 0, 37, 0, 75, 0, 0, 0, 0, 0, 5, 0, 13, 97, 100, 109, 105, 110, 99, 108, 105, 101,
+            110, 116, 45, 49, 0, 2, 5, 116, 101, 115, 116, 0, 0, 0, 7, 208, 255, 0,
+        ],
+        c.into_inner()
+    );
+
+    Ok(())
+}
+
+#[test]
+fn describe_topic_partitions_response_v0_000() -> Result<()> {
+    use tansu_kafka_sans_io::describe_topic_partitions_response::{
+        DescribeTopicPartitionsResponsePartition, DescribeTopicPartitionsResponseTopic,
+    };
+
+    let _guard = init_tracing()?;
+
+    let v = vec![
+        0, 0, 0, 126, 0, 0, 0, 5, 0, 0, 0, 0, 0, 2, 0, 0, 5, 116, 101, 115, 116, 113, 142, 248, 9,
+        90, 152, 68, 142, 161, 218, 25, 210, 166, 234, 204, 62, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+        0, 0, 0, 0, 2, 0, 0, 0, 1, 2, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0,
+        0, 0, 2, 0, 0, 0, 1, 2, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0, 0,
+        2, 0, 0, 0, 1, 2, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 13, 248, 0, 255, 0,
+    ];
+
+    let api_key = 75;
+    let api_version = 0;
+
+    let header = Header::Response { correlation_id: 5 };
+
+    let body = Body::DescribeTopicPartitionsResponse {
+        throttle_time_ms: 0,
+        topics: Some(
+            [DescribeTopicPartitionsResponseTopic {
+                error_code: 0,
+                name: Some("test".into()),
+                topic_id: [
+                    113, 142, 248, 9, 90, 152, 68, 142, 161, 218, 25, 210, 166, 234, 204, 62,
+                ],
+                is_internal: false,
+                partitions: Some(
+                    [
+                        DescribeTopicPartitionsResponsePartition {
+                            error_code: 0,
+                            partition_index: 0,
+                            leader_id: 1,
+                            leader_epoch: 0,
+                            replica_nodes: Some([1].into()),
+                            isr_nodes: Some([1].into()),
+                            eligible_leader_replicas: Some([].into()),
+                            last_known_elr: Some([].into()),
+                            offline_replicas: Some([].into()),
+                        },
+                        DescribeTopicPartitionsResponsePartition {
+                            error_code: 0,
+                            partition_index: 1,
+                            leader_id: 1,
+                            leader_epoch: 0,
+                            replica_nodes: Some([1].into()),
+                            isr_nodes: Some([1].into()),
+                            eligible_leader_replicas: Some([].into()),
+                            last_known_elr: Some([].into()),
+                            offline_replicas: Some([].into()),
+                        },
+                        DescribeTopicPartitionsResponsePartition {
+                            error_code: 0,
+                            partition_index: 2,
+                            leader_id: 1,
+                            leader_epoch: 0,
+                            replica_nodes: Some([1].into()),
+                            isr_nodes: Some([1].into()),
+                            eligible_leader_replicas: Some([].into()),
+                            last_known_elr: Some([].into()),
+                            offline_replicas: Some([].into()),
+                        },
+                    ]
+                    .into(),
+                ),
+                topic_authorized_operations: 3576,
+            }]
+            .into(),
+        ),
+        next_cursor: None,
+    };
+
+    assert_eq!(v, Frame::response(header, body, api_key, api_version)?);
 
     Ok(())
 }

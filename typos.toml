@@ -1,0 +1,7 @@
+[files]
+ignore-files = true
+ignore-hidden = true
+extend-exclude = [
+    # not our typos
+    "tansu-kafka-sans-io/message",
+]

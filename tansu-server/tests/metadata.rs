@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -502,7 +502,7 @@ pub async fn topics_some_not_matching_by_id(
 
 mod pg {
     use common::{init_tracing, StorageType};
-    use rand::{prelude::*, thread_rng};
+    use rand::{prelude::*, rng};
 
     use super::*;
 
@@ -525,7 +525,7 @@ mod pg {
         let _guard = init_tracing()?;
 
         let cluster = Uuid::now_v7();
-        let node = thread_rng().gen_range(0..i32::MAX);
+        let node = rng().random_range(0..i32::MAX);
         let advertised_listener = Url::parse("tcp://example.com:9092/")?;
 
         super::topics_none(
@@ -542,7 +542,7 @@ mod pg {
         let _guard = init_tracing()?;
 
         let cluster = Uuid::now_v7();
-        let node = thread_rng().gen_range(0..i32::MAX);
+        let node = rng().random_range(0..i32::MAX);
         let advertised_listener = Url::parse("tcp://example.com:9092/")?;
 
         super::topics_some_empty(
@@ -559,7 +559,7 @@ mod pg {
         let _guard = init_tracing()?;
 
         let cluster = Uuid::now_v7();
-        let node = thread_rng().gen_range(0..i32::MAX);
+        let node = rng().random_range(0..i32::MAX);
         let advertised_listener = Url::parse("tcp://example.com:9092/")?;
 
         super::topics_some_matching_by_name(
@@ -576,7 +576,7 @@ mod pg {
         let _guard = init_tracing()?;
 
         let cluster = Uuid::now_v7();
-        let node = thread_rng().gen_range(0..i32::MAX);
+        let node = rng().random_range(0..i32::MAX);
         let advertised_listener = Url::parse("tcp://example.com:9092/")?;
 
         super::topics_some_not_matching_by_name(
@@ -593,7 +593,7 @@ mod pg {
         let _guard = init_tracing()?;
 
         let cluster = Uuid::now_v7();
-        let node = thread_rng().gen_range(0..i32::MAX);
+        let node = rng().random_range(0..i32::MAX);
         let advertised_listener = Url::parse("tcp://example.com:9092/")?;
 
         super::topics_some_matching_by_id(
@@ -610,7 +610,7 @@ mod pg {
         let _guard = init_tracing()?;
 
         let cluster = Uuid::now_v7();
-        let node = thread_rng().gen_range(0..i32::MAX);
+        let node = rng().random_range(0..i32::MAX);
         let advertised_listener = Url::parse("tcp://example.com:9092/")?;
 
         super::topics_some_not_matching_by_id(
@@ -625,7 +625,7 @@ mod pg {
 
 mod in_memory {
     use common::{init_tracing, StorageType};
-    use rand::{prelude::*, thread_rng};
+    use rand::{prelude::*, rng};
 
     use super::*;
 
@@ -648,7 +648,7 @@ mod in_memory {
         let _guard = init_tracing()?;
 
         let cluster = Uuid::now_v7();
-        let node = thread_rng().gen_range(0..i32::MAX);
+        let node = rng().random_range(0..i32::MAX);
         let advertised_listener = Url::parse("tcp://example.com:9092/")?;
 
         super::topics_none(
@@ -665,7 +665,7 @@ mod in_memory {
         let _guard = init_tracing()?;
 
         let cluster = Uuid::now_v7();
-        let node = thread_rng().gen_range(0..i32::MAX);
+        let node = rng().random_range(0..i32::MAX);
         let advertised_listener = Url::parse("tcp://example.com:9092/")?;
 
         super::topics_some_empty(
@@ -682,7 +682,7 @@ mod in_memory {
         let _guard = init_tracing()?;
 
         let cluster = Uuid::now_v7();
-        let node = thread_rng().gen_range(0..i32::MAX);
+        let node = rng().random_range(0..i32::MAX);
         let advertised_listener = Url::parse("tcp://example.com:9092/")?;
 
         super::topics_some_matching_by_name(
@@ -699,7 +699,7 @@ mod in_memory {
         let _guard = init_tracing()?;
 
         let cluster = Uuid::now_v7();
-        let node = thread_rng().gen_range(0..i32::MAX);
+        let node = rng().random_range(0..i32::MAX);
         let advertised_listener = Url::parse("tcp://example.com:9092/")?;
 
         super::topics_some_not_matching_by_name(
@@ -716,7 +716,7 @@ mod in_memory {
         let _guard = init_tracing()?;
 
         let cluster = Uuid::now_v7();
-        let node = thread_rng().gen_range(0..i32::MAX);
+        let node = rng().random_range(0..i32::MAX);
         let advertised_listener = Url::parse("tcp://example.com:9092/")?;
 
         super::topics_some_matching_by_id(
@@ -733,7 +733,7 @@ mod in_memory {
         let _guard = init_tracing()?;
 
         let cluster = Uuid::now_v7();
-        let node = thread_rng().gen_range(0..i32::MAX);
+        let node = rng().random_range(0..i32::MAX);
         let advertised_listener = Url::parse("tcp://example.com:9092/")?;
 
         super::topics_some_not_matching_by_id(
