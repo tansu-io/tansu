@@ -85,11 +85,6 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target:
-          - aarch64-apple-darwin
-          - aarch64-unknown-linux-musl
-          - x86_64-apple-darwin
-          - x86_64-unknown-linux-musl
         include:
           - target: aarch64-unknown-linux-musl
             os: ubuntu-latest
@@ -122,7 +117,7 @@ jobs:
           RUSTFLAGS: ${{matrix.flags}}
           TARGET: ${{matrix.target}}
         run: |
-          cargo build  --release --target ${{matrix.target}}
+          cargo build --release --target ${{matrix.target}}
           tar --create --verbose --gzip --file=tansu-${TARGET}.tar.gz -C target/${TARGET}/release/ tansu{_server,_proxy}
       - uses: actions/upload-artifact@v4
         with:
