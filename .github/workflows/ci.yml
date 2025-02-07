@@ -103,11 +103,10 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - if: ${{matrix.target == 'aarch64-unknown-linux-musl'}}
         run: |
-          which rustup
-          rustup target add aarch64-unknown-linux-musl
           sudo apt update
-          sudo apt install -y crossbuild-essential-arm64
-          sudo apt install -y musl-tools
+          sudo apt install -y crossbuild-essential-arm64 musl-tools
+          rustup target add aarch64-unknown-linux-musl
+          echo "CC=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
       - if: ${{matrix.os == 'macos-latest'}}
         run: |
           rustup target add x86_64-apple-darwin
@@ -116,16 +115,15 @@ jobs:
         run: |
           sudo apt update
           sudo apt install -y musl-tools
-          which rustup
           rustup target add x86_64-unknown-linux-musl
       - env:
           RUSTFLAGS: ${{matrix.flags}}
           TARGET: ${{matrix.target}}
         run: |
           cargo build --release --target ${{matrix.target}}
-          ls -R target/${TARGET}/release
           tar --create --verbose --gzip --file=tansu-${TARGET}.tar.gz -C target/${TARGET}/release tansu{-server,-proxy}
       - uses: actions/upload-artifact@v4
         with:
-          name: tansu-${matrix.target}
-          path: tansu-${matrix.target}.tar.gz
+          name: tansu-${{matrix.target}}
+          path: tansu-${{matrix.target}}.tar.gz
+          if-no-files-found: error
