@@ -144,13 +144,12 @@ codespace-create:
         --machine basicLinux32gb
 
 codespace-delete:
-    gh codespace delete \
-        --codespace $(gh codespace ls \
-            --repo $(gh repo view \
-                --json nameWithOwner \
-                --jq .nameWithOwner) \
-            --json name \
-            --jq '.[].name')
+    gh codespace ls \
+        --repo $(gh repo view \
+            --json nameWithOwner \
+            --jq .nameWithOwner) \
+        --json name \
+        --jq '.[].name' | xargs --no-run-if-empty -n1 gh codespace delete --codespace 
 
 codespace-logs:
     gh codespace logs \
