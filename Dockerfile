@@ -1,4 +1,4 @@
-# Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+# Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as
@@ -13,7 +13,7 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-ARG BUILD_IMAGE=rust:1.80
+ARG BUILD_IMAGE=rust:1.84.1
 
 FROM ${BUILD_IMAGE} AS builder
 

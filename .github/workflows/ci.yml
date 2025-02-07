@@ -107,6 +107,7 @@ jobs:
           sudo apt install -y crossbuild-essential-arm64 musl-tools
           rustup target add aarch64-unknown-linux-musl
           echo "CC=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+          $(which aarch64-linux-gnu-gcc) --version
       - if: ${{matrix.os == 'macos-latest'}}
         run: |
           rustup target add x86_64-apple-darwin
