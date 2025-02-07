@@ -79,3 +79,52 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+  release:
+    needs: [build, typos]
+    runs-on: ${{matrix.os}}
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - aarch64-apple-darwin
+          - aarch64-unknown-linux-musl
+          - x86_64-apple-darwin
+          - x86_64-unknown-linux-musl
+        include:
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            flags: '-C linker=aarch64-linux-gnu-gcc -C link-arg=-lgcc'
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            flags: ''
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            flags: ''
+          - target: x84_64-apple-darwin
+            os: macos-latest
+            flags: ''
+    steps:
+      - uses: actions/checkout@v4
+      - if: ${{matrix.target == 'aarch64-unknown-linux-musl'}}
+        run: |
+          rustup target add aarch64-unknown-linux-musl
+          sudo apt update
+          apt install -y crossbuild-essential-arm64
+          apt install -y musl-tools
+      - if: ${{matrix.os == 'macos-latest'}}
+        run: |
+          rustup target add x86_64-apple-darwin
+          rustup target add aarch64-apple-darwin
+      - if: ${{matrix.target == 'x86_64-unknown-linux-musl'}}
+        run: |
+          rustup target add x86_64-unknown-linux-musl
+      - env:
+          RUSTFLAGS: ${{matrix.flags}}
+          TARGET: ${{matrix.target}}
+        run: |
+          cargo build  --release --target ${{matrix.target}}
+          tar --create --verbose --gzip --file=tansu-${TARGET}.tar.gz -C target/${TARGET}/release/ tansu{_server,_proxy}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tansu-${matrix.target}
+          path: tansu-${matrix.target}.tar.gz
