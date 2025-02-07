@@ -63,7 +63,6 @@ jobs:
             type=ref,event=pr
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-      - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
         with:
           buildkitd-flags: --debug
@@ -75,8 +74,8 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64
-          push: ${{ github.event_name != 'pull_request' }}
+          platforms: linux/amd64,linux/arm64
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
   release:
@@ -88,7 +87,7 @@ jobs:
         include:
           - target: aarch64-unknown-linux-musl
             os: ubuntu-latest
-            flags: '-C linker=aarch64-linux-gnu-gcc -C link-arg=-lgcc -C link-arg=-D_FORTIFY_SOURCE=0'
+            flags: '-C linker=aarch64-linux-gnu-gcc -C link-arg=-lgcc'
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
             flags: ''
@@ -101,21 +100,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - if: ${{matrix.target == 'aarch64-unknown-linux-musl'}}
-        run: |
-          sudo apt update
-          sudo apt install -y crossbuild-essential-arm64 musl-tools
-          rustup target add aarch64-unknown-linux-musl
-          echo "CC=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
-          $(which aarch64-linux-gnu-gcc) --version
       - if: ${{matrix.os == 'macos-latest'}}
         run: |
           rustup target add x86_64-apple-darwin
           rustup target add aarch64-apple-darwin
+      - if: ${{matrix.target == 'aarch64-unknown-linux-musl'}}
+        run: |
+          sudo apt update
+          sudo apt install -y crossbuild-essential-arm64 musl-tools zlib1g-dev
+          rustup target add aarch64-unknown-linux-musl
+          echo "CC=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+          $(which aarch64-linux-gnu-gcc) --version
       - if: ${{matrix.target == 'x86_64-unknown-linux-musl'}}
         run: |
           sudo apt update
-          sudo apt install -y musl-tools
+          sudo apt install -y musl-tools zlib1g-dev
           rustup target add x86_64-unknown-linux-musl
       - env:
           RUSTFLAGS: ${{matrix.flags}}
