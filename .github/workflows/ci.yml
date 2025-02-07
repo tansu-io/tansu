@@ -88,7 +88,7 @@ jobs:
         include:
           - target: aarch64-unknown-linux-musl
             os: ubuntu-latest
-            flags: '-C linker=aarch64-linux-gnu-gcc -C link-arg=-lgcc'
+            flags: '-C linker=aarch64-linux-gnu-gcc -C link-arg=-lgcc -C link-arg=-D_FORTIFY_SOURCE=0'
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
             flags: ''
