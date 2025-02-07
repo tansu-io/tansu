@@ -107,7 +107,7 @@ jobs:
       - if: ${{matrix.target == 'aarch64-unknown-linux-musl'}}
         run: |
           sudo apt update
-          sudo apt install -y crossbuild-essential-arm64 musl-tools zlib1g-dev
+          sudo apt install -y crossbuild-essential-arm64 musl-tools zlib1g-dev libzstd-dev
           rustup target add aarch64-unknown-linux-musl
           echo "CC=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
           $(which aarch64-linux-gnu-gcc) --version

@@ -5,6 +5,7 @@
         "clippy",
         "crossbuild",
         "lgcc",
+        "libzstd",
         "RUSTFLAGS",
         "rustup"
     ]
