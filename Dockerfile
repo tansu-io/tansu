@@ -20,6 +20,7 @@ COPY --from=xx / /
 RUN apk add clang lld
 RUN rustup target add $(xx-cargo --print-target-triple)
 
+ARG CARGO_ABOUT_VERSION=0.6.1
 ARG PACKAGE=tansu-server
 WORKDIR /usr/src
 ADD / /usr/src/
@@ -28,12 +29,12 @@ ARG TARGETPLATFORM
 RUN xx-apk add --no-cache musl-dev zlib-dev
 RUN xx-cargo build --package ${PACKAGE} --release --target-dir ./build
 RUN xx-verify --static ./build/$(xx-cargo --print-target-triple)/release/${PACKAGE}
+RUN cargo install cargo-about@${CARGO_ABOUT_VERSION}
 
 RUN <<EOF
 mkdir /image /image/schema /image/tmp
-
-# copy the executable
 cp -v build/$(xx-cargo --print-target-triple)/release/${PACKAGE} /image
+cp -v LICENSE /image
 EOF
 
 FROM scratch

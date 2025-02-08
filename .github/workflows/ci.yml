@@ -42,6 +42,32 @@ jobs:
       - uses: crate-ci/typos@v1.29.5
         with:
           config: typos.toml
+  third-party-license:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - env:
+          CARGO_ABOUT_VERSION: 0.6.1
+        run: |
+          cargo install "cargo-about@$CARGO_ABOUT_VERSION"
+          cargo about generate about.hbs >THIRD-PARTY-LICENSE.html
+      - uses: actions/upload-artifact@v4
+        with:
+          name: third-party-license
+          path: THIRD-PARTY-LICENSE.html
+          if-no-files-found: error
+  src:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          tar --create --verbose --gzip --file=src.tar.gz .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: src
+          path: src.tar.gz
+          if-no-files-found: error
   package:
     needs: [build, typos]
     runs-on: ${{matrix.os}}
@@ -79,7 +105,7 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
   release:
-    needs: [build, typos]
+    needs: [build, src, third-party-license, typos]
     runs-on: ${{matrix.os}}
     strategy:
       fail-fast: false
@@ -104,6 +130,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
       - if: ${{matrix.os == 'macos-latest'}}
         run: |
           rustup target add x86_64-apple-darwin
@@ -126,7 +156,12 @@ jobs:
           TARGET: ${{matrix.target}}
         run: |
           cargo build --release --target ${{matrix.target}}
-          tar --create --verbose --gzip --file=tansu-${TARGET}.tar.gz -C target/${TARGET}/release tansu{-server,-proxy}
+          dist=$(mktemp -d)
+          mkdir "$dist"/bin
+          cp target/"${TARGET}"/release/tansu{-server,-proxy} "$dist"/bin
+          cp LICENSE "$dist"
+          cp artifacts/* "$dist"
+          tar --create --verbose --gzip --file=tansu-"${TARGET}".tar.gz -C "$dist" .
       - if: ${{matrix.enabled}}
         uses: actions/upload-artifact@v4
         with:
