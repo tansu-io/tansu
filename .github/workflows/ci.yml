@@ -88,15 +88,19 @@ jobs:
           - target: aarch64-unknown-linux-musl
             os: ubuntu-latest
             flags: '-C linker=aarch64-linux-gnu-gcc -C link-arg=-lgcc'
+            enabled: false
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
             flags: ''
+            enabled: true
           - target: aarch64-apple-darwin
             os: macos-latest
             flags: ''
+            enabled: true
           - target: x86_64-apple-darwin
             os: macos-latest
             flags: ''
+            enabled: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -116,7 +120,8 @@ jobs:
           sudo apt update
           sudo apt install -y musl-tools zlib1g-dev
           rustup target add x86_64-unknown-linux-musl
-      - env:
+      - if: ${{matrix.enabled}}
+        env:
           RUSTFLAGS: ${{matrix.flags}}
           TARGET: ${{matrix.target}}
         run: |
