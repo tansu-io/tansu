@@ -127,7 +127,8 @@ jobs:
         run: |
           cargo build --release --target ${{matrix.target}}
           tar --create --verbose --gzip --file=tansu-${TARGET}.tar.gz -C target/${TARGET}/release tansu{-server,-proxy}
-      - uses: actions/upload-artifact@v4
+      - if: ${{matrix.enabled}}
+        uses: actions/upload-artifact@v4
         with:
           name: tansu-${{matrix.target}}
           path: tansu-${{matrix.target}}.tar.gz
