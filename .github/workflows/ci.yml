@@ -62,11 +62,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: |
-          tar --create --verbose --gzip --file=src.tar.gz .
+          git archive --format=tar.gz HEAD >${{runner.temp}}/src.tar.gz
       - uses: actions/upload-artifact@v4
         with:
           name: src
-          path: src.tar.gz
+          path: ${{runner.temp}}/src.tar.gz
           if-no-files-found: error
   package:
     needs: [build, typos]
