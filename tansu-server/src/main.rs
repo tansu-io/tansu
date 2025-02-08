@@ -34,7 +34,7 @@ struct Cli {
     #[arg(long)]
     kafka_cluster_id: String,
 
-    #[arg(long, default_value = "tcp://0.0.0.0:9092")]
+    #[arg(long, default_value = "tcp://[::]:9092")]
     kafka_listener_url: Url,
 
     #[arg(long, default_value = "tcp://localhost:9092")]

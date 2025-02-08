@@ -15,6 +15,7 @@
 
 use std::{
     fmt, io,
+    net::AddrParseError,
     num::TryFromIntError,
     result,
     str::Utf8Error,
@@ -33,6 +34,7 @@ pub mod coordinator;
 
 #[derive(Error, Debug)]
 pub enum Error {
+    AddrParse(#[from] AddrParseError),
     Api(ErrorCode),
     Custom(String),
     EmptyCoordinatorWrapper,
