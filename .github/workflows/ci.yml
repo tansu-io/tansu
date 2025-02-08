@@ -156,7 +156,7 @@ jobs:
           TARGET: ${{matrix.target}}
         run: |
           cargo build --release --target ${{matrix.target}}
-          dist=$(mktemp -d)
+          dist=$(mktemp -d -p ${{runner.temp}})
           mkdir "$dist"/bin
           cp target/"${TARGET}"/release/tansu{-server,-proxy} "$dist"/bin
           cp LICENSE "$dist"
