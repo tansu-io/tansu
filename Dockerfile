@@ -29,7 +29,6 @@ ARG TARGETPLATFORM
 RUN xx-apk add --no-cache musl-dev zlib-dev
 RUN xx-cargo build --package ${PACKAGE} --release --target-dir ./build
 RUN xx-verify --static ./build/$(xx-cargo --print-target-triple)/release/${PACKAGE}
-RUN cargo install cargo-about@${CARGO_ABOUT_VERSION}
 
 RUN <<EOF
 mkdir /image /image/schema /image/tmp
