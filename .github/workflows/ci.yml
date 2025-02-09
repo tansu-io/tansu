@@ -42,6 +42,32 @@ jobs:
       - uses: crate-ci/typos@v1.29.5
         with:
           config: typos.toml
+  third-party-license:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - env:
+          CARGO_ABOUT_VERSION: 0.6.1
+        run: |
+          cargo install "cargo-about@$CARGO_ABOUT_VERSION"
+          cargo about generate about.hbs >THIRD-PARTY-LICENSE.html
+      - uses: actions/upload-artifact@v4
+        with:
+          name: third-party-license
+          path: THIRD-PARTY-LICENSE.html
+          if-no-files-found: error
+  src:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          git archive --format=tar.gz HEAD >${{runner.temp}}/src.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: src
+          path: ${{runner.temp}}/src.tar.gz
+          if-no-files-found: error
   package:
     needs: [build, typos]
     runs-on: ${{matrix.os}}
@@ -63,7 +89,6 @@ jobs:
             type=ref,event=pr
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-      - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
         with:
           buildkitd-flags: --debug
@@ -76,6 +101,70 @@ jobs:
         with:
           context: .
           platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+  release:
+    needs: [build, src, third-party-license, typos]
+    runs-on: ${{matrix.os}}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            flags: '-C linker=aarch64-linux-gnu-gcc -C link-arg=-lgcc'
+            enabled: false
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            flags: ''
+            enabled: true
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            flags: ''
+            enabled: true
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            flags: ''
+            enabled: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - if: ${{matrix.os == 'macos-latest'}}
+        run: |
+          rustup target add x86_64-apple-darwin
+          rustup target add aarch64-apple-darwin
+      - if: ${{matrix.target == 'aarch64-unknown-linux-musl'}}
+        run: |
+          sudo apt update
+          sudo apt install -y crossbuild-essential-arm64 musl-tools zlib1g-dev libzstd-dev
+          rustup target add aarch64-unknown-linux-musl
+          echo "CC=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+          $(which aarch64-linux-gnu-gcc) --version
+      - if: ${{matrix.target == 'x86_64-unknown-linux-musl'}}
+        run: |
+          sudo apt update
+          sudo apt install -y musl-tools zlib1g-dev
+          rustup target add x86_64-unknown-linux-musl
+      - if: ${{matrix.enabled}}
+        env:
+          RUSTFLAGS: ${{matrix.flags}}
+          TARGET: ${{matrix.target}}
+        run: |
+          cargo build --release --target ${{matrix.target}}
+          dist=$(mktemp -d -p ${{runner.temp}})
+          mkdir "$dist"/bin
+          cp target/"${TARGET}"/release/tansu{-server,-proxy} "$dist"/bin
+          cp LICENSE "$dist"
+          cp artifacts/* "$dist"
+          tar --create --verbose --gzip --file=tansu-"${TARGET}".tar.gz -C "$dist" .
+      - if: ${{matrix.enabled}}
+        uses: actions/upload-artifact@v4
+        with:
+          name: tansu-${{matrix.target}}
+          path: tansu-${{matrix.target}}.tar.gz
+          if-no-files-found: error
