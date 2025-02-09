@@ -6,6 +6,7 @@
         "crossbuild",
         "lgcc",
         "libzstd",
+        "miri",
         "RUSTFLAGS",
         "rustup"
     ]
