@@ -14,7 +14,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use crate::{Result, TracingFormat};
-use opentelemetry::{trace::TracerProvider as _, KeyValue};
+use opentelemetry::KeyValue;
 use opentelemetry_otlp::SpanExporter;
 use opentelemetry_sdk::{
     runtime,
@@ -25,7 +25,6 @@ use opentelemetry_semantic_conventions::{
     resource::{SERVICE_NAME, SERVICE_VERSION},
     SCHEMA_URL,
 };
-use tracing_opentelemetry::OpenTelemetryLayer;
 use tracing_subscriber::{
     fmt::format::FmtSpan, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter,
 };
@@ -73,7 +72,7 @@ impl Drop for Guard {
 pub fn init_tracing_subscriber(tracing_format: TracingFormat) -> Result<Guard> {
     let provider = init_tracer_provider()?;
 
-    let tracer = provider.tracer(format!("{}-otel-subscriber", env!("CARGO_PKG_NAME")));
+    // let tracer = provider.tracer(format!("{}-otel-subscriber", env!("CARGO_PKG_NAME")));
 
     match tracing_format {
         TracingFormat::Text => tracing_subscriber::registry()
@@ -85,13 +84,13 @@ pub fn init_tracing_subscriber(tracing_format: TracingFormat) -> Result<Guard> {
                     .with_thread_ids(false)
                     .with_span_events(FmtSpan::NONE),
             )
-            .with(OpenTelemetryLayer::new(tracer))
+            // .with(OpenTelemetryLayer::new(tracer))
             .init(),
 
         TracingFormat::Json => tracing_subscriber::registry()
             .with(EnvFilter::from_default_env())
             .with(tracing_subscriber::fmt::layer().json())
-            .with(OpenTelemetryLayer::new(tracer))
+            // .with(OpenTelemetryLayer::new(tracer))
             .init(),
     }
 
