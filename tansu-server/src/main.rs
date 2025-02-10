@@ -49,7 +49,7 @@ struct Cli {
 
     #[arg(
         long,
-        env = "STORAGE_URL",
+        env = "STORAGE_ENGINE",
         default_value = "postgres://postgres:postgres@localhost"
     )]
     storage_engine: Url,
