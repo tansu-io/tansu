@@ -82,50 +82,50 @@ docker-rm-f:
     docker rm --force tansu
 
 list-topics:
-    kafka-topics --bootstrap-server localhost:9092 --list
+    kafka-topics --bootstrap-server ${ADVERTISED_LISTENER} --list
 
 test-topic-describe:
-    kafka-topics --bootstrap-server localhost:9092 --describe --topic test
+    kafka-topics --bootstrap-server ${ADVERTISED_LISTENER} --describe --topic test
 
 test-topic-create:
-    kafka-topics --bootstrap-server localhost:9092 --config cleanup.policy=compact --partitions=3 --replication-factor=1 --create --topic test
+    kafka-topics --bootstrap-server ${ADVERTISED_LISTENER} --config cleanup.policy=compact --partitions=3 --replication-factor=1 --create --topic test
 
 test-topic-delete:
-    kafka-topics --bootstrap-server localhost:9092 --delete --topic test
+    kafka-topics --bootstrap-server ${ADVERTISED_LISTENER} --delete --topic test
 
 test-topic-get-offsets-earliest:
-    kafka-get-offsets --bootstrap-server localhost:9092 --topic test --time earliest
+    kafka-get-offsets --bootstrap-server ${ADVERTISED_LISTENER} --topic test --time earliest
 
 test-topic-get-offsets-latest:
-    kafka-get-offsets --bootstrap-server localhost:9092 --topic test --time latest
+    kafka-get-offsets --bootstrap-server ${ADVERTISED_LISTENER} --topic test --time latest
 
 test-topic-produce:
-    echo "h1:pqr,h2:jkl,h3:uio	qwerty	poiuy\nh1:def,h2:lmn,h3:xyz	asdfgh	lkj\nh1:stu,h2:fgh,h3:ijk	zxcvbn	mnbvc" | kafka-console-producer --bootstrap-server localhost:9092 --topic test --property parse.headers=true --property parse.key=true
+    echo "h1:pqr,h2:jkl,h3:uio	qwerty	poiuy\nh1:def,h2:lmn,h3:xyz	asdfgh	lkj\nh1:stu,h2:fgh,h3:ijk	zxcvbn	mnbvc" | kafka-console-producer --bootstrap-server ${ADVERTISED_LISTENER} --topic test --property parse.headers=true --property parse.key=true
 
 test-topic-consume:
-    kafka-console-consumer --bootstrap-server localhost:9092 --consumer-property fetch.max.wait.ms=15000 --group test-consumer-group --topic test --from-beginning --property print.timestamp=true --property print.key=true --property print.offset=true --property print.partition=true --property print.headers=true --property print.value=true
+    kafka-console-consumer --bootstrap-server ${ADVERTISED_LISTENER} --consumer-property fetch.max.wait.ms=15000 --group test-consumer-group --topic test --from-beginning --property print.timestamp=true --property print.key=true --property print.offset=true --property print.partition=true --property print.headers=true --property print.value=true
 
 test-consumer-group-describe:
-    kafka-consumer-groups --bootstrap-server localhost:9092 --group test-consumer-group --describe
+    kafka-consumer-groups --bootstrap-server ${ADVERTISED_LISTENER} --group test-consumer-group --describe
 
 consumer-group-list:
-    kafka-consumer-groups --bootstrap-server localhost:9092 --list
+    kafka-consumer-groups --bootstrap-server ${ADVERTISED_LISTENER} --list
 
 test-reset-offsets-to-earliest:
-    kafka-consumer-groups --bootstrap-server localhost:9092 --group test-consumer-group --topic test:0 --reset-offsets --to-earliest --execute
+    kafka-consumer-groups --bootstrap-server ${ADVERTISED_LISTENER} --group test-consumer-group --topic test:0 --reset-offsets --to-earliest --execute
 
 person-topic-create:
-    kafka-topics --bootstrap-server localhost:9092 --partitions=3 --replication-factor=1 --create --topic person
+    kafka-topics --bootstrap-server ${ADVERTISED_LISTENER} --partitions=3 --replication-factor=1 --create --topic person
 
 person-topic-produce-valid:
-    echo 'h1:pqr,h2:jkl,h3:uio	"ABC-123"	{"firstName": "John", "lastName": "Doe", "age": 21}' | kafka-console-producer --bootstrap-server localhost:9092 --topic person --property parse.headers=true --property parse.key=true
+    echo 'h1:pqr,h2:jkl,h3:uio	"ABC-123"	{"firstName": "John", "lastName": "Doe", "age": 21}' | kafka-console-producer --bootstrap-server ${ADVERTISED_LISTENER} --topic person --property parse.headers=true --property parse.key=true
 
 person-topic-produce-invalid:
-    echo 'h1:pqr,h2:jkl,h3:uio	"ABC-123"	{"firstName": "John", "lastName": "Doe", "age": -1}' | kafka-console-producer --bootstrap-server localhost:9092 --topic person --property parse.headers=true --property parse.key=true
+    echo 'h1:pqr,h2:jkl,h3:uio	"ABC-123"	{"firstName": "John", "lastName": "Doe", "age": -1}' | kafka-console-producer --bootstrap-server ${ADVERTISED_LISTENER} --topic person --property parse.headers=true --property parse.key=true
 
 person-topic-consume:
     kafka-console-consumer \
-        --bootstrap-server localhost:9092 \
+        --bootstrap-server ${ADVERTISED_LISTENER} \
         --consumer-property fetch.max.wait.ms=15000 \
         --group person-consumer-group --topic person \
         --from-beginning \
@@ -150,5 +150,42 @@ kafka-proxy:
 tansu-proxy:
     ./target/debug/tansu-proxy 2>&1 | tee proxy.log
 
+codespace-create:
+    gh codespace create \
+        --repo $(gh repo view --json nameWithOwner --jq .nameWithOwner) \
+        --branch $(git branch --show-current) \
+        --machine basicLinux32gb
+
+codespace-delete:
+    gh codespace ls \
+        --repo $(gh repo view \
+            --json nameWithOwner \
+            --jq .nameWithOwner) \
+        --json name \
+        --jq '.[].name' | xargs --no-run-if-empty -n1 gh codespace delete --codespace 
+
+codespace-logs:
+    gh codespace logs \
+        --codespace $(gh codespace ls \
+            --repo $(gh repo view \
+                --json nameWithOwner \
+                --jq .nameWithOwner) \
+            --json name \
+            --jq '.[].name')
+
+codespace-ls:
+    gh codespace list \
+        --repo $(gh repo view \
+            --json nameWithOwner \
+            --jq .nameWithOwner)
+
+codespace-ssh:
+    gh codespace ssh \
+        --codespace $(gh codespace ls \
+            --repo $(gh repo view \
+                --json nameWithOwner \
+                --jq .nameWithOwner) \
+            --json name \
+            --jq '.[].name')
 
 all: test miri

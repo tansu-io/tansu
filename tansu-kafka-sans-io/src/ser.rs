@@ -454,22 +454,25 @@ impl Serializer for &mut Encoder<'_> {
             v.len()
                 .try_into()
                 .map_err(Into::into)
-                .and_then(|len| self.serialize_i16(len))?;
+                .and_then(|len| self.serialize_i16(len))
+                .and(self.writer.write_all(v.as_bytes()).map_err(Into::into))
         } else if self.is_valid() {
             if self.is_flexible() {
                 (v.len() + 1)
                     .try_into()
                     .map_err(Into::into)
-                    .and_then(|len| self.unsigned_varint(len))?;
+                    .and_then(|len| self.unsigned_varint(len))
+                    .and(self.writer.write_all(v.as_bytes()).map_err(Into::into))
             } else {
                 v.len()
                     .try_into()
                     .map_err(Into::into)
-                    .and_then(|len| self.serialize_i16(len))?;
+                    .and_then(|len| self.serialize_i16(len))
+                    .and(self.writer.write_all(v.as_bytes()).map_err(Into::into))
             }
+        } else {
+            Ok(())
         }
-
-        self.writer.write_all(v.as_bytes()).map_err(Into::into)
     }
 
     fn serialize_bytes(self, v: &[u8]) -> Result<Self::Ok, Self::Error> {

@@ -1,4 +1,4 @@
-# Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+# Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as
@@ -13,37 +13,27 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-ARG BUILD_IMAGE=rust:1.80
+FROM --platform=$BUILDPLATFORM tonistiigi/xx AS xx
 
-FROM ${BUILD_IMAGE} AS builder
+FROM --platform=$BUILDPLATFORM rust:alpine AS builder
+COPY --from=xx / /
+RUN apk add clang lld
+RUN rustup target add $(xx-cargo --print-target-triple)
 
 ARG PACKAGE=tansu-server
-
 WORKDIR /usr/src
 ADD / /usr/src/
-RUN cargo build --package ${PACKAGE} --release
+
+ARG TARGETPLATFORM
+RUN xx-apk add --no-cache musl-dev zlib-dev
+RUN xx-cargo build --package ${PACKAGE} --release --target-dir ./build
+RUN xx-verify --static ./build/$(xx-cargo --print-target-triple)/release/${PACKAGE}
 
 RUN <<EOF
-mkdir /image /image/schema /image/tmp
-
-# copy any dynamically linked libraries used
-for lib in $(ldd target/release/* 2>/dev/null|grep "=>"|awk '{print $3}'|sort|uniq); do
-    mkdir -p $(dirname /image$lib)
-    cp -Lv $lib /image$lib
-done
-
-# ensure that the link loader is present
-case `arch` in
-    x86_64)
-        mkdir -p /image/lib64
-        cp -v /lib64/ld-linux*.so.* /image/lib64;;
-
-    aarch64)
-        cp -v /lib/ld-linux*.so.* /image/lib;;
-esac
-
-# copy the executable
-cp -v target/release/${PACKAGE} /image
+mkdir -p /image/schema /image/tmp /image/etc/ssl
+cp -v build/$(xx-cargo --print-target-triple)/release/${PACKAGE} /image
+cp -v LICENSE /image
+cp -rv /etc/ssl /image/etc
 EOF
 
 FROM scratch

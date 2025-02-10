@@ -1,0 +1,13 @@
+{
+    "cSpell.words": [
+        "buildkitd",
+        "CLICOLOR",
+        "clippy",
+        "crossbuild",
+        "lgcc",
+        "libzstd",
+        "miri",
+        "RUSTFLAGS",
+        "rustup"
+    ]
+}

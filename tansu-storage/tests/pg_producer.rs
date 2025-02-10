@@ -14,7 +14,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use bytes::Bytes;
-use rand::{distributions::Alphanumeric, prelude::*, thread_rng};
+use rand::{distr::Alphanumeric, prelude::*, rng};
 use tansu_kafka_sans_io::{
     create_topics_request::CreatableTopic,
     record::{inflated, Record},
@@ -66,10 +66,8 @@ fn storage_container(cluster: impl Into<String>, node: i32) -> Result<StorageCon
 async fn produce() -> Result<()> {
     let _guard = init_tracing()?;
 
-    let mut rng = thread_rng();
-
     let cluster_id = Uuid::now_v7();
-    let broker_id = rng.gen_range(0..i32::MAX);
+    let broker_id = rng().random_range(0..i32::MAX);
     let incarnation_id = Uuid::now_v7();
 
     let mut storage_container = storage_container(cluster_id, broker_id)?;
@@ -85,14 +83,14 @@ async fn produce() -> Result<()> {
         .register_broker(broker_registration)
         .await?;
 
-    let name: String = thread_rng()
+    let name: String = rng()
         .sample_iter(&Alphanumeric)
         .take(15)
         .map(char::from)
         .collect();
 
-    let num_partitions = rng.gen_range(1..64);
-    let replication_factor = rng.gen_range(0..64);
+    let num_partitions = rng().random_range(1..64);
+    let replication_factor = rng().random_range(0..64);
     let assignments = Some([].into());
     let configs = Some([].into());
 
@@ -108,7 +106,7 @@ async fn produce() -> Result<()> {
         .create_topic(creatable.clone(), false)
         .await?;
 
-    let partition = rng.gen_range(0..num_partitions);
+    let partition = rng().random_range(0..num_partitions);
 
     let topition = Topition::new(name, partition);
 

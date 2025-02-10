@@ -14,7 +14,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use common::{alphanumeric_string, register_broker};
-use rand::{prelude::*, thread_rng};
+use rand::{prelude::*, rng};
 use tansu_kafka_sans_io::{
     create_topics_request::{CreatableTopic, CreatableTopicConfig},
     describe_configs_request::DescribeConfigsResource,
@@ -131,7 +131,7 @@ mod pg {
         let _guard = init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
+        let broker_id = rng().random_range(0..i32::MAX);
 
         super::single_topic(
             cluster_id,
@@ -167,7 +167,7 @@ mod in_memory {
         let _guard = init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
-        let broker_id = thread_rng().gen_range(0..i32::MAX);
+        let broker_id = rng().random_range(0..i32::MAX);
 
         super::single_topic(
             cluster_id,

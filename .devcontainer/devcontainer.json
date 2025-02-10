@@ -1,0 +1,30 @@
+{
+  "name": "tansu",
+
+  "dockerFile": "Dockerfile",
+
+  "hostRequirements": {
+    "cpus": 2,
+    "memory": "4gb",
+    "storage": "32gb"
+  },
+
+  "forwardPorts": [3000, 5432, 9090, 9092],
+
+  "portsAttributes": {
+    "3000": { "label": "grafana" },
+    "5432": { "label": "postgresql" },
+    "9090": { "label": "prom" },
+    "9092": { "label": "tansu" }
+  },
+
+  "features": {
+    "ghcr.io/devcontainers/features/sshd:1": {},
+
+    "ghcr.io/devcontainers/features/common-utils:2": {},
+
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {},
+
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  }
+}
