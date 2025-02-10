@@ -33,22 +33,34 @@ const NODE_ID: i32 = 111;
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Cli {
-    #[arg(long)]
+    #[arg(long, env = "CLUSTER_ID")]
     kafka_cluster_id: String,
 
-    #[arg(long, default_value = "tcp://0.0.0.0:9092")]
+    #[arg(long, env = "LISTENER_URL", default_value = "tcp://0.0.0.0:9092")]
     kafka_listener_url: Url,
 
-    #[arg(long, default_value = "tcp://localhost:9092")]
+    #[arg(
+        long,
+        env = "ADVERTISED_LISTENER_URL",
+        default_value = "tcp://localhost:9092"
+    )]
     kafka_advertised_listener_url: Url,
 
-    #[arg(long, default_value = "postgres://postgres:postgres@localhost")]
+    #[arg(
+        long,
+        env = "STORAGE_URL",
+        default_value = "postgres://postgres:postgres@localhost"
+    )]
     storage_engine: Url,
 
-    #[arg(long)]
+    #[arg(long, env = "SCHEMA_REGISTRY")]
     schema_registry: Option<Url>,
 
-    #[arg(long)]
+    #[arg(
+        long,
+        env = "PROMETHEUS_LISTENER_URL",
+        default_value = "tcp://0.0.0.0:9100"
+    )]
     prometheus_listener_url: Option<Url>,
 }
 

@@ -138,11 +138,7 @@ person-topic-consume:
 
 tansu-server:
     ./target/debug/tansu-server \
-        --kafka-cluster-id ${CLUSTER_ID} \
-        --kafka-advertised-listener-url tcp://${ADVERTISED_LISTENER} \
-        --schema-registry file://./etc/schema \
-        --prometheus-listener-url http://localhost:3000 \
-        --storage-engine ${STORAGE_ENGINE} 2>&1 | tee tansu.log
+        --schema-registry file://./etc/schema 2>&1 | tee tansu.log
 
 kafka-proxy:
     docker run -d -p 19092:9092 apache/kafka:3.9.0
