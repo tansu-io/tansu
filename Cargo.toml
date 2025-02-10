@@ -95,7 +95,7 @@ tokio-postgres = { version = "0.7.13", features = [
 tracing = "0.1"
 tracing-core = { version = "0.1" }
 tracing-opentelemetry = "0.28.0"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 url = { version = "2.5.4", features = ["serde"] }
 uuid = { version = "1.13.1", features = ["serde", "v4", "v7"] }
 zstd = "0.13.2"

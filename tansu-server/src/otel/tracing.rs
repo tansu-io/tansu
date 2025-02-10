@@ -13,7 +13,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use crate::Result;
+use crate::{Result, TracingFormat};
 use opentelemetry::{trace::TracerProvider as _, KeyValue};
 use opentelemetry_otlp::SpanExporter;
 use opentelemetry_sdk::{
@@ -70,22 +70,30 @@ impl Drop for Guard {
     }
 }
 
-pub fn init_tracing_subscriber() -> Result<Guard> {
+pub fn init_tracing_subscriber(tracing_format: TracingFormat) -> Result<Guard> {
     let provider = init_tracer_provider()?;
 
     let tracer = provider.tracer(format!("{}-otel-subscriber", env!("CARGO_PKG_NAME")));
 
-    tracing_subscriber::registry()
-        .with(EnvFilter::from_default_env())
-        .with(
-            tracing_subscriber::fmt::layer()
-                .with_level(true)
-                .with_line_number(true)
-                .with_thread_ids(false)
-                .with_span_events(FmtSpan::NONE),
-        )
-        .with(OpenTelemetryLayer::new(tracer))
-        .init();
+    match tracing_format {
+        TracingFormat::Text => tracing_subscriber::registry()
+            .with(EnvFilter::from_default_env())
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_level(true)
+                    .with_line_number(true)
+                    .with_thread_ids(false)
+                    .with_span_events(FmtSpan::NONE),
+            )
+            .with(OpenTelemetryLayer::new(tracer))
+            .init(),
+
+        TracingFormat::Json => tracing_subscriber::registry()
+            .with(EnvFilter::from_default_env())
+            .with(tracing_subscriber::fmt::layer().json())
+            .with(OpenTelemetryLayer::new(tracer))
+            .init(),
+    }
 
     Ok(Guard { tracer: provider })
 }

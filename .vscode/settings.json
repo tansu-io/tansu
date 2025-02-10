@@ -3,11 +3,22 @@
         "buildkitd",
         "CLICOLOR",
         "clippy",
+        "condtype",
         "crossbuild",
+        "deadpool",
+        "dynostore",
+        "flate",
+        "getrandom",
+        "jsonschema",
         "lgcc",
         "libzstd",
         "miri",
+        "prettyplease",
         "RUSTFLAGS",
-        "rustup"
+        "rustup",
+        "semconv",
+        "serde",
+        "thiserror",
+        "zstd"
     ]
 }

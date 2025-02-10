@@ -13,7 +13,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use crate::Result;
+use crate::{Result, TracingFormat};
 
 pub mod prom;
 mod tracing;
@@ -24,6 +24,6 @@ pub struct Guard {
     tracer: tracing::Guard,
 }
 
-pub fn init() -> Result<Guard> {
-    tracing::init_tracing_subscriber().map(|tracer| Guard { tracer })
+pub fn init(tracing_format: TracingFormat) -> Result<Guard> {
+    tracing::init_tracing_subscriber(tracing_format).map(|tracer| Guard { tracer })
 }

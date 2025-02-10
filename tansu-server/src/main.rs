@@ -21,6 +21,7 @@ use object_store::{
 use tansu_schema_registry::Registry;
 use tansu_server::{
     broker::Broker, coordinator::group::administrator::Controller, otel, Error, Result,
+    TracingFormat,
 };
 use tansu_storage::{dynostore::DynoStore, pg::Postgres, StorageContainer};
 use tokio::task::JoinSet;
@@ -62,16 +63,19 @@ struct Cli {
         default_value = "tcp://0.0.0.0:9100"
     )]
     prometheus_listener_url: Option<Url>,
+
+    #[arg(long, env = "TRACING_FORMAT", default_value = "text")]
+    tracing_format: TracingFormat,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let args = Cli::parse();
+
     let instance_id = Uuid::now_v7();
-    let _guard = otel::init()?;
+    let _guard = otel::init(args.tracing_format)?;
 
     let mut set = JoinSet::new();
-
-    let args = Cli::parse();
 
     if let Some(prometheus_listener_url) = args.prometheus_listener_url {
         debug!(%prometheus_listener_url);

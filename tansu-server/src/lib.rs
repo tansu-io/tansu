@@ -17,7 +17,7 @@ use std::{
     fmt, io,
     num::TryFromIntError,
     result,
-    str::Utf8Error,
+    str::{FromStr, Utf8Error},
     string::FromUtf8Error,
     sync::{Arc, PoisonError},
 };
@@ -60,6 +60,7 @@ pub enum Error {
     TokioPostgres(#[from] tokio_postgres::error::Error),
     TryFromInt(#[from] TryFromIntError),
     UnsupportedStorageUrl(Url),
+    UnsupportedTracingFormat(String),
     Url(#[from] url::ParseError),
     Utf8(#[from] Utf8Error),
     Uuid(#[from] uuid::Error),
@@ -100,3 +101,21 @@ impl fmt::Display for Error {
 }
 
 pub type Result<T, E = Error> = result::Result<T, E>;
+
+#[derive(Copy, Clone, Debug)]
+pub enum TracingFormat {
+    Text,
+    Json,
+}
+
+impl FromStr for TracingFormat {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "text" => Ok(Self::Text),
+            "json" => Ok(Self::Json),
+            otherwise => Err(Error::UnsupportedTracingFormat(otherwise.to_owned())),
+        }
+    }
+}
