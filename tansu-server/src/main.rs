@@ -20,7 +20,7 @@ use object_store::{
 };
 use tansu_schema_registry::Registry;
 use tansu_server::{
-    broker::Broker, coordinator::group::administrator::Controller, otel, Error, Result,
+    broker::Broker, coordinator::group::administrator::Controller, otel, EnvVarExp, Error, Result,
     TracingFormat,
 };
 use tansu_storage::{dynostore::DynoStore, pg::Postgres, StorageContainer};
@@ -38,31 +38,31 @@ struct Cli {
     kafka_cluster_id: String,
 
     #[arg(long, env = "LISTENER_URL", default_value = "tcp://0.0.0.0:9092")]
-    kafka_listener_url: Url,
+    kafka_listener_url: EnvVarExp<Url>,
 
     #[arg(
         long,
         env = "ADVERTISED_LISTENER_URL",
         default_value = "tcp://localhost:9092"
     )]
-    kafka_advertised_listener_url: Url,
+    kafka_advertised_listener_url: EnvVarExp<Url>,
 
     #[arg(
         long,
         env = "STORAGE_ENGINE",
         default_value = "postgres://postgres:postgres@localhost"
     )]
-    storage_engine: Url,
+    storage_engine: EnvVarExp<Url>,
 
     #[arg(long, env = "SCHEMA_REGISTRY")]
-    schema_registry: Option<Url>,
+    schema_registry: Option<EnvVarExp<Url>>,
 
     #[arg(
         long,
         env = "PROMETHEUS_LISTENER_URL",
         default_value = "tcp://0.0.0.0:9100"
     )]
-    prometheus_listener_url: Option<Url>,
+    prometheus_listener_url: EnvVarExp<Url>,
 
     #[arg(long, env = "TRACING_FORMAT", default_value = "text")]
     tracing_format: TracingFormat,
@@ -75,32 +75,34 @@ async fn main() -> Result<()> {
     let instance_id = Uuid::now_v7();
     let _guard = otel::init(args.tracing_format)?;
 
+    let prometheus_listener_url = args.prometheus_listener_url.into_inner();
+    let storage_engine = args.storage_engine.into_inner();
+    let advertised_listener = args.kafka_advertised_listener_url.into_inner();
+    let listener = args.kafka_listener_url.into_inner();
+    debug!(%prometheus_listener_url, %storage_engine, %advertised_listener, %listener);
+
     let mut set = JoinSet::new();
 
-    if let Some(prometheus_listener_url) = args.prometheus_listener_url {
-        debug!(%prometheus_listener_url);
+    _ = set.spawn(async move {
+        otel::prom::init(prometheus_listener_url).await.unwrap();
+    });
 
-        _ = set.spawn(async move {
-            otel::prom::init(prometheus_listener_url).await.unwrap();
-        });
-    }
+    let schemas = args.schema_registry.map_or(Ok(None), |schema| {
+        Registry::try_from(schema.into_inner()).map(Some)
+    })?;
 
-    let schemas = args
-        .schema_registry
-        .map_or(Ok(None), |schema| Registry::try_from(schema).map(Some))?;
-
-    let storage = match args.storage_engine.scheme() {
-        "postgres" | "postgresql" => Postgres::builder(args.storage_engine.to_string().as_str())
+    let storage = match storage_engine.scheme() {
+        "postgres" | "postgresql" => Postgres::builder(storage_engine.to_string().as_str())
             .map(|builder| builder.cluster(args.kafka_cluster_id.as_str()))
             .map(|builder| builder.node(NODE_ID))
-            .map(|builder| builder.advertised_listener(args.kafka_advertised_listener_url.clone()))
+            .map(|builder| builder.advertised_listener(advertised_listener.clone()))
             .map(|builder| builder.schemas(schemas))
             .map(|builder| builder.build())
             .map(StorageContainer::Postgres)
             .map_err(Into::into),
 
         "s3" => {
-            let bucket_name = args.storage_engine.host_str().unwrap_or("tansu");
+            let bucket_name = storage_engine.host_str().unwrap_or("tansu");
 
             AmazonS3Builder::from_env()
                 .with_bucket_name(bucket_name)
@@ -108,7 +110,7 @@ async fn main() -> Result<()> {
                 .build()
                 .map(|object_store| {
                     DynoStore::new(args.kafka_cluster_id.as_str(), NODE_ID, object_store)
-                        .advertised_listener(args.kafka_advertised_listener_url.clone())
+                        .advertised_listener(advertised_listener.clone())
                         .schemas(schemas)
                 })
                 .map(StorageContainer::DynoStore)
@@ -117,10 +119,10 @@ async fn main() -> Result<()> {
 
         "memory" => Ok(StorageContainer::DynoStore(
             DynoStore::new(args.kafka_cluster_id.as_str(), NODE_ID, InMemory::new())
-                .advertised_listener(args.kafka_advertised_listener_url.clone()),
+                .advertised_listener(advertised_listener.clone()),
         )),
 
-        _unsupported => Err(Error::UnsupportedStorageUrl(args.storage_engine)),
+        _unsupported => Err(Error::UnsupportedStorageUrl(storage_engine)),
     }?;
 
     {
@@ -129,14 +131,12 @@ async fn main() -> Result<()> {
         let mut broker = Broker::new(
             NODE_ID,
             &args.kafka_cluster_id,
-            args.kafka_listener_url,
-            args.kafka_advertised_listener_url,
+            listener,
+            advertised_listener,
             storage,
             groups,
             instance_id,
         );
-
-        debug!(?broker);
 
         _ = set.spawn(async move {
             broker.serve().await.unwrap();
