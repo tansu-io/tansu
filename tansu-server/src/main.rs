@@ -75,11 +75,12 @@ async fn main() -> Result<()> {
     let instance_id = Uuid::now_v7();
     let _guard = otel::init(args.tracing_format)?;
 
+    let cluster_id = args.kafka_cluster_id;
     let prometheus_listener_url = args.prometheus_listener_url.into_inner();
     let storage_engine = args.storage_engine.into_inner();
     let advertised_listener = args.kafka_advertised_listener_url.into_inner();
     let listener = args.kafka_listener_url.into_inner();
-    debug!(%prometheus_listener_url, %storage_engine, %advertised_listener, %listener);
+    debug!(%cluster_id, %prometheus_listener_url, %storage_engine, %advertised_listener, %listener);
 
     let mut set = JoinSet::new();
 
@@ -93,7 +94,7 @@ async fn main() -> Result<()> {
 
     let storage = match storage_engine.scheme() {
         "postgres" | "postgresql" => Postgres::builder(storage_engine.to_string().as_str())
-            .map(|builder| builder.cluster(args.kafka_cluster_id.as_str()))
+            .map(|builder| builder.cluster(cluster_id.as_str()))
             .map(|builder| builder.node(NODE_ID))
             .map(|builder| builder.advertised_listener(advertised_listener.clone()))
             .map(|builder| builder.schemas(schemas))
@@ -109,7 +110,7 @@ async fn main() -> Result<()> {
                 .with_conditional_put(S3ConditionalPut::ETagMatch)
                 .build()
                 .map(|object_store| {
-                    DynoStore::new(args.kafka_cluster_id.as_str(), NODE_ID, object_store)
+                    DynoStore::new(cluster_id.as_str(), NODE_ID, object_store)
                         .advertised_listener(advertised_listener.clone())
                         .schemas(schemas)
                 })
@@ -118,7 +119,7 @@ async fn main() -> Result<()> {
         }
 
         "memory" => Ok(StorageContainer::DynoStore(
-            DynoStore::new(args.kafka_cluster_id.as_str(), NODE_ID, InMemory::new())
+            DynoStore::new(cluster_id.as_str(), NODE_ID, InMemory::new())
                 .advertised_listener(advertised_listener.clone()),
         )),
 
@@ -130,7 +131,7 @@ async fn main() -> Result<()> {
 
         let mut broker = Broker::new(
             NODE_ID,
-            &args.kafka_cluster_id,
+            &cluster_id,
             listener,
             advertised_listener,
             storage,
