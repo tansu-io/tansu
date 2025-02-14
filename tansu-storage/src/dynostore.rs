@@ -79,8 +79,8 @@ pub struct DynoStore {
     node: i32,
     advertised_listener: Url,
     schemas: Option<Registry>,
-    watermarks: BTreeMap<Topition, ConditionData<Watermark>>,
-    meta: ConditionData<Meta>,
+    watermarks: BTreeMap<Topition, OptiLock<Watermark>>,
+    meta: OptiLock<Meta>,
 
     object_store: Arc<DynObjectStore>,
 }
@@ -96,11 +96,14 @@ struct Meta {
     transactions: BTreeMap<String, Txn>,
 }
 
-impl ConditionData<Meta> {
+impl OptiLock<Meta> {
     fn new(cluster: &str) -> Self {
         Self {
             path: Path::from(format!("clusters/{}/meta.json", cluster)),
-            data: Meta::default(),
+            version_data: Arc::new(Mutex::new(VersionData {
+                data: Meta::default(),
+                ..Default::default()
+            })),
             ..Default::default()
         }
     }
@@ -259,175 +262,6 @@ struct TxnCommitOffset {
     metadata: Option<String>,
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-struct ConditionData<D> {
-    path: Path,
-    version: Option<UpdateVersion>,
-    tags: TagSet,
-    attributes: Attributes,
-    data: D,
-}
-
-impl<D> ConditionData<D>
-where
-    D: Clone + Debug + DeserializeOwned + Send + Serialize + Sync,
-{
-    async fn get(&mut self, object_store: &impl ObjectStore) -> Result<()> {
-        debug!(?self);
-
-        let get_result = object_store
-            .get(&self.path)
-            .await
-            .inspect_err(|error| error!(?error, ?self))
-            .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
-
-        self.version = Some(UpdateVersion {
-            e_tag: get_result.meta.e_tag.clone(),
-            version: get_result.meta.version.clone(),
-        });
-
-        let encoded = get_result
-            .bytes()
-            .await
-            .inspect_err(|error| error!(?error, ?self))
-            .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
-
-        self.data = serde_json::from_slice::<D>(&encoded[..])
-            .inspect_err(|error| error!(?error, ?self))
-            .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
-
-        debug!(?self);
-
-        Ok(())
-    }
-
-    async fn with_mut<E, F>(&mut self, object_store: &impl ObjectStore, f: F) -> Result<E>
-    where
-        E: Debug,
-        F: Fn(&mut D) -> Result<E>,
-    {
-        debug!(?self);
-
-        loop {
-            let outcome = f(&mut self.data);
-            debug!(?self, ?outcome);
-
-            let payload = serde_json::to_vec(&self.data)
-                .map(Bytes::from)
-                .map(PutPayload::from)
-                .inspect_err(|err| error!(?err, data = ?self.data))?;
-
-            match object_store
-                .put_opts(&self.path, payload, PutOptions::from(&*self))
-                .await
-                .inspect_err(|error| match error {
-                    object_store::Error::AlreadyExists { .. }
-                    | object_store::Error::Precondition { .. } => {
-                        debug!(?error, ?self)
-                    }
-
-                    _ => error!(?error, ?self),
-                })
-                .inspect(|put_result| debug!(?self, ?put_result))
-            {
-                Ok(result) => {
-                    debug!(?self, ?result);
-
-                    self.version = Some(UpdateVersion {
-                        e_tag: result.e_tag,
-                        version: result.version,
-                    });
-
-                    return outcome;
-                }
-
-                Err(pre_condition @ object_store::Error::Precondition { .. }) => {
-                    debug!(?self, ?pre_condition);
-                    self.get(object_store).await?;
-                    continue;
-                }
-
-                Err(already_exists @ object_store::Error::AlreadyExists { .. }) => {
-                    debug!(?self, ?already_exists);
-                    self.get(object_store).await?;
-                    continue;
-                }
-
-                Err(error) => {
-                    return {
-                        error!(?self, ?error);
-                        Err(Error::Api(ErrorCode::UnknownServerError))
-                    }
-                }
-            }
-        }
-    }
-
-    async fn with<E, F>(&mut self, object_store: &impl ObjectStore, f: F) -> Result<E>
-    where
-        F: Fn(&D) -> Result<E>,
-    {
-        debug!(?self);
-
-        match object_store
-            .get_opts(
-                &self.path,
-                GetOptions {
-                    if_none_match: self
-                        .version
-                        .as_ref()
-                        .and_then(|version| version.e_tag.clone()),
-                    ..GetOptions::default()
-                },
-            )
-            .await
-        {
-            Ok(get_result) => {
-                self.version = Some(UpdateVersion {
-                    e_tag: get_result.meta.e_tag.clone(),
-                    version: get_result.meta.version.clone(),
-                });
-
-                let encoded = get_result
-                    .bytes()
-                    .await
-                    .inspect_err(|error| error!(?error, ?self))
-                    .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
-
-                self.data = serde_json::from_slice::<D>(&encoded[..])
-                    .inspect_err(|error| error!(?error, ?self))
-                    .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
-
-                Ok(())
-            }
-
-            Err(object_store::Error::NotModified { .. }) => Ok(()),
-
-            Err(object_store::Error::NotFound { .. }) => {
-                self.with_mut(object_store, |_| Ok(())).await
-            }
-
-            Err(error) => {
-                error!(?self, ?error);
-                Err(Error::Api(ErrorCode::UnknownServerError))
-            }
-        }
-        .and(f(&self.data))
-    }
-}
-
-impl<D> From<&ConditionData<D>> for PutOptions {
-    fn from(value: &ConditionData<D>) -> Self {
-        Self {
-            mode: value.version.as_ref().map_or(PutMode::Create, |existing| {
-                PutMode::Update(existing.to_owned())
-            }),
-            tags: value.tags.to_owned(),
-            attributes: value.attributes.to_owned(),
-        }
-    }
-}
-
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 struct TopicMetadata {
     id: Uuid,
@@ -440,14 +274,17 @@ struct Watermark {
     high: Option<i64>,
 }
 
-impl ConditionData<Watermark> {
+impl OptiLock<Watermark> {
     fn new(cluster: &str, topition: &Topition) -> Self {
         Self {
             path: Path::from(format!(
                 "clusters/{}/topics/{}/partitions/{:0>10}/watermark.json",
                 cluster, topition.topic, topition.partition,
             )),
-            data: Watermark::default(),
+            version_data: Arc::new(Mutex::new(VersionData {
+                data: Watermark::default(),
+                ..Default::default()
+            })),
             ..Default::default()
         }
     }
@@ -487,7 +324,7 @@ impl DynoStore {
             advertised_listener: Url::parse("tcp://127.0.0.1/").unwrap(),
             schemas: None,
             watermarks: BTreeMap::new(),
-            meta: ConditionData::<Meta>::new(cluster),
+            meta: OptiLock::<Meta>::new(cluster),
             object_store: Arc::new(Cache::new(Metron::new(object_store, cluster))),
         }
     }
@@ -919,10 +756,7 @@ impl Storage for DynoStore {
         let offset = self
             .watermarks
             .entry(topition.to_owned())
-            .or_insert(ConditionData::<Watermark>::new(
-                self.cluster.as_str(),
-                topition,
-            ))
+            .or_insert(OptiLock::<Watermark>::new(self.cluster.as_str(), topition))
             .with_mut(&self.object_store, |watermark| {
                 debug!(?watermark);
 
@@ -1152,10 +986,7 @@ impl Storage for DynoStore {
 
         self.watermarks
             .entry(topition.to_owned())
-            .or_insert(ConditionData::<Watermark>::new(
-                self.cluster.as_str(),
-                topition,
-            ))
+            .or_insert(OptiLock::<Watermark>::new(self.cluster.as_str(), topition))
             .with(&self.object_store, |watermark| {
                 debug!(?watermark);
                 let high_watermark = watermark.high.unwrap_or(0);
@@ -1226,10 +1057,7 @@ impl Storage for DynoStore {
                     ListOffsetRequest::Earliest => {
                         self.watermarks
                             .entry(topition.to_owned())
-                            .or_insert(ConditionData::<Watermark>::new(
-                                self.cluster.as_str(),
-                                topition,
-                            ))
+                            .or_insert(OptiLock::<Watermark>::new(self.cluster.as_str(), topition))
                             .with(&self.object_store, |watermark| {
                                 Ok(ListOffsetResponse {
                                     error_code: ErrorCode::None,
@@ -1249,7 +1077,7 @@ impl Storage for DynoStore {
                         } else {
                             self.watermarks
                                 .entry(topition.to_owned())
-                                .or_insert(ConditionData::<Watermark>::new(
+                                .or_insert(OptiLock::<Watermark>::new(
                                     self.cluster.as_str(),
                                     topition,
                                 ))
@@ -3148,31 +2976,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn condition_with_new() -> Result<()> {
-        #[derive(
-            Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize,
-        )]
-        struct X(i32);
-
-        impl ConditionData<X> {
-            fn new() -> Self {
-                Self {
-                    path: Path::from(format!("/abc/def.json")),
-                    ..Default::default()
-                }
-            }
-        }
-
-        let object_store = InMemory::new();
-
-        let mut o = ConditionData::<X>::new();
-
-        assert_eq!(1, o.with(&object_store, |x| Ok(x.0 + 1)).await?);
-
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn opti_lock_with_new() -> Result<()> {
         #[derive(
             Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize,
@@ -3182,7 +2985,7 @@ mod tests {
         impl OptiLock<X> {
             fn new() -> Self {
                 Self {
-                    path: Path::from(format!("/abc/def.json")),
+                    path: Path::from("/abc/def.json"),
                     ..Default::default()
                 }
             }
@@ -3198,49 +3001,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn condition_with_existing() -> Result<()> {
-        #[derive(
-            Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize,
-        )]
-        struct X(i32);
-
-        let path = Path::from(format!("/abc/def.json"));
-
-        impl ConditionData<X> {
-            fn new(path: Path) -> Self {
-                Self {
-                    path,
-                    ..Default::default()
-                }
-            }
-        }
-
-        let object_store = InMemory::new();
-
-        _ = object_store
-            .put(
-                &path,
-                serde_json::to_vec(&X(6))
-                    .map(Bytes::from)
-                    .map(PutPayload::from)?,
-            )
-            .await?;
-
-        let mut o = ConditionData::<X>::new(path.clone());
-
-        assert_eq!(7, o.with(&object_store, |x| Ok(x.0 + 1)).await?);
-
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn opti_lock_with_existing() -> Result<()> {
         #[derive(
             Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize,
         )]
         struct X(i32);
 
-        let path = Path::from(format!("/abc/def.json"));
+        let path = Path::from("/abc/def.json");
 
         impl OptiLock<X> {
             fn new(path: Path) -> Self {
@@ -3276,7 +3043,7 @@ mod tests {
         )]
         struct X(i32);
 
-        let path = Path::from(format!("/abc/def.json"));
+        let path = Path::from("/abc/def.json");
 
         impl OptiLock<X> {
             fn new(path: Path) -> Self {

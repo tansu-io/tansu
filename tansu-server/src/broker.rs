@@ -795,19 +795,9 @@ fn attributes(api_key: i16, api_version: i16, _correlation_id: i32, body: &Body)
     ];
 
     match body {
-        Body::AddOffsetsToTxnRequest {
-            transactional_id,
-            producer_id,
-            producer_epoch,
-            group_id,
-            ..
-        } => attributes.append(&mut vec![
-            KeyValue::new("api_name", "add_offsets_to_txn"),
-            KeyValue::new("transactional_id", transactional_id.to_owned()),
-            KeyValue::new("producer_id", *producer_id),
-            KeyValue::new("producer_epoch", *producer_epoch as i64),
-            KeyValue::new("group_id", group_id.to_owned()),
-        ]),
+        Body::AddOffsetsToTxnRequest { .. } => {
+            attributes.append(&mut vec![KeyValue::new("api_name", "add_offsets_to_txn")])
+        }
 
         Body::AddPartitionsToTxnRequest { .. } => attributes.append(&mut vec![KeyValue::new(
             "api_name",
@@ -818,466 +808,68 @@ fn attributes(api_key: i16, api_version: i16, _correlation_id: i32, body: &Body)
             attributes.append(&mut vec![KeyValue::new("api_name", "api_versions")])
         }
 
-        Body::CreateTopicsRequest {
-            topics, timeout_ms, ..
-        } => attributes.append(&mut vec![
-            KeyValue::new("api_name", "create_topics"),
-            KeyValue::new(
-                "topics",
-                topics.as_ref().map_or("".into(), |topics| {
-                    topics
-                        .iter()
-                        .map(|topic| topic.name.as_str())
-                        .collect::<Vec<_>>()
-                        .join(",")
-                }),
-            ),
-            KeyValue::new("timeout_ms", *timeout_ms as i64),
-        ]),
+        Body::CreateTopicsRequest { .. } => {
+            attributes.append(&mut vec![KeyValue::new("api_name", "create_topics")])
+        }
 
         Body::DeleteTopicsRequest { .. } => {
             attributes.append(&mut vec![KeyValue::new("api_name", "delete_topics")])
         }
 
-        Body::EndTxnRequest {
-            transactional_id,
-            producer_id,
-            producer_epoch,
-            committed,
-        } => attributes.append(&mut vec![
-            KeyValue::new("api_name", "end_txn"),
-            KeyValue::new("transactional_id", transactional_id.to_owned()),
-            KeyValue::new("producer_id", *producer_id),
-            KeyValue::new("producer_epoch", *producer_epoch as i64),
-            KeyValue::new("committed", *committed),
-        ]),
+        Body::EndTxnRequest { .. } => {
+            attributes.append(&mut vec![KeyValue::new("api_name", "end_txn")])
+        }
 
-        Body::FetchRequest {
-            max_wait_ms,
-            min_bytes,
-            max_bytes,
-            cluster_id,
-            replica_id,
-            isolation_level,
-            session_id,
-            session_epoch,
-
-            rack_id,
-            ..
-        } => {
-            attributes.append(&mut vec![
-                KeyValue::new("api_name", "fetch"),
-                KeyValue::new("max_wait_ms", *max_wait_ms as i64),
-                KeyValue::new("min_bytes", *min_bytes as i64),
-            ]);
-
-            if let Some(max_bytes) = max_bytes {
-                attributes.push(KeyValue::new("max_bytes", *max_bytes as i64));
-            }
-
-            if let Some(cluster_id) = cluster_id {
-                attributes.push(KeyValue::new("cluster_id", cluster_id.to_owned()));
-            }
-
-            if let Some(replica_id) = replica_id {
-                attributes.push(KeyValue::new("replica_id", *replica_id as i64));
-            }
-
-            if let Some(isolation_level) = isolation_level {
-                attributes.push(KeyValue::new("isolation_level", *isolation_level as i64));
-            }
-
-            if let Some(session_id) = session_id {
-                attributes.push(KeyValue::new("session_id", *session_id as i64));
-            }
-
-            if let Some(session_epoch) = session_epoch {
-                attributes.push(KeyValue::new("session_epoch", *session_epoch as i64));
-            }
-
-            if let Some(rack_id) = rack_id {
-                attributes.push(KeyValue::new("rack_id", rack_id.to_owned()));
-            }
+        Body::FetchRequest { .. } => {
+            attributes.append(&mut vec![KeyValue::new("api_name", "fetch")]);
         }
 
         Body::FindCoordinatorRequest { .. } => {
             attributes.append(&mut vec![KeyValue::new("api_name", "find_coordinator")])
         }
 
-        Body::HeartbeatRequest {
-            group_id,
-            generation_id,
-            member_id,
-            group_instance_id,
-        } => {
-            attributes.append(&mut vec![
-                KeyValue::new("api_name", "heartbeat"),
-                KeyValue::new("group_id", group_id.to_owned()),
-                KeyValue::new("generation_id", *generation_id as i64),
-                KeyValue::new("member_id", member_id.to_owned()),
-            ]);
-
-            if let Some(group_instance_id) = group_instance_id {
-                attributes.push(KeyValue::new(
-                    "group_instance_id",
-                    group_instance_id.to_owned(),
-                ));
-            }
+        Body::HeartbeatRequest { .. } => {
+            attributes.append(&mut vec![KeyValue::new("api_name", "heartbeat")]);
         }
 
-        Body::InitProducerIdRequest {
-            transactional_id,
-            transaction_timeout_ms,
-            producer_id,
-            producer_epoch,
-        } => {
-            attributes.append(&mut vec![
-                KeyValue::new("api_name", "init_producer_id"),
-                KeyValue::new("transaction_timeout_ms", *transaction_timeout_ms as i64),
-            ]);
-
-            if let Some(transactional_id) = transactional_id {
-                attributes.push(KeyValue::new(
-                    "transactional_id",
-                    transactional_id.to_owned(),
-                ));
-            }
-
-            if let Some(producer_id) = producer_id {
-                attributes.push(KeyValue::new("producer_id", *producer_id))
-            }
-
-            if let Some(producer_epoch) = producer_epoch {
-                attributes.push(KeyValue::new("producer_epoch", *producer_epoch as i64))
-            }
+        Body::InitProducerIdRequest { .. } => {
+            attributes.append(&mut vec![KeyValue::new("api_name", "init_producer_id")]);
         }
 
-        Body::JoinGroupRequest {
-            group_id,
-            session_timeout_ms,
-            rebalance_timeout_ms,
-            member_id,
-            group_instance_id,
-            protocol_type,
-            reason,
-            ..
-        } => {
-            attributes.append(&mut vec![
-                KeyValue::new("api_name", "join_group"),
-                KeyValue::new("group_id", group_id.to_owned()),
-                KeyValue::new("session_timeout_ms", *session_timeout_ms as i64),
-                KeyValue::new("member_id", member_id.to_owned()),
-                KeyValue::new("protocol_type", protocol_type.to_owned()),
-            ]);
-
-            if let Some(rebalance_timeout_ms) = rebalance_timeout_ms {
-                attributes.push(KeyValue::new(
-                    "rebalance_timeout_ms",
-                    *rebalance_timeout_ms as i64,
-                ));
-            }
-
-            if let Some(group_instance_id) = group_instance_id {
-                attributes.push(KeyValue::new(
-                    "group_instance_id",
-                    group_instance_id.to_owned(),
-                ));
-            }
-
-            if let Some(reason) = reason {
-                attributes.push(KeyValue::new("reason", reason.to_owned()));
-            }
+        Body::JoinGroupRequest { .. } => {
+            attributes.append(&mut vec![KeyValue::new("api_name", "join_group")]);
         }
 
-        Body::LeaveGroupRequest {
-            group_id,
-            member_id,
-            members,
-        } => {
-            attributes.append(&mut vec![
-                KeyValue::new("api_name", "leave_group"),
-                KeyValue::new("group_id", group_id.to_owned()),
-                KeyValue::new(
-                    "members",
-                    members.as_ref().map_or("".into(), |members| {
-                        members
-                            .iter()
-                            .map(|member| member.member_id.as_str())
-                            .collect::<Vec<_>>()
-                            .join(",")
-                    }),
-                ),
-            ]);
-
-            if let Some(member_id) = member_id {
-                attributes.push(KeyValue::new("member_id", member_id.to_owned()));
-            }
+        Body::LeaveGroupRequest { .. } => {
+            attributes.append(&mut vec![KeyValue::new("api_name", "leave_group")]);
         }
 
-        Body::ListOffsetsRequest {
-            replica_id,
-            isolation_level,
-            topics,
-        } => {
-            attributes.append(&mut vec![
-                KeyValue::new("api_name", "list_offsets"),
-                KeyValue::new("replica_id", *replica_id as i64),
-                KeyValue::new(
-                    "topics",
-                    topics.as_ref().map_or("".into(), |topics| {
-                        topics
-                            .iter()
-                            .map(|topic| {
-                                topic
-                                    .partitions
-                                    .as_ref()
-                                    .map_or(topic.name.clone(), |partitions| {
-                                        partitions
-                                            .iter()
-                                            .map(|partition| {
-                                                format!(
-                                                    "{}:{}",
-                                                    topic.name, partition.partition_index
-                                                )
-                                            })
-                                            .collect::<Vec<_>>()
-                                            .join(",")
-                                    })
-                            })
-                            .collect::<Vec<_>>()
-                            .join(",")
-                    }),
-                ),
-            ]);
-
-            if let Some(isolation_level) = isolation_level {
-                attributes.push(KeyValue::new("isolation_level", *isolation_level as i64));
-            }
+        Body::ListOffsetsRequest { .. } => {
+            attributes.append(&mut vec![KeyValue::new("api_name", "list_offsets")]);
         }
 
-        Body::MetadataRequest {
-            topics,
-            allow_auto_topic_creation,
-            include_cluster_authorized_operations,
-            include_topic_authorized_operations,
-        } => {
-            attributes.append(&mut vec![
-                KeyValue::new("api_name", "metadata"),
-                KeyValue::new(
-                    "topics",
-                    topics.as_ref().map_or(0, |topics| topics.len() as i64),
-                ),
-            ]);
-
-            if let Some(allow_auto_topic_creation) = allow_auto_topic_creation {
-                attributes.push(KeyValue::new(
-                    "allow_auto_topic_creation",
-                    *allow_auto_topic_creation,
-                ));
-            }
-
-            if let Some(include_cluster_authorized_operations) =
-                include_cluster_authorized_operations
-            {
-                attributes.push(KeyValue::new(
-                    "include_cluster_authorized_operations",
-                    *include_cluster_authorized_operations,
-                ));
-            }
-
-            if let Some(include_topic_authorized_operations) = include_topic_authorized_operations {
-                attributes.push(KeyValue::new(
-                    "include_topic_authorized_operations",
-                    *include_topic_authorized_operations,
-                ));
-            }
+        Body::MetadataRequest { .. } => {
+            attributes.append(&mut vec![KeyValue::new("api_name", "metadata")]);
         }
 
-        Body::OffsetCommitRequest {
-            group_id,
-            generation_id_or_member_epoch,
-            member_id,
-            group_instance_id,
-            retention_time_ms,
-            topics,
-        } => {
-            attributes.append(&mut vec![
-                KeyValue::new("api_name", "offset_commit"),
-                KeyValue::new("group_id", group_id.to_owned()),
-                KeyValue::new(
-                    "topics",
-                    topics.as_ref().map_or("".into(), |topics| {
-                        topics
-                            .iter()
-                            .map(|topic| topic.name.as_str())
-                            .collect::<Vec<_>>()
-                            .join(",")
-                    }),
-                ),
-            ]);
-
-            if let Some(generation_id_or_member_epoch) = generation_id_or_member_epoch {
-                attributes.push(KeyValue::new(
-                    "generation_id_or_member_epoch",
-                    *generation_id_or_member_epoch as i64,
-                ));
-            }
-
-            if let Some(member_id) = member_id {
-                attributes.push(KeyValue::new("member_id", member_id.to_owned()));
-            }
-
-            if let Some(group_instance_id) = group_instance_id {
-                attributes.push(KeyValue::new(
-                    "group_instance_id",
-                    group_instance_id.to_owned(),
-                ));
-            }
-
-            if let Some(retention_time_ms) = retention_time_ms {
-                attributes.push(KeyValue::new("retention_time_ms", *retention_time_ms));
-            }
+        Body::OffsetCommitRequest { .. } => {
+            attributes.append(&mut vec![KeyValue::new("api_name", "offset_commit")]);
         }
 
-        Body::OffsetFetchRequest {
-            group_id,
-            topics,
-            groups,
-            require_stable,
-        } => {
-            attributes.append(&mut vec![
-                KeyValue::new("api_name", "offset_fetch"),
-                KeyValue::new(
-                    "topics",
-                    topics.as_ref().map_or("".into(), |topics| {
-                        topics
-                            .iter()
-                            .map(|topic| topic.name.as_str())
-                            .collect::<Vec<_>>()
-                            .join(",")
-                    }),
-                ),
-                KeyValue::new(
-                    "groups",
-                    groups.as_ref().map_or("".into(), |groups| {
-                        groups
-                            .iter()
-                            .map(|group| group.group_id.as_str())
-                            .collect::<Vec<_>>()
-                            .join(",")
-                    }),
-                ),
-            ]);
-
-            if let Some(group_id) = group_id {
-                attributes.push(KeyValue::new("group_id", group_id.to_owned()));
-            }
-
-            if let Some(require_stable) = require_stable {
-                attributes.push(KeyValue::new("require_stable", *require_stable));
-            }
+        Body::OffsetFetchRequest { .. } => {
+            attributes.append(&mut vec![KeyValue::new("api_name", "offset_fetch")]);
         }
 
-        Body::ProduceRequest {
-            transactional_id,
-            acks,
-            timeout_ms,
-            ..
-        } => {
-            attributes.append(&mut vec![
-                KeyValue::new("api_name", "produce"),
-                KeyValue::new("acks", *acks as i64),
-                KeyValue::new("timeout_ms", *timeout_ms as i64),
-            ]);
-
-            if let Some(transactional_id) = transactional_id {
-                attributes.push(KeyValue::new(
-                    "transactional_id",
-                    transactional_id.to_owned(),
-                ));
-            }
+        Body::ProduceRequest { .. } => {
+            attributes.append(&mut vec![KeyValue::new("api_name", "produce")]);
         }
 
-        Body::SyncGroupRequest {
-            group_id,
-            generation_id,
-            member_id,
-            group_instance_id,
-            protocol_type,
-            protocol_name,
-            assignments,
-        } => {
-            attributes.append(&mut vec![
-                KeyValue::new("api_name", "sync_group"),
-                KeyValue::new("group_id", group_id.to_owned()),
-                KeyValue::new("generation_id", *generation_id as i64),
-                KeyValue::new("member_id", member_id.to_owned()),
-                KeyValue::new(
-                    "assignments",
-                    assignments
-                        .as_ref()
-                        .map_or(0, |assignments| assignments.len() as i64),
-                ),
-            ]);
-
-            if let Some(group_instance_id) = group_instance_id {
-                attributes.push(KeyValue::new(
-                    "group_instance_id",
-                    group_instance_id.to_owned(),
-                ));
-            }
-
-            if let Some(protocol_type) = protocol_type {
-                attributes.push(KeyValue::new("protocol_type", protocol_type.to_owned()));
-            }
-
-            if let Some(protocol_name) = protocol_name {
-                attributes.push(KeyValue::new("protocol_name", protocol_name.to_owned()));
-            }
+        Body::SyncGroupRequest { .. } => {
+            attributes.append(&mut vec![KeyValue::new("api_name", "sync_group")]);
         }
 
-        Body::TxnOffsetCommitRequest {
-            transactional_id,
-            group_id,
-            producer_id,
-            producer_epoch,
-            generation_id,
-            member_id,
-            group_instance_id,
-            topics,
-        } => {
-            attributes.append(&mut vec![
-                KeyValue::new("api_name", "txn_offset_commit"),
-                KeyValue::new("transactional_id", transactional_id.to_owned()),
-                KeyValue::new("group_id", group_id.to_owned()),
-                KeyValue::new("producer_id", *producer_id),
-                KeyValue::new("producer_epoch", *producer_epoch as i64),
-                KeyValue::new(
-                    "topics",
-                    topics.as_ref().map_or("".into(), |topics| {
-                        topics
-                            .iter()
-                            .map(|topic| topic.name.as_str())
-                            .collect::<Vec<_>>()
-                            .join(",")
-                    }),
-                ),
-            ]);
-
-            if let Some(generation_id) = generation_id {
-                attributes.push(KeyValue::new("generation_id", *generation_id as i64));
-            }
-
-            if let Some(member_id) = member_id {
-                attributes.push(KeyValue::new("member_id", member_id.to_owned()));
-            }
-
-            if let Some(group_instance_id) = group_instance_id {
-                attributes.push(KeyValue::new(
-                    "group_instance_id",
-                    group_instance_id.to_owned(),
-                ));
-            }
+        Body::TxnOffsetCommitRequest { .. } => {
+            attributes.append(&mut vec![KeyValue::new("api_name", "txn_offset_commit")]);
         }
 
         _ => (),
