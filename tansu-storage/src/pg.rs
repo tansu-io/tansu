@@ -3042,12 +3042,12 @@ impl Metron {
 
         Self {
             sql_duration: meter
-                .u64_histogram("sql_duration")
+                .u64_histogram("tansu_sql_duration")
                 .with_unit("ms")
                 .with_description("The SQL request latencies in milliseconds")
                 .build(),
             sql_error: meter
-                .u64_counter("sql_error")
+                .u64_counter("tansu_sql_error")
                 .with_description("The SQL error count")
                 .build(),
         }

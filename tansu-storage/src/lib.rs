@@ -126,6 +126,9 @@ pub enum Error {
     #[error("parse int: {0}")]
     ParseInt(#[from] ParseIntError),
 
+    #[error("phantom cached")]
+    PhantomCached(),
+
     #[error("poision")]
     Poison,
 

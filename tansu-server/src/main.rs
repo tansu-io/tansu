@@ -60,7 +60,7 @@ struct Cli {
     #[arg(
         long,
         env = "PROMETHEUS_LISTENER_URL",
-        default_value = "tcp://0.0.0.0:9100"
+        default_value = "tcp://[::]:9000"
     )]
     prometheus_listener_url: EnvVarExp<Url>,
 

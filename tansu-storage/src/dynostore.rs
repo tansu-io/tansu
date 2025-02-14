@@ -14,11 +14,12 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use std::{
-    collections::{btree_map::Entry, BTreeMap, BTreeSet},
+    collections::{btree_map::Entry, BTreeMap, BTreeSet, HashMap},
     fmt::{Debug, Display},
     io::Cursor,
+    ops::{Deref, DerefMut},
     str::FromStr,
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::{Duration, SystemTime},
 };
 
@@ -487,7 +488,7 @@ impl DynoStore {
             schemas: None,
             watermarks: BTreeMap::new(),
             meta: ConditionData::<Meta>::new(cluster),
-            object_store: Arc::new(Metron::new(object_store, cluster)),
+            object_store: Arc::new(Cache::new(Metron::new(object_store, cluster))),
         }
     }
 
@@ -2534,6 +2535,143 @@ impl Storage for DynoStore {
 }
 
 #[derive(Debug, Clone)]
+struct CacheEntry {
+    version: UpdateVersion,
+}
+
+#[derive(Debug, Clone)]
+struct Cache<O> {
+    entries: Arc<Mutex<HashMap<Path, CacheEntry>>>,
+    object_store: O,
+}
+
+impl<O> Display for Cache<O> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Cache").finish()
+    }
+}
+
+impl<O> Cache<O>
+where
+    O: ObjectStore,
+{
+    fn new(object_store: O) -> Self {
+        Self {
+            entries: Arc::new(Mutex::new(HashMap::new())),
+            object_store,
+        }
+    }
+}
+
+#[async_trait]
+impl<O> ObjectStore for Cache<O>
+where
+    O: ObjectStore,
+{
+    async fn put_opts(
+        &self,
+        location: &Path,
+        payload: PutPayload,
+        opts: PutOptions,
+    ) -> Result<PutResult, object_store::Error> {
+        self.object_store
+            .put_opts(location, payload, opts)
+            .await
+            .inspect(|put_result| {
+                let e_tag = put_result.e_tag.clone();
+                let version = put_result.version.clone();
+
+                if let Ok(mut guard) = self.entries.lock() {
+                    debug!(%location, e_tag);
+
+                    _ = guard.deref_mut().insert(
+                        location.to_owned(),
+                        CacheEntry {
+                            version: UpdateVersion { e_tag, version },
+                        },
+                    );
+                }
+            })
+    }
+
+    async fn put_multipart_opts(
+        &self,
+        location: &Path,
+        opts: PutMultipartOpts,
+    ) -> Result<Box<dyn MultipartUpload>, object_store::Error> {
+        self.object_store.put_multipart_opts(location, opts).await
+    }
+
+    async fn get_opts(
+        &self,
+        location: &Path,
+        options: GetOptions,
+    ) -> Result<GetResult, object_store::Error> {
+        if let Ok(guard) = self.entries.lock() {
+            if let Some(entry) = guard.deref().get(location) {
+                if let Some(ref cached_e_tag) = entry.version.e_tag {
+                    if let Some(ref presented) = options.if_none_match {
+                        debug!(%location, cached_e_tag, presented);
+
+                        if cached_e_tag == presented {
+                            return Err(object_store::Error::NotModified {
+                                path: location.to_string(),
+                                source: Box::new(Error::PhantomCached()),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        self.object_store
+            .get_opts(location, options)
+            .await
+            .inspect(|get_result| {
+                let e_tag = get_result.meta.e_tag.clone();
+                let version = get_result.meta.version.clone();
+
+                if let Ok(mut guard) = self.entries.lock() {
+                    debug!(%location, e_tag);
+
+                    _ = guard.deref_mut().insert(
+                        location.to_owned(),
+                        CacheEntry {
+                            version: UpdateVersion { e_tag, version },
+                        },
+                    );
+                }
+            })
+    }
+
+    async fn delete(&self, location: &Path) -> Result<(), object_store::Error> {
+        self.object_store.delete(location).await
+    }
+
+    fn list(
+        &self,
+        prefix: Option<&Path>,
+    ) -> BoxStream<'_, Result<ObjectMeta, object_store::Error>> {
+        self.object_store.list(prefix)
+    }
+
+    async fn list_with_delimiter(
+        &self,
+        prefix: Option<&Path>,
+    ) -> Result<ListResult, object_store::Error> {
+        self.object_store.list_with_delimiter(prefix).await
+    }
+
+    async fn copy(&self, from: &Path, to: &Path) -> Result<(), object_store::Error> {
+        self.object_store.copy(from, to).await
+    }
+
+    async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<(), object_store::Error> {
+        self.object_store.copy_if_not_exists(from, to).await
+    }
+}
+
+#[derive(Debug, Clone)]
 struct Metron<O> {
     request_duration: Histogram<u64>,
     request_error: Counter<u64>,
@@ -2563,16 +2701,25 @@ where
         Self {
             cluster: cluster.into(),
             request_duration: meter
-                .u64_histogram("object_store_request_duration")
+                .u64_histogram("tansu_object_store_request_duration")
                 .with_unit("ms")
                 .with_description("The object store request latencies in milliseconds")
                 .build(),
             request_error: meter
-                .u64_counter("object_store_request_error")
+                .u64_counter("tansu_object_store_request_error")
                 .with_description("The object store request errors")
                 .build(),
 
             object_store,
+        }
+    }
+
+    fn reason(&self, error: &object_store::Error) -> &'static str {
+        match error {
+            object_store::Error::NotFound { .. } => "not found",
+            object_store::Error::AlreadyExists { .. } => "already exists",
+            object_store::Error::PermissionDenied { .. } => "permission denied",
+            _otherwise => "other",
         }
     }
 }
@@ -2595,7 +2742,7 @@ where
         ];
 
         self.object_store
-            .put_opts(location, payload, opts)
+            .put_opts(location, payload, opts.clone())
             .await
             .inspect(|_put_result| {
                 self.request_duration.record(
@@ -2606,7 +2753,9 @@ where
                 )
             })
             .inspect_err(|err| {
-                let mut additional = vec![KeyValue::new("reason", format!("{err:?}"))];
+                debug!(%location, opts = ?opts, err = ?err);
+
+                let mut additional = vec![KeyValue::new("reason", self.reason(err))];
                 additional.append(&mut attributes);
                 self.request_error.add(1, &additional[..]);
             })
@@ -2635,7 +2784,7 @@ where
                 )
             })
             .inspect_err(|err| {
-                let mut additional = vec![KeyValue::new("reason", format!("{err:?}"))];
+                let mut additional = vec![KeyValue::new("reason", self.reason(err))];
                 additional.append(&mut attributes);
                 self.request_error.add(1, &additional[..]);
             })
@@ -2653,7 +2802,7 @@ where
         ];
 
         self.object_store
-            .get_opts(location, options)
+            .get_opts(location, options.clone())
             .await
             .inspect(|_get_result| {
                 self.request_duration.record(
@@ -2664,7 +2813,8 @@ where
                 )
             })
             .inspect_err(|err| {
-                let mut additional = vec![KeyValue::new("reason", format!("{err:?}"))];
+                debug!(%location, opts = ?options, err = ?err);
+                let mut additional = vec![KeyValue::new("reason", self.reason(err))];
                 additional.append(&mut attributes);
                 self.request_error.add(1, &additional[..]);
             })
@@ -2689,7 +2839,7 @@ where
                 )
             })
             .inspect_err(|err| {
-                let mut additional = vec![KeyValue::new("reason", format!("{err:?}"))];
+                let mut additional = vec![KeyValue::new("reason", self.reason(err))];
                 additional.append(&mut attributes);
                 self.request_error.add(1, &additional[..]);
             })
@@ -2712,6 +2862,10 @@ where
             KeyValue::new("cluster", self.cluster.clone()),
         ];
 
+        if let Some(prefix) = prefix {
+            attributes.push(KeyValue::new("prefix", prefix.to_string()));
+        }
+
         self.object_store
             .list_with_delimiter(prefix)
             .await
@@ -2724,7 +2878,7 @@ where
                 )
             })
             .inspect_err(|err| {
-                let mut additional = vec![KeyValue::new("reason", format!("{err:?}"))];
+                let mut additional = vec![KeyValue::new("reason", self.reason(err))];
                 additional.append(&mut attributes);
                 self.request_error.add(1, &additional[..]);
             })
@@ -2749,7 +2903,7 @@ where
                 )
             })
             .inspect_err(|err| {
-                let mut additional = vec![KeyValue::new("reason", format!("{err:?}"))];
+                let mut additional = vec![KeyValue::new("reason", self.reason(err))];
                 additional.append(&mut attributes);
                 self.request_error.add(1, &additional[..]);
             })
@@ -2774,7 +2928,7 @@ where
                 )
             })
             .inspect_err(|err| {
-                let mut additional = vec![KeyValue::new("reason", format!("{err:?}"))];
+                let mut additional = vec![KeyValue::new("reason", self.reason(err))];
                 additional.append(&mut attributes);
                 self.request_error.add(1, &additional[..]);
             })
