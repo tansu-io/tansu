@@ -2935,8 +2935,203 @@ where
     }
 }
 
+#[derive(Clone, Debug, Default)]
+struct OptiLock<D> {
+    path: Path,
+    tags: TagSet,
+    attributes: Attributes,
+    version_data: Arc<Mutex<VersionData<D>>>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct VersionData<D> {
+    version: Option<UpdateVersion>,
+    data: D,
+}
+
+impl<D> OptiLock<D>
+where
+    D: Clone + Debug + DeserializeOwned + Serialize,
+{
+    async fn get(&self, object_store: &impl ObjectStore) -> Result<()> {
+        debug!(?self);
+
+        let get_result = object_store
+            .get(&self.path)
+            .await
+            .inspect_err(|error| error!(?error, ?self))
+            .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
+
+        let version = Some(UpdateVersion {
+            e_tag: get_result.meta.e_tag.clone(),
+            version: get_result.meta.version.clone(),
+        });
+
+        let encoded = get_result
+            .bytes()
+            .await
+            .inspect_err(|error| error!(?error, ?self))
+            .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
+
+        let data = serde_json::from_slice::<D>(&encoded[..])
+            .inspect_err(|error| error!(?error, ?self))
+            .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
+
+        self.version_data
+            .lock()
+            .map(|mut lock| {
+                lock.version = version;
+                lock.data = data;
+            })
+            .map_err(Into::into)
+    }
+
+    async fn with_mut<E, F>(&self, object_store: &impl ObjectStore, f: F) -> Result<E>
+    where
+        E: Debug,
+        F: Fn(&mut D) -> Result<E>,
+    {
+        debug!(?self);
+
+        loop {
+            let mut cloned = self.version_data.lock().map(|lock| VersionData {
+                version: lock.version.clone(),
+                data: lock.data.clone(),
+            })?;
+
+            let outcome = f(&mut cloned.data);
+            debug!(?self, ?outcome);
+
+            let payload = serde_json::to_vec(&cloned.data)
+                .map(Bytes::from)
+                .map(PutPayload::from)
+                .inspect_err(|err| error!(?err, data = ?cloned.data))?;
+
+            let opts = PutOptions {
+                mode: cloned.version.as_ref().map_or(PutMode::Create, |existing| {
+                    PutMode::Update(existing.to_owned())
+                }),
+                tags: self.tags.clone(),
+                attributes: self.attributes.clone(),
+            };
+
+            match object_store
+                .put_opts(&self.path, payload, opts)
+                .await
+                .inspect_err(|error| match error {
+                    object_store::Error::AlreadyExists { .. }
+                    | object_store::Error::Precondition { .. } => {
+                        debug!(?error, ?self)
+                    }
+
+                    _ => error!(?error, ?self),
+                })
+                .inspect(|put_result| debug!(?self, ?put_result))
+            {
+                Ok(result) => {
+                    debug!(?self, ?result);
+
+                    self.version_data.lock().map(|mut lock| {
+                        let version_data = lock.deref_mut();
+                        version_data.version = Some(UpdateVersion {
+                            e_tag: result.e_tag,
+                            version: result.version,
+                        });
+                        version_data.data = cloned.data;
+                    })?;
+
+                    return outcome;
+                }
+
+                Err(pre_condition @ object_store::Error::Precondition { .. }) => {
+                    debug!(?self, ?pre_condition);
+                    self.get(object_store).await?;
+                    continue;
+                }
+
+                Err(already_exists @ object_store::Error::AlreadyExists { .. }) => {
+                    debug!(?self, ?already_exists);
+                    self.get(object_store).await?;
+                    continue;
+                }
+
+                Err(error) => {
+                    return {
+                        error!(?self, ?error);
+                        Err(Error::Api(ErrorCode::UnknownServerError))
+                    }
+                }
+            }
+        }
+    }
+
+    async fn with<E, F>(&self, object_store: &impl ObjectStore, f: F) -> Result<E>
+    where
+        F: Fn(&D) -> Result<E>,
+    {
+        debug!(?self);
+
+        let version = self.version_data.lock().map(|lock| lock.version.clone())?;
+
+        match object_store
+            .get_opts(
+                &self.path,
+                GetOptions {
+                    if_none_match: version.as_ref().and_then(|version| version.e_tag.clone()),
+                    ..GetOptions::default()
+                },
+            )
+            .await
+        {
+            Ok(get_result) => {
+                let version = Some(UpdateVersion {
+                    e_tag: get_result.meta.e_tag.clone(),
+                    version: get_result.meta.version.clone(),
+                });
+
+                let encoded = get_result
+                    .bytes()
+                    .await
+                    .inspect_err(|error| error!(?error, ?self))
+                    .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
+
+                let data = serde_json::from_slice::<D>(&encoded[..])
+                    .inspect_err(|error| error!(?error, ?self))
+                    .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
+
+                self.version_data
+                    .lock()
+                    .map(|mut lock| {
+                        lock.version = version;
+                        lock.data = data.clone();
+                    })
+                    .map_err(Into::into)
+            }
+
+            Err(object_store::Error::NotModified { .. }) => Ok(()),
+
+            Err(object_store::Error::NotFound { .. }) => {
+                self.with_mut(object_store, |_| Ok(())).await
+            }
+
+            Err(error) => {
+                error!(?self, ?error);
+                Err(Error::Api(ErrorCode::UnknownServerError))
+            }
+        }
+        .and(
+            self.version_data
+                .lock()
+                .map_err(Into::into)
+                .and_then(|lock| f(&lock.data)),
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use object_store::memory::InMemory;
+
     use super::*;
 
     #[test]
@@ -2949,6 +3144,164 @@ mod tests {
         let decoded = serde_json::from_slice::<BTreeMap<i32, &str>>(&encoded[..])?;
         assert_eq!(Some(&"a"), decoded.get(&65));
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn condition_with_new() -> Result<()> {
+        #[derive(
+            Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize,
+        )]
+        struct X(i32);
+
+        impl ConditionData<X> {
+            fn new() -> Self {
+                Self {
+                    path: Path::from(format!("/abc/def.json")),
+                    ..Default::default()
+                }
+            }
+        }
+
+        let object_store = InMemory::new();
+
+        let mut o = ConditionData::<X>::new();
+
+        assert_eq!(1, o.with(&object_store, |x| Ok(x.0 + 1)).await?);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn opti_lock_with_new() -> Result<()> {
+        #[derive(
+            Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize,
+        )]
+        struct X(i32);
+
+        impl OptiLock<X> {
+            fn new() -> Self {
+                Self {
+                    path: Path::from(format!("/abc/def.json")),
+                    ..Default::default()
+                }
+            }
+        }
+
+        let object_store = InMemory::new();
+
+        let o = OptiLock::<X>::new();
+
+        assert_eq!(1, o.with(&object_store, |x| Ok(x.0 + 1)).await?);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn condition_with_existing() -> Result<()> {
+        #[derive(
+            Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize,
+        )]
+        struct X(i32);
+
+        let path = Path::from(format!("/abc/def.json"));
+
+        impl ConditionData<X> {
+            fn new(path: Path) -> Self {
+                Self {
+                    path,
+                    ..Default::default()
+                }
+            }
+        }
+
+        let object_store = InMemory::new();
+
+        _ = object_store
+            .put(
+                &path,
+                serde_json::to_vec(&X(6))
+                    .map(Bytes::from)
+                    .map(PutPayload::from)?,
+            )
+            .await?;
+
+        let mut o = ConditionData::<X>::new(path.clone());
+
+        assert_eq!(7, o.with(&object_store, |x| Ok(x.0 + 1)).await?);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn opti_lock_with_existing() -> Result<()> {
+        #[derive(
+            Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize,
+        )]
+        struct X(i32);
+
+        let path = Path::from(format!("/abc/def.json"));
+
+        impl OptiLock<X> {
+            fn new(path: Path) -> Self {
+                Self {
+                    path,
+                    ..Default::default()
+                }
+            }
+        }
+
+        let object_store = InMemory::new();
+
+        let o = OptiLock::<X>::new(path.clone());
+        assert_eq!(1, o.with(&object_store, |x| Ok(x.0 + 1)).await?);
+
+        _ = object_store
+            .put(
+                &path,
+                serde_json::to_vec(&X(6))
+                    .map(Bytes::from)
+                    .map(PutPayload::from)?,
+            )
+            .await?;
+
+        assert_eq!(7, o.with(&object_store, |x| Ok(x.0 + 1)).await?);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn opti_lock_mut_existing() -> Result<()> {
+        #[derive(
+            Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize,
+        )]
+        struct X(i32);
+
+        let path = Path::from(format!("/abc/def.json"));
+
+        impl OptiLock<X> {
+            fn new(path: Path) -> Self {
+                Self {
+                    path,
+                    ..Default::default()
+                }
+            }
+        }
+
+        let object_store = InMemory::new();
+
+        let o = OptiLock::<X>::new(path.clone());
+        assert_eq!(1, o.with_mut(&object_store, |x| Ok(x.0 + 1)).await?);
+
+        _ = object_store
+            .put(
+                &path,
+                serde_json::to_vec(&X(6))
+                    .map(Bytes::from)
+                    .map(PutPayload::from)?,
+            )
+            .await?;
+
+        assert_eq!(7, o.with_mut(&object_store, |x| Ok(x.0 + 1)).await?);
         Ok(())
     }
 }
