@@ -50,6 +50,12 @@ docker-compose-prometheus-up:
 docker-compose-prometheus-down:
     docker compose down --volumes prometheus
 
+docker-compose-grafana-up:
+    docker compose up --detach grafana
+
+docker-compose-grafana-down:
+    docker compose down --volumes grafana
+
 docker-compose-up:
     docker compose up --detach
 
@@ -138,7 +144,7 @@ person-topic-consume:
 
 tansu-server:
     ./target/debug/tansu-server \
-        --schema-registry file://./etc/schema 2>&1 | tee tansu.log
+        --schema-registry file://./etc/schema 2>&1 >tansu.log
 
 kafka-proxy:
     docker run -d -p 19092:9092 apache/kafka:3.9.0
@@ -158,7 +164,7 @@ codespace-delete:
             --json nameWithOwner \
             --jq .nameWithOwner) \
         --json name \
-        --jq '.[].name' | xargs --no-run-if-empty -n1 gh codespace delete --codespace 
+        --jq '.[].name' | xargs --no-run-if-empty -n1 gh codespace delete --codespace
 
 codespace-logs:
     gh codespace logs \
