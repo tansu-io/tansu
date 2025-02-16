@@ -79,6 +79,8 @@ services:
     ports:
       - 9090:9090
     command: --web.enable-otlp-receiver
+    extra_hosts:
+      - "host.docker.internal=host-gateway"
     configs:
       - source: prometheus_yaml
         target: /prometheus/prometheus.yml
