@@ -19,7 +19,7 @@ use std::{
     io::Cursor,
     ops::{Deref, DerefMut},
     str::FromStr,
-    sync::{Arc, Mutex},
+    sync::{Arc, LazyLock, Mutex},
     time::{Duration, SystemTime},
 };
 
@@ -36,7 +36,7 @@ use object_store::{
 };
 use opentelemetry::{
     global,
-    metrics::{Counter, Histogram},
+    metrics::{Counter, Histogram, Meter},
     InstrumentationScope, KeyValue,
 };
 use opentelemetry_semantic_conventions::SCHEMA_URL;
@@ -73,14 +73,23 @@ use crate::{
 
 const APPLICATION_JSON: &str = "application/json";
 
+static METER: LazyLock<Meter> = LazyLock::new(|| {
+    global::meter_with_scope(
+        InstrumentationScope::builder(env!("CARGO_PKG_NAME"))
+            .with_version(env!("CARGO_PKG_VERSION"))
+            .with_schema_url(SCHEMA_URL)
+            .build(),
+    )
+});
+
 #[derive(Clone, Debug)]
 pub struct DynoStore {
     cluster: String,
     node: i32,
     advertised_listener: Url,
     schemas: Option<Registry>,
-    watermarks: BTreeMap<Topition, OptiLock<Watermark>>,
-    meta: OptiLock<Meta>,
+    watermarks: Arc<Mutex<BTreeMap<Topition, OptiCon<Watermark>>>>,
+    meta: OptiCon<Meta>,
 
     object_store: Arc<DynObjectStore>,
 }
@@ -96,7 +105,7 @@ struct Meta {
     transactions: BTreeMap<String, Txn>,
 }
 
-impl OptiLock<Meta> {
+impl OptiCon<Meta> {
     fn new(cluster: &str) -> Self {
         Self {
             path: Path::from(format!("clusters/{}/meta.json", cluster)),
@@ -274,7 +283,7 @@ struct Watermark {
     high: Option<i64>,
 }
 
-impl OptiLock<Watermark> {
+impl OptiCon<Watermark> {
     fn new(cluster: &str, topition: &Topition) -> Self {
         Self {
             path: Path::from(format!(
@@ -323,8 +332,8 @@ impl DynoStore {
             node,
             advertised_listener: Url::parse("tcp://127.0.0.1/").unwrap(),
             schemas: None,
-            watermarks: BTreeMap::new(),
-            meta: OptiLock::<Meta>::new(cluster),
+            watermarks: Arc::new(Mutex::new(BTreeMap::new())),
+            meta: OptiCon::<Meta>::new(cluster),
             object_store: Arc::new(Cache::new(Metron::new(object_store, cluster))),
         }
     }
@@ -753,10 +762,14 @@ impl Storage for DynoStore {
             schemas.validate(topition.topic(), &inflated).await?;
         }
 
-        let offset = self
-            .watermarks
-            .entry(topition.to_owned())
-            .or_insert(OptiLock::<Watermark>::new(self.cluster.as_str(), topition))
+        let watermark = self.watermarks.lock().map(|mut locked| {
+            locked
+                .entry(topition.to_owned())
+                .or_insert(OptiCon::<Watermark>::new(self.cluster.as_str(), topition))
+                .to_owned()
+        })?;
+
+        let offset = watermark
             .with_mut(&self.object_store, |watermark| {
                 debug!(?watermark);
 
@@ -984,9 +997,14 @@ impl Storage for DynoStore {
 
         debug!(?stable);
 
-        self.watermarks
-            .entry(topition.to_owned())
-            .or_insert(OptiLock::<Watermark>::new(self.cluster.as_str(), topition))
+        let watermark = self.watermarks.lock().map(|mut locked| {
+            locked
+                .entry(topition.to_owned())
+                .or_insert(OptiCon::<Watermark>::new(self.cluster.as_str(), topition))
+                .to_owned()
+        })?;
+
+        watermark
             .with(&self.object_store, |watermark| {
                 debug!(?watermark);
                 let high_watermark = watermark.high.unwrap_or(0);
@@ -1055,9 +1073,17 @@ impl Storage for DynoStore {
                 topition.to_owned(),
                 match offset_request {
                     ListOffsetRequest::Earliest => {
-                        self.watermarks
-                            .entry(topition.to_owned())
-                            .or_insert(OptiLock::<Watermark>::new(self.cluster.as_str(), topition))
+                        let watermark = self.watermarks.lock().map(|mut locked| {
+                            locked
+                                .entry(topition.to_owned())
+                                .or_insert(OptiCon::<Watermark>::new(
+                                    self.cluster.as_str(),
+                                    topition,
+                                ))
+                                .to_owned()
+                        })?;
+
+                        watermark
                             .with(&self.object_store, |watermark| {
                                 Ok(ListOffsetResponse {
                                     error_code: ErrorCode::None,
@@ -1075,12 +1101,17 @@ impl Storage for DynoStore {
                                 offset: Some(*offset),
                             }
                         } else {
-                            self.watermarks
-                                .entry(topition.to_owned())
-                                .or_insert(OptiLock::<Watermark>::new(
-                                    self.cluster.as_str(),
-                                    topition,
-                                ))
+                            let watermark = self.watermarks.lock().map(|mut locked| {
+                                locked
+                                    .entry(topition.to_owned())
+                                    .or_insert(OptiCon::<Watermark>::new(
+                                        self.cluster.as_str(),
+                                        topition,
+                                    ))
+                                    .to_owned()
+                            })?;
+
+                            watermark
                                 .with(&self.object_store, |watermark| {
                                     Ok(ListOffsetResponse {
                                         error_code: ErrorCode::None,
@@ -2384,12 +2415,35 @@ where
     O: ObjectStore,
 {
     fn new(object_store: O) -> Self {
+        let entries = Arc::new(Mutex::new(HashMap::new()));
+
         Self {
-            entries: Arc::new(Mutex::new(HashMap::new())),
+            entries,
             object_store,
         }
     }
 }
+
+static CACHE_REQUESTS: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    METER
+        .u64_counter("tansu_objectstore_cache_requests")
+        .with_description("object_store cache requests")
+        .build()
+});
+
+static CACHE_ERRORS: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    METER
+        .u64_counter("tansu_objectstore_cache_errors")
+        .with_description("object_store cache requests")
+        .build()
+});
+
+static CACHE_OUTCOMES: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    METER
+        .u64_counter("tansu_objectstore_cache_outcomes")
+        .with_description("object_store cache outcomes")
+        .build()
+});
 
 #[async_trait]
 impl<O> ObjectStore for Cache<O>
@@ -2402,6 +2456,10 @@ where
         payload: PutPayload,
         opts: PutOptions,
     ) -> Result<PutResult, object_store::Error> {
+        debug!(%location, ?opts);
+
+        CACHE_REQUESTS.add(1, &[KeyValue::new("method", "put_opts")]);
+
         self.object_store
             .put_opts(location, payload, opts)
             .await
@@ -2420,6 +2478,17 @@ where
                     );
                 }
             })
+            .inspect_err(|error| {
+                debug!(%location, ?error);
+
+                CACHE_ERRORS.add(
+                    1,
+                    &[
+                        KeyValue::new("method", "put_opts"),
+                        KeyValue::new("error", object_store_error_name(error)),
+                    ],
+                );
+            })
     }
 
     async fn put_multipart_opts(
@@ -2427,7 +2496,24 @@ where
         location: &Path,
         opts: PutMultipartOpts,
     ) -> Result<Box<dyn MultipartUpload>, object_store::Error> {
-        self.object_store.put_multipart_opts(location, opts).await
+        debug!(%location, ?opts);
+
+        CACHE_REQUESTS.add(1, &[KeyValue::new("method", "put_multipart_opts")]);
+
+        self.object_store
+            .put_multipart_opts(location, opts)
+            .await
+            .inspect_err(|error| {
+                debug!(%location, ?error);
+
+                CACHE_ERRORS.add(
+                    1,
+                    &[
+                        KeyValue::new("method", "put_multipart_opts"),
+                        KeyValue::new("error", object_store_error_name(error)),
+                    ],
+                );
+            })
     }
 
     async fn get_opts(
@@ -2435,6 +2521,10 @@ where
         location: &Path,
         options: GetOptions,
     ) -> Result<GetResult, object_store::Error> {
+        debug!(%location, ?options);
+
+        CACHE_REQUESTS.add(1, &[KeyValue::new("method", "get_opts")]);
+
         if let Ok(guard) = self.entries.lock() {
             if let Some(entry) = guard.deref().get(location) {
                 if let Some(ref cached_e_tag) = entry.version.e_tag {
@@ -2442,15 +2532,39 @@ where
                         debug!(%location, cached_e_tag, presented);
 
                         if cached_e_tag == presented {
+                            CACHE_OUTCOMES.add(
+                                1,
+                                &[
+                                    KeyValue::new("method", "get_opts"),
+                                    KeyValue::new("outcome", "match"),
+                                ],
+                            );
+
                             return Err(object_store::Error::NotModified {
                                 path: location.to_string(),
                                 source: Box::new(Error::PhantomCached()),
                             });
+                        } else {
+                            CACHE_OUTCOMES.add(
+                                1,
+                                &[
+                                    KeyValue::new("method", "get_opts"),
+                                    KeyValue::new("outcome", "no_match"),
+                                ],
+                            );
                         }
                     }
                 }
             }
         }
+
+        CACHE_OUTCOMES.add(
+            1,
+            &[
+                KeyValue::new("method", "get_opts"),
+                KeyValue::new("outcome", "miss"),
+            ],
+        );
 
         self.object_store
             .get_opts(location, options)
@@ -2470,16 +2584,46 @@ where
                     );
                 }
             })
+            .inspect_err(|error| {
+                debug!(%location, ?error);
+
+                CACHE_ERRORS.add(
+                    1,
+                    &[
+                        KeyValue::new("method", "get_opts"),
+                        KeyValue::new("error", object_store_error_name(error)),
+                    ],
+                );
+            })
     }
 
     async fn delete(&self, location: &Path) -> Result<(), object_store::Error> {
-        self.object_store.delete(location).await
+        debug!(%location);
+
+        CACHE_REQUESTS.add(1, &[KeyValue::new("method", "delete")]);
+
+        self.object_store
+            .delete(location)
+            .await
+            .inspect_err(|error| {
+                debug!(%location, ?error);
+
+                CACHE_ERRORS.add(
+                    1,
+                    &[
+                        KeyValue::new("method", "delete"),
+                        KeyValue::new("error", object_store_error_name(error)),
+                    ],
+                );
+            })
     }
 
     fn list(
         &self,
         prefix: Option<&Path>,
     ) -> BoxStream<'_, Result<ObjectMeta, object_store::Error>> {
+        debug!(?prefix);
+        CACHE_REQUESTS.add(1, &[KeyValue::new("method", "list")]);
         self.object_store.list(prefix)
     }
 
@@ -2487,15 +2631,71 @@ where
         &self,
         prefix: Option<&Path>,
     ) -> Result<ListResult, object_store::Error> {
-        self.object_store.list_with_delimiter(prefix).await
+        debug!(?prefix);
+        CACHE_REQUESTS.add(1, &[KeyValue::new("method", "list_with_delimiter")]);
+        self.object_store
+            .list_with_delimiter(prefix)
+            .await
+            .inspect_err(|error| {
+                debug!(?prefix, ?error);
+
+                CACHE_ERRORS.add(
+                    1,
+                    &[
+                        KeyValue::new("method", "list_with_delimiter"),
+                        KeyValue::new("error", object_store_error_name(error)),
+                    ],
+                );
+            })
     }
 
     async fn copy(&self, from: &Path, to: &Path) -> Result<(), object_store::Error> {
-        self.object_store.copy(from, to).await
+        debug!(%from, %to);
+        CACHE_REQUESTS.add(1, &[KeyValue::new("method", "copy")]);
+        self.object_store.copy(from, to).await.inspect_err(|error| {
+            debug!(%from, %to, ?error);
+
+            CACHE_ERRORS.add(
+                1,
+                &[
+                    KeyValue::new("method", "copy"),
+                    KeyValue::new("error", object_store_error_name(error)),
+                ],
+            );
+        })
     }
 
     async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<(), object_store::Error> {
-        self.object_store.copy_if_not_exists(from, to).await
+        debug!(%from, %to);
+        CACHE_REQUESTS.add(1, &[KeyValue::new("method", "copy_if_not_exists")]);
+        self.object_store
+            .copy_if_not_exists(from, to)
+            .await
+            .inspect_err(|error| {
+                debug!(%from, %to, ?error);
+
+                CACHE_ERRORS.add(
+                    1,
+                    &[
+                        KeyValue::new("method", "copy_if_not_exists"),
+                        KeyValue::new("error", object_store_error_name(error)),
+                    ],
+                );
+            })
+    }
+}
+
+fn object_store_error_name(error: &object_store::Error) -> &'static str {
+    match error {
+        object_store::Error::Precondition { .. } => "pre_condition",
+
+        object_store::Error::AlreadyExists { .. } => "already_exists",
+
+        object_store::Error::NotModified { .. } => "not_modified",
+
+        object_store::Error::NotFound { .. } => "not_found",
+
+        _otherwise => "otherwise",
     }
 }
 
@@ -2519,21 +2719,14 @@ where
     O: ObjectStore,
 {
     fn new(object_store: O, cluster: &str) -> Self {
-        let meter = global::meter_with_scope(
-            InstrumentationScope::builder(env!("CARGO_PKG_NAME"))
-                .with_version(env!("CARGO_PKG_VERSION"))
-                .with_schema_url(SCHEMA_URL)
-                .build(),
-        );
-
         Self {
             cluster: cluster.into(),
-            request_duration: meter
+            request_duration: METER
                 .u64_histogram("tansu_object_store_request_duration")
                 .with_unit("ms")
                 .with_description("The object store request latencies in milliseconds")
                 .build(),
-            request_error: meter
+            request_error: METER
                 .u64_counter("tansu_object_store_request_error")
                 .with_description("The object store request errors")
                 .build(),
@@ -2563,6 +2756,8 @@ where
         payload: PutPayload,
         opts: PutOptions,
     ) -> Result<PutResult, object_store::Error> {
+        debug!(%location, ?opts);
+
         let execute_start = SystemTime::now();
         let mut attributes = vec![
             KeyValue::new("method", "put_opts"),
@@ -2594,6 +2789,8 @@ where
         location: &Path,
         opts: PutMultipartOpts,
     ) -> Result<Box<dyn MultipartUpload>, object_store::Error> {
+        debug!(%location, ?opts);
+
         let execute_start = SystemTime::now();
         let mut attributes = vec![
             KeyValue::new("method", "put_multipart_opts"),
@@ -2623,6 +2820,8 @@ where
         location: &Path,
         options: GetOptions,
     ) -> Result<GetResult, object_store::Error> {
+        debug!(%location, ?options);
+
         let execute_start = SystemTime::now();
         let mut attributes = vec![
             KeyValue::new("method", "get_opts"),
@@ -2649,6 +2848,8 @@ where
     }
 
     async fn delete(&self, location: &Path) -> Result<(), object_store::Error> {
+        debug!(%location);
+
         let execute_start = SystemTime::now();
         let mut attributes = vec![
             KeyValue::new("method", "delete"),
@@ -2677,6 +2878,8 @@ where
         &self,
         prefix: Option<&Path>,
     ) -> BoxStream<'_, Result<ObjectMeta, object_store::Error>> {
+        debug!(?prefix);
+
         self.object_store.list(prefix)
     }
 
@@ -2684,6 +2887,8 @@ where
         &self,
         prefix: Option<&Path>,
     ) -> Result<ListResult, object_store::Error> {
+        debug!(?prefix);
+
         let execute_start = SystemTime::now();
         let mut attributes = vec![
             KeyValue::new("method", "list_with_delimiter"),
@@ -2713,6 +2918,8 @@ where
     }
 
     async fn copy(&self, from: &Path, to: &Path) -> Result<(), object_store::Error> {
+        debug!(%from, %to);
+
         let execute_start = SystemTime::now();
         let mut attributes = vec![
             KeyValue::new("method", "copy"),
@@ -2738,6 +2945,8 @@ where
     }
 
     async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<(), object_store::Error> {
+        debug!(%from, %to);
+
         let execute_start = SystemTime::now();
         let mut attributes = vec![
             KeyValue::new("method", "copy_if_not_exists"),
@@ -2764,7 +2973,7 @@ where
 }
 
 #[derive(Clone, Debug, Default)]
-struct OptiLock<D> {
+struct OptiCon<D> {
     path: Path,
     tags: TagSet,
     attributes: Attributes,
@@ -2777,17 +2986,43 @@ struct VersionData<D> {
     data: D,
 }
 
-impl<D> OptiLock<D>
+static OPTICON_REQUESTS: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    METER
+        .u64_counter("tansu_opticon_requests")
+        .with_description("OptiCon requests")
+        .build()
+});
+
+static OPTICON_ERRORS: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    METER
+        .u64_counter("tansu_opticon_errors")
+        .with_description("OptiCon requests")
+        .build()
+});
+
+impl<D> OptiCon<D>
 where
     D: Clone + Debug + DeserializeOwned + Serialize,
 {
     async fn get(&self, object_store: &impl ObjectStore) -> Result<()> {
         debug!(?self);
 
+        OPTICON_REQUESTS.add(1, &[KeyValue::new("method", "get")]);
+
         let get_result = object_store
             .get(&self.path)
             .await
-            .inspect_err(|error| error!(?error, ?self))
+            .inspect_err(|error| {
+                debug!(?error, ?self);
+
+                OPTICON_ERRORS.add(
+                    1,
+                    &[
+                        KeyValue::new("method", "get"),
+                        KeyValue::new("error", object_store_error_name(error)),
+                    ],
+                );
+            })
             .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
 
         let version = Some(UpdateVersion {
@@ -2798,7 +3033,16 @@ where
         let encoded = get_result
             .bytes()
             .await
-            .inspect_err(|error| error!(?error, ?self))
+            .inspect_err(|error| {
+                debug!(?error, ?self);
+                OPTICON_ERRORS.add(
+                    1,
+                    &[
+                        KeyValue::new("method", "get"),
+                        KeyValue::new("error", object_store_error_name(error)),
+                    ],
+                );
+            })
             .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
 
         let data = serde_json::from_slice::<D>(&encoded[..])
@@ -2819,7 +3063,19 @@ where
         E: Debug,
         F: Fn(&mut D) -> Result<E>,
     {
-        debug!(?self);
+        debug!(path = %self.path);
+
+        OPTICON_REQUESTS.add(1, &[KeyValue::new("method", "with_mut")]);
+
+        fn on_error(error: &object_store::Error) {
+            OPTICON_ERRORS.add(
+                1,
+                &[
+                    KeyValue::new("method", "with_mut"),
+                    KeyValue::new("error", object_store_error_name(error)),
+                ],
+            );
+        }
 
         loop {
             let mut cloned = self.version_data.lock().map(|lock| VersionData {
@@ -2828,7 +3084,7 @@ where
             })?;
 
             let outcome = f(&mut cloned.data);
-            debug!(?self, ?outcome);
+            debug!(path = %self.path, ?outcome);
 
             let payload = serde_json::to_vec(&cloned.data)
                 .map(Bytes::from)
@@ -2849,7 +3105,7 @@ where
                 .inspect_err(|error| match error {
                     object_store::Error::AlreadyExists { .. }
                     | object_store::Error::Precondition { .. } => {
-                        debug!(?error, ?self)
+                        debug!(?error, path = %self.path)
                     }
 
                     _ => error!(?error, ?self),
@@ -2857,7 +3113,7 @@ where
                 .inspect(|put_result| debug!(?self, ?put_result))
             {
                 Ok(result) => {
-                    debug!(?self, ?result);
+                    debug!(path = %self.path, ?result);
 
                     self.version_data.lock().map(|mut lock| {
                         let version_data = lock.deref_mut();
@@ -2871,21 +3127,30 @@ where
                     return outcome;
                 }
 
-                Err(pre_condition @ object_store::Error::Precondition { .. }) => {
-                    debug!(?self, ?pre_condition);
+                Err(ref error @ object_store::Error::Precondition { .. }) => {
+                    debug!(path = %self.path, ?error);
+
+                    on_error(error);
+
                     self.get(object_store).await?;
                     continue;
                 }
 
-                Err(already_exists @ object_store::Error::AlreadyExists { .. }) => {
-                    debug!(?self, ?already_exists);
+                Err(ref error @ object_store::Error::AlreadyExists { .. }) => {
+                    debug!(path = %self.path, ?error);
+
+                    on_error(error);
+
                     self.get(object_store).await?;
                     continue;
                 }
 
-                Err(error) => {
+                Err(ref error) => {
                     return {
-                        error!(?self, ?error);
+                        error!(path = %self.path, ?error);
+
+                        on_error(error);
+
                         Err(Error::Api(ErrorCode::UnknownServerError))
                     }
                 }
@@ -2898,6 +3163,18 @@ where
         F: Fn(&D) -> Result<E>,
     {
         debug!(?self);
+
+        OPTICON_REQUESTS.add(1, &[KeyValue::new("method", "with")]);
+
+        fn on_error(error: &object_store::Error) {
+            OPTICON_ERRORS.add(
+                1,
+                &[
+                    KeyValue::new("method", "with"),
+                    KeyValue::new("error", object_store_error_name(error)),
+                ],
+            );
+        }
 
         let version = self.version_data.lock().map(|lock| lock.version.clone())?;
 
@@ -2936,14 +3213,23 @@ where
                     .map_err(Into::into)
             }
 
-            Err(object_store::Error::NotModified { .. }) => Ok(()),
+            Err(ref error @ object_store::Error::NotModified { .. }) => {
+                on_error(error);
 
-            Err(object_store::Error::NotFound { .. }) => {
+                Ok(())
+            }
+
+            Err(ref error @ object_store::Error::NotFound { .. }) => {
+                on_error(error);
+
                 self.with_mut(object_store, |_| Ok(())).await
             }
 
-            Err(error) => {
+            Err(ref error) => {
                 error!(?self, ?error);
+
+                on_error(error);
+
                 Err(Error::Api(ErrorCode::UnknownServerError))
             }
         }
@@ -2958,6 +3244,7 @@ where
 
 #[cfg(test)]
 mod tests {
+
     use object_store::memory::InMemory;
 
     use super::*;
@@ -2982,7 +3269,7 @@ mod tests {
         )]
         struct X(i32);
 
-        impl OptiLock<X> {
+        impl OptiCon<X> {
             fn new() -> Self {
                 Self {
                     path: Path::from("/abc/def.json"),
@@ -2993,7 +3280,7 @@ mod tests {
 
         let object_store = InMemory::new();
 
-        let o = OptiLock::<X>::new();
+        let o = OptiCon::<X>::new();
 
         assert_eq!(1, o.with(&object_store, |x| Ok(x.0 + 1)).await?);
 
@@ -3009,7 +3296,7 @@ mod tests {
 
         let path = Path::from("/abc/def.json");
 
-        impl OptiLock<X> {
+        impl OptiCon<X> {
             fn new(path: Path) -> Self {
                 Self {
                     path,
@@ -3020,7 +3307,7 @@ mod tests {
 
         let object_store = InMemory::new();
 
-        let o = OptiLock::<X>::new(path.clone());
+        let o = OptiCon::<X>::new(path.clone());
         assert_eq!(1, o.with(&object_store, |x| Ok(x.0 + 1)).await?);
 
         _ = object_store
@@ -3045,7 +3332,7 @@ mod tests {
 
         let path = Path::from("/abc/def.json");
 
-        impl OptiLock<X> {
+        impl OptiCon<X> {
             fn new(path: Path) -> Self {
                 Self {
                     path,
@@ -3056,7 +3343,7 @@ mod tests {
 
         let object_store = InMemory::new();
 
-        let o = OptiLock::<X>::new(path.clone());
+        let o = OptiCon::<X>::new(path.clone());
         assert_eq!(1, o.with_mut(&object_store, |x| Ok(x.0 + 1)).await?);
 
         _ = object_store
