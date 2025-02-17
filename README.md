@@ -204,6 +204,12 @@ Switch to the PostgreSQL storage engine by updating [.env](.env):
 STORAGE_ENGINE="postgres://postgres:postgres@db"
 ```
 
+Start PostgreSQL:
+
+```shell
+docker compose up -d db
+```
+
 Bring Tansu back up:
 
 ```shell

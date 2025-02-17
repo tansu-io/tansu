@@ -20,40 +20,46 @@ miri:
 docker-build:
     docker build --tag ghcr.io/tansu-io/tansu --no-cache --progress plain .
 
-docker-compose-minio-up:
+minio-up:
     docker compose up --detach minio
 
-docker-compose-minio-down:
+minio-down:
     docker compose down --volumes minio
 
-docker-compose-tansu-up:
+minio-local-alias:
+    docker compose exec minio /usr/bin/mc alias set local http://localhost:9000 minioadmin minioadmin
+
+minio-tansu-bucket:
+    docker compose exec minio /usr/bin/mc mb local/tansu
+
+tansu-up:
     docker compose up --detach tansu
 
-docker-compose-tansu-down:
+tansu-down:
     docker compose down --volumes tansu
 
-docker-compose-db-up:
+db-up:
     docker compose up --detach db
 
-docker-compose-db-down:
+db-down:
     docker compose down --volumes db
 
-docker-compose-jaeger-up:
+jaeger-up:
     docker compose up --detach jaeger
 
-docker-compose-jaeger-down:
+jaeger-down:
     docker compose down --volumes jaeger
 
-docker-compose-prometheus-up:
+prometheus-up:
     docker compose up --detach prometheus
 
-docker-compose-prometheus-down:
+prometheus-down:
     docker compose down --volumes prometheus
 
-docker-compose-grafana-up:
+grafana-up:
     docker compose up --detach grafana
 
-docker-compose-grafana-down:
+grafana-down:
     docker compose down --volumes grafana
 
 docker-compose-up:
@@ -192,12 +198,10 @@ codespace-ssh:
 
 all: test miri
 
-benchmark-flamegraph: build docker-compose-down docker-compose-minio-up docker-compose-prometheus-up docker-compose-grafana-up
-	docker compose exec minio /usr/bin/mc alias set local http://localhost:9000 minioadmin minioadmin
-	docker compose exec minio /usr/bin/mc mb local/tansu
+benchmark-flamegraph: build docker-compose-down minio-up minio-local-alias minio-tansu-bucket prometheus-up grafana-up
 	flamegraph -- ./target/debug/tansu-server --schema-registry file://./etc/schema 2>&1 >tansu.log
 
-benchmark: build docker-compose-down docker-compose-minio-up docker-compose-prometheus-up docker-compose-grafana-up
-	docker compose exec minio /usr/bin/mc alias set local http://localhost:9000 minioadmin minioadmin
-	docker compose exec minio /usr/bin/mc mb local/tansu
+benchmark: build docker-compose-down minio-up minio-local-alias minio-tansu-bucket prometheus-up grafana-up
 	./target/debug/tansu-server --schema-registry file://./etc/schema 2>&1 >tansu.log
+
+otel-minio-up: docker-compose-down minio-up minio-local-alias minio-tansu-bucket prometheus-up grafana-up tansu-up
