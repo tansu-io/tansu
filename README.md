@@ -80,7 +80,13 @@ some examples:
 
 The following will configure a S3 storage engine
 using the "tansu" bucket (full context is in
-[compose.yaml](compose.yaml) and [.env](.env)):
+[compose.yaml](compose.yaml) and [example.env](example.env)):
+
+Copy `example.env` into `.env` so that you have a local working copy:
+
+```shell
+cp example.env .env
+```
 
 Edit `.env` so that `STORAGE_ENGINE` is defined as:
 
@@ -97,27 +103,24 @@ Just bring minio up, without tansu:
 docker compose up -d minio
 ```
 
-The minio console should now be running on
-[http://localhost:9001](http://localhost:9001), login using
-the default user credentials of "minioadmin", with password "minioadmin". Follow
-the [bucket creation instructions][minio-create-bucket]
-to create a bucket called "tansu", and then
-[create an access key and secret][minio-create-access-key].
-Use your newly created access key and
-secret to update the following environment in [.env](.env):
+Create a minio `local` alias representing `http://localhost:9000` with the default credentials of `minioadmin`:
 
-```bash
-# Your AWS access key:
-AWS_ACCESS_KEY_ID="access key"
+```shell
+docker compose exec minio \
+   /usr/bin/mc \
+   alias \
+   set \
+   local \
+   http://localhost:9000 \
+   minioadmin \
+   minioadmin
+```
 
-# Your AWS secret:
-AWS_SECRET_ACCESS_KEY="secret"
+Create a `tansu` bucket in minio using the `local` alias:
 
-# The endpoint URL of the S3 service:
-AWS_ENDPOINT="http://minio:9000"
-
-# Allow HTTP requests to the S3 service:
-AWS_ALLOW_HTTP="true"
+```shell
+docker compose exec minio \
+   /usr/bin/mc mb local/tansu
 ```
 
 Once this is done, you can start tansu with:

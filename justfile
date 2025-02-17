@@ -192,8 +192,12 @@ codespace-ssh:
 
 all: test miri
 
-benchmark-flamegraph: docker-compose-down docker-compose-minio-up docker-compose-prometheus-up docker-compose-grafana-up
+benchmark-flamegraph: build docker-compose-down docker-compose-minio-up docker-compose-prometheus-up docker-compose-grafana-up
 	docker compose exec minio /usr/bin/mc alias set local http://localhost:9000 minioadmin minioadmin
 	docker compose exec minio /usr/bin/mc mb local/tansu
-	flamegraph -- ./target/debug/tansu-server --schema-registry file://./etc/schema
+	flamegraph -- ./target/debug/tansu-server --schema-registry file://./etc/schema 2>&1 >tansu.log
 
+benchmark: build docker-compose-down docker-compose-minio-up docker-compose-prometheus-up docker-compose-grafana-up
+	docker compose exec minio /usr/bin/mc alias set local http://localhost:9000 minioadmin minioadmin
+	docker compose exec minio /usr/bin/mc mb local/tansu
+	./target/debug/tansu-server --schema-registry file://./etc/schema 2>&1 >tansu.log
