@@ -46,6 +46,12 @@ services:
       - 9001:9001
     environment:
       MINIO_PROMETHEUS_AUTH_TYPE: public
+    healthcheck:
+      test: timeout 5s bash -c ':> /dev/tcp/127.0.0.1/9000' || exit 1
+      interval: 5s
+      retries: 1
+      start_period: 5s
+      timeout: 5s
   tansu:
     image: ${TANSU_IMAGE}
     restart: unless-stopped
