@@ -25,12 +25,8 @@ use std::{
 use async_trait::async_trait;
 use bytes::Bytes;
 use deadpool_postgres::{Manager, ManagerConfig, Object, Pool, RecyclingMethod};
-use opentelemetry::{
-    global,
-    metrics::{Counter, Histogram},
-    InstrumentationScope, KeyValue,
-};
-use opentelemetry_semantic_conventions::SCHEMA_URL;
+use opentelemetry::metrics::Histogram;
+use opentelemetry::{metrics::Counter, KeyValue};
 use rand::{prelude::*, rng};
 use serde_json::Value;
 use tansu_kafka_sans_io::{
@@ -61,7 +57,7 @@ use crate::{
     BrokerRegistrationRequest, Error, GroupDetail, ListOffsetRequest, ListOffsetResponse,
     MetadataResponse, NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse,
     Result, Storage, TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse,
-    TxnOffsetCommitRequest, TxnState, UpdateError, Version, NULL_TOPIC_ID,
+    TxnOffsetCommitRequest, TxnState, UpdateError, Version, METER, NULL_TOPIC_ID,
 };
 
 macro_rules! include_sql {
@@ -3033,20 +3029,13 @@ struct Metron {
 
 impl Metron {
     fn new() -> Self {
-        let meter = global::meter_with_scope(
-            InstrumentationScope::builder(env!("CARGO_PKG_NAME"))
-                .with_version(env!("CARGO_PKG_VERSION"))
-                .with_schema_url(SCHEMA_URL)
-                .build(),
-        );
-
         Self {
-            sql_duration: meter
+            sql_duration: METER
                 .u64_histogram("tansu_sql_duration")
                 .with_unit("ms")
                 .with_description("The SQL request latencies in milliseconds")
                 .build(),
-            sql_error: meter
+            sql_error: METER
                 .u64_counter("tansu_sql_error")
                 .with_description("The SQL error count")
                 .build(),

@@ -17,6 +17,12 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use dynostore::DynoStore;
 use glob::{GlobError, PatternError};
+use opentelemetry::{
+    global,
+    metrics::{Counter, Meter},
+    InstrumentationScope, KeyValue,
+};
+use opentelemetry_semantic_conventions::SCHEMA_URL;
 use pg::Postgres;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -31,7 +37,7 @@ use std::{
     path::PathBuf,
     result,
     str::FromStr,
-    sync::PoisonError,
+    sync::{LazyLock, PoisonError},
     time::{Duration, SystemTime, SystemTimeError},
 };
 use tansu_kafka_sans_io::{
@@ -1115,19 +1121,51 @@ pub enum StorageContainer {
     DynoStore(DynoStore),
 }
 
+pub(crate) static METER: LazyLock<Meter> = LazyLock::new(|| {
+    global::meter_with_scope(
+        InstrumentationScope::builder(env!("CARGO_PKG_NAME"))
+            .with_version(env!("CARGO_PKG_VERSION"))
+            .with_schema_url(SCHEMA_URL)
+            .build(),
+    )
+});
+
+static STORAGE_CONTAINER_REQUESTS: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    METER
+        .u64_counter("tansu_storage_container_requests")
+        .with_description("tansu storage container requests")
+        .build()
+});
+
+static STORAGE_CONTAINER_ERRORS: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    METER
+        .u64_counter("tansu_storage_container_errors")
+        .with_description("tansu storage container errors")
+        .build()
+});
+
 #[async_trait]
 impl Storage for StorageContainer {
     async fn register_broker(
         &mut self,
         broker_registration: BrokerRegistrationRequest,
     ) -> Result<()> {
+        let attributes = [KeyValue::new("method", "register_broker")];
+
         match self {
             Self::Postgres(pg) => pg.register_broker(broker_registration).await,
             Self::DynoStore(dyn_store) => dyn_store.register_broker(broker_registration).await,
         }
+        .inspect(|_| {
+            STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
+        })
+        .inspect_err(|_| {
+            STORAGE_CONTAINER_ERRORS.add(1, &attributes);
+        })
     }
 
     async fn create_topic(&mut self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {
+        let attributes = [KeyValue::new("method", "create_topic")];
         let span = debug_span!("create_topic", ?topic, validate_only);
 
         async move {
@@ -1139,30 +1177,60 @@ impl Storage for StorageContainer {
         }
         .instrument(span)
         .await
+        .inspect(|_| {
+            STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
+        })
+        .inspect_err(|_| {
+            STORAGE_CONTAINER_ERRORS.add(1, &attributes);
+        })
     }
 
     async fn delete_records(
         &mut self,
         topics: &[DeleteRecordsTopic],
     ) -> Result<Vec<DeleteRecordsTopicResult>> {
+        let attributes = [KeyValue::new("method", "delete_records")];
+
         match self {
             Self::Postgres(pg) => pg.delete_records(topics).await,
             Self::DynoStore(dyn_store) => dyn_store.delete_records(topics).await,
         }
+        .inspect(|_| {
+            STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
+        })
+        .inspect_err(|_| {
+            STORAGE_CONTAINER_ERRORS.add(1, &attributes);
+        })
     }
 
     async fn delete_topic(&mut self, topic: &TopicId) -> Result<ErrorCode> {
+        let attributes = [KeyValue::new("method", "delete_topic")];
+
         match self {
             Self::Postgres(pg) => pg.delete_topic(topic).await,
             Self::DynoStore(dyn_store) => dyn_store.delete_topic(topic).await,
         }
+        .inspect(|_| {
+            STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
+        })
+        .inspect_err(|_| {
+            STORAGE_CONTAINER_ERRORS.add(1, &attributes);
+        })
     }
 
     async fn brokers(&mut self) -> Result<Vec<DescribeClusterBroker>> {
+        let attributes = [KeyValue::new("method", "brokers")];
+
         match self {
             Self::Postgres(pg) => pg.brokers().await,
             Self::DynoStore(dyn_store) => dyn_store.brokers().await,
         }
+        .inspect(|_| {
+            STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
+        })
+        .inspect_err(|_| {
+            STORAGE_CONTAINER_ERRORS.add(1, &attributes);
+        })
     }
 
     async fn produce(
@@ -1171,10 +1239,18 @@ impl Storage for StorageContainer {
         topition: &Topition,
         batch: deflated::Batch,
     ) -> Result<i64> {
+        let attributes = [KeyValue::new("method", "produce")];
+
         match self {
             Self::Postgres(pg) => pg.produce(transaction_id, topition, batch).await,
             Self::DynoStore(dyn_store) => dyn_store.produce(transaction_id, topition, batch).await,
         }
+        .inspect(|_| {
+            STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
+        })
+        .inspect_err(|_| {
+            STORAGE_CONTAINER_ERRORS.add(1, &attributes);
+        })
     }
 
     async fn fetch(
@@ -1185,6 +1261,8 @@ impl Storage for StorageContainer {
         max_bytes: u32,
         isolation: IsolationLevel,
     ) -> Result<Vec<deflated::Batch>> {
+        let attributes = [KeyValue::new("method", "fetch")];
+
         match self {
             Self::Postgres(pg) => {
                 pg.fetch(topition, offset, min_bytes, max_bytes, isolation)
@@ -1196,13 +1274,27 @@ impl Storage for StorageContainer {
                     .await
             }
         }
+        .inspect(|_| {
+            STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
+        })
+        .inspect_err(|_| {
+            STORAGE_CONTAINER_ERRORS.add(1, &attributes);
+        })
     }
 
     async fn offset_stage(&mut self, topition: &Topition) -> Result<OffsetStage> {
+        let attributes = [KeyValue::new("method", "offset_stage")];
+
         match self {
             Self::Postgres(pg) => pg.offset_stage(topition).await,
             Self::DynoStore(dyn_store) => dyn_store.offset_stage(topition).await,
         }
+        .inspect(|_| {
+            STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
+        })
+        .inspect_err(|_| {
+            STORAGE_CONTAINER_ERRORS.add(1, &attributes);
+        })
     }
 
     async fn list_offsets(
@@ -1210,10 +1302,18 @@ impl Storage for StorageContainer {
         isolation_level: IsolationLevel,
         offsets: &[(Topition, ListOffsetRequest)],
     ) -> Result<Vec<(Topition, ListOffsetResponse)>> {
+        let attributes = [KeyValue::new("method", "list_offsets")];
+
         match self {
             Self::Postgres(pg) => pg.list_offsets(isolation_level, offsets).await,
             Self::DynoStore(dyn_store) => dyn_store.list_offsets(isolation_level, offsets).await,
         }
+        .inspect(|_| {
+            STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
+        })
+        .inspect_err(|_| {
+            STORAGE_CONTAINER_ERRORS.add(1, &attributes);
+        })
     }
 
     async fn offset_commit(
@@ -1222,6 +1322,8 @@ impl Storage for StorageContainer {
         retention_time_ms: Option<Duration>,
         offsets: &[(Topition, OffsetCommitRequest)],
     ) -> Result<Vec<(Topition, ErrorCode)>> {
+        let attributes = [KeyValue::new("method", "offset_commit")];
+
         match self {
             Self::Postgres(pg) => pg.offset_commit(group_id, retention_time_ms, offsets).await,
             Self::DynoStore(dyn_store) => {
@@ -1230,16 +1332,30 @@ impl Storage for StorageContainer {
                     .await
             }
         }
+        .inspect(|_| {
+            STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
+        })
+        .inspect_err(|_| {
+            STORAGE_CONTAINER_ERRORS.add(1, &attributes);
+        })
     }
 
     async fn committed_offset_topitions(
         &mut self,
         group_id: &str,
     ) -> Result<BTreeMap<Topition, i64>> {
+        let attributes = [KeyValue::new("method", "committed_offset_topitions")];
+
         match self {
             Self::Postgres(inner) => inner.committed_offset_topitions(group_id).await,
             Self::DynoStore(inner) => inner.committed_offset_topitions(group_id).await,
         }
+        .inspect(|_| {
+            STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
+        })
+        .inspect_err(|_| {
+            STORAGE_CONTAINER_ERRORS.add(1, &attributes);
+        })
     }
 
     async fn offset_fetch(
@@ -1248,6 +1364,8 @@ impl Storage for StorageContainer {
         topics: &[Topition],
         require_stable: Option<bool>,
     ) -> Result<BTreeMap<Topition, i64>> {
+        let attributes = [KeyValue::new("method", "offset_fetch")];
+
         match self {
             Self::Postgres(pg) => pg.offset_fetch(group_id, topics, require_stable).await,
             Self::DynoStore(dyn_store) => {
@@ -1256,13 +1374,27 @@ impl Storage for StorageContainer {
                     .await
             }
         }
+        .inspect(|_| {
+            STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
+        })
+        .inspect_err(|_| {
+            STORAGE_CONTAINER_ERRORS.add(1, &attributes);
+        })
     }
 
     async fn metadata(&mut self, topics: Option<&[TopicId]>) -> Result<MetadataResponse> {
+        let attributes = [KeyValue::new("method", "metadata")];
+
         match self {
             Self::Postgres(pg) => pg.metadata(topics).await,
             Self::DynoStore(dyn_store) => dyn_store.metadata(topics).await,
         }
+        .inspect(|_| {
+            STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
+        })
+        .inspect_err(|_| {
+            STORAGE_CONTAINER_ERRORS.add(1, &attributes);
+        })
     }
 
     async fn describe_config(
@@ -1271,27 +1403,51 @@ impl Storage for StorageContainer {
         resource: ConfigResource,
         keys: Option<&[String]>,
     ) -> Result<DescribeConfigsResult> {
+        let attributes = [KeyValue::new("method", "describe_config")];
+
         match self {
             Self::Postgres(pg) => pg.describe_config(name, resource, keys).await,
             Self::DynoStore(dyn_store) => dyn_store.describe_config(name, resource, keys).await,
         }
+        .inspect(|_| {
+            STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
+        })
+        .inspect_err(|_| {
+            STORAGE_CONTAINER_ERRORS.add(1, &attributes);
+        })
     }
 
     async fn list_groups(&mut self, states_filter: Option<&[String]>) -> Result<Vec<ListedGroup>> {
+        let attributes = [KeyValue::new("method", "list_groups")];
+
         match self {
             Self::Postgres(pg) => pg.list_groups(states_filter).await,
             Self::DynoStore(dyn_store) => dyn_store.list_groups(states_filter).await,
         }
+        .inspect(|_| {
+            STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
+        })
+        .inspect_err(|_| {
+            STORAGE_CONTAINER_ERRORS.add(1, &attributes);
+        })
     }
 
     async fn delete_groups(
         &mut self,
         group_ids: Option<&[String]>,
     ) -> Result<Vec<DeletableGroupResult>> {
+        let attributes = [KeyValue::new("method", "delete_groups")];
+
         match self {
             Self::Postgres(inner) => inner.delete_groups(group_ids).await,
             Self::DynoStore(inner) => inner.delete_groups(group_ids).await,
         }
+        .inspect(|_| {
+            STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
+        })
+        .inspect_err(|_| {
+            STORAGE_CONTAINER_ERRORS.add(1, &attributes);
+        })
     }
 
     async fn describe_groups(
@@ -1299,6 +1455,8 @@ impl Storage for StorageContainer {
         group_ids: Option<&[String]>,
         include_authorized_operations: bool,
     ) -> Result<Vec<NamedGroupDetail>> {
+        let attributes = [KeyValue::new("method", "describe_groups")];
+
         match self {
             Self::Postgres(inner) => {
                 inner
@@ -1311,6 +1469,12 @@ impl Storage for StorageContainer {
                     .await
             }
         }
+        .inspect(|_| {
+            STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
+        })
+        .inspect_err(|_| {
+            STORAGE_CONTAINER_ERRORS.add(1, &attributes);
+        })
     }
 
     async fn update_group(
@@ -1319,10 +1483,18 @@ impl Storage for StorageContainer {
         detail: GroupDetail,
         version: Option<Version>,
     ) -> Result<Version, UpdateError<GroupDetail>> {
+        let attributes = [KeyValue::new("method", "update_group")];
+
         match self {
             Self::Postgres(pg) => pg.update_group(group_id, detail, version).await,
             Self::DynoStore(dyn_store) => dyn_store.update_group(group_id, detail, version).await,
         }
+        .inspect(|_| {
+            STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
+        })
+        .inspect_err(|_| {
+            STORAGE_CONTAINER_ERRORS.add(1, &attributes);
+        })
     }
 
     async fn init_producer(
@@ -1338,6 +1510,8 @@ impl Storage for StorageContainer {
             ?producer_id,
             ?producer_epoch
         );
+
+        let attributes = [KeyValue::new("method", "init_producer")];
 
         match self {
             Self::Postgres(pg) => {
@@ -1360,6 +1534,12 @@ impl Storage for StorageContainer {
                     .await
             }
         }
+        .inspect(|_| {
+            STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
+        })
+        .inspect_err(|_| {
+            STORAGE_CONTAINER_ERRORS.add(1, &attributes);
+        })
     }
 
     async fn txn_add_offsets(
@@ -1369,6 +1549,8 @@ impl Storage for StorageContainer {
         producer_epoch: i16,
         group_id: &str,
     ) -> Result<ErrorCode> {
+        let attributes = [KeyValue::new("method", "txn_add_offsets")];
+
         match self {
             Self::Postgres(pg) => {
                 pg.txn_add_offsets(transaction_id, producer_id, producer_epoch, group_id)
@@ -1380,26 +1562,48 @@ impl Storage for StorageContainer {
                     .await
             }
         }
+        .inspect(|_| {
+            STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
+        })
+        .inspect_err(|_| {
+            STORAGE_CONTAINER_ERRORS.add(1, &attributes);
+        })
     }
 
     async fn txn_add_partitions(
         &mut self,
         partitions: TxnAddPartitionsRequest,
     ) -> Result<TxnAddPartitionsResponse> {
+        let attributes = [KeyValue::new("method", "txn_add_partitions")];
+
         match self {
             Self::Postgres(pg) => pg.txn_add_partitions(partitions).await,
             Self::DynoStore(dyn_store) => dyn_store.txn_add_partitions(partitions).await,
         }
+        .inspect(|_| {
+            STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
+        })
+        .inspect_err(|_| {
+            STORAGE_CONTAINER_ERRORS.add(1, &attributes);
+        })
     }
 
     async fn txn_offset_commit(
         &mut self,
         offsets: TxnOffsetCommitRequest,
     ) -> Result<Vec<TxnOffsetCommitResponseTopic>> {
+        let attributes = [KeyValue::new("method", "txn_offset_commit")];
+
         match self {
             Self::Postgres(pg) => pg.txn_offset_commit(offsets).await,
             Self::DynoStore(dyn_store) => dyn_store.txn_offset_commit(offsets).await,
         }
+        .inspect(|_| {
+            STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
+        })
+        .inspect_err(|_| {
+            STORAGE_CONTAINER_ERRORS.add(1, &attributes);
+        })
     }
 
     async fn txn_end(
@@ -1409,6 +1613,8 @@ impl Storage for StorageContainer {
         producer_epoch: i16,
         committed: bool,
     ) -> Result<ErrorCode> {
+        let attributes = [KeyValue::new("method", "txn_end")];
+
         match self {
             Self::Postgres(pg) => {
                 pg.txn_end(transaction_id, producer_id, producer_epoch, committed)
@@ -1420,6 +1626,12 @@ impl Storage for StorageContainer {
                     .await
             }
         }
+        .inspect(|_| {
+            STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
+        })
+        .inspect_err(|_| {
+            STORAGE_CONTAINER_ERRORS.add(1, &attributes);
+        })
     }
 }
 

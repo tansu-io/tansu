@@ -19,11 +19,13 @@ use std::{
     hash::{Hash, Hasher},
     marker::PhantomData,
     ops::Deref,
+    sync::LazyLock,
     time::SystemTime,
 };
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use opentelemetry::{metrics::Counter, KeyValue};
 use tansu_kafka_sans_io::{
     join_group_request::JoinGroupRequestProtocol,
     join_group_response::JoinGroupResponseMember,
@@ -46,11 +48,18 @@ use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info};
 use uuid::Uuid;
 
-use crate::{Error, Result};
+use crate::{Error, Result, METER};
 
 use super::{Coordinator, OffsetCommit};
 
 const PAUSE_MS: u128 = 3_000;
+
+static COORDINATOR_REQUESTS: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    METER
+        .u64_counter("tansu_group_coordinator_requests")
+        .with_description("consumer group coordinator requests")
+        .build()
+});
 
 #[async_trait]
 pub trait Group: Debug + Send {
@@ -708,11 +717,15 @@ where
             ?reason,
         );
 
+        COORDINATOR_REQUESTS.add(1, &[KeyValue::new("method", "join")]);
+
         let started_at = SystemTime::now();
 
         let mut iteration = 0;
 
         loop {
+            COORDINATOR_REQUESTS.add(1, &[KeyValue::new("method", "join_loop")]);
+
             let now = SystemTime::now();
 
             let (mut original, version) = self.wrappers.remove(group_id).unwrap_or_else(|| {
@@ -742,6 +755,7 @@ where
                 && group_instance_id.is_none()
             {
                 debug!(?member_id);
+                COORDINATOR_REQUESTS.add(1, &[KeyValue::new("method", "join_follower_pause")]);
                 sleep(Duration::from_millis(PAUSE_MS as u64)).await;
             }
 
@@ -791,6 +805,8 @@ where
                         let pause = PAUSE_MS.saturating_sub(elapsed);
                         debug!(pause);
 
+                        COORDINATOR_REQUESTS
+                            .add(1, &[KeyValue::new("method", "join_group_instance_pause")]);
                         sleep(Duration::from_millis(pause as u64)).await;
 
                         iteration += 1;
@@ -802,6 +818,8 @@ where
 
                 Err(UpdateError::Outdated { current, version }) => {
                     debug!(group_id, ?current, ?version, iteration);
+
+                    COORDINATOR_REQUESTS.add(1, &[KeyValue::new("method", "join_outdated")]);
 
                     _ = self.wrappers.insert(
                         group_id.to_owned(),
@@ -854,11 +872,15 @@ where
             ?assignments
         );
 
+        COORDINATOR_REQUESTS.add(1, &[KeyValue::new("method", "sync")]);
+
         let started_at = SystemTime::now();
 
         let mut iteration = 0;
 
         loop {
+            COORDINATOR_REQUESTS.add(1, &[KeyValue::new("method", "sync_loop")]);
+
             let now = SystemTime::now();
 
             let (mut original, version) = self
@@ -913,6 +935,8 @@ where
                         let pause = PAUSE_MS.saturating_sub(elapsed);
                         debug!(pause);
 
+                        COORDINATOR_REQUESTS
+                            .add(1, &[KeyValue::new("method", "sync_group_instance_pause")]);
                         sleep(Duration::from_millis(pause as u64)).await;
 
                         iteration += 1;
@@ -924,6 +948,7 @@ where
 
                 Err(UpdateError::Outdated { current, version }) => {
                     debug!(?group_id, ?current, ?version);
+                    COORDINATOR_REQUESTS.add(1, &[KeyValue::new("method", "sync_outdated")]);
 
                     _ = self.wrappers.insert(
                         group_id.to_owned(),
@@ -964,9 +989,13 @@ where
     ) -> Result<Body> {
         debug!(?group_id, ?member_id, ?members);
 
+        COORDINATOR_REQUESTS.add(1, &[KeyValue::new("method", "leave")]);
+
         let mut iteration = 0;
 
         loop {
+            COORDINATOR_REQUESTS.add(1, &[KeyValue::new("method", "leave_loop")]);
+
             let (wrapper, version) = self
                 .wrappers
                 .remove(group_id)
@@ -997,6 +1026,7 @@ where
 
                 Err(UpdateError::Outdated { current, version }) => {
                     debug!(?group_id, ?current, ?version);
+                    COORDINATOR_REQUESTS.add(1, &[KeyValue::new("method", "leave_outdated")]);
 
                     _ = self.wrappers.insert(
                         group_id.to_owned(),
@@ -1030,10 +1060,15 @@ where
     }
 
     async fn offset_commit(&mut self, offset_commit: OffsetCommit<'_>) -> Result<Body> {
+        debug!(?offset_commit);
+        COORDINATOR_REQUESTS.add(1, &[KeyValue::new("method", "offset_commit")]);
+
         let group_id = offset_commit.group_id;
         let mut iteration = 0;
 
         loop {
+            COORDINATOR_REQUESTS.add(1, &[KeyValue::new("method", "offset_commit_loop")]);
+
             let (wrapper, version) = self
                 .wrappers
                 .remove(group_id)
@@ -1063,6 +1098,8 @@ where
 
                 Err(UpdateError::Outdated { current, version }) => {
                     debug!(?group_id, ?current, ?version);
+                    COORDINATOR_REQUESTS
+                        .add(1, &[KeyValue::new("method", "offset_commit_outdated")]);
 
                     _ = self.wrappers.insert(
                         group_id.to_owned(),
@@ -1103,6 +1140,7 @@ where
         require_stable: Option<bool>,
     ) -> Result<Body> {
         debug!(?group_id, ?topics, ?groups, ?require_stable);
+        COORDINATOR_REQUESTS.add(1, &[KeyValue::new("method", "offset_fetch")]);
 
         let wrapper = Wrapper::Forming(Inner::new(self.storage.clone()));
 
@@ -1121,10 +1159,13 @@ where
         group_instance_id: Option<&str>,
     ) -> Result<Body> {
         debug!(?group_id, ?generation_id, ?member_id, ?group_instance_id);
+        COORDINATOR_REQUESTS.add(1, &[KeyValue::new("method", "heartbeat")]);
 
         let mut iteration = 0;
 
         loop {
+            COORDINATOR_REQUESTS.add(1, &[KeyValue::new("method", "heartbeat_loop")]);
+
             let (wrapper, version) = self
                 .wrappers
                 .remove(group_id)
@@ -1161,6 +1202,7 @@ where
 
                 Err(UpdateError::Outdated { current, version }) => {
                     debug!(?group_id, ?current, ?version);
+                    COORDINATOR_REQUESTS.add(1, &[KeyValue::new("method", "heartbeat_outdated")]);
 
                     _ = self.wrappers.insert(
                         group_id.to_owned(),

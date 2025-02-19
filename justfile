@@ -207,4 +207,7 @@ benchmark-flamegraph: build docker-compose-down minio-up minio-ready-local minio
 benchmark: build docker-compose-down minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up
 	./target/debug/tansu-server --schema-registry file://./etc/schema 2>&1 >tansu.log
 
-otel-minio-up: docker-compose-down minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up tansu-up
+otel: build docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up
+	./target/debug/tansu-server --schema-registry file://./etc/schema 2>&1 >tansu.log
+
+otel-up: docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up tansu-up

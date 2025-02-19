@@ -30,7 +30,7 @@ pub mod produce;
 pub mod telemetry;
 pub mod txn;
 
-use crate::{coordinator::group::Coordinator, Error, Result};
+use crate::{coordinator::group::Coordinator, Error, Result, METER};
 use api_versions::ApiVersionsRequest;
 use create_topic::CreateTopic;
 use delete_records::DeleteRecordsRequest;
@@ -44,13 +44,8 @@ use list_offsets::ListOffsetsRequest;
 use list_partition_reassignments::ListPartitionReassignmentsRequest;
 use metadata::MetadataRequest;
 use opentelemetry::{
-    global,
     metrics::{Counter, Histogram},
-    InstrumentationScope, KeyValue,
-};
-use opentelemetry_semantic_conventions::{
-    resource::{SERVICE_INSTANCE_ID, SERVICE_NAMESPACE},
-    SCHEMA_URL,
+    KeyValue,
 };
 use produce::ProduceRequest;
 use std::{io::ErrorKind, net::SocketAddr, time::SystemTime};
@@ -1049,34 +1044,23 @@ struct Metron {
 }
 
 impl Metron {
-    fn new(namespace: &str, instance_id: Uuid) -> Self {
-        let meter = global::meter_with_scope(
-            InstrumentationScope::builder(env!("CARGO_PKG_NAME"))
-                .with_version(env!("CARGO_PKG_VERSION"))
-                .with_schema_url(SCHEMA_URL)
-                .with_attributes([
-                    KeyValue::new(SERVICE_INSTANCE_ID, instance_id.to_string()),
-                    KeyValue::new(SERVICE_NAMESPACE, namespace.to_string()),
-                ])
-                .build(),
-        );
-
+    fn new(_namespace: &str, _instance_id: Uuid) -> Self {
         Self {
-            api_requests: meter
+            api_requests: METER
                 .u64_counter("tansu_api_requests")
                 .with_description("The number of API requests made")
                 .build(),
-            request_size: meter
+            request_size: METER
                 .u64_histogram("tansu_request_size")
                 .with_unit("By")
                 .with_description("The API request size in bytes")
                 .build(),
-            response_size: meter
+            response_size: METER
                 .u64_histogram("tansu_response_size")
                 .with_unit("By")
                 .with_description("The API response size in bytes")
                 .build(),
-            request_duration: meter
+            request_duration: METER
                 .u64_histogram("tansu_request_duration")
                 .with_unit("ms")
                 .with_description("The API request latencies in milliseconds")

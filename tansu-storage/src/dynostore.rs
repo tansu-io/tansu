@@ -35,11 +35,9 @@ use object_store::{
     PutPayload, PutResult, TagSet, UpdateVersion,
 };
 use opentelemetry::{
-    global,
-    metrics::{Counter, Histogram, Meter},
-    InstrumentationScope, KeyValue,
+    metrics::{Counter, Histogram},
+    KeyValue,
 };
-use opentelemetry_semantic_conventions::SCHEMA_URL;
 use rand::{prelude::*, rng};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tansu_kafka_sans_io::{
@@ -68,19 +66,10 @@ use crate::{
     BrokerRegistrationRequest, Error, GroupDetail, ListOffsetRequest, ListOffsetResponse,
     MetadataResponse, NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse,
     Result, Storage, TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse,
-    TxnOffsetCommitRequest, TxnState, UpdateError, Version, NULL_TOPIC_ID,
+    TxnOffsetCommitRequest, TxnState, UpdateError, Version, METER, NULL_TOPIC_ID,
 };
 
 const APPLICATION_JSON: &str = "application/json";
-
-static METER: LazyLock<Meter> = LazyLock::new(|| {
-    global::meter_with_scope(
-        InstrumentationScope::builder(env!("CARGO_PKG_NAME"))
-            .with_version(env!("CARGO_PKG_VERSION"))
-            .with_schema_url(SCHEMA_URL)
-            .build(),
-    )
-});
 
 #[derive(Clone, Debug)]
 pub struct DynoStore {
@@ -90,6 +79,7 @@ pub struct DynoStore {
     schemas: Option<Registry>,
     watermarks: Arc<Mutex<BTreeMap<Topition, OptiCon<Watermark>>>>,
     meta: OptiCon<Meta>,
+    topics: Arc<Mutex<BTreeMap<TopicId, TopicMetadata>>>,
 
     object_store: Arc<DynObjectStore>,
 }
@@ -277,27 +267,6 @@ struct TopicMetadata {
     topic: CreatableTopic,
 }
 
-impl OptiCon<TopicMetadata> {
-    fn new(cluster: &str, topic: &TopicId) -> Self {
-        Self {
-            path: match topic {
-                TopicId::Name(name) => {
-                    Path::from(format!("clusters/{}/topics/{}.json", cluster, name))
-                }
-
-                TopicId::Id(id) => {
-                    Path::from(format!("clusters/{}/topics/uuids/{}.json", cluster, id))
-                }
-            },
-            version_data: Arc::new(Mutex::new(VersionData {
-                data: TopicMetadata::default(),
-                ..Default::default()
-            })),
-            ..Default::default()
-        }
-    }
-}
-
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 struct Watermark {
     low: Option<i64>,
@@ -355,6 +324,7 @@ impl DynoStore {
             schemas: None,
             watermarks: Arc::new(Mutex::new(BTreeMap::new())),
             meta: OptiCon::<Meta>::new(cluster),
+            topics: Arc::new(Mutex::new(BTreeMap::new())),
             object_store: Arc::new(Cache::new(Metron::new(object_store, cluster))),
         }
     }
@@ -373,6 +343,12 @@ impl DynoStore {
     async fn topic_metadata(&self, topic: &TopicId) -> Result<TopicMetadata> {
         debug!(?topic);
 
+        if let Ok(guard) = self.topics.lock() {
+            if let Some(topic_metadata) = guard.get(topic) {
+                return Ok(topic_metadata.to_owned());
+            }
+        }
+
         let location = match topic {
             TopicId::Name(name) => {
                 Path::from(format!("clusters/{}/topics/{}.json", self.cluster, name))
@@ -388,9 +364,14 @@ impl DynoStore {
 
         let encoded = get_result.bytes().await?;
 
-        serde_json::from_slice::<TopicMetadata>(&encoded[..])
-            .inspect(|topic_metadata| debug!(?topic_metadata, ?topic))
-            .map_err(Into::into)
+        let topic_metadata = serde_json::from_slice::<TopicMetadata>(&encoded[..])
+            .inspect(|topic_metadata| debug!(?topic_metadata, ?topic))?;
+
+        if let Ok(mut guard) = self.topics.lock() {
+            _ = guard.insert(topic.to_owned(), topic_metadata.clone());
+        }
+
+        Ok(topic_metadata)
     }
 
     fn encode(&self, deflated: deflated::Batch) -> Result<PutPayload> {
@@ -2466,7 +2447,7 @@ impl<O> Cache<O>
 where
     O: ObjectStore,
 {
-    const CACHE_RETENTION_MS: u128 = 3600_000;
+    const CACHE_RETENTION_MS: u128 = 600_000;
 
     fn new(object_store: O) -> Self {
         let entries = Arc::new(Mutex::new(HashMap::new()));
@@ -2506,7 +2487,7 @@ static CACHE_REQUESTS: LazyLock<Counter<u64>> = LazyLock::new(|| {
 static CACHE_ERRORS: LazyLock<Counter<u64>> = LazyLock::new(|| {
     METER
         .u64_counter("tansu_objectstore_cache_errors")
-        .with_description("object_store cache requests")
+        .with_description("object_store cache errors")
         .build()
 });
 
@@ -3417,11 +3398,40 @@ where
 mod tests {
 
     use object_store::memory::InMemory;
+    use tracing::subscriber::DefaultGuard;
+    use tracing_subscriber::EnvFilter;
 
     use super::*;
 
+    fn init_tracing() -> Result<DefaultGuard> {
+        use std::{fs::File, sync::Arc, thread};
+
+        Ok(tracing::subscriber::set_default(
+            tracing_subscriber::fmt()
+                .with_level(true)
+                .with_line_number(true)
+                .with_thread_names(false)
+                .with_env_filter(EnvFilter::from_default_env().add_directive(
+                    format!("{}=debug", env!("CARGO_PKG_NAME").replace("-", "_")).parse()?,
+                ))
+                .with_writer(
+                    thread::current()
+                        .name()
+                        .ok_or(Error::Message(String::from("unnamed thread")))
+                        .and_then(|name| {
+                            File::create(format!("../logs/{}/{name}.log", env!("CARGO_PKG_NAME"),))
+                                .map_err(Into::into)
+                        })
+                        .map(Arc::new)?,
+                )
+                .finish(),
+        ))
+    }
+
     #[test]
     fn int_key_b_tree_map() -> Result<()> {
+        let _guard = init_tracing()?;
+
         let mut b = BTreeMap::new();
         assert_eq!(None, b.insert(65, "a"));
 
@@ -3435,6 +3445,8 @@ mod tests {
 
     #[tokio::test]
     async fn opti_lock_with_new() -> Result<()> {
+        let _guard = init_tracing()?;
+
         #[derive(
             Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize,
         )]
@@ -3460,6 +3472,8 @@ mod tests {
 
     #[tokio::test]
     async fn opti_lock_with_existing() -> Result<()> {
+        let _guard = init_tracing()?;
+
         #[derive(
             Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize,
         )]
@@ -3495,7 +3509,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn opti_lock_with_option() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        #[derive(
+            Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize,
+        )]
+        struct X(Option<i32>);
+
+        let path = Path::from("/abc/def.json");
+
+        impl OptiCon<X> {
+            fn new(path: Path) -> Self {
+                Self {
+                    path,
+                    ..Default::default()
+                }
+            }
+        }
+
+        let object_store = InMemory::new();
+
+        let o = OptiCon::<X>::new(path.clone());
+        assert_eq!(
+            None,
+            o.with(&object_store, |x| Ok(x.0.map(|x| x + 1))).await?
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn opti_lock_mut_existing() -> Result<()> {
+        let _guard = init_tracing()?;
+
         #[derive(
             Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize,
         )]
@@ -3515,7 +3562,15 @@ mod tests {
         let object_store = InMemory::new();
 
         let o = OptiCon::<X>::new(path.clone());
-        assert_eq!(1, o.with_mut(&object_store, |x| Ok(x.0 + 1)).await?);
+
+        assert_eq!(
+            1,
+            o.with_mut(&object_store, |x| {
+                x.0 += 1;
+                Ok(x.0)
+            })
+            .await?
+        );
 
         _ = object_store
             .put(
@@ -3526,7 +3581,14 @@ mod tests {
             )
             .await?;
 
-        assert_eq!(7, o.with_mut(&object_store, |x| Ok(x.0 + 1)).await?);
+        assert_eq!(
+            7,
+            o.with_mut(&object_store, |x| {
+                x.0 += 1;
+                Ok(x.0)
+            })
+            .await?
+        );
         Ok(())
     }
 }

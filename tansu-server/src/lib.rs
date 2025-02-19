@@ -21,11 +21,12 @@ use std::{
     result,
     str::{FromStr, Utf8Error},
     string::FromUtf8Error,
-    sync::{Arc, PoisonError},
+    sync::{Arc, LazyLock, PoisonError},
 };
 
 use jsonschema::ValidationError;
-use opentelemetry::trace::TraceError;
+use opentelemetry::{global, metrics::Meter, trace::TraceError, InstrumentationScope};
+use opentelemetry_semantic_conventions::SCHEMA_URL;
 use regex::{Regex, Replacer};
 use tansu_kafka_sans_io::ErrorCode;
 use thiserror::Error;
@@ -35,6 +36,15 @@ use url::Url;
 pub mod broker;
 pub mod coordinator;
 pub mod otel;
+
+pub(crate) static METER: LazyLock<Meter> = LazyLock::new(|| {
+    global::meter_with_scope(
+        InstrumentationScope::builder(env!("CARGO_PKG_NAME"))
+            .with_version(env!("CARGO_PKG_VERSION"))
+            .with_schema_url(SCHEMA_URL)
+            .build(),
+    )
+});
 
 #[derive(Error, Debug)]
 pub enum Error {
