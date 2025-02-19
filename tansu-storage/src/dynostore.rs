@@ -36,7 +36,7 @@ use object_store::{
 };
 use opentelemetry::{
     global,
-    metrics::{Counter, Gauge, Histogram, Meter},
+    metrics::{Counter, Histogram, Meter},
     InstrumentationScope, KeyValue,
 };
 use opentelemetry_semantic_conventions::SCHEMA_URL;
@@ -275,6 +275,27 @@ struct TxnCommitOffset {
 struct TopicMetadata {
     id: Uuid,
     topic: CreatableTopic,
+}
+
+impl OptiCon<TopicMetadata> {
+    fn new(cluster: &str, topic: &TopicId) -> Self {
+        Self {
+            path: match topic {
+                TopicId::Name(name) => {
+                    Path::from(format!("clusters/{}/topics/{}.json", cluster, name))
+                }
+
+                TopicId::Id(id) => {
+                    Path::from(format!("clusters/{}/topics/uuids/{}.json", cluster, id))
+                }
+            },
+            version_data: Arc::new(Mutex::new(VersionData {
+                data: TopicMetadata::default(),
+                ..Default::default()
+            })),
+            ..Default::default()
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -2393,7 +2414,7 @@ impl Storage for DynoStore {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct CacheEntry {
     version: UpdateVersion,
     tagged_at: SystemTime,
@@ -2445,7 +2466,7 @@ impl<O> Cache<O>
 where
     O: ObjectStore,
 {
-    const CACHE_RETENTION_MS: u128 = 60_000;
+    const CACHE_RETENTION_MS: u128 = 3600_000;
 
     fn new(object_store: O) -> Self {
         let entries = Arc::new(Mutex::new(HashMap::new()));
@@ -2456,18 +2477,22 @@ where
         }
     }
 
-    fn evict(guard: &mut MutexGuard<'_, HashMap<Path, CacheEntry>>) {
+    fn evict(guard: &mut MutexGuard<'_, HashMap<Path, CacheEntry>>, attributes: &[KeyValue]) {
         let now = SystemTime::now();
 
-        guard.deref_mut().retain(|location, entry| {
-            now.duration_since(entry.tagged_at).is_ok_and(|elapsed| {
-                let elapsed = elapsed.as_millis();
-                debug!(%location, elapsed, retain = elapsed < Self::CACHE_RETENTION_MS);
-                elapsed < Self::CACHE_RETENTION_MS
-            })
+        let original = guard.deref().len();
+        guard.deref_mut().retain(|_location, entry| {
+            now.duration_since(entry.tagged_at)
+                .is_ok_and(|elapsed| elapsed.as_millis() < Self::CACHE_RETENTION_MS)
         });
 
-        CACHE_ENTRIES.record(u64::try_from(guard.deref().len()).unwrap_or_default(), &[]);
+        let mut a = vec![KeyValue::new("outcome", "evict")];
+        a.extend_from_slice(attributes);
+
+        CACHE_ENTRIES.add(
+            u64::try_from(original - guard.deref().len()).unwrap_or_default(),
+            &a,
+        );
     }
 }
 
@@ -2492,9 +2517,9 @@ static CACHE_OUTCOMES: LazyLock<Counter<u64>> = LazyLock::new(|| {
         .build()
 });
 
-static CACHE_ENTRIES: LazyLock<Gauge<u64>> = LazyLock::new(|| {
+static CACHE_ENTRIES: LazyLock<Counter<u64>> = LazyLock::new(|| {
     METER
-        .u64_gauge("tansu_objectstore_cache_entries")
+        .u64_counter("tansu_objectstore_cache_entries")
         .with_description("object_store cache entries")
         .build()
 });
@@ -2512,43 +2537,50 @@ where
     ) -> Result<PutResult, object_store::Error> {
         debug!(%location, ?opts);
 
-        CACHE_REQUESTS.add(1, &[KeyValue::new("method", "put_opts")]);
+        let method = KeyValue::new("method", "put_opts");
+
+        CACHE_REQUESTS.add(1, &[method.clone()]);
 
         self.object_store
             .put_opts(location, payload, opts)
             .await
             .inspect(|put_result| {
                 if let Ok(mut guard) = self.entries.lock() {
-                    Self::evict(&mut guard);
+                    Self::evict(&mut guard, &[method.clone()]);
 
-                    if guard
+                    let replacement = CacheEntry::from(put_result);
+
+                    let outcome = match guard
                         .deref_mut()
-                        .insert(location.to_owned(), CacheEntry::from(put_result))
-                        .is_none()
+                        .insert(location.to_owned(), replacement.clone())
                     {
-                        debug!(caching = ?location, len = guard.deref().len());
+                        None => "add",
 
-                        CACHE_ENTRIES
-                            .record(u64::try_from(guard.deref().len()).unwrap_or_default(), &[]);
-                    }
+                        Some(existing) if existing == replacement => "existing",
+
+                        Some(_) => "replace",
+                    };
+
+                    debug!(%location, outcome);
+
+                    CACHE_ENTRIES.add(1, &[method.clone(), KeyValue::new("outcome", outcome)]);
                 }
             })
             .inspect_err(|error| {
                 debug!(%location, ?error);
 
                 if let Ok(mut guard) = self.entries.lock() {
-                    Self::evict(&mut guard);
+                    Self::evict(&mut guard, &[method.clone()]);
 
                     if guard.deref_mut().remove(location).is_some() {
-                        CACHE_ENTRIES
-                            .record(u64::try_from(guard.deref().len()).unwrap_or_default(), &[]);
+                        CACHE_ENTRIES.add(1, &[method.clone(), KeyValue::new("outcome", "error")]);
                     }
                 }
 
                 CACHE_ERRORS.add(
                     1,
                     &[
-                        KeyValue::new("method", "put_opts"),
+                        method,
                         KeyValue::new("error", object_store_error_name(error)),
                     ],
                 );
@@ -2562,7 +2594,9 @@ where
     ) -> Result<Box<dyn MultipartUpload>, object_store::Error> {
         debug!(%location, ?opts);
 
-        CACHE_REQUESTS.add(1, &[KeyValue::new("method", "put_multipart_opts")]);
+        let method = KeyValue::new("method", "put_multipart_opts");
+
+        CACHE_REQUESTS.add(1, &[method.clone()]);
 
         self.object_store
             .put_multipart_opts(location, opts)
@@ -2573,7 +2607,7 @@ where
                 CACHE_ERRORS.add(
                     1,
                     &[
-                        KeyValue::new("method", "put_multipart_opts"),
+                        method,
                         KeyValue::new("error", object_store_error_name(error)),
                     ],
                 );
@@ -2587,52 +2621,60 @@ where
     ) -> Result<GetResult, object_store::Error> {
         debug!(%location, ?options);
 
-        CACHE_REQUESTS.add(1, &[KeyValue::new("method", "get_opts")]);
+        let method = KeyValue::new("method", "get_opts");
+
+        CACHE_REQUESTS.add(1, &[method.clone()]);
 
         if let Ok(mut guard) = self.entries.lock() {
-            Self::evict(&mut guard);
+            Self::evict(&mut guard, &[method.clone()]);
 
             if let Some(entry) = guard.deref_mut().get_mut(location) {
+                debug!(%location, ?entry);
+
                 if let Some(ref cached_e_tag) = entry.version.e_tag {
+                    debug!(%location, cached_e_tag);
+
                     if let Some(ref presented) = options.if_none_match {
                         debug!(%location, cached_e_tag, presented);
 
                         if cached_e_tag == presented {
                             entry.hit();
 
-                            CACHE_OUTCOMES.add(
-                                1,
-                                &[
-                                    KeyValue::new("method", "get_opts"),
-                                    KeyValue::new("outcome", "hit"),
-                                ],
-                            );
+                            let outcome = "hit";
+
+                            CACHE_OUTCOMES.add(1, &[method, KeyValue::new("outcome", outcome)]);
+                            debug!(%location, outcome);
 
                             return Err(object_store::Error::NotModified {
                                 path: location.to_string(),
                                 source: Box::new(Error::PhantomCached()),
                             });
                         } else {
-                            CACHE_OUTCOMES.add(
-                                1,
-                                &[
-                                    KeyValue::new("method", "get_opts"),
-                                    KeyValue::new("outcome", "no_match"),
-                                ],
-                            );
+                            let outcome = "no_match";
+                            debug!(%location, outcome);
+
+                            CACHE_OUTCOMES
+                                .add(1, &[method.clone(), KeyValue::new("outcome", outcome)]);
                         }
+                    } else {
+                        let outcome = "miss";
+
+                        debug!(%location, outcome);
+                        CACHE_OUTCOMES.add(1, &[method.clone(), KeyValue::new("outcome", outcome)]);
                     }
+                } else {
+                    let outcome = "miss";
+
+                    debug!(%location, outcome);
+                    CACHE_OUTCOMES.add(1, &[method.clone(), KeyValue::new("outcome", outcome)]);
                 }
+            } else {
+                let outcome = "miss";
+
+                debug!(%location, outcome);
+                CACHE_OUTCOMES.add(1, &[method.clone(), KeyValue::new("outcome", outcome)]);
             }
         }
-
-        CACHE_OUTCOMES.add(
-            1,
-            &[
-                KeyValue::new("method", "get_opts"),
-                KeyValue::new("outcome", "miss"),
-            ],
-        );
 
         self.object_store
             .get_opts(location, options)
@@ -2644,16 +2686,20 @@ where
                 if let Ok(mut guard) = self.entries.lock() {
                     debug!(%location, e_tag, version);
 
-                    if guard
-                        .deref_mut()
-                        .insert(location.to_owned(), CacheEntry::from(get_result))
-                        .is_none()
-                    {
-                        debug!(caching = ?location, len = guard.deref().len());
+                    let replacement = CacheEntry::from(get_result);
 
-                        CACHE_ENTRIES
-                            .record(u64::try_from(guard.deref().len()).unwrap_or_default(), &[]);
-                    }
+                    let outcome = match guard
+                        .deref_mut()
+                        .insert(location.to_owned(), replacement.clone())
+                    {
+                        None => "add",
+
+                        Some(existing) if existing == replacement => "existing",
+
+                        Some(_) => "replace",
+                    };
+
+                    CACHE_ENTRIES.add(1, &[method.clone(), KeyValue::new("outcome", outcome)]);
                 }
             })
             .inspect_err(|error| {
@@ -2661,17 +2707,17 @@ where
 
                 if let Ok(mut guard) = self.entries.lock() {
                     debug!(%location);
+                    Self::evict(&mut guard, &[method.clone()]);
 
                     if guard.deref_mut().remove(location).is_some() {
-                        CACHE_ENTRIES
-                            .record(u64::try_from(guard.deref().len()).unwrap_or_default(), &[]);
+                        CACHE_ENTRIES.add(1, &[method.clone(), KeyValue::new("outcome", "error")]);
                     }
                 }
 
                 CACHE_ERRORS.add(
                     1,
                     &[
-                        KeyValue::new("method", "get_opts"),
+                        method,
                         KeyValue::new("error", object_store_error_name(error)),
                     ],
                 );
@@ -2688,10 +2734,9 @@ where
             .await
             .inspect(|_| {
                 if let Ok(mut guard) = self.entries.lock() {
-                    _ = guard.deref_mut().remove(location);
-
-                    CACHE_ENTRIES
-                        .record(u64::try_from(guard.deref().len()).unwrap_or_default(), &[]);
+                    if guard.deref_mut().remove(location).is_some() {
+                        CACHE_ENTRIES.add(1, &[KeyValue::new("outcome", "delete")]);
+                    }
                 }
             })
             .inspect_err(|error| {
@@ -2850,7 +2895,9 @@ where
         self.object_store
             .put_opts(location, payload, opts.clone())
             .await
-            .inspect(|_put_result| {
+            .inspect(|put_result| {
+                debug!(%location, etag = ?put_result.e_tag, version = ?put_result.version);
+
                 self.request_duration.record(
                     execute_start
                         .elapsed()
@@ -2914,7 +2961,9 @@ where
         self.object_store
             .get_opts(location, options.clone())
             .await
-            .inspect(|_get_result| {
+            .inspect(|get_result| {
+                debug!(%location, meta = ?get_result.meta);
+
                 self.request_duration.record(
                     execute_start
                         .elapsed()
@@ -2923,7 +2972,8 @@ where
                 )
             })
             .inspect_err(|err| {
-                debug!(%location, opts = ?options, err = ?err);
+                debug!(%location, ?options, ?err);
+
                 let mut additional = vec![KeyValue::new("reason", object_store_error_name(err))];
                 additional.append(&mut attributes);
                 self.request_error.add(1, &additional[..]);
@@ -2942,7 +2992,9 @@ where
         self.object_store
             .delete(location)
             .await
-            .inspect(|_get_result| {
+            .inspect(|_| {
+                debug!(%location);
+
                 self.request_duration.record(
                     execute_start
                         .elapsed()
@@ -2951,6 +3003,7 @@ where
                 )
             })
             .inspect_err(|err| {
+                debug!(%location, ?err);
                 let mut additional = vec![KeyValue::new("reason", object_store_error_name(err))];
                 additional.append(&mut attributes);
                 self.request_error.add(1, &additional[..]);
@@ -2985,7 +3038,9 @@ where
         self.object_store
             .list_with_delimiter(prefix)
             .await
-            .inspect(|_get_result| {
+            .inspect(|_list_result| {
+                debug!(?prefix);
+
                 self.request_duration.record(
                     execute_start
                         .elapsed()
@@ -2994,6 +3049,8 @@ where
                 )
             })
             .inspect_err(|err| {
+                debug!(?prefix, err = ?err);
+
                 let mut additional = vec![KeyValue::new("reason", object_store_error_name(err))];
                 additional.append(&mut attributes);
                 self.request_error.add(1, &additional[..]);
@@ -3012,7 +3069,9 @@ where
         self.object_store
             .copy(from, to)
             .await
-            .inspect(|_get_result| {
+            .inspect(|_| {
+                debug!(%from, %to);
+
                 self.request_duration.record(
                     execute_start
                         .elapsed()
@@ -3021,6 +3080,8 @@ where
                 )
             })
             .inspect_err(|err| {
+                debug!(%from, %to, err = ?err);
+
                 let mut additional = vec![KeyValue::new("reason", object_store_error_name(err))];
                 additional.append(&mut attributes);
                 self.request_error.add(1, &additional[..]);
@@ -3039,7 +3100,9 @@ where
         self.object_store
             .copy_if_not_exists(from, to)
             .await
-            .inspect(|_get_result| {
+            .inspect(|_| {
+                debug!(%from, %to);
+
                 self.request_duration.record(
                     execute_start
                         .elapsed()
@@ -3048,6 +3111,8 @@ where
                 )
             })
             .inspect_err(|err| {
+                debug!(%from, %to, err = ?err);
+
                 let mut additional = vec![KeyValue::new("reason", object_store_error_name(err))];
                 additional.append(&mut attributes);
                 self.request_error.add(1, &additional[..]);
@@ -3085,7 +3150,7 @@ static OPTICON_ERRORS: LazyLock<Counter<u64>> = LazyLock::new(|| {
 
 impl<D> OptiCon<D>
 where
-    D: Clone + Debug + DeserializeOwned + Serialize,
+    D: Clone + Debug + DeserializeOwned + PartialEq + Serialize,
 {
     async fn get(&self, object_store: &impl ObjectStore) -> Result<()> {
         debug!(?self);
@@ -3161,12 +3226,32 @@ where
         }
 
         loop {
-            let mut cloned = self.version_data.lock().map(|lock| VersionData {
-                version: lock.version.clone(),
-                data: lock.data.clone(),
+            OPTICON_REQUESTS.add(1, &[KeyValue::new("method", "with_mut_loop")]);
+
+            let (outcome, version_data) = self.version_data.lock().map(|lock| {
+                let mut data = lock.data.clone();
+                let outcome = f(&mut data);
+
+                let unchanged = lock.data == data;
+                debug!(path = %self.path, before = ?lock.data, after = ?data, unchanged);
+
+                if unchanged {
+                    (outcome, None)
+                } else {
+                    (
+                        outcome,
+                        Some(VersionData {
+                            version: lock.version.clone(),
+                            data,
+                        }),
+                    )
+                }
             })?;
 
-            let outcome = f(&mut cloned.data);
+            let Some(cloned) = version_data else {
+                return outcome;
+            };
+
             debug!(path = %self.path, ?outcome);
 
             let payload = serde_json::to_vec(&cloned.data)
@@ -3320,7 +3405,10 @@ where
             self.version_data
                 .lock()
                 .map_err(Into::into)
-                .and_then(|lock| f(&lock.data)),
+                .and_then(|lock| {
+                    OPTICON_REQUESTS.add(1, &[KeyValue::new("method", "with_apply")]);
+                    f(&lock.data)
+                }),
         )
     }
 }
