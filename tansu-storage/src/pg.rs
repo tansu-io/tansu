@@ -19,6 +19,7 @@ use std::{
     hash::{DefaultHasher, Hash, Hasher},
     marker::PhantomData,
     str::FromStr,
+    sync::LazyLock,
     time::{Duration, SystemTime},
 };
 
@@ -73,7 +74,6 @@ pub struct Postgres {
     advertised_listener: Url,
     pool: Pool,
     schemas: Option<Registry>,
-    metron: Metron,
 }
 
 #[derive(Clone, Default, Debug)]
@@ -133,7 +133,6 @@ impl Builder<String, i32, Url, Pool> {
             advertised_listener: self.advertised_listener,
             pool: self.pool,
             schemas: self.schemas,
-            metron: Metron::new(),
         }
     }
 }
@@ -254,6 +253,7 @@ impl Postgres {
                 tx,
                 include_sql!("pg/producer_epoch_current_for_producer.sql").as_str(),
                 &[&self.cluster, &deflated.producer_id],
+                "idempotent_message_check",
             )
             .await
             .inspect_err(|err| error!(?err))?
@@ -273,6 +273,7 @@ impl Postgres {
                         &deflated.producer_id,
                         &deflated.producer_epoch,
                     ],
+                    "idempotent_message_check",
                 )
                 .await
                 .inspect_err(|err| {
@@ -313,6 +314,7 @@ impl Postgres {
                         &deflated.producer_epoch,
                         &increment,
                     ],
+                    "idempotent_message_check",
                 )
                 .await?
             );
@@ -333,6 +335,7 @@ impl Postgres {
                 tx,
                 include_sql!("pg/watermark_select_for_update.sql").as_str(),
                 &[&self.cluster, &topition.topic(), &topition.partition()],
+                "watermark_select_for_update",
             )
             .await
             .inspect_err(|err| error!(?err, cluster = ?self.cluster, ?topition))?
@@ -350,11 +353,11 @@ impl Postgres {
 
     fn attributes_for_error(
         &self,
-        sql: &str,
+        nickname: &str,
         error: &tokio_postgres::error::Error,
     ) -> Vec<KeyValue> {
         let mut attributes = vec![
-            KeyValue::new("sql", sql.to_owned()),
+            KeyValue::new("sql", nickname.to_owned()),
             KeyValue::new("cluster_id", self.cluster.clone()),
         ];
 
@@ -384,6 +387,7 @@ impl Postgres {
         c: &Object,
         sql: &str,
         params: &[&(dyn ToSql + Sync)],
+        _nickname: &str,
     ) -> Result<u64, tokio_postgres::error::Error> {
         let prepared = c.prepare(sql).await.inspect_err(|err| error!(?err))?;
 
@@ -391,7 +395,7 @@ impl Postgres {
         c.execute(&prepared, params)
             .await
             .inspect(|_n| {
-                self.metron.sql_duration.record(
+                SQL_DURATION.record(
                     execute_start
                         .elapsed()
                         .map_or(0, |duration| duration.as_millis() as u64),
@@ -399,12 +403,18 @@ impl Postgres {
                         KeyValue::new("sql", sql.to_owned()),
                         KeyValue::new("cluster_id", self.cluster.clone()),
                     ],
-                )
+                );
+
+                SQL_REQUESTS.add(
+                    1,
+                    &[
+                        KeyValue::new("sql", sql.to_owned()),
+                        KeyValue::new("cluster_id", self.cluster.clone()),
+                    ],
+                );
             })
             .inspect_err(|err| {
-                self.metron
-                    .sql_error
-                    .add(1, &self.attributes_for_error(sql, err)[..]);
+                SQL_ERROR.add(1, &self.attributes_for_error(sql, err)[..]);
             })
     }
 
@@ -413,6 +423,7 @@ impl Postgres {
         c: &Object,
         sql: &str,
         params: &[&(dyn ToSql + Sync)],
+        _nickname: &str,
     ) -> Result<Vec<Row>, tokio_postgres::error::Error> {
         debug!(sql);
 
@@ -423,7 +434,7 @@ impl Postgres {
         c.query(&prepared, params)
             .await
             .inspect(|_n| {
-                self.metron.sql_duration.record(
+                SQL_DURATION.record(
                     execute_start
                         .elapsed()
                         .map_or(0, |duration| duration.as_millis() as u64),
@@ -431,12 +442,18 @@ impl Postgres {
                         KeyValue::new("sql", sql.to_owned()),
                         KeyValue::new("cluster_id", self.cluster.clone()),
                     ],
-                )
+                );
+
+                SQL_REQUESTS.add(
+                    1,
+                    &[
+                        KeyValue::new("sql", sql.to_owned()),
+                        KeyValue::new("cluster_id", self.cluster.clone()),
+                    ],
+                );
             })
             .inspect_err(|err| {
-                self.metron
-                    .sql_error
-                    .add(1, &self.attributes_for_error(sql, err)[..]);
+                SQL_ERROR.add(1, &self.attributes_for_error(sql, err)[..]);
             })
     }
 
@@ -445,6 +462,7 @@ impl Postgres {
         c: &Object,
         sql: &str,
         params: &[&(dyn ToSql + Sync)],
+        _nickname: &str,
     ) -> Result<Row, tokio_postgres::error::Error> {
         debug!(sql);
 
@@ -455,7 +473,7 @@ impl Postgres {
         c.query_one(&prepared, params)
             .await
             .inspect(|_n| {
-                self.metron.sql_duration.record(
+                SQL_DURATION.record(
                     execute_start
                         .elapsed()
                         .map_or(0, |duration| duration.as_millis() as u64),
@@ -463,12 +481,18 @@ impl Postgres {
                         KeyValue::new("sql", sql.to_owned()),
                         KeyValue::new("cluster_id", self.cluster.clone()),
                     ],
-                )
+                );
+
+                SQL_REQUESTS.add(
+                    1,
+                    &[
+                        KeyValue::new("sql", sql.to_owned()),
+                        KeyValue::new("cluster_id", self.cluster.clone()),
+                    ],
+                );
             })
             .inspect_err(|err| {
-                self.metron
-                    .sql_error
-                    .add(1, &self.attributes_for_error(sql, err)[..]);
+                SQL_ERROR.add(1, &self.attributes_for_error(sql, err)[..]);
             })
     }
 
@@ -477,6 +501,7 @@ impl Postgres {
         c: &Object,
         sql: &str,
         params: &[&(dyn ToSql + Sync)],
+        _nickname: &str,
     ) -> Result<Option<Row>, tokio_postgres::error::Error> {
         debug!(sql);
 
@@ -487,7 +512,7 @@ impl Postgres {
         c.query_opt(&prepared, params)
             .await
             .inspect(|_n| {
-                self.metron.sql_duration.record(
+                SQL_DURATION.record(
                     execute_start
                         .elapsed()
                         .map_or(0, |duration| duration.as_millis() as u64),
@@ -495,12 +520,18 @@ impl Postgres {
                         KeyValue::new("sql", sql.to_owned()),
                         KeyValue::new("cluster_id", self.cluster.clone()),
                     ],
-                )
+                );
+
+                SQL_REQUESTS.add(
+                    1,
+                    &[
+                        KeyValue::new("sql", sql.to_owned()),
+                        KeyValue::new("cluster_id", self.cluster.clone()),
+                    ],
+                );
             })
             .inspect_err(|err| {
-                self.metron
-                    .sql_error
-                    .add(1, &self.attributes_for_error(sql, err)[..]);
+                SQL_ERROR.add(1, &self.attributes_for_error(sql, err)[..]);
             })
     }
 
@@ -509,6 +540,7 @@ impl Postgres {
         tx: &Transaction<'_>,
         sql: &str,
         params: &[&(dyn ToSql + Sync)],
+        _nickname: &str,
     ) -> Result<u64, tokio_postgres::error::Error> {
         debug!(sql);
 
@@ -519,7 +551,7 @@ impl Postgres {
         tx.execute(&prepared, params)
             .await
             .inspect(|_n| {
-                self.metron.sql_duration.record(
+                SQL_DURATION.record(
                     execute_start
                         .elapsed()
                         .map_or(0, |duration| duration.as_millis() as u64),
@@ -527,12 +559,18 @@ impl Postgres {
                         KeyValue::new("sql", sql.to_owned()),
                         KeyValue::new("cluster_id", self.cluster.clone()),
                     ],
-                )
+                );
+
+                SQL_REQUESTS.add(
+                    1,
+                    &[
+                        KeyValue::new("sql", sql.to_owned()),
+                        KeyValue::new("cluster_id", self.cluster.clone()),
+                    ],
+                );
             })
             .inspect_err(|err| {
-                self.metron
-                    .sql_error
-                    .add(1, &self.attributes_for_error(sql, err)[..]);
+                SQL_ERROR.add(1, &self.attributes_for_error(sql, err)[..]);
             })
     }
 
@@ -541,6 +579,7 @@ impl Postgres {
         tx: &Transaction<'_>,
         sql: &str,
         params: &[&(dyn ToSql + Sync)],
+        _nickname: &str,
     ) -> Result<Vec<Row>, tokio_postgres::error::Error> {
         debug!(sql);
 
@@ -550,7 +589,7 @@ impl Postgres {
         tx.query(&prepared, params)
             .await
             .inspect(|_n| {
-                self.metron.sql_duration.record(
+                SQL_DURATION.record(
                     execute_start
                         .elapsed()
                         .map_or(0, |duration| duration.as_millis() as u64),
@@ -558,12 +597,18 @@ impl Postgres {
                         KeyValue::new("sql", sql.to_owned()),
                         KeyValue::new("cluster_id", self.cluster.clone()),
                     ],
-                )
+                );
+
+                SQL_REQUESTS.add(
+                    1,
+                    &[
+                        KeyValue::new("sql", sql.to_owned()),
+                        KeyValue::new("cluster_id", self.cluster.clone()),
+                    ],
+                );
             })
             .inspect_err(|err| {
-                self.metron
-                    .sql_error
-                    .add(1, &self.attributes_for_error(sql, err)[..]);
+                SQL_ERROR.add(1, &self.attributes_for_error(sql, err)[..]);
             })
     }
 
@@ -572,6 +617,7 @@ impl Postgres {
         tx: &Transaction<'_>,
         sql: &str,
         params: &[&(dyn ToSql + Sync)],
+        _nickname: &str,
     ) -> Result<Row, tokio_postgres::error::Error> {
         debug!(sql);
 
@@ -581,7 +627,7 @@ impl Postgres {
         tx.query_one(&prepared, params)
             .await
             .inspect(|_n| {
-                self.metron.sql_duration.record(
+                SQL_DURATION.record(
                     execute_start
                         .elapsed()
                         .map_or(0, |duration| duration.as_millis() as u64),
@@ -589,12 +635,18 @@ impl Postgres {
                         KeyValue::new("sql", sql.to_owned()),
                         KeyValue::new("cluster_id", self.cluster.clone()),
                     ],
-                )
+                );
+
+                SQL_REQUESTS.add(
+                    1,
+                    &[
+                        KeyValue::new("sql", sql.to_owned()),
+                        KeyValue::new("cluster_id", self.cluster.clone()),
+                    ],
+                );
             })
             .inspect_err(|err| {
-                self.metron
-                    .sql_error
-                    .add(1, &self.attributes_for_error(sql, err)[..]);
+                SQL_ERROR.add(1, &self.attributes_for_error(sql, err)[..]);
             })
     }
 
@@ -603,6 +655,7 @@ impl Postgres {
         tx: &Transaction<'_>,
         sql: &str,
         params: &[&(dyn ToSql + Sync)],
+        _nickname: &str,
     ) -> Result<Option<Row>, tokio_postgres::error::Error> {
         debug!(sql);
 
@@ -612,7 +665,7 @@ impl Postgres {
         tx.query_opt(&prepared, params)
             .await
             .inspect(|_n| {
-                self.metron.sql_duration.record(
+                SQL_DURATION.record(
                     execute_start
                         .elapsed()
                         .map_or(0, |duration| duration.as_millis() as u64),
@@ -620,12 +673,18 @@ impl Postgres {
                         KeyValue::new("sql", sql.to_owned()),
                         KeyValue::new("cluster_id", self.cluster.clone()),
                     ],
-                )
+                );
+
+                SQL_REQUESTS.add(
+                    1,
+                    &[
+                        KeyValue::new("sql", sql.to_owned()),
+                        KeyValue::new("cluster_id", self.cluster.clone()),
+                    ],
+                );
             })
             .inspect_err(|err| {
-                self.metron
-                    .sql_error
-                    .add(1, &self.attributes_for_error(sql, err)[..]);
+                SQL_ERROR.add(1, &self.attributes_for_error(sql, err)[..]);
             })
     }
 
@@ -693,6 +752,7 @@ impl Postgres {
                         &key,
                         &value,
                     ],
+                    "produce_in_tx",
                 )
                 .await
                 .inspect(|n| debug!(?n))
@@ -725,6 +785,7 @@ impl Postgres {
                         tx,
                         include_sql!("pg/header_insert.sql").as_str(),
                         &[&self.cluster, &topic, &partition, &offset, &key, &value],
+                        "produce_in_tx",
                     )
                     .await
                     .inspect_err(|err| {
@@ -751,6 +812,7 @@ impl Postgres {
                             &offset_start,
                             &offset_end,
                         ],
+                        "produce_in_tx",
                     )
                     .await
                     .inspect(|n| debug!(cluster = ?self.cluster, ?transaction_id, ?inflated.producer_id, ?inflated.producer_epoch, ?topic, ?partition, ?offset_start, ?offset_end, ?n))
@@ -769,6 +831,7 @@ impl Postgres {
                     &low.unwrap_or_default(),
                     &high.map_or(last_offset_delta + 1, |high| high + last_offset_delta + 1),
                 ],
+                "produce_in_tx",
             )
             .await
             .inspect(|n| debug!(?n))
@@ -799,6 +862,7 @@ impl Postgres {
                     &producer_id,
                     &producer_epoch,
                 ],
+                "end_in_tx",
             )
             .await?;
 
@@ -854,6 +918,7 @@ impl Postgres {
                         &topic,
                         &partition,
                     ],
+                    "end_in_tx",
                 )
                 .await?;
 
@@ -874,6 +939,7 @@ impl Postgres {
                         &partition,
                         &offset_end,
                     ],
+                    "end_in_tx",
                 )
                 .await?;
 
@@ -917,6 +983,7 @@ impl Postgres {
                             &txn.producer_id,
                             &txn.producer_epoch,
                         ],
+                        "end_in_tx",
                     )
                     .await?;
 
@@ -930,6 +997,7 @@ impl Postgres {
                             &txn.producer_id,
                             &txn.producer_epoch,
                         ],
+                        "end_in_tx",
                     )
                     .await?;
 
@@ -944,6 +1012,7 @@ impl Postgres {
                                 &txn.producer_id,
                                 &txn.producer_epoch,
                             ],
+                            "end_in_tx",
                         )
                         .await?;
                 }
@@ -958,6 +1027,7 @@ impl Postgres {
                             &txn.producer_id,
                             &txn.producer_epoch,
                         ],
+                        "end_in_tx",
                     )
                     .await?;
 
@@ -971,6 +1041,7 @@ impl Postgres {
                             &txn.producer_id,
                             &txn.producer_epoch,
                         ],
+                        "end_in_tx",
                     )
                     .await?;
 
@@ -993,6 +1064,7 @@ impl Postgres {
                             &txn.producer_epoch,
                             &outcome,
                         ],
+                        "end_in_tx",
                     )
                     .await?;
             }
@@ -1015,6 +1087,7 @@ impl Postgres {
                     &producer_epoch,
                     &outcome,
                 ],
+                "end_in_tx",
             )
             .await
             .inspect(|n| {
@@ -1050,6 +1123,7 @@ impl Storage for Postgres {
                     " last_updated = excluded.last_updated",
                 ),
                 &[&broker_registration.cluster_id],
+                "register_broker",
             )
             .await
             .inspect(|n| debug!(cluster = self.cluster, n))?;
@@ -1093,6 +1167,7 @@ impl Storage for Postgres {
                     &topic.num_partitions,
                     &(topic.replication_factor as i32),
                 ],
+                "create_topic",
             )
             .await
             .inspect_err(|err| error!(?err, ?topic, ?validate_only))
@@ -1124,6 +1199,7 @@ impl Storage for Postgres {
                     &tx,
                     include_sql!("pg/topition_insert.sql").as_str(),
                     &[&self.cluster, &topic.name, &partition],
+                    "create_topic",
                 )
                 .await?;
 
@@ -1132,6 +1208,7 @@ impl Storage for Postgres {
                     &tx,
                     include_sql!("pg/watermark_insert.sql").as_str(),
                     &[&self.cluster, &topic.name, &partition],
+                    "create_topic",
                 )
                 .await?;
         }
@@ -1150,6 +1227,7 @@ impl Storage for Postgres {
                             &config.name,
                             &config.value.as_deref(),
                         ],
+                        "create_topic",
                     )
                     .await
                     .inspect_err(|err| error!(?err, ?config));
@@ -1303,6 +1381,7 @@ impl Storage for Postgres {
                     &tx,
                     include_sql!("pg/topic_select_uuid.sql").as_str(),
                     &[&self.cluster, &id],
+                    "delete_topic",
                 )
                 .await?
             }
@@ -1312,6 +1391,7 @@ impl Storage for Postgres {
                     &tx,
                     include_sql!("pg/topic_select_name.sql").as_str(),
                     &[&self.cluster, name],
+                    "delete_topic",
                 )
                 .await?
             }
@@ -1323,41 +1403,60 @@ impl Storage for Postgres {
 
         let topic_name = row.try_get::<_, String>(1)?;
 
-        for (description, sql) in [
+        for (description, sql, nickname) in [
             (
                 "consumer_offsets",
                 include_sql!("pg/consumer_offset_delete_by_topic.sql"),
+                "delete_topic",
             ),
             (
                 "topic_configuration",
                 include_sql!("pg/topic_configuration_delete_by_topic.sql"),
+                "delete_topic",
             ),
             (
                 "watermarks",
                 include_sql!("pg/watermark_delete_by_topic.sql"),
+                "delete_topic",
             ),
-            ("headers", include_sql!("pg/header_delete_by_topic.sql")),
-            ("records", include_sql!("pg/record_delete_by_topic.sql")),
+            (
+                "headers",
+                include_sql!("pg/header_delete_by_topic.sql"),
+                "delete_topic",
+            ),
+            (
+                "records",
+                include_sql!("pg/record_delete_by_topic.sql"),
+                "delete_topic",
+            ),
             (
                 "txn_offset_commit_tp",
                 include_sql!("pg/txn_offset_commit_tp_delete_by_topic.sql"),
+                "delete_topic",
             ),
             (
                 "txn_produce_offset_delete",
                 include_sql!("pg/txn_produce_offset_delete_by_topic.sql"),
+                "delete_topic",
             ),
             (
                 "txn_topition",
                 include_sql!("pg/txn_topition_delete_by_topic.sql"),
+                "delete_topic",
             ),
             (
                 "producer_detail",
                 include_sql!("pg/producer_detail_delete_by_topic.sql"),
+                "delete_topic",
             ),
-            ("topitions", include_sql!("pg/topition_delete_by_topic.sql")),
+            (
+                "topitions",
+                include_sql!("pg/topition_delete_by_topic.sql"),
+                "delete_topic",
+            ),
         ] {
             let rows = self
-                .tx_prepare_execute(&tx, sql.as_str(), &[&self.cluster, &topic_name])
+                .tx_prepare_execute(&tx, sql.as_str(), &[&self.cluster, &topic_name], nickname)
                 .await?;
 
             debug!(?topic, ?rows, ?description);
@@ -1368,6 +1467,7 @@ impl Storage for Postgres {
                 &tx,
                 include_sql!("pg/topic_delete_by.sql").as_str(),
                 &[&self.cluster, &topic_name],
+                "delete_topic",
             )
             .await?;
 
@@ -1437,6 +1537,7 @@ impl Storage for Postgres {
                     &(max_bytes as i64),
                     &high_watermark,
                 ],
+                "fetch",
             )
             .await
             .inspect_err(|err| error!(?err))?;
@@ -1564,6 +1665,7 @@ impl Storage for Postgres {
                             &topition.partition(),
                             &offset,
                         ],
+                        "fetch",
                     )
                     .await
                     .inspect(|row| debug!(?row))
@@ -1614,6 +1716,7 @@ impl Storage for Postgres {
                 &c,
                 include_sql!("pg/watermark_select.sql").as_str(),
                 &[&self.cluster, &topition.topic(), &topition.partition()],
+                "offset_stage",
             )
             .await
             .inspect_err(|err| error!(?topition, ?err))?;
@@ -1665,6 +1768,7 @@ impl Storage for Postgres {
                     &tx,
                     include_sql!("pg/topition_select.sql").as_str(),
                     &[&self.cluster, &topition.topic(), &topition.partition()],
+                    "offset_commit",
                 )
                 .await
                 .inspect_err(|err| error!(?err))?
@@ -1676,6 +1780,7 @@ impl Storage for Postgres {
                             &tx,
                             include_sql!("pg/consumer_group_insert.sql").as_str(),
                             &[&self.cluster, &group],
+                            "offset_commit",
                         )
                         .await?;
                     debug!(rows);
@@ -1697,6 +1802,7 @@ impl Storage for Postgres {
                             &offset.timestamp,
                             &offset.metadata,
                         ],
+                        "offset_commit",
                     )
                     .await
                     .inspect_err(|err| error!(?err))?;
@@ -1736,6 +1842,7 @@ impl Storage for Postgres {
                 &c,
                 include_sql!("pg/consumer_offset_select_by_group.sql").as_str(),
                 &[&self.cluster, &group_id],
+                "committed_offset_topitions",
             )
             .await
             .inspect_err(|err| error!(?err))?
@@ -1773,6 +1880,7 @@ impl Storage for Postgres {
                     &c,
                     include_sql!("pg/consumer_offset_select.sql").as_str(),
                     &[&self.cluster, &group_id, &topic.topic(), &topic.partition()],
+                    "offset_fetch",
                 )
                 .await
                 .and_then(|maybe| maybe.map_or(Ok(-1), |row| row.try_get::<_, i64>(0)))
@@ -1834,6 +1942,7 @@ impl Storage for Postgres {
                         &c,
                         query.as_str(),
                         &[&self.cluster, &topition.topic(), &topition.partition()],
+                        "list_offsets",
                     )
                     .await
                     .inspect_err(|err| error!(?err, cluster = self.cluster, ?topition)),
@@ -1848,6 +1957,7 @@ impl Storage for Postgres {
                             &topition.partition(),
                             timestamp,
                         ],
+                        "list_offsets",
                     )
                     .await
                     .inspect_err(|err| error!(?err)),
@@ -1933,6 +2043,7 @@ impl Storage for Postgres {
                                     &c,
                                     include_sql!("pg/topic_select_name.sql").as_str(),
                                     &[&self.cluster, &name.as_str()],
+                                    "metadata",
                                 )
                                 .await
                                 .inspect_err(|err| error!(?err))
@@ -2030,6 +2141,7 @@ impl Storage for Postgres {
                                     &c,
                                     include_sql!("pg/topic_select_uuid.sql").as_str(),
                                     &[&self.cluster, &id],
+                                    "metadata",
                                 )
                                 .await
                             {
@@ -2123,6 +2235,7 @@ impl Storage for Postgres {
                         &c,
                         include_sql!("pg/topic_by_cluster.sql").as_str(),
                         &[&self.cluster],
+                        "metadata",
                     )
                     .await
                     .inspect_err(|err| error!(?err))
@@ -2316,6 +2429,7 @@ impl Storage for Postgres {
                 &c,
                 include_sql!("pg/consumer_group_select.sql").as_str(),
                 &[&self.cluster],
+                "list_groups",
             )
             .await
             .inspect_err(|err| error!(?err))?
@@ -2407,6 +2521,7 @@ impl Storage for Postgres {
                         &c,
                         include_sql!("pg/consumer_group_select_by_name.sql").as_str(),
                         &[&self.cluster, group_id],
+                        "describe_groups",
                     )
                     .await
                     .inspect_err(|err| error!(?err, group_id))?
@@ -2447,6 +2562,7 @@ impl Storage for Postgres {
                 &tx,
                 include_sql!("pg/consumer_group_insert.sql").as_str(),
                 &[&self.cluster, &group_id],
+                "update_group",
             )
             .await?;
 
@@ -2479,6 +2595,7 @@ impl Storage for Postgres {
                     &new_e_tag,
                     &detail,
                 ],
+                "update_group",
             )
             .await
             .inspect(|row| debug!(?row))
@@ -2500,6 +2617,7 @@ impl Storage for Postgres {
                     &tx,
                     include_sql!("pg/consumer_group_detail.sql").as_str(),
                     &[&group_id, &self.cluster.as_str()],
+                    "update_group",
                 )
                 .await
                 .inspect(|row| debug!(?row))
@@ -2552,6 +2670,7 @@ impl Storage for Postgres {
                         &tx,
                         include_sql!("pg/producer_epoch_for_current_txn.sql").as_str(),
                         &[&self.cluster, &transaction_id],
+                        "init_producer",
                     )
                     .await
                     .inspect_err(|err| error!(?err))?
@@ -2588,6 +2707,7 @@ impl Storage for Postgres {
                         &tx,
                         include_sql!("pg/txn_select_name.sql").as_str(),
                         &[&self.cluster, &transaction_id],
+                        "init_producer",
                     )
                     .await
                     .inspect_err(|err| error!(?err))?
@@ -2599,6 +2719,7 @@ impl Storage for Postgres {
                             &tx,
                             include_sql!("pg/producer_epoch_insert.sql").as_str(),
                             &[&self.cluster, &producer],
+                            "init_producer",
                         )
                         .await
                         .inspect_err(|err| error!(self.cluster, producer, ?err))?;
@@ -2612,6 +2733,7 @@ impl Storage for Postgres {
                             &tx,
                             include_sql!("pg/producer_insert.sql").as_str(),
                             &[&self.cluster],
+                            "init_producer",
                         )
                         .await
                         .inspect_err(|err| error!(?err))?;
@@ -2623,6 +2745,7 @@ impl Storage for Postgres {
                             &tx,
                             include_sql!("pg/producer_epoch_insert.sql").as_str(),
                             &[&self.cluster, &producer],
+                            "init_producer",
                         )
                         .await
                         .inspect_err(|err| error!(self.cluster, producer, ?err))?;
@@ -2634,7 +2757,8 @@ impl Storage for Postgres {
                         self.tx_prepare_execute(
                             &tx,
                             include_sql!("pg/txn_insert.sql").as_str(),
-                            &[&self.cluster, &transaction_id, &producer]
+                            &[&self.cluster, &transaction_id, &producer],
+                            "init_producer",
                         )
                         .await
                         .inspect_err(|err| error!(
@@ -2661,7 +2785,8 @@ impl Storage for Postgres {
                             &producer,
                             &epoch,
                             &transaction_timeout_ms
-                        ]
+                        ],
+                        "init_producer",
                     )
                     .await
                     .inspect_err(|err| error!(
@@ -2703,6 +2828,7 @@ impl Storage for Postgres {
                         &tx,
                         include_sql!("pg/producer_insert.sql").as_str(),
                         &[&self.cluster],
+                        "init_producer",
                     )
                     .await
                     .inspect_err(|err| error!(self.cluster, ?err))?;
@@ -2714,6 +2840,7 @@ impl Storage for Postgres {
                         &tx,
                         include_sql!("pg/producer_epoch_insert.sql").as_str(),
                         &[&self.cluster, &producer],
+                        "init_producer",
                     )
                     .await
                     .inspect_err(|err| error!(self.cluster, producer, ?err))?;
@@ -2791,6 +2918,7 @@ impl Storage for Postgres {
                                     &producer_id,
                                     &producer_epoch,
                                 ],
+                                "txn_add_partitions",
                             )
                             .await
                             .inspect_err(|err| {
@@ -2825,6 +2953,7 @@ impl Storage for Postgres {
                             &producer_id,
                             &producer_epoch,
                         ],
+                        "txn_add_partitions",
                     )
                     .await
                     .inspect_err(|err| {
@@ -2862,6 +2991,7 @@ impl Storage for Postgres {
                 &tx,
                 include_sql!("pg/producer_epoch_for_current_txn.sql").as_str(),
                 &[&self.cluster, &offsets.transaction_id],
+                "txn_offset_commit",
             )
             .await
             .inspect_err(|err| error!(?err))?
@@ -2886,6 +3016,7 @@ impl Storage for Postgres {
                 &tx,
                 include_sql!("pg/consumer_group_insert.sql").as_str(),
                 &[&self.cluster, &offsets.group_id],
+                "txn_offset_commit",
             )
             .await?;
 
@@ -2904,6 +3035,7 @@ impl Storage for Postgres {
                     &offsets.generation_id,
                     &offsets.member_id,
                 ],
+                "txn_offset_commit",
             )
             .await
             .inspect_err(|err| error!(?err))?;
@@ -2934,6 +3066,7 @@ impl Storage for Postgres {
                                     &partition.committed_leader_epoch,
                                     &partition.committed_metadata,
                                 ],
+                                "txn_offset_commit",
                             )
                             .await
                             .inspect_err(|err| error!(?err))?;
@@ -3021,27 +3154,27 @@ fn remove_comments(commented: &str) -> String {
     })
 }
 
-#[derive(Debug, Clone)]
-struct Metron {
-    sql_duration: Histogram<u64>,
-    sql_error: Counter<u64>,
-}
+static SQL_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
+    METER
+        .u64_histogram("tansu_sql_duration")
+        .with_unit("ms")
+        .with_description("The SQL request latencies in milliseconds")
+        .build()
+});
 
-impl Metron {
-    fn new() -> Self {
-        Self {
-            sql_duration: METER
-                .u64_histogram("tansu_sql_duration")
-                .with_unit("ms")
-                .with_description("The SQL request latencies in milliseconds")
-                .build(),
-            sql_error: METER
-                .u64_counter("tansu_sql_error")
-                .with_description("The SQL error count")
-                .build(),
-        }
-    }
-}
+static SQL_REQUESTS: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    METER
+        .u64_counter("tansu_sql_requests")
+        .with_description("The number of SQL requests made")
+        .build()
+});
+
+static SQL_ERROR: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    METER
+        .u64_counter("tansu_sql_error")
+        .with_description("The SQL error count")
+        .build()
+});
 
 #[cfg(test)]
 mod tests {

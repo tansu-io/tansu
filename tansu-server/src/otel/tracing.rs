@@ -17,8 +17,7 @@ use crate::{Result, TracingFormat};
 use opentelemetry::KeyValue;
 use opentelemetry_otlp::SpanExporter;
 use opentelemetry_sdk::{
-    runtime,
-    trace::{RandomIdGenerator, Sampler, TracerProvider},
+    trace::{RandomIdGenerator, Sampler, SdkTracerProvider},
     Resource,
 };
 use opentelemetry_semantic_conventions::{
@@ -30,27 +29,29 @@ use tracing_subscriber::{
 };
 
 fn resource() -> Resource {
-    Resource::from_schema_url(
-        [
-            KeyValue::new(SERVICE_NAME, env!("CARGO_PKG_NAME")),
-            KeyValue::new(SERVICE_VERSION, env!("CARGO_PKG_VERSION")),
-        ],
-        SCHEMA_URL,
-    )
+    Resource::builder()
+        .with_schema_url(
+            [
+                KeyValue::new(SERVICE_NAME, env!("CARGO_PKG_NAME")),
+                KeyValue::new(SERVICE_VERSION, env!("CARGO_PKG_VERSION")),
+            ],
+            SCHEMA_URL,
+        )
+        .build()
 }
 
-fn init_tracer_provider() -> Result<TracerProvider> {
+fn init_tracer_provider() -> Result<SdkTracerProvider> {
     SpanExporter::builder()
         .with_tonic()
         .build()
         .map_err(Into::into)
         .map(|exporter| {
-            TracerProvider::builder()
+            SdkTracerProvider::builder()
                 .with_sampler(Sampler::ParentBased(Box::new(Sampler::TraceIdRatioBased(
                     1.0,
                 ))))
                 .with_resource(resource())
-                .with_batch_exporter(exporter, runtime::Tokio)
+                .with_batch_exporter(exporter)
                 .with_id_generator(RandomIdGenerator::default())
                 .build()
         })
@@ -58,7 +59,7 @@ fn init_tracer_provider() -> Result<TracerProvider> {
 
 #[derive(Debug)]
 pub struct Guard {
-    tracer: TracerProvider,
+    tracer: SdkTracerProvider,
 }
 
 impl Drop for Guard {

@@ -41,6 +41,7 @@ async fn serve_req(request: Request<Incoming>, state: Registry) -> Result<Respon
             let mut buffer = vec![];
             let encoder = TextEncoder::new();
             let metric_families = state.gather();
+            debug!(?metric_families);
 
             encoder
                 .encode(&metric_families, &mut buffer)

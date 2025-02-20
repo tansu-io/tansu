@@ -724,32 +724,7 @@
             ]
           }
         },
-        "overrides": [
-          {
-            "__systemRef": "hideSeriesFrom",
-            "matcher": {
-              "id": "byNames",
-              "options": {
-                "mode": "exclude",
-                "names": [
-                  "with stable as ( select t.id as topic, tp.id as topition, min(txn_po.offset_start) as offset from cluster c join topic t on t.cluster = c.id join topition tp on tp.topic = t.id join txn on txn.cluster = c.id join txn_detail txn_d on txn_d.transaction = txn.id join txn_topition txn_tp on txn_tp.txn_detail = txn_d.id and txn_tp.topition = tp.id join txn_produce_offset txn_po on txn_po.txn_topition = txn_tp.id where c.name = $1 and t.name = $2 and tp.partition = $3 and (txn_d.status = 'PREPARE_COMMIT' or txn_d.status = 'PREPARE_ABORT' or txn_d.status = 'BEGIN') group by t.id, tp.id ) select w.low, w.high, s.offset as stable from cluster c join topic t on t.cluster = c.id join topition tp on tp.topic = t.id join watermark w on w.topition = tp.id left join stable s on s.topic = t.id and s.topition = tp.id where c.name = $1 and t.name = $2 and tp.partition = $3;"
-                ],
-                "prefix": "All except:",
-                "readOnly": true
-              }
-            },
-            "properties": [
-              {
-                "id": "custom.hideFrom",
-                "value": {
-                  "legend": false,
-                  "tooltip": false,
-                  "viz": true
-                }
-              }
-            ]
-          }
-        ]
+        "overrides": []
       },
       "gridPos": {
         "h": 8,
@@ -757,7 +732,7 @@
         "x": 12,
         "y": 26
       },
-      "id": 20,
+      "id": 25,
       "options": {
         "legend": {
           "calcs": [],
@@ -785,7 +760,7 @@
           "useBackend": false
         }
       ],
-      "title": "SQL Expression Rate",
+      "title": "SQL Request Rate",
       "type": "timeseries"
     },
     {
