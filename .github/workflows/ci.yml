@@ -41,7 +41,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: crate-ci/typos@v1.29.8
+      - uses: crate-ci/typos@v1.29.9
         with:
           config: typos.toml
   third-party-license:
