@@ -325,7 +325,7 @@ impl DynoStore {
             watermarks: Arc::new(Mutex::new(BTreeMap::new())),
             meta: OptiCon::<Meta>::new(cluster),
             topics: Arc::new(Mutex::new(BTreeMap::new())),
-            object_store: Arc::new(Cache::new(Metron::new(object_store, cluster))),
+            object_store: Arc::new(Metron::new(object_store, cluster)),
         }
     }
 
@@ -2403,6 +2403,8 @@ struct CacheEntry {
 
 impl From<&PutResult> for CacheEntry {
     fn from(put_result: &PutResult) -> Self {
+        debug!(?put_result);
+
         let e_tag = put_result.e_tag.clone();
         let version = put_result.version.clone();
 
@@ -2415,6 +2417,8 @@ impl From<&PutResult> for CacheEntry {
 
 impl From<&GetResult> for CacheEntry {
     fn from(get_result: &GetResult) -> Self {
+        debug!(?get_result);
+
         let e_tag = get_result.meta.e_tag.clone();
         let version = get_result.meta.version.clone();
 
@@ -2431,6 +2435,7 @@ impl CacheEntry {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct Cache<O> {
     entries: Arc<Mutex<HashMap<Path, CacheEntry>>>,
@@ -2443,6 +2448,7 @@ impl<O> Display for Cache<O> {
     }
 }
 
+#[allow(dead_code)]
 impl<O> Cache<O>
 where
     O: ObjectStore,
@@ -2526,6 +2532,7 @@ where
             .put_opts(location, payload, opts)
             .await
             .inspect(|put_result| {
+                debug!(?put_result);
                 if let Ok(mut guard) = self.entries.lock() {
                     Self::evict(&mut guard, &[method.clone()]);
 

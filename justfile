@@ -153,7 +153,7 @@ person-topic-consume:
 
 tansu-server:
     ./target/debug/tansu-server \
-        --schema-registry file://./etc/schema 2>&1 >tansu.log
+        --schema-registry file://./etc/schema 2>&1 | tee tansu.log
 
 kafka-proxy:
     docker run -d -p 19092:9092 apache/kafka:3.9.0
@@ -208,6 +208,6 @@ benchmark: build docker-compose-down minio-up minio-ready-local minio-local-alia
 	./target/debug/tansu-server --schema-registry file://./etc/schema 2>&1 >tansu.log
 
 otel: build docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up
-	./target/debug/tansu-server --schema-registry file://./etc/schema 2>&1 >tansu.log
+	./target/debug/tansu-server --schema-registry file://./etc/schema 2>&1  | tee tansu.log
 
 otel-up: docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up tansu-up
