@@ -3212,21 +3212,13 @@ where
             let (outcome, version_data) = self.version_data.lock().map(|lock| {
                 let mut data = lock.data.clone();
                 let outcome = f(&mut data);
-
-                let unchanged = lock.data == data;
-                debug!(path = %self.path, before = ?lock.data, after = ?data, unchanged);
-
-                if unchanged {
-                    (outcome, None)
-                } else {
-                    (
-                        outcome,
-                        Some(VersionData {
-                            version: lock.version.clone(),
-                            data,
-                        }),
-                    )
-                }
+                (
+                    outcome,
+                    Some(VersionData {
+                        version: lock.version.clone(),
+                        data,
+                    }),
+                )
             })?;
 
             let Some(cloned) = version_data else {
