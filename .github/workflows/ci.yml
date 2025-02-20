@@ -32,6 +32,7 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: clippy, rustfmt
+          cache-key: ${{matrix.pg}}
       - run: cargo build
       - run: cargo fmt --all --check
       - run: cargo clippy --all-targets
@@ -131,6 +132,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache-key: ${{matrix.os}}
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
