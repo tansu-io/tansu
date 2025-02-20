@@ -8,4 +8,6 @@ Cargo.lock
 .*DS_Store
 .DS_Store
 *.log
-
+.env
+flamegraph.svg
+perf.data

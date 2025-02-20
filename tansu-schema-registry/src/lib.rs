@@ -13,7 +13,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::{env, fmt, io, result, sync::Arc};
+use std::{env, fmt, io, result, sync::Arc, time::SystemTime};
 
 use bytes::Bytes;
 use jsonschema::ValidationError;
@@ -21,6 +21,12 @@ use object_store::{
     aws::AmazonS3Builder, local::LocalFileSystem, memory::InMemory, path::Path, DynObjectStore,
     ObjectStore,
 };
+use opentelemetry::{
+    global,
+    metrics::{Counter, Histogram},
+    InstrumentationScope, KeyValue,
+};
+use opentelemetry_semantic_conventions::SCHEMA_URL;
 use tansu_kafka_sans_io::{record::inflated::Batch, ErrorCode};
 use tracing::{debug, error};
 use url::Url;
@@ -79,12 +85,30 @@ trait Validator {
 #[derive(Clone, Debug)]
 pub struct Registry {
     object_store: Arc<DynObjectStore>,
+    validation_duration: Histogram<u64>,
+    validation_error: Counter<u64>,
 }
 
 impl Registry {
     fn new(object_store: impl ObjectStore) -> Self {
+        let meter = global::meter_with_scope(
+            InstrumentationScope::builder(env!("CARGO_PKG_NAME"))
+                .with_version(env!("CARGO_PKG_VERSION"))
+                .with_schema_url(SCHEMA_URL)
+                .build(),
+        );
+
         Self {
             object_store: Arc::new(object_store),
+            validation_duration: meter
+                .u64_histogram("registry_validation_duration")
+                .with_unit("ms")
+                .with_description("The registry validation request latencies in milliseconds")
+                .build(),
+            validation_error: meter
+                .u64_counter("registry_validation_error")
+                .with_description("The registry validation error count")
+                .build(),
         }
     }
 
@@ -115,19 +139,64 @@ impl Registry {
             .iter()
             .any(|meta| meta.location == Path::from(format!("{topic}.proto")))
         {
+            let validation_start = SystemTime::now();
+
             self.get(&Path::from(format!("{topic}.proto")))
                 .await
                 .and_then(proto::Schema::try_from)
                 .and_then(|schema| schema.validate(batch))
+                .inspect(|_| {
+                    self.validation_duration.record(
+                        validation_start
+                            .elapsed()
+                            .map_or(0, |duration| duration.as_millis() as u64),
+                        &[
+                            KeyValue::new("topic", topic.to_owned()),
+                            KeyValue::new("schema", format!("{topic}.proto")),
+                        ],
+                    )
+                })
+                .inspect_err(|err| {
+                    self.validation_error.add(
+                        1,
+                        &[
+                            KeyValue::new("topic", topic.to_owned()),
+                            KeyValue::new("reason", err.to_string()),
+                        ],
+                    )
+                })
         } else if list_result
             .objects
             .iter()
             .any(|meta| meta.location == Path::from(format!("{topic}.json")))
         {
+            let validation_start = SystemTime::now();
+
             self.get(&Path::from(format!("{topic}.json")))
                 .await
                 .and_then(json::Schema::try_from)
                 .and_then(|schema| schema.validate(batch))
+                .inspect(|_| {
+                    self.validation_duration.record(
+                        validation_start
+                            .elapsed()
+                            .map_or(0, |duration| duration.as_millis() as u64),
+                        &[
+                            KeyValue::new("topic", topic.to_owned()),
+                            KeyValue::new("schema", format!("{topic}.json")),
+                        ],
+                    )
+                })
+                .inspect_err(|err| {
+                    self.validation_error.add(
+                        1,
+                        &[
+                            KeyValue::new("topic", topic.to_owned()),
+                            KeyValue::new("schema", format!("{topic}.json")),
+                            KeyValue::new("reason", err.to_string()),
+                        ],
+                    )
+                })
         } else {
             Ok(())
         }

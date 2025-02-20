@@ -20,23 +20,50 @@ miri:
 docker-build:
     docker build --tag ghcr.io/tansu-io/tansu --no-cache --progress plain .
 
-docker-compose-minio-up:
-    docker compose up --detach minio
+minio-up:
+    docker compose up --detach --wait minio
 
-docker-compose-minio-down:
+minio-down:
     docker compose down --volumes minio
 
-docker-compose-tansu-up:
+minio-local-alias:
+    docker compose exec minio /usr/bin/mc alias set local http://localhost:9000 minioadmin minioadmin
+
+minio-tansu-bucket:
+    docker compose exec minio /usr/bin/mc mb local/tansu
+
+minio-ready-local:
+    docker compose exec minio /usr/bin/mc ready local
+
+tansu-up:
     docker compose up --detach tansu
 
-docker-compose-tansu-down:
+tansu-down:
     docker compose down --volumes tansu
 
-docker-compose-db-up:
+db-up:
     docker compose up --detach db
 
-docker-compose-db-down:
+db-down:
     docker compose down --volumes db
+
+jaeger-up:
+    docker compose up --detach jaeger
+
+jaeger-down:
+    docker compose down --volumes jaeger
+
+prometheus-up:
+    docker compose up --detach prometheus
+
+prometheus-down:
+    docker compose down --volumes prometheus
+
+grafana-up:
+    docker compose up --detach grafana
+
+grafana-down:
+    docker compose down --volumes grafana
 
 docker-compose-up:
     docker compose up --detach
@@ -126,10 +153,7 @@ person-topic-consume:
 
 tansu-server:
     ./target/debug/tansu-server \
-        --kafka-cluster-id ${CLUSTER_ID} \
-        --kafka-advertised-listener-url tcp://${ADVERTISED_LISTENER} \
-        --schema-registry file://./etc/schema \
-        --storage-engine ${STORAGE_ENGINE} 2>&1 | tee tansu.log
+        --schema-registry file://./etc/schema 2>&1 >tansu.log
 
 kafka-proxy:
     docker run -d -p 19092:9092 apache/kafka:3.9.0
@@ -149,7 +173,7 @@ codespace-delete:
             --json nameWithOwner \
             --jq .nameWithOwner) \
         --json name \
-        --jq '.[].name' | xargs --no-run-if-empty -n1 gh codespace delete --codespace 
+        --jq '.[].name' | xargs --no-run-if-empty -n1 gh codespace delete --codespace
 
 codespace-logs:
     gh codespace logs \
@@ -176,3 +200,14 @@ codespace-ssh:
             --jq '.[].name')
 
 all: test miri
+
+benchmark-flamegraph: build docker-compose-down minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up
+	flamegraph -- ./target/debug/tansu-server --schema-registry file://./etc/schema 2>&1 >tansu.log
+
+benchmark: build docker-compose-down minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up
+	./target/debug/tansu-server --schema-registry file://./etc/schema 2>&1 >tansu.log
+
+otel: build docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up
+	./target/debug/tansu-server --schema-registry file://./etc/schema 2>&1 >tansu.log
+
+otel-up: docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up tansu-up

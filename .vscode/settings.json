@@ -1,13 +1,34 @@
 {
     "cSpell.words": [
+        "acks",
         "buildkitd",
         "CLICOLOR",
         "clippy",
+        "condtype",
         "crossbuild",
+        "deadpool",
+        "dynostore",
+        "flate",
+        "getrandom",
+        "healthcheck",
+        "initdb",
+        "isready",
+        "jsonschema",
+        "labeldrop",
         "lgcc",
         "libzstd",
+        "Metron",
         "miri",
+        "PGUSER",
+        "prettyplease",
         "RUSTFLAGS",
-        "rustup"
+        "rustup",
+        "semconv",
+        "serde",
+        "thiserror",
+        "Topition",
+        "topitions",
+        "txns",
+        "zstd"
     ]
 }

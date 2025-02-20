@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -12,3 +12,18 @@
 //
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+use crate::{Result, TracingFormat};
+
+pub mod prom;
+mod tracing;
+
+#[derive(Debug)]
+pub struct Guard {
+    #[allow(dead_code)]
+    tracer: tracing::Guard,
+}
+
+pub fn init(tracing_format: TracingFormat) -> Result<Guard> {
+    tracing::init_tracing_subscriber(tracing_format).map(|tracer| Guard { tracer })
+}

@@ -14,20 +14,29 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use std::{
-    collections::{btree_map::Entry, BTreeMap, BTreeSet},
-    fmt::Debug,
+    collections::{btree_map::Entry, BTreeMap, BTreeSet, HashMap},
+    fmt::{Debug, Display},
     io::Cursor,
+    ops::{Deref, DerefMut},
     str::FromStr,
-    sync::Arc,
+    sync::{Arc, LazyLock, Mutex, MutexGuard},
     time::{Duration, SystemTime},
 };
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::{stream::TryStreamExt, StreamExt};
+use futures::{
+    stream::{BoxStream, TryStreamExt},
+    StreamExt,
+};
 use object_store::{
-    path::Path, Attribute, AttributeValue, Attributes, DynObjectStore, GetOptions, ObjectStore,
-    PutMode, PutOptions, PutPayload, PutResult, TagSet, UpdateVersion,
+    path::Path, Attribute, AttributeValue, Attributes, DynObjectStore, GetOptions, GetResult,
+    ListResult, MultipartUpload, ObjectMeta, ObjectStore, PutMode, PutMultipartOpts, PutOptions,
+    PutPayload, PutResult, TagSet, UpdateVersion,
+};
+use opentelemetry::{
+    metrics::{Counter, Histogram},
+    KeyValue,
 };
 use rand::{prelude::*, rng};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -57,7 +66,7 @@ use crate::{
     BrokerRegistrationRequest, Error, GroupDetail, ListOffsetRequest, ListOffsetResponse,
     MetadataResponse, NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse,
     Result, Storage, TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse,
-    TxnOffsetCommitRequest, TxnState, UpdateError, Version, NULL_TOPIC_ID,
+    TxnOffsetCommitRequest, TxnState, UpdateError, Version, METER, NULL_TOPIC_ID,
 };
 
 const APPLICATION_JSON: &str = "application/json";
@@ -68,8 +77,9 @@ pub struct DynoStore {
     node: i32,
     advertised_listener: Url,
     schemas: Option<Registry>,
-    watermarks: BTreeMap<Topition, ConditionData<Watermark>>,
-    meta: ConditionData<Meta>,
+    watermarks: Arc<Mutex<BTreeMap<Topition, OptiCon<Watermark>>>>,
+    meta: OptiCon<Meta>,
+    topics: Arc<Mutex<BTreeMap<TopicId, TopicMetadata>>>,
 
     object_store: Arc<DynObjectStore>,
 }
@@ -85,11 +95,14 @@ struct Meta {
     transactions: BTreeMap<String, Txn>,
 }
 
-impl ConditionData<Meta> {
+impl OptiCon<Meta> {
     fn new(cluster: &str) -> Self {
         Self {
             path: Path::from(format!("clusters/{}/meta.json", cluster)),
-            data: Meta::default(),
+            version_data: Arc::new(Mutex::new(VersionData {
+                data: Meta::default(),
+                ..Default::default()
+            })),
             ..Default::default()
         }
     }
@@ -248,175 +261,6 @@ struct TxnCommitOffset {
     metadata: Option<String>,
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-struct ConditionData<D> {
-    path: Path,
-    version: Option<UpdateVersion>,
-    tags: TagSet,
-    attributes: Attributes,
-    data: D,
-}
-
-impl<D> ConditionData<D>
-where
-    D: Clone + Debug + DeserializeOwned + Send + Serialize + Sync,
-{
-    async fn get(&mut self, object_store: &impl ObjectStore) -> Result<()> {
-        debug!(?self);
-
-        let get_result = object_store
-            .get(&self.path)
-            .await
-            .inspect_err(|error| error!(?error, ?self))
-            .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
-
-        self.version = Some(UpdateVersion {
-            e_tag: get_result.meta.e_tag.clone(),
-            version: get_result.meta.version.clone(),
-        });
-
-        let encoded = get_result
-            .bytes()
-            .await
-            .inspect_err(|error| error!(?error, ?self))
-            .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
-
-        self.data = serde_json::from_slice::<D>(&encoded[..])
-            .inspect_err(|error| error!(?error, ?self))
-            .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
-
-        debug!(?self);
-
-        Ok(())
-    }
-
-    async fn with_mut<E, F>(&mut self, object_store: &impl ObjectStore, f: F) -> Result<E>
-    where
-        E: Debug,
-        F: Fn(&mut D) -> Result<E>,
-    {
-        debug!(?self);
-
-        loop {
-            let outcome = f(&mut self.data);
-            debug!(?self, ?outcome);
-
-            let payload = serde_json::to_vec(&self.data)
-                .map(Bytes::from)
-                .map(PutPayload::from)
-                .inspect_err(|err| error!(?err, data = ?self.data))?;
-
-            match object_store
-                .put_opts(&self.path, payload, PutOptions::from(&*self))
-                .await
-                .inspect_err(|error| match error {
-                    object_store::Error::AlreadyExists { .. }
-                    | object_store::Error::Precondition { .. } => {
-                        debug!(?error, ?self)
-                    }
-
-                    _ => error!(?error, ?self),
-                })
-                .inspect(|put_result| debug!(?self, ?put_result))
-            {
-                Ok(result) => {
-                    debug!(?self, ?result);
-
-                    self.version = Some(UpdateVersion {
-                        e_tag: result.e_tag,
-                        version: result.version,
-                    });
-
-                    return outcome;
-                }
-
-                Err(pre_condition @ object_store::Error::Precondition { .. }) => {
-                    debug!(?self, ?pre_condition);
-                    self.get(object_store).await?;
-                    continue;
-                }
-
-                Err(already_exists @ object_store::Error::AlreadyExists { .. }) => {
-                    debug!(?self, ?already_exists);
-                    self.get(object_store).await?;
-                    continue;
-                }
-
-                Err(error) => {
-                    return {
-                        error!(?self, ?error);
-                        Err(Error::Api(ErrorCode::UnknownServerError))
-                    }
-                }
-            }
-        }
-    }
-
-    async fn with<E, F>(&mut self, object_store: &impl ObjectStore, f: F) -> Result<E>
-    where
-        F: Fn(&D) -> Result<E>,
-    {
-        debug!(?self);
-
-        match object_store
-            .get_opts(
-                &self.path,
-                GetOptions {
-                    if_none_match: self
-                        .version
-                        .as_ref()
-                        .and_then(|version| version.e_tag.clone()),
-                    ..GetOptions::default()
-                },
-            )
-            .await
-        {
-            Ok(get_result) => {
-                self.version = Some(UpdateVersion {
-                    e_tag: get_result.meta.e_tag.clone(),
-                    version: get_result.meta.version.clone(),
-                });
-
-                let encoded = get_result
-                    .bytes()
-                    .await
-                    .inspect_err(|error| error!(?error, ?self))
-                    .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
-
-                self.data = serde_json::from_slice::<D>(&encoded[..])
-                    .inspect_err(|error| error!(?error, ?self))
-                    .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
-
-                Ok(())
-            }
-
-            Err(object_store::Error::NotModified { .. }) => Ok(()),
-
-            Err(object_store::Error::NotFound { .. }) => {
-                self.with_mut(object_store, |_| Ok(())).await
-            }
-
-            Err(error) => {
-                error!(?self, ?error);
-                Err(Error::Api(ErrorCode::UnknownServerError))
-            }
-        }
-        .and(f(&self.data))
-    }
-}
-
-impl<D> From<&ConditionData<D>> for PutOptions {
-    fn from(value: &ConditionData<D>) -> Self {
-        Self {
-            mode: value.version.as_ref().map_or(PutMode::Create, |existing| {
-                PutMode::Update(existing.to_owned())
-            }),
-            tags: value.tags.to_owned(),
-            attributes: value.attributes.to_owned(),
-        }
-    }
-}
-
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 struct TopicMetadata {
     id: Uuid,
@@ -429,14 +273,17 @@ struct Watermark {
     high: Option<i64>,
 }
 
-impl ConditionData<Watermark> {
+impl OptiCon<Watermark> {
     fn new(cluster: &str, topition: &Topition) -> Self {
         Self {
             path: Path::from(format!(
                 "clusters/{}/topics/{}/partitions/{:0>10}/watermark.json",
                 cluster, topition.topic, topition.partition,
             )),
-            data: Watermark::default(),
+            version_data: Arc::new(Mutex::new(VersionData {
+                data: Watermark::default(),
+                ..Default::default()
+            })),
             ..Default::default()
         }
     }
@@ -475,9 +322,10 @@ impl DynoStore {
             node,
             advertised_listener: Url::parse("tcp://127.0.0.1/").unwrap(),
             schemas: None,
-            watermarks: BTreeMap::new(),
-            meta: ConditionData::<Meta>::new(cluster),
-            object_store: Arc::new(object_store),
+            watermarks: Arc::new(Mutex::new(BTreeMap::new())),
+            meta: OptiCon::<Meta>::new(cluster),
+            topics: Arc::new(Mutex::new(BTreeMap::new())),
+            object_store: Arc::new(Cache::new(Metron::new(object_store, cluster))),
         }
     }
 
@@ -495,6 +343,12 @@ impl DynoStore {
     async fn topic_metadata(&self, topic: &TopicId) -> Result<TopicMetadata> {
         debug!(?topic);
 
+        if let Ok(guard) = self.topics.lock() {
+            if let Some(topic_metadata) = guard.get(topic) {
+                return Ok(topic_metadata.to_owned());
+            }
+        }
+
         let location = match topic {
             TopicId::Name(name) => {
                 Path::from(format!("clusters/{}/topics/{}.json", self.cluster, name))
@@ -510,9 +364,14 @@ impl DynoStore {
 
         let encoded = get_result.bytes().await?;
 
-        serde_json::from_slice::<TopicMetadata>(&encoded[..])
-            .inspect(|topic_metadata| debug!(?topic_metadata, ?topic))
-            .map_err(Into::into)
+        let topic_metadata = serde_json::from_slice::<TopicMetadata>(&encoded[..])
+            .inspect(|topic_metadata| debug!(?topic_metadata, ?topic))?;
+
+        if let Ok(mut guard) = self.topics.lock() {
+            _ = guard.insert(topic.to_owned(), topic_metadata.clone());
+        }
+
+        Ok(topic_metadata)
     }
 
     fn encode(&self, deflated: deflated::Batch) -> Result<PutPayload> {
@@ -905,13 +764,14 @@ impl Storage for DynoStore {
             schemas.validate(topition.topic(), &inflated).await?;
         }
 
-        let offset = self
-            .watermarks
-            .entry(topition.to_owned())
-            .or_insert(ConditionData::<Watermark>::new(
-                self.cluster.as_str(),
-                topition,
-            ))
+        let watermark = self.watermarks.lock().map(|mut locked| {
+            locked
+                .entry(topition.to_owned())
+                .or_insert(OptiCon::<Watermark>::new(self.cluster.as_str(), topition))
+                .to_owned()
+        })?;
+
+        let offset = watermark
             .with_mut(&self.object_store, |watermark| {
                 debug!(?watermark);
 
@@ -1139,12 +999,14 @@ impl Storage for DynoStore {
 
         debug!(?stable);
 
-        self.watermarks
-            .entry(topition.to_owned())
-            .or_insert(ConditionData::<Watermark>::new(
-                self.cluster.as_str(),
-                topition,
-            ))
+        let watermark = self.watermarks.lock().map(|mut locked| {
+            locked
+                .entry(topition.to_owned())
+                .or_insert(OptiCon::<Watermark>::new(self.cluster.as_str(), topition))
+                .to_owned()
+        })?;
+
+        watermark
             .with(&self.object_store, |watermark| {
                 debug!(?watermark);
                 let high_watermark = watermark.high.unwrap_or(0);
@@ -1213,12 +1075,17 @@ impl Storage for DynoStore {
                 topition.to_owned(),
                 match offset_request {
                     ListOffsetRequest::Earliest => {
-                        self.watermarks
-                            .entry(topition.to_owned())
-                            .or_insert(ConditionData::<Watermark>::new(
-                                self.cluster.as_str(),
-                                topition,
-                            ))
+                        let watermark = self.watermarks.lock().map(|mut locked| {
+                            locked
+                                .entry(topition.to_owned())
+                                .or_insert(OptiCon::<Watermark>::new(
+                                    self.cluster.as_str(),
+                                    topition,
+                                ))
+                                .to_owned()
+                        })?;
+
+                        watermark
                             .with(&self.object_store, |watermark| {
                                 Ok(ListOffsetResponse {
                                     error_code: ErrorCode::None,
@@ -1236,12 +1103,17 @@ impl Storage for DynoStore {
                                 offset: Some(*offset),
                             }
                         } else {
-                            self.watermarks
-                                .entry(topition.to_owned())
-                                .or_insert(ConditionData::<Watermark>::new(
-                                    self.cluster.as_str(),
-                                    topition,
-                                ))
+                            let watermark = self.watermarks.lock().map(|mut locked| {
+                                locked
+                                    .entry(topition.to_owned())
+                                    .or_insert(OptiCon::<Watermark>::new(
+                                        self.cluster.as_str(),
+                                        topition,
+                                    ))
+                                    .to_owned()
+                            })?;
+
+                            watermark
                                 .with(&self.object_store, |watermark| {
                                     Ok(ListOffsetResponse {
                                         error_code: ErrorCode::None,
@@ -2523,12 +2395,1043 @@ impl Storage for DynoStore {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct CacheEntry {
+    version: UpdateVersion,
+    tagged_at: SystemTime,
+}
+
+impl From<&PutResult> for CacheEntry {
+    fn from(put_result: &PutResult) -> Self {
+        let e_tag = put_result.e_tag.clone();
+        let version = put_result.version.clone();
+
+        Self {
+            version: UpdateVersion { e_tag, version },
+            tagged_at: SystemTime::now(),
+        }
+    }
+}
+
+impl From<&GetResult> for CacheEntry {
+    fn from(get_result: &GetResult) -> Self {
+        let e_tag = get_result.meta.e_tag.clone();
+        let version = get_result.meta.version.clone();
+
+        Self {
+            version: UpdateVersion { e_tag, version },
+            tagged_at: SystemTime::now(),
+        }
+    }
+}
+
+impl CacheEntry {
+    fn hit(&mut self) {
+        self.tagged_at = SystemTime::now();
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Cache<O> {
+    entries: Arc<Mutex<HashMap<Path, CacheEntry>>>,
+    object_store: O,
+}
+
+impl<O> Display for Cache<O> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Cache").finish()
+    }
+}
+
+impl<O> Cache<O>
+where
+    O: ObjectStore,
+{
+    const CACHE_RETENTION_MS: u128 = 600_000;
+
+    fn new(object_store: O) -> Self {
+        let entries = Arc::new(Mutex::new(HashMap::new()));
+
+        Self {
+            entries,
+            object_store,
+        }
+    }
+
+    fn evict(guard: &mut MutexGuard<'_, HashMap<Path, CacheEntry>>, attributes: &[KeyValue]) {
+        let now = SystemTime::now();
+
+        let original = guard.deref().len();
+        guard.deref_mut().retain(|_location, entry| {
+            now.duration_since(entry.tagged_at)
+                .is_ok_and(|elapsed| elapsed.as_millis() < Self::CACHE_RETENTION_MS)
+        });
+
+        let mut a = vec![KeyValue::new("outcome", "evict")];
+        a.extend_from_slice(attributes);
+
+        CACHE_ENTRIES.add(
+            u64::try_from(original - guard.deref().len()).unwrap_or_default(),
+            &a,
+        );
+    }
+}
+
+static CACHE_REQUESTS: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    METER
+        .u64_counter("tansu_objectstore_cache_requests")
+        .with_description("object_store cache requests")
+        .build()
+});
+
+static CACHE_ERRORS: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    METER
+        .u64_counter("tansu_objectstore_cache_errors")
+        .with_description("object_store cache errors")
+        .build()
+});
+
+static CACHE_OUTCOMES: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    METER
+        .u64_counter("tansu_objectstore_cache_outcomes")
+        .with_description("object_store cache outcomes")
+        .build()
+});
+
+static CACHE_ENTRIES: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    METER
+        .u64_counter("tansu_objectstore_cache_entries")
+        .with_description("object_store cache entries")
+        .build()
+});
+
+#[async_trait]
+impl<O> ObjectStore for Cache<O>
+where
+    O: ObjectStore,
+{
+    async fn put_opts(
+        &self,
+        location: &Path,
+        payload: PutPayload,
+        opts: PutOptions,
+    ) -> Result<PutResult, object_store::Error> {
+        debug!(%location, ?opts);
+
+        let method = KeyValue::new("method", "put_opts");
+
+        CACHE_REQUESTS.add(1, &[method.clone()]);
+
+        self.object_store
+            .put_opts(location, payload, opts)
+            .await
+            .inspect(|put_result| {
+                if let Ok(mut guard) = self.entries.lock() {
+                    Self::evict(&mut guard, &[method.clone()]);
+
+                    let replacement = CacheEntry::from(put_result);
+
+                    let outcome = match guard
+                        .deref_mut()
+                        .insert(location.to_owned(), replacement.clone())
+                    {
+                        None => "add",
+
+                        Some(existing) if existing == replacement => "existing",
+
+                        Some(_) => "replace",
+                    };
+
+                    debug!(%location, outcome);
+
+                    CACHE_ENTRIES.add(1, &[method.clone(), KeyValue::new("outcome", outcome)]);
+                }
+            })
+            .inspect_err(|error| {
+                debug!(%location, ?error);
+
+                if let Ok(mut guard) = self.entries.lock() {
+                    Self::evict(&mut guard, &[method.clone()]);
+
+                    if guard.deref_mut().remove(location).is_some() {
+                        CACHE_ENTRIES.add(1, &[method.clone(), KeyValue::new("outcome", "error")]);
+                    }
+                }
+
+                CACHE_ERRORS.add(
+                    1,
+                    &[
+                        method,
+                        KeyValue::new("error", object_store_error_name(error)),
+                    ],
+                );
+            })
+    }
+
+    async fn put_multipart_opts(
+        &self,
+        location: &Path,
+        opts: PutMultipartOpts,
+    ) -> Result<Box<dyn MultipartUpload>, object_store::Error> {
+        debug!(%location, ?opts);
+
+        let method = KeyValue::new("method", "put_multipart_opts");
+
+        CACHE_REQUESTS.add(1, &[method.clone()]);
+
+        self.object_store
+            .put_multipart_opts(location, opts)
+            .await
+            .inspect_err(|error| {
+                debug!(%location, ?error);
+
+                CACHE_ERRORS.add(
+                    1,
+                    &[
+                        method,
+                        KeyValue::new("error", object_store_error_name(error)),
+                    ],
+                );
+            })
+    }
+
+    async fn get_opts(
+        &self,
+        location: &Path,
+        options: GetOptions,
+    ) -> Result<GetResult, object_store::Error> {
+        debug!(%location, ?options);
+
+        let method = KeyValue::new("method", "get_opts");
+
+        CACHE_REQUESTS.add(1, &[method.clone()]);
+
+        if let Ok(mut guard) = self.entries.lock() {
+            Self::evict(&mut guard, &[method.clone()]);
+
+            if let Some(entry) = guard.deref_mut().get_mut(location) {
+                debug!(%location, ?entry);
+
+                if let Some(ref cached_e_tag) = entry.version.e_tag {
+                    debug!(%location, cached_e_tag);
+
+                    if let Some(ref presented) = options.if_none_match {
+                        debug!(%location, cached_e_tag, presented);
+
+                        if cached_e_tag == presented {
+                            entry.hit();
+
+                            let outcome = "hit";
+
+                            CACHE_OUTCOMES.add(1, &[method, KeyValue::new("outcome", outcome)]);
+                            debug!(%location, outcome);
+
+                            return Err(object_store::Error::NotModified {
+                                path: location.to_string(),
+                                source: Box::new(Error::PhantomCached()),
+                            });
+                        } else {
+                            let outcome = "no_match";
+                            debug!(%location, outcome);
+
+                            CACHE_OUTCOMES
+                                .add(1, &[method.clone(), KeyValue::new("outcome", outcome)]);
+                        }
+                    } else {
+                        let outcome = "miss";
+
+                        debug!(%location, outcome);
+                        CACHE_OUTCOMES.add(1, &[method.clone(), KeyValue::new("outcome", outcome)]);
+                    }
+                } else {
+                    let outcome = "miss";
+
+                    debug!(%location, outcome);
+                    CACHE_OUTCOMES.add(1, &[method.clone(), KeyValue::new("outcome", outcome)]);
+                }
+            } else {
+                let outcome = "miss";
+
+                debug!(%location, outcome);
+                CACHE_OUTCOMES.add(1, &[method.clone(), KeyValue::new("outcome", outcome)]);
+            }
+        }
+
+        self.object_store
+            .get_opts(location, options)
+            .await
+            .inspect(|get_result| {
+                let e_tag = get_result.meta.e_tag.clone();
+                let version = get_result.meta.version.clone();
+
+                if let Ok(mut guard) = self.entries.lock() {
+                    debug!(%location, e_tag, version);
+
+                    let replacement = CacheEntry::from(get_result);
+
+                    let outcome = match guard
+                        .deref_mut()
+                        .insert(location.to_owned(), replacement.clone())
+                    {
+                        None => "add",
+
+                        Some(existing) if existing == replacement => "existing",
+
+                        Some(_) => "replace",
+                    };
+
+                    CACHE_ENTRIES.add(1, &[method.clone(), KeyValue::new("outcome", outcome)]);
+                }
+            })
+            .inspect_err(|error| {
+                debug!(%location, ?error);
+
+                if let Ok(mut guard) = self.entries.lock() {
+                    debug!(%location);
+                    Self::evict(&mut guard, &[method.clone()]);
+
+                    if guard.deref_mut().remove(location).is_some() {
+                        CACHE_ENTRIES.add(1, &[method.clone(), KeyValue::new("outcome", "error")]);
+                    }
+                }
+
+                CACHE_ERRORS.add(
+                    1,
+                    &[
+                        method,
+                        KeyValue::new("error", object_store_error_name(error)),
+                    ],
+                );
+            })
+    }
+
+    async fn delete(&self, location: &Path) -> Result<(), object_store::Error> {
+        debug!(%location);
+
+        CACHE_REQUESTS.add(1, &[KeyValue::new("method", "delete")]);
+
+        self.object_store
+            .delete(location)
+            .await
+            .inspect(|_| {
+                if let Ok(mut guard) = self.entries.lock() {
+                    if guard.deref_mut().remove(location).is_some() {
+                        CACHE_ENTRIES.add(1, &[KeyValue::new("outcome", "delete")]);
+                    }
+                }
+            })
+            .inspect_err(|error| {
+                debug!(%location, ?error);
+
+                CACHE_ERRORS.add(
+                    1,
+                    &[
+                        KeyValue::new("method", "delete"),
+                        KeyValue::new("error", object_store_error_name(error)),
+                    ],
+                );
+            })
+    }
+
+    fn list(
+        &self,
+        prefix: Option<&Path>,
+    ) -> BoxStream<'_, Result<ObjectMeta, object_store::Error>> {
+        debug!(?prefix);
+        CACHE_REQUESTS.add(1, &[KeyValue::new("method", "list")]);
+        self.object_store.list(prefix)
+    }
+
+    async fn list_with_delimiter(
+        &self,
+        prefix: Option<&Path>,
+    ) -> Result<ListResult, object_store::Error> {
+        debug!(?prefix);
+        CACHE_REQUESTS.add(1, &[KeyValue::new("method", "list_with_delimiter")]);
+        self.object_store
+            .list_with_delimiter(prefix)
+            .await
+            .inspect_err(|error| {
+                debug!(?prefix, ?error);
+
+                CACHE_ERRORS.add(
+                    1,
+                    &[
+                        KeyValue::new("method", "list_with_delimiter"),
+                        KeyValue::new("error", object_store_error_name(error)),
+                    ],
+                );
+            })
+    }
+
+    async fn copy(&self, from: &Path, to: &Path) -> Result<(), object_store::Error> {
+        debug!(%from, %to);
+        CACHE_REQUESTS.add(1, &[KeyValue::new("method", "copy")]);
+        self.object_store.copy(from, to).await.inspect_err(|error| {
+            debug!(%from, %to, ?error);
+
+            CACHE_ERRORS.add(
+                1,
+                &[
+                    KeyValue::new("method", "copy"),
+                    KeyValue::new("error", object_store_error_name(error)),
+                ],
+            );
+        })
+    }
+
+    async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<(), object_store::Error> {
+        debug!(%from, %to);
+        CACHE_REQUESTS.add(1, &[KeyValue::new("method", "copy_if_not_exists")]);
+        self.object_store
+            .copy_if_not_exists(from, to)
+            .await
+            .inspect_err(|error| {
+                debug!(%from, %to, ?error);
+
+                CACHE_ERRORS.add(
+                    1,
+                    &[
+                        KeyValue::new("method", "copy_if_not_exists"),
+                        KeyValue::new("error", object_store_error_name(error)),
+                    ],
+                );
+            })
+    }
+}
+
+fn object_store_error_name(error: &object_store::Error) -> &'static str {
+    match error {
+        object_store::Error::Precondition { .. } => "pre_condition",
+
+        object_store::Error::AlreadyExists { .. } => "already_exists",
+
+        object_store::Error::NotModified { .. } => "not_modified",
+
+        object_store::Error::NotFound { .. } => "not_found",
+
+        otherwise => {
+            debug!(?otherwise);
+            "otherwise"
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Metron<O> {
+    request_duration: Histogram<u64>,
+    request_error: Counter<u64>,
+
+    cluster: String,
+    object_store: O,
+}
+
+impl<O> Display for Metron<O> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Metron").finish()
+    }
+}
+
+impl<O> Metron<O>
+where
+    O: ObjectStore,
+{
+    fn new(object_store: O, cluster: &str) -> Self {
+        Self {
+            cluster: cluster.into(),
+            request_duration: METER
+                .u64_histogram("tansu_object_store_request_duration")
+                .with_unit("ms")
+                .with_description("The object store request latencies in milliseconds")
+                .build(),
+            request_error: METER
+                .u64_counter("tansu_object_store_request_error")
+                .with_description("The object store request errors")
+                .build(),
+
+            object_store,
+        }
+    }
+}
+
+#[async_trait]
+impl<O> ObjectStore for Metron<O>
+where
+    O: ObjectStore,
+{
+    async fn put_opts(
+        &self,
+        location: &Path,
+        payload: PutPayload,
+        opts: PutOptions,
+    ) -> Result<PutResult, object_store::Error> {
+        debug!(%location, ?opts);
+
+        let execute_start = SystemTime::now();
+        let mut attributes = vec![
+            KeyValue::new("method", "put_opts"),
+            KeyValue::new("cluster", self.cluster.clone()),
+        ];
+
+        self.object_store
+            .put_opts(location, payload, opts.clone())
+            .await
+            .inspect(|put_result| {
+                debug!(%location, etag = ?put_result.e_tag, version = ?put_result.version);
+
+                self.request_duration.record(
+                    execute_start
+                        .elapsed()
+                        .map_or(0, |duration| duration.as_millis() as u64),
+                    attributes.as_ref(),
+                )
+            })
+            .inspect_err(|err| {
+                debug!(%location, opts = ?opts, err = ?err);
+
+                let mut additional = vec![KeyValue::new("reason", object_store_error_name(err))];
+                additional.append(&mut attributes);
+                self.request_error.add(1, &additional[..]);
+            })
+    }
+
+    async fn put_multipart_opts(
+        &self,
+        location: &Path,
+        opts: PutMultipartOpts,
+    ) -> Result<Box<dyn MultipartUpload>, object_store::Error> {
+        debug!(%location, ?opts);
+
+        let execute_start = SystemTime::now();
+        let mut attributes = vec![
+            KeyValue::new("method", "put_multipart_opts"),
+            KeyValue::new("cluster", self.cluster.clone()),
+        ];
+
+        self.object_store
+            .put_multipart_opts(location, opts)
+            .await
+            .inspect(|_put_result| {
+                self.request_duration.record(
+                    execute_start
+                        .elapsed()
+                        .map_or(0, |duration| duration.as_millis() as u64),
+                    attributes.as_ref(),
+                )
+            })
+            .inspect_err(|err| {
+                let mut additional = vec![KeyValue::new("reason", object_store_error_name(err))];
+                additional.append(&mut attributes);
+                self.request_error.add(1, &additional[..]);
+            })
+    }
+
+    async fn get_opts(
+        &self,
+        location: &Path,
+        options: GetOptions,
+    ) -> Result<GetResult, object_store::Error> {
+        debug!(%location, ?options);
+
+        let execute_start = SystemTime::now();
+        let mut attributes = vec![
+            KeyValue::new("method", "get_opts"),
+            KeyValue::new("cluster", self.cluster.clone()),
+        ];
+
+        self.object_store
+            .get_opts(location, options.clone())
+            .await
+            .inspect(|get_result| {
+                debug!(%location, meta = ?get_result.meta);
+
+                self.request_duration.record(
+                    execute_start
+                        .elapsed()
+                        .map_or(0, |duration| duration.as_millis() as u64),
+                    attributes.as_ref(),
+                )
+            })
+            .inspect_err(|err| {
+                debug!(%location, ?options, ?err);
+
+                let mut additional = vec![KeyValue::new("reason", object_store_error_name(err))];
+                additional.append(&mut attributes);
+                self.request_error.add(1, &additional[..]);
+            })
+    }
+
+    async fn delete(&self, location: &Path) -> Result<(), object_store::Error> {
+        debug!(%location);
+
+        let execute_start = SystemTime::now();
+        let mut attributes = vec![
+            KeyValue::new("method", "delete"),
+            KeyValue::new("cluster", self.cluster.clone()),
+        ];
+
+        self.object_store
+            .delete(location)
+            .await
+            .inspect(|_| {
+                debug!(%location);
+
+                self.request_duration.record(
+                    execute_start
+                        .elapsed()
+                        .map_or(0, |duration| duration.as_millis() as u64),
+                    attributes.as_ref(),
+                )
+            })
+            .inspect_err(|err| {
+                debug!(%location, ?err);
+                let mut additional = vec![KeyValue::new("reason", object_store_error_name(err))];
+                additional.append(&mut attributes);
+                self.request_error.add(1, &additional[..]);
+            })
+    }
+
+    fn list(
+        &self,
+        prefix: Option<&Path>,
+    ) -> BoxStream<'_, Result<ObjectMeta, object_store::Error>> {
+        debug!(?prefix);
+
+        self.object_store.list(prefix)
+    }
+
+    async fn list_with_delimiter(
+        &self,
+        prefix: Option<&Path>,
+    ) -> Result<ListResult, object_store::Error> {
+        debug!(?prefix);
+
+        let execute_start = SystemTime::now();
+        let mut attributes = vec![
+            KeyValue::new("method", "list_with_delimiter"),
+            KeyValue::new("cluster", self.cluster.clone()),
+        ];
+
+        if let Some(prefix) = prefix {
+            attributes.push(KeyValue::new("prefix", prefix.to_string()));
+        }
+
+        self.object_store
+            .list_with_delimiter(prefix)
+            .await
+            .inspect(|_list_result| {
+                debug!(?prefix);
+
+                self.request_duration.record(
+                    execute_start
+                        .elapsed()
+                        .map_or(0, |duration| duration.as_millis() as u64),
+                    attributes.as_ref(),
+                )
+            })
+            .inspect_err(|err| {
+                debug!(?prefix, err = ?err);
+
+                let mut additional = vec![KeyValue::new("reason", object_store_error_name(err))];
+                additional.append(&mut attributes);
+                self.request_error.add(1, &additional[..]);
+            })
+    }
+
+    async fn copy(&self, from: &Path, to: &Path) -> Result<(), object_store::Error> {
+        debug!(%from, %to);
+
+        let execute_start = SystemTime::now();
+        let mut attributes = vec![
+            KeyValue::new("method", "copy"),
+            KeyValue::new("cluster", self.cluster.clone()),
+        ];
+
+        self.object_store
+            .copy(from, to)
+            .await
+            .inspect(|_| {
+                debug!(%from, %to);
+
+                self.request_duration.record(
+                    execute_start
+                        .elapsed()
+                        .map_or(0, |duration| duration.as_millis() as u64),
+                    attributes.as_ref(),
+                )
+            })
+            .inspect_err(|err| {
+                debug!(%from, %to, err = ?err);
+
+                let mut additional = vec![KeyValue::new("reason", object_store_error_name(err))];
+                additional.append(&mut attributes);
+                self.request_error.add(1, &additional[..]);
+            })
+    }
+
+    async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<(), object_store::Error> {
+        debug!(%from, %to);
+
+        let execute_start = SystemTime::now();
+        let mut attributes = vec![
+            KeyValue::new("method", "copy_if_not_exists"),
+            KeyValue::new("cluster", self.cluster.clone()),
+        ];
+
+        self.object_store
+            .copy_if_not_exists(from, to)
+            .await
+            .inspect(|_| {
+                debug!(%from, %to);
+
+                self.request_duration.record(
+                    execute_start
+                        .elapsed()
+                        .map_or(0, |duration| duration.as_millis() as u64),
+                    attributes.as_ref(),
+                )
+            })
+            .inspect_err(|err| {
+                debug!(%from, %to, err = ?err);
+
+                let mut additional = vec![KeyValue::new("reason", object_store_error_name(err))];
+                additional.append(&mut attributes);
+                self.request_error.add(1, &additional[..]);
+            })
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct OptiCon<D> {
+    path: Path,
+    tags: TagSet,
+    attributes: Attributes,
+    version_data: Arc<Mutex<VersionData<D>>>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct VersionData<D> {
+    version: Option<UpdateVersion>,
+    data: D,
+}
+
+static OPTICON_REQUESTS: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    METER
+        .u64_counter("tansu_opticon_requests")
+        .with_description("OptiCon requests")
+        .build()
+});
+
+static OPTICON_ERRORS: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    METER
+        .u64_counter("tansu_opticon_errors")
+        .with_description("OptiCon requests")
+        .build()
+});
+
+impl<D> OptiCon<D>
+where
+    D: Clone + Debug + DeserializeOwned + PartialEq + Serialize,
+{
+    async fn get(&self, object_store: &impl ObjectStore) -> Result<()> {
+        debug!(?self);
+
+        OPTICON_REQUESTS.add(1, &[KeyValue::new("method", "get")]);
+
+        let get_result = object_store
+            .get(&self.path)
+            .await
+            .inspect_err(|error| {
+                debug!(?error, ?self);
+
+                OPTICON_ERRORS.add(
+                    1,
+                    &[
+                        KeyValue::new("method", "get"),
+                        KeyValue::new("error", object_store_error_name(error)),
+                    ],
+                );
+            })
+            .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
+
+        let version = Some(UpdateVersion {
+            e_tag: get_result.meta.e_tag.clone(),
+            version: get_result.meta.version.clone(),
+        });
+
+        let encoded = get_result
+            .bytes()
+            .await
+            .inspect_err(|error| {
+                debug!(?error, ?self);
+                OPTICON_ERRORS.add(
+                    1,
+                    &[
+                        KeyValue::new("method", "get"),
+                        KeyValue::new("error", object_store_error_name(error)),
+                    ],
+                );
+            })
+            .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
+
+        let data = serde_json::from_slice::<D>(&encoded[..])
+            .inspect_err(|error| error!(?error, ?self))
+            .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
+
+        self.version_data
+            .lock()
+            .map(|mut lock| {
+                lock.version = version;
+                lock.data = data;
+            })
+            .map_err(Into::into)
+    }
+
+    async fn with_mut<E, F>(&self, object_store: &impl ObjectStore, f: F) -> Result<E>
+    where
+        E: Debug,
+        F: Fn(&mut D) -> Result<E>,
+    {
+        debug!(path = %self.path);
+
+        OPTICON_REQUESTS.add(1, &[KeyValue::new("method", "with_mut")]);
+
+        fn on_error(error: &object_store::Error) {
+            OPTICON_ERRORS.add(
+                1,
+                &[
+                    KeyValue::new("method", "with_mut"),
+                    KeyValue::new("error", object_store_error_name(error)),
+                ],
+            );
+        }
+
+        loop {
+            OPTICON_REQUESTS.add(1, &[KeyValue::new("method", "with_mut_loop")]);
+
+            let (outcome, version_data) = self.version_data.lock().map(|lock| {
+                let mut data = lock.data.clone();
+                let outcome = f(&mut data);
+
+                let unchanged = lock.data == data;
+                debug!(path = %self.path, before = ?lock.data, after = ?data, unchanged);
+
+                if unchanged {
+                    (outcome, None)
+                } else {
+                    (
+                        outcome,
+                        Some(VersionData {
+                            version: lock.version.clone(),
+                            data,
+                        }),
+                    )
+                }
+            })?;
+
+            let Some(cloned) = version_data else {
+                return outcome;
+            };
+
+            debug!(path = %self.path, ?outcome);
+
+            let payload = serde_json::to_vec(&cloned.data)
+                .map(Bytes::from)
+                .map(PutPayload::from)
+                .inspect_err(|err| error!(?err, data = ?cloned.data))?;
+
+            let opts = PutOptions {
+                mode: cloned.version.as_ref().map_or(PutMode::Create, |existing| {
+                    PutMode::Update(existing.to_owned())
+                }),
+                tags: self.tags.clone(),
+                attributes: self.attributes.clone(),
+            };
+
+            match object_store
+                .put_opts(&self.path, payload, opts)
+                .await
+                .inspect_err(|error| match error {
+                    object_store::Error::AlreadyExists { .. }
+                    | object_store::Error::Precondition { .. } => {
+                        debug!(?error, path = %self.path)
+                    }
+
+                    _ => error!(?error, ?self),
+                })
+                .inspect(|put_result| debug!(?self, ?put_result))
+            {
+                Ok(result) => {
+                    debug!(path = %self.path, ?result);
+
+                    self.version_data.lock().map(|mut lock| {
+                        let version_data = lock.deref_mut();
+                        version_data.version = Some(UpdateVersion {
+                            e_tag: result.e_tag,
+                            version: result.version,
+                        });
+                        version_data.data = cloned.data;
+                    })?;
+
+                    return outcome;
+                }
+
+                Err(ref error @ object_store::Error::Precondition { .. }) => {
+                    debug!(path = %self.path, ?error);
+
+                    on_error(error);
+
+                    self.get(object_store).await?;
+                    continue;
+                }
+
+                Err(ref error @ object_store::Error::AlreadyExists { .. }) => {
+                    debug!(path = %self.path, ?error);
+
+                    on_error(error);
+
+                    self.get(object_store).await?;
+                    continue;
+                }
+
+                Err(ref error) => {
+                    return {
+                        error!(path = %self.path, ?error);
+
+                        on_error(error);
+
+                        Err(Error::Api(ErrorCode::UnknownServerError))
+                    }
+                }
+            }
+        }
+    }
+
+    async fn with<E, F>(&self, object_store: &impl ObjectStore, f: F) -> Result<E>
+    where
+        F: Fn(&D) -> Result<E>,
+    {
+        debug!(?self);
+
+        OPTICON_REQUESTS.add(1, &[KeyValue::new("method", "with")]);
+
+        fn on_error(error: &object_store::Error) {
+            OPTICON_ERRORS.add(
+                1,
+                &[
+                    KeyValue::new("method", "with"),
+                    KeyValue::new("error", object_store_error_name(error)),
+                ],
+            );
+        }
+
+        let version = self.version_data.lock().map(|lock| lock.version.clone())?;
+
+        match object_store
+            .get_opts(
+                &self.path,
+                GetOptions {
+                    if_none_match: version.as_ref().and_then(|version| version.e_tag.clone()),
+                    ..GetOptions::default()
+                },
+            )
+            .await
+        {
+            Ok(get_result) => {
+                let version = Some(UpdateVersion {
+                    e_tag: get_result.meta.e_tag.clone(),
+                    version: get_result.meta.version.clone(),
+                });
+
+                let encoded = get_result
+                    .bytes()
+                    .await
+                    .inspect_err(|error| error!(?error, ?self))
+                    .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
+
+                let data = serde_json::from_slice::<D>(&encoded[..])
+                    .inspect_err(|error| error!(?error, ?self))
+                    .map_err(|_error| Error::Api(ErrorCode::UnknownServerError))?;
+
+                self.version_data
+                    .lock()
+                    .map(|mut lock| {
+                        lock.version = version;
+                        lock.data = data.clone();
+                    })
+                    .map_err(Into::into)
+            }
+
+            Err(ref error @ object_store::Error::NotModified { .. }) => {
+                on_error(error);
+
+                Ok(())
+            }
+
+            Err(ref error @ object_store::Error::NotFound { .. }) => {
+                on_error(error);
+
+                self.with_mut(object_store, |_| Ok(())).await
+            }
+
+            Err(ref error) => {
+                error!(?self, ?error);
+
+                on_error(error);
+
+                Err(Error::Api(ErrorCode::UnknownServerError))
+            }
+        }
+        .and(
+            self.version_data
+                .lock()
+                .map_err(Into::into)
+                .and_then(|lock| {
+                    OPTICON_REQUESTS.add(1, &[KeyValue::new("method", "with_apply")]);
+                    f(&lock.data)
+                }),
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
+
+    use object_store::memory::InMemory;
+    use tracing::subscriber::DefaultGuard;
+    use tracing_subscriber::EnvFilter;
+
     use super::*;
+
+    fn init_tracing() -> Result<DefaultGuard> {
+        use std::{fs::File, sync::Arc, thread};
+
+        Ok(tracing::subscriber::set_default(
+            tracing_subscriber::fmt()
+                .with_level(true)
+                .with_line_number(true)
+                .with_thread_names(false)
+                .with_env_filter(EnvFilter::from_default_env().add_directive(
+                    format!("{}=debug", env!("CARGO_PKG_NAME").replace("-", "_")).parse()?,
+                ))
+                .with_writer(
+                    thread::current()
+                        .name()
+                        .ok_or(Error::Message(String::from("unnamed thread")))
+                        .and_then(|name| {
+                            File::create(format!("../logs/{}/{name}.log", env!("CARGO_PKG_NAME"),))
+                                .map_err(Into::into)
+                        })
+                        .map(Arc::new)?,
+                )
+                .finish(),
+        ))
+    }
 
     #[test]
     fn int_key_b_tree_map() -> Result<()> {
+        let _guard = init_tracing()?;
+
         let mut b = BTreeMap::new();
         assert_eq!(None, b.insert(65, "a"));
 
@@ -2537,6 +3440,155 @@ mod tests {
         let decoded = serde_json::from_slice::<BTreeMap<i32, &str>>(&encoded[..])?;
         assert_eq!(Some(&"a"), decoded.get(&65));
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn opti_lock_with_new() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        #[derive(
+            Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize,
+        )]
+        struct X(i32);
+
+        impl OptiCon<X> {
+            fn new() -> Self {
+                Self {
+                    path: Path::from("/abc/def.json"),
+                    ..Default::default()
+                }
+            }
+        }
+
+        let object_store = InMemory::new();
+
+        let o = OptiCon::<X>::new();
+
+        assert_eq!(1, o.with(&object_store, |x| Ok(x.0 + 1)).await?);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn opti_lock_with_existing() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        #[derive(
+            Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize,
+        )]
+        struct X(i32);
+
+        let path = Path::from("/abc/def.json");
+
+        impl OptiCon<X> {
+            fn new(path: Path) -> Self {
+                Self {
+                    path,
+                    ..Default::default()
+                }
+            }
+        }
+
+        let object_store = InMemory::new();
+
+        let o = OptiCon::<X>::new(path.clone());
+        assert_eq!(1, o.with(&object_store, |x| Ok(x.0 + 1)).await?);
+
+        _ = object_store
+            .put(
+                &path,
+                serde_json::to_vec(&X(6))
+                    .map(Bytes::from)
+                    .map(PutPayload::from)?,
+            )
+            .await?;
+
+        assert_eq!(7, o.with(&object_store, |x| Ok(x.0 + 1)).await?);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn opti_lock_with_option() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        #[derive(
+            Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize,
+        )]
+        struct X(Option<i32>);
+
+        let path = Path::from("/abc/def.json");
+
+        impl OptiCon<X> {
+            fn new(path: Path) -> Self {
+                Self {
+                    path,
+                    ..Default::default()
+                }
+            }
+        }
+
+        let object_store = InMemory::new();
+
+        let o = OptiCon::<X>::new(path.clone());
+        assert_eq!(
+            None,
+            o.with(&object_store, |x| Ok(x.0.map(|x| x + 1))).await?
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn opti_lock_mut_existing() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        #[derive(
+            Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize,
+        )]
+        struct X(i32);
+
+        let path = Path::from("/abc/def.json");
+
+        impl OptiCon<X> {
+            fn new(path: Path) -> Self {
+                Self {
+                    path,
+                    ..Default::default()
+                }
+            }
+        }
+
+        let object_store = InMemory::new();
+
+        let o = OptiCon::<X>::new(path.clone());
+
+        assert_eq!(
+            1,
+            o.with_mut(&object_store, |x| {
+                x.0 += 1;
+                Ok(x.0)
+            })
+            .await?
+        );
+
+        _ = object_store
+            .put(
+                &path,
+                serde_json::to_vec(&X(6))
+                    .map(Bytes::from)
+                    .map(PutPayload::from)?,
+            )
+            .await?;
+
+        assert_eq!(
+            7,
+            o.with_mut(&object_store, |x| {
+                x.0 += 1;
+                Ok(x.0)
+            })
+            .await?
+        );
         Ok(())
     }
 }
