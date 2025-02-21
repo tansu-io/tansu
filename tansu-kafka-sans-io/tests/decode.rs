@@ -18,6 +18,7 @@ use common::init_tracing;
 use serde::Deserialize;
 use std::io::Cursor;
 use tansu_kafka_sans_io::{
+    Body, ErrorCode, Frame, Header, Result,
     de::Decoder,
     describe_configs_response::{
         DescribeConfigsResourceResult, DescribeConfigsResult, DescribeConfigsSynonym,
@@ -31,8 +32,7 @@ use tansu_kafka_sans_io::{
     metadata_request::MetadataRequestTopic,
     metadata_response::{MetadataResponseBroker, MetadataResponsePartition, MetadataResponseTopic},
     offset_fetch_response::{OffsetFetchResponsePartition, OffsetFetchResponseTopic},
-    record::{self, deflated, inflated, Record},
-    Body, ErrorCode, Frame, Header, Result,
+    record::{self, Record, deflated, inflated},
 };
 use tracing::debug;
 

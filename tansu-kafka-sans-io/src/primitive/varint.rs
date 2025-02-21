@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -16,9 +16,9 @@
 use super::ByteSize;
 use crate::{Error, Result};
 use serde::{
+    Deserialize, Deserializer, Serialize, Serializer,
     de::{self, SeqAccess, Visitor},
     ser::SerializeSeq,
-    Deserialize, Deserializer, Serialize, Serializer,
 };
 use std::{any::type_name_of_val, fmt::Formatter, ops::Deref};
 use tracing::debug;

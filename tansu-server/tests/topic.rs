@@ -15,8 +15,8 @@
 
 use common::{alphanumeric_string, register_broker};
 use tansu_kafka_sans_io::{
-    create_topics_request::{CreatableTopic, CreatableTopicConfig},
     ErrorCode,
+    create_topics_request::{CreatableTopic, CreatableTopicConfig},
 };
 use tansu_server::Result;
 use tansu_storage::{Storage, StorageContainer, TopicId};
@@ -108,7 +108,7 @@ pub async fn create_with_config_delete(
 }
 
 mod pg {
-    use common::{init_tracing, StorageType};
+    use common::{StorageType, init_tracing};
     use rand::{prelude::*, rng};
     use url::Url;
 
@@ -160,7 +160,7 @@ mod pg {
 }
 
 mod in_memory {
-    use common::{init_tracing, StorageType};
+    use common::{StorageType, init_tracing};
     use rand::{prelude::*, rng};
     use url::Url;
 

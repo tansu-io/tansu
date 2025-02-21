@@ -16,13 +16,13 @@
 use bytes::Bytes;
 use rand::{distr::Alphanumeric, prelude::*, rng};
 use tansu_kafka_sans_io::{
-    create_topics_request::CreatableTopic,
-    record::{inflated, Record},
     ErrorCode, IsolationLevel,
+    create_topics_request::CreatableTopic,
+    record::{Record, inflated},
 };
 use tansu_storage::{
-    pg::Postgres, BrokerRegistrationRequest, Error, ListOffsetRequest, Result, Storage,
-    StorageContainer, TopicId, Topition,
+    BrokerRegistrationRequest, Error, ListOffsetRequest, Result, Storage, StorageContainer,
+    TopicId, Topition, pg::Postgres,
 };
 use tracing::{debug, subscriber::DefaultGuard};
 use uuid::Uuid;

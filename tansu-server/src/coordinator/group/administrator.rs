@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -25,8 +25,9 @@ use std::{
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use opentelemetry::{metrics::Counter, KeyValue};
+use opentelemetry::{KeyValue, metrics::Counter};
 use tansu_kafka_sans_io::{
+    Body, ErrorCode,
     join_group_request::JoinGroupRequestProtocol,
     join_group_response::JoinGroupResponseMember,
     leave_group_request::MemberIdentity,
@@ -38,17 +39,16 @@ use tansu_kafka_sans_io::{
         OffsetFetchResponseTopic, OffsetFetchResponseTopics,
     },
     sync_group_request::SyncGroupRequestAssignment,
-    Body, ErrorCode,
 };
 use tansu_storage::{
     GroupDetail, GroupMember, GroupState, OffsetCommitRequest, Storage, Topition, UpdateError,
     Version,
 };
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 use tracing::{debug, error, info};
 use uuid::Uuid;
 
-use crate::{Error, Result, METER};
+use crate::{Error, METER, Result};
 
 use super::{Coordinator, OffsetCommit};
 
@@ -842,11 +842,11 @@ where
                 Err(UpdateError::TokioPostgres(error)) => return Err(error.into()),
 
                 Err(UpdateError::MissingEtag) => {
-                    return Err(Error::Message(String::from("missing e-tag")))
+                    return Err(Error::Message(String::from("missing e-tag")));
                 }
 
                 Err(UpdateError::Uuid(uuid)) => {
-                    return Err(Error::Message(format!("uuid: {uuid}")))
+                    return Err(Error::Message(format!("uuid: {uuid}")));
                 }
             }
         }
@@ -971,11 +971,11 @@ where
                 Err(UpdateError::TokioPostgres(error)) => return Err(error.into()),
 
                 Err(UpdateError::MissingEtag) => {
-                    return Err(Error::Message(String::from("missing e-tag")))
+                    return Err(Error::Message(String::from("missing e-tag")));
                 }
 
                 Err(UpdateError::Uuid(uuid)) => {
-                    return Err(Error::Message(format!("uuid: {uuid}")))
+                    return Err(Error::Message(format!("uuid: {uuid}")));
                 }
             }
         }
@@ -1049,11 +1049,11 @@ where
                 Err(UpdateError::TokioPostgres(error)) => return Err(error.into()),
 
                 Err(UpdateError::MissingEtag) => {
-                    return Err(Error::Message(String::from("missing e-tag")))
+                    return Err(Error::Message(String::from("missing e-tag")));
                 }
 
                 Err(UpdateError::Uuid(uuid)) => {
-                    return Err(Error::Message(format!("uuid: {uuid}")))
+                    return Err(Error::Message(format!("uuid: {uuid}")));
                 }
             }
         }
@@ -1122,11 +1122,11 @@ where
                 Err(UpdateError::TokioPostgres(error)) => return Err(error.into()),
 
                 Err(UpdateError::MissingEtag) => {
-                    return Err(Error::Message(String::from("missing e-tag")))
+                    return Err(Error::Message(String::from("missing e-tag")));
                 }
 
                 Err(UpdateError::Uuid(uuid)) => {
-                    return Err(Error::Message(format!("uuid: {uuid}")))
+                    return Err(Error::Message(format!("uuid: {uuid}")));
                 }
             }
         }
@@ -1225,11 +1225,11 @@ where
                 Err(UpdateError::TokioPostgres(error)) => return Err(error.into()),
 
                 Err(UpdateError::MissingEtag) => {
-                    return Err(Error::Message(String::from("missing e-tag")))
+                    return Err(Error::Message(String::from("missing e-tag")));
                 }
 
                 Err(UpdateError::Uuid(uuid)) => {
-                    return Err(Error::Message(format!("uuid: {uuid}")))
+                    return Err(Error::Message(format!("uuid: {uuid}")));
                 }
             }
         }

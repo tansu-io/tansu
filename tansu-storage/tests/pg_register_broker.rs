@@ -15,7 +15,7 @@
 
 use rand::{prelude::*, rng};
 use tansu_storage::{
-    pg::Postgres, BrokerRegistrationRequest, Error, Result, Storage, StorageContainer,
+    BrokerRegistrationRequest, Error, Result, Storage, StorageContainer, pg::Postgres,
 };
 use tracing::subscriber::DefaultGuard;
 use uuid::Uuid;

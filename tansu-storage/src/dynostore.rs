@@ -14,7 +14,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use std::{
-    collections::{btree_map::Entry, BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap, btree_map::Entry},
     fmt::{Debug, Display},
     io::Cursor,
     ops::{Deref, DerefMut},
@@ -26,21 +26,23 @@ use std::{
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::{
-    stream::{BoxStream, TryStreamExt},
     StreamExt,
+    stream::{BoxStream, TryStreamExt},
 };
 use object_store::{
-    path::Path, Attribute, AttributeValue, Attributes, DynObjectStore, GetOptions, GetResult,
-    ListResult, MultipartUpload, ObjectMeta, ObjectStore, PutMode, PutMultipartOpts, PutOptions,
-    PutPayload, PutResult, TagSet, UpdateVersion,
+    Attribute, AttributeValue, Attributes, DynObjectStore, GetOptions, GetResult, ListResult,
+    MultipartUpload, ObjectMeta, ObjectStore, PutMode, PutMultipartOpts, PutOptions, PutPayload,
+    PutResult, TagSet, UpdateVersion, path::Path,
 };
 use opentelemetry::{
-    metrics::{Counter, Histogram},
     KeyValue,
+    metrics::{Counter, Histogram},
 };
 use rand::{prelude::*, rng};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tansu_kafka_sans_io::{
+    BatchAttribute, ConfigResource, ConfigSource, ConfigType, ControlBatch, Decoder, Encoder,
+    EndTransactionMarker, ErrorCode, IsolationLevel,
     add_partitions_to_txn_response::{
         AddPartitionsToTxnPartitionResult, AddPartitionsToTxnTopicResult,
     },
@@ -52,10 +54,8 @@ use tansu_kafka_sans_io::{
     describe_configs_response::{DescribeConfigsResourceResult, DescribeConfigsResult},
     list_groups_response::ListedGroup,
     metadata_response::{MetadataResponseBroker, MetadataResponsePartition, MetadataResponseTopic},
-    record::{deflated, inflated, Record},
+    record::{Record, deflated, inflated},
     txn_offset_commit_response::{TxnOffsetCommitResponsePartition, TxnOffsetCommitResponseTopic},
-    BatchAttribute, ConfigResource, ConfigSource, ConfigType, ControlBatch, Decoder, Encoder,
-    EndTransactionMarker, ErrorCode, IsolationLevel,
 };
 use tansu_schema_registry::Registry;
 use tracing::{debug, error, warn};
@@ -63,10 +63,10 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::{
-    BrokerRegistrationRequest, Error, GroupDetail, ListOffsetRequest, ListOffsetResponse,
-    MetadataResponse, NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse,
-    Result, Storage, TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse,
-    TxnOffsetCommitRequest, TxnState, UpdateError, Version, METER, NULL_TOPIC_ID,
+    BrokerRegistrationRequest, Error, GroupDetail, ListOffsetRequest, ListOffsetResponse, METER,
+    MetadataResponse, NULL_TOPIC_ID, NamedGroupDetail, OffsetCommitRequest, OffsetStage,
+    ProducerIdResponse, Result, Storage, TopicId, Topition, TxnAddPartitionsRequest,
+    TxnAddPartitionsResponse, TxnOffsetCommitRequest, TxnState, UpdateError, Version,
 };
 
 const APPLICATION_JSON: &str = "application/json";
@@ -576,7 +576,7 @@ impl Storage for DynoStore {
                         Ok(_) => continue,
 
                         Err(object_store::Error::AlreadyExists { .. }) => {
-                            return Err(Error::Api(ErrorCode::TopicAlreadyExists))
+                            return Err(Error::Api(ErrorCode::TopicAlreadyExists));
                         }
 
                         _ => return Err(Error::Api(ErrorCode::UnknownServerError)),
@@ -3300,7 +3300,7 @@ where
                         on_error(error);
 
                         Err(Error::Api(ErrorCode::UnknownServerError))
-                    }
+                    };
                 }
             }
         }

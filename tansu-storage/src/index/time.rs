@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -20,7 +20,7 @@ use crate::{Error, Result, TopitionOffset};
 use std::{
     cmp::Ordering,
     fmt::{self, Debug, Formatter},
-    fs::{create_dir_all, File, OpenOptions},
+    fs::{File, OpenOptions, create_dir_all},
     io::{Cursor, Read, Seek, SeekFrom, Write},
     marker::PhantomData,
     path::{Path, PathBuf},

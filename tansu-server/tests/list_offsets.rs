@@ -14,12 +14,12 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use bytes::Bytes;
-use common::{alphanumeric_string, init_tracing, register_broker, StorageType};
+use common::{StorageType, alphanumeric_string, init_tracing, register_broker};
 use rand::{prelude::*, rng};
 use tansu_kafka_sans_io::{
-    create_topics_request::CreatableTopic,
-    record::{inflated, Record},
     IsolationLevel,
+    create_topics_request::CreatableTopic,
+    record::{Record, inflated},
 };
 use tansu_server::Result;
 use tansu_storage::{ListOffsetRequest, Storage, StorageContainer, Topition};

@@ -20,10 +20,10 @@ use object_store::{
 };
 use tansu_schema_registry::Registry;
 use tansu_server::{
-    broker::Broker, coordinator::group::administrator::Controller, otel, EnvVarExp, Error, Result,
-    TracingFormat,
+    EnvVarExp, Error, Result, TracingFormat, broker::Broker,
+    coordinator::group::administrator::Controller, otel,
 };
-use tansu_storage::{dynostore::DynoStore, pg::Postgres, StorageContainer};
+use tansu_storage::{StorageContainer, dynostore::DynoStore, pg::Postgres};
 use tokio::task::JoinSet;
 use tracing::debug;
 use url::Url;

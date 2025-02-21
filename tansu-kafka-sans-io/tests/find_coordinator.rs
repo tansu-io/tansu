@@ -46,9 +46,11 @@ fn check_message_meta() {
         }),
         message.field("key_type").map(|field| field.version)
     );
-    assert!(!message
-        .field("key_type")
-        .is_some_and(|field| field.is_mandatory(None)));
+    assert!(
+        !message
+            .field("key_type")
+            .is_some_and(|field| field.is_mandatory(None))
+    );
 
     assert_eq!(
         Some(VersionRange {
@@ -57,7 +59,9 @@ fn check_message_meta() {
         }),
         message.field("coordinator_keys").map(|field| field.version)
     );
-    assert!(!message
-        .field("coordinator_keys")
-        .is_some_and(|field| field.is_mandatory(None)));
+    assert!(
+        !message
+            .field("coordinator_keys")
+            .is_some_and(|field| field.is_mandatory(None))
+    );
 }

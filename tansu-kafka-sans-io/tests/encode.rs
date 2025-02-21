@@ -19,14 +19,14 @@ use pretty_assertions::assert_eq;
 use serde::Serialize;
 use std::io::Cursor;
 use tansu_kafka_sans_io::{
+    Body, Frame, Header, Result,
     join_group_request::JoinGroupRequestProtocol,
     join_group_response::JoinGroupResponseMember,
     record::{
-        inflated::{self, Batch},
         Record,
+        inflated::{self, Batch},
     },
     ser::Encoder,
-    Body, Frame, Header, Result,
 };
 
 pub mod common;
@@ -3135,7 +3135,9 @@ fn find_coordinator_request_v1_000() -> Result<()> {
     frame.serialize(&mut serializer)?;
 
     assert_eq!(
-        vec![0, 0, 0, 19, 0, 10, 0, 1, 0, 0, 0, 0, 255, 255, 0, 6, 97, 98, 99, 100, 101, 102, 0,],
+        vec![
+            0, 0, 0, 19, 0, 10, 0, 1, 0, 0, 0, 0, 255, 255, 0, 6, 97, 98, 99, 100, 101, 102, 0,
+        ],
         c.into_inner(),
     );
 

@@ -18,16 +18,15 @@ use std::{env, fmt, io, result, sync::Arc, time::SystemTime};
 use bytes::Bytes;
 use jsonschema::ValidationError;
 use object_store::{
-    aws::AmazonS3Builder, local::LocalFileSystem, memory::InMemory, path::Path, DynObjectStore,
-    ObjectStore,
+    DynObjectStore, ObjectStore, aws::AmazonS3Builder, local::LocalFileSystem, memory::InMemory,
+    path::Path,
 };
 use opentelemetry::{
-    global,
+    InstrumentationScope, KeyValue, global,
     metrics::{Counter, Histogram},
-    InstrumentationScope, KeyValue,
 };
 use opentelemetry_semantic_conventions::SCHEMA_URL;
-use tansu_kafka_sans_io::{record::inflated::Batch, ErrorCode};
+use tansu_kafka_sans_io::{ErrorCode, record::inflated::Batch};
 use tracing::{debug, error};
 use url::Url;
 

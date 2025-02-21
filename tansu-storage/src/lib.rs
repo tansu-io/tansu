@@ -18,9 +18,8 @@ use bytes::Bytes;
 use dynostore::DynoStore;
 use glob::{GlobError, PatternError};
 use opentelemetry::{
-    global,
+    InstrumentationScope, KeyValue, global,
     metrics::{Counter, Meter},
-    InstrumentationScope, KeyValue,
 };
 use opentelemetry_semantic_conventions::SCHEMA_URL;
 use pg::Postgres;
@@ -41,6 +40,7 @@ use std::{
     time::{Duration, SystemTime, SystemTimeError},
 };
 use tansu_kafka_sans_io::{
+    Body, ConfigResource, ErrorCode, IsolationLevel,
     add_partitions_to_txn_request::{AddPartitionsToTxnTopic, AddPartitionsToTxnTransaction},
     add_partitions_to_txn_response::{AddPartitionsToTxnResult, AddPartitionsToTxnTopicResult},
     consumer_group_describe_response,
@@ -62,9 +62,8 @@ use tansu_kafka_sans_io::{
     to_system_time, to_timestamp,
     txn_offset_commit_request::TxnOffsetCommitRequestTopic,
     txn_offset_commit_response::TxnOffsetCommitResponseTopic,
-    Body, ConfigResource, ErrorCode, IsolationLevel,
 };
-use tracing::{debug, debug_span, Instrument};
+use tracing::{Instrument, debug, debug_span};
 use tracing_subscriber::filter::ParseError;
 use uuid::Uuid;
 

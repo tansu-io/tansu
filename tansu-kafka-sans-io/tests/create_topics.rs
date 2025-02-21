@@ -43,20 +43,26 @@ fn check_message_meta() {
         keys
     );
 
-    assert!(message
-        .field("topics")
-        .map(|field| field.kind.is_sequence())
-        .unwrap());
+    assert!(
+        message
+            .field("topics")
+            .map(|field| field.kind.is_sequence())
+            .unwrap()
+    );
 
-    assert!(message
-        .field("topics")
-        .map(|field| field.is_structure())
-        .unwrap());
+    assert!(
+        message
+            .field("topics")
+            .map(|field| field.is_structure())
+            .unwrap()
+    );
 
-    assert!(!message
-        .field("topics")
-        .map(|field| field.kind.is_primitive())
-        .unwrap());
+    assert!(
+        !message
+            .field("topics")
+            .map(|field| field.kind.is_primitive())
+            .unwrap()
+    );
 
     assert_eq!(
         "CreatableTopic",
@@ -67,23 +73,31 @@ fn check_message_meta() {
             .unwrap()
     );
 
-    assert!(!message
-        .field("timeout_ms")
-        .map(|field| field.kind.is_sequence())
-        .unwrap());
+    assert!(
+        !message
+            .field("timeout_ms")
+            .map(|field| field.kind.is_sequence())
+            .unwrap()
+    );
 
-    assert!(!message
-        .field("timeout_ms")
-        .map(|field| field.is_structure())
-        .unwrap());
+    assert!(
+        !message
+            .field("timeout_ms")
+            .map(|field| field.is_structure())
+            .unwrap()
+    );
 
-    assert!(!message
-        .field("validate_only")
-        .map(|field| field.kind.is_sequence())
-        .unwrap());
+    assert!(
+        !message
+            .field("validate_only")
+            .map(|field| field.kind.is_sequence())
+            .unwrap()
+    );
 
-    assert!(!message
-        .field("validate_only")
-        .map(|field| field.is_structure())
-        .unwrap());
+    assert!(
+        !message
+            .field("validate_only")
+            .map(|field| field.is_structure())
+            .unwrap()
+    );
 }

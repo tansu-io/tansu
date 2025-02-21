@@ -17,15 +17,15 @@ use crate::{Result, TracingFormat};
 use opentelemetry::KeyValue;
 use opentelemetry_otlp::SpanExporter;
 use opentelemetry_sdk::{
-    trace::{RandomIdGenerator, Sampler, SdkTracerProvider},
     Resource,
+    trace::{RandomIdGenerator, Sampler, SdkTracerProvider},
 };
 use opentelemetry_semantic_conventions::{
-    resource::{SERVICE_NAME, SERVICE_VERSION},
     SCHEMA_URL,
+    resource::{SERVICE_NAME, SERVICE_VERSION},
 };
 use tracing_subscriber::{
-    fmt::format::FmtSpan, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter,
+    EnvFilter, fmt::format::FmtSpan, layer::SubscriberExt, util::SubscriberInitExt,
 };
 
 fn resource() -> Resource {

@@ -15,15 +15,15 @@
 
 use bytes::Bytes;
 use common::{
+    CLIENT_ID, COOPERATIVE_STICKY, HeartbeatResponse, PROTOCOL_TYPE, RANGE, StorageType,
     alphanumeric_string, heartbeat, join, join_group, register_broker, sync_group,
-    HeartbeatResponse, StorageType, CLIENT_ID, COOPERATIVE_STICKY, PROTOCOL_TYPE, RANGE,
 };
 use rand::{prelude::*, rng};
 use tansu_kafka_sans_io::{
-    join_group_request::JoinGroupRequestProtocol, sync_group_request::SyncGroupRequestAssignment,
-    ErrorCode,
+    ErrorCode, join_group_request::JoinGroupRequestProtocol,
+    sync_group_request::SyncGroupRequestAssignment,
 };
-use tansu_server::{coordinator::group::administrator::Controller, Result};
+use tansu_server::{Result, coordinator::group::administrator::Controller};
 use tansu_storage::StorageContainer;
 use tracing::debug;
 use url::Url;

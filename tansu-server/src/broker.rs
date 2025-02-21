@@ -30,7 +30,7 @@ pub mod produce;
 pub mod telemetry;
 pub mod txn;
 
-use crate::{coordinator::group::Coordinator, Error, Result, METER};
+use crate::{Error, METER, Result, coordinator::group::Coordinator};
 use api_versions::ApiVersionsRequest;
 use create_topic::CreateTopic;
 use delete_records::DeleteRecordsRequest;
@@ -44,14 +44,14 @@ use list_offsets::ListOffsetsRequest;
 use list_partition_reassignments::ListPartitionReassignmentsRequest;
 use metadata::MetadataRequest;
 use opentelemetry::{
-    metrics::{Counter, Histogram},
     KeyValue,
+    metrics::{Counter, Histogram},
 };
 use produce::ProduceRequest;
 use std::{io::ErrorKind, net::SocketAddr, time::SystemTime};
 use tansu_kafka_sans_io::{
-    consumer_group_describe_response, describe_groups_response, Body, ErrorCode, Frame, Header,
-    IsolationLevel,
+    Body, ErrorCode, Frame, Header, IsolationLevel, consumer_group_describe_response,
+    describe_groups_response,
 };
 use tansu_storage::{BrokerRegistrationRequest, Storage};
 use telemetry::GetTelemetrySubscriptionsRequest;
@@ -59,7 +59,7 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
 };
-use tracing::{debug, debug_span, error, info, span, Instrument, Level, Span};
+use tracing::{Instrument, Level, Span, debug, debug_span, error, info, span};
 use txn::{add_offsets::AddOffsets, add_partitions::AddPartitions};
 use url::Url;
 use uuid::Uuid;

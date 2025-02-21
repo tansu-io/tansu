@@ -60,9 +60,11 @@ fn request() {
 
     assert!(!partitions.is_structure());
     assert!(partitions.kind.is_sequence());
-    assert!(partitions
-        .kind
-        .kind_of_sequence()
-        .map(|sk| sk.is_primitive())
-        .unwrap());
+    assert!(
+        partitions
+            .kind
+            .kind_of_sequence()
+            .map(|sk| sk.is_primitive())
+            .unwrap()
+    );
 }

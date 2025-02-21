@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -13,9 +13,9 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use tansu_kafka_sans_io::{leave_group_request::MemberIdentity, Body};
+use tansu_kafka_sans_io::{Body, leave_group_request::MemberIdentity};
 
-use crate::{coordinator::group::Coordinator, Result};
+use crate::{Result, coordinator::group::Coordinator};
 
 #[derive(Debug)]
 pub struct LeaveRequest<C> {
