@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -15,8 +15,8 @@
 
 use crate::{Error, Result};
 use serde::{
-    de::{DeserializeSeed, SeqAccess, Visitor},
     Deserializer,
+    de::{DeserializeSeed, SeqAccess, Visitor},
 };
 use std::{
     any::{type_name, type_name_of_val},

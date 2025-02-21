@@ -21,11 +21,11 @@ use std::{
 };
 
 use serde::{
+    Serialize, Serializer,
     ser::{
         SerializeMap, SerializeSeq, SerializeStruct, SerializeStructVariant, SerializeTuple,
         SerializeTupleStruct, SerializeTupleVariant,
     },
-    Serialize, Serializer,
 };
 use tansu_kafka_model::{FieldMeta, MessageMeta};
 use tracing::debug;

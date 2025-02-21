@@ -18,9 +18,9 @@ use common::register_broker;
 use rand::{prelude::*, rng};
 use serde_json::json;
 use tansu_kafka_sans_io::{
-    create_topics_request::CreatableTopic,
-    record::{inflated::Batch, Record},
     ErrorCode,
+    create_topics_request::CreatableTopic,
+    record::{Record, inflated::Batch},
 };
 use tansu_server::Result;
 use tansu_storage::{Error, Storage, StorageContainer, Topition};
@@ -153,7 +153,7 @@ pub async fn person_invalid(
 mod pg {
     use std::env;
 
-    use common::{init_tracing, StorageType};
+    use common::{StorageType, init_tracing};
     use tansu_schema_registry::Registry;
     use tansu_server::Error;
     use url::Url;
@@ -216,7 +216,7 @@ mod pg {
 mod in_memory {
     use std::env;
 
-    use common::{init_tracing, StorageType};
+    use common::{StorageType, init_tracing};
     use tansu_schema_registry::Registry;
     use tansu_server::Error;
     use url::Url;

@@ -13,9 +13,9 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use common::{alphanumeric_string, init_tracing, register_broker, StorageType};
+use common::{StorageType, alphanumeric_string, init_tracing, register_broker};
 use rand::{prelude::*, rng};
-use tansu_kafka_sans_io::{create_topics_request::CreatableTopic, ErrorCode};
+use tansu_kafka_sans_io::{ErrorCode, create_topics_request::CreatableTopic};
 use tansu_server::Result;
 use tansu_storage::{OffsetCommitRequest, Storage, StorageContainer, Topition};
 use tracing::debug;

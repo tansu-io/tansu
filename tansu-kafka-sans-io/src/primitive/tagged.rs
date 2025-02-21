@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -16,12 +16,12 @@
 mod de;
 mod ser;
 
-use super::{varint::UnsignedVarInt, ByteSize};
+use super::{ByteSize, varint::UnsignedVarInt};
 use crate::Result;
 use serde::{
+    Deserialize, Deserializer, Serialize, Serializer,
     de::{SeqAccess, Visitor},
     ser::SerializeSeq,
-    Deserialize, Deserializer, Serialize, Serializer,
 };
 use std::{
     any::{type_name, type_name_of_val},
@@ -591,7 +591,9 @@ mod tests {
 
         assert_eq!(
             encoded,
-            vec![2, 0, 0, 125, 123, 4, 97, 98, 99, 0, 1, 129, 229, 4, 112, 113, 114]
+            vec![
+                2, 0, 0, 125, 123, 4, 97, 98, 99, 0, 1, 129, 229, 4, 112, 113, 114
+            ]
         );
 
         let mut c = Cursor::new(&mut encoded);

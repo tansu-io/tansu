@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -18,11 +18,11 @@ use std::io::Write;
 use crate::{Error, Result, Validator};
 use bytes::Bytes;
 use protobuf::{
-    reflect::{FileDescriptor, MessageDescriptor},
     CodedInputStream,
+    reflect::{FileDescriptor, MessageDescriptor},
 };
-use tansu_kafka_sans_io::{record::inflated::Batch, ErrorCode};
-use tempfile::{tempdir, NamedTempFile};
+use tansu_kafka_sans_io::{ErrorCode, record::inflated::Batch};
+use tempfile::{NamedTempFile, tempdir};
 use tracing::{debug, error};
 
 pub(crate) struct Schema {
@@ -105,9 +105,9 @@ mod tests {
 
     use super::*;
     use bytes::{BufMut, BytesMut};
-    use object_store::{memory::InMemory, path::Path, ObjectStore, PutPayload};
+    use object_store::{ObjectStore, PutPayload, memory::InMemory, path::Path};
     use protobuf_json_mapping::parse_dyn_from_str;
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
     use std::{fs::File, sync::Arc, thread};
     use tansu_kafka_sans_io::record::Record;
     use tracing::subscriber::DefaultGuard;

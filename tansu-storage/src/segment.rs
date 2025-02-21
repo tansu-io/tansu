@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -14,11 +14,11 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use crate::{
-    index::{
-        offset::{FileSystemOffsetProvider, OffsetIndex},
-        Offset, OffsetProvider,
-    },
     Error, Result, Topition, TopitionOffset,
+    index::{
+        Offset, OffsetProvider,
+        offset::{FileSystemOffsetProvider, OffsetIndex},
+    },
 };
 use bytes::Bytes;
 use regex::Regex;
@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::{self, Debug, Formatter},
-    fs::{create_dir_all, DirEntry, File, OpenOptions},
+    fs::{DirEntry, File, OpenOptions, create_dir_all},
     future::Future,
     io::{Cursor, Read, Seek, SeekFrom, Write},
     marker::PhantomData,
@@ -38,8 +38,8 @@ use std::{
     time::Instant,
 };
 use tansu_kafka_sans_io::{
-    record::{deflated::Batch, inflated},
     Decoder, Encoder,
+    record::{deflated::Batch, inflated},
 };
 use tracing::{debug, instrument};
 
@@ -68,7 +68,7 @@ impl Storage {
                 .last_entry()
                 .as_mut()
                 .ok_or_else(|| Error::SegmentEmpty(topition.to_owned()))
-                .and_then(|segment| segment.get_mut().append(batch).map_err(Into::into))?
+                .and_then(|segment| segment.get_mut().append(batch))?
         } else {
             let tpo = TopitionOffset::new(topition.clone(), batch.base_offset);
             let mut segment = self.provider.provide_segment(&tpo)?;
@@ -139,7 +139,7 @@ impl Storage {
     #[instrument]
     pub fn fetch(&mut self, topition: &'_ Topition, offset: i64) -> Result<Batch> {
         self.segment_mut(topition, offset)
-            .and_then(|segment| segment.read(offset).map_err(Into::into))
+            .and_then(|segment| segment.read(offset))
     }
 
     #[instrument]
@@ -406,7 +406,7 @@ where
         self.check().and_then(|position| {
             if let Some(position) = position {
                 debug!(?position);
-                self.storage.truncate_from(position).map_err(Into::into)
+                self.storage.truncate_from(position)
             } else {
                 Ok(())
             }
@@ -458,7 +458,6 @@ where
             offset += i64::from(batch.last_offset_delta) + 1;
 
             _ = inflated::Batch::try_from(batch)
-                .map_err(Into::into)
                 .and_then(|inflated| inflated.compact(keys_to_be_removed_from_tail))
                 .map_err(Into::into)
                 .and_then(|compacted| {
@@ -930,9 +929,9 @@ mod tests {
     use crate::{Error, Topition};
     use bytes::Bytes;
     use std::{fs::write, sync::Arc, thread};
-    use tansu_kafka_sans_io::record::{inflated, Record};
+    use tansu_kafka_sans_io::record::{Record, inflated};
     use tempfile::tempdir;
-    use tracing::{subscriber::DefaultGuard, Level};
+    use tracing::{Level, subscriber::DefaultGuard};
     use tracing_subscriber::{filter::Targets, fmt, prelude::*, registry};
 
     #[cfg(miri)]

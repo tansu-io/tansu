@@ -16,10 +16,10 @@
 use crate::{Error, Result};
 use http_body_util::Full;
 use hyper::{
+    Method, Request, Response,
     body::{Bytes, Incoming},
     header::CONTENT_TYPE,
     service::service_fn,
-    Method, Request, Response,
 };
 use hyper_util::{
     rt::{TokioExecutor, TokioIo},

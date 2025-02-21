@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -15,7 +15,7 @@
 
 use crate::Result;
 use tansu_kafka_sans_io::{
-    create_topics_request::CreatableTopic, create_topics_response::CreatableTopicResult, ErrorCode,
+    ErrorCode, create_topics_request::CreatableTopic, create_topics_response::CreatableTopicResult,
 };
 use tansu_storage::Storage;
 use tracing::debug;
@@ -119,7 +119,7 @@ where
 #[cfg(test)]
 mod tests {
     use object_store::memory::InMemory;
-    use tansu_storage::{dynostore::DynoStore, NULL_TOPIC_ID};
+    use tansu_storage::{NULL_TOPIC_ID, dynostore::DynoStore};
 
     use super::*;
 

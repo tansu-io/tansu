@@ -13,7 +13,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use common::{alphanumeric_string, init_tracing, register_broker, storage_container, StorageType};
+use common::{StorageType, alphanumeric_string, init_tracing, register_broker, storage_container};
 use rand::{prelude::*, rng};
 use tansu_server::Result;
 use tansu_storage::Storage;

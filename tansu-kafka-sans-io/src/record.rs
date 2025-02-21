@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -19,18 +19,18 @@ pub mod header;
 pub mod inflated;
 
 use crate::{
-    primitive::{
-        varint::{LongVarInt, VarInt},
-        ByteSize,
-    },
     Result,
+    primitive::{
+        ByteSize,
+        varint::{LongVarInt, VarInt},
+    },
 };
 use bytes::Bytes;
 use codec::{Octets, VarIntSequence};
 pub use header::Header;
 use serde::{
-    ser::{self, SerializeSeq},
     Deserialize, Serialize, Serializer,
+    ser::{self, SerializeSeq},
 };
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -202,7 +202,7 @@ impl Builder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ser::Encoder, Result};
+    use crate::{Result, ser::Encoder};
     use codec::Sequence;
     use std::io::Cursor;
 
@@ -262,8 +262,8 @@ mod tests {
 
     #[test]
     fn crc_check() {
-        use crc::Crc;
         use crc::CRC_32_ISCSI;
+        use crc::Crc;
 
         let b = [
             0, 0, 0, 0, 0, 0, 0, 0, 1, 141, 116, 152, 137, 53, 0, 0, 1, 141, 116, 152, 137, 53, 0,

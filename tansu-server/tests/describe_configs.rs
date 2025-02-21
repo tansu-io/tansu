@@ -20,7 +20,7 @@ use tansu_kafka_sans_io::{
     describe_configs_request::DescribeConfigsResource,
     describe_configs_response::{DescribeConfigsResourceResult, DescribeConfigsResult},
 };
-use tansu_server::{broker::describe_configs::DescribeConfigsRequest, Result};
+use tansu_server::{Result, broker::describe_configs::DescribeConfigsRequest};
 use tansu_storage::{Storage, StorageContainer};
 use tracing::debug;
 use uuid::Uuid;
@@ -107,7 +107,7 @@ pub async fn single_topic(
 }
 
 mod pg {
-    use common::{init_tracing, StorageType};
+    use common::{StorageType, init_tracing};
     use url::Url;
 
     use super::*;
@@ -143,7 +143,7 @@ mod pg {
 }
 
 mod in_memory {
-    use common::{init_tracing, StorageType};
+    use common::{StorageType, init_tracing};
     use url::Url;
 
     use super::*;

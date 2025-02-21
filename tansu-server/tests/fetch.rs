@@ -16,17 +16,17 @@
 use std::collections::BTreeMap;
 
 use bytes::Bytes;
-use common::{alphanumeric_string, init_tracing, register_broker, FetchResponse, StorageType};
+use common::{FetchResponse, StorageType, alphanumeric_string, init_tracing, register_broker};
 use rand::{prelude::*, rng};
 use tansu_kafka_sans_io::{
+    ErrorCode, IsolationLevel,
     create_topics_request::CreatableTopic,
     fetch_request::{FetchPartition, FetchTopic},
-    record::{inflated, Record},
-    ErrorCode, IsolationLevel,
+    record::{Record, inflated},
 };
-use tansu_server::{broker::fetch::FetchRequest, Result};
+use tansu_server::{Result, broker::fetch::FetchRequest};
 use tansu_storage::{
-    ListOffsetRequest, ListOffsetResponse, Storage, StorageContainer, Topition, NULL_TOPIC_ID,
+    ListOffsetRequest, ListOffsetResponse, NULL_TOPIC_ID, Storage, StorageContainer, Topition,
 };
 use tracing::{debug, error};
 use url::Url;

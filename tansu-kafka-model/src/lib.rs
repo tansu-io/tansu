@@ -35,11 +35,11 @@ macro_rules! prefix_crate {
 }
 
 macro_rules! with_crate {
-    ($e:expr) => {
+    ($e:expr_2021) => {
         format!("{}::{:?}", env!("CARGO_CRATE_NAME"), $e)
     };
 
-    ($e:expr, $f:expr) => {
+    ($e:expr_2021, $f:expr_2021) => {
         format!("{}::{}::{:?}", env!("CARGO_CRATE_NAME"), $e, $f)
     };
 }

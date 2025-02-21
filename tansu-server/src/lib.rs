@@ -25,7 +25,7 @@ use std::{
 };
 
 use jsonschema::ValidationError;
-use opentelemetry::{global, metrics::Meter, trace::TraceError, InstrumentationScope};
+use opentelemetry::{InstrumentationScope, global, metrics::Meter, trace::TraceError};
 use opentelemetry_semantic_conventions::SCHEMA_URL;
 use regex::{Regex, Replacer};
 use tansu_kafka_sans_io::ErrorCode;

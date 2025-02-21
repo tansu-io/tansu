@@ -14,24 +14,25 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use bytes::Bytes;
-use common::{alphanumeric_string, register_broker, StorageType};
+use common::{StorageType, alphanumeric_string, register_broker};
 use rand::{prelude::*, rng};
 use tansu_kafka_sans_io::{
+    ErrorCode,
     create_topics_request::CreatableTopic,
     produce_request::{PartitionProduceData, TopicProduceData},
     produce_response::{PartitionProduceResponse, TopicProduceResponse},
     record::{
+        Record,
         deflated::{self, Frame},
-        inflated, Record,
+        inflated,
     },
-    ErrorCode,
 };
 use tansu_server::{
+    Result,
     broker::{
         init_producer_id::InitProducerIdRequest,
         produce::{ProduceRequest, ProduceResponse},
     },
-    Result,
 };
 use tansu_storage::{Storage, StorageContainer};
 use url::Url;

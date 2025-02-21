@@ -27,10 +27,12 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use deadpool_postgres::{Manager, ManagerConfig, Object, Pool, RecyclingMethod};
 use opentelemetry::metrics::Histogram;
-use opentelemetry::{metrics::Counter, KeyValue};
+use opentelemetry::{KeyValue, metrics::Counter};
 use rand::{prelude::*, rng};
 use serde_json::Value;
 use tansu_kafka_sans_io::{
+    BatchAttribute, ConfigResource, ConfigSource, ConfigType, ControlBatch, EndTransactionMarker,
+    ErrorCode, IsolationLevel,
     add_partitions_to_txn_response::{
         AddPartitionsToTxnPartitionResult, AddPartitionsToTxnTopicResult,
     },
@@ -42,23 +44,21 @@ use tansu_kafka_sans_io::{
     describe_configs_response::{DescribeConfigsResourceResult, DescribeConfigsResult},
     list_groups_response::ListedGroup,
     metadata_response::{MetadataResponseBroker, MetadataResponsePartition, MetadataResponseTopic},
-    record::{deflated, inflated, Header, Record},
+    record::{Header, Record, deflated, inflated},
     to_system_time, to_timestamp,
     txn_offset_commit_response::{TxnOffsetCommitResponsePartition, TxnOffsetCommitResponseTopic},
-    BatchAttribute, ConfigResource, ConfigSource, ConfigType, ControlBatch, EndTransactionMarker,
-    ErrorCode, IsolationLevel,
 };
 use tansu_schema_registry::Registry;
-use tokio_postgres::{error::SqlState, types::ToSql, Config, NoTls, Row, Transaction};
+use tokio_postgres::{Config, NoTls, Row, Transaction, error::SqlState, types::ToSql};
 use tracing::{debug, error};
 use url::Url;
 use uuid::Uuid;
 
 use crate::{
-    BrokerRegistrationRequest, Error, GroupDetail, ListOffsetRequest, ListOffsetResponse,
-    MetadataResponse, NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse,
-    Result, Storage, TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse,
-    TxnOffsetCommitRequest, TxnState, UpdateError, Version, METER, NULL_TOPIC_ID,
+    BrokerRegistrationRequest, Error, GroupDetail, ListOffsetRequest, ListOffsetResponse, METER,
+    MetadataResponse, NULL_TOPIC_ID, NamedGroupDetail, OffsetCommitRequest, OffsetStage,
+    ProducerIdResponse, Result, Storage, TopicId, Topition, TxnAddPartitionsRequest,
+    TxnAddPartitionsResponse, TxnOffsetCommitRequest, TxnState, UpdateError, Version,
 };
 
 macro_rules! include_sql {

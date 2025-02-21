@@ -14,9 +14,9 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use common::{alphanumeric_string, register_broker};
-use tansu_kafka_sans_io::{create_topics_request::CreatableTopic, ErrorCode};
+use tansu_kafka_sans_io::{ErrorCode, create_topics_request::CreatableTopic};
 use tansu_server::Result;
-use tansu_storage::{Storage, StorageContainer, TopicId, NULL_TOPIC_ID};
+use tansu_storage::{NULL_TOPIC_ID, Storage, StorageContainer, TopicId};
 use tracing::debug;
 use url::Url;
 use uuid::Uuid;
@@ -82,43 +82,53 @@ pub async fn topics_none(
 
     assert_eq!(num_partitions, partitions.len() as i32);
 
-    assert!(partitions
-        .iter()
-        .map(|partition| partition.leader_id)
-        .inspect(|leader_id| debug!(leader_id))
-        .all(|leader_id| leader_id == broker_id));
+    assert!(
+        partitions
+            .iter()
+            .map(|partition| partition.leader_id)
+            .inspect(|leader_id| debug!(leader_id))
+            .all(|leader_id| leader_id == broker_id)
+    );
 
-    assert!(partitions
-        .iter()
-        .map(|partition| partition.leader_epoch)
-        .inspect(|leader_epoch| debug!(leader_epoch))
-        .all(|leader_epoch| leader_epoch == Some(-1)));
+    assert!(
+        partitions
+            .iter()
+            .map(|partition| partition.leader_epoch)
+            .inspect(|leader_epoch| debug!(leader_epoch))
+            .all(|leader_epoch| leader_epoch == Some(-1))
+    );
 
-    assert!(partitions
-        .iter()
-        .map(|partition| partition.offline_replicas.as_deref().unwrap_or_default())
-        .inspect(|offline_replicas| debug!(?offline_replicas))
-        .all(|offline_replicas| offline_replicas.is_empty()));
+    assert!(
+        partitions
+            .iter()
+            .map(|partition| partition.offline_replicas.as_deref().unwrap_or_default())
+            .inspect(|offline_replicas| debug!(?offline_replicas))
+            .all(|offline_replicas| offline_replicas.is_empty())
+    );
 
-    assert!(partitions
-        .iter()
-        .map(|partition| partition.replica_nodes.as_deref().unwrap_or_default())
-        .inspect(|replica_nodes| debug!(?replica_nodes))
-        .all(
-            |replica_nodes| (replica_nodes.len() as i16) == replication_factor
-                && replica_nodes
-                    .iter()
-                    .all(|replica_node| *replica_node == broker_id)
-        ));
+    assert!(
+        partitions
+            .iter()
+            .map(|partition| partition.replica_nodes.as_deref().unwrap_or_default())
+            .inspect(|replica_nodes| debug!(?replica_nodes))
+            .all(
+                |replica_nodes| (replica_nodes.len() as i16) == replication_factor
+                    && replica_nodes
+                        .iter()
+                        .all(|replica_node| *replica_node == broker_id)
+            )
+    );
 
-    assert!(partitions
-        .iter()
-        .map(|partition| partition.isr_nodes.as_deref().unwrap_or_default())
-        .inspect(|isr_nodes| debug!(?isr_nodes))
-        .all(|isr_nodes| {
-            (isr_nodes.len() as i16) == replication_factor
-                && isr_nodes.iter().all(|isr_node| *isr_node == broker_id)
-        }));
+    assert!(
+        partitions
+            .iter()
+            .map(|partition| partition.isr_nodes.as_deref().unwrap_or_default())
+            .inspect(|isr_nodes| debug!(?isr_nodes))
+            .all(|isr_nodes| {
+                (isr_nodes.len() as i16) == replication_factor
+                    && isr_nodes.iter().all(|isr_node| *isr_node == broker_id)
+            })
+    );
 
     Ok(())
 }
@@ -182,43 +192,53 @@ pub async fn topics_some_empty(
 
     assert_eq!(num_partitions, partitions.len() as i32);
 
-    assert!(partitions
-        .iter()
-        .map(|partition| partition.leader_id)
-        .inspect(|leader_id| debug!(leader_id))
-        .all(|leader_id| leader_id == broker_id));
+    assert!(
+        partitions
+            .iter()
+            .map(|partition| partition.leader_id)
+            .inspect(|leader_id| debug!(leader_id))
+            .all(|leader_id| leader_id == broker_id)
+    );
 
-    assert!(partitions
-        .iter()
-        .map(|partition| partition.leader_epoch)
-        .inspect(|leader_epoch| debug!(leader_epoch))
-        .all(|leader_epoch| leader_epoch == Some(-1)));
+    assert!(
+        partitions
+            .iter()
+            .map(|partition| partition.leader_epoch)
+            .inspect(|leader_epoch| debug!(leader_epoch))
+            .all(|leader_epoch| leader_epoch == Some(-1))
+    );
 
-    assert!(partitions
-        .iter()
-        .map(|partition| partition.offline_replicas.as_deref().unwrap_or_default())
-        .inspect(|offline_replicas| debug!(?offline_replicas))
-        .all(|offline_replicas| offline_replicas.is_empty()));
+    assert!(
+        partitions
+            .iter()
+            .map(|partition| partition.offline_replicas.as_deref().unwrap_or_default())
+            .inspect(|offline_replicas| debug!(?offline_replicas))
+            .all(|offline_replicas| offline_replicas.is_empty())
+    );
 
-    assert!(partitions
-        .iter()
-        .map(|partition| partition.replica_nodes.as_deref().unwrap_or_default())
-        .inspect(|replica_nodes| debug!(?replica_nodes))
-        .all(
-            |replica_nodes| (replica_nodes.len() as i16) == replication_factor
-                && replica_nodes
-                    .iter()
-                    .all(|replica_node| *replica_node == broker_id)
-        ));
+    assert!(
+        partitions
+            .iter()
+            .map(|partition| partition.replica_nodes.as_deref().unwrap_or_default())
+            .inspect(|replica_nodes| debug!(?replica_nodes))
+            .all(
+                |replica_nodes| (replica_nodes.len() as i16) == replication_factor
+                    && replica_nodes
+                        .iter()
+                        .all(|replica_node| *replica_node == broker_id)
+            )
+    );
 
-    assert!(partitions
-        .iter()
-        .map(|partition| partition.isr_nodes.as_deref().unwrap_or_default())
-        .inspect(|isr_nodes| debug!(?isr_nodes))
-        .all(|isr_nodes| {
-            (isr_nodes.len() as i16) == replication_factor
-                && isr_nodes.iter().all(|isr_node| *isr_node == broker_id)
-        }));
+    assert!(
+        partitions
+            .iter()
+            .map(|partition| partition.isr_nodes.as_deref().unwrap_or_default())
+            .inspect(|isr_nodes| debug!(?isr_nodes))
+            .all(|isr_nodes| {
+                (isr_nodes.len() as i16) == replication_factor
+                    && isr_nodes.iter().all(|isr_node| *isr_node == broker_id)
+            })
+    );
 
     Ok(())
 }
@@ -282,43 +302,53 @@ pub async fn topics_some_matching_by_name(
 
     assert_eq!(num_partitions, partitions.len() as i32);
 
-    assert!(partitions
-        .iter()
-        .map(|partition| partition.leader_id)
-        .inspect(|leader_id| debug!(leader_id))
-        .all(|leader_id| leader_id == broker_id));
+    assert!(
+        partitions
+            .iter()
+            .map(|partition| partition.leader_id)
+            .inspect(|leader_id| debug!(leader_id))
+            .all(|leader_id| leader_id == broker_id)
+    );
 
-    assert!(partitions
-        .iter()
-        .map(|partition| partition.leader_epoch)
-        .inspect(|leader_epoch| debug!(leader_epoch))
-        .all(|leader_epoch| leader_epoch == Some(-1)));
+    assert!(
+        partitions
+            .iter()
+            .map(|partition| partition.leader_epoch)
+            .inspect(|leader_epoch| debug!(leader_epoch))
+            .all(|leader_epoch| leader_epoch == Some(-1))
+    );
 
-    assert!(partitions
-        .iter()
-        .map(|partition| partition.offline_replicas.as_deref().unwrap_or_default())
-        .inspect(|offline_replicas| debug!(?offline_replicas))
-        .all(|offline_replicas| offline_replicas.is_empty()));
+    assert!(
+        partitions
+            .iter()
+            .map(|partition| partition.offline_replicas.as_deref().unwrap_or_default())
+            .inspect(|offline_replicas| debug!(?offline_replicas))
+            .all(|offline_replicas| offline_replicas.is_empty())
+    );
 
-    assert!(partitions
-        .iter()
-        .map(|partition| partition.replica_nodes.as_deref().unwrap_or_default())
-        .inspect(|replica_nodes| debug!(?replica_nodes))
-        .all(
-            |replica_nodes| (replica_nodes.len() as i16) == replication_factor
-                && replica_nodes
-                    .iter()
-                    .all(|replica_node| *replica_node == broker_id)
-        ));
+    assert!(
+        partitions
+            .iter()
+            .map(|partition| partition.replica_nodes.as_deref().unwrap_or_default())
+            .inspect(|replica_nodes| debug!(?replica_nodes))
+            .all(
+                |replica_nodes| (replica_nodes.len() as i16) == replication_factor
+                    && replica_nodes
+                        .iter()
+                        .all(|replica_node| *replica_node == broker_id)
+            )
+    );
 
-    assert!(partitions
-        .iter()
-        .map(|partition| partition.isr_nodes.as_deref().unwrap_or_default())
-        .inspect(|isr_nodes| debug!(?isr_nodes))
-        .all(|isr_nodes| {
-            (isr_nodes.len() as i16) == replication_factor
-                && isr_nodes.iter().all(|isr_node| *isr_node == broker_id)
-        }));
+    assert!(
+        partitions
+            .iter()
+            .map(|partition| partition.isr_nodes.as_deref().unwrap_or_default())
+            .inspect(|isr_nodes| debug!(?isr_nodes))
+            .all(|isr_nodes| {
+                (isr_nodes.len() as i16) == replication_factor
+                    && isr_nodes.iter().all(|isr_node| *isr_node == broker_id)
+            })
+    );
 
     Ok(())
 }
@@ -421,43 +451,53 @@ pub async fn topics_some_matching_by_id(
 
     assert_eq!(num_partitions, partitions.len() as i32);
 
-    assert!(partitions
-        .iter()
-        .map(|partition| partition.leader_id)
-        .inspect(|leader_id| debug!(leader_id))
-        .all(|leader_id| leader_id == broker_id));
+    assert!(
+        partitions
+            .iter()
+            .map(|partition| partition.leader_id)
+            .inspect(|leader_id| debug!(leader_id))
+            .all(|leader_id| leader_id == broker_id)
+    );
 
-    assert!(partitions
-        .iter()
-        .map(|partition| partition.leader_epoch)
-        .inspect(|leader_epoch| debug!(leader_epoch))
-        .all(|leader_epoch| leader_epoch == Some(-1)));
+    assert!(
+        partitions
+            .iter()
+            .map(|partition| partition.leader_epoch)
+            .inspect(|leader_epoch| debug!(leader_epoch))
+            .all(|leader_epoch| leader_epoch == Some(-1))
+    );
 
-    assert!(partitions
-        .iter()
-        .map(|partition| partition.offline_replicas.as_deref().unwrap_or_default())
-        .inspect(|offline_replicas| debug!(?offline_replicas))
-        .all(|offline_replicas| offline_replicas.is_empty()));
+    assert!(
+        partitions
+            .iter()
+            .map(|partition| partition.offline_replicas.as_deref().unwrap_or_default())
+            .inspect(|offline_replicas| debug!(?offline_replicas))
+            .all(|offline_replicas| offline_replicas.is_empty())
+    );
 
-    assert!(partitions
-        .iter()
-        .map(|partition| partition.replica_nodes.as_deref().unwrap_or_default())
-        .inspect(|replica_nodes| debug!(?replica_nodes))
-        .all(
-            |replica_nodes| (replica_nodes.len() as i16) == replication_factor
-                && replica_nodes
-                    .iter()
-                    .all(|replica_node| *replica_node == broker_id)
-        ));
+    assert!(
+        partitions
+            .iter()
+            .map(|partition| partition.replica_nodes.as_deref().unwrap_or_default())
+            .inspect(|replica_nodes| debug!(?replica_nodes))
+            .all(
+                |replica_nodes| (replica_nodes.len() as i16) == replication_factor
+                    && replica_nodes
+                        .iter()
+                        .all(|replica_node| *replica_node == broker_id)
+            )
+    );
 
-    assert!(partitions
-        .iter()
-        .map(|partition| partition.isr_nodes.as_deref().unwrap_or_default())
-        .inspect(|isr_nodes| debug!(?isr_nodes))
-        .all(|isr_nodes| {
-            (isr_nodes.len() as i16) == replication_factor
-                && isr_nodes.iter().all(|isr_node| *isr_node == broker_id)
-        }));
+    assert!(
+        partitions
+            .iter()
+            .map(|partition| partition.isr_nodes.as_deref().unwrap_or_default())
+            .inspect(|isr_nodes| debug!(?isr_nodes))
+            .all(|isr_nodes| {
+                (isr_nodes.len() as i16) == replication_factor
+                    && isr_nodes.iter().all(|isr_node| *isr_node == broker_id)
+            })
+    );
 
     Ok(())
 }
@@ -501,7 +541,7 @@ pub async fn topics_some_not_matching_by_id(
 }
 
 mod pg {
-    use common::{init_tracing, StorageType};
+    use common::{StorageType, init_tracing};
     use rand::{prelude::*, rng};
 
     use super::*;
@@ -624,7 +664,7 @@ mod pg {
 }
 
 mod in_memory {
-    use common::{init_tracing, StorageType};
+    use common::{StorageType, init_tracing};
     use rand::{prelude::*, rng};
 
     use super::*;

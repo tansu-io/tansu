@@ -15,7 +15,7 @@
 
 use convert_case::{Case, Casing};
 use proc_macro2::TokenStream;
-use quote::{quote, ToTokens};
+use quote::{ToTokens, quote};
 use serde_json::Value;
 use std::{
     collections::HashMap,
@@ -26,7 +26,7 @@ use std::{
     path::Path,
 };
 use syn::{Expr, Type};
-use tansu_kafka_model::{wv::Wv, CommonStruct, Field, Listener, Message};
+use tansu_kafka_model::{CommonStruct, Field, Listener, Message, wv::Wv};
 
 #[derive(Debug)]
 #[allow(dead_code)]

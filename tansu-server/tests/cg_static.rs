@@ -14,10 +14,10 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use bytes::Bytes;
-use common::{register_broker, StorageType, CLIENT_ID, COOPERATIVE_STICKY, PROTOCOL_TYPE, RANGE};
+use common::{CLIENT_ID, COOPERATIVE_STICKY, PROTOCOL_TYPE, RANGE, StorageType, register_broker};
 use rand::{prelude::*, rng};
-use tansu_kafka_sans_io::{join_group_request::JoinGroupRequestProtocol, ErrorCode};
-use tansu_server::{coordinator::group::administrator::Controller, Result};
+use tansu_kafka_sans_io::{ErrorCode, join_group_request::JoinGroupRequestProtocol};
+use tansu_server::{Result, coordinator::group::administrator::Controller};
 use tansu_storage::StorageContainer;
 use tracing::debug;
 use url::Url;
@@ -82,9 +82,11 @@ pub async fn join_with_empty_member_id(
     assert_eq!(Some(PROTOCOL_TYPE.into()), join_response.protocol_type);
     assert_eq!(Some(RANGE.into()), join_response.protocol_name);
     assert_eq!(join_response.member_id, join_response.leader);
-    assert!(join_response
-        .member_id
-        .starts_with(group_instance_id.as_str()));
+    assert!(
+        join_response
+            .member_id
+            .starts_with(group_instance_id.as_str())
+    );
     assert_eq!(1, join_response.members.len());
 
     Ok(())
@@ -141,9 +143,11 @@ pub async fn rejoin_with_empty_member_id(
     assert_eq!(Some(PROTOCOL_TYPE.into()), join_response.protocol_type);
     assert_eq!(Some(RANGE.into()), join_response.protocol_name);
     assert_eq!(join_response.member_id, join_response.leader);
-    assert!(join_response
-        .member_id
-        .starts_with(group_instance_id.as_str()));
+    assert!(
+        join_response
+            .member_id
+            .starts_with(group_instance_id.as_str())
+    );
     assert_eq!(1, join_response.members.len());
 
     let rejoin_response = common::join_group(

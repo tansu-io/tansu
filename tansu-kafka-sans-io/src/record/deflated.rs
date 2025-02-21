@@ -16,15 +16,15 @@
 use std::fmt::Formatter;
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use crc::{Crc, Digest, CRC_32_ISCSI};
+use crc::{CRC_32_ISCSI, Crc, Digest};
 use flate2::write::GzEncoder;
 use serde::{
-    de::{self, SeqAccess, Visitor},
     Deserialize, Deserializer, Serialize,
+    de::{self, SeqAccess, Visitor},
 };
 use tracing::debug;
 
-use crate::{record::Record, Compression, Decoder, Encoder, Error, Result};
+use crate::{Compression, Decoder, Encoder, Error, Result, record::Record};
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct Frame {
@@ -415,7 +415,7 @@ impl<'de> Deserialize<'de> for Batch {
 mod tests {
     use std::io::Cursor;
 
-    use crate::{record::inflated, BatchAttribute, ControlBatch, EndTransactionMarker};
+    use crate::{BatchAttribute, ControlBatch, EndTransactionMarker, record::inflated};
 
     use super::*;
 

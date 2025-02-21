@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -79,8 +79,8 @@ mod tests {
 
     use super::*;
     use object_store::memory::InMemory;
-    use tansu_kafka_sans_io::{create_topics_request::CreatableTopic, ErrorCode};
-    use tansu_storage::{dynostore::DynoStore, NULL_TOPIC_ID};
+    use tansu_kafka_sans_io::{ErrorCode, create_topics_request::CreatableTopic};
+    use tansu_storage::{NULL_TOPIC_ID, dynostore::DynoStore};
     use uuid::Uuid;
 
     #[tokio::test]

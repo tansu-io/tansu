@@ -16,17 +16,17 @@
 use std::collections::BTreeMap;
 
 use bytes::Bytes;
-use common::{alphanumeric_string, init_tracing, register_broker, StorageType};
+use common::{StorageType, alphanumeric_string, init_tracing, register_broker};
 use rand::{prelude::*, rng};
 use tansu_kafka_sans_io::{
+    BatchAttribute, ControlBatch, EndTransactionMarker, ErrorCode, IsolationLevel,
     add_partitions_to_txn_request::AddPartitionsToTxnTopic,
     add_partitions_to_txn_response::{
         AddPartitionsToTxnPartitionResult, AddPartitionsToTxnTopicResult,
     },
     create_topics_request::CreatableTopic,
-    record::{inflated, Record},
+    record::{Record, inflated},
     txn_offset_commit_request::{TxnOffsetCommitRequestPartition, TxnOffsetCommitRequestTopic},
-    BatchAttribute, ControlBatch, EndTransactionMarker, ErrorCode, IsolationLevel,
 };
 use tansu_server::Result;
 use tansu_storage::{
