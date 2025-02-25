@@ -49,7 +49,7 @@ crc = "3.0.1"
 criterion = { version = "0.5.1", features = ["html_reports"] }
 deadpool = "0.12.2"
 deadpool-postgres = "0.14.1"
-flate2 = "1.0"
+flate2 = "1.1"
 futures = "0.3"
 futures-core = "0.3.31"
 futures-util = "0.3.31"
