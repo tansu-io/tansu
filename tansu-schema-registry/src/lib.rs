@@ -15,7 +15,7 @@
 
 use std::{env, fmt, io, result, sync::Arc, time::SystemTime};
 
-use bytes::Bytes;
+use bytes::{Buf, Bytes};
 use jsonschema::ValidationError;
 use object_store::{
     DynObjectStore, ObjectStore, aws::AmazonS3Builder, local::LocalFileSystem, memory::InMemory,
@@ -33,6 +33,7 @@ use url::Url;
 #[cfg(test)]
 use tracing_subscriber::filter::ParseError;
 
+mod avro;
 mod json;
 mod proto;
 
@@ -40,6 +41,7 @@ mod proto;
 pub enum Error {
     Anyhow(#[from] anyhow::Error),
     Api(ErrorCode),
+    Avro(#[from] apache_avro::Error),
     Io(#[from] io::Error),
     KafkaSansIo(#[from] tansu_kafka_sans_io::Error),
     Message(String),
@@ -196,6 +198,18 @@ impl Registry {
                         ],
                     )
                 })
+        } else if list_result
+            .objects
+            .iter()
+            .any(|meta| meta.location == Path::from(format!("{topic}.avsc")))
+        {
+            self.get(&Path::from(format!("{topic}.avsc")))
+                .await
+                .and_then(|schema| {
+                    apache_avro::Schema::parse_reader(&mut schema.reader()).map_err(Into::into)
+                });
+
+            Ok(())
         } else {
             Ok(())
         }
@@ -282,7 +296,7 @@ mod tests {
         ))
     }
 
-    static DEF_PROTO: &[u8] = br#"
+    const DEF_PROTO: &[u8] = br#"
       syntax = 'proto3';
 
       message Key {
@@ -293,6 +307,18 @@ mod tests {
         string name = 1;
         string email = 2;
       }
+    "#;
+
+    const PQR_AVRO: &[u8] = br#"
+        {
+            "type": "record",
+            "name": "test",
+            "fields": [
+                {"name": "a", "type": "long", "default": 42},
+                {"name": "b", "type": "string"},
+                {"name": "c", "type": "long", "default": 43}
+            ]
+        }
     "#;
 
     async fn populate() -> Result<Registry> {
@@ -317,6 +343,10 @@ mod tests {
 
         let location = Path::from("def.proto");
         let payload = PutPayload::from(Bytes::from_static(DEF_PROTO));
+        _ = object_store.put(&location, payload).await?;
+
+        let location = Path::from("pqr.avsc");
+        let payload = PutPayload::from(Bytes::from_static(PQR_AVRO));
         _ = object_store.put(&location, payload).await?;
 
         Ok(Registry::new(object_store))
@@ -357,6 +387,22 @@ mod tests {
                 .inspect_err(|err| error!(?err)),
             Err(Error::Api(ErrorCode::InvalidRecord))
         ));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn pqr_valid() -> Result<()> {
+        let _guard = init_tracing()?;
+        let registry = populate().await?;
+
+        let key = Bytes::from_static(b"5450");
+
+        let batch = Batch::builder()
+            .record(Record::builder().key(key.clone().into()))
+            .build()?;
+
+        registry.validate("pqr", &batch).await?;
 
         Ok(())
     }
