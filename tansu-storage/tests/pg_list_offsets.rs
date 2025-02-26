@@ -16,8 +16,8 @@
 use rand::{distr::Alphanumeric, prelude::*, rng};
 use tansu_kafka_sans_io::{ErrorCode, IsolationLevel};
 use tansu_storage::{
-    pg::Postgres, BrokerRegistrationRequest, Error, ListOffsetRequest, Result, Storage,
-    StorageContainer, Topition,
+    BrokerRegistrationRequest, Error, ListOffsetRequest, Result, Storage, StorageContainer,
+    Topition, pg::Postgres,
 };
 use tracing::subscriber::DefaultGuard;
 use uuid::Uuid;

@@ -30,7 +30,7 @@ pub mod produce;
 pub mod telemetry;
 pub mod txn;
 
-use crate::{coordinator::group::Coordinator, Error, Result};
+use crate::{Error, METER, Result, coordinator::group::Coordinator};
 use api_versions::ApiVersionsRequest;
 use create_topic::CreateTopic;
 use delete_records::DeleteRecordsRequest;
@@ -43,15 +43,20 @@ use init_producer_id::InitProducerIdRequest;
 use list_offsets::ListOffsetsRequest;
 use list_partition_reassignments::ListPartitionReassignmentsRequest;
 use metadata::MetadataRequest;
+use opentelemetry::{
+    KeyValue,
+    metrics::{Counter, Histogram},
+};
 use produce::ProduceRequest;
 use std::{
     io::ErrorKind,
     net::{IpAddr, Ipv6Addr, SocketAddr},
     str::FromStr,
+    time::SystemTime,
 };
 use tansu_kafka_sans_io::{
-    consumer_group_describe_response, describe_groups_response, Body, ErrorCode, Frame, Header,
-    IsolationLevel,
+    Body, ErrorCode, Frame, Header, IsolationLevel, consumer_group_describe_response,
+    describe_groups_response,
 };
 use tansu_storage::{BrokerRegistrationRequest, Storage};
 use telemetry::GetTelemetrySubscriptionsRequest;
@@ -59,7 +64,7 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
 };
-use tracing::{debug, debug_span, error, info, span, Instrument, Level, Span};
+use tracing::{Instrument, Level, Span, debug, debug_span, error, info, span};
 use txn::{add_offsets::AddOffsets, add_partitions::AddPartitions};
 use url::Url;
 use uuid::Uuid;
@@ -73,6 +78,7 @@ pub struct Broker<G, S> {
     advertised_listener: Url,
     storage: S,
     groups: G,
+    metron: Metron,
 }
 
 impl<G, S> Broker<G, S>
@@ -88,9 +94,8 @@ where
         advertised_listener: Url,
         storage: S,
         groups: G,
+        incarnation_id: Uuid,
     ) -> Self {
-        let incarnation_id = Uuid::new_v4();
-
         Self {
             node_id,
             cluster_id: cluster_id.to_owned(),
@@ -99,6 +104,7 @@ where
             advertised_listener,
             storage,
             groups,
+            metron: Metron::new(cluster_id, incarnation_id),
         }
     }
 
@@ -152,7 +158,7 @@ where
                 let span = span!(Level::DEBUG, "peer", addr = %addr);
 
                 async move {
-                    match broker.stream_handler(stream).await {
+                    match broker.stream_handler(&addr, stream).await {
                         Err(Error::Io(ref io))
                             if io.kind() == ErrorKind::UnexpectedEof
                                 || io.kind() == ErrorKind::BrokenPipe
@@ -171,7 +177,7 @@ where
         }
     }
 
-    async fn stream_handler(&mut self, mut stream: TcpStream) -> Result<()> {
+    async fn stream_handler(&mut self, peer: &SocketAddr, mut stream: TcpStream) -> Result<()> {
         debug!(?stream);
 
         let mut size = [0u8; 4];
@@ -200,11 +206,29 @@ where
                 .inspect_err(|error| error!(?size, ?request, ?error))?;
             debug!(?request);
 
+            let request_start = SystemTime::now();
+
+            let attributes = [KeyValue::new("cluster_id", self.cluster_id.clone())];
+
+            self.metron
+                .request_size
+                .record(request.len() as u64, &attributes);
+
             let response = self
-                .process_request(&request)
+                .process_request(peer, &request)
                 .await
                 .inspect_err(|error| error!(?request, ?error))?;
             debug!(?response);
+
+            self.metron
+                .response_size
+                .record(response.len() as u64, &attributes);
+            self.metron.request_duration.record(
+                request_start
+                    .elapsed()
+                    .map_or(0, |duration| duration.as_millis() as u64),
+                &attributes,
+            );
 
             stream
                 .write_all(&response)
@@ -213,7 +237,7 @@ where
         }
     }
 
-    async fn process_request(&mut self, input: &[u8]) -> Result<Vec<u8>> {
+    async fn process_request(&mut self, _peer: &SocketAddr, input: &[u8]) -> Result<Vec<u8>> {
         match Frame::request_from_bytes(input)? {
             Frame {
                 header:
@@ -228,6 +252,12 @@ where
                 ..
             } => {
                 let span = request_span(api_key, api_version, correlation_id, &body);
+
+                {
+                    let mut attributes = attributes(api_key, api_version, correlation_id, &body);
+                    attributes.push(KeyValue::new("cluster_id", self.cluster_id.clone()));
+                    self.metron.api_requests.add(1, &attributes);
+                }
 
                 async move {
                     Frame::response(
@@ -771,6 +801,96 @@ where
     }
 }
 
+fn attributes(api_key: i16, api_version: i16, _correlation_id: i32, body: &Body) -> Vec<KeyValue> {
+    let mut attributes = vec![
+        KeyValue::new("api_key", api_key as i64),
+        KeyValue::new("api_version", api_version as i64),
+    ];
+
+    match body {
+        Body::AddOffsetsToTxnRequest { .. } => {
+            attributes.append(&mut vec![KeyValue::new("api_name", "add_offsets_to_txn")])
+        }
+
+        Body::AddPartitionsToTxnRequest { .. } => attributes.append(&mut vec![KeyValue::new(
+            "api_name",
+            "add_partitions_to_txn",
+        )]),
+
+        Body::ApiVersionsRequest { .. } => {
+            attributes.append(&mut vec![KeyValue::new("api_name", "api_versions")])
+        }
+
+        Body::CreateTopicsRequest { .. } => {
+            attributes.append(&mut vec![KeyValue::new("api_name", "create_topics")])
+        }
+
+        Body::DeleteTopicsRequest { .. } => {
+            attributes.append(&mut vec![KeyValue::new("api_name", "delete_topics")])
+        }
+
+        Body::EndTxnRequest { .. } => {
+            attributes.append(&mut vec![KeyValue::new("api_name", "end_txn")])
+        }
+
+        Body::FetchRequest { .. } => {
+            attributes.append(&mut vec![KeyValue::new("api_name", "fetch")]);
+        }
+
+        Body::FindCoordinatorRequest { .. } => {
+            attributes.append(&mut vec![KeyValue::new("api_name", "find_coordinator")])
+        }
+
+        Body::HeartbeatRequest { .. } => {
+            attributes.append(&mut vec![KeyValue::new("api_name", "heartbeat")]);
+        }
+
+        Body::InitProducerIdRequest { .. } => {
+            attributes.append(&mut vec![KeyValue::new("api_name", "init_producer_id")]);
+        }
+
+        Body::JoinGroupRequest { .. } => {
+            attributes.append(&mut vec![KeyValue::new("api_name", "join_group")]);
+        }
+
+        Body::LeaveGroupRequest { .. } => {
+            attributes.append(&mut vec![KeyValue::new("api_name", "leave_group")]);
+        }
+
+        Body::ListOffsetsRequest { .. } => {
+            attributes.append(&mut vec![KeyValue::new("api_name", "list_offsets")]);
+        }
+
+        Body::MetadataRequest { .. } => {
+            attributes.append(&mut vec![KeyValue::new("api_name", "metadata")]);
+        }
+
+        Body::OffsetCommitRequest { .. } => {
+            attributes.append(&mut vec![KeyValue::new("api_name", "offset_commit")]);
+        }
+
+        Body::OffsetFetchRequest { .. } => {
+            attributes.append(&mut vec![KeyValue::new("api_name", "offset_fetch")]);
+        }
+
+        Body::ProduceRequest { .. } => {
+            attributes.append(&mut vec![KeyValue::new("api_name", "produce")]);
+        }
+
+        Body::SyncGroupRequest { .. } => {
+            attributes.append(&mut vec![KeyValue::new("api_name", "sync_group")]);
+        }
+
+        Body::TxnOffsetCommitRequest { .. } => {
+            attributes.append(&mut vec![KeyValue::new("api_name", "txn_offset_commit")]);
+        }
+
+        _ => (),
+    };
+
+    attributes
+}
+
 fn request_span(api_key: i16, api_version: i16, correlation_id: i32, body: &Body) -> Span {
     match body {
         Body::AddOffsetsToTxnRequest {
@@ -930,5 +1050,39 @@ fn request_span(api_key: i16, api_version: i16, correlation_id: i32, body: &Body
         }
 
         _ => debug_span!("request", api_key, api_version, correlation_id,),
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Metron {
+    api_requests: Counter<u64>,
+    request_size: Histogram<u64>,
+    response_size: Histogram<u64>,
+    request_duration: Histogram<u64>,
+}
+
+impl Metron {
+    fn new(_namespace: &str, _instance_id: Uuid) -> Self {
+        Self {
+            api_requests: METER
+                .u64_counter("tansu_api_requests")
+                .with_description("The number of API requests made")
+                .build(),
+            request_size: METER
+                .u64_histogram("tansu_request_size")
+                .with_unit("By")
+                .with_description("The API request size in bytes")
+                .build(),
+            response_size: METER
+                .u64_histogram("tansu_response_size")
+                .with_unit("By")
+                .with_description("The API response size in bytes")
+                .build(),
+            request_duration: METER
+                .u64_histogram("tansu_request_duration")
+                .with_unit("ms")
+                .with_description("The API request latencies in milliseconds")
+                .build(),
+        }
     }
 }

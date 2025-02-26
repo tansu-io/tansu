@@ -22,6 +22,7 @@ use rand::{
     rng,
 };
 use tansu_kafka_sans_io::{
+    Body, ErrorCode,
     fetch_response::{FetchableTopicResponse, NodeEndpoint},
     join_group_request::JoinGroupRequestProtocol,
     join_group_response::JoinGroupResponseMember,
@@ -30,15 +31,14 @@ use tansu_kafka_sans_io::{
     offset_fetch_request::OffsetFetchRequestTopic,
     offset_fetch_response::OffsetFetchResponseTopic,
     sync_group_request::SyncGroupRequestAssignment,
-    Body, ErrorCode,
 };
 use tansu_schema_registry::Registry;
 use tansu_server::{
-    coordinator::group::{administrator::Controller, Coordinator},
     Error, Result,
+    coordinator::group::{Coordinator, administrator::Controller},
 };
 use tansu_storage::{
-    dynostore::DynoStore, pg::Postgres, BrokerRegistrationRequest, Storage, StorageContainer,
+    BrokerRegistrationRequest, Storage, StorageContainer, dynostore::DynoStore, pg::Postgres,
 };
 use tracing::{debug, subscriber::DefaultGuard};
 use tracing_subscriber::EnvFilter;
@@ -191,7 +191,6 @@ pub(crate) async fn join_group(
             reason,
         )
         .await
-        .map_err(Into::into)
         .and_then(TryInto::try_into)
 }
 
@@ -250,7 +249,6 @@ pub(crate) async fn sync_group(
             Some(assignments),
         )
         .await
-        .map_err(Into::into)
         .and_then(TryInto::try_into)
 }
 
@@ -286,7 +284,6 @@ pub(crate) async fn heartbeat(
     controller
         .heartbeat(group_id, generation_id, member_id, group_instance_id)
         .await
-        .map_err(Into::into)
         .and_then(TryInto::try_into)
 }
 
@@ -323,7 +320,6 @@ pub(crate) async fn offset_fetch(
     controller
         .offset_fetch(Some(group_id), Some(topics), None, Some(false))
         .await
-        .map_err(Into::into)
         .and_then(TryInto::try_into)
 }
 
@@ -374,7 +370,6 @@ pub(crate) async fn leave(
             }]),
         )
         .await
-        .map_err(Into::into)
         .and_then(TryInto::try_into)
 }
 

@@ -15,8 +15,8 @@
 
 use crate::{Error, Result, RootMessageMeta};
 use serde::{
-    de::{DeserializeSeed, EnumAccess, SeqAccess, VariantAccess, Visitor},
     Deserializer,
+    de::{DeserializeSeed, EnumAccess, SeqAccess, VariantAccess, Visitor},
 };
 use std::{
     any::{type_name, type_name_of_val},
@@ -222,10 +222,10 @@ impl<'de> Decoder<'de> {
 
     #[must_use]
     fn is_valid(&self) -> bool {
-        self.api_version.map_or(true, |api_version| {
+        self.api_version.is_none_or(|api_version| {
             self.meta
                 .field
-                .map_or(true, |field| field.version.within(api_version))
+                .is_none_or(|field| field.version.within(api_version))
         })
     }
 

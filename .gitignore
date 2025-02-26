@@ -1,5 +1,5 @@
-debug/
-target/
+debug
+target
 Cargo.lock
 **/*.rs.bk
 *~
@@ -8,4 +8,7 @@ Cargo.lock
 .*DS_Store
 .DS_Store
 *.log
-
+.env
+flamegraph.svg
+perf.data
+.vscode

@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -13,13 +13,13 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use std::iter;
-use tansu_kafka_sans_io::record::{deflated, inflated, Record};
+use tansu_kafka_sans_io::record::{Record, deflated, inflated};
 use tansu_storage::{
+    Topition, TopitionOffset,
     index::offset::OffsetIndex,
     segment::{LogSegment, MemorySegmentProvider, Segment, SegmentProvider},
-    Topition, TopitionOffset,
 };
 
 fn append_in_memory(c: &mut Criterion) {

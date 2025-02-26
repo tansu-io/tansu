@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -15,9 +15,9 @@
 
 use crate::{Error, Result};
 use tansu_kafka_sans_io::{
+    ErrorCode,
     produce_request::{PartitionProduceData, TopicProduceData},
     produce_response::{NodeEndpoint, PartitionProduceResponse, TopicProduceResponse},
-    ErrorCode,
 };
 use tansu_storage::{Storage, Topition};
 use tracing::{debug, error, warn};
@@ -124,10 +124,12 @@ where
     pub async fn response(
         &mut self,
         transaction_id: Option<String>,
-        _acks: i16,
-        _timeout_ms: i32,
+        acks: i16,
+        timeout_ms: i32,
         topic_data: Option<Vec<TopicProduceData>>,
     ) -> Result<ProduceResponse> {
+        debug!(?self, ?transaction_id, ?acks, timeout_ms, ?topic_data);
+
         let mut responses =
             Vec::with_capacity(topic_data.as_ref().map_or(0, |topic_data| topic_data.len()));
 
@@ -150,15 +152,16 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{broker::init_producer_id::InitProducerIdRequest, Error};
+    use crate::{Error, broker::init_producer_id::InitProducerIdRequest};
     use bytes::Bytes;
     use object_store::memory::InMemory;
     use tansu_kafka_sans_io::{
-        record::{
-            deflated::{self, Frame},
-            inflated, Record,
-        },
         ErrorCode,
+        record::{
+            Record,
+            deflated::{self, Frame},
+            inflated,
+        },
     };
     use tansu_storage::dynostore::DynoStore;
     use tracing::subscriber::DefaultGuard;

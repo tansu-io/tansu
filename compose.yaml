@@ -1,5 +1,25 @@
 ---
 services:
+  grafana:
+    image: grafana/grafana:11.5.1
+    ports:
+      - 3000:3000
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: true
+      GF_AUTH_ANONYMOUS_HIDE_VERSION: true
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: true
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/dashboards/home.json
+      GF_LIVE_ALLOWED_ORIGINS: "https://*.preview.app.github.dev"
+    volumes:
+      - type: bind
+        source: etc/grafana/provisioning
+        target: /etc/grafana/provisioning
+      - type: bind
+        source: etc/grafana/dashboards
+        target: /etc/dashboards
+      - grafana:/var/lib/grafana
+    pull_policy: missing
   db:
     image: ${POSTGRES_IMAGE:-postgres:17}
     environment:
@@ -18,16 +38,22 @@ services:
     pull_policy: missing
   minio:
     image: quay.io/minio/minio
-    command: server
-      /data
-      --console-address ":9001"
+    command: server /data --console-address ":9001"
     volumes:
       - minio:/data
     ports:
       - 9000:9000
       - 9001:9001
+    environment:
+      MINIO_PROMETHEUS_AUTH_TYPE: public
+    healthcheck:
+      test: timeout 5s bash -c ':> /dev/tcp/127.0.0.1/9000' || exit 1
+      interval: 5s
+      retries: 1
+      start_period: 5s
+      timeout: 5s
   tansu:
-    image: ghcr.io/tansu-io/tansu:latest
+    image: ${TANSU_IMAGE}
     restart: unless-stopped
     environment:
       RUST_BACKTRACE: ${RUST_BACKTRACE}
@@ -37,21 +63,43 @@ services:
       AWS_ENDPOINT: ${AWS_ENDPOINT}
       AWS_ALLOW_HTTP: ${AWS_ALLOW_HTTP}
     volumes:
-      - db:/var/lib/postgresql/data
       - ./etc/schema/:/schema/
-    command: --kafka-cluster-id ${CLUSTER_ID}
+    command: |
+      --kafka-cluster-id ${CLUSTER_ID}
       --kafka-listener-url tcp://0.0.0.0:9092/
-      --kafka-advertised-listener-url tcp://${ADVERTISED_LISTENER}
+      --kafka-advertised-listener-url ${ADVERTISED_LISTENER_URL}
       --storage-engine ${STORAGE_ENGINE}
+      --prometheus-listener-url ${PROMETHEUS_LISTENER_URL}
       --schema-registry file:///schema
     ports:
       - 9092:9092
-    links:
-      - db
-      - minio
+      - 9100:9100
     pull_policy: always
+  jaeger:
+    image: jaegertracing/all-in-one
+    ports:
+      - 16686:16686
+      - 4317:4317
+      - 4318:4318
+      - 5778:5778
+      - 9411:9411
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    ports:
+      - 9090:9090
+    command: --web.enable-otlp-receiver
+    extra_hosts:
+      - "host.docker.internal=host-gateway"
+    configs:
+      - source: prometheus_yaml
+        target: /prometheus/prometheus.yml
+configs:
+  prometheus_yaml:
+    file: etc/prometheus.yaml
 volumes:
   db:
     driver: local
   minio:
+    driver: local
+  grafana:
     driver: local

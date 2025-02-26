@@ -36,38 +36,52 @@ fn request() {
     let keys: Vec<&&str> = structures.keys().collect();
     assert_eq!(vec![&"Cursor", &"TopicRequest",], keys);
 
-    assert!(message
-        .field("topics")
-        .map(|field| field.kind.is_sequence())
-        .unwrap());
+    assert!(
+        message
+            .field("topics")
+            .map(|field| field.kind.is_sequence())
+            .unwrap()
+    );
 
-    assert!(message
-        .field("topics")
-        .map(|field| field.is_structure())
-        .unwrap());
+    assert!(
+        message
+            .field("topics")
+            .map(|field| field.is_structure())
+            .unwrap()
+    );
 
-    assert!(!message
-        .field("response_partition_limit")
-        .map(|field| field.kind.is_sequence())
-        .unwrap());
+    assert!(
+        !message
+            .field("response_partition_limit")
+            .map(|field| field.kind.is_sequence())
+            .unwrap()
+    );
 
-    assert!(!message
-        .field("response_partition_limit")
-        .map(|field| field.is_structure())
-        .unwrap());
+    assert!(
+        !message
+            .field("response_partition_limit")
+            .map(|field| field.is_structure())
+            .unwrap()
+    );
 
-    assert!(!message
-        .field("cursor")
-        .map(|field| field.kind.is_sequence())
-        .unwrap());
+    assert!(
+        !message
+            .field("cursor")
+            .map(|field| field.kind.is_sequence())
+            .unwrap()
+    );
 
-    assert!(message
-        .field("cursor")
-        .map(|field| field.is_nullable(i16::MAX))
-        .unwrap());
+    assert!(
+        message
+            .field("cursor")
+            .map(|field| field.is_nullable(i16::MAX))
+            .unwrap()
+    );
 
-    assert!(message
-        .field("cursor")
-        .map(|field| field.is_structure())
-        .unwrap());
+    assert!(
+        message
+            .field("cursor")
+            .map(|field| field.is_structure())
+            .unwrap()
+    );
 }

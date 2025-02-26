@@ -15,8 +15,8 @@
 
 use crate::Result;
 use tansu_kafka_sans_io::{
-    describe_configs_request::DescribeConfigsResource,
-    describe_configs_response::DescribeConfigsResult, ConfigResource,
+    ConfigResource, describe_configs_request::DescribeConfigsResource,
+    describe_configs_response::DescribeConfigsResult,
 };
 use tansu_storage::Storage;
 use tracing::{debug, error};

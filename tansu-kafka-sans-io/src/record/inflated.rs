@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -14,12 +14,13 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use crate::{
+    Compression, Encoder, Error, Result,
     primitive::ByteSize,
-    record::{codec::Sequence, deflated, Record},
-    to_timestamp, Compression, Encoder, Error, Result,
+    record::{Record, codec::Sequence, deflated},
+    to_timestamp,
 };
 use bytes::Bytes;
-use crc::{Crc, Digest, CRC_32_ISCSI};
+use crc::{CRC_32_ISCSI, Crc, Digest};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -448,7 +449,7 @@ impl Builder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{de::Decoder, Result};
+    use crate::{Result, de::Decoder};
     use std::io::Cursor;
 
     #[test]

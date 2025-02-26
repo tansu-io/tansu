@@ -16,7 +16,7 @@
 use crate::{Error, Result, Validator};
 use bytes::Bytes;
 use serde_json::Value;
-use tansu_kafka_sans_io::{record::inflated::Batch, ErrorCode};
+use tansu_kafka_sans_io::{ErrorCode, record::inflated::Batch};
 use tracing::{debug, warn};
 
 pub(crate) struct Schema {
@@ -94,7 +94,7 @@ mod tests {
     use crate::Registry;
 
     use super::*;
-    use object_store::{memory::InMemory, path::Path, ObjectStore, PutPayload};
+    use object_store::{ObjectStore, PutPayload, memory::InMemory, path::Path};
     use serde_json::json;
     use std::{fs::File, sync::Arc, thread};
     use tansu_kafka_sans_io::record::Record;

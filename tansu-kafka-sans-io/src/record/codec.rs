@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -14,17 +14,17 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use crate::{
-    primitive::{
-        varint::{UnsignedVarInt, VarInt},
-        ByteSize,
-    },
     Result,
+    primitive::{
+        ByteSize,
+        varint::{UnsignedVarInt, VarInt},
+    },
 };
 use bytes::{BufMut, Bytes, BytesMut};
 use serde::{
+    Deserialize, Deserializer, Serialize, Serializer,
     de::{self, SeqAccess, Visitor},
     ser::{self, SerializeSeq, SerializeStruct},
-    Deserialize, Deserializer, Serialize, Serializer,
 };
 use std::{
     fmt::{self, Formatter},
