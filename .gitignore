@@ -1,5 +1,5 @@
-debug/
-target/
+debug
+target
 Cargo.lock
 **/*.rs.bk
 *~
@@ -11,3 +11,4 @@ Cargo.lock
 .env
 flamegraph.svg
 perf.data
+.vscode

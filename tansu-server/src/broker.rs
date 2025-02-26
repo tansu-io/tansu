@@ -48,7 +48,12 @@ use opentelemetry::{
     metrics::{Counter, Histogram},
 };
 use produce::ProduceRequest;
-use std::{io::ErrorKind, net::SocketAddr, time::SystemTime};
+use std::{
+    io::ErrorKind,
+    net::{IpAddr, Ipv6Addr, SocketAddr},
+    str::FromStr,
+    time::SystemTime,
+};
 use tansu_kafka_sans_io::{
     Body, ErrorCode, Frame, Header, IsolationLevel, consumer_group_describe_response,
     describe_groups_response,
@@ -123,10 +128,23 @@ where
     pub async fn listen(&self) -> Result<()> {
         debug!(listener = %self.listener, advertised_listener = %self.advertised_listener);
 
-        let listener = TcpListener::bind(format!(
-            "{}:{}",
-            self.listener.host_str().unwrap_or("0.0.0.0"),
-            self.listener.port().unwrap_or(9092)
+        let listener = TcpListener::bind(self.listener.host().map_or_else(
+            || {
+                SocketAddr::from((
+                    IpAddr::V6(Ipv6Addr::UNSPECIFIED),
+                    self.listener.port().unwrap_or(9092),
+                ))
+            },
+            |host| {
+                let port = self.listener.port().unwrap_or(9092);
+
+                match host {
+                    url::Host::Domain(domain) => SocketAddr::from_str(&format!("{domain}:{port}"))
+                        .unwrap_or(SocketAddr::from((IpAddr::V6(Ipv6Addr::UNSPECIFIED), port))),
+                    url::Host::Ipv4(ipv4_addr) => SocketAddr::from((IpAddr::V4(ipv4_addr), port)),
+                    url::Host::Ipv6(ipv6_addr) => SocketAddr::from((IpAddr::V6(ipv6_addr), port)),
+                }
+            },
         ))
         .await?;
 

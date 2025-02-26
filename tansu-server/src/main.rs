@@ -37,7 +37,7 @@ struct Cli {
     #[arg(long, env = "CLUSTER_ID")]
     kafka_cluster_id: String,
 
-    #[arg(long, env = "LISTENER_URL", default_value = "tcp://0.0.0.0:9092")]
+    #[arg(long, env = "LISTENER_URL", default_value = "tcp://[::]:9092")]
     kafka_listener_url: EnvVarExp<Url>,
 
     #[arg(

@@ -211,3 +211,6 @@ otel: build docker-compose-down db-up minio-up minio-ready-local minio-local-ali
 	./target/debug/tansu-server --schema-registry file://./etc/schema 2>&1  | tee tansu.log
 
 otel-up: docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up tansu-up
+
+server: build docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket
+	./target/debug/tansu-server --schema-registry file://./etc/schema 2>&1  | tee tansu.log

@@ -17,6 +17,7 @@ use std::{
     collections::HashMap,
     env::vars,
     fmt, io,
+    net::AddrParseError,
     num::TryFromIntError,
     result,
     str::{FromStr, Utf8Error},
@@ -48,6 +49,7 @@ pub(crate) static METER: LazyLock<Meter> = LazyLock::new(|| {
 
 #[derive(Error, Debug)]
 pub enum Error {
+    AddrParse(#[from] AddrParseError),
     Api(ErrorCode),
     Custom(String),
     EmptyCoordinatorWrapper,
