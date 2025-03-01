@@ -114,9 +114,9 @@ jobs:
       matrix:
         include:
           - target: aarch64-unknown-linux-musl
-            os: ubuntu-latest
+            os: ubuntu-24.04-arm
             flags: "-C linker=aarch64-linux-gnu-gcc -C link-arg=-lgcc"
-            enabled: false
+            enabled: true
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
             flags: ""
@@ -126,7 +126,7 @@ jobs:
             flags: ""
             enabled: true
           - target: x86_64-apple-darwin
-            os: macos-latest
+            os: macos-13
             flags: ""
             enabled: true
     steps:
