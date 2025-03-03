@@ -39,7 +39,7 @@ license-file = "LICENSE"
 # private_intra_doc_links = "deny"
 
 [workspace.dependencies]
-anyhow = "1.0.94"
+anyhow = "1.0.97"
 async-trait = "0.1.86"
 bytes = { version = "1", features = ["serde"] }
 clap = { version = "4.5.30", features = ["derive", "env"] }
