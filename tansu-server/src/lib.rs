@@ -38,6 +38,8 @@ pub mod broker;
 pub mod coordinator;
 pub mod otel;
 
+pub const NODE_ID: i32 = 111;
+
 pub(crate) static METER: LazyLock<Meter> = LazyLock::new(|| {
     global::meter_with_scope(
         InstrumentationScope::builder(env!("CARGO_PKG_NAME"))

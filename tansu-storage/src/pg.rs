@@ -42,6 +42,9 @@ use tansu_kafka_sans_io::{
     delete_records_response::{DeleteRecordsPartitionResult, DeleteRecordsTopicResult},
     describe_cluster_response::DescribeClusterBroker,
     describe_configs_response::{DescribeConfigsResourceResult, DescribeConfigsResult},
+    describe_topic_partitions_response::{
+        DescribeTopicPartitionsResponsePartition, DescribeTopicPartitionsResponseTopic,
+    },
     list_groups_response::ListedGroup,
     metadata_response::{MetadataResponseBroker, MetadataResponsePartition, MetadataResponseTopic},
     record::{Header, Record, deflated, inflated},
@@ -2415,6 +2418,199 @@ impl Storage for Postgres {
                 configs: Some([].into()),
             })
         }
+    }
+
+    async fn describe_topic_partitions(
+        &mut self,
+        topics: Option<&[TopicId]>,
+        partition_limit: i32,
+        cursor: Option<Topition>,
+    ) -> Result<Vec<DescribeTopicPartitionsResponseTopic>> {
+        let _ = (topics, partition_limit, cursor);
+
+        let c = self.connection().await.inspect_err(|err| error!(?err))?;
+
+        let mut responses =
+            Vec::with_capacity(topics.map(|topics| topics.len()).unwrap_or_default());
+
+        for topic in topics.unwrap_or_default() {
+            responses.push(match topic {
+                TopicId::Name(name) => {
+                    match self
+                        .prepare_query_opt(
+                            &c,
+                            include_sql!("pg/topic_select_name.sql").as_str(),
+                            &[&self.cluster, &name.as_str()],
+                            "metadata",
+                        )
+                        .await
+                        .inspect_err(|err| error!(?err))
+                    {
+                        Ok(Some(row)) => {
+                            let topic_id =
+                                row.try_get::<_, Uuid>(0).map(|uuid| uuid.into_bytes())?;
+                            let name = row.try_get::<_, String>(1).map(Some)?;
+                            let is_internal = row.try_get::<_, bool>(2).map(Some)?;
+                            let partitions = row.try_get::<_, i32>(3)?;
+                            let replication_factor = row.try_get::<_, i32>(4)?;
+
+                            debug!(
+                                ?topic_id,
+                                ?name,
+                                ?is_internal,
+                                ?partitions,
+                                ?replication_factor
+                            );
+
+                            DescribeTopicPartitionsResponseTopic {
+                                error_code: ErrorCode::None.into(),
+                                name,
+                                topic_id,
+                                is_internal: false,
+                                partitions: Some(
+                                    (0..partitions)
+                                        .map(|partition_index| {
+                                            DescribeTopicPartitionsResponsePartition {
+                                                error_code: ErrorCode::None.into(),
+                                                partition_index,
+                                                leader_id: self.node,
+                                                leader_epoch: -1,
+                                                replica_nodes: Some(vec![
+                                                    self.node;
+                                                    replication_factor
+                                                        as usize
+                                                ]),
+                                                isr_nodes: Some(vec![
+                                                    self.node;
+                                                    replication_factor as usize
+                                                ]),
+                                                eligible_leader_replicas: Some(vec![]),
+                                                last_known_elr: Some(vec![]),
+                                                offline_replicas: Some(vec![]),
+                                            }
+                                        })
+                                        .collect(),
+                                ),
+                                topic_authorized_operations: -2147483648,
+                            }
+                        }
+
+                        Ok(None) => DescribeTopicPartitionsResponseTopic {
+                            error_code: ErrorCode::UnknownTopicOrPartition.into(),
+                            name: match topic {
+                                TopicId::Name(name) => Some(name.into()),
+                                TopicId::Id(_) => None,
+                            },
+                            topic_id: match topic {
+                                TopicId::Name(_) => NULL_TOPIC_ID,
+                                TopicId::Id(id) => id.into_bytes(),
+                            },
+                            is_internal: false,
+                            partitions: Some([].into()),
+                            topic_authorized_operations: -2147483648,
+                        },
+
+                        Err(reason) => {
+                            debug!(?reason);
+                            DescribeTopicPartitionsResponseTopic {
+                                error_code: ErrorCode::UnknownServerError.into(),
+                                name: match topic {
+                                    TopicId::Name(name) => Some(name.into()),
+                                    TopicId::Id(_) => None,
+                                },
+                                topic_id: match topic {
+                                    TopicId::Name(_) => NULL_TOPIC_ID,
+                                    TopicId::Id(id) => id.into_bytes(),
+                                },
+                                is_internal: false,
+                                partitions: Some([].into()),
+                                topic_authorized_operations: -2147483648,
+                            }
+                        }
+                    }
+                }
+                TopicId::Id(id) => {
+                    debug!(?id);
+                    match self
+                        .prepare_query_one(
+                            &c,
+                            include_sql!("pg/topic_select_uuid.sql").as_str(),
+                            &[&self.cluster, &id],
+                            "metadata",
+                        )
+                        .await
+                    {
+                        Ok(row) => {
+                            let topic_id =
+                                row.try_get::<_, Uuid>(0).map(|uuid| uuid.into_bytes())?;
+                            let name = row.try_get::<_, String>(1).map(Some)?;
+                            let is_internal = row.try_get::<_, bool>(2).map(Some)?;
+                            let partitions = row.try_get::<_, i32>(3)?;
+                            let replication_factor = row.try_get::<_, i32>(4)?;
+
+                            debug!(
+                                ?topic_id,
+                                ?name,
+                                ?is_internal,
+                                ?partitions,
+                                ?replication_factor
+                            );
+
+                            DescribeTopicPartitionsResponseTopic {
+                                error_code: ErrorCode::None.into(),
+                                name,
+                                topic_id,
+                                is_internal: false,
+                                partitions: Some(
+                                    (0..partitions)
+                                        .map(|partition_index| {
+                                            DescribeTopicPartitionsResponsePartition {
+                                                error_code: ErrorCode::None.into(),
+                                                partition_index,
+                                                leader_id: self.node,
+                                                leader_epoch: -1,
+                                                replica_nodes: Some(vec![
+                                                    self.node;
+                                                    replication_factor
+                                                        as usize
+                                                ]),
+                                                isr_nodes: Some(vec![
+                                                    self.node;
+                                                    replication_factor as usize
+                                                ]),
+                                                eligible_leader_replicas: Some(vec![]),
+                                                last_known_elr: Some(vec![]),
+                                                offline_replicas: Some(vec![]),
+                                            }
+                                        })
+                                        .collect(),
+                                ),
+                                topic_authorized_operations: -2147483648,
+                            }
+                        }
+                        Err(reason) => {
+                            debug!(?reason);
+                            DescribeTopicPartitionsResponseTopic {
+                                error_code: ErrorCode::UnknownTopicOrPartition.into(),
+                                name: match topic {
+                                    TopicId::Name(name) => Some(name.into()),
+                                    TopicId::Id(_) => None,
+                                },
+                                topic_id: match topic {
+                                    TopicId::Name(_) => NULL_TOPIC_ID,
+                                    TopicId::Id(id) => id.into_bytes(),
+                                },
+                                is_internal: false,
+                                partitions: Some([].into()),
+                                topic_authorized_operations: -2147483648,
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        Ok(responses)
     }
 
     async fn list_groups(&mut self, states_filter: Option<&[String]>) -> Result<Vec<ListedGroup>> {

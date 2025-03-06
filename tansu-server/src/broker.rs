@@ -58,7 +58,7 @@ use tansu_kafka_sans_io::{
     Body, ErrorCode, Frame, Header, IsolationLevel, consumer_group_describe_response,
     describe_groups_response,
 };
-use tansu_storage::{BrokerRegistrationRequest, Storage};
+use tansu_storage::{BrokerRegistrationRequest, Storage, TopicId};
 use telemetry::GetTelemetrySubscriptionsRequest;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -453,6 +453,28 @@ where
                 .map(|groups| Body::DescribeGroupsResponse {
                     throttle_time_ms: Some(0),
                     groups,
+                })
+                .map_err(Into::into),
+
+            Body::DescribeTopicPartitionsRequest {
+                topics,
+                response_partition_limit,
+                cursor,
+            } => self
+                .storage
+                .describe_topic_partitions(
+                    topics
+                        .as_ref()
+                        .map(|topics| topics.iter().map(TopicId::from).collect::<Vec<_>>())
+                        .as_deref(),
+                    response_partition_limit,
+                    cursor.map(Into::into),
+                )
+                .await
+                .map(|topics| Body::DescribeTopicPartitionsResponse {
+                    throttle_time_ms: 0,
+                    topics: Some(topics),
+                    next_cursor: None,
                 })
                 .map_err(Into::into),
 

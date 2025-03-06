@@ -22,13 +22,11 @@ pub struct ApiVersionsRequest;
 
 const TELEMETRY: [i16; 3] = [71, 72, 74];
 const SASL: [i16; 1] = [17];
-const DESCRIBE_TOPIC_PARTITIONS: [i16; 1] = [75];
 
 static UNSUPPORTED: LazyLock<Vec<i16>> = LazyLock::new(|| {
     let mut unsupported = vec![];
     unsupported.extend_from_slice(&TELEMETRY);
     unsupported.extend_from_slice(&SASL);
-    unsupported.extend_from_slice(&DESCRIBE_TOPIC_PARTITIONS);
     unsupported
 });
 

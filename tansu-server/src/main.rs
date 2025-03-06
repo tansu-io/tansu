@@ -20,7 +20,7 @@ use object_store::{
 };
 use tansu_schema_registry::Registry;
 use tansu_server::{
-    EnvVarExp, Error, Result, TracingFormat, broker::Broker,
+    EnvVarExp, Error, NODE_ID, Result, TracingFormat, broker::Broker,
     coordinator::group::administrator::Controller, otel,
 };
 use tansu_storage::{StorageContainer, dynostore::DynoStore, pg::Postgres};
@@ -28,8 +28,6 @@ use tokio::task::JoinSet;
 use tracing::debug;
 use url::Url;
 use uuid::Uuid;
-
-const NODE_ID: i32 = 111;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
