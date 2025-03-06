@@ -53,6 +53,9 @@ use tansu_kafka_sans_io::{
     delete_records_response::DeleteRecordsTopicResult,
     describe_cluster_response::DescribeClusterBroker,
     describe_configs_response::{DescribeConfigsResourceResult, DescribeConfigsResult},
+    describe_topic_partitions_response::{
+        DescribeTopicPartitionsResponsePartition, DescribeTopicPartitionsResponseTopic,
+    },
     list_groups_response::ListedGroup,
     metadata_response::{MetadataResponseBroker, MetadataResponsePartition, MetadataResponseTopic},
     record::{Record, deflated, inflated},
@@ -1558,6 +1561,91 @@ impl Storage for DynoStore {
 
             _ => todo!(),
         }
+    }
+
+    async fn describe_topic_partitions(
+        &mut self,
+        topics: Option<&[TopicId]>,
+        partition_limit: i32,
+        cursor: Option<Topition>,
+    ) -> Result<Vec<DescribeTopicPartitionsResponseTopic>> {
+        let _ = (partition_limit, cursor);
+
+        let mut responses =
+            Vec::with_capacity(topics.map(|topics| topics.len()).unwrap_or_default());
+
+        for topic in topics.unwrap_or_default() {
+            match self
+                .topic_metadata(topic)
+                .await
+                .inspect_err(|error| error!(?error))
+            {
+                Ok(topic_metadata) => responses.push(DescribeTopicPartitionsResponseTopic {
+                    error_code: ErrorCode::None.into(),
+                    name: Some(topic_metadata.topic.name),
+                    topic_id: topic.into(),
+                    is_internal: false,
+                    partitions: Some(
+                        (0..topic_metadata.topic.num_partitions)
+                            .map(|partition_index| DescribeTopicPartitionsResponsePartition {
+                                error_code: ErrorCode::None.into(),
+                                partition_index,
+                                leader_id: self.node,
+                                leader_epoch: -1,
+                                replica_nodes: Some(vec![
+                                    self.node;
+                                    topic_metadata.topic.replication_factor
+                                        as usize
+                                ]),
+                                isr_nodes: Some(vec![
+                                    self.node;
+                                    topic_metadata.topic.replication_factor
+                                        as usize
+                                ]),
+                                eligible_leader_replicas: Some(vec![]),
+                                last_known_elr: Some(vec![]),
+                                offline_replicas: Some(vec![]),
+                            })
+                            .collect(),
+                    ),
+                    topic_authorized_operations: -2147483648,
+                }),
+
+                Err(Error::ObjectStore(object_store::Error::NotFound { .. })) => {
+                    responses.push(DescribeTopicPartitionsResponseTopic {
+                        error_code: ErrorCode::UnknownTopicOrPartition.into(),
+                        name: match topic {
+                            TopicId::Name(name) => Some(name.into()),
+                            TopicId::Id(_) => None,
+                        },
+                        topic_id: match topic {
+                            TopicId::Name(_) => NULL_TOPIC_ID,
+                            TopicId::Id(id) => id.into_bytes(),
+                        },
+                        is_internal: false,
+                        partitions: Some([].into()),
+                        topic_authorized_operations: -2147483648,
+                    })
+                }
+
+                Err(_) => responses.push(DescribeTopicPartitionsResponseTopic {
+                    error_code: ErrorCode::UnknownServerError.into(),
+                    name: match topic {
+                        TopicId::Name(name) => Some(name.into()),
+                        TopicId::Id(_) => None,
+                    },
+                    topic_id: match topic {
+                        TopicId::Name(_) => NULL_TOPIC_ID,
+                        TopicId::Id(id) => id.into_bytes(),
+                    },
+                    is_internal: false,
+                    partitions: Some([].into()),
+                    topic_authorized_operations: -2147483648,
+                }),
+            }
+        }
+
+        Ok(responses)
     }
 
     async fn list_groups(&mut self, states_filter: Option<&[String]>) -> Result<Vec<ListedGroup>> {

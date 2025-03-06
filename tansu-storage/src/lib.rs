@@ -52,6 +52,8 @@ use tansu_kafka_sans_io::{
     describe_cluster_response::DescribeClusterBroker,
     describe_configs_response::DescribeConfigsResult,
     describe_groups_response,
+    describe_topic_partitions_request::{Cursor, TopicRequest},
+    describe_topic_partitions_response::DescribeTopicPartitionsResponseTopic,
     fetch_request::FetchTopic,
     join_group_response::JoinGroupResponseMember,
     list_groups_response::ListedGroup,
@@ -216,6 +218,15 @@ impl Topition {
 
     pub fn partition(&self) -> i32 {
         self.partition
+    }
+}
+
+impl From<Cursor> for Topition {
+    fn from(value: Cursor) -> Self {
+        Self {
+            topic: value.topic_name,
+            partition: value.partition_index,
+        }
     }
 }
 
@@ -442,6 +453,15 @@ impl From<[u8; 16]> for TopicId {
     }
 }
 
+impl From<&TopicId> for [u8; 16] {
+    fn from(value: &TopicId) -> Self {
+        match value {
+            TopicId::Id(id) => id.into_bytes(),
+            TopicId::Name(_) => NULL_TOPIC_ID,
+        }
+    }
+}
+
 impl From<&FetchTopic> for TopicId {
     fn from(value: &FetchTopic) -> Self {
         if let Some(ref name) = value.topic {
@@ -476,6 +496,12 @@ impl From<DeleteTopicState> for TopicId {
 
             DeleteTopicState { topic_id, .. } => topic_id.into(),
         }
+    }
+}
+
+impl From<&TopicRequest> for TopicId {
+    fn from(value: &TopicRequest) -> Self {
+        value.name.to_owned().into()
     }
 }
 
@@ -818,6 +844,19 @@ impl From<&NamedGroupDetail> for describe_groups_response::DescribedGroup {
     }
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct TopitionDetail {
+    error: ErrorCode,
+    topic: TopicId,
+    partitions: Option<Vec<PartitionDetail>>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct PartitionDetail {
+    error: ErrorCode,
+    partition_index: i32,
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct Version {
     e_tag: Option<String>,
@@ -1060,6 +1099,13 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
         group_ids: Option<&[String]>,
         include_authorized_operations: bool,
     ) -> Result<Vec<NamedGroupDetail>>;
+
+    async fn describe_topic_partitions(
+        &mut self,
+        topics: Option<&[TopicId]>,
+        partition_limit: i32,
+        cursor: Option<Topition>,
+    ) -> Result<Vec<DescribeTopicPartitionsResponseTopic>>;
 
     async fn update_group(
         &mut self,
@@ -1407,6 +1453,33 @@ impl Storage for StorageContainer {
         match self {
             Self::Postgres(pg) => pg.describe_config(name, resource, keys).await,
             Self::DynoStore(dyn_store) => dyn_store.describe_config(name, resource, keys).await,
+        }
+        .inspect(|_| {
+            STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
+        })
+        .inspect_err(|_| {
+            STORAGE_CONTAINER_ERRORS.add(1, &attributes);
+        })
+    }
+
+    async fn describe_topic_partitions(
+        &mut self,
+        topics: Option<&[TopicId]>,
+        partition_limit: i32,
+        cursor: Option<Topition>,
+    ) -> Result<Vec<DescribeTopicPartitionsResponseTopic>> {
+        let attributes = [KeyValue::new("method", "describe_topic_partitions")];
+
+        match self {
+            Self::Postgres(pg) => {
+                pg.describe_topic_partitions(topics, partition_limit, cursor)
+                    .await
+            }
+            Self::DynoStore(dyn_store) => {
+                dyn_store
+                    .describe_topic_partitions(topics, partition_limit, cursor)
+                    .await
+            }
         }
         .inspect(|_| {
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
