@@ -138,6 +138,15 @@ jobs:
       STORAGE_ENGINE: ${{matrix.storage}}
       TANSU_IMAGE: ${{steps.meta.outputs.tags}}
     steps:
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ${{env.REGISTRY}}/${{github.repository}}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
       - uses: actions/checkout@v4
         with:
           repository: tansu-io/example-java
