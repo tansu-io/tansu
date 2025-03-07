@@ -136,7 +136,6 @@ jobs:
       RUST_BACKTRACE: 1
       RUST_LOG: warn,tansu_server=debug,tansu_storage=debug,tansu_schema_registry=debug
       STORAGE_ENGINE: ${{matrix.storage}}
-      TANSU_IMAGE: ${{steps.meta.outputs.tags}}
     steps:
       - uses: docker/metadata-action@v5
         id: meta
@@ -151,6 +150,8 @@ jobs:
         with:
           repository: tansu-io/example-java
       - run: docker compose --ansi never --progress plain up --no-color --quiet-pull --detach
+        env:
+          TANSU_IMAGE: ${{steps.meta.outputs.tags}}
       - run: docker compose --ansi never exec minio /usr/bin/mc ready local
       - run: docker compose --ansi never exec minio /usr/bin/mc alias set local http://localhost:9000 ${{ secrets.AWS_ACCESS_KEY_ID }} ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       - run: docker compose --ansi never exec minio /usr/bin/mc mb local/tansu
