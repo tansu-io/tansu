@@ -167,6 +167,8 @@ jobs:
         env:
           TANSU_IMAGE: ${{steps.meta.outputs.tags}}
       - run: bats --trace --verbose-run tests
+        env:
+          TANSU_IMAGE: ${{steps.meta.outputs.tags}}
   release:
     needs: [build, src, third-party-license, typos]
     runs-on: ${{matrix.os}}
