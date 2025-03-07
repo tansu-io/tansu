@@ -153,15 +153,19 @@ jobs:
         env:
           TANSU_IMAGE: ${{steps.meta.outputs.tags}}
       - run: docker compose --ansi never exec minio /usr/bin/mc ready local
+        env:
+          TANSU_IMAGE: ${{steps.meta.outputs.tags}}
       - run: docker compose --ansi never exec minio /usr/bin/mc alias set local http://localhost:9000 ${{ secrets.AWS_ACCESS_KEY_ID }} ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        env:
+          TANSU_IMAGE: ${{steps.meta.outputs.tags}}
       - run: docker compose --ansi never exec minio /usr/bin/mc mb local/tansu
+        env:
+          TANSU_IMAGE: ${{steps.meta.outputs.tags}}
       - run: sudo apt-get update
       - run: sudo apt-get install -y bats
       - run: docker compose exec db /usr/bin/pg_isready --timeout=60
-      - run: docker compose ps -a --format '{{.ID}}\t{{.Service}}'
-      - run: docker compose exec kafka cat /etc/hosts
-      - run: docker compose exec kafka ping -c 6 tansu
-      - run: docker compose exec kafka ping -c 6 minio
+        env:
+          TANSU_IMAGE: ${{steps.meta.outputs.tags}}
       - run: bats --trace --verbose-run tests
   release:
     needs: [build, src, third-party-license, typos]
