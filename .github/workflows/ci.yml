@@ -122,8 +122,6 @@ jobs:
           - apache/kafka:3.9.0
           - apache/kafka:3.8.1
           - apache/kafka:3.7.0
-        tansu:
-          - ghcr.io/tansu-io/tansu:main
     runs-on: ${{matrix.os}}
     env:
       ADVERTISED_LISTENER_URL: tcp://tansu:9092
@@ -138,7 +136,7 @@ jobs:
       RUST_BACKTRACE: 1
       RUST_LOG: warn,tansu_server=debug,tansu_storage=debug,tansu_schema_registry=debug
       STORAGE_ENGINE: ${{matrix.storage}}
-      TANSU_IMAGE: ${{matrix.tansu}}
+      TANSU_IMAGE: ${{steps.meta.outputs.tags}}
     steps:
       - uses: actions/checkout@v4
         with:
