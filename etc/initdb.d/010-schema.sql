@@ -1,5 +1,5 @@
 -- -*- mode: sql; sql-product: postgres; -*-
--- Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+-- Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 --
 -- This program is free software: you can redistribute it and/or modify
 -- it under the terms of the GNU Affero General Public License as
@@ -90,10 +90,9 @@ create table if not exists topic_configuration (
 );
 
 create table if not exists record (
-    id bigint generated always as identity primary key,
     topition int references topition (id),
     offset_id bigint not null,
-    unique (topition, offset_id),
+    primary key (topition, offset_id),
     attributes smallint,
     producer_id bigint,
     producer_epoch smallint,
@@ -102,7 +101,14 @@ create table if not exists record (
     v bytea,
     last_updated timestamp default current_timestamp not null,
     created_at timestamp default current_timestamp not null
-);
+)
+partition by
+    range (topition, offset_id);
+
+create table record_default partition of record for
+values
+from
+    (minvalue, minvalue) to (maxvalue, maxvalue);
 
 create
 or replace view v_record as
@@ -126,10 +132,11 @@ order by
     r.offset_id;
 
 create table if not exists header (
-    id bigint generated always as identity primary key,
-    record int references record (id),
+    topition int,
+    offset_id bigint,
     k bytea,
-    unique (record, k),
+    primary key (topition, offset_id, k),
+    foreign key (topition, offset_id) references record (topition, offset_id),
     v bytea,
     last_updated timestamp default current_timestamp not null,
     created_at timestamp default current_timestamp not null
@@ -169,13 +176,13 @@ select
     c.name as cluster,
     cg.name as consumer_group,
     cgd.e_tag as e_tag,
-    cgd.detail -> 'generation_id' as generation_id,
-    cgd.detail -> 'rebalance_timeout_ms' as rebalance_timeout_ms,
-    cgd.detail -> 'session_timeout_ms' as session_timeout_ms,
-    cgd.detail -> 'skip_assignment' as skip_assignment,
+    json_object_field (cgd.detail, 'generation_id') as generation_id,
+    json_object_field (cgd.detail, 'rebalance_timeout_ms') as rebalance_timeout_ms,
+    json_object_field (cgd.detail, 'session_timeout_ms') as session_timeout_ms,
+    json_object_field (cgd.detail, 'skip_assignment') as skip_assignment,
     array(
         select
-            json_object_keys (cgd.detail -> 'members')
+            json_object_keys (json_object_field (cgd.detail, 'members'))
     ) as members
 from
     cluster c
