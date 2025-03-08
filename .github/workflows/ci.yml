@@ -106,6 +106,69 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+  smoke:
+    needs: [package]
+    environment: integration
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - ubuntu-24.04-arm
+        storage:
+          - s3://tansu/
+          - postgres://postgres:postgres@db
+        kafka:
+          - apache/kafka:3.9.0
+          - apache/kafka:3.8.1
+          - apache/kafka:3.7.0
+    runs-on: ${{matrix.os}}
+    env:
+      ADVERTISED_LISTENER_URL: tcp://tansu:9092
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_ALLOW_HTTP: true
+      AWS_DEFAULT_REGION: auto
+      AWS_ENDPOINT: http://minio:9000
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      CLUSTER_ID: kafka-python-integration
+      KAFKA_IMAGE: ${{matrix.kafka}}
+      PROMETHEUS_LISTENER_URL: tcp://localhost:9100
+      RUST_BACKTRACE: 1
+      RUST_LOG: warn,tansu_server=debug,tansu_storage=debug,tansu_schema_registry=debug
+      STORAGE_ENGINE: ${{matrix.storage}}
+    steps:
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ${{env.REGISTRY}}/${{github.repository}}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+      - uses: actions/checkout@v4
+        with:
+          repository: tansu-io/example-java
+      - run: docker compose --ansi never --progress plain up --no-color --quiet-pull --detach
+        env:
+          TANSU_IMAGE: ${{steps.meta.outputs.tags}}
+      - run: docker compose --ansi never exec minio /usr/bin/mc ready local
+        env:
+          TANSU_IMAGE: ${{steps.meta.outputs.tags}}
+      - run: docker compose --ansi never exec minio /usr/bin/mc alias set local http://localhost:9000 ${{ secrets.AWS_ACCESS_KEY_ID }} ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        env:
+          TANSU_IMAGE: ${{steps.meta.outputs.tags}}
+      - run: docker compose --ansi never exec minio /usr/bin/mc mb local/tansu
+        env:
+          TANSU_IMAGE: ${{steps.meta.outputs.tags}}
+      - run: sudo apt-get update
+      - run: sudo apt-get install -y bats
+      - run: docker compose exec db /usr/bin/pg_isready --timeout=60
+        env:
+          TANSU_IMAGE: ${{steps.meta.outputs.tags}}
+      - run: bats --trace --verbose-run tests
+        env:
+          TANSU_IMAGE: ${{steps.meta.outputs.tags}}
   release:
     needs: [build, src, third-party-license, typos]
     runs-on: ${{matrix.os}}
