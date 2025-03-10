@@ -103,12 +103,9 @@ create table if not exists record (
     created_at timestamp default current_timestamp not null
 )
 partition by
-    range (topition, offset_id);
+    list (topition);
 
-create table record_default partition of record for
-values
-from
-    (minvalue, minvalue) to (maxvalue, maxvalue);
+create table if not exists record_default partition of record default;
 
 create
 or replace view v_record as
@@ -140,7 +137,11 @@ create table if not exists header (
     v bytea,
     last_updated timestamp default current_timestamp not null,
     created_at timestamp default current_timestamp not null
-);
+)
+partition by
+    list (topition);
+
+create table if not exists header_default partition of header default;
 
 create table if not exists consumer_group (
     id int generated always as identity primary key,
