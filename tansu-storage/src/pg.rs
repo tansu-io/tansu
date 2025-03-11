@@ -1225,7 +1225,7 @@ impl Storage for Postgres {
                 _ = self
                     .tx_prepare_execute(
                         &tx,
-                        include_sql!("pg/topic_configuration_insert.sql").as_str(),
+                        include_sql!("pg/topic_configuration_upsert.sql").as_str(),
                         &[
                             &self.cluster,
                             &topic.name,
@@ -1514,21 +1514,21 @@ impl Storage for Postgres {
                 let mut error_code = ErrorCode::None;
 
                 for config in resource.configs.unwrap_or_default() {
-                    match OpType::from(config.config_operation) {
+                    match OpType::try_from(config.config_operation)? {
                         OpType::Set => {
                             let c = self.connection().await?;
 
                             if self
                                 .prepare_query(
                                     &c,
-                                    include_sql!("pg/topic_configuration_insert.sql").as_str(),
+                                    include_sql!("pg/topic_configuration_upsert.sql").as_str(),
                                     &[
                                         &self.cluster,
                                         &resource.resource_name,
                                         &config.name,
                                         &config.value,
                                     ],
-                                    "topic_configuration_insert",
+                                    "topic_configuration",
                                 )
                                 .await
                                 .inspect_err(|err| error!(?err))
@@ -1538,10 +1538,26 @@ impl Storage for Postgres {
                                 break;
                             }
                         }
-                        OpType::Delete => todo!(),
+                        OpType::Delete => {
+                            let c = self.connection().await?;
+
+                            if self
+                                .prepare_query(
+                                    &c,
+                                    include_sql!("pg/topic_configuration_delete.sql").as_str(),
+                                    &[&self.cluster, &resource.resource_name, &config.name],
+                                    "topic_configuration",
+                                )
+                                .await
+                                .inspect_err(|err| error!(?err))
+                                .is_err()
+                            {
+                                error_code = ErrorCode::UnknownServerError;
+                                break;
+                            }
+                        }
                         OpType::Append => todo!(),
                         OpType::Subtract => todo!(),
-                        OpType::Unknown => todo!(),
                     }
                 }
 

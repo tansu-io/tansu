@@ -93,6 +93,7 @@ pub enum Error {
     InvalidAckValue(i16),
     InvalidCoordinatorType(i8),
     InvalidIsolationLevel(i8),
+    InvalidOpType(i8),
     Io(io::Error),
     Message(String),
     NoSuchField(&'static str),
@@ -1631,17 +1632,29 @@ pub enum OpType {
     Delete,
     Append,
     Subtract,
-    Unknown,
 }
 
-impl From<i8> for OpType {
-    fn from(value: i8) -> Self {
+impl TryFrom<i8> for OpType {
+    type Error = Error;
+
+    fn try_from(value: i8) -> Result<Self, Self::Error> {
         match value {
-            0 => Self::Set,
-            1 => Self::Delete,
-            2 => Self::Append,
-            3 => Self::Subtract,
-            _ => Self::Unknown,
+            0 => Ok(Self::Set),
+            1 => Ok(Self::Delete),
+            2 => Ok(Self::Append),
+            3 => Ok(Self::Subtract),
+            otherwise => Err(Error::InvalidOpType(otherwise)),
+        }
+    }
+}
+
+impl From<OpType> for i8 {
+    fn from(value: OpType) -> Self {
+        match value {
+            OpType::Set => 0,
+            OpType::Delete => 1,
+            OpType::Append => 2,
+            OpType::Subtract => 3,
         }
     }
 }

@@ -16,9 +16,11 @@
 use common::{alphanumeric_string, register_broker};
 use rand::{prelude::*, rng};
 use tansu_kafka_sans_io::{
+    ConfigResource, ConfigSource, ErrorCode, OpType,
     create_topics_request::{CreatableTopic, CreatableTopicConfig},
     describe_configs_request::DescribeConfigsResource,
     describe_configs_response::{DescribeConfigsResourceResult, DescribeConfigsResult},
+    incremental_alter_configs_request::{AlterConfigsResource, AlterableConfig},
 };
 use tansu_server::{Result, broker::describe_configs::DescribeConfigsRequest};
 use tansu_storage::{Storage, StorageContainer};
@@ -36,13 +38,16 @@ pub async fn single_topic(
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
 
+    let cleanup_policy = "cleanup.policy";
+    let compact = "compact";
+
     let num_partitions = 6;
     let replication_factor = 0;
     let assignments = Some([].into());
     let configs = Some(
         [CreatableTopicConfig {
-            name: "cleanup.policy".into(),
-            value: Some("compact".into()),
+            name: cleanup_policy.into(),
+            value: Some(compact.into()),
         }]
         .into(),
     );
@@ -61,7 +66,7 @@ pub async fn single_topic(
         .await?;
 
     let resources = [DescribeConfigsResource {
-        resource_type: 2,
+        resource_type: ConfigResource::Topic.into(),
         resource_name: topic_name.clone(),
         configuration_keys: None,
     }];
@@ -81,24 +86,221 @@ pub async fn single_topic(
     assert_eq!(
         results,
         vec![DescribeConfigsResult {
-            error_code: 0,
-            error_message: Some("No error.".into()),
-            resource_type: 2,
+            error_code: ErrorCode::None.into(),
+            error_message: Some(ErrorCode::None.to_string()),
+            resource_type: ConfigResource::Topic.into(),
             resource_name: topic_name,
             configs: Some(
                 [DescribeConfigsResourceResult {
-                    name: "cleanup.policy".into(),
-                    value: Some("compact".into()),
+                    name: cleanup_policy.into(),
+                    value: Some(compact.into()),
                     read_only: false,
                     is_default: None,
-                    config_source: Some(5),
+                    config_source: Some(ConfigSource::DefaultConfig.into()),
                     is_sensitive: false,
                     synonyms: Some([].into()),
-                    config_type: Some(2),
+                    config_type: Some(ConfigResource::Topic.into()),
                     documentation: Some("".into()),
                 }]
                 .into(),
             ),
+        }],
+    );
+
+    debug!(?topic_id);
+    Ok(())
+}
+
+pub async fn alter_single_topic(
+    cluster_id: Uuid,
+    broker_id: i32,
+    mut sc: StorageContainer,
+) -> Result<()> {
+    register_broker(&cluster_id, broker_id, &mut sc).await?;
+
+    let topic_name: String = alphanumeric_string(15);
+    debug!(?topic_name);
+
+    let cleanup_policy = "cleanup.policy";
+    let compact = "compact";
+    let delete = "delete";
+
+    let num_partitions = 6;
+    let replication_factor = 0;
+
+    let topic_id = sc
+        .create_topic(
+            CreatableTopic {
+                name: topic_name.clone(),
+                num_partitions,
+                replication_factor,
+                assignments: Some([].into()),
+                configs: Some([].into()),
+            },
+            false,
+        )
+        .await?;
+
+    let resources = [DescribeConfigsResource {
+        resource_type: ConfigResource::Topic.into(),
+        resource_name: topic_name.clone(),
+        configuration_keys: None,
+    }];
+
+    let include_synonyms = Some(false);
+    let include_documentation = Some(false);
+
+    let results = DescribeConfigsRequest::with_storage(sc.clone())
+        .response(
+            Some(&resources[..]),
+            include_synonyms,
+            include_documentation,
+        )
+        .await
+        .inspect(|results| debug!(?results))?;
+
+    assert_eq!(
+        results,
+        vec![DescribeConfigsResult {
+            error_code: ErrorCode::None.into(),
+            error_message: Some(ErrorCode::None.to_string()),
+            resource_type: ConfigResource::Topic.into(),
+            resource_name: topic_name.clone(),
+            configs: Some([].into(),),
+        }],
+    );
+
+    let response = sc
+        .incremental_alter_resource(AlterConfigsResource {
+            resource_type: ConfigResource::Topic.into(),
+            resource_name: topic_name.clone(),
+            configs: Some(vec![AlterableConfig {
+                name: cleanup_policy.into(),
+                config_operation: OpType::Set.into(),
+                value: Some(compact.into()),
+            }]),
+        })
+        .await?;
+
+    assert_eq!(i16::from(ErrorCode::None), response.error_code);
+    assert_eq!(i8::from(ConfigResource::Topic), response.resource_type);
+    assert_eq!(topic_name, response.resource_name);
+
+    let results = DescribeConfigsRequest::with_storage(sc.clone())
+        .response(
+            Some(&resources[..]),
+            include_synonyms,
+            include_documentation,
+        )
+        .await
+        .inspect(|results| debug!(?results))?;
+
+    assert_eq!(
+        results,
+        vec![DescribeConfigsResult {
+            error_code: ErrorCode::None.into(),
+            error_message: Some(ErrorCode::None.to_string()),
+            resource_type: ConfigResource::Topic.into(),
+            resource_name: topic_name.clone(),
+            configs: Some(
+                [DescribeConfigsResourceResult {
+                    name: cleanup_policy.into(),
+                    value: Some(compact.into()),
+                    read_only: false,
+                    is_default: None,
+                    config_source: Some(ConfigSource::DefaultConfig.into()),
+                    is_sensitive: false,
+                    synonyms: Some([].into()),
+                    config_type: Some(ConfigResource::Topic.into()),
+                    documentation: Some("".into()),
+                }]
+                .into(),
+            ),
+        }],
+    );
+
+    let response = sc
+        .incremental_alter_resource(AlterConfigsResource {
+            resource_type: ConfigResource::Topic.into(),
+            resource_name: topic_name.clone(),
+            configs: Some(vec![AlterableConfig {
+                name: cleanup_policy.into(),
+                config_operation: OpType::Set.into(),
+                value: Some(delete.into()),
+            }]),
+        })
+        .await?;
+
+    assert_eq!(i16::from(ErrorCode::None), response.error_code);
+    assert_eq!(i8::from(ConfigResource::Topic), response.resource_type);
+    assert_eq!(topic_name, response.resource_name);
+
+    let results = DescribeConfigsRequest::with_storage(sc.clone())
+        .response(
+            Some(&resources[..]),
+            include_synonyms,
+            include_documentation,
+        )
+        .await
+        .inspect(|results| debug!(?results))?;
+
+    assert_eq!(
+        results,
+        vec![DescribeConfigsResult {
+            error_code: ErrorCode::None.into(),
+            error_message: Some(ErrorCode::None.to_string()),
+            resource_type: ConfigResource::Topic.into(),
+            resource_name: topic_name.clone(),
+            configs: Some(
+                [DescribeConfigsResourceResult {
+                    name: cleanup_policy.into(),
+                    value: Some(delete.into()),
+                    read_only: false,
+                    is_default: None,
+                    config_source: Some(ConfigSource::DefaultConfig.into()),
+                    is_sensitive: false,
+                    synonyms: Some([].into()),
+                    config_type: Some(ConfigResource::Topic.into()),
+                    documentation: Some("".into()),
+                }]
+                .into(),
+            ),
+        }],
+    );
+
+    let response = sc
+        .incremental_alter_resource(AlterConfigsResource {
+            resource_type: ConfigResource::Topic.into(),
+            resource_name: topic_name.clone(),
+            configs: Some(vec![AlterableConfig {
+                name: cleanup_policy.into(),
+                config_operation: OpType::Delete.into(),
+                value: None,
+            }]),
+        })
+        .await?;
+
+    assert_eq!(i16::from(ErrorCode::None), response.error_code);
+    assert_eq!(i8::from(ConfigResource::Topic), response.resource_type);
+    assert_eq!(topic_name, response.resource_name);
+
+    let results = DescribeConfigsRequest::with_storage(sc.clone())
+        .response(
+            Some(&resources[..]),
+            include_synonyms,
+            include_documentation,
+        )
+        .await
+        .inspect(|results| debug!(?results))?;
+
+    assert_eq!(
+        results,
+        vec![DescribeConfigsResult {
+            error_code: ErrorCode::None.into(),
+            error_message: Some(ErrorCode::None.to_string()),
+            resource_type: ConfigResource::Topic.into(),
+            resource_name: topic_name.clone(),
+            configs: Some([].into(),),
         }],
     );
 
@@ -124,6 +326,21 @@ mod pg {
                     None,
                 )
             })
+    }
+
+    #[tokio::test]
+    async fn alter_single_topic() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        super::alter_single_topic(
+            cluster_id,
+            broker_id,
+            storage_container(cluster_id, broker_id)?,
+        )
+        .await
     }
 
     #[tokio::test]
