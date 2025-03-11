@@ -549,6 +549,23 @@ where
                     .await
             }
 
+            Body::IncrementalAlterConfigsRequest {
+                resources,
+                validate_only,
+            } => {
+                debug!(?resources, ?validate_only);
+                let mut responses = vec![];
+
+                for resource in resources.unwrap_or_default() {
+                    responses.push(self.storage.incremental_alter_resource(resource).await?);
+                }
+
+                Ok(Body::IncrementalAlterConfigsResponse {
+                    throttle_time_ms: 0,
+                    responses: Some(responses),
+                })
+            }
+
             Body::InitProducerIdRequest {
                 transactional_id,
                 transaction_timeout_ms,

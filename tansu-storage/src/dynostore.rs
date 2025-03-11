@@ -56,6 +56,8 @@ use tansu_kafka_sans_io::{
     describe_topic_partitions_response::{
         DescribeTopicPartitionsResponsePartition, DescribeTopicPartitionsResponseTopic,
     },
+    incremental_alter_configs_request::AlterConfigsResource,
+    incremental_alter_configs_response::AlterConfigsResourceResponse,
     list_groups_response::ListedGroup,
     metadata_response::{MetadataResponseBroker, MetadataResponsePartition, MetadataResponseTopic},
     record::{Record, deflated, inflated},
@@ -483,6 +485,14 @@ impl Storage for DynoStore {
     ) -> Result<()> {
         debug!(?broker_registration);
         Ok(())
+    }
+
+    async fn incremental_alter_resource(
+        &mut self,
+        resource: AlterConfigsResource,
+    ) -> Result<AlterConfigsResourceResponse> {
+        let _ = resource;
+        todo!()
     }
 
     async fn create_topic(&mut self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {

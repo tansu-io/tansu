@@ -1626,6 +1626,26 @@ impl From<ConfigSource> for i8 {
     }
 }
 
+pub enum OpType {
+    Set,
+    Delete,
+    Append,
+    Subtract,
+    Unknown,
+}
+
+impl From<i8> for OpType {
+    fn from(value: i8) -> Self {
+        match value {
+            0 => Self::Set,
+            1 => Self::Delete,
+            2 => Self::Append,
+            3 => Self::Subtract,
+            _ => Self::Unknown,
+        }
+    }
+}
+
 pub fn to_system_time(timestamp: i64) -> Result<SystemTime> {
     u64::try_from(timestamp)
         .map(|timestamp| SystemTime::UNIX_EPOCH + Duration::from_millis(timestamp))

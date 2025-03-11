@@ -55,6 +55,8 @@ use tansu_kafka_sans_io::{
     describe_topic_partitions_request::{Cursor, TopicRequest},
     describe_topic_partitions_response::DescribeTopicPartitionsResponseTopic,
     fetch_request::FetchTopic,
+    incremental_alter_configs_request::AlterConfigsResource,
+    incremental_alter_configs_response::AlterConfigsResourceResponse,
     join_group_response::JoinGroupResponseMember,
     list_groups_response::ListedGroup,
     metadata_request::MetadataRequestTopic,
@@ -1026,6 +1028,11 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
 
     async fn create_topic(&mut self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid>;
 
+    async fn incremental_alter_resource(
+        &mut self,
+        resource: AlterConfigsResource,
+    ) -> Result<AlterConfigsResourceResponse>;
+
     async fn delete_records(
         &mut self,
         topics: &[DeleteRecordsTopic],
@@ -1200,6 +1207,24 @@ impl Storage for StorageContainer {
         match self {
             Self::Postgres(pg) => pg.register_broker(broker_registration).await,
             Self::DynoStore(dyn_store) => dyn_store.register_broker(broker_registration).await,
+        }
+        .inspect(|_| {
+            STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
+        })
+        .inspect_err(|_| {
+            STORAGE_CONTAINER_ERRORS.add(1, &attributes);
+        })
+    }
+
+    async fn incremental_alter_resource(
+        &mut self,
+        resource: AlterConfigsResource,
+    ) -> Result<AlterConfigsResourceResponse> {
+        let attributes = [KeyValue::new("method", "incremental_alter_resource")];
+
+        match self {
+            Self::Postgres(pg) => pg.incremental_alter_resource(resource).await,
+            Self::DynoStore(dyn_store) => dyn_store.incremental_alter_resource(resource).await,
         }
         .inspect(|_| {
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
