@@ -183,13 +183,13 @@ select
     c.name as cluster,
     cg.name as consumer_group,
     cgd.e_tag as e_tag,
-    cgd.detail - > 'generation_id' as generation_id,
-    cgd.detail - > 'rebalance_timeout_ms' as rebalance_timeout_ms,
-    cgd.detail - > 'session_timeout_ms' as session_timeout_ms,
-    cgd.detail - > 'skip_assignment' as skip_assignment,
+    json_object_field (cgd.detail, 'generation_id') as generation_id,
+    json_object_field (cgd.detail, 'rebalance_timeout_ms') as rebalance_timeout_ms,
+    json_object_field (cgd.detail, 'session_timeout_ms') as session_timeout_ms,
+    json_object_field (cgd.detail, 'skip_assignment') as skip_assignment,
     array(
         select
-            json_object_keys (cgd.detail - > 'members')
+            json_object_keys (json_object_field (cgd.detail, 'members'))
     ) as members
 from
     cluster c
