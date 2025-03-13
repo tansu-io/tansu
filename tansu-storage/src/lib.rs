@@ -507,6 +507,12 @@ impl From<&TopicRequest> for TopicId {
     }
 }
 
+impl From<&Topition> for TopicId {
+    fn from(value: &Topition) -> Self {
+        value.topic.to_owned().into()
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct BrokerRegistrationRequest {
     pub broker_id: i32,

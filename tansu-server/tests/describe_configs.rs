@@ -159,11 +159,13 @@ pub async fn alter_single_topic(
         .await
         .inspect(|results| debug!(?results))?;
 
+    let none = ErrorCode::None;
+
     assert_eq!(
         results,
         vec![DescribeConfigsResult {
-            error_code: ErrorCode::None.into(),
-            error_message: Some(ErrorCode::None.to_string()),
+            error_code: none.into(),
+            error_message: Some(none.to_string()),
             resource_type: ConfigResource::Topic.into(),
             resource_name: topic_name.clone(),
             configs: Some([].into(),),
@@ -182,7 +184,7 @@ pub async fn alter_single_topic(
         })
         .await?;
 
-    assert_eq!(i16::from(ErrorCode::None), response.error_code);
+    assert_eq!(i16::from(none), response.error_code);
     assert_eq!(i8::from(ConfigResource::Topic), response.resource_type);
     assert_eq!(topic_name, response.resource_name);
 
@@ -198,8 +200,8 @@ pub async fn alter_single_topic(
     assert_eq!(
         results,
         vec![DescribeConfigsResult {
-            error_code: ErrorCode::None.into(),
-            error_message: Some(ErrorCode::None.to_string()),
+            error_code: none.into(),
+            error_message: Some(none.to_string()),
             resource_type: ConfigResource::Topic.into(),
             resource_name: topic_name.clone(),
             configs: Some(
@@ -231,7 +233,7 @@ pub async fn alter_single_topic(
         })
         .await?;
 
-    assert_eq!(i16::from(ErrorCode::None), response.error_code);
+    assert_eq!(i16::from(none), response.error_code);
     assert_eq!(i8::from(ConfigResource::Topic), response.resource_type);
     assert_eq!(topic_name, response.resource_name);
 
@@ -247,8 +249,8 @@ pub async fn alter_single_topic(
     assert_eq!(
         results,
         vec![DescribeConfigsResult {
-            error_code: ErrorCode::None.into(),
-            error_message: Some(ErrorCode::None.to_string()),
+            error_code: none.into(),
+            error_message: Some(none.to_string()),
             resource_type: ConfigResource::Topic.into(),
             resource_name: topic_name.clone(),
             configs: Some(
@@ -280,7 +282,7 @@ pub async fn alter_single_topic(
         })
         .await?;
 
-    assert_eq!(i16::from(ErrorCode::None), response.error_code);
+    assert_eq!(i16::from(none), response.error_code);
     assert_eq!(i8::from(ConfigResource::Topic), response.resource_type);
     assert_eq!(topic_name, response.resource_name);
 
@@ -296,8 +298,8 @@ pub async fn alter_single_topic(
     assert_eq!(
         results,
         vec![DescribeConfigsResult {
-            error_code: ErrorCode::None.into(),
-            error_message: Some(ErrorCode::None.to_string()),
+            error_code: none.into(),
+            error_message: Some(none.to_string()),
             resource_type: ConfigResource::Topic.into(),
             resource_name: topic_name.clone(),
             configs: Some([].into(),),
@@ -377,6 +379,21 @@ mod in_memory {
                     None,
                 )
             })
+    }
+
+    #[tokio::test]
+    async fn alter_single_topic() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        super::alter_single_topic(
+            cluster_id,
+            broker_id,
+            storage_container(cluster_id, broker_id)?,
+        )
+        .await
     }
 
     #[tokio::test]

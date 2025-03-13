@@ -43,11 +43,11 @@ use rand::{prelude::*, rng};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tansu_kafka_sans_io::{
     BatchAttribute, ConfigResource, ConfigSource, ConfigType, ControlBatch, Decoder, Encoder,
-    EndTransactionMarker, ErrorCode, IsolationLevel,
+    EndTransactionMarker, ErrorCode, IsolationLevel, OpType,
     add_partitions_to_txn_response::{
         AddPartitionsToTxnPartitionResult, AddPartitionsToTxnTopicResult,
     },
-    create_topics_request::CreatableTopic,
+    create_topics_request::{CreatableTopic, CreatableTopicConfig},
     delete_groups_response::DeletableGroupResult,
     delete_records_request::DeleteRecordsTopic,
     delete_records_response::DeleteRecordsTopicResult,
@@ -56,7 +56,7 @@ use tansu_kafka_sans_io::{
     describe_topic_partitions_response::{
         DescribeTopicPartitionsResponsePartition, DescribeTopicPartitionsResponseTopic,
     },
-    incremental_alter_configs_request::AlterConfigsResource,
+    incremental_alter_configs_request::{AlterConfigsResource, AlterableConfig},
     incremental_alter_configs_response::AlterConfigsResourceResponse,
     list_groups_response::ListedGroup,
     metadata_response::{MetadataResponseBroker, MetadataResponsePartition, MetadataResponseTopic},
@@ -88,19 +88,22 @@ pub struct DynoStore {
     schemas: Option<Registry>,
     watermarks: Arc<Mutex<BTreeMap<Topition, OptiCon<Watermark>>>>,
     meta: OptiCon<Meta>,
-    topics: Arc<Mutex<BTreeMap<TopicId, TopicMetadata>>>,
 
     object_store: Arc<DynObjectStore>,
 }
 
-type ProducerId = i64;
-type ProducerEpoch = i16;
+type Group = String;
 type Offset = i64;
+type Partition = i32;
+type ProducerEpoch = i16;
+type ProducerId = i64;
 type Sequence = i32;
+type Topic = String;
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 struct Meta {
     producers: BTreeMap<ProducerId, ProducerDetail>,
+    topics: BTreeMap<Topic, TopicMetadata>,
     transactions: BTreeMap<String, Txn>,
 }
 
@@ -195,6 +198,51 @@ impl Meta {
 
         Ok(overlapping)
     }
+
+    fn alter_topic(&mut self, topic: &str, changes: &[AlterableConfig]) -> Result<()> {
+        if let Some(metadata) = self.topics.get_mut(topic) {
+            let mut configuration = metadata
+                .topic
+                .configs
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .fold(BTreeMap::new(), |mut acc, item| {
+                    _ = acc.insert(item.name.as_str(), item.value.as_deref());
+                    acc
+                });
+
+            for change in changes {
+                match OpType::try_from(change.config_operation)? {
+                    OpType::Set => {
+                        _ = configuration.insert(change.name.as_str(), change.value.as_deref());
+                    }
+                    OpType::Delete => {
+                        _ = configuration.remove(change.name.as_str());
+                    }
+                    OpType::Append => todo!(),
+                    OpType::Subtract => todo!(),
+                }
+            }
+
+            metadata
+                .topic
+                .configs
+                .replace(
+                    configuration
+                        .into_iter()
+                        .fold(Vec::new(), |mut acc, (key, value)| {
+                            acc.push(CreatableTopicConfig {
+                                name: key.to_owned(),
+                                value: value.map(|value| value.to_owned()),
+                            });
+                            acc
+                        }),
+                );
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -215,10 +263,6 @@ struct Txn {
     producer: ProducerId,
     epochs: BTreeMap<ProducerEpoch, TxnDetail>,
 }
-
-type Group = String;
-type Topic = String;
-type Partition = i32;
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 struct TxnDetail {
@@ -319,7 +363,6 @@ impl DynoStore {
             schemas: None,
             watermarks: Arc::new(Mutex::new(BTreeMap::new())),
             meta: OptiCon::<Meta>::new(cluster),
-            topics: Arc::new(Mutex::new(BTreeMap::new())),
             object_store: Arc::new(Cache::new(
                 Metron::new(object_store, cluster),
                 Duration::from_millis(5_000),
@@ -338,38 +381,23 @@ impl DynoStore {
         Self { schemas, ..self }
     }
 
-    async fn topic_metadata(&self, topic: &TopicId) -> Result<TopicMetadata> {
+    async fn topic_metadata(&self, topic: &TopicId) -> Result<Option<TopicMetadata>> {
         debug!(?topic);
 
-        if let Ok(guard) = self.topics.lock() {
-            if let Some(topic_metadata) = guard.get(topic) {
-                return Ok(topic_metadata.to_owned());
-            }
-        }
+        self.meta
+            .with(&self.object_store, |meta| match topic {
+                TopicId::Name(name) => Ok(meta.topics.get(name).cloned()),
+                TopicId::Id(id) => {
+                    for (_, metadata) in meta.topics.iter() {
+                        if &metadata.id == id {
+                            return Ok(Some(metadata.clone()));
+                        }
+                    }
 
-        let location = match topic {
-            TopicId::Name(name) => {
-                Path::from(format!("clusters/{}/topics/{}.json", self.cluster, name))
-            }
-
-            TopicId::Id(id) => Path::from(format!(
-                "clusters/{}/topics/uuids/{}.json",
-                self.cluster, id
-            )),
-        };
-
-        let get_result = self.object_store.get(&location).await?;
-
-        let encoded = get_result.bytes().await?;
-
-        let topic_metadata = serde_json::from_slice::<TopicMetadata>(&encoded[..])
-            .inspect(|topic_metadata| debug!(?topic_metadata, ?topic))?;
-
-        if let Ok(mut guard) = self.topics.lock() {
-            _ = guard.insert(topic.to_owned(), topic_metadata.clone());
-        }
-
-        Ok(topic_metadata)
+                    Ok(None)
+                }
+            })
+            .await
     }
 
     fn encode(&self, deflated: deflated::Batch) -> Result<PutPayload> {
@@ -492,111 +520,102 @@ impl Storage for DynoStore {
         resource: AlterConfigsResource,
     ) -> Result<AlterConfigsResourceResponse> {
         let _ = resource;
-        todo!()
+
+        match ConfigResource::from(resource.resource_type) {
+            ConfigResource::Group => Ok(AlterConfigsResourceResponse {
+                error_code: ErrorCode::None.into(),
+                error_message: Some("".into()),
+                resource_type: resource.resource_type,
+                resource_name: resource.resource_name,
+            }),
+            ConfigResource::ClientMetric => Ok(AlterConfigsResourceResponse {
+                error_code: ErrorCode::None.into(),
+                error_message: Some("".into()),
+                resource_type: resource.resource_type,
+                resource_name: resource.resource_name,
+            }),
+            ConfigResource::BrokerLogger => Ok(AlterConfigsResourceResponse {
+                error_code: ErrorCode::None.into(),
+                error_message: Some("".into()),
+                resource_type: resource.resource_type,
+                resource_name: resource.resource_name,
+            }),
+            ConfigResource::Broker => Ok(AlterConfigsResourceResponse {
+                error_code: ErrorCode::None.into(),
+                error_message: Some("".into()),
+                resource_type: resource.resource_type,
+                resource_name: resource.resource_name,
+            }),
+            ConfigResource::Topic => self
+                .meta
+                .with_mut(&self.object_store, |meta| {
+                    meta.alter_topic(
+                        resource.resource_name.as_str(),
+                        resource.configs.as_deref().unwrap_or_default(),
+                    )
+                })
+                .await
+                .map(|()| AlterConfigsResourceResponse {
+                    error_code: ErrorCode::None.into(),
+                    error_message: Some("".into()),
+                    resource_type: resource.resource_type,
+                    resource_name: resource.resource_name,
+                }),
+            ConfigResource::Unknown => Ok(AlterConfigsResourceResponse {
+                error_code: ErrorCode::None.into(),
+                error_message: Some("".into()),
+                resource_type: resource.resource_type,
+                resource_name: resource.resource_name,
+            }),
+        }
     }
 
     async fn create_topic(&mut self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {
         debug!(?topic, ?validate_only);
 
-        let id = Uuid::now_v7();
+        match self
+            .meta
+            .with_mut(&self.object_store, |meta| {
+                if meta.topics.contains_key(topic.name.as_str()) {
+                    return Err(Error::Api(ErrorCode::TopicAlreadyExists));
+                }
 
-        let td = TopicMetadata { id, topic };
+                let id = Uuid::now_v7();
+                let td = TopicMetadata {
+                    id,
+                    topic: topic.clone(),
+                };
 
-        let payload = serde_json::to_vec(&td)
-            .map(Bytes::from)
-            .map(PutPayload::from)?;
+                assert_eq!(None, meta.topics.insert(topic.name.clone(), td));
+                Ok(id)
+            })
+            .await
+        {
+            Ok(id) => {
+                for partition in 0..topic.num_partitions {
+                    let topition = Topition::new(topic.name.as_str(), partition);
 
-        let options = PutOptions {
-            mode: PutMode::Create,
-            tags: TagSet::default(),
-            attributes: json_content_type(),
-        };
+                    let watermark = self.watermarks.lock().map(|mut locked| {
+                        locked
+                            .entry(topition.to_owned())
+                            .or_insert(OptiCon::<Watermark>::new(self.cluster.as_str(), &topition))
+                            .to_owned()
+                    })?;
 
-        match (
-            self.object_store
-                .put_opts(
-                    &Path::from(format!(
-                        "clusters/{}/topics/{}.json",
-                        self.cluster, td.topic.name,
-                    )),
-                    payload.clone(),
-                    options.clone(),
-                )
-                .await
-                .inspect(|put_result| debug!(?put_result))
-                .inspect_err(|error| match error {
-                    object_store::Error::AlreadyExists { .. } => {
-                        debug!(?error, ?td, ?validate_only)
-                    }
+                    watermark
+                        .with_mut(&self.object_store, |watermark| {
+                            assert_eq!(None, watermark.high.take());
+                            assert_eq!(None, watermark.low.take());
 
-                    _ => error!(?error, ?td, ?validate_only),
-                }),
-            self.object_store
-                .put_opts(
-                    &Path::from(format!(
-                        "clusters/{}/topics/uuids/{}.json",
-                        self.cluster, id,
-                    )),
-                    payload,
-                    options,
-                )
-                .await
-                .inspect(|put_result| debug!(?put_result))
-                .inspect_err(|error| match error {
-                    object_store::Error::AlreadyExists { .. } => {
-                        debug!(?error, ?td, ?validate_only)
-                    }
-
-                    _ => error!(?error, ?td, ?validate_only),
-                }),
-        ) {
-            (Ok(_), Ok(_)) => {
-                let payload = serde_json::to_vec(&Watermark::default())
-                    .map(Bytes::from)
-                    .map(PutPayload::from)?;
-
-                for partition in 0..td.topic.num_partitions {
-                    let location = Path::from(format!(
-                        "clusters/{}/topics/{}/partitions/{:0>10}/watermark.json",
-                        self.cluster, td.topic.name, partition,
-                    ));
-
-                    let options = PutOptions {
-                        mode: PutMode::Create,
-                        tags: TagSet::default(),
-                        attributes: json_content_type(),
-                    };
-
-                    match self
-                        .object_store
-                        .put_opts(&location, payload.clone(), options)
-                        .await
-                        .inspect(|put_result| debug!(%location, ?put_result))
-                        .inspect_err(|error| match error {
-                            object_store::Error::AlreadyExists { .. } => {
-                                debug!(?error, ?td, ?validate_only)
-                            }
-
-                            _ => error!(?error, ?td, ?validate_only),
-                        }) {
-                        Ok(_) => continue,
-
-                        Err(object_store::Error::AlreadyExists { .. }) => {
-                            return Err(Error::Api(ErrorCode::TopicAlreadyExists));
-                        }
-
-                        _ => return Err(Error::Api(ErrorCode::UnknownServerError)),
-                    }
+                            Ok(())
+                        })
+                        .await?;
                 }
 
                 Ok(id)
             }
 
-            (Err(object_store::Error::AlreadyExists { .. }), _) => {
-                Err(Error::Api(ErrorCode::TopicAlreadyExists))
-            }
-
-            (_, _) => Err(Error::Api(ErrorCode::UnknownServerError)),
+            error @ Err(_) => error,
         }
     }
 
@@ -611,7 +630,14 @@ impl Storage for DynoStore {
     async fn delete_topic(&mut self, topic: &TopicId) -> Result<ErrorCode> {
         debug!(?topic);
 
-        if let Ok(metadata) = self.topic_metadata(topic).await {
+        if let Some(metadata) = self.topic_metadata(topic).await? {
+            self.meta
+                .with_mut(&self.object_store, |meta| {
+                    meta.topics.remove(metadata.topic.name.as_str());
+                    Ok(())
+                })
+                .await?;
+
             let prefix = Path::from(format!(
                 "clusters/{}/topics/{}/",
                 self.cluster, metadata.topic.name,
@@ -663,21 +689,6 @@ impl Storage for DynoStore {
                 .delete_stream(locations)
                 .try_collect::<Vec<Path>>()
                 .await?;
-
-            self.object_store
-                .delete(&Path::from(format!(
-                    "clusters/{}/topics/uuids/{}.json",
-                    self.cluster, metadata.id,
-                )))
-                .await?;
-
-            self.object_store
-                .delete(&Path::from(format!(
-                    "clusters/{}/topics/{}.json",
-                    self.cluster, metadata.topic.name,
-                )))
-                .await?;
-
             Ok(ErrorCode::None)
         } else {
             Ok(ErrorCode::UnknownTopicOrPartition)
@@ -1150,13 +1161,9 @@ impl Storage for DynoStore {
 
         for (topition, offset_commit) in offsets {
             if self
-                .object_store
-                .head(&Path::from(format!(
-                    "clusters/{}/topics/{}.json",
-                    self.cluster, topition.topic,
-                )))
-                .await
-                .is_ok()
+                .topic_metadata(&TopicId::from(topition))
+                .await?
+                .is_some()
             {
                 let location = Path::from(format!(
                     "clusters/{}/groups/consumers/{}/offsets/{}/partitions/{:0>10}.json",
@@ -1314,7 +1321,7 @@ impl Storage for DynoStore {
                         .await
                         .inspect_err(|error| error!(?error))
                     {
-                        Ok(topic_metadata) => {
+                        Ok(Some(topic_metadata)) => {
                             let name = Some(topic_metadata.topic.name.to_owned());
                             let error_code = ErrorCode::None.into();
                             let topic_id = Some(topic_metadata.id.into_bytes());
@@ -1373,22 +1380,20 @@ impl Storage for DynoStore {
                             }
                         }
 
-                        Err(Error::ObjectStore(object_store::Error::NotFound { .. })) => {
-                            MetadataResponseTopic {
-                                error_code: ErrorCode::UnknownTopicOrPartition.into(),
-                                name: match topic {
-                                    TopicId::Name(name) => Some(name.into()),
-                                    TopicId::Id(_) => None,
-                                },
-                                topic_id: Some(match topic {
-                                    TopicId::Name(_) => NULL_TOPIC_ID,
-                                    TopicId::Id(id) => id.into_bytes(),
-                                }),
-                                is_internal: Some(false),
-                                partitions: Some([].into()),
-                                topic_authorized_operations: Some(-2147483648),
-                            }
-                        }
+                        Ok(None) => MetadataResponseTopic {
+                            error_code: ErrorCode::UnknownTopicOrPartition.into(),
+                            name: match topic {
+                                TopicId::Name(name) => Some(name.into()),
+                                TopicId::Id(_) => None,
+                            },
+                            topic_id: Some(match topic {
+                                TopicId::Name(_) => NULL_TOPIC_ID,
+                                TopicId::Id(id) => id.into_bytes(),
+                            }),
+                            is_internal: Some(false),
+                            partitions: Some([].into()),
+                            topic_authorized_operations: Some(-2147483648),
+                        },
 
                         Err(_) => MetadataResponseTopic {
                             error_code: ErrorCode::UnknownServerError.into(),
@@ -1413,112 +1418,73 @@ impl Storage for DynoStore {
             }
 
             _ => {
-                let location = Path::from(format!("clusters/{}/topics/", self.cluster));
-                debug!(%location);
+                self.meta
+                    .with(&self.object_store, |meta| {
+                        let mut responses = vec![];
 
-                let mut responses = vec![];
+                        for (name, topic_metadata) in meta.topics.iter() {
+                            debug!(?name, ?topic_metadata);
 
-                let Ok(list_result) = self
-                    .object_store
-                    .list_with_delimiter(Some(&location))
-                    .await
-                    .inspect_err(|error| error!(?error, %location))
-                else {
-                    return Ok(MetadataResponse {
-                        cluster: Some(self.cluster.clone()),
-                        controller: Some(self.node),
-                        brokers,
-                        topics: responses,
-                    });
-                };
+                            let name = Some(name.to_owned());
+                            let error_code = ErrorCode::None.into();
+                            let topic_id = Some(topic_metadata.id.into_bytes());
+                            let is_internal = Some(false);
+                            let partitions = topic_metadata.topic.num_partitions;
+                            let replication_factor = topic_metadata.topic.replication_factor;
 
-                debug!(?list_result);
+                            debug!(
+                                ?error_code,
+                                ?topic_id,
+                                ?name,
+                                ?is_internal,
+                                ?partitions,
+                                ?replication_factor
+                            );
 
-                for meta in list_result.objects {
-                    debug!(?meta);
+                            let mut rng = rng();
+                            let mut broker_ids: Vec<_> =
+                                brokers.iter().map(|broker| broker.node_id).collect();
+                            broker_ids.shuffle(&mut rng);
 
-                    let Ok(payload) = self
-                        .object_store
-                        .get(&meta.location)
-                        .await
-                        .inspect_err(|error| error!(?error, %location))
-                    else {
-                        continue;
-                    };
+                            let mut brokers = broker_ids.into_iter().cycle();
 
-                    let Ok(encoded) = payload
-                        .bytes()
-                        .await
-                        .inspect_err(|error| error!(?error, %location))
-                    else {
-                        continue;
-                    };
+                            let partitions = Some(
+                                (0..partitions)
+                                    .map(|partition_index| {
+                                        let leader_id = brokers.next().expect("cycling");
 
-                    let Ok(topic_metadata) = serde_json::from_slice::<TopicMetadata>(&encoded[..])
-                        .inspect_err(|error| error!(?error, %location))
-                    else {
-                        continue;
-                    };
+                                        let replica_nodes = Some(
+                                            (0..replication_factor)
+                                                .map(|_replica| brokers.next().expect("cycling"))
+                                                .collect(),
+                                        );
+                                        let isr_nodes = replica_nodes.clone();
 
-                    let name = Some(topic_metadata.topic.name.to_owned());
-                    let error_code = ErrorCode::None.into();
-                    let topic_id = Some(topic_metadata.id.into_bytes());
-                    let is_internal = Some(false);
-                    let partitions = topic_metadata.topic.num_partitions;
-                    let replication_factor = topic_metadata.topic.replication_factor;
+                                        MetadataResponsePartition {
+                                            error_code,
+                                            partition_index,
+                                            leader_id,
+                                            leader_epoch: Some(-1),
+                                            replica_nodes,
+                                            isr_nodes,
+                                            offline_replicas: Some([].into()),
+                                        }
+                                    })
+                                    .collect(),
+                            );
 
-                    debug!(
-                        ?error_code,
-                        ?topic_id,
-                        ?name,
-                        ?is_internal,
-                        ?partitions,
-                        ?replication_factor
-                    );
-
-                    let mut rng = rng();
-                    let mut broker_ids: Vec<_> =
-                        brokers.iter().map(|broker| broker.node_id).collect();
-                    broker_ids.shuffle(&mut rng);
-
-                    let mut brokers = broker_ids.into_iter().cycle();
-
-                    let partitions = Some(
-                        (0..partitions)
-                            .map(|partition_index| {
-                                let leader_id = brokers.next().expect("cycling");
-
-                                let replica_nodes = Some(
-                                    (0..replication_factor)
-                                        .map(|_replica| brokers.next().expect("cycling"))
-                                        .collect(),
-                                );
-                                let isr_nodes = replica_nodes.clone();
-
-                                MetadataResponsePartition {
-                                    error_code,
-                                    partition_index,
-                                    leader_id,
-                                    leader_epoch: Some(-1),
-                                    replica_nodes,
-                                    isr_nodes,
-                                    offline_replicas: Some([].into()),
-                                }
-                            })
-                            .collect(),
-                    );
-
-                    responses.push(MetadataResponseTopic {
-                        error_code,
-                        name,
-                        topic_id,
-                        is_internal,
-                        partitions,
-                        topic_authorized_operations: Some(-2147483648),
-                    });
-                }
-
-                responses
+                            responses.push(MetadataResponseTopic {
+                                error_code,
+                                name,
+                                topic_id,
+                                is_internal,
+                                partitions,
+                                topic_authorized_operations: Some(-2147483648),
+                            });
+                        }
+                        Ok(responses)
+                    })
+                    .await?
             }
         };
 
@@ -1540,7 +1506,7 @@ impl Storage for DynoStore {
 
         match resource {
             ConfigResource::Topic => match self.topic_metadata(&TopicId::Name(name.into())).await {
-                Ok(topic_metadata) => {
+                Ok(Some(topic_metadata)) => {
                     let error_code = ErrorCode::None;
 
                     Ok(DescribeConfigsResult {
@@ -1566,6 +1532,8 @@ impl Storage for DynoStore {
                         }),
                     })
                 }
+
+                Ok(None) => todo!(),
                 Err(_) => todo!(),
             },
 
@@ -1590,7 +1558,7 @@ impl Storage for DynoStore {
                 .await
                 .inspect_err(|error| error!(?error))
             {
-                Ok(topic_metadata) => responses.push(DescribeTopicPartitionsResponseTopic {
+                Ok(Some(topic_metadata)) => responses.push(DescribeTopicPartitionsResponseTopic {
                     error_code: ErrorCode::None.into(),
                     name: Some(topic_metadata.topic.name),
                     topic_id: topic.into(),
@@ -1621,22 +1589,20 @@ impl Storage for DynoStore {
                     topic_authorized_operations: -2147483648,
                 }),
 
-                Err(Error::ObjectStore(object_store::Error::NotFound { .. })) => {
-                    responses.push(DescribeTopicPartitionsResponseTopic {
-                        error_code: ErrorCode::UnknownTopicOrPartition.into(),
-                        name: match topic {
-                            TopicId::Name(name) => Some(name.into()),
-                            TopicId::Id(_) => None,
-                        },
-                        topic_id: match topic {
-                            TopicId::Name(_) => NULL_TOPIC_ID,
-                            TopicId::Id(id) => id.into_bytes(),
-                        },
-                        is_internal: false,
-                        partitions: Some([].into()),
-                        topic_authorized_operations: -2147483648,
-                    })
-                }
+                Ok(None) => responses.push(DescribeTopicPartitionsResponseTopic {
+                    error_code: ErrorCode::UnknownTopicOrPartition.into(),
+                    name: match topic {
+                        TopicId::Name(name) => Some(name.into()),
+                        TopicId::Id(_) => None,
+                    },
+                    topic_id: match topic {
+                        TopicId::Name(_) => NULL_TOPIC_ID,
+                        TopicId::Id(id) => id.into_bytes(),
+                    },
+                    is_internal: false,
+                    partitions: Some([].into()),
+                    topic_authorized_operations: -2147483648,
+                }),
 
                 Err(_) => responses.push(DescribeTopicPartitionsResponseTopic {
                     error_code: ErrorCode::UnknownServerError.into(),
