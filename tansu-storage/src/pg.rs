@@ -32,7 +32,7 @@ use rand::{prelude::*, rng};
 use serde_json::Value;
 use tansu_kafka_sans_io::{
     BatchAttribute, ConfigResource, ConfigSource, ConfigType, ControlBatch, EndTransactionMarker,
-    ErrorCode, IsolationLevel,
+    ErrorCode, IsolationLevel, OpType,
     add_partitions_to_txn_response::{
         AddPartitionsToTxnPartitionResult, AddPartitionsToTxnTopicResult,
     },
@@ -45,6 +45,8 @@ use tansu_kafka_sans_io::{
     describe_topic_partitions_response::{
         DescribeTopicPartitionsResponsePartition, DescribeTopicPartitionsResponseTopic,
     },
+    incremental_alter_configs_request::AlterConfigsResource,
+    incremental_alter_configs_response::AlterConfigsResourceResponse,
     list_groups_response::ListedGroup,
     metadata_response::{MetadataResponseBroker, MetadataResponsePartition, MetadataResponseTopic},
     record::{Header, Record, deflated, inflated},
@@ -1223,7 +1225,7 @@ impl Storage for Postgres {
                 _ = self
                     .tx_prepare_execute(
                         &tx,
-                        include_sql!("pg/topic_configuration_insert.sql").as_str(),
+                        include_sql!("pg/topic_configuration_upsert.sql").as_str(),
                         &[
                             &self.cluster,
                             &topic.name,
@@ -1477,6 +1479,102 @@ impl Storage for Postgres {
         tx.commit().await.inspect_err(|err| error!(?err))?;
 
         Ok(ErrorCode::None)
+    }
+
+    async fn incremental_alter_resource(
+        &mut self,
+        resource: AlterConfigsResource,
+    ) -> Result<AlterConfigsResourceResponse> {
+        match ConfigResource::from(resource.resource_type) {
+            ConfigResource::Group => Ok(AlterConfigsResourceResponse {
+                error_code: ErrorCode::None.into(),
+                error_message: Some("".into()),
+                resource_type: resource.resource_type,
+                resource_name: resource.resource_name,
+            }),
+            ConfigResource::ClientMetric => Ok(AlterConfigsResourceResponse {
+                error_code: ErrorCode::None.into(),
+                error_message: Some("".into()),
+                resource_type: resource.resource_type,
+                resource_name: resource.resource_name,
+            }),
+            ConfigResource::BrokerLogger => Ok(AlterConfigsResourceResponse {
+                error_code: ErrorCode::None.into(),
+                error_message: Some("".into()),
+                resource_type: resource.resource_type,
+                resource_name: resource.resource_name,
+            }),
+            ConfigResource::Broker => Ok(AlterConfigsResourceResponse {
+                error_code: ErrorCode::None.into(),
+                error_message: Some("".into()),
+                resource_type: resource.resource_type,
+                resource_name: resource.resource_name,
+            }),
+            ConfigResource::Topic => {
+                let mut error_code = ErrorCode::None;
+
+                for config in resource.configs.unwrap_or_default() {
+                    match OpType::try_from(config.config_operation)? {
+                        OpType::Set => {
+                            let c = self.connection().await?;
+
+                            if self
+                                .prepare_query(
+                                    &c,
+                                    include_sql!("pg/topic_configuration_upsert.sql").as_str(),
+                                    &[
+                                        &self.cluster,
+                                        &resource.resource_name,
+                                        &config.name,
+                                        &config.value,
+                                    ],
+                                    "topic_configuration",
+                                )
+                                .await
+                                .inspect_err(|err| error!(?err))
+                                .is_err()
+                            {
+                                error_code = ErrorCode::UnknownServerError;
+                                break;
+                            }
+                        }
+                        OpType::Delete => {
+                            let c = self.connection().await?;
+
+                            if self
+                                .prepare_query(
+                                    &c,
+                                    include_sql!("pg/topic_configuration_delete.sql").as_str(),
+                                    &[&self.cluster, &resource.resource_name, &config.name],
+                                    "topic_configuration",
+                                )
+                                .await
+                                .inspect_err(|err| error!(?err))
+                                .is_err()
+                            {
+                                error_code = ErrorCode::UnknownServerError;
+                                break;
+                            }
+                        }
+                        OpType::Append => todo!(),
+                        OpType::Subtract => todo!(),
+                    }
+                }
+
+                Ok(AlterConfigsResourceResponse {
+                    error_code: error_code.into(),
+                    error_message: Some("".into()),
+                    resource_type: resource.resource_type,
+                    resource_name: resource.resource_name,
+                })
+            }
+            ConfigResource::Unknown => Ok(AlterConfigsResourceResponse {
+                error_code: ErrorCode::None.into(),
+                error_message: Some("".into()),
+                resource_type: resource.resource_type,
+                resource_name: resource.resource_name,
+            }),
+        }
     }
 
     async fn produce(
