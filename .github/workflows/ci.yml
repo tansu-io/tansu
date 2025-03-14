@@ -108,7 +108,6 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
   smoke:
     needs: [package]
-    environment: integration
     strategy:
       fail-fast: false
       matrix:
@@ -125,11 +124,11 @@ jobs:
     runs-on: ${{matrix.os}}
     env:
       ADVERTISED_LISTENER_URL: tcp://tansu:9092
-      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_ACCESS_KEY_ID: minioadmin
       AWS_ALLOW_HTTP: true
       AWS_DEFAULT_REGION: auto
       AWS_ENDPOINT: http://minio:9000
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_SECRET_ACCESS_KEY: minioadmin
       CLUSTER_ID: kafka-python-integration
       KAFKA_IMAGE: ${{matrix.kafka}}
       PROMETHEUS_LISTENER_URL: tcp://localhost:9100
@@ -155,7 +154,7 @@ jobs:
       - run: docker compose --ansi never exec minio /usr/bin/mc ready local
         env:
           TANSU_IMAGE: ${{steps.meta.outputs.tags}}
-      - run: docker compose --ansi never exec minio /usr/bin/mc alias set local http://localhost:9000 ${{ secrets.AWS_ACCESS_KEY_ID }} ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      - run: docker compose --ansi never exec minio /usr/bin/mc alias set local http://localhost:9000 ${{ env.AWS_ACCESS_KEY_ID }} ${{ env.AWS_SECRET_ACCESS_KEY }}
         env:
           TANSU_IMAGE: ${{steps.meta.outputs.tags}}
       - run: docker compose --ansi never exec minio /usr/bin/mc mb local/tansu

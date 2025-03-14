@@ -83,7 +83,7 @@ where
     D: Clone + Debug + Default + DeserializeOwned + PartialEq + Serialize,
 {
     async fn get(&self, object_store: &impl ObjectStore) -> Result<()> {
-        debug!(?self);
+        debug!(%self.path);
 
         const METHOD: &str = "get";
         REQUESTS.add(1, &[KeyValue::new("method", METHOD)]);
@@ -136,7 +136,7 @@ where
     where
         F: Fn(&D) -> Result<E>,
     {
-        debug!(?self);
+        debug!(%self.path);
 
         const METHOD: &str = "with";
         REQUESTS.add(1, &[KeyValue::new("method", METHOD)]);
@@ -227,7 +227,7 @@ where
         E: Debug,
         F: Fn(&mut D) -> Result<E>,
     {
-        debug!(?self);
+        debug!(%self.path);
 
         const METHOD: &str = "with_mut";
         REQUESTS.add(1, &[KeyValue::new("method", METHOD)]);

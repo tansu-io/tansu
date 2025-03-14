@@ -89,6 +89,20 @@ create table if not exists topic_configuration (
     created_at timestamp default current_timestamp not null
 );
 
+create
+or replace view v_topic_configuration as
+select
+    c.name as cluster,
+    t.name as topic,
+    tc.name as name,
+    tc.value as value,
+    tc.created_at as created_at,
+    tc.last_updated as last_updated
+from
+    cluster c
+    join topic t on t.cluster = c.id
+    join topic_configuration tc on tc.topic = t.id;
+
 create table if not exists record (
     topition int references topition (id),
     offset_id bigint not null,

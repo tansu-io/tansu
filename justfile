@@ -105,6 +105,9 @@ test-topic-describe:
 test-topic-create:
     kafka-topics --bootstrap-server ${ADVERTISED_LISTENER} --config cleanup.policy=compact --partitions=3 --replication-factor=1 --create --topic test
 
+test-topic-alter:
+    kafka-configs --bootstrap-server ${ADVERTISED_LISTENER} --alter --entity-type topics --entity-name test --add-config retention.ms=3600000,retention.bytes=524288000
+
 test-topic-delete:
     kafka-topics --bootstrap-server ${ADVERTISED_LISTENER} --delete --topic test
 
