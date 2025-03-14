@@ -1,5 +1,5 @@
 -- -*- mode: sql; sql-product: postgres; -*-
--- Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+-- Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 --
 -- This program is free software: you can redistribute it and/or modify
 -- it under the terms of the GNU Affero General Public License as
@@ -15,12 +15,12 @@
 -- along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 select h.k, h.v
-from cluster c, header h, record r, topic t, topition tp
+from header h
+join record r on h.topition = r.topition and h.offset_id = r.offset_id
+join topition tp on tp.id = r.topition
+join topic t on tp.topic = t.id
+join cluster c on t.cluster = c.id
 where c.name = $1
 and t.name = $2
 and tp.partition = $3
-and r.offset_id = $4
-and t.cluster = c.id
-and tp.topic = t.id
-and r.topition = tp.id
-and h.record = r.id;
+and r.offset_id = $4;
