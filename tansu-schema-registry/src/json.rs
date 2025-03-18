@@ -13,12 +13,14 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use crate::{Error, Result, Validator};
+use crate::{AsArrow, Error, Result, Validator};
+use arrow_schema::{DataType, Field, Fields};
 use bytes::Bytes;
 use serde_json::Value;
 use tansu_kafka_sans_io::{ErrorCode, record::inflated::Batch};
 use tracing::{debug, warn};
 
+#[derive(Debug)]
 pub(crate) struct Schema {
     key: Option<jsonschema::Validator>,
     value: Option<jsonschema::Validator>,
@@ -86,6 +88,179 @@ impl Validator for Schema {
         }
 
         Ok(())
+    }
+}
+
+fn common_numeric_data_type(data_types: &[DataType]) -> Vec<DataType> {
+    let mut result = vec![];
+
+    if data_types.contains(&DataType::Float64) {
+        result.push(DataType::Float64)
+    } else if data_types.contains(&DataType::Int64) {
+        result.push(DataType::Int64)
+    } else if data_types.contains(&DataType::UInt64) {
+        result.push(DataType::UInt64)
+    }
+
+    for data_type in data_types {
+        if data_type == &DataType::Float64
+            || data_type == &DataType::Int64
+            || data_type == &DataType::UInt64
+        {
+            continue;
+        }
+
+        result.push(data_type.to_owned());
+    }
+
+    result.sort();
+    result.dedup();
+    result
+}
+
+fn common_struct_type(data_types: &[DataType]) -> Vec<DataType> {
+    let _ = data_types
+        .iter()
+        .filter(|data_type| matches!(data_type, DataType::Struct(_)));
+
+    vec![]
+}
+
+fn common_data_type(types: &[DataType]) -> Result<DataType> {
+    match common_numeric_data_type(types).as_slice() {
+        [data_type] => Ok(data_type.to_owned()),
+
+        [DataType::Null, data_type] => Ok(data_type.to_owned()),
+        [data_type, DataType::Null] => Ok(data_type.to_owned()),
+
+        [DataType::UInt64, DataType::Int64] => Ok(DataType::Int64),
+        [DataType::Int64, DataType::UInt64] => Ok(DataType::Int64),
+
+        [data_type, DataType::Float64]
+            if data_type == &DataType::Int64 || data_type == &DataType::UInt64 =>
+        {
+            Ok(DataType::Float64)
+        }
+        [DataType::Float64, data_type]
+            if data_type == &DataType::Int64 || data_type == &DataType::UInt64 =>
+        {
+            Ok(DataType::Float64)
+        }
+
+        [DataType::Float64, dt1, dt2]
+            if (dt1 == &DataType::Int64 || dt1 == &DataType::UInt64)
+                && (dt2 == &DataType::Int64 || dt2 == &DataType::UInt64) =>
+        {
+            Ok(DataType::Float64)
+        }
+
+        [dt1, DataType::Float64, dt2]
+            if (dt1 == &DataType::Int64 || dt1 == &DataType::UInt64)
+                && (dt2 == &DataType::Int64 || dt2 == &DataType::UInt64) =>
+        {
+            Ok(DataType::Float64)
+        }
+        [dt1, dt2, DataType::Float64]
+            if (dt1 == &DataType::Int64 || dt1 == &DataType::UInt64)
+                && (dt2 == &DataType::Int64 || dt2 == &DataType::UInt64) =>
+        {
+            Ok(DataType::Float64)
+        }
+
+        otherwise => Err(Error::NoCommonType(
+            otherwise
+                .iter()
+                .map(|data_type| data_type.to_owned())
+                .collect(),
+        )),
+    }
+}
+
+fn sort_dedup(mut input: Vec<DataType>) -> Vec<DataType> {
+    input.sort();
+    input.dedup();
+    input
+}
+
+fn value_data_type(value: &Value) -> Result<DataType> {
+    match value {
+        Value::Null => Ok(DataType::Null),
+
+        Value::Bool(_) => Ok(DataType::Boolean),
+
+        Value::Number(number) => {
+            if number.is_u64() {
+                Ok(DataType::UInt64)
+            } else if number.is_i64() {
+                Ok(DataType::Int64)
+            } else {
+                Ok(DataType::Float64)
+            }
+        }
+
+        Value::String(_) => Ok(DataType::Utf8),
+
+        Value::Array(values) => values
+            .iter()
+            .try_fold(Vec::new(), |mut acc, value| {
+                value_data_type(value).map(|data_type| {
+                    acc.push(data_type);
+                    acc
+                })
+            })
+            .map(sort_dedup)
+            .and_then(|data_types| common_data_type(data_types.as_slice()))
+            .map(|item| DataType::new_list(item, false)),
+
+        Value::Object(map) => map
+            .iter()
+            .try_fold(Vec::new(), |mut acc, (name, value)| {
+                value_data_type(value).map(|data_type| {
+                    acc.push(arrow_schema::Field::new(name.to_owned(), data_type, true));
+                    acc
+                })
+            })
+            .map(Fields::from_iter)
+            .map(DataType::Struct),
+    }
+}
+
+// fn batch_fields(batch: &Batch) -> Result<Vec<Field>> {
+//     for record in &batch.records {
+//         if let Some(encoded) = record.key.clone() {
+//             match serde_json::from_slice::<Value>(&encoded[..])? {
+//                 Value::Null => DataType::Null,
+//                 Value::Bool(_) => DataType::Boolean,
+//                 Value::Number(number) => {
+//                     todo!()
+//                 }
+//                 Value::String(_) => DataType::Utf8,
+//                 Value::Array(values) => todo!(),
+//                 Value::Object(map) => todo!(),
+//             }
+//         }
+//     }
+//     Ok(vec![])
+// }
+
+impl AsArrow for Schema {
+    fn as_arrow(&self, batch: &Batch) -> Result<arrow_array::RecordBatch> {
+        let key = self.key.as_ref();
+
+        for record in &batch.records {
+            if let Some(encoded) = record.key.clone() {
+                match serde_json::from_slice::<Value>(&encoded[..])? {
+                    Value::Null => todo!(),
+                    Value::Bool(_) => todo!(),
+                    Value::Number(number) => todo!(),
+                    Value::String(_) => todo!(),
+                    Value::Array(values) => todo!(),
+                    Value::Object(map) => todo!(),
+                }
+            }
+        }
+
+        todo!()
     }
 }
 
@@ -498,6 +673,122 @@ mod tests {
             registry.validate(topic, &batch).await,
             Err(Error::Api(ErrorCode::InvalidRecord))
         ));
+
+        Ok(())
+    }
+
+    #[test]
+    fn integer_type_can_be_float_dot_zero() -> Result<()> {
+        let schema = json!({"type": "integer"});
+        let validator = jsonschema::validator_for(&schema)?;
+
+        assert!(validator.is_valid(&json!(42)));
+        assert!(validator.is_valid(&json!(-1)));
+        assert!(validator.is_valid(&json!(1.0)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn common_struct_type() {
+        assert_eq!(
+            vec![DataType::Struct(Fields::from_iter([Field::new(
+                "a",
+                DataType::Int64,
+                true
+            )]))],
+            super::common_struct_type(&[
+                DataType::Struct(Fields::from_iter([Field::new("a", DataType::Int64, true)])),
+                DataType::Struct(Fields::from_iter([Field::new("a", DataType::UInt64, true)])),
+            ])
+        );
+    }
+
+    #[test]
+    fn common_data_type() -> Result<()> {
+        assert_eq!(
+            DataType::Int64,
+            super::common_data_type(
+                sort_dedup(vec![DataType::UInt64, DataType::Int64]).as_slice()
+            )?
+        );
+
+        assert_eq!(
+            DataType::Float64,
+            super::common_data_type(
+                sort_dedup(vec![DataType::Float64, DataType::Int64]).as_slice()
+            )?
+        );
+
+        assert_eq!(
+            DataType::Float64,
+            super::common_data_type(
+                sort_dedup(vec![DataType::Float64, DataType::UInt64, DataType::Int64]).as_slice()
+            )?
+        );
+
+        assert!(matches!(
+            super::common_data_type(
+                sort_dedup(vec![DataType::Float64, DataType::Boolean]).as_slice()
+            ),
+            Err(Error::NoCommonType(_))
+        ));
+
+        assert_eq!(
+            DataType::Utf8,
+            super::common_data_type(sort_dedup(vec![DataType::Utf8, DataType::Null]).as_slice())?
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn value_data_type() -> Result<()> {
+        assert_eq!(
+            DataType::new_list(DataType::Int64, false),
+            super::value_data_type(&json!([1, 0, -1]))?
+        );
+
+        assert_eq!(
+            DataType::new_list(DataType::UInt64, false),
+            super::value_data_type(&json!([1, null]))?
+        );
+
+        assert_eq!(
+            DataType::new_list(DataType::Int64, false),
+            super::value_data_type(&json!([1, -1, null]))?
+        );
+
+        assert_eq!(
+            DataType::new_list(DataType::Float64, false),
+            super::value_data_type(&json!([1, 0.0, -1, null]))?
+        );
+
+        assert_eq!(
+            DataType::new_list(DataType::Float64, false),
+            super::value_data_type(&json!([1, 0.0, -1]))?
+        );
+
+        assert_eq!(
+            DataType::new_list(DataType::Utf8, false),
+            super::value_data_type(&json!(["a", "b", "c"]))?
+        );
+
+        assert_eq!(
+            DataType::new_list(
+                DataType::Struct(Fields::from_iter([Field::new("a", DataType::UInt64, true)])),
+                false
+            ),
+            super::value_data_type(&json!([{"a": 10}, {"a": 20}]))?
+        );
+
+        assert_eq!(
+            DataType::new_list(
+                DataType::Struct(Fields::from_iter([Field::new("a", DataType::Int64, true)])),
+                false
+            ),
+            super::value_data_type(&json!([{"a": -1}, {"a": 1}]))?
+        );
 
         Ok(())
     }

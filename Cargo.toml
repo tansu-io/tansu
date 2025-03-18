@@ -40,6 +40,9 @@ license-file = "LICENSE"
 
 [workspace.dependencies]
 anyhow = "1.0.94"
+arrow = "54.2.1"
+arrow-array = "54.2.1"
+arrow-schema = "54.2.1"
 async-trait = "0.1.86"
 bytes = { version = "1", features = ["serde"] }
 clap = { version = "4.5.32", features = ["derive", "env"] }

@@ -7,6 +7,9 @@ publish = false
 
 [dependencies]
 anyhow.workspace = true
+arrow-array.workspace = true
+arrow-schema.workspace = true
+arrow.workspace = true
 bytes.workspace = true
 jsonschema.workspace = true
 object_store.workspace = true

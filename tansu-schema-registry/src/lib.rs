@@ -15,6 +15,7 @@
 
 use std::{env, fmt, io, result, sync::Arc, time::SystemTime};
 
+use arrow_schema::DataType;
 use bytes::Bytes;
 use jsonschema::ValidationError;
 use object_store::{
@@ -40,9 +41,20 @@ mod proto;
 pub enum Error {
     Anyhow(#[from] anyhow::Error),
     Api(ErrorCode),
+
+    Arrow(#[from] arrow_schema::ArrowError),
+
+    BadDowncast {
+        field: String,
+    },
+    BuilderExhausted,
+
     Io(#[from] io::Error),
     KafkaSansIo(#[from] tansu_kafka_sans_io::Error),
     Message(String),
+
+    NoCommonType(Vec<DataType>),
+
     ObjectStore(#[from] object_store::Error),
 
     #[cfg(test)]
@@ -79,6 +91,10 @@ pub type Result<T, E = Error> = result::Result<T, E>;
 
 trait Validator {
     fn validate(&self, batch: &Batch) -> Result<()>;
+}
+
+trait AsArrow {
+    fn as_arrow(&self, batch: &Batch) -> Result<arrow_array::RecordBatch>;
 }
 
 #[derive(Clone, Debug)]
