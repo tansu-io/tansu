@@ -12,3 +12,4 @@ Cargo.lock
 flamegraph.svg
 perf.data
 .vscode
+license.html

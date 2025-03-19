@@ -34,7 +34,7 @@ use tracing::{debug, error};
 const KEY: &str = "Key";
 const VALUE: &str = "Value";
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct Schema {
     file_descriptor: FileDescriptor,
 }
