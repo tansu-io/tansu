@@ -25,6 +25,7 @@ use tansu_kafka_sans_io::{ErrorCode, record::inflated::Batch};
 use tempfile::{NamedTempFile, tempdir};
 use tracing::{debug, error};
 
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct Schema {
     file_descriptor: FileDescriptor,
 }

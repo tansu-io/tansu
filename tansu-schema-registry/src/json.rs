@@ -19,6 +19,7 @@ use serde_json::Value;
 use tansu_kafka_sans_io::{ErrorCode, record::inflated::Batch};
 use tracing::{debug, warn};
 
+#[derive(Debug, Default)]
 pub(crate) struct Schema {
     key: Option<jsonschema::Validator>,
     value: Option<jsonschema::Validator>,
