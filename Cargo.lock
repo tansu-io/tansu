@@ -131,7 +131,30 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dcfed56ad506cb2c684a14971b8861fdc3baaaae314b9e5f9bb532cbe3ba7a4f"
 
 [[package]]
-<<<<<<< HEAD
+name = "apache-avro"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1aef82843a0ec9f8b19567445ad2421ceeb1d711514384bdd3d49fe37102ee13"
+dependencies = [
+ "bigdecimal",
+ "digest",
+ "libflate",
+ "log",
+ "num-bigint",
+ "quad-rand",
+ "rand 0.8.5",
+ "regex-lite",
+ "serde",
+ "serde_bytes",
+ "serde_json",
+ "strum",
+ "strum_macros",
+ "thiserror 1.0.69",
+ "typed-builder",
+ "uuid",
+]
+
+[[package]]
 name = "arrow"
 version = "54.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -335,29 +358,6 @@ dependencies = [
  "num",
  "regex",
  "regex-syntax 0.8.5",
-=======
-name = "apache-avro"
-version = "0.17.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1aef82843a0ec9f8b19567445ad2421ceeb1d711514384bdd3d49fe37102ee13"
-dependencies = [
- "bigdecimal",
- "digest",
- "libflate",
- "log",
- "num-bigint",
- "quad-rand",
- "rand 0.8.5",
- "regex-lite",
- "serde",
- "serde_bytes",
- "serde_json",
- "strum",
- "strum_macros",
- "thiserror 1.0.69",
- "typed-builder",
- "uuid",
->>>>>>> main
 ]
 
 [[package]]
@@ -845,7 +845,6 @@ dependencies = [
 ]
 
 [[package]]
-<<<<<<< HEAD
 name = "csv"
 version = "1.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -865,12 +864,12 @@ checksum = "7d02f3b0da4c6504f86e9cd789d8dbafab48c2321be74e9987593de5a894d93d"
 dependencies = [
  "memchr",
 ]
-=======
+
+[[package]]
 name = "dary_heap"
 version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "04d2cd9c18b9f454ed67da600630b021a8a80bf33f8c95896ab33aaf1c26b728"
->>>>>>> main
 
 [[package]]
 name = "deadpool"
@@ -1767,8 +1766,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c19937216e9d3aa9956d9bb8dfc0b0c8beb6058fc4f7a4dc4d850edf86a237d6"
 
 [[package]]
-<<<<<<< HEAD
-=======
 name = "libflate"
 version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1793,7 +1790,6 @@ dependencies = [
 ]
 
 [[package]]
->>>>>>> main
 name = "libm"
 version = "0.2.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3323,13 +3319,10 @@ name = "tansu-schema-registry"
 version = "0.1.0"
 dependencies = [
  "anyhow",
-<<<<<<< HEAD
+ "apache-avro",
  "arrow",
  "arrow-array",
  "arrow-schema",
-=======
- "apache-avro",
->>>>>>> main
  "bytes",
  "jsonschema",
  "object_store",
