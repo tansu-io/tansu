@@ -71,7 +71,7 @@ jobs:
           path: ${{runner.temp}}/src.tar.gz
           if-no-files-found: error
   package:
-    needs: [build, typos]
+    needs: [build, third-party-license, typos]
     runs-on: ${{matrix.os}}
     permissions:
       packages: write
