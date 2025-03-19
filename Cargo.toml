@@ -41,7 +41,7 @@ license-file = "LICENSE"
 [workspace.dependencies]
 anyhow = "1.0.94"
 apache-avro = "0.17.0"
-async-trait = "0.1.86"
+async-trait = "0.1.88"
 bytes = { version = "1", features = ["serde"] }
 clap = { version = "4.5.32", features = ["derive", "env"] }
 condtype = "1.3.0"
