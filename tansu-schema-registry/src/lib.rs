@@ -13,7 +13,12 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::{env, fmt, io, result, sync::Arc, time::SystemTime};
+use std::{
+    collections::BTreeMap,
+    env, fmt, io, result,
+    sync::{Arc, Mutex, PoisonError},
+    time::SystemTime,
+};
 
 use bytes::Bytes;
 use jsonschema::ValidationError;
@@ -27,12 +32,13 @@ use opentelemetry::{
 };
 use opentelemetry_semantic_conventions::SCHEMA_URL;
 use tansu_kafka_sans_io::{ErrorCode, record::inflated::Batch};
-use tracing::{debug, error};
+use tracing::debug;
 use url::Url;
 
 #[cfg(test)]
 use tracing_subscriber::filter::ParseError;
 
+mod avro;
 mod json;
 mod proto;
 
@@ -40,6 +46,7 @@ mod proto;
 pub enum Error {
     Anyhow(#[from] anyhow::Error),
     Api(ErrorCode),
+    Avro(#[from] apache_avro::Error),
     Io(#[from] io::Error),
     KafkaSansIo(#[from] tansu_kafka_sans_io::Error),
     Message(String),
@@ -47,6 +54,8 @@ pub enum Error {
 
     #[cfg(test)]
     ParseFilter(#[from] ParseError),
+
+    Poison,
 
     #[cfg(test)]
     ProtobufJsonMapping(#[from] protobuf_json_mapping::ParseError),
@@ -58,6 +67,12 @@ pub enum Error {
     SchemaValidation,
     SerdeJson(#[from] serde_json::Error),
     UnsupportedSchemaRegistryUrl(Url),
+}
+
+impl<T> From<PoisonError<T>> for Error {
+    fn from(_value: PoisonError<T>) -> Self {
+        Self::Poison
+    }
 }
 
 impl From<ValidationError<'_>> for Error {
@@ -82,8 +97,26 @@ trait Validator {
 }
 
 #[derive(Clone, Debug)]
+enum Schema {
+    Avro(avro::Schema),
+    Json(Arc<json::Schema>),
+    Proto(proto::Schema),
+}
+
+impl Validator for Schema {
+    fn validate(&self, batch: &Batch) -> Result<()> {
+        match self {
+            Self::Avro(schema) => schema.validate(batch),
+            Self::Json(schema) => schema.validate(batch),
+            Self::Proto(schema) => schema.validate(batch),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct Registry {
     object_store: Arc<DynObjectStore>,
+    schemas: Arc<Mutex<BTreeMap<String, Schema>>>,
     validation_duration: Histogram<u64>,
     validation_error: Counter<u64>,
 }
@@ -99,6 +132,7 @@ impl Registry {
 
         Self {
             object_store: Arc::new(object_store),
+            schemas: Arc::new(Mutex::new(BTreeMap::new())),
             validation_duration: meter
                 .u64_histogram("registry_validation_duration")
                 .with_unit("ms")
@@ -111,94 +145,175 @@ impl Registry {
         }
     }
 
-    async fn get(&self, location: &Path) -> Result<Bytes> {
-        debug!(%location, object_store = ?self.object_store);
-
-        let get_result = self
-            .object_store
-            .get(location)
-            .await
-            .inspect(|r| debug!(?r))
-            .inspect_err(|err| error!(?err))?;
-
-        get_result
-            .bytes()
-            .await
-            .map_err(Into::into)
-            .inspect(|r| debug!(?r))
-            .inspect_err(|err| error!(?err))
-    }
-
     pub async fn validate(&self, topic: &str, batch: &Batch) -> Result<()> {
         let list_result = self.object_store.list_with_delimiter(None).await?;
         debug!(common_prefixes = ?list_result.common_prefixes, objects = ?list_result.objects);
 
-        if list_result
-            .objects
-            .iter()
-            .any(|meta| meta.location == Path::from(format!("{topic}.proto")))
-        {
-            let validation_start = SystemTime::now();
+        let validation_start = SystemTime::now();
 
-            self.get(&Path::from(format!("{topic}.proto")))
-                .await
-                .and_then(proto::Schema::try_from)
-                .and_then(|schema| schema.validate(batch))
-                .inspect(|_| {
-                    self.validation_duration.record(
-                        validation_start
-                            .elapsed()
-                            .map_or(0, |duration| duration.as_millis() as u64),
-                        &[
-                            KeyValue::new("topic", topic.to_owned()),
-                            KeyValue::new("schema", format!("{topic}.proto")),
-                        ],
-                    )
-                })
-                .inspect_err(|err| {
-                    self.validation_error.add(
-                        1,
-                        &[
-                            KeyValue::new("topic", topic.to_owned()),
-                            KeyValue::new("reason", err.to_string()),
-                        ],
-                    )
-                })
-        } else if list_result
-            .objects
-            .iter()
-            .any(|meta| meta.location == Path::from(format!("{topic}.json")))
+        if self
+            .schemas
+            .lock()
+            .map_err(Into::into)
+            .and_then(|guard| {
+                guard
+                    .get(topic)
+                    .map(|schema| schema.validate(batch))
+                    .transpose()
+            })
+            .inspect(|_| {
+                self.validation_duration.record(
+                    validation_start
+                        .elapsed()
+                        .map_or(0, |duration| duration.as_millis() as u64),
+                    &[KeyValue::new("topic", topic.to_owned())],
+                )
+            })
+            .inspect_err(|err| {
+                self.validation_error.add(
+                    1,
+                    &[
+                        KeyValue::new("topic", topic.to_owned()),
+                        KeyValue::new("reason", err.to_string()),
+                    ],
+                )
+            })?
+            .is_none()
         {
-            let validation_start = SystemTime::now();
+            {
+                let path = Path::from(format!("{topic}.proto"));
 
-            self.get(&Path::from(format!("{topic}.json")))
-                .await
-                .and_then(json::Schema::try_from)
-                .and_then(|schema| schema.validate(batch))
-                .inspect(|_| {
-                    self.validation_duration.record(
-                        validation_start
-                            .elapsed()
-                            .map_or(0, |duration| duration.as_millis() as u64),
-                        &[
-                            KeyValue::new("topic", topic.to_owned()),
-                            KeyValue::new("schema", format!("{topic}.json")),
-                        ],
-                    )
-                })
-                .inspect_err(|err| {
-                    self.validation_error.add(
-                        1,
-                        &[
-                            KeyValue::new("topic", topic.to_owned()),
-                            KeyValue::new("schema", format!("{topic}.json")),
-                            KeyValue::new("reason", err.to_string()),
-                        ],
-                    )
-                })
-        } else {
-            Ok(())
+                if let Ok(get_result) = self.object_store.get(&path).await {
+                    get_result
+                        .bytes()
+                        .await
+                        .map_err(Into::into)
+                        .and_then(proto::Schema::try_from)
+                        .map(Schema::Proto)
+                        .and_then(|schema| {
+                            self.schemas
+                                .lock()
+                                .map_err(Into::into)
+                                .and_then(|mut guard| {
+                                    guard.insert(topic.to_owned(), schema.clone());
+                                    schema.validate(batch)
+                                })
+                        })
+                        .inspect(|_| {
+                            self.validation_duration.record(
+                                validation_start
+                                    .elapsed()
+                                    .map_or(0, |duration| duration.as_millis() as u64),
+                                &[KeyValue::new("topic", topic.to_owned())],
+                            )
+                        })
+                        .inspect_err(|err| {
+                            self.validation_error.add(
+                                1,
+                                &[
+                                    KeyValue::new("topic", topic.to_owned()),
+                                    KeyValue::new("reason", err.to_string()),
+                                ],
+                            )
+                        })?
+                }
+            }
+
+            {
+                let path = Path::from(format!("{topic}.json"));
+
+                if let Ok(get_result) = self.object_store.get(&path).await {
+                    get_result
+                        .bytes()
+                        .await
+                        .map_err(Into::into)
+                        .and_then(json::Schema::try_from)
+                        .map(Arc::new)
+                        .map(Schema::Json)
+                        .and_then(|schema| {
+                            self.schemas
+                                .lock()
+                                .map_err(Into::into)
+                                .and_then(|mut guard| {
+                                    guard.insert(topic.to_owned(), schema.clone());
+                                    schema.validate(batch)
+                                })
+                        })
+                        .inspect(|_| {
+                            self.validation_duration.record(
+                                validation_start
+                                    .elapsed()
+                                    .map_or(0, |duration| duration.as_millis() as u64),
+                                &[KeyValue::new("topic", topic.to_owned())],
+                            )
+                        })
+                        .inspect_err(|err| {
+                            self.validation_error.add(
+                                1,
+                                &[
+                                    KeyValue::new("topic", topic.to_owned()),
+                                    KeyValue::new("reason", err.to_string()),
+                                ],
+                            )
+                        })?
+                }
+            }
+
+            {
+                let key = {
+                    let path = Path::from(format!("{topic}/key.avsc"));
+
+                    if let Ok(get_result) = self.object_store.get(&path).await {
+                        get_result.bytes().await.ok()
+                    } else {
+                        None
+                    }
+                };
+
+                let value = {
+                    let path = Path::from(format!("{topic}/value.avsc"));
+
+                    if let Ok(get_result) = self.object_store.get(&path).await {
+                        get_result.bytes().await.ok()
+                    } else {
+                        None
+                    }
+                };
+
+                if key.is_some() || value.is_some() {
+                    avro::Schema::new(key, value)
+                        .map(Schema::Avro)
+                        .and_then(|schema| {
+                            self.schemas
+                                .lock()
+                                .map_err(Into::into)
+                                .and_then(|mut guard| {
+                                    guard.insert(topic.to_owned(), schema.clone());
+                                    schema.validate(batch)
+                                })
+                        })
+                        .inspect(|_| {
+                            self.validation_duration.record(
+                                validation_start
+                                    .elapsed()
+                                    .map_or(0, |duration| duration.as_millis() as u64),
+                                &[KeyValue::new("topic", topic.to_owned())],
+                            )
+                        })
+                        .inspect_err(|err| {
+                            self.validation_error.add(
+                                1,
+                                &[
+                                    KeyValue::new("topic", topic.to_owned()),
+                                    KeyValue::new("reason", err.to_string()),
+                                ],
+                            )
+                        })?
+                }
+            }
         }
+
+        Ok(())
     }
 }
 
@@ -255,7 +370,7 @@ mod tests {
     use serde_json::json;
     use std::{fs::File, sync::Arc, thread};
     use tansu_kafka_sans_io::record::Record;
-    use tracing::subscriber::DefaultGuard;
+    use tracing::{error, subscriber::DefaultGuard};
     use tracing_subscriber::EnvFilter;
 
     fn init_tracing() -> Result<DefaultGuard> {
@@ -282,7 +397,7 @@ mod tests {
         ))
     }
 
-    static DEF_PROTO: &[u8] = br#"
+    const DEF_PROTO: &[u8] = br#"
       syntax = 'proto3';
 
       message Key {
@@ -293,6 +408,18 @@ mod tests {
         string name = 1;
         string email = 2;
       }
+    "#;
+
+    const PQR_AVRO: &[u8] = br#"
+        {
+            "type": "record",
+            "name": "test",
+            "fields": [
+                {"name": "a", "type": "long", "default": 42},
+                {"name": "b", "type": "string"},
+                {"name": "c", "type": "long", "default": 43}
+            ]
+        }
     "#;
 
     async fn populate() -> Result<Registry> {
@@ -317,6 +444,10 @@ mod tests {
 
         let location = Path::from("def.proto");
         let payload = PutPayload::from(Bytes::from_static(DEF_PROTO));
+        _ = object_store.put(&location, payload).await?;
+
+        let location = Path::from("pqr.avsc");
+        let payload = PutPayload::from(Bytes::from_static(PQR_AVRO));
         _ = object_store.put(&location, payload).await?;
 
         Ok(Registry::new(object_store))
@@ -357,6 +488,22 @@ mod tests {
                 .inspect_err(|err| error!(?err)),
             Err(Error::Api(ErrorCode::InvalidRecord))
         ));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn pqr_valid() -> Result<()> {
+        let _guard = init_tracing()?;
+        let registry = populate().await?;
+
+        let key = Bytes::from_static(b"5450");
+
+        let batch = Batch::builder()
+            .record(Record::builder().key(key.clone().into()))
+            .build()?;
+
+        registry.validate("pqr", &batch).await?;
 
         Ok(())
     }
