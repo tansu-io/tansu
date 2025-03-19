@@ -1,5 +1,5 @@
 -- -*- mode: sql; sql-product: postgres; -*-
--- Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+-- Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 --
 -- This program is free software: you can redistribute it and/or modify
 -- it under the terms of the GNU Affero General Public License as
@@ -15,11 +15,11 @@
 -- along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 insert into header
-(record, k, v)
+(topition, offset_id, k, v)
 
 select
 
-r.id, $5, $6
+r.topition, r.offset_id, $5, $6
 
 from
 
@@ -33,6 +33,4 @@ where
 c.name = $1
 and t.name = $2
 and tp.partition = $3
-and r.offset_id = $4
-
-returning header.id;
+and r.offset_id = $4;

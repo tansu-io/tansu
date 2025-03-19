@@ -760,7 +760,6 @@ impl Postgres {
                     "produce_in_tx",
                 )
                 .await
-                .inspect(|n| debug!(?n))
                 .inspect_err(|err| error!(?err, ?topic, ?partition, ?offset, ?key, ?value))
                 .map_err(|error| {
                     if let Some(db_error) = error.as_db_error() {
@@ -1462,7 +1461,10 @@ impl Storage for Postgres {
         ] {
             let rows = self
                 .tx_prepare_execute(&tx, sql.as_str(), &[&self.cluster, &topic_name], nickname)
-                .await?;
+                .await
+                .inspect_err(|err| {
+                    debug!(?description, ?err);
+                })?;
 
             debug!(?topic, ?rows, ?description);
         }
