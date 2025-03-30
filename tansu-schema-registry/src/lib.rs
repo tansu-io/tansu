@@ -15,17 +15,23 @@
 
 use std::{
     collections::BTreeMap,
-    env, fmt, io, result,
+    env, fmt, io,
+    num::TryFromIntError,
+    result,
     sync::{Arc, Mutex, PoisonError},
     time::SystemTime,
 };
 
-use arrow_schema::DataType;
 use bytes::Bytes;
+use datafusion::{
+    arrow::{datatypes::DataType, error::ArrowError, record_batch::RecordBatch},
+    error::DataFusionError,
+    parquet::{arrow::AsyncArrowWriter, errors::ParquetError},
+};
 use jsonschema::ValidationError;
 use object_store::{
-    DynObjectStore, ObjectStore, aws::AmazonS3Builder, local::LocalFileSystem, memory::InMemory,
-    path::Path,
+    DynObjectStore, ObjectStore, PutMode, PutOptions, PutPayload, aws::AmazonS3Builder,
+    local::LocalFileSystem, memory::InMemory, path::Path,
 };
 use opentelemetry::{
     InstrumentationScope, KeyValue, global,
@@ -33,12 +39,13 @@ use opentelemetry::{
 };
 use opentelemetry_semantic_conventions::SCHEMA_URL;
 use tansu_kafka_sans_io::{ErrorCode, record::inflated::Batch};
-use tracing::debug;
+use tracing::{debug, error};
 use url::Url;
 
 #[cfg(test)]
 use tracing_subscriber::filter::ParseError;
 
+mod arrow;
 mod avro;
 mod json;
 mod proto;
@@ -48,7 +55,7 @@ pub enum Error {
     Anyhow(#[from] anyhow::Error),
     Api(ErrorCode),
 
-    Arrow(#[from] arrow_schema::ArrowError),
+    Arrow(#[from] ArrowError),
 
     Avro(#[from] apache_avro::Error),
 
@@ -57,6 +64,12 @@ pub enum Error {
     },
     BuilderExhausted,
 
+    DataFusion(#[from] DataFusionError),
+
+    Downcast,
+
+    InvalidValue(apache_avro::types::Value),
+
     Io(#[from] io::Error),
     KafkaSansIo(#[from] tansu_kafka_sans_io::Error),
     Message(String),
@@ -64,6 +77,8 @@ pub enum Error {
     NoCommonType(Vec<DataType>),
 
     ObjectStore(#[from] object_store::Error),
+
+    Parquet(#[from] ParquetError),
 
     #[cfg(test)]
     ParseFilter(#[from] ParseError),
@@ -79,7 +94,14 @@ pub enum Error {
 
     SchemaValidation,
     SerdeJson(#[from] serde_json::Error),
+
+    TryFromInt(#[from] TryFromIntError),
+
     UnsupportedSchemaRegistryUrl(Url),
+
+    UnsupportedSchemaRuntimeValue(DataType, serde_json::Value),
+
+    Uuid(#[from] uuid::Error),
 }
 
 impl<T> From<PoisonError<T>> for Error {
@@ -110,7 +132,7 @@ trait Validator {
 }
 
 trait AsArrow {
-    fn as_arrow(&self, batch: &Batch) -> Result<arrow_array::RecordBatch>;
+    fn as_arrow(&self, batch: &Batch) -> Result<RecordBatch>;
 }
 
 #[derive(Clone, Debug)]
@@ -126,6 +148,16 @@ impl Validator for Schema {
             Self::Avro(schema) => schema.validate(batch),
             Self::Json(schema) => schema.validate(batch),
             Self::Proto(schema) => schema.validate(batch),
+        }
+    }
+}
+
+impl AsArrow for Schema {
+    fn as_arrow(&self, batch: &Batch) -> Result<RecordBatch> {
+        match self {
+            Schema::Avro(schema) => schema.as_arrow(batch),
+            Schema::Json(schema) => schema.as_arrow(batch),
+            Schema::Proto(schema) => schema.as_arrow(batch),
         }
     }
 }
@@ -160,6 +192,51 @@ impl Registry {
                 .with_description("The registry validation error count")
                 .build(),
         }
+    }
+
+    pub async fn store_as_parquet(
+        &self,
+        topic: &str,
+        partition: i32,
+        offset: i64,
+        batch: &Batch,
+        object_store: &impl ObjectStore,
+    ) -> Result<()> {
+        if let Some(record_batch) = self.schemas.lock().map_err(Into::into).and_then(|guard| {
+            guard
+                .get(topic)
+                .map(|schema| schema.as_arrow(batch))
+                .transpose()
+        })? {
+            let payload = {
+                let mut buffer = Vec::new();
+                let mut writer =
+                    AsyncArrowWriter::try_new(&mut buffer, record_batch.schema(), None)?;
+                writer.write(&record_batch).await?;
+                writer.close().await?;
+                PutPayload::from(Bytes::from(buffer))
+            };
+
+            let location = Path::from(format!(
+                "{}/{:0>10}/{:0>20}.parquet",
+                topic, partition, offset,
+            ));
+
+            _ = object_store
+                .put_opts(
+                    &location,
+                    payload,
+                    PutOptions {
+                        mode: PutMode::Create,
+                        ..Default::default()
+                    },
+                )
+                .await
+                .inspect_err(|err| error!(?err, topic, partition, ?batch))
+                .inspect(|result| debug!(%location, ?result))?
+        }
+
+        Ok(())
     }
 
     pub async fn validate(&self, topic: &str, batch: &Batch) -> Result<()> {

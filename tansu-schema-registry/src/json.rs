@@ -13,12 +13,21 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+use std::{any::type_name_of_val, sync::Arc};
+
 use crate::{AsArrow, Error, Result, Validator};
-use arrow_schema::{DataType, Field, Fields};
 use bytes::Bytes;
-use serde_json::Value;
+use datafusion::arrow::{
+    array::{
+        ArrayBuilder, BooleanBuilder, Float64Builder, Int64Builder, ListBuilder, NullBuilder,
+        StringBuilder, StructBuilder, UInt64Builder,
+    },
+    datatypes::{DataType, Field, Fields},
+    record_batch::RecordBatch,
+};
+use serde_json::{Map, Value};
 use tansu_kafka_sans_io::{ErrorCode, record::inflated::Batch};
-use tracing::{debug, warn};
+use tracing::{debug, error, warn};
 
 #[derive(Debug, Default)]
 pub(crate) struct Schema {
@@ -91,176 +100,442 @@ impl Validator for Schema {
     }
 }
 
-fn common_numeric_data_type(data_types: &[DataType]) -> Vec<DataType> {
-    let mut result = vec![];
-
-    if data_types.contains(&DataType::Float64) {
-        result.push(DataType::Float64)
-    } else if data_types.contains(&DataType::Int64) {
-        result.push(DataType::Int64)
-    } else if data_types.contains(&DataType::UInt64) {
-        result.push(DataType::UInt64)
-    }
-
-    for data_type in data_types {
-        if data_type == &DataType::Float64
-            || data_type == &DataType::Int64
-            || data_type == &DataType::UInt64
-        {
-            continue;
-        }
-
-        result.push(data_type.to_owned());
-    }
-
-    result.sort();
-    result.dedup();
-    result
-}
-
-fn common_struct_type(data_types: &[DataType]) -> Vec<DataType> {
-    let _ = data_types
-        .iter()
-        .filter(|data_type| matches!(data_type, DataType::Struct(_)));
-
-    vec![]
-}
-
-fn common_data_type(types: &[DataType]) -> Result<DataType> {
-    match common_numeric_data_type(types).as_slice() {
-        [data_type] => Ok(data_type.to_owned()),
-
-        [DataType::Null, data_type] => Ok(data_type.to_owned()),
-        [data_type, DataType::Null] => Ok(data_type.to_owned()),
-
-        [DataType::UInt64, DataType::Int64] => Ok(DataType::Int64),
-        [DataType::Int64, DataType::UInt64] => Ok(DataType::Int64),
-
-        [data_type, DataType::Float64]
-            if data_type == &DataType::Int64 || data_type == &DataType::UInt64 =>
-        {
-            Ok(DataType::Float64)
-        }
-        [DataType::Float64, data_type]
-            if data_type == &DataType::Int64 || data_type == &DataType::UInt64 =>
-        {
-            Ok(DataType::Float64)
-        }
-
-        [DataType::Float64, dt1, dt2]
-            if (dt1 == &DataType::Int64 || dt1 == &DataType::UInt64)
-                && (dt2 == &DataType::Int64 || dt2 == &DataType::UInt64) =>
-        {
-            Ok(DataType::Float64)
-        }
-
-        [dt1, DataType::Float64, dt2]
-            if (dt1 == &DataType::Int64 || dt1 == &DataType::UInt64)
-                && (dt2 == &DataType::Int64 || dt2 == &DataType::UInt64) =>
-        {
-            Ok(DataType::Float64)
-        }
-        [dt1, dt2, DataType::Float64]
-            if (dt1 == &DataType::Int64 || dt1 == &DataType::UInt64)
-                && (dt2 == &DataType::Int64 || dt2 == &DataType::UInt64) =>
-        {
-            Ok(DataType::Float64)
-        }
-
-        otherwise => Err(Error::NoCommonType(
-            otherwise
-                .iter()
-                .map(|data_type| data_type.to_owned())
-                .collect(),
-        )),
-    }
-}
-
 fn sort_dedup(mut input: Vec<DataType>) -> Vec<DataType> {
     input.sort();
     input.dedup();
     input
 }
 
-fn value_data_type(value: &Value) -> Result<DataType> {
+struct Record {
+    key: Option<Value>,
+    value: Option<Value>,
+}
+
+fn data_type_builder(data_type: &DataType) -> Box<dyn ArrayBuilder> {
+    match data_type {
+        DataType::Null => Box::new(NullBuilder::new()),
+        DataType::Boolean => Box::new(BooleanBuilder::new()),
+        DataType::UInt64 => Box::new(UInt64Builder::new()),
+        DataType::Int64 => Box::new(Int64Builder::new()),
+        DataType::Float64 => Box::new(Float64Builder::new()),
+        DataType::Utf8 => Box::new(StringBuilder::new()),
+        DataType::List(element) => {
+            Box::new(ListBuilder::new(data_type_builder(element.data_type())))
+        }
+        DataType::Struct(fields) => Box::new(StructBuilder::new(
+            fields.to_owned(),
+            fields
+                .iter()
+                .map(|field| data_type_builder(field.data_type()))
+                .collect::<Vec<_>>(),
+        )),
+
+        _ => unimplemented!("unexpected: {}", type_name_of_val(data_type)),
+    }
+}
+
+fn common_data_type(values: &[Value]) -> Result<DataType> {
+    values
+        .iter()
+        .map(data_type)
+        .collect::<Result<Vec<_>>>()
+        .map(sort_dedup)
+        .and_then(|mut data_types| {
+            if data_types.len() > 1 {
+                Err(Error::NoCommonType(data_types))
+            } else if let Some(data_type) = data_types.pop() {
+                Ok(data_type)
+            } else {
+                Ok(DataType::Null)
+            }
+        })
+        .inspect(|data_type| debug!(?values, ?data_type))
+        .inspect_err(|err| error!(?err, ?values))
+}
+
+fn data_type(value: &Value) -> Result<DataType> {
     match value {
         Value::Null => Ok(DataType::Null),
-
         Value::Bool(_) => Ok(DataType::Boolean),
-
-        Value::Number(number) => {
-            if number.is_u64() {
+        Value::Number(value) => {
+            if value.is_u64() {
                 Ok(DataType::UInt64)
-            } else if number.is_i64() {
+            } else if value.is_i64() {
                 Ok(DataType::Int64)
             } else {
                 Ok(DataType::Float64)
             }
         }
-
         Value::String(_) => Ok(DataType::Utf8),
-
-        Value::Array(values) => values
+        Value::Array(values) => {
+            common_data_type(values).map(|data_type| DataType::new_list(data_type, true))
+        }
+        Value::Object(object) => object
             .iter()
-            .try_fold(Vec::new(), |mut acc, value| {
-                value_data_type(value).map(|data_type| {
-                    acc.push(data_type);
-                    acc
-                })
-            })
-            .map(sort_dedup)
-            .and_then(|data_types| common_data_type(data_types.as_slice()))
-            .map(|item| DataType::new_list(item, false)),
-
-        Value::Object(map) => map
-            .iter()
-            .try_fold(Vec::new(), |mut acc, (name, value)| {
-                value_data_type(value).map(|data_type| {
-                    acc.push(arrow_schema::Field::new(name.to_owned(), data_type, true));
-                    acc
-                })
-            })
-            .map(Fields::from_iter)
+            .map(|(k, v)| data_type(v).map(|data_type| Field::new(k.to_owned(), data_type, true)))
+            .collect::<Result<Vec<_>>>()
+            .map(Fields::from)
             .map(DataType::Struct),
+    }
+    .inspect(|data_type| debug!(?value, ?data_type))
+    .inspect_err(|err| error!(?err, ?value))
+}
+
+fn append_list_builder(
+    element: Arc<Field>,
+    items: Vec<Value>,
+    builder: &mut ListBuilder<Box<dyn ArrayBuilder>>,
+) -> Result<()> {
+    let values = builder.values().as_any_mut();
+
+    for item in items {
+        match (element.data_type(), item) {
+            (_, Value::Null) => values
+                .downcast_mut::<NullBuilder>()
+                .ok_or(Error::Downcast)
+                .map(|builder| builder.append_null())?,
+
+            (_, Value::Bool(value)) => values
+                .downcast_mut::<BooleanBuilder>()
+                .ok_or(Error::Downcast)
+                .map(|builder| builder.append_value(value))?,
+
+            (DataType::UInt64, Value::Number(value)) if value.is_u64() => values
+                .downcast_mut::<UInt64Builder>()
+                .ok_or(Error::Downcast)
+                .map(|builder| {
+                    if let Some(value) = value.as_u64() {
+                        builder.append_value(value)
+                    } else {
+                        builder.append_null()
+                    }
+                })
+                .inspect_err(|err| error!(?value, ?err))?,
+
+            (DataType::Int64, Value::Number(value)) if value.is_i64() => values
+                .downcast_mut::<Int64Builder>()
+                .ok_or(Error::Downcast)
+                .map(|builder| {
+                    if let Some(value) = value.as_i64() {
+                        builder.append_value(value)
+                    } else {
+                        builder.append_null()
+                    }
+                })
+                .inspect_err(|err| error!(?value, ?err))?,
+
+            (DataType::Float64, Value::Number(value)) if value.is_f64() => values
+                .downcast_mut::<Float64Builder>()
+                .ok_or(Error::Downcast)
+                .map(|builder| {
+                    if let Some(value) = value.as_f64() {
+                        builder.append_value(value)
+                    } else {
+                        builder.append_null()
+                    }
+                })
+                .inspect_err(|err| error!(?value, ?err))?,
+
+            (_, Value::String(value)) => values
+                .downcast_mut::<StringBuilder>()
+                .ok_or(Error::Downcast)
+                .map(|builder| builder.append_value(value))?,
+
+            (DataType::List(element), Value::Array(items)) => values
+                .downcast_mut::<ListBuilder<Box<dyn ArrayBuilder>>>()
+                .ok_or(Error::Downcast)
+                .inspect_err(|err| error!(?err, ?element, ?items))
+                .and_then(|builder| append_list_builder(element.to_owned(), items, builder))?,
+
+            (DataType::Struct(fields), Value::Object(object)) => values
+                .downcast_mut::<StructBuilder>()
+                .ok_or(Error::Downcast)
+                .inspect_err(|err| error!(?err, ?fields, ?object))
+                .and_then(|builder| append_struct_builder(fields, object, builder))?,
+
+            (data_type, value) => Err(Error::UnsupportedSchemaRuntimeValue(
+                data_type.to_owned(),
+                value,
+            ))?,
+        }
+    }
+
+    builder.append(true);
+
+    Ok(())
+}
+
+fn append_struct_builder(
+    fields: &Fields,
+    mut object: Map<String, Value>,
+    builder: &mut StructBuilder,
+) -> Result<()> {
+    debug!(?fields, ?object);
+
+    for (index, field) in fields.iter().enumerate() {
+        if let Some(value) = object.remove(field.name()) {
+            match (field.data_type(), value) {
+                (_, Value::Null) => builder
+                    .field_builder::<NullBuilder>(index)
+                    .ok_or(Error::Downcast)
+                    .map(|builder| builder.append_null())
+                    .inspect_err(|err| error!(?err))?,
+
+                (_, Value::Bool(value)) => builder
+                    .field_builder::<BooleanBuilder>(index)
+                    .ok_or(Error::Downcast)
+                    .map(|builder| builder.append_value(value))
+                    .inspect_err(|err| error!(?err))?,
+
+                (DataType::UInt64, Value::Number(value)) if value.is_u64() => builder
+                    .field_builder::<UInt64Builder>(index)
+                    .ok_or(Error::Downcast)
+                    .map(|builder| {
+                        if let Some(value) = value.as_u64() {
+                            builder.append_value(value)
+                        } else {
+                            builder.append_null()
+                        }
+                    })
+                    .inspect_err(|err| error!(?field, ?value, ?err))?,
+
+                (DataType::Int64, Value::Number(value)) if value.is_i64() => builder
+                    .field_builder::<Int64Builder>(index)
+                    .ok_or(Error::Downcast)
+                    .map(|builder| {
+                        if let Some(value) = value.as_i64() {
+                            builder.append_value(value)
+                        } else {
+                            builder.append_null()
+                        }
+                    })?,
+
+                (DataType::Float64, Value::Number(value)) if value.is_f64() => builder
+                    .field_builder::<Float64Builder>(index)
+                    .ok_or(Error::Downcast)
+                    .map(|builder| {
+                        if let Some(value) = value.as_f64() {
+                            builder.append_value(value)
+                        } else {
+                            builder.append_null()
+                        }
+                    })?,
+
+                (DataType::Utf8, Value::String(value)) => builder
+                    .field_builder::<StringBuilder>(index)
+                    .ok_or(Error::Downcast)
+                    .map(|builder| builder.append_value(value))
+                    .inspect_err(|err| error!(?err))?,
+
+                (DataType::List(element), Value::Array(items)) => builder
+                    .field_builder::<ListBuilder<Box<dyn ArrayBuilder>>>(index)
+                    .ok_or(Error::Downcast)
+                    .and_then(|builder| append_list_builder(element.to_owned(), items, builder))
+                    .inspect_err(|err| error!(?err))?,
+
+                (DataType::Struct(fields), Value::Object(object)) => builder
+                    .field_builder::<StructBuilder>(index)
+                    .ok_or(Error::Downcast)
+                    .and_then(|builder| append_struct_builder(fields, object, builder))
+                    .inspect_err(|err| error!(?err))?,
+
+                (data_type, value) => Err(Error::UnsupportedSchemaRuntimeValue(
+                    data_type.to_owned(),
+                    value,
+                ))?,
+            }
+        }
+    }
+
+    builder.append(true);
+
+    Ok(())
+}
+
+fn append(field: &Field, value: Value, builder: &mut dyn ArrayBuilder) -> Result<()> {
+    debug!(?field, ?value, builder = type_name_of_val(builder));
+
+    match (field.data_type(), value) {
+        (DataType::Null, _) => builder
+            .as_any_mut()
+            .downcast_mut::<NullBuilder>()
+            .ok_or(Error::Downcast)
+            .map(|builder| builder.append_null()),
+
+        (DataType::Boolean, Value::Bool(value)) => builder
+            .as_any_mut()
+            .downcast_mut::<BooleanBuilder>()
+            .ok_or(Error::Downcast)
+            .map(|builder| builder.append_value(value)),
+
+        (DataType::UInt64, Value::Number(value)) if value.is_u64() => builder
+            .as_any_mut()
+            .downcast_mut::<UInt64Builder>()
+            .ok_or(Error::Downcast)
+            .map(|builder| {
+                if let Some(value) = value.as_u64() {
+                    builder.append_value(value)
+                } else {
+                    builder.append_null()
+                }
+            })
+            .inspect_err(|err| error!(?field, ?value, ?err)),
+
+        (DataType::Int64, Value::Number(value)) if value.is_i64() => builder
+            .as_any_mut()
+            .downcast_mut::<Int64Builder>()
+            .ok_or(Error::Downcast)
+            .map(|builder| {
+                if let Some(value) = value.as_i64() {
+                    builder.append_value(value)
+                } else {
+                    builder.append_null()
+                }
+            }),
+
+        (DataType::Float64, Value::Number(value)) if value.is_f64() => builder
+            .as_any_mut()
+            .downcast_mut::<Float64Builder>()
+            .ok_or(Error::Downcast)
+            .map(|builder| {
+                if let Some(value) = value.as_f64() {
+                    builder.append_value(value)
+                } else {
+                    builder.append_null()
+                }
+            }),
+
+        (DataType::Utf8, Value::String(value)) => builder
+            .as_any_mut()
+            .downcast_mut::<StringBuilder>()
+            .ok_or(Error::Downcast)
+            .map(|builder| builder.append_value(value)),
+
+        (DataType::List(element), Value::Array(items)) => builder
+            .as_any_mut()
+            .downcast_mut::<ListBuilder<Box<dyn ArrayBuilder>>>()
+            .ok_or(Error::Downcast)
+            .inspect_err(|err| error!(?err, ?element, ?items))
+            .and_then(|builder| append_list_builder(element.to_owned(), items, builder)),
+
+        (DataType::Struct(fields), Value::Object(object)) => builder
+            .as_any_mut()
+            .downcast_mut::<StructBuilder>()
+            .ok_or(Error::Downcast)
+            .inspect_err(|err| error!(?err, ?fields, ?object))
+            .and_then(|builder| append_struct_builder(fields, object, builder)),
+
+        (data_type, value) => Err(Error::UnsupportedSchemaRuntimeValue(
+            data_type.to_owned(),
+            value,
+        ))?,
     }
 }
 
-// fn batch_fields(batch: &Batch) -> Result<Vec<Field>> {
-//     for record in &batch.records {
-//         if let Some(encoded) = record.key.clone() {
-//             match serde_json::from_slice::<Value>(&encoded[..])? {
-//                 Value::Null => DataType::Null,
-//                 Value::Bool(_) => DataType::Boolean,
-//                 Value::Number(number) => {
-//                     todo!()
-//                 }
-//                 Value::String(_) => DataType::Utf8,
-//                 Value::Array(values) => todo!(),
-//                 Value::Object(map) => todo!(),
-//             }
-//         }
-//     }
-//     Ok(vec![])
-// }
-
 impl AsArrow for Schema {
-    fn as_arrow(&self, batch: &Batch) -> Result<arrow_array::RecordBatch> {
-        let key = self.key.as_ref();
+    fn as_arrow(&self, batch: &Batch) -> Result<RecordBatch> {
+        debug!(?batch);
 
-        for record in &batch.records {
-            if let Some(encoded) = record.key.clone() {
-                match serde_json::from_slice::<Value>(&encoded[..])? {
-                    Value::Null => todo!(),
-                    Value::Bool(_) => todo!(),
-                    Value::Number(number) => todo!(),
-                    Value::String(_) => todo!(),
-                    Value::Array(values) => todo!(),
-                    Value::Object(map) => todo!(),
+        let mut builders = vec![];
+        let mut fields = vec![];
+
+        if let Some(data_type) = batch
+            .records
+            .iter()
+            .map(|record| {
+                record.key.clone().map_or(Ok(None), |encoded| {
+                    serde_json::from_slice::<Value>(&encoded[..])
+                        .map(Some)
+                        .map_err(Into::into)
+                })
+            })
+            .collect::<Result<Vec<_>>>()
+            .map(|values| values.into_iter().flatten().collect::<Vec<_>>())
+            .and_then(|values| {
+                if values.is_empty() {
+                    Ok(None)
+                } else {
+                    common_data_type(values.as_slice()).map(Some)
                 }
+            })
+            .inspect(|data_type| debug!(?data_type))?
+        {
+            builders.push(data_type_builder(&data_type));
+            fields.push(Field::new("key", data_type, true))
+        };
+
+        if let Some(data_type) = batch
+            .records
+            .iter()
+            .map(|record| {
+                record.value.clone().map_or(Ok(None), |encoded| {
+                    serde_json::from_slice::<Value>(&encoded[..])
+                        .map(Some)
+                        .map_err(Into::into)
+                })
+            })
+            .collect::<Result<Vec<_>>>()
+            .map(|values| values.into_iter().flatten().collect::<Vec<_>>())
+            .and_then(|values| {
+                if values.is_empty() {
+                    Ok(None)
+                } else {
+                    common_data_type(values.as_slice()).map(Some)
+                }
+            })
+            .inspect(|data_type| debug!(?data_type))?
+        {
+            builders.push(data_type_builder(&data_type));
+            fields.push(Field::new("value", data_type, true))
+        };
+
+        for kv in batch
+            .records
+            .iter()
+            .map(|record| {
+                record
+                    .key
+                    .as_ref()
+                    .map(|encoded| serde_json::from_slice::<Value>(&encoded[..]))
+                    .transpose()
+                    .map_err(Into::into)
+                    .and_then(|key| {
+                        record
+                            .value
+                            .as_ref()
+                            .map(|encoded| serde_json::from_slice::<Value>(&encoded[..]))
+                            .transpose()
+                            .map_err(Into::into)
+                            .map(|value| Record { key, value })
+                    })
+            })
+            .collect::<Result<Vec<_>>>()?
+        {
+            let mut i = fields.iter().zip(builders.iter_mut());
+
+            if let Some(value) = kv.key {
+                let (field, builder) = i.next().unwrap();
+                debug!(?value, ?field);
+                append(field, value, builder)?;
+            }
+
+            if let Some(value) = kv.value {
+                let (field, builder) = i.next().unwrap();
+                debug!(?value, ?field);
+                append(field, value, builder)?;
             }
         }
 
-        todo!()
+        RecordBatch::try_new(
+            Arc::new(datafusion::arrow::datatypes::Schema::new(Fields::from(
+                fields,
+            ))),
+            builders
+                .iter_mut()
+                .map(|builder| builder.finish())
+                .collect(),
+        )
+        .map_err(Into::into)
     }
 }
 
@@ -269,9 +544,11 @@ mod tests {
     use crate::Registry;
 
     use super::*;
+    use datafusion::{arrow::util::pretty::pretty_format_batches, prelude::*};
+    use jsonschema::BasicOutput;
     use object_store::{ObjectStore, PutPayload, memory::InMemory, path::Path};
     use serde_json::json;
-    use std::{fs::File, sync::Arc, thread};
+    use std::{collections::VecDeque, fs::File, ops::Deref, sync::Arc, thread};
     use tansu_kafka_sans_io::record::Record;
     use tracing::subscriber::DefaultGuard;
     use tracing_subscriber::EnvFilter;
@@ -690,105 +967,611 @@ mod tests {
     }
 
     #[test]
-    fn common_struct_type() {
-        assert_eq!(
-            vec![DataType::Struct(Fields::from_iter([Field::new(
-                "a",
-                DataType::Int64,
-                true
-            )]))],
-            super::common_struct_type(&[
-                DataType::Struct(Fields::from_iter([Field::new("a", DataType::Int64, true)])),
-                DataType::Struct(Fields::from_iter([Field::new("a", DataType::UInt64, true)])),
-            ])
-        );
-    }
+    fn array_with_items_type_basic_output() -> Result<()> {
+        let _guard = init_tracing()?;
 
-    #[test]
-    fn common_data_type() -> Result<()> {
-        assert_eq!(
-            DataType::Int64,
-            super::common_data_type(
-                sort_dedup(vec![DataType::UInt64, DataType::Int64]).as_slice()
-            )?
-        );
-
-        assert_eq!(
-            DataType::Float64,
-            super::common_data_type(
-                sort_dedup(vec![DataType::Float64, DataType::Int64]).as_slice()
-            )?
-        );
-
-        assert_eq!(
-            DataType::Float64,
-            super::common_data_type(
-                sort_dedup(vec![DataType::Float64, DataType::UInt64, DataType::Int64]).as_slice()
-            )?
-        );
+        let schema = serde_json::to_vec(&json!({
+            "type": "object",
+            "properties": {
+                "value": {
+                    "type": "array",
+                    "items": {
+                        "type": "number"
+                    }
+                }
+            }
+        }))
+        .map_err(Into::into)
+        .map(Bytes::from)
+        .and_then(Schema::try_from)?;
 
         assert!(matches!(
-            super::common_data_type(
-                sort_dedup(vec![DataType::Float64, DataType::Boolean]).as_slice()
-            ),
-            Err(Error::NoCommonType(_))
+            schema
+                .value
+                .as_ref()
+                .unwrap()
+                .apply(&json!([1, 2, 3, 4, 5]))
+                .basic(),
+            BasicOutput::Valid(_),
         ));
 
-        assert_eq!(
-            DataType::Utf8,
-            super::common_data_type(sort_dedup(vec![DataType::Utf8, DataType::Null]).as_slice())?
-        );
+        assert!(matches!(
+            schema
+                .value
+                .as_ref()
+                .unwrap()
+                .apply(&json!([-1, 2.3, 3, 4.0, 5]))
+                .basic(),
+            BasicOutput::Valid(_),
+        ));
+
+        assert!(matches!(
+            schema
+                .value
+                .as_ref()
+                .unwrap()
+                .apply(&json!([3, "different", { "types": "of values" }]))
+                .basic(),
+            BasicOutput::Invalid(_),
+        ));
+
+        assert!(matches!(
+            schema
+                .value
+                .as_ref()
+                .unwrap()
+                .apply(&json!({"Not": "an array"}))
+                .basic(),
+            BasicOutput::Invalid(_)
+        ));
 
         Ok(())
     }
 
     #[test]
-    fn value_data_type() -> Result<()> {
+    fn array_basic_output() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let schema = serde_json::to_vec(&json!({
+            "type": "object",
+            "properties": {
+                "value": {
+                    "type": "array",
+                }
+            }
+        }))
+        .map_err(Into::into)
+        .map(Bytes::from)
+        .and_then(Schema::try_from)?;
+
         assert_eq!(
-            DataType::new_list(DataType::Int64, false),
-            super::value_data_type(&json!([1, 0, -1]))?
+            BasicOutput::Valid(VecDeque::new()),
+            schema
+                .value
+                .as_ref()
+                .unwrap()
+                .apply(&json!([1, 2, 3, 4, 5]))
+                .basic()
         );
 
         assert_eq!(
-            DataType::new_list(DataType::UInt64, false),
-            super::value_data_type(&json!([1, null]))?
+            BasicOutput::Valid(VecDeque::new()),
+            schema
+                .value
+                .as_ref()
+                .unwrap()
+                .apply(&json!([3, "different", { "types": "of values" }]))
+                .basic()
         );
 
-        assert_eq!(
-            DataType::new_list(DataType::Int64, false),
-            super::value_data_type(&json!([1, -1, null]))?
-        );
+        assert!(matches!(
+            schema
+                .value
+                .as_ref()
+                .unwrap()
+                .apply(&json!({"Not": "an array"}))
+                .basic(),
+            BasicOutput::Invalid(_)
+        ));
+
+        Ok(())
+    }
+
+    #[test]
+    fn schema_basic_output() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let schema = serde_json::to_vec(&json!({
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "number"
+                },
+                "value": {
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                        },
+                        "email": {
+                            "type": "string",
+                            "format": "email"
+                        }
+                    }
+                }
+            }
+        }))
+        .map_err(Into::into)
+        .map(Bytes::from)
+        .and_then(Schema::try_from)?;
+
+        debug!(?schema);
 
         assert_eq!(
-            DataType::new_list(DataType::Float64, false),
-            super::value_data_type(&json!([1, 0.0, -1, null]))?
+            BasicOutput::Valid(VecDeque::new()),
+            schema.key.as_ref().unwrap().apply(&json!(12321)).basic()
         );
 
-        assert_eq!(
-            DataType::new_list(DataType::Float64, false),
-            super::value_data_type(&json!([1, 0.0, -1]))?
-        );
+        match schema
+            .value
+            .as_ref()
+            .unwrap()
+            .apply(&json!({"name": "alice", "email": "alice@example.com"}))
+            .basic()
+        {
+            BasicOutput::Valid(annotations) => {
+                debug!(?annotations);
+                assert_eq!(1, annotations.len());
+                assert_eq!(
+                    &Value::Array(vec![
+                        Value::String("email".into()),
+                        Value::String("name".into())
+                    ]),
+                    annotations[0].value().deref()
+                );
 
-        assert_eq!(
-            DataType::new_list(DataType::Utf8, false),
-            super::value_data_type(&json!(["a", "b", "c"]))?
-        );
+                for annotation in annotations {
+                    debug!(
+                        "value: {} at path {}",
+                        annotation.value(),
+                        annotation.instance_location()
+                    )
+                }
+            }
+            BasicOutput::Invalid(errors) => {
+                debug!(?errors);
+                panic!()
+            }
+        }
 
-        assert_eq!(
-            DataType::new_list(
-                DataType::Struct(Fields::from_iter([Field::new("a", DataType::UInt64, true)])),
-                false
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn key_and_value_as_arrow() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let topic = "def";
+
+        let schema = serde_json::to_vec(&json!({
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "number"
+                },
+                "value": {
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                        },
+                        "email": {
+                            "type": "string",
+                            "format": "email"
+                        }
+                    }
+                }
+            }
+        }))
+        .map_err(Into::into)
+        .map(Bytes::from)
+        .and_then(Schema::try_from)?;
+
+        let kv = [
+            (
+                json!(12321),
+                json!({"name": "alice", "email": "alice@example.com"}),
             ),
-            super::value_data_type(&json!([{"a": 10}, {"a": 20}]))?
-        );
-
-        assert_eq!(
-            DataType::new_list(
-                DataType::Struct(Fields::from_iter([Field::new("a", DataType::Int64, true)])),
-                false
+            (
+                json!(32123),
+                json!({"name": "bob", "email": "bob@example.com"}),
             ),
-            super::value_data_type(&json!([{"a": -1}, {"a": 1}]))?
-        );
+        ];
+
+        let batch = {
+            let mut batch = Batch::builder();
+
+            for (ref key, ref value) in kv {
+                batch = batch.record(
+                    Record::builder()
+                        .key(serde_json::to_vec(key).map(Bytes::from).map(Into::into)?)
+                        .value(serde_json::to_vec(value).map(Bytes::from).map(Into::into)?),
+                );
+            }
+
+            batch.build()?
+        };
+
+        let record_batch = schema.as_arrow(&batch)?;
+
+        let ctx = SessionContext::new();
+
+        _ = ctx.register_batch(topic, record_batch)?;
+        let df = ctx.sql(format!("select * from {topic}").as_str()).await?;
+        let results = df.collect().await?;
+
+        let pretty_results = pretty_format_batches(&results)?.to_string();
+
+        let expected = vec![
+            "+-------+-----------------------------------------+",
+            "| key   | value                                   |",
+            "+-------+-----------------------------------------+",
+            "| 12321 | {email: alice@example.com, name: alice} |",
+            "| 32123 | {email: bob@example.com, name: bob}     |",
+            "+-------+-----------------------------------------+",
+        ];
+
+        assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn key_as_arrow() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let topic = "def";
+
+        let schema = serde_json::to_vec(&json!({
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "number"
+                }
+            }
+        }))
+        .map_err(Into::into)
+        .map(Bytes::from)
+        .and_then(Schema::try_from)?;
+
+        let keys = [json!(12321), json!(23432), json!(34543)];
+
+        let batch = {
+            let mut batch = Batch::builder();
+
+            for ref key in keys {
+                batch = batch.record(
+                    Record::builder()
+                        .key(serde_json::to_vec(key).map(Bytes::from).map(Into::into)?),
+                );
+            }
+
+            batch.build()?
+        };
+
+        let record_batch = schema.as_arrow(&batch)?;
+
+        let ctx = SessionContext::new();
+
+        _ = ctx.register_batch(topic, record_batch)?;
+        let df = ctx.sql(format!("select * from {topic}").as_str()).await?;
+        let results = df.collect().await?;
+
+        let pretty_results = pretty_format_batches(&results)?.to_string();
+
+        let expected = vec![
+            "+-------+",
+            "| key   |",
+            "+-------+",
+            "| 12321 |",
+            "| 23432 |",
+            "| 34543 |",
+            "+-------+",
+        ];
+
+        assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn primitive_key_and_value_as_arrow() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let topic = "def";
+
+        let schema = serde_json::to_vec(&json!({
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "number"
+                },
+                "value": {
+                    "type": "string",
+                }
+            }
+        }))
+        .map_err(Into::into)
+        .map(Bytes::from)
+        .and_then(Schema::try_from)?;
+
+        let kv = [
+            (json!(12321), json!("alice@example.com")),
+            (json!(32123), json!("bob@example.com")),
+        ];
+
+        let batch = {
+            let mut batch = Batch::builder();
+
+            for (ref key, ref value) in kv {
+                batch = batch.record(
+                    Record::builder()
+                        .key(serde_json::to_vec(key).map(Bytes::from).map(Into::into)?)
+                        .value(serde_json::to_vec(value).map(Bytes::from).map(Into::into)?),
+                );
+            }
+
+            batch.build()?
+        };
+
+        let record_batch = schema.as_arrow(&batch)?;
+
+        let ctx = SessionContext::new();
+
+        _ = ctx.register_batch(topic, record_batch)?;
+        let df = ctx.sql(format!("select * from {topic}").as_str()).await?;
+        let results = df.collect().await?;
+
+        let pretty_results = pretty_format_batches(&results)?.to_string();
+
+        let expected = vec![
+            "+-------+-------------------+",
+            "| key   | value             |",
+            "+-------+-------------------+",
+            "| 12321 | alice@example.com |",
+            "| 32123 | bob@example.com   |",
+            "+-------+-------------------+",
+        ];
+
+        assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn primitive_key_and_array_value_as_arrow() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let topic = "def";
+
+        let schema = serde_json::to_vec(&json!({
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "number"
+                },
+                "value": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        }))
+        .map_err(Into::into)
+        .map(Bytes::from)
+        .and_then(Schema::try_from)?;
+
+        let kv = [
+            (json!(12321), json!(["a", "b", "c"])),
+            (json!(32123), json!(["p", "q", "r"])),
+        ];
+
+        let batch = {
+            let mut batch = Batch::builder();
+
+            for (ref key, ref value) in kv {
+                batch = batch.record(
+                    Record::builder()
+                        .key(serde_json::to_vec(key).map(Bytes::from).map(Into::into)?)
+                        .value(serde_json::to_vec(value).map(Bytes::from).map(Into::into)?),
+                );
+            }
+
+            batch.build()?
+        };
+
+        let record_batch = schema.as_arrow(&batch)?;
+
+        let ctx = SessionContext::new();
+
+        _ = ctx.register_batch(topic, record_batch)?;
+        let df = ctx.sql(format!("select * from {topic}").as_str()).await?;
+        let results = df.collect().await?;
+
+        let pretty_results = pretty_format_batches(&results)?.to_string();
+
+        let expected = vec![
+            "+-------+-----------+",
+            "| key   | value     |",
+            "+-------+-----------+",
+            "| 12321 | [a, b, c] |",
+            "| 32123 | [p, q, r] |",
+            "+-------+-----------+",
+        ];
+
+        assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn primitive_key_and_array_object_value_as_arrow() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let topic = "def";
+
+        let schema = serde_json::to_vec(&json!({
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "number"
+                },
+                "value": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "quantity": {
+                                "type": "integer",
+                            },
+                            "location": {
+                                "type": "string",
+                            }
+                        }
+                    }
+                }
+            }
+        }))
+        .map_err(Into::into)
+        .map(Bytes::from)
+        .and_then(Schema::try_from)?;
+
+        let kv = [
+            (
+                json!(12321),
+                json!([{"quantity": 6, "location": "abc"}, {"quantity": 11, "location": "pqr"}]),
+            ),
+            (
+                json!(32123),
+                json!([{"quantity": 3, "location": "abc"},
+                       {"quantity": 33, "location": "def"},
+                       {"quantity": 21, "location": "xyz"}]),
+            ),
+        ];
+
+        let batch = {
+            let mut batch = Batch::builder();
+
+            for (ref key, ref value) in kv {
+                batch = batch.record(
+                    Record::builder()
+                        .key(serde_json::to_vec(key).map(Bytes::from).map(Into::into)?)
+                        .value(serde_json::to_vec(value).map(Bytes::from).map(Into::into)?),
+                );
+            }
+
+            batch.build()?
+        };
+
+        let record_batch = schema.as_arrow(&batch)?;
+
+        let ctx = SessionContext::new();
+
+        _ = ctx.register_batch(topic, record_batch)?;
+        let df = ctx.sql(format!("select * from {topic}").as_str()).await?;
+        let results = df.collect().await?;
+
+        let pretty_results = pretty_format_batches(&results)?.to_string();
+
+        let expected = vec![
+            "+-------+----------------------------------------------------------------------------------------------+",
+            "| key   | value                                                                                        |",
+            "+-------+----------------------------------------------------------------------------------------------+",
+            "| 12321 | [{location: abc, quantity: 6}, {location: pqr, quantity: 11}]                                |",
+            "| 32123 | [{location: abc, quantity: 3}, {location: def, quantity: 33}, {location: xyz, quantity: 21}] |",
+            "+-------+----------------------------------------------------------------------------------------------+",
+        ];
+
+        assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn primitive_key_and_struct_with_array_field_value_as_arrow() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let topic = "def";
+
+        let schema = serde_json::to_vec(&json!({
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "number"
+                },
+                "value": {
+                    "type": "object",
+                    "properties": {
+                        "zone": {
+                            "type": "number",
+                        },
+                        "locations": {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        }))
+        .map_err(Into::into)
+        .map(Bytes::from)
+        .and_then(Schema::try_from)?;
+
+        let kv = [
+            (
+                json!(12321),
+                json!({"zone": 6, "locations": ["abc", "def"]}),
+            ),
+            (json!(32123), json!({"zone": 11, "locations": ["pqr"]})),
+        ];
+
+        let batch = {
+            let mut batch = Batch::builder();
+
+            for (ref key, ref value) in kv {
+                batch = batch.record(
+                    Record::builder()
+                        .key(serde_json::to_vec(key).map(Bytes::from).map(Into::into)?)
+                        .value(serde_json::to_vec(value).map(Bytes::from).map(Into::into)?),
+                );
+            }
+
+            batch.build()?
+        };
+
+        let record_batch = schema.as_arrow(&batch)?;
+
+        let ctx = SessionContext::new();
+
+        _ = ctx.register_batch(topic, record_batch)?;
+        let df = ctx.sql(format!("select * from {topic}").as_str()).await?;
+        let results = df.collect().await?;
+
+        let pretty_results = pretty_format_batches(&results)?.to_string();
+
+        let expected = vec![
+            "+-------+----------------------------------+",
+            "| key   | value                            |",
+            "+-------+----------------------------------+",
+            "| 12321 | {locations: [abc, def], zone: 6} |",
+            "| 32123 | {locations: [pqr], zone: 11}     |",
+            "+-------+----------------------------------+",
+        ];
+
+        assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
 
         Ok(())
     }

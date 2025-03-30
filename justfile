@@ -32,6 +32,9 @@ minio-local-alias:
 minio-tansu-bucket:
     docker compose exec minio /usr/bin/mc mb local/tansu
 
+minio-lake-bucket:
+    docker compose exec minio /usr/bin/mc mb local/lake
+
 minio-ready-local:
     docker compose exec minio /usr/bin/mc ready local
 
@@ -154,6 +157,12 @@ person-topic-consume:
         --property print.headers=true \
         --property print.value=true
 
+search-topic-create:
+    kafka-topics --bootstrap-server ${ADVERTISED_LISTENER} --partitions=3 --replication-factor=1 --create --topic search
+
+search-topic-produce:
+    echo 'query: "abc/def", page_number: 6, results_per_page: 13, corpus: CORPUS_WEB' | protoc --encode=Value etc/schema/search.proto | kafka-console-producer --bootstrap-server ${ADVERTISED_LISTENER} --topic search
+
 tansu-server:
     ./target/debug/tansu-server \
         --schema-registry file://./etc/schema 2>&1 | tee tansu.log
@@ -215,5 +224,5 @@ otel: build docker-compose-down db-up minio-up minio-ready-local minio-local-ali
 
 otel-up: docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up tansu-up
 
-server: build docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket
+server: build docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket
 	./target/debug/tansu-server --schema-registry file://./etc/schema 2>&1  | tee tansu.log
