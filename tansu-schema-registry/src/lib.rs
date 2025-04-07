@@ -15,9 +15,10 @@
 
 use std::{
     collections::BTreeMap,
-    env, fmt, io,
+    env, io,
     num::TryFromIntError,
     result,
+    string::FromUtf8Error,
     sync::{Arc, Mutex, PoisonError},
     time::SystemTime,
 };
@@ -38,6 +39,7 @@ use opentelemetry::{
     metrics::{Counter, Histogram},
 };
 use opentelemetry_semantic_conventions::SCHEMA_URL;
+use serde_json::Value;
 use tansu_kafka_sans_io::{ErrorCode, record::inflated::Batch};
 use tracing::{debug, error};
 use url::Url;
@@ -52,55 +54,105 @@ mod proto;
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
+    #[error("{:?}", self)]
     Anyhow(#[from] anyhow::Error),
+
+    #[error("{:?}", self)]
     Api(ErrorCode),
 
+    #[error("{:?}", self)]
     Arrow(#[from] ArrowError),
 
+    #[error("{:?}", self)]
     Avro(#[from] apache_avro::Error),
 
-    BadDowncast {
-        field: String,
-    },
+    #[error("{:?}", self)]
+    AvroToJson(apache_avro::types::Value),
+
+    #[error("{:?}", self)]
+    BadDowncast { field: String },
+
+    #[error("{:?}", self)]
     BuilderExhausted,
 
+    #[error("{:?}", self)]
+    ChronoParse(#[from] chrono::ParseError),
+
+    #[error("{:?}", self)]
     DataFusion(#[from] DataFusionError),
 
+    #[error("{:?}", self)]
     Downcast,
 
+    #[error("{:?}", self)]
+    FromUtf8(#[from] FromUtf8Error),
+
+    #[error("{:?}", self)]
     InvalidValue(apache_avro::types::Value),
 
+    #[error("{:?}", self)]
     Io(#[from] io::Error),
+
+    #[error("{:?}", self)]
+    JsonToAvro(apache_avro::Schema, serde_json::Value),
+
+    #[error("field: {field}, not found in: {value} with schema: {schema}")]
+    JsonToAvroFieldNotFound {
+        schema: apache_avro::Schema,
+        value: serde_json::Value,
+        field: String,
+    },
+
+    #[error("{:?}", self)]
     KafkaSansIo(#[from] tansu_kafka_sans_io::Error),
+
+    #[error("{:?}", self)]
     Message(String),
 
+    #[error("{:?}", self)]
     NoCommonType(Vec<DataType>),
 
+    #[error("{:?}", self)]
     ObjectStore(#[from] object_store::Error),
 
+    #[error("{:?}", self)]
     Parquet(#[from] ParquetError),
 
     #[cfg(test)]
+    #[error("{:?}", self)]
     ParseFilter(#[from] ParseError),
 
+    #[error("{:?}", self)]
     Poison,
 
-    #[cfg(test)]
+    #[error("{:?}", self)]
     ProtobufJsonMapping(#[from] protobuf_json_mapping::ParseError),
 
+    #[error("{:?}", self)]
+    ProtobufJsonMappingPrint(#[from] protobuf_json_mapping::PrintError),
+
+    #[error("{:?}", self)]
     Protobuf(#[from] protobuf::Error),
 
+    #[error("{:?}", self)]
     ProtobufFileDescriptorMissing(Bytes),
 
+    #[error("{:?}", self)]
     SchemaValidation,
+
+    #[error("{:?}", self)]
     SerdeJson(#[from] serde_json::Error),
 
+    #[error("{:?}", self)]
     TryFromInt(#[from] TryFromIntError),
 
+    #[error("{:?}", self)]
     UnsupportedSchemaRegistryUrl(Url),
 
+    #[error("{:?}", self)]
     UnsupportedSchemaRuntimeValue(DataType, serde_json::Value),
 
+    #[error("{:?}", self)]
     Uuid(#[from] uuid::Error),
 }
 
@@ -116,15 +168,6 @@ impl From<ValidationError<'_>> for Error {
     }
 }
 
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Message(msg) => write!(f, "{}", msg),
-            error => write!(f, "{:?}", error),
-        }
-    }
-}
-
 pub type Result<T, E = Error> = result::Result<T, E>;
 
 trait Validator {
@@ -135,11 +178,31 @@ trait AsArrow {
     fn as_arrow(&self, batch: &Batch) -> Result<RecordBatch>;
 }
 
+pub trait AsKafkaRecord {
+    fn as_kafka_record(&self, value: &Value) -> Result<tansu_kafka_sans_io::record::Builder>;
+}
+
+pub trait AsJsonValue {
+    fn as_json_value(&self, batch: &Batch) -> Result<Value>;
+}
+
 #[derive(Clone, Debug)]
-enum Schema {
+pub enum Schema {
     Avro(avro::Schema),
     Json(Arc<json::Schema>),
     Proto(proto::Schema),
+}
+
+impl AsKafkaRecord for Schema {
+    fn as_kafka_record(&self, value: &Value) -> Result<tansu_kafka_sans_io::record::Builder> {
+        debug!(?value);
+
+        match self {
+            Self::Avro(schema) => schema.as_kafka_record(value),
+            Self::Json(schema) => schema.as_kafka_record(value),
+            Self::Proto(schema) => schema.as_kafka_record(value),
+        }
+    }
 }
 
 impl Validator for Schema {
@@ -162,6 +225,16 @@ impl AsArrow for Schema {
     }
 }
 
+impl AsJsonValue for Schema {
+    fn as_json_value(&self, batch: &Batch) -> Result<Value> {
+        match self {
+            Schema::Avro(schema) => schema.as_json_value(batch),
+            Schema::Json(schema) => schema.as_json_value(batch),
+            Schema::Proto(schema) => schema.as_json_value(batch),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Registry {
     object_store: Arc<DynObjectStore>,
@@ -171,7 +244,7 @@ pub struct Registry {
 }
 
 impl Registry {
-    fn new(object_store: impl ObjectStore) -> Self {
+    pub fn new(storage: impl ObjectStore) -> Self {
         let meter = global::meter_with_scope(
             InstrumentationScope::builder(env!("CARGO_PKG_NAME"))
                 .with_version(env!("CARGO_PKG_VERSION"))
@@ -180,7 +253,7 @@ impl Registry {
         );
 
         Self {
-            object_store: Arc::new(object_store),
+            object_store: Arc::new(storage),
             schemas: Arc::new(Mutex::new(BTreeMap::new())),
             validation_duration: meter
                 .u64_histogram("registry_validation_duration")
@@ -202,6 +275,8 @@ impl Registry {
         batch: &Batch,
         object_store: &impl ObjectStore,
     ) -> Result<()> {
+        debug!(%topic, partition, offset, ?object_store);
+
         if let Some(record_batch) = self.schemas.lock().map_err(Into::into).and_then(|guard| {
             guard
                 .get(topic)
@@ -239,22 +314,79 @@ impl Registry {
         Ok(())
     }
 
+    pub async fn schema(&self, topic: &str) -> Result<Option<Schema>> {
+        let proto = Path::from(format!("{topic}.proto"));
+        let json = Path::from(format!("{topic}.json"));
+        let avro = Path::from(format!("{topic}.avsc"));
+
+        if let Some(schema) = self.schemas.lock().map(|guard| guard.get(topic).cloned())? {
+            Ok(Some(schema))
+        } else if let Ok(get_result) = self
+            .object_store
+            .get(&proto)
+            .await
+            .inspect(|get_result| debug!(?get_result))
+            .inspect_err(|err| debug!(?err))
+        {
+            get_result
+                .bytes()
+                .await
+                .map_err(Into::into)
+                .and_then(proto::Schema::try_from)
+                .map(Schema::Proto)
+                .and_then(|schema| {
+                    self.schemas
+                        .lock()
+                        .map_err(Into::into)
+                        .map(|mut guard| guard.insert(topic.to_owned(), schema.clone()))
+                        .and(Ok(Some(schema)))
+                })
+        } else if let Ok(get_result) = self.object_store.get(&json).await {
+            get_result
+                .bytes()
+                .await
+                .map_err(Into::into)
+                .and_then(json::Schema::try_from)
+                .map(Arc::new)
+                .map(Schema::Json)
+                .and_then(|schema| {
+                    self.schemas
+                        .lock()
+                        .map_err(Into::into)
+                        .map(|mut guard| guard.insert(topic.to_owned(), schema.clone()))
+                        .and(Ok(Some(schema)))
+                })
+        } else if let Ok(get_result) = self.object_store.get(&avro).await {
+            get_result
+                .bytes()
+                .await
+                .map_err(Into::into)
+                .and_then(avro::Schema::try_from)
+                .map(Schema::Avro)
+                .and_then(|schema| {
+                    self.schemas
+                        .lock()
+                        .map_err(Into::into)
+                        .map(|mut guard| guard.insert(topic.to_owned(), schema.clone()))
+                        .and(Ok(Some(schema)))
+                })
+        } else {
+            Ok(None)
+        }
+    }
+
     pub async fn validate(&self, topic: &str, batch: &Batch) -> Result<()> {
         let list_result = self.object_store.list_with_delimiter(None).await?;
         debug!(common_prefixes = ?list_result.common_prefixes, objects = ?list_result.objects);
 
         let validation_start = SystemTime::now();
 
-        if self
-            .schemas
-            .lock()
-            .map_err(Into::into)
-            .and_then(|guard| {
-                guard
-                    .get(topic)
-                    .map(|schema| schema.validate(batch))
-                    .transpose()
-            })
+        let Some(schema) = self.schema(topic).await? else {
+            return Ok(());
+        };
+
+        schema
+            .validate(batch)
             .inspect(|_| {
                 self.validation_duration.record(
                     validation_start
@@ -271,143 +403,7 @@ impl Registry {
                         KeyValue::new("reason", err.to_string()),
                     ],
                 )
-            })?
-            .is_none()
-        {
-            {
-                let path = Path::from(format!("{topic}.proto"));
-
-                if let Ok(get_result) = self.object_store.get(&path).await {
-                    get_result
-                        .bytes()
-                        .await
-                        .map_err(Into::into)
-                        .and_then(proto::Schema::try_from)
-                        .map(Schema::Proto)
-                        .and_then(|schema| {
-                            self.schemas
-                                .lock()
-                                .map_err(Into::into)
-                                .and_then(|mut guard| {
-                                    guard.insert(topic.to_owned(), schema.clone());
-                                    schema.validate(batch)
-                                })
-                        })
-                        .inspect(|_| {
-                            self.validation_duration.record(
-                                validation_start
-                                    .elapsed()
-                                    .map_or(0, |duration| duration.as_millis() as u64),
-                                &[KeyValue::new("topic", topic.to_owned())],
-                            )
-                        })
-                        .inspect_err(|err| {
-                            self.validation_error.add(
-                                1,
-                                &[
-                                    KeyValue::new("topic", topic.to_owned()),
-                                    KeyValue::new("reason", err.to_string()),
-                                ],
-                            )
-                        })?
-                }
-            }
-
-            {
-                let path = Path::from(format!("{topic}.json"));
-
-                if let Ok(get_result) = self.object_store.get(&path).await {
-                    get_result
-                        .bytes()
-                        .await
-                        .map_err(Into::into)
-                        .and_then(json::Schema::try_from)
-                        .map(Arc::new)
-                        .map(Schema::Json)
-                        .and_then(|schema| {
-                            self.schemas
-                                .lock()
-                                .map_err(Into::into)
-                                .and_then(|mut guard| {
-                                    guard.insert(topic.to_owned(), schema.clone());
-                                    schema.validate(batch)
-                                })
-                        })
-                        .inspect(|_| {
-                            self.validation_duration.record(
-                                validation_start
-                                    .elapsed()
-                                    .map_or(0, |duration| duration.as_millis() as u64),
-                                &[KeyValue::new("topic", topic.to_owned())],
-                            )
-                        })
-                        .inspect_err(|err| {
-                            self.validation_error.add(
-                                1,
-                                &[
-                                    KeyValue::new("topic", topic.to_owned()),
-                                    KeyValue::new("reason", err.to_string()),
-                                ],
-                            )
-                        })?
-                }
-            }
-
-            {
-                let key = {
-                    let path = Path::from(format!("{topic}/key.avsc"));
-
-                    if let Ok(get_result) = self.object_store.get(&path).await {
-                        get_result.bytes().await.ok()
-                    } else {
-                        None
-                    }
-                };
-
-                let value = {
-                    let path = Path::from(format!("{topic}/value.avsc"));
-
-                    if let Ok(get_result) = self.object_store.get(&path).await {
-                        get_result.bytes().await.ok()
-                    } else {
-                        None
-                    }
-                };
-
-                if key.is_some() || value.is_some() {
-                    avro::Schema::new(key, value)
-                        .map(Schema::Avro)
-                        .and_then(|schema| {
-                            self.schemas
-                                .lock()
-                                .map_err(Into::into)
-                                .and_then(|mut guard| {
-                                    guard.insert(topic.to_owned(), schema.clone());
-                                    schema.validate(batch)
-                                })
-                        })
-                        .inspect(|_| {
-                            self.validation_duration.record(
-                                validation_start
-                                    .elapsed()
-                                    .map_or(0, |duration| duration.as_millis() as u64),
-                                &[KeyValue::new("topic", topic.to_owned())],
-                            )
-                        })
-                        .inspect_err(|err| {
-                            self.validation_error.add(
-                                1,
-                                &[
-                                    KeyValue::new("topic", topic.to_owned()),
-                                    KeyValue::new("reason", err.to_string()),
-                                ],
-                            )
-                        })?
-                }
-            }
-        }
-
-        Ok(())
+            })
     }
 }
 
@@ -415,6 +411,14 @@ impl TryFrom<Url> for Registry {
     type Error = Error;
 
     fn try_from(storage: Url) -> Result<Self, Self::Error> {
+        Self::try_from(&storage)
+    }
+}
+
+impl TryFrom<&Url> for Registry {
+    type Error = Error;
+
+    fn try_from(storage: &Url) -> Result<Self, Self::Error> {
         debug!(%storage);
 
         match storage.scheme() {
@@ -450,7 +454,7 @@ impl TryFrom<Url> for Registry {
 
             "memory" => Ok(Registry::new(InMemory::new())),
 
-            _unsupported => Err(Error::UnsupportedSchemaRegistryUrl(storage)),
+            _unsupported => Err(Error::UnsupportedSchemaRegistryUrl(storage.to_owned())),
         }
     }
 }

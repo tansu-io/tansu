@@ -713,8 +713,10 @@ checksum = "1a7964611d71df112cb1730f2ee67324fcf4d0fc6606acbbe9bfe06df124637c"
 dependencies = [
  "android-tzdata",
  "iana-time-zone",
+ "js-sys",
  "num-traits",
  "serde",
+ "wasm-bindgen",
  "windows-link",
 ]
 
@@ -4091,13 +4093,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "tansu-cat"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "futures-core",
+ "futures-util",
+ "serde_json",
+ "tansu-kafka-sans-io",
+ "tansu-schema-registry",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+]
+
+[[package]]
 name = "tansu-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "regex",
+ "tansu-cat",
+ "tansu-kafka-sans-io",
+ "tansu-proxy",
+ "tansu-server",
+ "tansu-storage",
+ "tansu-topic",
  "thiserror 1.0.69",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
  "url",
+ "uuid",
 ]
 
 [[package]]
@@ -4161,6 +4191,7 @@ dependencies = [
  "anyhow",
  "apache-avro",
  "bytes",
+ "chrono",
  "datafusion",
  "jsonschema",
  "num-bigint",
@@ -4255,6 +4286,22 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "tansu-topic"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "futures-core",
+ "futures-util",
+ "tansu-kafka-sans-io",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "url",
 ]
 
 [[package]]
@@ -4501,8 +4548,12 @@ checksum = "6b9590b93e6fcc1739458317cccd391ad3955e2bde8913edf6f95f9e65a8f034"
 dependencies = [
  "bytes",
  "futures-core",
+ "futures-io",
  "futures-sink",
+ "futures-util",
+ "hashbrown 0.14.5",
  "pin-project-lite",
+ "slab",
  "tokio",
 ]
 

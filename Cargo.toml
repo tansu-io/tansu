@@ -1,12 +1,14 @@
 [workspace]
 resolver = "2"
-members = [ "tansu-cli",
+members = [
+    "tansu-cat",
+    "tansu-cli",
     "tansu-kafka-model",
     "tansu-kafka-sans-io",
     "tansu-proxy",
     "tansu-schema-registry",
     "tansu-server",
-    "tansu-storage",
+    "tansu-storage", "tansu-topic",
 ]
 
 [workspace.package]
@@ -48,6 +50,7 @@ condtype = "1.3.0"
 convert_case = "0.6.0"
 crc = "3.0.1"
 criterion = { version = "0.5.1", features = ["html_reports"] }
+chrono = "0.4.40"
 datafusion = "46"
 deadpool = "0.12.2"
 deadpool-postgres = "0.14.1"
@@ -95,6 +98,7 @@ syn = { version = "2.0", features = ["full"] }
 tempfile = "3"
 thiserror = "1.0"
 time = { version = "0.3.37", features = ["formatting", "macros"] }
+tokio-util = { version = "0.7", features = ["full"] }
 tokio = { version = "1", features = ["full"] }
 tokio-postgres = { version = "0.7.13", features = [
     "with-serde_json-1",

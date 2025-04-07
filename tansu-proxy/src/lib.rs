@@ -19,11 +19,12 @@ use std::{
     result,
     sync::Arc,
 };
-use tansu_kafka_sans_io::{Frame, Header};
+use tansu_kafka_sans_io::{ErrorCode, Frame, Header};
 use thiserror::Error;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
+    task::JoinSet,
 };
 use tracing::{Instrument, Level, debug, error, info, span};
 use url::Url;
@@ -96,6 +97,23 @@ impl Proxy {
                 .await
             });
         }
+    }
+
+    pub async fn main(listener_url: Url, origin_url: Url) -> Result<ErrorCode> {
+        let mut set = JoinSet::new();
+
+        {
+            let proxy = Proxy::new(listener_url, origin_url);
+            _ = set.spawn(async move { proxy.listen().await.unwrap() });
+        }
+
+        loop {
+            if set.join_next().await.is_none() {
+                break;
+            }
+        }
+
+        Ok(ErrorCode::None)
     }
 }
 

@@ -43,7 +43,7 @@ use rand::{prelude::*, rng};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tansu_kafka_sans_io::{
     BatchAttribute, ConfigResource, ConfigSource, ConfigType, ControlBatch, Decoder, Encoder,
-    EndTransactionMarker, ErrorCode, IsolationLevel, OpType,
+    EndTransactionMarker, ErrorCode, IsolationLevel, NULL_TOPIC_ID, OpType,
     add_partitions_to_txn_response::{
         AddPartitionsToTxnPartitionResult, AddPartitionsToTxnTopicResult,
     },
@@ -73,9 +73,9 @@ mod opticon;
 
 use crate::{
     BrokerRegistrationRequest, Error, GroupDetail, ListOffsetRequest, ListOffsetResponse, METER,
-    MetadataResponse, NULL_TOPIC_ID, NamedGroupDetail, OffsetCommitRequest, OffsetStage,
-    ProducerIdResponse, Result, Storage, TopicId, Topition, TxnAddPartitionsRequest,
-    TxnAddPartitionsResponse, TxnOffsetCommitRequest, TxnState, UpdateError, Version,
+    MetadataResponse, NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse,
+    Result, Storage, TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse,
+    TxnOffsetCommitRequest, TxnState, UpdateError, Version,
 };
 
 const APPLICATION_JSON: &str = "application/json";
@@ -384,6 +384,7 @@ impl DynoStore {
     }
 
     pub fn lake(self, lake: Option<impl ObjectStore>) -> Self {
+        debug!(?lake);
         let lake = lake.map(|parquet| Arc::new(parquet) as Arc<dyn ObjectStore>);
         Self { lake, ..self }
     }
@@ -611,8 +612,8 @@ impl Storage for DynoStore {
 
                     watermark
                         .with_mut(&self.object_store, |watermark| {
-                            assert_eq!(None, watermark.high.take());
-                            assert_eq!(None, watermark.low.take());
+                            watermark.high.take();
+                            watermark.low.take();
 
                             Ok(())
                         })
@@ -814,7 +815,7 @@ impl Storage for DynoStore {
             .inspect(|offset| debug!(offset, transaction_id, ?topition))
             .inspect_err(|err| error!(?err, transaction_id, ?topition))?;
 
-        if let Some(ref parquet) = self.lake {
+        if let Some(ref lake) = self.lake {
             if let Some(ref registry) = self.schemas {
                 let inflated = inflated::Batch::try_from(&deflated)?;
 
@@ -824,7 +825,7 @@ impl Storage for DynoStore {
                         topition.partition(),
                         offset,
                         &inflated,
-                        parquet,
+                        lake,
                     )
                     .await?;
             }

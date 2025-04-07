@@ -15,7 +15,7 @@
 
 use std::{any::type_name_of_val, sync::Arc};
 
-use crate::{AsArrow, Error, Result, Validator};
+use crate::{AsArrow, AsJsonValue, AsKafkaRecord, Error, Result, Validator};
 use bytes::Bytes;
 use datafusion::arrow::{
     array::{
@@ -30,7 +30,7 @@ use tansu_kafka_sans_io::{ErrorCode, record::inflated::Batch};
 use tracing::{debug, error, warn};
 
 #[derive(Debug, Default)]
-pub(crate) struct Schema {
+pub struct Schema {
     key: Option<jsonschema::Validator>,
     value: Option<jsonschema::Validator>,
 }
@@ -536,6 +536,38 @@ impl AsArrow for Schema {
                 .collect(),
         )
         .map_err(Into::into)
+    }
+}
+
+impl AsKafkaRecord for Schema {
+    fn as_kafka_record(&self, value: &Value) -> Result<tansu_kafka_sans_io::record::Builder> {
+        let mut builder = tansu_kafka_sans_io::record::Record::builder();
+
+        if let Some(value) = value.get("key") {
+            debug!(?value);
+
+            if self.key.is_some() {
+                builder = builder.key(serde_json::to_vec(value).map(Bytes::from).map(Into::into)?);
+            }
+        }
+
+        if let Some(value) = value.get("value") {
+            debug!(?value);
+
+            if self.value.is_some() {
+                builder =
+                    builder.value(serde_json::to_vec(value).map(Bytes::from).map(Into::into)?);
+            }
+        }
+
+        Ok(builder)
+    }
+}
+
+impl AsJsonValue for Schema {
+    fn as_json_value(&self, batch: &Batch) -> Result<Value> {
+        let _ = batch;
+        todo!()
     }
 }
 

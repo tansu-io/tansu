@@ -1,0 +1,24 @@
+{
+  "type": "record",
+  "name": "Grade",
+
+  "fields": [
+    { "name": "key", "type": "string" },
+    {
+      "name": "value",
+      "type": {
+        "type": "record",
+        "fields": [
+          { "name": "first", "type": "string" },
+          { "name": "last", "type": "string" },
+          { "name": "test1", "type": "double" },
+          { "name": "test2", "type": "double" },
+          { "name": "test3", "type": "double" },
+          { "name": "test4", "type": "double" },
+          { "name": "final", "type": "double" },
+          { "name": "grade", "type": "string" }
+        ]
+      }
+    }
+  ]
+}

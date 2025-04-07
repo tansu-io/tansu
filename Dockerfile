@@ -15,23 +15,22 @@
 
 FROM --platform=$BUILDPLATFORM tonistiigi/xx AS xx
 
-FROM --platform=$BUILDPLATFORM rust:1.85-alpine AS builder
+FROM --platform=$BUILDPLATFORM rust:1.86-alpine AS builder
 COPY --from=xx / /
 RUN apk add clang lld
 RUN rustup target add $(xx-cargo --print-target-triple)
 
-ARG PACKAGE=tansu-server
 WORKDIR /usr/src
 ADD / /usr/src/
 
 ARG TARGETPLATFORM
 RUN xx-apk add --no-cache musl-dev zlib-dev
-RUN xx-cargo build --package ${PACKAGE} --release --target-dir ./build
-RUN xx-verify --static ./build/$(xx-cargo --print-target-triple)/release/${PACKAGE}
+RUN xx-cargo build --package tansu-cli --release --target-dir ./build
+RUN xx-verify --static ./build/$(xx-cargo --print-target-triple)/release/tansu
 
 RUN <<EOF
 mkdir -p /image/schema /image/tmp /image/etc/ssl
-cp -v build/$(xx-cargo --print-target-triple)/release/${PACKAGE} /image
+cp -v build/$(xx-cargo --print-target-triple)/release/tansu /image
 cp -v LICENSE /image
 cp -rv /etc/ssl /image/etc
 EOF
@@ -39,4 +38,5 @@ EOF
 FROM scratch
 COPY --from=builder /image /
 ENV TMP=/tmp
-ENTRYPOINT [ "/tansu-server" ]
+ENTRYPOINT ["/tansu"]
+CMD ["broker"]

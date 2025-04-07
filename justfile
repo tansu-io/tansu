@@ -158,20 +158,20 @@ person-topic-consume:
         --property print.value=true
 
 search-topic-create:
-    kafka-topics --bootstrap-server ${ADVERTISED_LISTENER} --partitions=3 --replication-factor=1 --create --topic search
+    ./target/debug/tansu topic create --broker ${ADVERTISED_LISTENER_URL} --name search
 
 search-topic-produce:
-    echo 'query: "abc/def", page_number: 6, results_per_page: 13, corpus: CORPUS_WEB' | protoc --encode=Value etc/schema/search.proto | kafka-console-producer --bootstrap-server ${ADVERTISED_LISTENER} --topic search
+    echo '{"value": {"query": "abc/def", "page_number": 6, "results_per_page": 13, "corpus": "CORPUS_WEB"}}' | target/debug/tansu cat produce --topic search --partition 0 --schema-registry file://./etc/schema
 
 tansu-server:
-    ./target/debug/tansu-server \
+    ./target/debug/tansu broker \
         --schema-registry file://./etc/schema 2>&1 | tee tansu.log
 
 kafka-proxy:
     docker run -d -p 19092:9092 apache/kafka:3.9.0
 
 tansu-proxy:
-    ./target/debug/tansu-proxy 2>&1 | tee proxy.log
+    ./target/debug/tansu proxy 2>&1 | tee proxy.log
 
 codespace-create:
     gh codespace create \
@@ -214,15 +214,52 @@ codespace-ssh:
 all: test miri
 
 benchmark-flamegraph: build docker-compose-down minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up
-	flamegraph -- ./target/debug/tansu-server --schema-registry file://./etc/schema 2>&1 >tansu.log
+	flamegraph -- ./target/debug/tansu broker --schema-registry file://./etc/schema 2>&1  | tee tansu.log
 
 benchmark: build docker-compose-down minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up
-	./target/debug/tansu-server --schema-registry file://./etc/schema 2>&1 >tansu.log
+	./target/debug/tansu broker --schema-registry file://./etc/schema 2>&1  | tee tansu.log
 
 otel: build docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up
-	./target/debug/tansu-server --schema-registry file://./etc/schema 2>&1  | tee tansu.log
+	./target/debug/tansu broker --schema-registry file://./etc/schema 2>&1  | tee tansu.log
 
 otel-up: docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up tansu-up
 
 server: build docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket
-	./target/debug/tansu-server --schema-registry file://./etc/schema 2>&1  | tee tansu.log
+	./target/debug/tansu broker --schema-registry file://./etc/schema 2>&1  | tee tansu.log
+
+people-cat:
+    echo '{"key": {"id": 32123}, "value": {"name": "alice", "email": "alice@example.com"}}' | target/debug/tansu cat produce --topic people --partition 0 --schema-registry file://./etc/schema
+
+people-topic-create:
+    ./target/debug/tansu topic create --broker ${ADVERTISED_LISTENER_URL} --name people
+
+observation-produce:
+    cat etc/data/observations.json | target/debug/tansu cat produce --topic observation --partition 0 --schema-registry file://./etc/schema
+
+observation-consume:
+    target/debug/tansu cat consume --topic observation --partition 0 --schema-registry file://./etc/schema --max-wait-time-ms=5000
+
+observation-topic-create:
+    ./target/debug/tansu topic create --broker ${ADVERTISED_LISTENER_URL} --name observation
+
+observation-duckdb-parquet:
+    duckdb -init duckdb-init.sql :memory: "SELECT key,unnest(value) FROM 's3://lake/observation/*/*.parquet'"
+
+duckdb:
+    duckdb -init duckdb-init.sql
+
+
+taxi-produce:
+    cat etc/data/trips.json | target/debug/tansu cat produce --topic taxi --partition 0 --schema-registry file://./etc/schema
+
+taxi-consume:
+    target/debug/tansu cat consume --topic taxi --partition 0 --schema-registry file://./etc/schema --max-wait-time-ms=5000
+
+taxi-topic-create:
+    ./target/debug/tansu topic create --broker ${ADVERTISED_LISTENER_URL} --name taxi
+
+taxi-topic-delete:
+    ./target/debug/tansu topic delete --broker ${ADVERTISED_LISTENER_URL} --name taxi
+
+taxi-duckdb-parquet:
+    duckdb -init duckdb-init.sql :memory: "SELECT * FROM 's3://lake/taxi/*/*.parquet'"

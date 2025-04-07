@@ -79,8 +79,8 @@ mod tests {
 
     use super::*;
     use object_store::memory::InMemory;
-    use tansu_kafka_sans_io::{ErrorCode, create_topics_request::CreatableTopic};
-    use tansu_storage::{NULL_TOPIC_ID, dynostore::DynoStore};
+    use tansu_kafka_sans_io::{ErrorCode, NULL_TOPIC_ID, create_topics_request::CreatableTopic};
+    use tansu_storage::dynostore::DynoStore;
     use uuid::Uuid;
 
     #[tokio::test]

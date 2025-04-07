@@ -90,15 +90,16 @@ async fn main() -> Result<()> {
     });
 
     let schemas = args.schema_registry.map_or(Ok(None), |schema| {
-        Registry::try_from(schema.into_inner()).map(Some)
+        Registry::try_from(&schema.into_inner()).map(Some)
     })?;
 
     let lake = args.lake.map_or(Ok(None), |parquet| {
         let url = parquet.into_inner();
+        debug!(%url);
 
         match url.scheme() {
             "s3" => {
-                let bucket_name = storage_engine.host_str().unwrap_or("lake");
+                let bucket_name = url.host_str().unwrap_or("lake");
 
                 AmazonS3Builder::from_env()
                     .with_bucket_name(bucket_name)

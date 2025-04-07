@@ -44,7 +44,7 @@ fn append_in_memory(c: &mut Criterion) {
                     .in_memory(&data)
                     .build();
 
-                let value = iter::repeat(0u8).take(size).collect::<Vec<_>>();
+                let value = iter::repeat_n(0u8, size).take(size).collect::<Vec<_>>();
 
                 _ = segment
                     .append(
@@ -88,7 +88,7 @@ fn append_in_memory_provider(c: &mut Criterion) {
                 let tpo = TopitionOffset::new(topition, base_offset);
                 let mut segment = provider.provide_segment(&tpo).unwrap();
 
-                let value = iter::repeat(0u8).take(size).collect::<Vec<_>>();
+                let value = iter::repeat_n(0u8, size).collect::<Vec<_>>();
 
                 _ = segment
                     .append(

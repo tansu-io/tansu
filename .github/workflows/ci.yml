@@ -148,6 +148,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: tansu-io/example-java
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            etc/data/initdb.d/010-schema.sql
+          sparse-checkout-cone-mode: false
+      - run: ls -lR
       - run: docker compose --ansi never --progress plain up --no-color --quiet-pull --detach
         env:
           TANSU_IMAGE: ${{steps.meta.outputs.tags}}

@@ -32,7 +32,7 @@ use rand::{prelude::*, rng};
 use serde_json::Value;
 use tansu_kafka_sans_io::{
     BatchAttribute, ConfigResource, ConfigSource, ConfigType, ControlBatch, EndTransactionMarker,
-    ErrorCode, IsolationLevel, OpType,
+    ErrorCode, IsolationLevel, NULL_TOPIC_ID, OpType,
     add_partitions_to_txn_response::{
         AddPartitionsToTxnPartitionResult, AddPartitionsToTxnTopicResult,
     },
@@ -61,9 +61,9 @@ use uuid::Uuid;
 
 use crate::{
     BrokerRegistrationRequest, Error, GroupDetail, ListOffsetRequest, ListOffsetResponse, METER,
-    MetadataResponse, NULL_TOPIC_ID, NamedGroupDetail, OffsetCommitRequest, OffsetStage,
-    ProducerIdResponse, Result, Storage, TopicId, Topition, TxnAddPartitionsRequest,
-    TxnAddPartitionsResponse, TxnOffsetCommitRequest, TxnState, UpdateError, Version,
+    MetadataResponse, NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse,
+    Result, Storage, TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse,
+    TxnOffsetCommitRequest, TxnState, UpdateError, Version,
 };
 
 macro_rules! include_sql {

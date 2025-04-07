@@ -15,8 +15,8 @@
 
 use std::{io::Write, ops::Deref};
 
-use crate::{AsArrow, Error, Result, Validator, arrow::RecordBuilder};
-use bytes::Bytes;
+use crate::{AsArrow, AsJsonValue, AsKafkaRecord, Error, Result, Validator, arrow::RecordBuilder};
+use bytes::{BufMut, Bytes, BytesMut};
 use datafusion::arrow::{
     array::{
         ArrayBuilder, BinaryBuilder, BooleanBuilder, Float32Builder, Float64Builder, Int32Builder,
@@ -33,6 +33,8 @@ use protobuf::{
         RuntimeType,
     },
 };
+use protobuf_json_mapping::{parse_dyn_from_str, print_to_string};
+use serde_json::{Map, Value};
 use tansu_kafka_sans_io::{ErrorCode, record::inflated::Batch};
 use tempfile::{NamedTempFile, tempdir};
 use tracing::{debug, error};
@@ -44,8 +46,59 @@ const KEY: &str = "Key";
 const VALUE: &str = "Value";
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub(crate) struct Schema {
+pub struct Schema {
     file_descriptor: FileDescriptor,
+}
+
+impl Schema {
+    fn message_value_as_bytes(&self, message_name: &str, json: &Value) -> Result<Option<Bytes>> {
+        self.file_descriptor
+            .message_by_package_relative_name(message_name)
+            .map(|message_descriptor| {
+                serde_json::to_string(json)
+                    .map_err(Error::from)
+                    .inspect(|json| debug!(%json))
+                    .and_then(|json| {
+                        parse_dyn_from_str(&message_descriptor, json.as_str()).map_err(Into::into)
+                    })
+                    .inspect(|message| debug!(?message))
+                    .and_then(|message| {
+                        let mut w = BytesMut::new().writer();
+                        message
+                            .write_to_writer_dyn(&mut w)
+                            .map(|()| Bytes::from(w.into_inner()))
+                            .map_err(Into::into)
+                    })
+                    .inspect_err(|err| error!(?err))
+            })
+            .transpose()
+    }
+}
+
+impl AsKafkaRecord for Schema {
+    fn as_kafka_record(&self, value: &Value) -> Result<tansu_kafka_sans_io::record::Builder> {
+        debug!(?value);
+
+        let mut builder = tansu_kafka_sans_io::record::Record::builder();
+
+        if let Some(value) = value.get("key") {
+            debug!(?value);
+
+            if let Some(encoded) = self.message_value_as_bytes(KEY, value)? {
+                builder = builder.key(encoded.into());
+            }
+        };
+
+        if let Some(value) = value.get("value") {
+            debug!(?value);
+
+            if let Some(encoded) = self.message_value_as_bytes(VALUE, value)? {
+                builder = builder.value(encoded.into());
+            }
+        };
+
+        Ok(builder)
+    }
 }
 
 fn runtime_type_to_data_type(runtime_type: &RuntimeType) -> DataType {
@@ -328,10 +381,13 @@ impl From<&Schema> for datafusion::arrow::datatypes::Schema {
     }
 }
 
-fn validate(message_descriptor: Option<MessageDescriptor>, encoded: Option<Bytes>) -> Result<()> {
+fn decode(
+    message_descriptor: Option<MessageDescriptor>,
+    encoded: Option<Bytes>,
+) -> Result<Option<Box<dyn MessageDyn>>> {
     debug!(?message_descriptor, ?encoded);
 
-    message_descriptor.map_or(Ok(()), |message_descriptor| {
+    message_descriptor.map_or(Ok(None), |message_descriptor| {
         encoded.map_or(Err(Error::Api(ErrorCode::InvalidRecord)), |encoded| {
             let mut message = message_descriptor.new_instance();
 
@@ -339,8 +395,14 @@ fn validate(message_descriptor: Option<MessageDescriptor>, encoded: Option<Bytes
                 .merge_from_dyn(&mut CodedInputStream::from_tokio_bytes(&encoded))
                 .inspect_err(|err| error!(?err))
                 .map_err(|_err| Error::Api(ErrorCode::InvalidRecord))
+                .and(Ok(Some(message)))
+                .inspect(|message| debug!(?message))
         })
     })
+}
+
+fn validate(message_descriptor: Option<MessageDescriptor>, encoded: Option<Bytes>) -> Result<()> {
+    decode(message_descriptor, encoded).and(Ok(()))
 }
 
 impl Validator for Schema {
@@ -965,16 +1027,61 @@ impl AsArrow for Schema {
     }
 }
 
+impl Schema {
+    fn to_json_value(
+        &self,
+        package_relative_name: &str,
+        encoded: Option<Bytes>,
+    ) -> Result<(String, Value)> {
+        decode(
+            self.file_descriptor
+                .message_by_package_relative_name(package_relative_name),
+            encoded,
+        )
+        .inspect(|decoded| debug!(?decoded))
+        .and_then(|decoded| {
+            decoded.map_or(
+                Ok((package_relative_name.to_lowercase(), Value::Null)),
+                |message| {
+                    print_to_string(message.as_ref())
+                        .inspect(|s| debug!(s))
+                        .map_err(Into::into)
+                        .and_then(|s| serde_json::from_str::<Value>(&s).map_err(Into::into))
+                        .map(|value| (package_relative_name.to_lowercase(), value))
+                        .inspect(|(k, v)| debug!(k, ?v))
+                },
+            )
+        })
+    }
+}
+
+impl AsJsonValue for Schema {
+    fn as_json_value(&self, batch: &Batch) -> Result<Value> {
+        Ok(Value::Array(
+            batch
+                .records
+                .iter()
+                .inspect(|record| debug!(?record))
+                .map(|record| {
+                    Value::Object(Map::from_iter(
+                        self.to_json_value(KEY, record.key.clone())
+                            .into_iter()
+                            .chain(self.to_json_value(VALUE, record.value.clone())),
+                    ))
+                })
+                .collect::<Vec<_>>(),
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::Registry;
 
     use super::*;
-    use bytes::{BufMut, BytesMut};
     use datafusion::{arrow::util::pretty::pretty_format_batches, prelude::*};
     use object_store::{ObjectStore, PutPayload, memory::InMemory, path::Path};
-    use protobuf_json_mapping::parse_dyn_from_str;
-    use serde_json::{Value, json};
+    use serde_json::json;
     use std::{fs::File, sync::Arc, thread};
     use tansu_kafka_sans_io::record::Record;
     use tracing::subscriber::DefaultGuard;
@@ -1203,11 +1310,11 @@ mod tests {
         let kv = [
             (
                 &json!({"id": 32123}),
-                &json!({"query": "abc/def", "page_number": 6, "results_per_page": 13, "corpus": "CORPUS_WEB"}),
+                &json!({"query": "abc/def", "pageNumber": 6, "resultsPerPage": 13, "corpus": "CORPUS_WEB"}),
             ),
             (
                 &json!({"id": 45654}),
-                &json!({"query": "pqr/stu", "page_number": 42, "results_per_page": 5, "corpus": "CORPUS_PRODUCTS"}),
+                &json!({"query": "pqr/stu", "pageNumber": 42, "resultsPerPage": 5, "corpus": "CORPUS_PRODUCTS"}),
             ),
         ];
 
@@ -1248,6 +1355,22 @@ mod tests {
         ];
 
         assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
+
+        assert_eq!(
+            json!([{"key": {"id": 32123},
+                    "value": {
+                        "query": "abc/def",
+                        "pageNumber": 6,
+                        "resultsPerPage": 13,
+                        "corpus": "CORPUS_WEB"}},
+                    {"key": {"id": 45654},
+                     "value": {
+                         "query": "pqr/stu",
+                         "pageNumber": 42,
+                         "resultsPerPage": 5,
+                         "corpus": "CORPUS_PRODUCTS"}}]),
+            schema.as_json_value(&batch)?
+        );
 
         Ok(())
     }

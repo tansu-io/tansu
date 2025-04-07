@@ -30,7 +30,11 @@ pub mod produce;
 pub mod telemetry;
 pub mod txn;
 
-use crate::{Error, METER, Result, coordinator::group::Coordinator};
+use crate::{
+    Error, METER, Result,
+    coordinator::group::{Coordinator, administrator::Controller},
+    otel,
+};
 use api_versions::ApiVersionsRequest;
 use create_topic::CreateTopic;
 use delete_records::DeleteRecordsRequest;
@@ -43,13 +47,21 @@ use init_producer_id::InitProducerIdRequest;
 use list_offsets::ListOffsetsRequest;
 use list_partition_reassignments::ListPartitionReassignmentsRequest;
 use metadata::MetadataRequest;
+use object_store::{
+    ObjectStore,
+    aws::{AmazonS3Builder, S3ConditionalPut},
+    local::LocalFileSystem,
+    memory::InMemory,
+};
 use opentelemetry::{
     KeyValue,
     metrics::{Counter, Histogram},
 };
 use produce::ProduceRequest;
 use std::{
+    env,
     io::ErrorKind,
+    marker::PhantomData,
     net::{IpAddr, Ipv6Addr, SocketAddr},
     str::FromStr,
     time::SystemTime,
@@ -58,11 +70,16 @@ use tansu_kafka_sans_io::{
     Body, ErrorCode, Frame, Header, IsolationLevel, consumer_group_describe_response,
     describe_groups_response,
 };
-use tansu_storage::{BrokerRegistrationRequest, Storage, TopicId};
+use tansu_schema_registry::Registry;
+use tansu_storage::{
+    BrokerRegistrationRequest, Storage, StorageContainer, TopicId, dynostore::DynoStore,
+    pg::Postgres,
+};
 use telemetry::GetTelemetrySubscriptionsRequest;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
+    task::JoinSet,
 };
 use tracing::{Instrument, Level, Span, debug, debug_span, error, info, span};
 use txn::{add_offsets::AddOffsets, add_partitions::AddPartitions};
@@ -79,6 +96,7 @@ pub struct Broker<G, S> {
     storage: S,
     groups: G,
     metron: Metron,
+    prometheus: Option<Url>,
 }
 
 impl<G, S> Broker<G, S>
@@ -105,7 +123,30 @@ where
             storage,
             groups,
             metron: Metron::new(cluster_id, incarnation_id),
+            prometheus: None,
         }
+    }
+
+    pub fn builder() -> PhantomBuilder {
+        Builder::default()
+    }
+
+    pub async fn main(mut self) -> Result<ErrorCode> {
+        let mut set = JoinSet::new();
+
+        if let Some(prometheus) = self.prometheus.clone() {
+            _ = set.spawn(async move {
+                otel::prom::init(prometheus).await.unwrap();
+            });
+        }
+
+        set.spawn(async move {
+            self.serve().await.unwrap();
+        });
+
+        _ = set.join_next().await;
+
+        Ok(ErrorCode::None)
     }
 
     pub async fn serve(&mut self) -> Result<()> {
@@ -1123,5 +1164,268 @@ impl Metron {
                 .with_description("The API request latencies in milliseconds")
                 .build(),
         }
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct Builder<N, C, I, A, S, L> {
+    node_id: N,
+    cluster_id: C,
+    incarnation_id: I,
+    advertised_listener: A,
+    storage: S,
+    listener: L,
+    prometheus: Option<Url>,
+    schema_registry: Option<Url>,
+    data_lake: Option<Url>,
+}
+
+type PhantomBuilder = Builder<
+    PhantomData<i32>,
+    PhantomData<String>,
+    PhantomData<Uuid>,
+    PhantomData<Url>,
+    PhantomData<Url>,
+    PhantomData<Url>,
+>;
+
+impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
+    pub fn node_id(self, node_id: i32) -> Builder<i32, C, I, A, S, L> {
+        Builder {
+            node_id,
+            cluster_id: self.cluster_id,
+            incarnation_id: self.incarnation_id,
+            advertised_listener: self.advertised_listener,
+            storage: self.storage,
+            listener: self.listener,
+            prometheus: self.prometheus,
+            schema_registry: self.schema_registry,
+            data_lake: self.data_lake,
+        }
+    }
+
+    pub fn cluster_id(self, cluster_id: impl Into<String>) -> Builder<N, String, I, A, S, L> {
+        Builder {
+            node_id: self.node_id,
+            cluster_id: cluster_id.into(),
+            incarnation_id: self.incarnation_id,
+            advertised_listener: self.advertised_listener,
+            storage: self.storage,
+            listener: self.listener,
+            prometheus: self.prometheus,
+            schema_registry: self.schema_registry,
+            data_lake: self.data_lake,
+        }
+    }
+
+    pub fn incarnation_id(self, incarnation_id: impl Into<Uuid>) -> Builder<N, C, Uuid, A, S, L> {
+        Builder {
+            node_id: self.node_id,
+            cluster_id: self.cluster_id,
+            incarnation_id: incarnation_id.into(),
+            advertised_listener: self.advertised_listener,
+            storage: self.storage,
+            listener: self.listener,
+            prometheus: self.prometheus,
+            schema_registry: self.schema_registry,
+            data_lake: self.data_lake,
+        }
+    }
+
+    pub fn advertised_listener(
+        self,
+        advertised_listener: impl Into<Url>,
+    ) -> Builder<N, C, I, Url, S, L> {
+        Builder {
+            node_id: self.node_id,
+            cluster_id: self.cluster_id,
+            incarnation_id: self.incarnation_id,
+            advertised_listener: advertised_listener.into(),
+            storage: self.storage,
+            listener: self.listener,
+            prometheus: self.prometheus,
+            schema_registry: self.schema_registry,
+            data_lake: self.data_lake,
+        }
+    }
+
+    pub fn storage(self, storage: Url) -> Builder<N, C, I, A, Url, L> {
+        Builder {
+            node_id: self.node_id,
+            cluster_id: self.cluster_id,
+            incarnation_id: self.incarnation_id,
+            advertised_listener: self.advertised_listener,
+            storage,
+            listener: self.listener,
+            prometheus: self.prometheus,
+            schema_registry: self.schema_registry,
+            data_lake: self.data_lake,
+        }
+    }
+
+    pub fn listener(self, listener: Url) -> Builder<N, C, I, A, S, Url> {
+        Builder {
+            node_id: self.node_id,
+            cluster_id: self.cluster_id,
+            incarnation_id: self.incarnation_id,
+            advertised_listener: self.advertised_listener,
+            storage: self.storage,
+            listener,
+            prometheus: self.prometheus,
+            schema_registry: self.schema_registry,
+            data_lake: self.data_lake,
+        }
+    }
+
+    pub fn schema_registry(self, schema_registry: Option<Url>) -> Builder<N, C, I, A, S, L> {
+        Builder {
+            node_id: self.node_id,
+            cluster_id: self.cluster_id,
+            incarnation_id: self.incarnation_id,
+            advertised_listener: self.advertised_listener,
+            storage: self.storage,
+            listener: self.listener,
+            prometheus: self.prometheus,
+            schema_registry,
+            data_lake: self.data_lake,
+        }
+    }
+
+    pub fn data_lake(self, data_lake: Option<Url>) -> Builder<N, C, I, A, S, L> {
+        Builder {
+            node_id: self.node_id,
+            cluster_id: self.cluster_id,
+            incarnation_id: self.incarnation_id,
+            advertised_listener: self.advertised_listener,
+            storage: self.storage,
+            listener: self.listener,
+            prometheus: self.prometheus,
+            schema_registry: self.schema_registry,
+            data_lake,
+        }
+    }
+
+    pub fn prometheus(self, prometheus: Option<Url>) -> Builder<N, C, I, A, S, L> {
+        Builder {
+            node_id: self.node_id,
+            cluster_id: self.cluster_id,
+            incarnation_id: self.incarnation_id,
+            advertised_listener: self.advertised_listener,
+            storage: self.storage,
+            listener: self.listener,
+            prometheus,
+            schema_registry: self.schema_registry,
+            data_lake: self.data_lake,
+        }
+    }
+}
+
+impl Builder<i32, String, Uuid, Url, Url, Url> {
+    fn lake(&self) -> Result<Option<Box<dyn ObjectStore>>> {
+        self.data_lake.as_ref().map_or(Ok(None), |url| {
+            debug!(%url);
+
+            match url.scheme() {
+                "s3" => {
+                    let bucket_name = url.host_str().unwrap_or("lake");
+
+                    AmazonS3Builder::from_env()
+                        .with_bucket_name(bucket_name)
+                        .with_conditional_put(S3ConditionalPut::ETagMatch)
+                        .build()
+                        .map(Box::new)
+                        .map(|data_source| data_source as Box<dyn ObjectStore>)
+                        .map(Some)
+                        .map_err(Into::into)
+                }
+
+                "file" => {
+                    let mut path =
+                        env::current_dir().inspect(|current_dir| debug!(?current_dir))?;
+
+                    if let Some(domain) = url.domain() {
+                        path.push(domain);
+                    }
+
+                    if let Some(relative) = url.path().strip_prefix("/") {
+                        path.push(relative);
+                    } else {
+                        path.push(url.path());
+                    }
+
+                    debug!(?path);
+
+                    LocalFileSystem::new_with_prefix(path)
+                        .map(Box::new)
+                        .map(|data_source| data_source as Box<dyn ObjectStore>)
+                        .map(Some)
+                        .map_err(Into::into)
+                }
+
+                _unsupported => Err(Error::UnsupportedStorageUrl(url.to_owned())),
+            }
+        })
+    }
+
+    fn storage_engine(&self) -> Result<StorageContainer> {
+        let schemas = self
+            .schema_registry
+            .as_ref()
+            .map_or(Ok(None), |schema| Registry::try_from(schema).map(Some))?;
+
+        let lake = self.lake()?;
+
+        match self.storage.scheme() {
+            "postgres" | "postgresql" => Postgres::builder(self.storage.to_string().as_str())
+                .map(|builder| builder.cluster(self.cluster_id.as_str()))
+                .map(|builder| builder.node(self.node_id))
+                .map(|builder| builder.advertised_listener(self.advertised_listener.clone()))
+                .map(|builder| builder.schemas(schemas))
+                .map(|builder| builder.build())
+                .map(StorageContainer::Postgres)
+                .map_err(Into::into),
+
+            "s3" => {
+                let bucket_name = self.storage.host_str().unwrap_or("tansu");
+
+                AmazonS3Builder::from_env()
+                    .with_bucket_name(bucket_name)
+                    .with_conditional_put(S3ConditionalPut::ETagMatch)
+                    .build()
+                    .map(|object_store| {
+                        DynoStore::new(self.cluster_id.as_str(), self.node_id, object_store)
+                            .advertised_listener(self.advertised_listener.clone())
+                            .schemas(schemas)
+                            .lake(lake)
+                    })
+                    .map(StorageContainer::DynoStore)
+                    .map_err(Into::into)
+            }
+
+            "memory" => Ok(StorageContainer::DynoStore(
+                DynoStore::new(self.cluster_id.as_str(), self.node_id, InMemory::new())
+                    .advertised_listener(self.advertised_listener.clone()),
+            )),
+
+            _unsupported => Err(Error::UnsupportedStorageUrl(self.storage.clone())),
+        }
+    }
+
+    pub fn build(self) -> Result<Broker<Controller<StorageContainer>, StorageContainer>> {
+        let storage = self.storage_engine()?;
+        let groups = Controller::with_storage(storage.clone())?;
+        let metron = Metron::new(self.cluster_id.as_str(), self.incarnation_id);
+
+        Ok(Broker {
+            node_id: self.node_id,
+            cluster_id: self.cluster_id.clone(),
+            incarnation_id: self.incarnation_id,
+            listener: self.listener,
+            advertised_listener: self.advertised_listener,
+            storage,
+            groups,
+            metron,
+            prometheus: self.prometheus,
+        })
     }
 }
