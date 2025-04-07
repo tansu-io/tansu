@@ -25,26 +25,32 @@ mod topic;
 const DEFAULT_BROKER: &str = "tcp://localhost:9092";
 
 #[derive(Clone, Debug, Parser)]
-#[command(version, about, long_about = None)]
+#[command(version, about, long_about = None, args_conflicts_with_subcommands = true)]
 pub struct Cli {
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
+
+    #[clap(flatten)]
+    broker: broker::Arg,
 }
 
 #[derive(Clone, Debug, Subcommand)]
 enum Command {
     Broker(Box<broker::Arg>),
 
+    #[command(arg_required_else_help = true)]
     Cat {
         #[command(subcommand)]
         command: cat::Command,
     },
 
+    #[command(arg_required_else_help = true)]
     Topic {
         #[command(subcommand)]
         command: topic::Command,
     },
 
+    #[command(arg_required_else_help = true)]
     Proxy(Box<proxy::Arg>),
 }
 
@@ -53,17 +59,19 @@ impl Cli {
         let cli = Cli::parse();
 
         match cli.command {
-            Command::Broker(arg) => arg.main().await,
+            None => cli.broker.main().await,
 
-            Command::Cat { command } => command.main().await,
+            Some(Command::Broker(arg)) => arg.main().await,
 
-            Command::Proxy(arg) => {
+            Some(Command::Cat { command }) => command.main().await,
+
+            Some(Command::Proxy(arg)) => {
                 tansu_proxy::Proxy::main(arg.listener_url.into_inner(), arg.origin_url.into_inner())
                     .await
                     .map_err(Into::into)
             }
 
-            Command::Topic { command } => command.main().await,
+            Some(Command::Topic { command }) => command.main().await,
         }
     }
 }

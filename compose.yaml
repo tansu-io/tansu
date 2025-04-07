@@ -65,7 +65,6 @@ services:
     volumes:
       - ./etc/schema/:/schema/
     command: |
-      broker
       --kafka-cluster-id ${CLUSTER_ID}
       --kafka-listener-url tcp://0.0.0.0:9092/
       --kafka-advertised-listener-url ${ADVERTISED_LISTENER_URL}

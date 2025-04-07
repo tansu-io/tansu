@@ -16,14 +16,14 @@
 use crate::{EnvVarExp, Error, Result};
 
 use super::DEFAULT_BROKER;
-use clap::Args;
+use clap::Parser;
 use tansu_kafka_sans_io::ErrorCode;
 use tansu_server::{NODE_ID, broker::Broker, coordinator::group::administrator::Controller};
 use tansu_storage::StorageContainer;
 use url::Url;
 use uuid::Uuid;
 
-#[derive(Args, Clone, Debug)]
+#[derive(Clone, Debug, Parser)]
 pub(super) struct Arg {
     #[arg(long, env = "CLUSTER_ID")]
     kafka_cluster_id: String,
