@@ -207,6 +207,8 @@ impl AsKafkaRecord for Schema {
 
 impl Validator for Schema {
     fn validate(&self, batch: &Batch) -> Result<()> {
+        debug!(?batch);
+
         match self {
             Self::Avro(schema) => schema.validate(batch),
             Self::Json(schema) => schema.validate(batch),
@@ -217,6 +219,8 @@ impl Validator for Schema {
 
 impl AsArrow for Schema {
     fn as_arrow(&self, batch: &Batch) -> Result<RecordBatch> {
+        debug!(?batch);
+
         match self {
             Schema::Avro(schema) => schema.as_arrow(batch),
             Schema::Json(schema) => schema.as_arrow(batch),
@@ -227,6 +231,8 @@ impl AsArrow for Schema {
 
 impl AsJsonValue for Schema {
     fn as_json_value(&self, batch: &Batch) -> Result<Value> {
+        debug!(?batch);
+
         match self {
             Schema::Avro(schema) => schema.as_json_value(batch),
             Schema::Json(schema) => schema.as_json_value(batch),
@@ -315,6 +321,8 @@ impl Registry {
     }
 
     pub async fn schema(&self, topic: &str) -> Result<Option<Schema>> {
+        debug!(?topic);
+
         let proto = Path::from(format!("{topic}.proto"));
         let json = Path::from(format!("{topic}.json"));
         let avro = Path::from(format!("{topic}.avsc"));
@@ -376,12 +384,12 @@ impl Registry {
     }
 
     pub async fn validate(&self, topic: &str, batch: &Batch) -> Result<()> {
-        let list_result = self.object_store.list_with_delimiter(None).await?;
-        debug!(common_prefixes = ?list_result.common_prefixes, objects = ?list_result.objects);
+        debug!(%topic, ?batch);
 
         let validation_start = SystemTime::now();
 
         let Some(schema) = self.schema(topic).await? else {
+            debug!(no_schema_for_topic = %topic);
             return Ok(());
         };
 

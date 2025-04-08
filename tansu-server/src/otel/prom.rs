@@ -30,7 +30,7 @@ use opentelemetry_prometheus::exporter;
 use opentelemetry_sdk::metrics::SdkMeterProvider;
 use prometheus::{Encoder, Registry, TextEncoder};
 use tokio::net::TcpListener;
-use tracing::debug;
+use tracing::{debug, error};
 use url::Url;
 
 async fn serve_req(request: Request<Incoming>, state: Registry) -> Result<Response<Full<Bytes>>> {
@@ -72,12 +72,15 @@ pub async fn init(listener: Url) -> Result<()> {
 
     global::set_meter_provider(provider);
 
-    let listener = TcpListener::bind(format!(
+    let addr = format!(
         "{}:{}",
         listener.host_str().unwrap_or("0.0.0.0"),
-        listener.port().unwrap_or(3000)
-    ))
-    .await?;
+        listener.port().unwrap_or(9100)
+    );
+
+    let listener = TcpListener::bind(addr.clone())
+        .await
+        .inspect_err(|err| error!(?err, %addr))?;
 
     while let Ok((stream, _addr)) = listener.accept().await {
         if let Err(err) = Builder::new(TokioExecutor::new())

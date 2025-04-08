@@ -13,6 +13,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+use dotenv::dotenv;
 use tansu_cli::{Cli, Result};
 use tansu_kafka_sans_io::ErrorCode;
 use tracing::{error, info};
@@ -20,6 +21,8 @@ use tracing_subscriber::{EnvFilter, fmt::format::FmtSpan, prelude::*};
 
 #[tokio::main]
 async fn main() -> Result<ErrorCode> {
+    dotenv()?;
+
     tracing_subscriber::registry()
         .with(EnvFilter::from_default_env())
         .with(

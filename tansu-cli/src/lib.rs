@@ -23,6 +23,7 @@ use regex::{Regex, Replacer};
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
     Cat(#[from] tansu_cat::Error),
+    DotEnv(#[from] dotenv::Error),
     Proxy(#[from] tansu_proxy::Error),
     Regex(#[from] regex::Error),
     Server(#[from] tansu_server::Error),

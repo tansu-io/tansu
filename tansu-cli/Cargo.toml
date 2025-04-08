@@ -7,6 +7,7 @@ publish = false
 
 [dependencies]
 clap.workspace = true
+dotenv.workspace = true
 regex.workspace = true
 tansu-cat = { path = "../tansu-cat" }
 tansu-kafka-sans-io = { path = "../tansu-kafka-sans-io" }

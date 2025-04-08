@@ -60,6 +60,7 @@ impl Cat {
         PhantomData<String>,
         PhantomData<i32>,
         PhantomData<Option<Url>>,
+        PhantomData<String>,
     > {
         Builder::produce()
     }
@@ -90,6 +91,7 @@ impl Builder {
         PhantomData<String>,
         PhantomData<i32>,
         PhantomData<Option<Url>>,
+        PhantomData<String>,
     > {
         produce::Builder::default()
     }

@@ -187,7 +187,8 @@ where
                 }
             },
         ))
-        .await?;
+        .await
+        .inspect_err(|err| error!(?err, %self.advertised_listener))?;
 
         loop {
             let (stream, addr) = listener.accept().await?;
@@ -1323,7 +1324,7 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
 impl Builder<i32, String, Uuid, Url, Url, Url> {
     fn lake(&self) -> Result<Option<Box<dyn ObjectStore>>> {
         self.data_lake.as_ref().map_or(Ok(None), |url| {
-            debug!(%url);
+            debug!(data_lake = %url);
 
             match url.scheme() {
                 "s3" => {
@@ -1368,6 +1369,8 @@ impl Builder<i32, String, Uuid, Url, Url, Url> {
     }
 
     fn storage_engine(&self) -> Result<StorageContainer> {
+        debug!(storage = %self.storage);
+
         let schemas = self
             .schema_registry
             .as_ref()
@@ -1404,7 +1407,9 @@ impl Builder<i32, String, Uuid, Url, Url, Url> {
 
             "memory" => Ok(StorageContainer::DynoStore(
                 DynoStore::new(self.cluster_id.as_str(), self.node_id, InMemory::new())
-                    .advertised_listener(self.advertised_listener.clone()),
+                    .advertised_listener(self.advertised_listener.clone())
+                    .schemas(schemas)
+                    .lake(lake),
             )),
 
             _unsupported => Err(Error::UnsupportedStorageUrl(self.storage.clone())),

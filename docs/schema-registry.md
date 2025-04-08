@@ -1,17 +1,22 @@
 # Schema Registry
 
-Tansu has an embedded schema registry that supports [JSON schema][json-schema-org].
+Tansu has a schema registry that supports [JSON schema][json-schema-org],
+[Apache Avro][https://avro.apache.org] and [Protocol buffers][protocol-buffers],
+that is embedded in the broker.
+
 The schema registry is enabled using the `--schema-registry` command-line
-parameter to the server. A schema registry is a `file` or `s3` URL containing
-schemas that Tansu uses to validate messages.
+parameter to the broker. A schema registry is a `file` or `s3` URL containing
+schemas used to validate messages.
 When a message is produced to a topic with an associated schema,
 the message is validated against the schema. If a message does not conform to its
-schema it is rejected with an `INVALID_RECORD` error.
+schema it is rejected by the broker with an `INVALID_RECORD` error.
 
 Each schema is found in the root directory of the registry, named after the topic.
-A `.json` extension is used for JSON schema, and `.proto` extension is used for Protocol buffers.
+A `.json` extension is used for JSON schema, `.avsc` for Apache Avro, and  `.proto` for Protocol buffers.
 For example the JSON schema for the person topic would be stored in `person.json`,
-whereas the protocol buffer schema for the employee topic would be in `employee.proto`.
+or `person.avsc` for an Apache Avro schema, `person.proto` for protocol buffer schema.
+
+All schema types require a definition of the "Key" and/or "Value" of the Kafka message.
 
 ## JSON schema
 
@@ -149,39 +154,25 @@ the `just tansu-server` recipe or Docker compose.
 Starting Tansu with schema validation enabled:
 
 ```shell
-❯ just tansu-server
-./target/debug/tansu-server --kafka-cluster-id ${CLUSTER_ID}
-                            --kafka-advertised-listener-url tcp://${ADVERTISED_LISTENER}
-                            --schema-registry file://./etc/schemas
-                            --storage-engine ${STORAGE_ENGINE} 2>&1 | tee tansu.log
+target/debug/tansu broker --schema-registry file://./etc/schema 2>&1 | tee tansu.log
 ```
 
 Create the person topic:
 
 ```shell
-❯ just person-topic-create
-kafka-topics --bootstrap-server localhost:9092
-             --partitions=3
-             --replication-factor=1
-             --create
-             --topic person
-Created topic person.
+target/debug/tansu topic create person
 ```
 
 Produce a message that is valid for the person schema:
 
 ```shell
-❯ just person-topic-produce-valid
-echo 'h1:pqr,h2:jkl,h3:uio	"ABC-123"	{"firstName": "John", "lastName": "Doe", "age": 21}' | kafka-console-producer --bootstrap-server localhost:9092 --topic person --property parse.headers=true --property parse.key=true
+echo '{"key": "345-67-6543", "value": {"firstName": "John", "lastName": "Doe", "age": 21}}' | target/debug/tansu cat produce person
 ```
 
 Produce a message that is invalid for the person schema (the `age` must be greater to equal to 0):
 
 ```shell
-❯ just person-topic-produce-invalid
-echo 'h1:pqr,h2:jkl,h3:uio	"ABC-123"	{"firstName": "John", "lastName": "Doe", "age": -1}' | kafka-console-producer --bootstrap-server localhost:9092 --topic person --property parse.headers=true --property parse.key=true
-[2024-12-19 11:51:28,412] ERROR Error when sending message to topic person with key: 19 bytes, value: 51 bytes with error: (org.apache.kafka.clients.producer.internals.ErrorLoggingCallback)
-org.apache.kafka.common.InvalidRecordException: This record has failed the validation on broker and hence will be rejected.
+echo '{"key": "567-89-8765", "value":	{"firstName": "John", "lastName": "Doe", "age": -1}}' | ./target/debug/tansu cat produce person
 ```
 
 The server log contains the reason for the message being rejected:

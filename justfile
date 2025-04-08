@@ -5,6 +5,9 @@ default: fmt build test clippy
 build:
     cargo build --workspace --all-targets
 
+release:
+    cargo build --release --workspace --all-targets
+
 test:
     cargo test --workspace --all-targets
 
@@ -135,14 +138,43 @@ consumer-group-list:
 test-reset-offsets-to-earliest:
     kafka-consumer-groups --bootstrap-server ${ADVERTISED_LISTENER} --group test-consumer-group --topic test:0 --reset-offsets --to-earliest --execute
 
-person-topic-create:
-    kafka-topics --bootstrap-server ${ADVERTISED_LISTENER} --partitions=3 --replication-factor=1 --create --topic person
+topic-create topic:
+    target/debug/tansu topic create {{topic}}
 
+topic-delete topic:
+    target/debug/tansu topic delete {{topic}}
+
+cat-produce topic file:
+    target/debug/tansu cat produce {{topic}} {{file}}
+
+cat-consume topic:
+    target/debug/tansu cat consume {{topic}} --max-wait-time-ms=5000
+
+duckdb-k-unnest-v-parquet topic:
+    duckdb -init duckdb-init.sql :memory: "SELECT key,unnest(value) FROM '{{replace(env("DATA_LAKE"), "file://./", "")}}/{{topic}}/*/*.parquet'"
+
+duckdb-parquet topic:
+    duckdb -init duckdb-init.sql :memory: "SELECT * FROM '{{replace(env("DATA_LAKE"), "file://./", "")}}/{{topic}}/*/*.parquet'"
+
+# create person topic with schema etc/schema/person.json
+person-topic-create: (topic-create "person")
+
+# delete person topic
+person-topic-delete: (topic-delete "person")
+
+# produce etc/data/persons.json with schema etc/schema/person.json
+person-topic-populate: (cat-produce "person" "etc/data/persons.json")
+
+# produce valid data, that is accepted by the broker
 person-topic-produce-valid:
-    echo 'h1:pqr,h2:jkl,h3:uio	"ABC-123"	{"firstName": "John", "lastName": "Doe", "age": 21}' | kafka-console-producer --bootstrap-server ${ADVERTISED_LISTENER} --topic person --property parse.headers=true --property parse.key=true
+    echo '{"key": "345-67-6543", "value": {"firstName": "John", "lastName": "Doe", "age": 21}}' | target/debug/tansu cat produce person
 
+# produce invalid data, that is rejected by the broker
 person-topic-produce-invalid:
-    echo 'h1:pqr,h2:jkl,h3:uio	"ABC-123"	{"firstName": "John", "lastName": "Doe", "age": -1}' | kafka-console-producer --bootstrap-server ${ADVERTISED_LISTENER} --topic person --property parse.headers=true --property parse.key=true
+    echo '{"key": "ABC-12-4242", "value": {"firstName": "John", "lastName": "Doe", "age": -1}}' | target/debug/tansu cat produce person
+
+# person parquet
+person-duckdb-parquet: (duckdb-k-unnest-v-parquet "person")
 
 person-topic-consume:
     kafka-console-consumer \
@@ -157,21 +189,33 @@ person-topic-consume:
         --property print.headers=true \
         --property print.value=true
 
-search-topic-create:
-    ./target/debug/tansu topic create --broker ${ADVERTISED_LISTENER_URL} --name search
+# create search topic with etc/schema/search.proto
+search-topic-create: (topic-create "search")
 
+# delete search topic
+search-topic-delete: (topic-delete "search")
+
+# produce data to search topic with etc/schema/search.proto
 search-topic-produce:
-    echo '{"value": {"query": "abc/def", "page_number": 6, "results_per_page": 13, "corpus": "CORPUS_WEB"}}' | target/debug/tansu cat produce --topic search --partition 0 --schema-registry file://./etc/schema
+    echo '{"value": {"query": "abc/def", "page_number": 6, "results_per_page": 13, "corpus": "CORPUS_WEB"}}' | target/debug/tansu cat produce search
+
+# search parquet
+search-duckdb-parquet: (duckdb-parquet "search")
 
 tansu-server:
     ./target/debug/tansu broker \
         --schema-registry file://./etc/schema 2>&1 | tee tansu.log
 
+# run a broker with configuration from .env
+broker:
+    target/debug/tansu broker 2>&1 | tee tansu.log
+
 kafka-proxy:
     docker run -d -p 19092:9092 apache/kafka:3.9.0
 
+# run a proxy with configuration from .env
 tansu-proxy:
-    ./target/debug/tansu proxy 2>&1 | tee proxy.log
+    target/debug/tansu proxy 2>&1 | tee proxy.log
 
 codespace-create:
     gh codespace create \
@@ -214,52 +258,48 @@ codespace-ssh:
 all: test miri
 
 benchmark-flamegraph: build docker-compose-down minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up
-	flamegraph -- ./target/debug/tansu broker --schema-registry file://./etc/schema 2>&1  | tee tansu.log
+	flamegraph -- target/debug/tansu broker 2>&1  | tee tansu.log
 
 benchmark: build docker-compose-down minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up
-	./target/debug/tansu broker --schema-registry file://./etc/schema 2>&1  | tee tansu.log
+	./target/debug/tansu broker 2>&1  | tee tansu.log
 
 otel: build docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up
-	./target/debug/tansu broker --schema-registry file://./etc/schema 2>&1  | tee tansu.log
+	./target/debug/tansu broker 2>&1  | tee tansu.log
 
 otel-up: docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up tansu-up
 
 server: build docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket
-	./target/debug/tansu broker --schema-registry file://./etc/schema 2>&1  | tee tansu.log
+	./target/debug/tansu broker file://./etc/schema 2>&1  | tee tansu.log
 
-people-cat:
-    echo '{"key": {"id": 32123}, "value": {"name": "alice", "email": "alice@example.com"}}' | target/debug/tansu cat produce --topic people --partition 0 --schema-registry file://./etc/schema
 
-people-topic-create:
-    ./target/debug/tansu topic create --broker ${ADVERTISED_LISTENER_URL} --name people
+# produce etc/data/observations.json with schema etc/schema/observation.avsc
+observation-produce: (cat-produce "observation" "etc/data/observations.json")
 
-observation-produce:
-    cat etc/data/observations.json | target/debug/tansu cat produce --topic observation --partition 0 --schema-registry file://./etc/schema
+# consume observation topic with schema etc/schema/observation.avsc
+observation-consume: (cat-consume "observation")
 
-observation-consume:
-    target/debug/tansu cat consume --topic observation --partition 0 --schema-registry file://./etc/schema --max-wait-time-ms=5000
+# create observation topic with schema etc/schema/observation.avsc
+observation-topic-create: (topic-create "observation")
 
-observation-topic-create:
-    ./target/debug/tansu topic create --broker ${ADVERTISED_LISTENER_URL} --name observation
+# observation parquet
+observation-duckdb-parquet: (duckdb-k-unnest-v-parquet "observation")
 
-observation-duckdb-parquet:
-    duckdb -init duckdb-init.sql :memory: "SELECT key,unnest(value) FROM 's3://lake/observation/*/*.parquet'"
 
 duckdb:
     duckdb -init duckdb-init.sql
 
 
-taxi-produce:
-    cat etc/data/trips.json | target/debug/tansu cat produce --topic taxi --partition 0 --schema-registry file://./etc/schema
+# produce etc/data/trips.json with schema etc/schema/taxi.proto
+taxi-topic-populate: (cat-produce "taxi" "etc/data/trips.json")
 
-taxi-consume:
-    target/debug/tansu cat consume --topic taxi --partition 0 --schema-registry file://./etc/schema --max-wait-time-ms=5000
+# consume taxi topic with schema etc/schema/taxi.proto
+taxi-topic-consume: (cat-consume "taxi")
 
-taxi-topic-create:
-    ./target/debug/tansu topic create --broker ${ADVERTISED_LISTENER_URL} --name taxi
+# create taxi topic with schema etc/schema/taxi.proto
+taxi-topic-create: (topic-create "taxi")
 
-taxi-topic-delete:
-    ./target/debug/tansu topic delete --broker ${ADVERTISED_LISTENER_URL} --name taxi
+# delete taxi topic
+taxi-topic-delete: (topic-delete "taxi")
 
-taxi-duckdb-parquet:
-    duckdb -init duckdb-init.sql :memory: "SELECT * FROM 's3://lake/taxi/*/*.parquet'"
+# taxi parquet
+taxi-duckdb-parquet: (duckdb-parquet "taxi")

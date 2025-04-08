@@ -23,22 +23,24 @@ use super::DEFAULT_BROKER;
 
 #[derive(Clone, Debug, Subcommand)]
 pub(super) enum Command {
+    #[command(about = "Create a topic")]
     Create {
         #[arg(long, default_value = DEFAULT_BROKER)]
         broker: Url,
 
-        #[arg(long)]
+        #[clap(value_parser)]
         name: String,
 
         #[arg(long, default_value = "3")]
         partitions: i32,
     },
 
+    #[command(about = "Delete an existing topic")]
     Delete {
         #[arg(long, default_value = DEFAULT_BROKER)]
         broker: Url,
 
-        #[arg(long)]
+        #[clap(value_parser)]
         name: String,
     },
 }

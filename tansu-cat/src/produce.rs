@@ -24,6 +24,7 @@ use tansu_kafka_sans_io::{
 };
 use tansu_schema_registry::{AsKafkaRecord, Registry};
 use tokio::{
+    fs::File,
     io::{self, AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
 };
@@ -32,58 +33,74 @@ use tracing::debug;
 use url::Url;
 
 #[derive(Clone, Default)]
-pub struct Builder<B, T, P, S> {
+pub struct Builder<B, T, P, S, F> {
     broker: B,
     topic: T,
     partition: P,
     schema_registry: S,
+    file_name: F,
 }
 
-impl<B, T, P, S> Builder<B, T, P, S> {
-    pub fn broker(self, broker: impl Into<Url>) -> Builder<Url, T, P, S> {
+impl<B, T, P, S, F> Builder<B, T, P, S, F> {
+    pub fn broker(self, broker: impl Into<Url>) -> Builder<Url, T, P, S, F> {
         Builder {
             broker: broker.into(),
             topic: self.topic,
             partition: self.partition,
             schema_registry: self.schema_registry,
+            file_name: self.file_name,
         }
     }
 
-    pub fn topic(self, topic: impl Into<String>) -> Builder<B, String, P, S> {
+    pub fn topic(self, topic: impl Into<String>) -> Builder<B, String, P, S, F> {
         Builder {
             broker: self.broker,
             topic: topic.into(),
             partition: self.partition,
             schema_registry: self.schema_registry,
+            file_name: self.file_name,
         }
     }
 
-    pub fn partition(self, partition: i32) -> Builder<B, T, i32, S> {
+    pub fn partition(self, partition: i32) -> Builder<B, T, i32, S, F> {
         Builder {
             broker: self.broker,
             topic: self.topic,
             partition,
             schema_registry: self.schema_registry,
+            file_name: self.file_name,
         }
     }
 
-    pub fn schema_registry(self, schema_registry: Option<Url>) -> Builder<B, T, P, Option<Url>> {
+    pub fn schema_registry(self, schema_registry: Option<Url>) -> Builder<B, T, P, Option<Url>, F> {
         Builder {
             broker: self.broker,
             topic: self.topic,
             partition: self.partition,
             schema_registry,
+            file_name: self.file_name,
+        }
+    }
+
+    pub fn file_name(self, file_name: String) -> Builder<B, T, P, S, String> {
+        Builder {
+            broker: self.broker,
+            topic: self.topic,
+            partition: self.partition,
+            schema_registry: self.schema_registry,
+            file_name,
         }
     }
 }
 
-impl Builder<Url, String, i32, Option<Url>> {
+impl Builder<Url, String, i32, Option<Url>, String> {
     pub fn build(self) -> super::Cat {
         super::Cat::Produce(Box::new(Configuration {
             broker: self.broker,
             topic: self.topic,
             partition: self.partition,
             schema_registry: self.schema_registry,
+            file_name: self.file_name,
         }))
     }
 }
@@ -94,6 +111,7 @@ pub struct Configuration {
     pub topic: String,
     pub partition: i32,
     pub schema_registry: Option<Url>,
+    pub file_name: String,
 }
 
 #[derive(Clone, Debug)]
@@ -121,7 +139,7 @@ impl TryFrom<Configuration> for Produce {
 
 impl Produce {
     pub async fn main(self) -> Result<ErrorCode> {
-        let stdin = io::stdin();
+        debug!(%self.configuration.file_name);
 
         let schema = if let Some(ref registry) = self.registry {
             registry
@@ -132,32 +150,57 @@ impl Produce {
             None
         };
 
-        let mut reader = FramedRead::new(stdin, LinesCodec::new());
-
         let frame = {
             let mut batch = inflated::Batch::builder();
-
             let mut offset_delta = 0;
 
-            while let Some(line) = reader.next().await.transpose()? {
-                if line.trim().is_empty() {
-                    continue;
+            if self.configuration.file_name == "-" {
+                let stdin = io::stdin();
+                let mut reader = FramedRead::new(stdin, LinesCodec::new());
+
+                while let Some(line) = reader.next().await.transpose()? {
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+
+                    debug!(%line);
+
+                    let v = serde_json::from_str::<Value>(&line).inspect(|value| debug!(?value))?;
+                    debug!(%v);
+
+                    if let Some(ref schema) = schema {
+                        batch = batch.record(
+                            schema
+                                .as_kafka_record(&v)
+                                .map(|record| record.offset_delta(offset_delta))?,
+                        );
+                    }
+
+                    offset_delta += 1;
                 }
+            } else {
+                let mut file = File::open(self.configuration.file_name).await?;
 
-                debug!(%line);
+                let mut contents = vec![];
+                file.read_to_end(&mut contents).await?;
 
-                let v = serde_json::from_str::<Value>(&line).inspect(|value| debug!(?value))?;
-                debug!(%v);
+                let v = serde_json::from_slice::<Value>(&contents[..])?;
 
-                if let Some(ref schema) = schema {
-                    batch = batch.record(
-                        schema
-                            .as_kafka_record(&v)
-                            .map(|record| record.offset_delta(offset_delta))?,
-                    );
+                if let Some(records) = v.as_array() {
+                    for record in records {
+                        debug!(%record);
+
+                        if let Some(ref schema) = schema {
+                            batch = batch.record(
+                                schema
+                                    .as_kafka_record(record)
+                                    .map(|record| record.offset_delta(offset_delta))?,
+                            );
+                        }
+
+                        offset_delta += 1;
+                    }
                 }
-
-                offset_delta += 1;
             }
 
             batch

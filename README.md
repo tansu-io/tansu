@@ -8,16 +8,14 @@ Written in 100% safe 🦺 async 🚀 [Rust][rust-lang-org] 🦀
 
 Features:
 
-- Kafka API compatible
-- Elastic stateless brokers: no more planning and reassigning partitions to a broker
-- Embedded [JSON Schema][json-schema-org] or [Protocol buffers][protocol-buffers]
-  [schema registration and validation](docs/schema-registry.md) of messages
-- Consensus free without the overhead of [Raft][raft-consensus] or [ZooKeeper][apache-zookeeper]
-- All brokers are the leader and ISR of any topic partition
-- All brokers are the transaction and group coordinator
-- No network replication or duplicate data storage charges
-- Spin up a broker for the duration of a Kafka API request: no more idle brokers
-- Available with PostgreSQL, S3 or memory storage engines
+- Apache Kafka API compatible
+- Available with [PostgreSQL][https://www.postgresql.org], [S3][https://en.wikipedia.org/wiki/Amazon_S3] or memory storage engines
+- [JSON Schema][json-schema-org], [Apache Avro][https://avro.apache.org] or [Protocol buffers][protocol-buffers]
+  [broker validation](docs/schema-registry.md) of messages
+- Topics validated by [JSON Schema][json-schema-org], [Apache Avro][https://avro.apache.org]
+  or [Protocol buffers][protocol-buffers] are generated as
+  [Apache Parquet][https://parquet.apache.org] files for easy consumption into
+  your [data lake][https://en.wikipedia.org/wiki/Data_lake]
 
 For data durability:
 
@@ -26,55 +24,133 @@ For data durability:
   streaming transaction logs files to an archive
 - The memory storage engine is designed for ephemeral non-production environments
 
-## configuration
+Tansu is a single statically linked binary that containing the following:
+- **broker** an Apache Kafka API compatible broker and schema registry
+- **cat** a CLI to consume or produce Avro, JSON or Protobuf messages to a topic
+- **topic** a CLI to create/delete Topics
+- **proxy** an Apache Kafka compatible proxy
+
+## broker
+
+The broker subcommand is default if no other command is supplied.
 
 ```shell
-Usage: tansu-server [OPTIONS] --kafka-cluster-id <KAFKA_CLUSTER_ID>
+Usage: tansu [OPTIONS]
+       tansu <COMMAND>
+
+Commands:
+  broker  Apache Kafka compatible broker with Avro, JSON, Protobuf schema validation [default if no command supplied]
+  topic   Create or delete topics managed by the broker
+  cat     Easily consume or produce Avro, JSON or Protobuf messages to a topic
+  proxy   Apache Kafka compatible proxy
+  help    Print this message or the help of the given subcommand(s)
 
 Options:
       --kafka-cluster-id <KAFKA_CLUSTER_ID>
-
+          All members of the same cluster should use the same id [env: CLUSTER_ID=] [default: tansu_cluster]
       --kafka-listener-url <KAFKA_LISTENER_URL>
-          [default: tcp://0.0.0.0:9092]
+          The broker will listen on this address [env: LISTENER_URL=] [default: tcp://[::]:9092]
       --kafka-advertised-listener-url <KAFKA_ADVERTISED_LISTENER_URL>
-          [default: tcp://localhost:9092]
+          This location is advertised to clients in metadata [env: ADVERTISED_LISTENER_URL=] [default: tcp://localhost:9092]
       --storage-engine <STORAGE_ENGINE>
-          [default: postgres://postgres:postgres@localhost]
+          Storage engine examples are: postgres://postgres:postgres@localhost, memory://tansu/ or s3://tansu/ [env: STORAGE_ENGINE=] [default: memory://tansu/]
       --schema-registry <SCHEMA_REGISTRY>
-
+          Schema registry examples are: file://./etc/schema or s3://tansu/, containing: topic.json, topic.proto or topic.avsc [env: SCHEMA_REGISTRY=]
+      --data-lake <DATA_LAKE>
+          Apache Parquet files are written to this location, examples are: file://./lake or s3://lake/ [env: DATA_LAKE=]
+      --prometheus-listener-url <PROMETHEUS_LISTENER_URL>
+          Broker metrics can be scraped by Prometheus from this URL [env: PROMETHEUS_LISTENER_URL=] [default: tcp://[::]:9100]
   -h, --help
           Print help
   -V, --version
           Print version
+
 ```
 
-The only mandatory parameter is `kafka-cluster-id` which identifies the cluster.
-All brokers in the same cluster should use the same cluster id.
-In Tansu, all brokers in the same cluster are equal.
+A broker can be started by simply running `tansu`, all options have defaults. Tansu pickup any existing environment,
+loading any found in `.env`. An [example.env](example.env) is provided as part of the distribution
+and can be copied into `.env` for local modification. Sample schemas can be found in `etc/schema`, used in the examples.
 
-The `kafka-listener-url` defines the IPv4 address that Tansu will listen for connections.
-The default is `tcp://0.0.0.0:9092` causing Tansu to listen on port 9092 on all available interfaces.
-For a non-public server you might want to use `tcp://localhost:9092` instead.
+If an Apache Avro, Protobuf or JSON schema has been assigned to a topic, the
+broker will reject any messages that are invalid. Schema backed topics are written
+as Apache Parquet when the `-data-lake` option is provided.
 
-The `kafka-advertised-listener-url` defines the IPv4 address used in broker
-metadata advertisements used by Kafka API clients. This must be an address that is reachable by clients.
-This might be your load balancer, gateway or DNS name of the server running Tansu.
+## topic
 
-The `schema-registry` is an optional URL defining the location of a schema registry.
-At present, tansu supports the s3 URL scheme, e.g., `s3://schema`
-or file based registries, e.g., `file://./etc/schema`.
-When this option is present, Tansu will validate any message produced to a
-topic that has an associated schema. Assuming the topic is called `person` any
-message produced will be validated against `person.proto` (protobuf) or `person.json` (JSON schema).
-If there is no schema associated with the topic, then this option has no effect.
-More details are [here](docs/schema-registry.md).
+The `tansu topic` command has the following subcommands:
 
-The `storage-engine` parameter is a URL defining the storage being used by Tansu,
-some examples:
+```shell
+Create or delete topics managed by the broker
 
-- s3://tansu/
-- postgres://postgres:postgres@localhost
-- memory://tansu/
+Usage: tansu topic <COMMAND>
+
+Commands:
+  create  Create a topic
+  delete  Delete an existing topic
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help  Print help
+```
+
+To create a topic use:
+
+```shell
+tansu topic create taxi
+```
+
+## cat
+
+The `tansu cat` command, has the following subcommands:
+
+```shell
+tansu cat --help
+Easily consume or produce Avro, JSON or Protobuf messages to a topic
+
+Usage: tansu cat <COMMAND>
+
+Commands:
+  produce  Produce Avro/JSON/Protobuf messages to a topic
+  consume  Consume Avro/JSON/Protobuf messages from a topic
+  help     Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help  Print help
+```
+
+The `produce` subcommand reads JSON formatted messages encoding them into
+Apache Avro, Protobuf or JSON depending on the schema used by the topic.
+
+For example, the `taxi` topic is backed by [taxi.proto](etc/schema/taxi.proto).
+Using [trips.json](etc/data/trips.json) containing a JSON array of objects,
+`tansu cat produce` encodes each message into protobuf into the broker:
+
+```
+tansu cat produce taxi etc/data/trips.json
+```
+
+Using [duckdb][https://duckdb.org] we can read the
+[Apache Parquet][https://parquet.apache.org] files
+created by the broker:
+
+```shell
+duckdb :memory: "SELECT * FROM 'data/taxi/*/*.parquet'"
+```
+
+Results in the following output:
+
+```shell
+|-----------+---------+---------------+-------------+---------------|
+| vendor_id | trip_id | trip_distance | fare_amount | store_and_fwd |
+|     int64 |   int64 |         float |      double |         int32 |
+|-----------+---------+---------------+-------------+---------------|
+|         1 | 1000371 |           1.8 |       15.32 |             0 |
+|         2 | 1000372 |           2.5 |       22.15 |             0 |
+|         2 | 1000373 |           0.9 |        9.01 |             0 |
+|         1 | 1000374 |           8.4 |       42.13 |             1 |
+|-----------+---------+---------------+-------------+---------------|
+```
+
 
 ### s3
 

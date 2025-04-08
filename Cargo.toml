@@ -8,7 +8,8 @@ members = [
     "tansu-proxy",
     "tansu-schema-registry",
     "tansu-server",
-    "tansu-storage", "tansu-topic",
+    "tansu-storage",
+    "tansu-topic",
 ]
 
 [workspace.package]
@@ -54,6 +55,7 @@ chrono = "0.4.40"
 datafusion = "46"
 deadpool = "0.12.2"
 deadpool-postgres = "0.14.1"
+dotenv = "0.15.0"
 flate2 = "1.0"
 futures = "0.3"
 futures-core = "0.3.31"

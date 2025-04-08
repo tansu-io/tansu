@@ -25,36 +25,57 @@ use uuid::Uuid;
 
 #[derive(Clone, Debug, Parser)]
 pub(super) struct Arg {
-    #[arg(long, env = "CLUSTER_ID")]
+    #[arg(
+        long,
+        env = "CLUSTER_ID",
+        default_value = "tansu_cluster",
+        help = "All members of the same cluster should use the same id"
+    )]
     kafka_cluster_id: String,
 
-    #[arg(long, env = "LISTENER_URL", default_value = "tcp://[::]:9092")]
+    #[arg(
+        long,
+        env = "LISTENER_URL",
+        default_value = "tcp://[::]:9092",
+        help = "The broker will listen on this address"
+    )]
     kafka_listener_url: EnvVarExp<Url>,
 
     #[arg(
         long,
         env = "ADVERTISED_LISTENER_URL",
-        default_value = DEFAULT_BROKER
+        default_value = DEFAULT_BROKER,
+        help = "This location is advertised to clients in metadata"
     )]
     kafka_advertised_listener_url: EnvVarExp<Url>,
 
     #[arg(
         long,
         env = "STORAGE_ENGINE",
-        default_value = "postgres://postgres:postgres@localhost"
+        help = "Storage engine examples are: postgres://postgres:postgres@localhost, memory://tansu/ or s3://tansu/",
+        default_value = "memory://tansu/"
     )]
     storage_engine: EnvVarExp<Url>,
 
-    #[arg(long, env = "SCHEMA_REGISTRY")]
+    #[arg(
+        long,
+        env = "SCHEMA_REGISTRY",
+        help = "Schema registry examples are: file://./etc/schema or s3://tansu/, containing: topic.json, topic.proto or topic.avsc"
+    )]
     schema_registry: Option<EnvVarExp<Url>>,
 
-    #[arg(long, env = "DATA_LAKE")]
+    #[arg(
+        long,
+        env = "DATA_LAKE",
+        help = "Apache Parquet files are written to this location, examples are: file://./lake or s3://lake/"
+    )]
     data_lake: Option<EnvVarExp<Url>>,
 
     #[arg(
         long,
         env = "PROMETHEUS_LISTENER_URL",
-        default_value = "tcp://[::]:9000"
+        default_value = "tcp://[::]:9100",
+        help = "Broker metrics can be scraped by Prometheus from this URL"
     )]
     prometheus_listener_url: Option<EnvVarExp<Url>>,
 }

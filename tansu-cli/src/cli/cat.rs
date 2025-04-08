@@ -22,46 +22,87 @@ use url::Url;
 
 #[derive(Clone, Debug, Subcommand)]
 pub(super) enum Command {
+    #[command(about = "Produce Avro/JSON/Protobuf messages to a topic")]
     Produce {
-        #[arg(long, default_value = DEFAULT_BROKER)]
+        #[arg(long, default_value = DEFAULT_BROKER, env = "ADVERTISED_LISTENER_URL", help = "The URL of the broker to produce messages into")]
         broker: Url,
 
-        #[arg(long)]
+        #[clap(value_parser, help = "The topic to produce messages into")]
         topic: String,
 
-        #[arg(long)]
+        #[clap(
+            value_parser,
+            default_value = "-",
+            help = "Input filename or '-' for stdin"
+        )]
+        file: String,
+
+        #[arg(
+            long,
+            default_value = "0",
+            help = "The partition to produce messages into"
+        )]
         partition: i32,
 
-        #[arg(long, env = "SCHEMA_REGISTRY")]
+        #[arg(
+            long,
+            env = "SCHEMA_REGISTRY",
+            help = "Schema registry examples are: file://./etc/schema or s3://tansu/, containing: topic.json, topic.proto or topic.avsc"
+        )]
         schema_registry: Option<Url>,
     },
 
+    #[command(about = "Consume Avro/JSON/Protobuf messages from a topic")]
     Consume {
-        #[arg(long, default_value = DEFAULT_BROKER)]
+        #[arg(long, default_value = DEFAULT_BROKER, env = "ADVERTISED_LISTENER_URL", help = "The URL of the broker to consume messages from")]
         broker: Url,
 
-        #[arg(long)]
+        #[clap(value_parser, help = "The topic to consume messages from")]
         topic: String,
 
-        #[arg(long)]
+        #[arg(
+            long,
+            default_value = "0",
+            help = "The partition to consume messages from"
+        )]
         partition: i32,
 
-        #[arg(long, env = "SCHEMA_REGISTRY")]
+        #[arg(
+            long,
+            env = "SCHEMA_REGISTRY",
+            help = "Schema registry examples are: file://./etc/schema or s3://tansu/, containing: topic.json, topic.proto or topic.avsc"
+        )]
         schema_registry: Option<Url>,
 
-        #[arg(long, default_value = "5000")]
+        #[arg(
+            long,
+            default_value = "5000",
+            help = "The maximum time in milliseconds to wait for a message"
+        )]
         max_wait_time_ms: i32,
 
-        #[arg(long, default_value = "1")]
+        #[arg(
+            long,
+            default_value = "1",
+            help = "The minimum number of bytes to wait for"
+        )]
         min_bytes: i32,
 
-        #[arg(long, default_value = "52428800")]
+        #[arg(
+            long,
+            default_value = "52428800",
+            help = "The maximum bytes to wait for"
+        )]
         max_bytes: Option<i32>,
 
-        #[arg(long, default_value = "0")]
+        #[arg(long, default_value = "0", help = "The fetch offset to start from")]
         fetch_offset: i64,
 
-        #[arg(long, default_value = "1048576")]
+        #[arg(
+            long,
+            default_value = "1048576",
+            help = "The partition to consume from"
+        )]
         partition_max_bytes: i32,
     },
 }
@@ -72,6 +113,7 @@ impl From<Command> for tansu_cat::Cat {
             Command::Produce {
                 broker,
                 topic,
+                file,
                 partition,
                 schema_registry,
             } => Cat::produce()
@@ -79,6 +121,7 @@ impl From<Command> for tansu_cat::Cat {
                 .topic(topic)
                 .partition(partition)
                 .schema_registry(schema_registry)
+                .file_name(file)
                 .build(),
 
             Command::Consume {
