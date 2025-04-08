@@ -13,13 +13,12 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::{fmt, io, marker::PhantomData, result, sync::Arc};
+use std::{fmt, io, result, sync::Arc};
 
 use consume::Consume;
 use produce::Produce;
 use tansu_kafka_sans_io::ErrorCode;
 use tokio_util::codec::LinesCodecError;
-use url::Url;
 
 mod consume;
 mod produce;
@@ -55,22 +54,11 @@ pub enum Cat {
 }
 
 impl Cat {
-    pub fn produce() -> produce::Builder<
-        PhantomData<Url>,
-        PhantomData<String>,
-        PhantomData<i32>,
-        PhantomData<Option<Url>>,
-        PhantomData<String>,
-    > {
+    pub fn produce() -> produce::PhantomBuilder {
         Builder::produce()
     }
 
-    pub fn consume() -> consume::Builder<
-        PhantomData<Url>,
-        PhantomData<String>,
-        PhantomData<i32>,
-        PhantomData<Option<Url>>,
-    > {
+    pub fn consume() -> consume::PhantomBuilder {
         Builder::consume()
     }
 
@@ -86,22 +74,11 @@ impl Cat {
 pub struct Builder;
 
 impl Builder {
-    pub fn produce() -> produce::Builder<
-        PhantomData<Url>,
-        PhantomData<String>,
-        PhantomData<i32>,
-        PhantomData<Option<Url>>,
-        PhantomData<String>,
-    > {
+    pub fn produce() -> produce::PhantomBuilder {
         produce::Builder::default()
     }
 
-    pub fn consume() -> consume::Builder<
-        PhantomData<Url>,
-        PhantomData<String>,
-        PhantomData<i32>,
-        PhantomData<Option<Url>>,
-    > {
+    pub fn consume() -> consume::PhantomBuilder {
         consume::Builder::default()
     }
 }

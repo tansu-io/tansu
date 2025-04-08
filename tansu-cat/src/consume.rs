@@ -13,6 +13,8 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+use std::marker::PhantomData;
+
 use crate::{Error, Result};
 
 use futures::SinkExt;
@@ -43,6 +45,9 @@ pub struct Builder<B, T, P, S> {
     fetch_offset: i64,
     partition_max_bytes: i32,
 }
+
+pub type PhantomBuilder =
+    Builder<PhantomData<Url>, PhantomData<String>, PhantomData<i32>, PhantomData<Option<Url>>>;
 
 impl<B, T, P, S> Builder<B, T, P, S> {
     pub fn broker(self, broker: impl Into<Url>) -> Builder<Url, T, P, S> {

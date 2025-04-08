@@ -13,6 +13,8 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+use std::marker::PhantomData;
+
 use crate::{Error, Result};
 
 use futures::StreamExt;
@@ -40,6 +42,14 @@ pub struct Builder<B, T, P, S, F> {
     schema_registry: S,
     file_name: F,
 }
+
+pub type PhantomBuilder = Builder<
+    PhantomData<Url>,
+    PhantomData<String>,
+    PhantomData<i32>,
+    PhantomData<Option<Url>>,
+    PhantomData<String>,
+>;
 
 impl<B, T, P, S, F> Builder<B, T, P, S, F> {
     pub fn broker(self, broker: impl Into<Url>) -> Builder<Url, T, P, S, F> {

@@ -9,13 +9,13 @@ Written in 100% safe 🦺 async 🚀 [Rust][rust-lang-org] 🦀
 Features:
 
 - Apache Kafka API compatible
-- Available with [PostgreSQL][https://www.postgresql.org], [S3][https://en.wikipedia.org/wiki/Amazon_S3] or memory storage engines
-- [JSON Schema][json-schema-org], [Apache Avro][https://avro.apache.org] or [Protocol buffers][protocol-buffers]
+- Available with [PostgreSQL](https://www.postgresql.org), [S3](https://en.wikipedia.org/wiki/Amazon_S3) or memory storage engines
+- [JSON Schema][json-schema-org], [Apache Avro](https://avro.apache.org) or [Protocol buffers](protocol-buffers)
   [broker validation](docs/schema-registry.md) of messages
-- Topics validated by [JSON Schema][json-schema-org], [Apache Avro][https://avro.apache.org]
-  or [Protocol buffers][protocol-buffers] are generated as
-  [Apache Parquet][https://parquet.apache.org] files for easy consumption into
-  your [data lake][https://en.wikipedia.org/wiki/Data_lake]
+- Topics validated by [JSON Schema][json-schema-org], [Apache Avro](https://avro.apache.org)
+  or [Protocol buffers](protocol-buffers) are generated as
+  [Apache Parquet](https://parquet.apache.org) files for easy consumption into
+  your [data lake](https://en.wikipedia.org/wiki/Data_lake)
 
 For data durability:
 
@@ -69,7 +69,7 @@ Options:
 
 A broker can be started by simply running `tansu`, all options have defaults. Tansu pickup any existing environment,
 loading any found in `.env`. An [example.env](example.env) is provided as part of the distribution
-and can be copied into `.env` for local modification. Sample schemas can be found in `etc/schema`, used in the examples.
+and can be copied into `.env` for local modification. Sample schemas can be found in [etc/schema](etc/schema), used in the examples.
 
 If an Apache Avro, Protobuf or JSON schema has been assigned to a topic, the
 broker will reject any messages that are invalid. Schema backed topics are written
@@ -129,8 +129,8 @@ Using [trips.json](etc/data/trips.json) containing a JSON array of objects,
 tansu cat produce taxi etc/data/trips.json
 ```
 
-Using [duckdb][https://duckdb.org] we can read the
-[Apache Parquet][https://parquet.apache.org] files
+Using [duckdb](https://duckdb.org) we can read the
+[Apache Parquet](https://parquet.apache.org) files
 created by the broker:
 
 ```shell

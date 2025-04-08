@@ -1,7 +1,7 @@
 # Schema Registry
 
-Tansu has a schema registry that supports [JSON schema][json-schema-org],
-[Apache Avro][https://avro.apache.org] and [Protocol buffers][protocol-buffers],
+Tansu has a schema registry that supports [JSON schema](json-schema-org),
+[Apache Avro](https://avro.apache.org) and [Protocol buffers](protocol-buffers),
 that is embedded in the broker.
 
 The schema registry is enabled using the `--schema-registry` command-line
