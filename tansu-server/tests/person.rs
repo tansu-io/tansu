@@ -61,7 +61,7 @@ pub async fn person_valid(
     let partition_index = rng().random_range(0..num_partitions);
     let topition = Topition::new(topic_name.to_owned(), partition_index);
 
-    let key = serde_json::to_vec(&json!("ABC-123")).map(Bytes::from)?;
+    let key = serde_json::to_vec(&json!("345-67-6543")).map(Bytes::from)?;
 
     let value = serde_json::to_vec(&json!({
       "firstName": "John",
@@ -120,7 +120,7 @@ pub async fn person_invalid(
     let partition_index = rng().random_range(0..num_partitions);
     let topition = Topition::new(topic_name.to_owned(), partition_index);
 
-    let key = serde_json::to_vec(&json!("ABC-123")).map(Bytes::from)?;
+    let key = serde_json::to_vec(&json!("345-67-6543")).map(Bytes::from)?;
 
     let value = serde_json::to_vec(&json!({
       "firstName": "John",

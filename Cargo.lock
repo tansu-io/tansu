@@ -320,7 +320,7 @@ dependencies = [
  "arrow-schema",
  "chrono",
  "half",
- "indexmap 2.8.0",
+ "indexmap 2.9.0",
  "lexical-core",
  "memchr",
  "num",
@@ -1140,7 +1140,7 @@ dependencies = [
  "base64",
  "half",
  "hashbrown 0.14.5",
- "indexmap 2.8.0",
+ "indexmap 2.9.0",
  "libc",
  "log",
  "object_store",
@@ -1235,7 +1235,7 @@ dependencies = [
  "datafusion-functions-aggregate-common",
  "datafusion-functions-window-common",
  "datafusion-physical-expr-common",
- "indexmap 2.8.0",
+ "indexmap 2.9.0",
  "paste",
  "recursive",
  "serde_json",
@@ -1250,7 +1250,7 @@ checksum = "18f0a851a436c5a2139189eb4617a54e6a9ccb9edc96c4b3c83b3bb7c58b950e"
 dependencies = [
  "arrow",
  "datafusion-common",
- "indexmap 2.8.0",
+ "indexmap 2.9.0",
  "itertools 0.14.0",
  "paste",
 ]
@@ -1404,7 +1404,7 @@ dependencies = [
  "datafusion-common",
  "datafusion-expr",
  "datafusion-physical-expr",
- "indexmap 2.8.0",
+ "indexmap 2.9.0",
  "itertools 0.14.0",
  "log",
  "recursive",
@@ -1427,7 +1427,7 @@ dependencies = [
  "datafusion-physical-expr-common",
  "half",
  "hashbrown 0.14.5",
- "indexmap 2.8.0",
+ "indexmap 2.9.0",
  "itertools 0.14.0",
  "log",
  "paste",
@@ -1489,7 +1489,7 @@ dependencies = [
  "futures",
  "half",
  "hashbrown 0.14.5",
- "indexmap 2.8.0",
+ "indexmap 2.9.0",
  "itertools 0.14.0",
  "log",
  "parking_lot",
@@ -1507,7 +1507,7 @@ dependencies = [
  "bigdecimal",
  "datafusion-common",
  "datafusion-expr",
- "indexmap 2.8.0",
+ "indexmap 2.9.0",
  "log",
  "recursive",
  "regex",
@@ -3028,7 +3028,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3672b37090dbd86368a4145bc067582552b29c27377cad4e0a306c97f9bd7772"
 dependencies = [
  "fixedbitset",
- "indexmap 2.8.0",
+ "indexmap 2.9.0",
 ]
 
 [[package]]
