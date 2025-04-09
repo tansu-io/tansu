@@ -181,6 +181,8 @@ jobs:
           TANSU_IMAGE: ${{steps.meta.outputs.tags}}
       - run: docker compose logs
         working-directory: integration
+        env:
+          TANSU_IMAGE: ${{steps.meta.outputs.tags}}
       - run: bats --trace --verbose-run tests
         working-directory: integration
         env:
