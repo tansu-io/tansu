@@ -180,6 +180,7 @@ jobs:
         env:
           TANSU_IMAGE: ${{steps.meta.outputs.tags}}
       - run: docker compose logs
+        working-directory: integration
       - run: bats --trace --verbose-run tests
         working-directory: integration
         env:
