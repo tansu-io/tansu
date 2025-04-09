@@ -40,7 +40,7 @@ use std::{
     time::{Duration, SystemTime, SystemTimeError},
 };
 use tansu_kafka_sans_io::{
-    Body, ConfigResource, ErrorCode, IsolationLevel,
+    Body, ConfigResource, ErrorCode, IsolationLevel, NULL_TOPIC_ID,
     add_partitions_to_txn_request::{AddPartitionsToTxnTopic, AddPartitionsToTxnTransaction},
     add_partitions_to_txn_response::{AddPartitionsToTxnResult, AddPartitionsToTxnTopicResult},
     consumer_group_describe_response,
@@ -76,8 +76,6 @@ pub mod index;
 pub mod os;
 pub mod pg;
 pub mod segment;
-
-pub const NULL_TOPIC_ID: [u8; 16] = [0; 16];
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {

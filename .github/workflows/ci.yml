@@ -148,24 +148,43 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: tansu-io/example-java
+          path: integration
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            etc/initdb.d/010-schema.sql
+          sparse-checkout-cone-mode: false
+          path: initdb
+      - run: ls -lR
+      - run: cp -v initdb/etc/initdb.d/010-schema.sql integration/etc/initdb.d
       - run: docker compose --ansi never --progress plain up --no-color --quiet-pull --detach
+        working-directory: integration
         env:
           TANSU_IMAGE: ${{steps.meta.outputs.tags}}
       - run: docker compose --ansi never exec minio /usr/bin/mc ready local
+        working-directory: integration
         env:
           TANSU_IMAGE: ${{steps.meta.outputs.tags}}
       - run: docker compose --ansi never exec minio /usr/bin/mc alias set local http://localhost:9000 ${{ env.AWS_ACCESS_KEY_ID }} ${{ env.AWS_SECRET_ACCESS_KEY }}
+        working-directory: integration
         env:
           TANSU_IMAGE: ${{steps.meta.outputs.tags}}
       - run: docker compose --ansi never exec minio /usr/bin/mc mb local/tansu
+        working-directory: integration
         env:
           TANSU_IMAGE: ${{steps.meta.outputs.tags}}
       - run: sudo apt-get update
       - run: sudo apt-get install -y bats
       - run: docker compose exec db /usr/bin/pg_isready --timeout=60
+        working-directory: integration
+        env:
+          TANSU_IMAGE: ${{steps.meta.outputs.tags}}
+      - run: docker compose logs
+        working-directory: integration
         env:
           TANSU_IMAGE: ${{steps.meta.outputs.tags}}
       - run: bats --trace --verbose-run tests
+        working-directory: integration
         env:
           TANSU_IMAGE: ${{steps.meta.outputs.tags}}
   release:
@@ -224,7 +243,7 @@ jobs:
           cargo build --release --target ${{matrix.target}}
           dist=$(mktemp -d -p ${{runner.temp}})
           mkdir "$dist"/bin
-          cp target/"${TARGET}"/release/tansu{-server,-proxy} "$dist"/bin
+          cp target/"${TARGET}"/release/tansu "$dist"/bin
           cp LICENSE "$dist"
           cp artifacts/* "$dist"
           tar --create --verbose --gzip --file=tansu-"${TARGET}".tar.gz -C "$dist" .

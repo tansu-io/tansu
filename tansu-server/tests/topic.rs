@@ -15,11 +15,11 @@
 
 use common::{alphanumeric_string, register_broker};
 use tansu_kafka_sans_io::{
-    ErrorCode,
+    ErrorCode, NULL_TOPIC_ID,
     create_topics_request::{CreatableTopic, CreatableTopicConfig},
 };
 use tansu_server::Result;
-use tansu_storage::{NULL_TOPIC_ID, Storage, StorageContainer, TopicId};
+use tansu_storage::{Storage, StorageContainer, TopicId};
 use tracing::debug;
 use uuid::Uuid;
 

@@ -4,7 +4,7 @@
   "properties": {
     "key": {
       "type": "string",
-      "pattern": "^[A-Z]{3}-\\d{3}$"
+      "pattern": "^\\d{3}-\\d{2}-\\d{4}$"
     },
     "value": {
       "type": "object",

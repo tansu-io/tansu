@@ -1,0 +1,14 @@
+syntax = 'proto3';
+
+enum Flag {
+    N = 0;
+    Y = 1;
+}
+
+message Value {
+  int64 vendor_id = 1;
+  int64 trip_id = 2;
+  float trip_distance = 3;
+  double fare_amount = 4;
+  Flag store_and_fwd = 5;
+}

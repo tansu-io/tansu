@@ -159,33 +159,34 @@ impl ByteSize for Builder {
 
 impl Builder {
     #[must_use]
-    pub fn attributes(mut self, attributes: u8) -> Self {
-        self.attributes = attributes;
-        self
+    pub fn attributes(self, attributes: u8) -> Self {
+        Self { attributes, ..self }
     }
 
     #[must_use]
-    pub fn timestamp_delta(mut self, timestamp_delta: i64) -> Self {
-        self.timestamp_delta = timestamp_delta.into();
-        self
+    pub fn timestamp_delta(self, timestamp_delta: i64) -> Self {
+        Self {
+            timestamp_delta: timestamp_delta.into(),
+            ..self
+        }
     }
 
     #[must_use]
-    pub fn offset_delta(mut self, offset_delta: i32) -> Self {
-        self.offset_delta = offset_delta.into();
-        self
+    pub fn offset_delta(self, offset_delta: i32) -> Self {
+        Self {
+            offset_delta: offset_delta.into(),
+            ..self
+        }
     }
 
     #[must_use]
-    pub fn key(mut self, key: Octets) -> Self {
-        self.key = key;
-        self
+    pub fn key(self, key: Octets) -> Self {
+        Self { key, ..self }
     }
 
     #[must_use]
-    pub fn value(mut self, value: Octets) -> Self {
-        self.value = value;
-        self
+    pub fn value(self, value: Octets) -> Self {
+        Self { value, ..self }
     }
 
     #[must_use]

@@ -1,5 +1,5 @@
 -- -*- mode: sql; sql-product: postgres; -*-
--- Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+-- Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 --
 -- This program is free software: you can redistribute it and/or modify
 -- it under the terms of the GNU Affero General Public License as
@@ -104,10 +104,9 @@ from
     join topic_configuration tc on tc.topic = t.id;
 
 create table if not exists record (
-    id bigint generated always as identity primary key,
     topition int references topition (id),
     offset_id bigint not null,
-    unique (topition, offset_id),
+    primary key (topition, offset_id),
     attributes smallint,
     producer_id bigint,
     producer_epoch smallint,
@@ -116,7 +115,11 @@ create table if not exists record (
     v bytea,
     last_updated timestamp default current_timestamp not null,
     created_at timestamp default current_timestamp not null
-);
+)
+partition by
+    list (topition);
+
+create table if not exists record_default partition of record default;
 
 create
 or replace view v_record as
@@ -140,14 +143,19 @@ order by
     r.offset_id;
 
 create table if not exists header (
-    id bigint generated always as identity primary key,
-    record int references record (id),
+    topition int,
+    offset_id bigint,
     k bytea,
-    unique (record, k),
+    primary key (topition, offset_id, k),
+    foreign key (topition, offset_id) references record (topition, offset_id),
     v bytea,
     last_updated timestamp default current_timestamp not null,
     created_at timestamp default current_timestamp not null
-);
+)
+partition by
+    list (topition);
+
+create table if not exists header_default partition of header default;
 
 create table if not exists consumer_group (
     id int generated always as identity primary key,

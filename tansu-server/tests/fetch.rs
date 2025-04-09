@@ -19,15 +19,13 @@ use bytes::Bytes;
 use common::{FetchResponse, StorageType, alphanumeric_string, init_tracing, register_broker};
 use rand::{prelude::*, rng};
 use tansu_kafka_sans_io::{
-    ErrorCode, IsolationLevel,
+    ErrorCode, IsolationLevel, NULL_TOPIC_ID,
     create_topics_request::CreatableTopic,
     fetch_request::{FetchPartition, FetchTopic},
     record::{Record, inflated},
 };
 use tansu_server::{Result, broker::fetch::FetchRequest};
-use tansu_storage::{
-    ListOffsetRequest, ListOffsetResponse, NULL_TOPIC_ID, Storage, StorageContainer, Topition,
-};
+use tansu_storage::{ListOffsetRequest, ListOffsetResponse, Storage, StorageContainer, Topition};
 use tracing::{debug, error};
 use url::Url;
 use uuid::Uuid;

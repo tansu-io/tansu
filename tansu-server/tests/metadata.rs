@@ -14,9 +14,9 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use common::{alphanumeric_string, register_broker};
-use tansu_kafka_sans_io::{ErrorCode, create_topics_request::CreatableTopic};
+use tansu_kafka_sans_io::{ErrorCode, NULL_TOPIC_ID, create_topics_request::CreatableTopic};
 use tansu_server::Result;
-use tansu_storage::{NULL_TOPIC_ID, Storage, StorageContainer, TopicId};
+use tansu_storage::{Storage, StorageContainer, TopicId};
 use tracing::debug;
 use url::Url;
 use uuid::Uuid;

@@ -55,6 +55,9 @@ struct Cli {
     #[arg(long, env = "SCHEMA_REGISTRY")]
     schema_registry: Option<EnvVarExp<Url>>,
 
+    #[arg(long, env = "DATA_LAKE")]
+    lake: Option<EnvVarExp<Url>>,
+
     #[arg(
         long,
         env = "PROMETHEUS_LISTENER_URL",
@@ -87,7 +90,27 @@ async fn main() -> Result<()> {
     });
 
     let schemas = args.schema_registry.map_or(Ok(None), |schema| {
-        Registry::try_from(schema.into_inner()).map(Some)
+        Registry::try_from(&schema.into_inner()).map(Some)
+    })?;
+
+    let lake = args.lake.map_or(Ok(None), |parquet| {
+        let url = parquet.into_inner();
+        debug!(%url);
+
+        match url.scheme() {
+            "s3" => {
+                let bucket_name = url.host_str().unwrap_or("lake");
+
+                AmazonS3Builder::from_env()
+                    .with_bucket_name(bucket_name)
+                    .with_conditional_put(S3ConditionalPut::ETagMatch)
+                    .build()
+                    .map(Some)
+                    .map_err(Into::into)
+            }
+
+            _unsupported => Err(Error::UnsupportedStorageUrl(url)),
+        }
     })?;
 
     let storage = match storage_engine.scheme() {
@@ -111,6 +134,7 @@ async fn main() -> Result<()> {
                     DynoStore::new(cluster_id.as_str(), NODE_ID, object_store)
                         .advertised_listener(advertised_listener.clone())
                         .schemas(schemas)
+                        .lake(lake)
                 })
                 .map(StorageContainer::DynoStore)
                 .map_err(Into::into)

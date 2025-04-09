@@ -19,20 +19,21 @@ use std::{
     hash::{DefaultHasher, Hash, Hasher},
     marker::PhantomData,
     str::FromStr,
-    sync::LazyLock,
+    sync::{Arc, LazyLock},
     time::{Duration, SystemTime},
 };
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use deadpool_postgres::{Manager, ManagerConfig, Object, Pool, RecyclingMethod};
+use object_store::ObjectStore;
 use opentelemetry::metrics::Histogram;
 use opentelemetry::{KeyValue, metrics::Counter};
 use rand::{prelude::*, rng};
 use serde_json::Value;
 use tansu_kafka_sans_io::{
     BatchAttribute, ConfigResource, ConfigSource, ConfigType, ControlBatch, EndTransactionMarker,
-    ErrorCode, IsolationLevel, OpType,
+    ErrorCode, IsolationLevel, NULL_TOPIC_ID, OpType,
     add_partitions_to_txn_response::{
         AddPartitionsToTxnPartitionResult, AddPartitionsToTxnTopicResult,
     },
@@ -61,9 +62,9 @@ use uuid::Uuid;
 
 use crate::{
     BrokerRegistrationRequest, Error, GroupDetail, ListOffsetRequest, ListOffsetResponse, METER,
-    MetadataResponse, NULL_TOPIC_ID, NamedGroupDetail, OffsetCommitRequest, OffsetStage,
-    ProducerIdResponse, Result, Storage, TopicId, Topition, TxnAddPartitionsRequest,
-    TxnAddPartitionsResponse, TxnOffsetCommitRequest, TxnState, UpdateError, Version,
+    MetadataResponse, NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse,
+    Result, Storage, TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse,
+    TxnOffsetCommitRequest, TxnState, UpdateError, Version,
 };
 
 macro_rules! include_sql {
@@ -79,6 +80,7 @@ pub struct Postgres {
     advertised_listener: Url,
     pool: Pool,
     schemas: Option<Registry>,
+    lake: Option<Arc<dyn ObjectStore>>,
 }
 
 #[derive(Clone, Default, Debug)]
@@ -88,6 +90,7 @@ pub struct Builder<C, N, L, P> {
     advertised_listener: L,
     pool: P,
     schemas: Option<Registry>,
+    lake: Option<Arc<dyn ObjectStore>>,
 }
 
 impl<C, N, L, P> Builder<C, N, L, P> {
@@ -98,6 +101,7 @@ impl<C, N, L, P> Builder<C, N, L, P> {
             advertised_listener: self.advertised_listener,
             pool: self.pool,
             schemas: self.schemas,
+            lake: self.lake,
         }
     }
 }
@@ -110,6 +114,7 @@ impl<C, N, L, P> Builder<C, N, L, P> {
             advertised_listener: self.advertised_listener,
             pool: self.pool,
             schemas: self.schemas,
+            lake: self.lake,
         }
     }
 }
@@ -122,11 +127,17 @@ impl<C, N, L, P> Builder<C, N, L, P> {
             advertised_listener,
             pool: self.pool,
             schemas: self.schemas,
+            lake: self.lake,
         }
     }
 
     pub fn schemas(self, schemas: Option<Registry>) -> Builder<C, N, L, P> {
         Self { schemas, ..self }
+    }
+
+    pub fn lake(self, lake: Option<impl ObjectStore>) -> Self {
+        let lake = lake.map(|lake| Arc::new(lake) as Arc<dyn ObjectStore>);
+        Self { lake, ..self }
     }
 }
 
@@ -138,6 +149,7 @@ impl Builder<String, i32, Url, Pool> {
             advertised_listener: self.advertised_listener,
             pool: self.pool,
             schemas: self.schemas,
+            lake: self.lake,
         }
     }
 }
@@ -164,10 +176,11 @@ where
             .build()
             .map(|pool| Self {
                 pool,
-                node: N::default(),
                 advertised_listener,
+                node: N::default(),
                 cluster: C::default(),
                 schemas: None,
+                lake: None,
             })
             .map_err(Into::into)
     }
@@ -760,7 +773,6 @@ impl Postgres {
                     "produce_in_tx",
                 )
                 .await
-                .inspect(|n| debug!(?n))
                 .inspect_err(|err| error!(?err, ?topic, ?partition, ?offset, ?key, ?value))
                 .map_err(|error| {
                     if let Some(db_error) = error.as_db_error() {
@@ -841,6 +853,20 @@ impl Postgres {
             .await
             .inspect(|n| debug!(?n))
             .inspect_err(|err| error!(?err))?;
+
+        if let Some(ref lake) = self.lake {
+            if let Some(ref registry) = self.schemas {
+                registry
+                    .store_as_parquet(
+                        topition.topic(),
+                        topition.partition(),
+                        high.unwrap_or_default(),
+                        &inflated,
+                        lake,
+                    )
+                    .await?;
+            }
+        }
 
         Ok(high.unwrap_or_default())
     }
@@ -1462,7 +1488,10 @@ impl Storage for Postgres {
         ] {
             let rows = self
                 .tx_prepare_execute(&tx, sql.as_str(), &[&self.cluster, &topic_name], nickname)
-                .await?;
+                .await
+                .inspect_err(|err| {
+                    debug!(?description, ?err);
+                })?;
 
             debug!(?topic, ?rows, ?description);
         }

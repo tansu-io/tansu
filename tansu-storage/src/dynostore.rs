@@ -43,7 +43,7 @@ use rand::{prelude::*, rng};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tansu_kafka_sans_io::{
     BatchAttribute, ConfigResource, ConfigSource, ConfigType, ControlBatch, Decoder, Encoder,
-    EndTransactionMarker, ErrorCode, IsolationLevel, OpType,
+    EndTransactionMarker, ErrorCode, IsolationLevel, NULL_TOPIC_ID, OpType,
     add_partitions_to_txn_response::{
         AddPartitionsToTxnPartitionResult, AddPartitionsToTxnTopicResult,
     },
@@ -73,9 +73,9 @@ mod opticon;
 
 use crate::{
     BrokerRegistrationRequest, Error, GroupDetail, ListOffsetRequest, ListOffsetResponse, METER,
-    MetadataResponse, NULL_TOPIC_ID, NamedGroupDetail, OffsetCommitRequest, OffsetStage,
-    ProducerIdResponse, Result, Storage, TopicId, Topition, TxnAddPartitionsRequest,
-    TxnAddPartitionsResponse, TxnOffsetCommitRequest, TxnState, UpdateError, Version,
+    MetadataResponse, NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse,
+    Result, Storage, TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse,
+    TxnOffsetCommitRequest, TxnState, UpdateError, Version,
 };
 
 const APPLICATION_JSON: &str = "application/json";
@@ -86,6 +86,7 @@ pub struct DynoStore {
     node: i32,
     advertised_listener: Url,
     schemas: Option<Registry>,
+    lake: Option<Arc<dyn ObjectStore>>,
     watermarks: Arc<Mutex<BTreeMap<Topition, OptiCon<Watermark>>>>,
     meta: OptiCon<Meta>,
 
@@ -361,6 +362,7 @@ impl DynoStore {
             node,
             advertised_listener: Url::parse("tcp://127.0.0.1/").unwrap(),
             schemas: None,
+            lake: None,
             watermarks: Arc::new(Mutex::new(BTreeMap::new())),
             meta: OptiCon::<Meta>::new(cluster),
             object_store: Arc::new(Cache::new(
@@ -379,6 +381,11 @@ impl DynoStore {
 
     pub fn schemas(self, schemas: Option<Registry>) -> Self {
         Self { schemas, ..self }
+    }
+
+    pub fn lake(self, lake: Option<impl ObjectStore>) -> Self {
+        let lake = lake.map(|lake| Arc::new(lake) as Arc<dyn ObjectStore>);
+        Self { lake, ..self }
     }
 
     async fn topic_metadata(&self, topic: &TopicId) -> Result<Option<TopicMetadata>> {
@@ -415,9 +422,9 @@ impl DynoStore {
         deflated::Batch::deserialize(&mut decoder).map_err(Into::into)
     }
 
-    async fn get<P>(&self, location: &Path) -> Result<(P, Version)>
+    async fn get<V>(&self, location: &Path) -> Result<(V, Version)>
     where
-        P: DeserializeOwned,
+        V: DeserializeOwned,
     {
         let get_result = self.object_store.get(location).await?;
         let meta = get_result.meta.clone();
@@ -431,15 +438,15 @@ impl DynoStore {
         Ok((payload, meta.into()))
     }
 
-    async fn put<P>(
+    async fn put<V>(
         &self,
         location: &Path,
-        value: P,
+        value: V,
         attributes: Attributes,
         update_version: Option<UpdateVersion>,
-    ) -> Result<PutResult, UpdateError<P>>
+    ) -> Result<PutResult, UpdateError<V>>
     where
-        P: PartialEq + Serialize + DeserializeOwned + Debug,
+        V: PartialEq + Serialize + DeserializeOwned + Debug,
     {
         debug!(%location, ?attributes, ?update_version, ?value);
 
@@ -604,8 +611,8 @@ impl Storage for DynoStore {
 
                     watermark
                         .with_mut(&self.object_store, |watermark| {
-                            assert_eq!(None, watermark.high.take());
-                            assert_eq!(None, watermark.low.take());
+                            watermark.high.take();
+                            watermark.low.take();
 
                             Ok(())
                         })
@@ -775,10 +782,10 @@ impl Storage for DynoStore {
                 .inspect_err(|err| error!(?err, transaction_id, ?topition))?;
         }
 
-        if let Some(ref schemas) = self.schemas {
+        if let Some(ref registry) = self.schemas {
             let inflated = inflated::Batch::try_from(&deflated)?;
 
-            schemas.validate(topition.topic(), &inflated).await?;
+            registry.validate(topition.topic(), &inflated).await?;
         }
 
         let watermark = self.watermarks.lock().map(|mut locked| {
@@ -806,6 +813,22 @@ impl Storage for DynoStore {
             .await
             .inspect(|offset| debug!(offset, transaction_id, ?topition))
             .inspect_err(|err| error!(?err, transaction_id, ?topition))?;
+
+        if let Some(ref lake) = self.lake {
+            if let Some(ref registry) = self.schemas {
+                let inflated = inflated::Batch::try_from(&deflated)?;
+
+                registry
+                    .store_as_parquet(
+                        topition.topic(),
+                        topition.partition(),
+                        offset,
+                        &inflated,
+                        lake,
+                    )
+                    .await?;
+            }
+        }
 
         let attributes = BatchAttribute::try_from(deflated.attributes)?;
 

@@ -119,7 +119,8 @@ where
 #[cfg(test)]
 mod tests {
     use object_store::memory::InMemory;
-    use tansu_storage::{NULL_TOPIC_ID, dynostore::DynoStore};
+    use tansu_kafka_sans_io::NULL_TOPIC_ID;
+    use tansu_storage::dynostore::DynoStore;
 
     use super::*;
 

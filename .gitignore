@@ -13,3 +13,4 @@ flamegraph.svg
 perf.data
 .vscode
 license.html
+*.duckdb

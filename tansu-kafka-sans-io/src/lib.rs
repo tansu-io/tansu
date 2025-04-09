@@ -30,13 +30,17 @@ use std::{
     env::VarError,
     fmt::{self, Display, Formatter},
     io::{self, BufRead, Cursor, Read, Write},
-    num, str, string,
+    num,
+    process::{ExitCode, Termination},
+    str, string,
     sync::OnceLock,
     time::{Duration, SystemTime, SystemTimeError},
 };
 use tansu_kafka_model::{MessageKind, MessageMeta};
 use tracing::{debug, error, warn};
 use tracing_subscriber::filter::ParseError;
+
+pub const NULL_TOPIC_ID: [u8; 16] = [0; 16];
 
 #[derive(Debug)]
 pub struct RootMessageMeta {
@@ -360,11 +364,29 @@ impl From<Header> for HeaderMezzanine {
     }
 }
 
+impl Termination for ErrorCode {
+    fn report(self) -> ExitCode {
+        if let Self::None = self {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::FAILURE
+        }
+    }
+}
+
 impl TryFrom<i16> for ErrorCode {
     type Error = Error;
 
-    #[allow(clippy::too_many_lines)]
     fn try_from(value: i16) -> Result<Self, Self::Error> {
+        Self::try_from(&value)
+    }
+}
+
+impl TryFrom<&i16> for ErrorCode {
+    type Error = Error;
+
+    #[allow(clippy::too_many_lines)]
+    fn try_from(value: &i16) -> Result<Self, Self::Error> {
         match value {
             -1 => Ok(Self::UnknownServerError),
             0 => Ok(Self::None),
@@ -487,14 +509,20 @@ impl TryFrom<i16> for ErrorCode {
             117 => Ok(Self::UnknownSubscriptionId),
             118 => Ok(Self::TelemetryTooLarge),
             119 => Ok(Self::InvalidRegistration),
-            otherwise => Err(Error::UnknownApiErrorCode(otherwise)),
+            otherwise => Err(Error::UnknownApiErrorCode(*otherwise)),
         }
     }
 }
 
 impl From<ErrorCode> for i16 {
-    #[allow(clippy::too_many_lines)]
     fn from(value: ErrorCode) -> Self {
+        Self::from(&value)
+    }
+}
+
+impl From<&ErrorCode> for i16 {
+    #[allow(clippy::too_many_lines)]
+    fn from(value: &ErrorCode) -> Self {
         match value {
             ErrorCode::UnknownServerError => -1,
             ErrorCode::None => 0,
@@ -1122,6 +1150,12 @@ impl TryFrom<i8> for IsolationLevel {
             1 => Ok(Self::ReadCommitted),
             _ => Err(Error::InvalidIsolationLevel(value)),
         }
+    }
+}
+
+impl From<IsolationLevel> for i8 {
+    fn from(value: IsolationLevel) -> Self {
+        Self::from(&value)
     }
 }
 
