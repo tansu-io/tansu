@@ -384,7 +384,7 @@ impl DynoStore {
     }
 
     pub fn lake(self, lake: Option<impl ObjectStore>) -> Self {
-        let lake = lake.map(|parquet| Arc::new(parquet) as Arc<dyn ObjectStore>);
+        let lake = lake.map(|lake| Arc::new(lake) as Arc<dyn ObjectStore>);
         Self { lake, ..self }
     }
 

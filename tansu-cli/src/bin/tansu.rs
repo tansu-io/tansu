@@ -21,7 +21,7 @@ use tracing_subscriber::{EnvFilter, fmt::format::FmtSpan, prelude::*};
 
 #[tokio::main]
 async fn main() -> Result<ErrorCode> {
-    dotenv()?;
+    dotenv().ok();
 
     tracing_subscriber::registry()
         .with(EnvFilter::from_default_env())
