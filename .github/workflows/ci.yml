@@ -243,7 +243,7 @@ jobs:
           cargo build --release --target ${{matrix.target}}
           dist=$(mktemp -d -p ${{runner.temp}})
           mkdir "$dist"/bin
-          cp target/"${TARGET}"/release/tansu{-server,-proxy} "$dist"/bin
+          cp target/"${TARGET}"/release/tansu "$dist"/bin
           cp LICENSE "$dist"
           cp artifacts/* "$dist"
           tar --create --verbose --gzip --file=tansu-"${TARGET}".tar.gz -C "$dist" .
