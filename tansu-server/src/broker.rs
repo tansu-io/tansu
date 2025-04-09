@@ -1384,6 +1384,7 @@ impl Builder<i32, String, Uuid, Url, Url, Url> {
                 .map(|builder| builder.node(self.node_id))
                 .map(|builder| builder.advertised_listener(self.advertised_listener.clone()))
                 .map(|builder| builder.schemas(schemas))
+                .map(|builder| builder.lake(lake))
                 .map(|builder| builder.build())
                 .map(StorageContainer::Postgres)
                 .map_err(Into::into),
