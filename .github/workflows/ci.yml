@@ -160,33 +160,33 @@ jobs:
       - run: docker compose --ansi never --progress plain up --no-color --quiet-pull --detach
         working-directory: integration
         env:
-          TANSU_IMAGE: ${{steps.meta.outputs.tags}}
+          TANSU_IMAGE: ghcr.io/tansu-io/tansu:${{steps.meta.outputs.version}}
       - run: docker compose --ansi never exec minio /usr/bin/mc ready local
         working-directory: integration
         env:
-          TANSU_IMAGE: ${{steps.meta.outputs.tags}}
+          TANSU_IMAGE: ghcr.io/tansu-io/tansu:${{steps.meta.outputs.version}}
       - run: docker compose --ansi never exec minio /usr/bin/mc alias set local http://localhost:9000 ${{ env.AWS_ACCESS_KEY_ID }} ${{ env.AWS_SECRET_ACCESS_KEY }}
         working-directory: integration
         env:
-          TANSU_IMAGE: ${{steps.meta.outputs.tags}}
+          TANSU_IMAGE: ghcr.io/tansu-io/tansu:${{steps.meta.outputs.version}}
       - run: docker compose --ansi never exec minio /usr/bin/mc mb local/tansu
         working-directory: integration
         env:
-          TANSU_IMAGE: ${{steps.meta.outputs.tags}}
+          TANSU_IMAGE: ghcr.io/tansu-io/tansu:${{steps.meta.outputs.version}}
       - run: sudo apt-get update
       - run: sudo apt-get install -y bats
       - run: docker compose exec db /usr/bin/pg_isready --timeout=60
         working-directory: integration
         env:
-          TANSU_IMAGE: ${{steps.meta.outputs.tags}}
+          TANSU_IMAGE: ghcr.io/tansu-io/tansu:${{steps.meta.outputs.version}}
       - run: docker compose logs
         working-directory: integration
         env:
-          TANSU_IMAGE: ${{steps.meta.outputs.tags}}
+          TANSU_IMAGE: ghcr.io/tansu-io/tansu:${{steps.meta.outputs.version}}
       - run: bats --trace --verbose-run tests
         working-directory: integration
         env:
-          TANSU_IMAGE: ${{steps.meta.outputs.tags}}
+          TANSU_IMAGE: ghcr.io/tansu-io/tansu:${{steps.meta.outputs.version}}
   release:
     needs: [build, src, third-party-license, typos]
     runs-on: ${{matrix.os}}
