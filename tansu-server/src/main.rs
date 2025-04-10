@@ -86,7 +86,9 @@ async fn main() -> Result<()> {
     let mut set = JoinSet::new();
 
     _ = set.spawn(async move {
-        otel::prom::init(prometheus_listener_url).await.unwrap();
+        if let Err(e) = otel::prom::init(prometheus_listener_url).await {
+            panic!("Errors on initializing prometheus listener. error: {}", e);
+        }
     });
 
     let schemas = args.schema_registry.map_or(Ok(None), |schema| {
