@@ -10,8 +10,8 @@ Features:
 
 - Apache Kafka API compatible
 - Available with [PostgreSQL](https://www.postgresql.org), [S3](https://en.wikipedia.org/wiki/Amazon_S3) or memory storage engines
-- [JSON Schema][json-schema-org], [Apache Avro](https://avro.apache.org) or [Protocol buffers](protocol-buffers)
-  [broker validation](docs/schema-registry.md) of messages
+- [JSON Schema][json-schema-org], [Apache Avro](https://avro.apache.org) or [Protocol Buffers](protocol-buffers)
+  broker [validation](docs/schema-registry.md) of messages
 - Topics validated by [JSON Schema][json-schema-org], [Apache Avro](https://avro.apache.org)
   or [Protocol buffers](protocol-buffers) are generated as
   [Apache Parquet](https://parquet.apache.org) files for easy consumption into
@@ -24,10 +24,11 @@ For data durability:
   streaming transaction logs files to an archive
 - The memory storage engine is designed for ephemeral non-production environments
 
-Tansu is a single statically linked binary that containing the following:
+Tansu is a single statically linked binary containing the following:
+
 - **broker** an Apache Kafka API compatible broker and schema registry
-- **cat** a CLI to consume or produce Avro, JSON or Protobuf messages to a topic
 - **topic** a CLI to create/delete Topics
+- **cat** a CLI to consume or produce Avro, JSON or Protobuf messages to a topic
 - **proxy** an Apache Kafka compatible proxy
 
 ## broker
