@@ -23,6 +23,7 @@ use std::{
     str::{FromStr, Utf8Error},
     string::FromUtf8Error,
     sync::{Arc, LazyLock, PoisonError},
+    time::Duration,
 };
 
 use jsonschema::ValidationError;
@@ -31,12 +32,28 @@ use opentelemetry_semantic_conventions::SCHEMA_URL;
 use regex::{Regex, Replacer};
 use tansu_kafka_sans_io::ErrorCode;
 use thiserror::Error;
+use tokio::{sync::broadcast::error::SendError, task::JoinError};
 use tracing_subscriber::filter::ParseError;
 use url::Url;
 
 pub mod broker;
 pub mod coordinator;
 pub mod otel;
+
+#[derive(Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum CancelKind {
+    Interrupt,
+    Terminate,
+}
+
+impl From<CancelKind> for Duration {
+    fn from(cancellation: CancelKind) -> Self {
+        Duration::from_millis(match cancellation {
+            CancelKind::Interrupt => 0,
+            CancelKind::Terminate => 5_000,
+        })
+    }
+}
 
 pub const NODE_ID: i32 = 111;
 
@@ -59,6 +76,7 @@ pub enum Error {
     ExpectedJoinGroupRequestProtocol(&'static str),
     Hyper(#[from] hyper::http::Error),
     Io(Arc<io::Error>),
+    Join(#[from] JoinError),
     Json(#[from] serde_json::Error),
     KafkaProtocol(#[from] tansu_kafka_sans_io::Error),
     Message(String),
@@ -83,6 +101,7 @@ pub enum Error {
     Utf8(#[from] Utf8Error),
     Uuid(#[from] uuid::Error),
     SchemaValidation,
+    Send(#[from] SendError<CancelKind>),
 }
 
 impl From<io::Error> for Error {
