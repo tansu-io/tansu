@@ -153,48 +153,58 @@ where
         debug!(?terminate_signal);
 
         set.spawn(async move {
-            self.serve(receiver).await.unwrap();
+            self.serve(receiver)
+                .await
+                .inspect_err(|err| error!(?err))
+                .unwrap();
         });
 
         let cancellation = tokio::select! {
+            v = set.join_next() => {
+                debug!(?v);
+                None
+            }
+
             interrupt = interrupt_signal.recv() => {
                 debug!(?interrupt);
-                CancelKind::Interrupt
+                Some(CancelKind::Interrupt)
             }
 
             terminate = terminate_signal.recv() => {
                 debug!(?terminate);
-                CancelKind::Terminate
+                Some(CancelKind::Terminate)
             }
         };
-
-        sender.send(cancellation).inspect_err(|err| debug!(?err))?;
 
         if let Some(prometheus) = prometheus {
             prometheus.abort();
         }
 
-        let cleanup = async {
-            while !set.is_empty() {
-                debug!(len = set.len());
+        if let Some(cancellation) = cancellation {
+            sender.send(cancellation).inspect_err(|err| debug!(?err))?;
 
-                set.join_next().await;
-            }
-        };
-
-        let patience = sleep(Duration::from(cancellation));
-
-        tokio::select! {
-            v = cleanup => {
-                debug!(?v)
-            }
-
-            _ = patience => {
-                debug!(aborting = set.len());
-                set.abort_all();
-
+            let cleanup = async {
                 while !set.is_empty() {
+                    debug!(len = set.len());
+
                     set.join_next().await;
+                }
+            };
+
+            let patience = sleep(Duration::from(cancellation));
+
+            tokio::select! {
+                v = cleanup => {
+                    debug!(?v)
+                }
+
+                _ = patience => {
+                    debug!(aborting = set.len());
+                    set.abort_all();
+
+                    while !set.is_empty() {
+                        set.join_next().await;
+                    }
                 }
             }
         }
