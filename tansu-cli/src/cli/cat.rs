@@ -24,7 +24,7 @@ use url::Url;
 pub(super) enum Command {
     #[command(about = "Produce Avro/JSON/Protobuf messages to a topic")]
     Produce {
-        #[arg(long, default_value = DEFAULT_BROKER, env = "ADVERTISED_LISTENER_URL", help = "The URL of the broker to produce messages into")]
+        #[arg(long, default_value = DEFAULT_BROKER, env = "BROKER_URL", help = "The URL of the broker to produce messages into")]
         broker: Url,
 
         #[clap(value_parser, help = "The topic to produce messages into")]
@@ -54,7 +54,7 @@ pub(super) enum Command {
 
     #[command(about = "Consume Avro/JSON/Protobuf messages from a topic")]
     Consume {
-        #[arg(long, default_value = DEFAULT_BROKER, env = "ADVERTISED_LISTENER_URL", help = "The URL of the broker to consume messages from")]
+        #[arg(long, default_value = DEFAULT_BROKER, env = "BROKER_URL", help = "The URL of the broker to consume messages from")]
         broker: Url,
 
         #[clap(value_parser, help = "The topic to consume messages from")]
