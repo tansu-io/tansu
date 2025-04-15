@@ -16,7 +16,7 @@
 use dotenv::dotenv;
 use tansu_cli::{Cli, Result};
 use tansu_kafka_sans_io::ErrorCode;
-use tracing::{error, info};
+use tracing::{debug, error};
 use tracing_subscriber::{EnvFilter, fmt::format::FmtSpan, prelude::*};
 
 #[tokio::main]
@@ -36,6 +36,6 @@ async fn main() -> Result<ErrorCode> {
 
     Cli::main()
         .await
-        .inspect(|error_code| info!(%error_code))
+        .inspect(|error_code| debug!(%error_code))
         .inspect_err(|err| error!(%err))
 }

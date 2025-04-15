@@ -13,9 +13,12 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+use std::process;
+
 use crate::Result;
 use clap::{Parser, Subcommand};
 use tansu_kafka_sans_io::ErrorCode;
+use tracing::debug;
 
 mod broker;
 mod cat;
@@ -59,10 +62,16 @@ enum Command {
 
 impl Cli {
     pub async fn main() -> Result<ErrorCode> {
+        debug!(pid = process::id());
+
         let cli = Cli::parse();
 
         match cli.command.unwrap_or(Command::Broker(Box::new(cli.broker))) {
-            Command::Broker(arg) => arg.main().await,
+            Command::Broker(arg) => arg
+                .main()
+                .await
+                .inspect(|result| debug!(?result))
+                .inspect_err(|err| debug!(?err)),
 
             Command::Cat { command } => command.main().await,
 

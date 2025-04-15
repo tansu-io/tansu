@@ -20,6 +20,7 @@ use clap::Parser;
 use tansu_kafka_sans_io::ErrorCode;
 use tansu_server::{NODE_ID, broker::Broker, coordinator::group::administrator::Controller};
 use tansu_storage::StorageContainer;
+use tracing::debug;
 use url::Url;
 use uuid::Uuid;
 
@@ -85,6 +86,8 @@ impl Arg {
         Broker::<Controller<StorageContainer>, StorageContainer>::try_from(self)?
             .main()
             .await
+            .inspect(|result| debug!(?result))
+            .inspect_err(|err| debug!(?err))
             .map_err(Into::into)
     }
 }
