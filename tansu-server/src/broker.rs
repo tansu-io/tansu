@@ -31,7 +31,7 @@ pub mod telemetry;
 pub mod txn;
 
 use crate::{
-    Error, METER, Result,
+    CancelKind, Error, METER, Result,
     coordinator::group::{Coordinator, administrator::Controller},
     otel,
 };
@@ -64,7 +64,7 @@ use std::{
     marker::PhantomData,
     net::{IpAddr, Ipv6Addr, SocketAddr},
     str::FromStr,
-    time::SystemTime,
+    time::{Duration, SystemTime},
 };
 use tansu_kafka_sans_io::{
     Body, ErrorCode, Frame, Header, IsolationLevel, consumer_group_describe_response,
@@ -79,7 +79,10 @@ use telemetry::GetTelemetrySubscriptionsRequest;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
+    signal::unix::{SignalKind, signal},
+    sync::broadcast::{self, Receiver},
     task::JoinSet,
+    time::sleep,
 };
 use tracing::{Instrument, Level, Span, debug, debug_span, error, info, span};
 use txn::{add_offsets::AddOffsets, add_partitions::AddPartitions};
@@ -134,24 +137,84 @@ where
     pub async fn main(mut self) -> Result<ErrorCode> {
         let mut set = JoinSet::new();
 
-        if let Some(prometheus) = self.prometheus.clone() {
-            _ = set.spawn(async move {
+        let prometheus = self.prometheus.clone().map(|prometheus| {
+            set.spawn(async move {
                 otel::prom::init(prometheus).await.unwrap();
-            });
-        }
-
-        set.spawn(async move {
-            self.serve().await.unwrap();
+            })
         });
 
-        _ = set.join_next().await;
+        let (sender, receiver) = broadcast::channel(16);
+        debug!(?sender, ?receiver);
+
+        let mut interrupt_signal = signal(SignalKind::interrupt()).unwrap();
+        debug!(?interrupt_signal);
+
+        let mut terminate_signal = signal(SignalKind::terminate()).unwrap();
+        debug!(?terminate_signal);
+
+        set.spawn(async move {
+            self.serve(receiver)
+                .await
+                .inspect_err(|err| error!(?err))
+                .unwrap();
+        });
+
+        let cancellation = tokio::select! {
+            v = set.join_next() => {
+                debug!(?v);
+                None
+            }
+
+            interrupt = interrupt_signal.recv() => {
+                debug!(?interrupt);
+                Some(CancelKind::Interrupt)
+            }
+
+            terminate = terminate_signal.recv() => {
+                debug!(?terminate);
+                Some(CancelKind::Terminate)
+            }
+        };
+
+        if let Some(prometheus) = prometheus {
+            prometheus.abort();
+        }
+
+        if let Some(cancellation) = cancellation {
+            sender.send(cancellation).inspect_err(|err| debug!(?err))?;
+
+            let cleanup = async {
+                while !set.is_empty() {
+                    debug!(len = set.len());
+
+                    set.join_next().await;
+                }
+            };
+
+            let patience = sleep(Duration::from(cancellation));
+
+            tokio::select! {
+                v = cleanup => {
+                    debug!(?v)
+                }
+
+                _ = patience => {
+                    debug!(aborting = set.len());
+                    set.abort_all();
+
+                    while !set.is_empty() {
+                        set.join_next().await;
+                    }
+                }
+            }
+        }
 
         Ok(ErrorCode::None)
     }
 
-    pub async fn serve(&mut self) -> Result<()> {
+    pub async fn serve(&mut self, interrupts: Receiver<CancelKind>) -> Result<()> {
         self.register().await?;
-        self.listen().await
+        self.listen(interrupts).await
     }
 
     pub async fn register(&mut self) -> Result<()> {
@@ -166,7 +229,7 @@ where
             .map_err(Into::into)
     }
 
-    pub async fn listen(&self) -> Result<()> {
+    pub async fn listen(&self, mut interrupts: Receiver<CancelKind>) -> Result<()> {
         debug!(listener = %self.listener, advertised_listener = %self.advertised_listener);
 
         let listener = TcpListener::bind(self.listener.host().map_or_else(
@@ -190,33 +253,59 @@ where
         .await
         .inspect_err(|err| error!(?err, %self.advertised_listener))?;
 
+        let mut set = JoinSet::new();
+
         loop {
-            let (stream, addr) = listener.accept().await?;
-            debug!(?addr);
+            tokio::select! {
+                Ok((stream, addr)) = listener.accept() => {
+                    debug!(?addr);
 
-            let mut broker = self.clone();
+                    let mut broker = self.clone();
 
-            _ = tokio::spawn(async move {
-                let span = span!(Level::DEBUG, "peer", addr = %addr);
+                    let handle = set.spawn(async move {
+                        let span = span!(Level::DEBUG, "peer", addr = %addr);
 
-                async move {
-                    match broker.stream_handler(&addr, stream).await {
-                        Err(Error::Io(ref io))
-                            if io.kind() == ErrorKind::UnexpectedEof
-                                || io.kind() == ErrorKind::BrokenPipe
-                                || io.kind() == ErrorKind::ConnectionReset => {}
+                        async move {
+                            match broker.stream_handler(&addr, stream).await {
+                                Err(Error::Io(ref io))
+                                    if io.kind() == ErrorKind::UnexpectedEof
+                                        || io.kind() == ErrorKind::BrokenPipe
+                                        || io.kind() == ErrorKind::ConnectionReset => {}
 
-                        Err(error) => {
-                            error!(?error);
+                                Err(error) => {
+                                    error!(?error);
+                                }
+
+                                Ok(_) => {}
+                            }
                         }
+                        .instrument(span)
+                        .await
+                    });
 
-                        Ok(_) => {}
-                    }
+                    debug!(?handle);
+
+                    continue;
                 }
-                .instrument(span)
-                .await
-            });
+
+                v = set.join_next(), if !set.is_empty() => {
+                    debug!(?v);
+                }
+
+                Ok(message) = interrupts.recv() => {
+                    debug!(?message);
+                    break;
+                }
+            }
         }
+
+        while !set.is_empty() {
+            debug!(len = set.len());
+
+            set.join_next().await;
+        }
+
+        Ok(())
     }
 
     async fn stream_handler(&mut self, peer: &SocketAddr, mut stream: TcpStream) -> Result<()> {

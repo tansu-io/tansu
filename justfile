@@ -29,17 +29,16 @@ minio-up:
 minio-down:
     docker compose down --volumes minio
 
-minio-local-alias:
-    docker compose exec minio /usr/bin/mc alias set local http://localhost:9000 minioadmin minioadmin
+minio-mc +args:
+    docker compose exec minio /usr/bin/mc {{args}}
 
-minio-tansu-bucket:
-    docker compose exec minio /usr/bin/mc mb local/tansu
+minio-local-alias: (minio-mc "alias" "set" "local" "http://localhost:9000" "minioadmin" "minioadmin")
 
-minio-lake-bucket:
-    docker compose exec minio /usr/bin/mc mb local/lake
+minio-tansu-bucket: (minio-mc "mb" "local/tansu")
 
-minio-ready-local:
-    docker compose exec minio /usr/bin/mc ready local
+minio-lake-bucket: (minio-mc "mb" "local/lake")
+
+minio-ready-local: (minio-mc "ready" "local")
 
 tansu-up:
     docker compose up --detach tansu
@@ -203,8 +202,7 @@ search-topic-produce:
 search-duckdb-parquet: (duckdb-parquet "search")
 
 tansu-server:
-    ./target/debug/tansu broker \
-        --schema-registry file://./etc/schema 2>&1 | tee tansu.log
+    target/debug/tansu broker --schema-registry file://./etc/schema 2>&1 | tee tansu.log
 
 # run a broker with configuration from .env
 broker:
@@ -261,18 +259,19 @@ benchmark-flamegraph: build docker-compose-down minio-up minio-ready-local minio
 	flamegraph -- target/debug/tansu broker 2>&1  | tee tansu.log
 
 benchmark: build docker-compose-down minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up
-	./target/debug/tansu broker 2>&1  | tee tansu.log
+	target/debug/tansu broker 2>&1  | tee tansu.log
 
 otel: build docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up
-	./target/debug/tansu broker 2>&1  | tee tansu.log
+	target/debug/tansu broker 2>&1  | tee tansu.log
 
 otel-up: docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up tansu-up
 
+# teardown compose, rebuild: minio, db, tansu and lake buckets
 server: build docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket
-	./target/debug/tansu broker --schema-registry file://./etc/schema 2>&1  | tee tansu.log
+	target/debug/tansu broker 2>&1  | tee tansu.log
 
 gdb: build docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket
-	rust-gdb --args target/debug/tansu broker --schema-registry file://./etc/schema 2>&1  | tee tansu.log
+	rust-gdb --args target/debug/tansu broker
 
 # produce etc/data/observations.json with schema etc/schema/observation.avsc
 observation-produce: (cat-produce "observation" "etc/data/observations.json")
@@ -286,10 +285,8 @@ observation-topic-create: (topic-create "observation")
 # observation parquet
 observation-duckdb-parquet: (duckdb-k-unnest-v-parquet "observation")
 
-
 duckdb:
     duckdb -init duckdb-init.sql
-
 
 # produce etc/data/trips.json with schema etc/schema/taxi.proto
 taxi-topic-populate: (cat-produce "taxi" "etc/data/trips.json")
