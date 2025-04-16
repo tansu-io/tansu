@@ -15,14 +15,7 @@
 
 use std::{collections::HashMap, iter::zip};
 
-use apache_avro::{
-    Reader,
-    schema::{ArraySchema, MapSchema, RecordSchema, Schema as AvroSchema, UnionSchema},
-    types::Value,
-};
-use bytes::Bytes;
-use chrono::NaiveDateTime;
-use datafusion::arrow::{
+use ::arrow::{
     array::{
         ArrayBuilder, BinaryBuilder, BooleanBuilder, Date32Builder, Decimal128Builder,
         Decimal256Builder, Float32Builder, Float64Builder, Int32Builder, Int64Builder, ListBuilder,
@@ -31,9 +24,19 @@ use datafusion::arrow::{
         TimestampMicrosecondBuilder, TimestampMillisecondBuilder, TimestampNanosecondBuilder,
         UInt32Builder,
     },
-    datatypes::{DataType, Field, FieldRef, Fields, TimeUnit, UInt32Type, UnionFields, UnionMode},
+    datatypes::{
+        DataType, Field, FieldRef, Fields, Schema as ArrowSchema, TimeUnit, UInt32Type,
+        UnionFields, UnionMode,
+    },
     record_batch::RecordBatch,
 };
+use apache_avro::{
+    Reader,
+    schema::{ArraySchema, MapSchema, RecordSchema, Schema as AvroSchema, UnionSchema},
+    types::Value,
+};
+use bytes::Bytes;
+use chrono::NaiveDateTime;
 use num_bigint::BigInt;
 use serde_json::{Map, Number, Value as JsonValue};
 use tansu_kafka_sans_io::{ErrorCode, record::inflated::Batch};
@@ -1078,7 +1081,7 @@ impl AsArrow for Schema {
     fn as_arrow(&self, batch: &Batch) -> Result<RecordBatch> {
         debug!(?batch);
 
-        let schema = datafusion::arrow::datatypes::Schema::try_from(self)?;
+        let schema = ArrowSchema::try_from(self)?;
         debug!(?schema);
 
         let mut record_builder = RecordBuilder::try_from(self)?;
@@ -1157,11 +1160,11 @@ impl TryFrom<&Schema> for Fields {
     }
 }
 
-impl TryFrom<&Schema> for datafusion::arrow::datatypes::Schema {
+impl TryFrom<&Schema> for ArrowSchema {
     type Error = Error;
 
     fn try_from(schema: &Schema) -> Result<Self, Self::Error> {
-        Fields::try_from(schema).map(datafusion::arrow::datatypes::Schema::new)
+        Fields::try_from(schema).map(ArrowSchema::new)
     }
 }
 
@@ -1474,8 +1477,9 @@ mod tests {
     use crate::Registry;
 
     use super::*;
+    use ::arrow::util::pretty::pretty_format_batches;
     use apache_avro::{Decimal, types::Value};
-    use datafusion::{arrow::util::pretty::pretty_format_batches, prelude::*};
+    use datafusion::prelude::*;
     use num_bigint::BigInt;
     use object_store::{ObjectStore, PutPayload, memory::InMemory, path::Path};
     use serde_json::json;

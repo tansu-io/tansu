@@ -14,7 +14,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     env, io,
     num::TryFromIntError,
     result,
@@ -23,12 +23,21 @@ use std::{
     time::SystemTime,
 };
 
+use ::arrow::{datatypes::DataType, error::ArrowError, record_batch::RecordBatch};
+use berg::{Offset, Topition};
 use bytes::Bytes;
 use datafusion::{
-    arrow::{datatypes::DataType, error::ArrowError, record_batch::RecordBatch},
     error::DataFusionError,
     parquet::{arrow::AsyncArrowWriter, errors::ParquetError},
 };
+use iceberg::{
+    Catalog, NamespaceIdent, TableCreation, TableIdent,
+    io::FileIO,
+    spec::{DataFileBuilder, DataFileBuilderError, Schema as IcebergSchema},
+    transaction::Transaction,
+    writer::file_writer::{FileWriter, FileWriterBuilder, ParquetWriterBuilder},
+};
+use iceberg_catalog_memory::MemoryCatalog;
 use jsonschema::ValidationError;
 use object_store::{
     DynObjectStore, ObjectStore, PutMode, PutOptions, PutPayload, aws::AmazonS3Builder,
@@ -39,6 +48,7 @@ use opentelemetry::{
     metrics::{Counter, Histogram},
 };
 use opentelemetry_semantic_conventions::SCHEMA_URL;
+use parquet::file::properties::WriterProperties;
 use serde_json::Value;
 use tansu_kafka_sans_io::{ErrorCode, record::inflated::Batch};
 use tracing::{debug, error};
@@ -46,9 +56,11 @@ use url::Url;
 
 #[cfg(test)]
 use tracing_subscriber::filter::ParseError;
+use uuid::Uuid;
 
 mod arrow;
 mod avro;
+mod berg;
 mod json;
 mod proto;
 
@@ -79,6 +91,9 @@ pub enum Error {
     ChronoParse(#[from] chrono::ParseError),
 
     #[error("{:?}", self)]
+    DataFileBuilder(#[from] DataFileBuilderError),
+
+    #[error("{:?}", self)]
     DataFusion(#[from] DataFusionError),
 
     #[error("{:?}", self)]
@@ -86,6 +101,9 @@ pub enum Error {
 
     #[error("{:?}", self)]
     FromUtf8(#[from] FromUtf8Error),
+
+    #[error("{:?}", self)]
+    Iceberg(#[from] ::iceberg::Error),
 
     #[error("{:?}", self)]
     InvalidValue(apache_avro::types::Value),
@@ -273,6 +291,116 @@ impl Registry {
         }
     }
 
+    pub async fn store_as_iceberg(
+        &self,
+        topic: &str,
+        partition: i32,
+        offset: i64,
+        batch: &Batch,
+        lake: &str,
+    ) -> Result<()> {
+        debug!(topic, partition, offset, lake);
+
+        if let Some(record_batch) = self
+            .schemas
+            .lock()
+            .map_err(Into::into)
+            .and_then(|guard| {
+                guard
+                    .get(topic)
+                    .map(|schema| schema.as_arrow(batch))
+                    .transpose()
+            })
+            .inspect_err(|err| debug!(?err))?
+        {
+            let file_io = FileIO::from_path(lake.to_owned())
+                .inspect(|file_io| debug!(?file_io))
+                .inspect_err(|err| debug!(?err))?
+                .build()
+                .inspect(|file_io| debug!(?file_io))
+                .inspect_err(|err| debug!(?err))?;
+
+            let catalog = MemoryCatalog::new(file_io.clone(), None);
+            debug!(?catalog);
+
+            let namespace_ident = NamespaceIdent::new(String::from("tansu"));
+
+            catalog
+                .create_namespace(&namespace_ident, HashMap::new())
+                .await
+                .inspect(|namespace| debug!(?namespace))
+                .inspect_err(|err| debug!(?err))?;
+
+            let iceberg_schema = IcebergSchema::try_from(record_batch.schema().as_ref())
+                .inspect_err(|err| debug!(?err))?;
+
+            let table = catalog
+                .create_table(
+                    &namespace_ident,
+                    TableCreation::builder()
+                        .name(topic.into())
+                        .schema(iceberg_schema.clone())
+                        .build(),
+                )
+                .await
+                .inspect(|table| debug!(?table))
+                .inspect_err(|err| debug!(?err))?;
+
+            // let table = catalog
+            //     .load_table(&TableIdent::from_strs(["tansu", topic])?)
+            //     .await
+            //     .inspect_err(|err| debug!(?err))?;
+
+            let topition = Topition::new(topic, partition);
+            let offset = Offset::from(offset);
+
+            let writer_properties = WriterProperties::default();
+
+            let mut writer = ParquetWriterBuilder::new(
+                writer_properties,
+                Arc::new(iceberg_schema),
+                file_io,
+                topition.clone(),
+                offset.clone(),
+            )
+            .build()
+            .await
+            .inspect_err(|err| debug!(?err))?;
+
+            writer
+                .write(&record_batch)
+                .await
+                .inspect_err(|err| debug!(?err))?;
+
+            let data_files = writer
+                .close()
+                .await?
+                .iter()
+                .map(DataFileBuilder::build)
+                .collect::<Result<Vec<_>, _>>()
+                .inspect_err(|err| debug!(?err))?;
+
+            let commit_uuid = Uuid::now_v7();
+            debug!(%commit_uuid);
+            let key_metadata = format!("{topition}/{offset}").into_bytes();
+
+            let tx = Transaction::new(&table);
+
+            let mut fast_append = tx
+                .fast_append(Some(commit_uuid), key_metadata)
+                .inspect_err(|err| debug!(?err))?;
+
+            fast_append
+                .add_data_files(data_files)
+                .inspect_err(|err| debug!(?err))?;
+
+            let tx = fast_append.apply().await.inspect_err(|err| debug!(?err))?;
+            let _table = tx.commit(&catalog).await.inspect_err(|err| debug!(?err))?;
+        }
+
+        Ok(())
+    }
+
     pub async fn store_as_parquet(
         &self,
         topic: &str,
@@ -282,6 +410,7 @@ impl Registry {
         object_store: &impl ObjectStore,
     ) -> Result<()> {
         debug!(%topic, partition, offset, ?object_store);
+        let _ = batch;
 
         if let Some(record_batch) = self.schemas.lock().map_err(Into::into).and_then(|guard| {
             guard

@@ -86,7 +86,7 @@ pub struct DynoStore {
     node: i32,
     advertised_listener: Url,
     schemas: Option<Registry>,
-    lake: Option<Arc<dyn ObjectStore>>,
+    lake: Option<Url>,
     watermarks: Arc<Mutex<BTreeMap<Topition, OptiCon<Watermark>>>>,
     meta: OptiCon<Meta>,
 
@@ -383,8 +383,7 @@ impl DynoStore {
         Self { schemas, ..self }
     }
 
-    pub fn lake(self, lake: Option<impl ObjectStore>) -> Self {
-        let lake = lake.map(|lake| Arc::new(lake) as Arc<dyn ObjectStore>);
+    pub fn lake(self, lake: Option<Url>) -> Self {
         Self { lake, ..self }
     }
 
@@ -819,14 +818,24 @@ impl Storage for DynoStore {
                 let inflated = inflated::Batch::try_from(&deflated)?;
 
                 registry
-                    .store_as_parquet(
+                    .store_as_iceberg(
                         topition.topic(),
                         topition.partition(),
                         offset,
                         &inflated,
-                        lake,
+                        lake.to_string().as_str(),
                     )
                     .await?;
+
+                // registry
+                //     .store_as_parquet(
+                //         topition.topic(),
+                //         topition.partition(),
+                //         offset,
+                //         &inflated,
+                //         lake,
+                //     )
+                //     .await?;
             }
         }
 

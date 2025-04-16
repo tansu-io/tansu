@@ -269,8 +269,10 @@ otel: build docker-compose-down db-up minio-up minio-ready-local minio-local-ali
 otel-up: docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up tansu-up
 
 server: build docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket
-	./target/debug/tansu broker file://./etc/schema 2>&1  | tee tansu.log
+	./target/debug/tansu broker --schema-registry file://./etc/schema 2>&1  | tee tansu.log
 
+gdb: build docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket
+	rust-gdb --args target/debug/tansu broker --schema-registry file://./etc/schema 2>&1  | tee tansu.log
 
 # produce etc/data/observations.json with schema etc/schema/observation.avsc
 observation-produce: (cat-produce "observation" "etc/data/observations.json")

@@ -16,15 +16,15 @@
 use std::{any::type_name_of_val, sync::Arc};
 
 use crate::{AsArrow, AsJsonValue, AsKafkaRecord, Error, Result, Validator};
-use bytes::Bytes;
-use datafusion::arrow::{
+use ::arrow::{
     array::{
         ArrayBuilder, BooleanBuilder, Float64Builder, Int64Builder, ListBuilder, NullBuilder,
         StringBuilder, StructBuilder, UInt64Builder,
     },
-    datatypes::{DataType, Field, Fields},
+    datatypes::{DataType, Field, Fields, Schema as ArrowSchema},
     record_batch::RecordBatch,
 };
+use bytes::Bytes;
 use serde_json::{Map, Value};
 use tansu_kafka_sans_io::{ErrorCode, record::inflated::Batch};
 use tracing::{debug, error, warn};
@@ -527,9 +527,7 @@ impl AsArrow for Schema {
         }
 
         RecordBatch::try_new(
-            Arc::new(datafusion::arrow::datatypes::Schema::new(Fields::from(
-                fields,
-            ))),
+            Arc::new(ArrowSchema::new(Fields::from(fields))),
             builders
                 .iter_mut()
                 .map(|builder| builder.finish())
@@ -576,7 +574,8 @@ mod tests {
     use crate::Registry;
 
     use super::*;
-    use datafusion::{arrow::util::pretty::pretty_format_batches, prelude::*};
+    use ::arrow::util::pretty::pretty_format_batches;
+    use datafusion::prelude::*;
     use jsonschema::BasicOutput;
     use object_store::{ObjectStore, PutPayload, memory::InMemory, path::Path};
     use serde_json::json;

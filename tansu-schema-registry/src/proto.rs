@@ -16,16 +16,16 @@
 use std::{io::Write, ops::Deref};
 
 use crate::{AsArrow, AsJsonValue, AsKafkaRecord, Error, Result, Validator, arrow::RecordBuilder};
-use bytes::{BufMut, Bytes, BytesMut};
-use datafusion::arrow::{
+use ::arrow::{
     array::{
         ArrayBuilder, BinaryBuilder, BooleanBuilder, Float32Builder, Float64Builder, Int32Builder,
         Int64Builder, ListBuilder, MapBuilder, StringBuilder, StructBuilder, UInt32Builder,
         UInt64Builder,
     },
-    datatypes::{DataType, Field, FieldRef, Fields},
+    datatypes::{DataType, Field, FieldRef, Fields, Schema as ArrowSchema},
     record_batch::RecordBatch,
 };
+use bytes::{BufMut, Bytes, BytesMut};
 use protobuf::{
     CodedInputStream, MessageDyn,
     reflect::{
@@ -375,9 +375,9 @@ impl From<&Schema> for Fields {
     }
 }
 
-impl From<&Schema> for datafusion::arrow::datatypes::Schema {
+impl From<&Schema> for ArrowSchema {
     fn from(schema: &Schema) -> Self {
-        datafusion::arrow::datatypes::Schema::new(Fields::from(schema))
+        ArrowSchema::new(Fields::from(schema))
     }
 }
 
@@ -982,7 +982,7 @@ impl AsArrow for Schema {
     fn as_arrow(&self, batch: &Batch) -> Result<RecordBatch> {
         debug!(?batch);
 
-        let schema = datafusion::arrow::datatypes::Schema::from(self);
+        let schema = ArrowSchema::from(self);
         debug!(?schema);
 
         let mut record_builder = RecordBuilder::from(self);
@@ -1079,7 +1079,8 @@ mod tests {
     use crate::Registry;
 
     use super::*;
-    use datafusion::{arrow::util::pretty::pretty_format_batches, prelude::*};
+    use ::arrow::util::pretty::pretty_format_batches;
+    use datafusion::prelude::*;
     use object_store::{ObjectStore, PutPayload, memory::InMemory, path::Path};
     use serde_json::json;
     use std::{fs::File, sync::Arc, thread};

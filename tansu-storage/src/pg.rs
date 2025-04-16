@@ -19,14 +19,13 @@ use std::{
     hash::{DefaultHasher, Hash, Hasher},
     marker::PhantomData,
     str::FromStr,
-    sync::{Arc, LazyLock},
+    sync::LazyLock,
     time::{Duration, SystemTime},
 };
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use deadpool_postgres::{Manager, ManagerConfig, Object, Pool, RecyclingMethod};
-use object_store::ObjectStore;
 use opentelemetry::metrics::Histogram;
 use opentelemetry::{KeyValue, metrics::Counter};
 use rand::{prelude::*, rng};
@@ -80,7 +79,7 @@ pub struct Postgres {
     advertised_listener: Url,
     pool: Pool,
     schemas: Option<Registry>,
-    lake: Option<Arc<dyn ObjectStore>>,
+    lake: Option<Url>,
 }
 
 #[derive(Clone, Default, Debug)]
@@ -90,7 +89,7 @@ pub struct Builder<C, N, L, P> {
     advertised_listener: L,
     pool: P,
     schemas: Option<Registry>,
-    lake: Option<Arc<dyn ObjectStore>>,
+    lake: Option<Url>,
 }
 
 impl<C, N, L, P> Builder<C, N, L, P> {
@@ -135,8 +134,7 @@ impl<C, N, L, P> Builder<C, N, L, P> {
         Self { schemas, ..self }
     }
 
-    pub fn lake(self, lake: Option<impl ObjectStore>) -> Self {
-        let lake = lake.map(|lake| Arc::new(lake) as Arc<dyn ObjectStore>);
+    pub fn lake(self, lake: Option<Url>) -> Self {
         Self { lake, ..self }
     }
 }
@@ -857,14 +855,24 @@ impl Postgres {
         if let Some(ref lake) = self.lake {
             if let Some(ref registry) = self.schemas {
                 registry
-                    .store_as_parquet(
+                    .store_as_iceberg(
                         topition.topic(),
                         topition.partition(),
                         high.unwrap_or_default(),
                         &inflated,
-                        lake,
+                        lake.to_string().as_str(),
                     )
                     .await?;
+
+                // registry
+                //     .store_as_parquet(
+                //         topition.topic(),
+                //         topition.partition(),
+                //         high.unwrap_or_default(),
+                //         &inflated,
+                //         lake,
+                //     )
+                //     .await?;
             }
         }
 

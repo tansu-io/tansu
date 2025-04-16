@@ -1376,7 +1376,7 @@ impl Builder<i32, String, Uuid, Url, Url, Url> {
             .as_ref()
             .map_or(Ok(None), |schema| Registry::try_from(schema).map(Some))?;
 
-        let lake = self.lake()?;
+        let _lake = self.lake()?;
 
         match self.storage.scheme() {
             "postgres" | "postgresql" => Postgres::builder(self.storage.to_string().as_str())
@@ -1384,7 +1384,7 @@ impl Builder<i32, String, Uuid, Url, Url, Url> {
                 .map(|builder| builder.node(self.node_id))
                 .map(|builder| builder.advertised_listener(self.advertised_listener.clone()))
                 .map(|builder| builder.schemas(schemas))
-                .map(|builder| builder.lake(lake))
+                .map(|builder| builder.lake(self.data_lake.clone()))
                 .map(|builder| builder.build())
                 .map(StorageContainer::Postgres)
                 .map_err(Into::into),
@@ -1400,7 +1400,7 @@ impl Builder<i32, String, Uuid, Url, Url, Url> {
                         DynoStore::new(self.cluster_id.as_str(), self.node_id, object_store)
                             .advertised_listener(self.advertised_listener.clone())
                             .schemas(schemas)
-                            .lake(lake)
+                            .lake(self.data_lake.clone())
                     })
                     .map(StorageContainer::DynoStore)
                     .map_err(Into::into)
@@ -1410,7 +1410,7 @@ impl Builder<i32, String, Uuid, Url, Url, Url> {
                 DynoStore::new(self.cluster_id.as_str(), self.node_id, InMemory::new())
                     .advertised_listener(self.advertised_listener.clone())
                     .schemas(schemas)
-                    .lake(lake),
+                    .lake(self.data_lake.clone()),
             )),
 
             _unsupported => Err(Error::UnsupportedStorageUrl(self.storage.clone())),
