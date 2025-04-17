@@ -13,7 +13,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::{io::Write, ops::Deref};
+use std::{collections::HashMap, io::Write, ops::Deref};
 
 use crate::{AsArrow, AsJsonValue, AsKafkaRecord, Error, Result, Validator, arrow::RecordBuilder};
 use ::arrow::{
@@ -26,6 +26,7 @@ use ::arrow::{
     record_batch::RecordBatch,
 };
 use bytes::{BufMut, Bytes, BytesMut};
+use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use protobuf::{
     CodedInputStream, MessageDyn,
     reflect::{
@@ -134,6 +135,10 @@ fn message_descriptor_to_fields(descriptor: &MessageDescriptor) -> Vec<Field> {
                     runtime_type_to_data_type(singular),
                     !field.is_required(),
                 )
+                .with_metadata(HashMap::from([(
+                    PARQUET_FIELD_ID_META_KEY.to_string(),
+                    field.number().to_string(),
+                )]))
             }
 
             RuntimeFieldType::Repeated(ref repeated) => {
@@ -148,6 +153,10 @@ fn message_descriptor_to_fields(descriptor: &MessageDescriptor) -> Vec<Field> {
                     DataType::new_list(runtime_type_to_data_type(repeated), NULLABLE),
                     !field.is_required(),
                 )
+                .with_metadata(HashMap::from([(
+                    PARQUET_FIELD_ID_META_KEY.to_string(),
+                    field.number().to_string(),
+                )]))
             }
 
             RuntimeFieldType::Map(ref key, ref value) => {
@@ -172,6 +181,10 @@ fn message_descriptor_to_fields(descriptor: &MessageDescriptor) -> Vec<Field> {
                     DataType::Map(children, SORTED_MAP_KEYS),
                     NULLABLE,
                 )
+                .with_metadata(HashMap::from([(
+                    PARQUET_FIELD_ID_META_KEY.to_string(),
+                    field.number().to_string(),
+                )]))
             }
         })
         .collect::<Vec<_>>()

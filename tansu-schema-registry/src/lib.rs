@@ -15,7 +15,8 @@
 
 use std::{
     collections::{BTreeMap, HashMap},
-    env, io,
+    env::{self, vars},
+    io,
     num::TryFromIntError,
     result,
     string::FromUtf8Error,
@@ -24,15 +25,15 @@ use std::{
 };
 
 use ::arrow::{datatypes::DataType, error::ArrowError, record_batch::RecordBatch};
-use berg::{Offset, Topition};
+use berg::{Offset, Topition, env_fileio_s3_props};
 use bytes::Bytes;
 use datafusion::{
     error::DataFusionError,
     parquet::{arrow::AsyncArrowWriter, errors::ParquetError},
 };
 use iceberg::{
-    Catalog, NamespaceIdent, TableCreation, TableIdent,
-    io::FileIO,
+    Catalog, NamespaceIdent, TableCreation,
+    io::{FileIO, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY},
     spec::{DataFileBuilder, DataFileBuilderError, Schema as IcebergSchema},
     transaction::Transaction,
     writer::file_writer::{FileWriter, FileWriterBuilder, ParquetWriterBuilder},
@@ -291,6 +292,17 @@ impl Registry {
         }
     }
 
+    fn env_mapping(k: &str) -> &str {
+        match k {
+            "AWS_ACCESS_KEY_ID" => S3_ACCESS_KEY_ID,
+            "AWS_SECRET_ACCESS_KEY" => S3_SECRET_ACCESS_KEY,
+            "AWS_DEFAULT_REGION" => S3_REGION,
+            "AWS_ENDPOINT" => S3_ENDPOINT,
+            "AWS_ALLOW_HTTP" => todo!(),
+            _ => unreachable!("{k}"),
+        }
+    }
+
     pub async fn store_as_iceberg(
         &self,
         topic: &str,
@@ -316,6 +328,7 @@ impl Registry {
             let file_io = FileIO::from_path(lake.to_owned())
                 .inspect(|file_io| debug!(?file_io))
                 .inspect_err(|err| debug!(?err))?
+                .with_props(env_fileio_s3_props())
                 .build()
                 .inspect(|file_io| debug!(?file_io))
                 .inspect_err(|err| debug!(?err))?;
@@ -340,6 +353,7 @@ impl Registry {
                     TableCreation::builder()
                         .name(topic.into())
                         .schema(iceberg_schema.clone())
+                        .location(String::from("s3://lake/table"))
                         .build(),
                 )
                 .await
@@ -377,6 +391,7 @@ impl Registry {
                 .await?
                 .iter()
                 .map(DataFileBuilder::build)
+                .inspect(|r| debug!(?r))
                 .collect::<Result<Vec<_>, _>>()
                 .inspect_err(|err| debug!(?err))?;
 

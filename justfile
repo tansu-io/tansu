@@ -2,11 +2,15 @@ set dotenv-load
 
 default: fmt build test clippy
 
-build:
-    cargo build --workspace --all-targets
 
-release:
-    cargo build --release --workspace --all-targets
+
+cargo-build +args:
+    cargo build {{args}}
+
+
+build: (cargo-build "--workspace" "--all-targets")
+
+release: (cargo-build "--release" "--workspace" "--all-targets")
 
 test:
     cargo test --workspace --all-targets
@@ -267,11 +271,11 @@ otel: build docker-compose-down db-up minio-up minio-ready-local minio-local-ali
 otel-up: docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up tansu-up
 
 # teardown compose, rebuild: minio, db, tansu and lake buckets
-server: build docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket
+server: (cargo-build "--package" "tansu-cli") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket
 	target/debug/tansu broker 2>&1  | tee tansu.log
 
-gdb: build docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket
-	rust-gdb --args target/debug/tansu broker
+gdb: (cargo-build "--package" "tansu-cli") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket
+    rust-gdb --args target/debug/tansu broker
 
 # produce etc/data/observations.json with schema etc/schema/observation.avsc
 observation-produce: (cat-produce "observation" "etc/data/observations.json")

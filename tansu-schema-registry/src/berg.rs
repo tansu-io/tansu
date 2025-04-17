@@ -13,9 +13,12 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::fmt::Display;
+use std::{env::vars, fmt::Display};
 
-use iceberg::writer::file_writer::location_generator::{FileNameGenerator, LocationGenerator};
+use iceberg::{
+    io::{S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY},
+    writer::file_writer::location_generator::{FileNameGenerator, LocationGenerator},
+};
 
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Topition {
@@ -25,7 +28,7 @@ pub struct Topition {
 
 impl Display for Topition {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}/{:0>10}", self.topic, self.partition)
+        write!(f, "s3://lake/topic/{}/{:0>10}", self.topic, self.partition)
     }
 }
 
@@ -63,4 +66,25 @@ impl FileNameGenerator for Offset {
     fn generate_file_name(&self) -> String {
         format!("{self}.parquet")
     }
+}
+
+pub fn env_mapping(k: &str) -> &str {
+    match k {
+        "AWS_ACCESS_KEY_ID" => S3_ACCESS_KEY_ID,
+        "AWS_SECRET_ACCESS_KEY" => S3_SECRET_ACCESS_KEY,
+        "AWS_DEFAULT_REGION" => S3_REGION,
+        "AWS_ENDPOINT" => S3_ENDPOINT,
+        _ => unreachable!("{k}"),
+    }
+}
+
+pub fn env_fileio_s3_props() -> impl Iterator<Item = (String, String)> {
+    vars()
+        .filter(|&(ref k, _)| {
+            k == "AWS_ACCESS_KEY_ID"
+                || k == "AWS_SECRET_ACCESS_KEY"
+                || k == "AWS_DEFAULT_REGION"
+                || k == "AWS_ENDPOINT"
+        })
+        .map(|(k, v)| (env_mapping(k.as_str()).to_owned(), v))
 }
