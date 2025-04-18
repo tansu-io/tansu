@@ -15,7 +15,7 @@
 
 use std::{
     collections::{BTreeMap, HashMap},
-    env::{self, vars},
+    env::{self},
     io,
     num::TryFromIntError,
     result,
@@ -25,7 +25,7 @@ use std::{
 };
 
 use ::arrow::{datatypes::DataType, error::ArrowError, record_batch::RecordBatch};
-use berg::{Offset, Topition, env_fileio_s3_props};
+use berg::{Offset, Topition, env_s3_props};
 use bytes::Bytes;
 use datafusion::{
     error::DataFusionError,
@@ -33,12 +33,17 @@ use datafusion::{
 };
 use iceberg::{
     Catalog, NamespaceIdent, TableCreation,
-    io::{FileIO, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY},
-    spec::{DataFileBuilder, DataFileBuilderError, Schema as IcebergSchema},
+    spec::{
+        DataFileBuilderError, Literal, PrimitiveLiteral, Schema as IcebergSchema, Struct,
+        Transform, UnboundPartitionField, UnboundPartitionSpec,
+    },
     transaction::Transaction,
-    writer::file_writer::{FileWriter, FileWriterBuilder, ParquetWriterBuilder},
+    writer::{
+        IcebergWriter, IcebergWriterBuilder, base_writer::data_file_writer::DataFileWriterBuilder,
+        file_writer::ParquetWriterBuilder,
+    },
 };
-use iceberg_catalog_memory::MemoryCatalog;
+use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
 use jsonschema::ValidationError;
 use object_store::{
     DynObjectStore, ObjectStore, PutMode, PutOptions, PutPayload, aws::AmazonS3Builder,
@@ -49,6 +54,7 @@ use opentelemetry::{
     metrics::{Counter, Histogram},
 };
 use opentelemetry_semantic_conventions::SCHEMA_URL;
+use ordered_float::OrderedFloat;
 use parquet::file::properties::WriterProperties;
 use serde_json::Value;
 use tansu_kafka_sans_io::{ErrorCode, record::inflated::Batch};
@@ -292,17 +298,6 @@ impl Registry {
         }
     }
 
-    fn env_mapping(k: &str) -> &str {
-        match k {
-            "AWS_ACCESS_KEY_ID" => S3_ACCESS_KEY_ID,
-            "AWS_SECRET_ACCESS_KEY" => S3_SECRET_ACCESS_KEY,
-            "AWS_DEFAULT_REGION" => S3_REGION,
-            "AWS_ENDPOINT" => S3_ENDPOINT,
-            "AWS_ALLOW_HTTP" => todo!(),
-            _ => unreachable!("{k}"),
-        }
-    }
-
     pub async fn store_as_iceberg(
         &self,
         topic: &str,
@@ -323,17 +318,15 @@ impl Registry {
                     .map(|schema| schema.as_arrow(batch))
                     .transpose()
             })
+            .inspect(|record_batch| debug!(?record_batch))
             .inspect_err(|err| debug!(?err))?
         {
-            let file_io = FileIO::from_path(lake.to_owned())
-                .inspect(|file_io| debug!(?file_io))
-                .inspect_err(|err| debug!(?err))?
-                .with_props(env_fileio_s3_props())
-                .build()
-                .inspect(|file_io| debug!(?file_io))
-                .inspect_err(|err| debug!(?err))?;
+            let catalog_config = RestCatalogConfig::builder()
+                .uri(format!("http://{}:{}", "localhost", "8181"))
+                .props(env_s3_props().collect())
+                .build();
 
-            let catalog = MemoryCatalog::new(file_io.clone(), None);
+            let catalog = RestCatalog::new(catalog_config);
             debug!(?catalog);
 
             let namespace_ident = NamespaceIdent::new(String::from("tansu"));
@@ -345,7 +338,21 @@ impl Registry {
                 .inspect_err(|err| debug!(?err))?;
 
             let iceberg_schema = IcebergSchema::try_from(record_batch.schema().as_ref())
+                .inspect(|schema| debug!(%schema))
                 .inspect_err(|err| debug!(?err))?;
+
+            let partition_spec = UnboundPartitionSpec::builder()
+                .add_partition_fields(record_batch.schema().fields().iter().enumerate().map(
+                    |(id, field)| {
+                        UnboundPartitionField::builder()
+                            .source_id(id as i32 + 1)
+                            .name(field.name().into())
+                            .transform(Transform::Identity)
+                            .build()
+                    },
+                ))
+                .map(|spec| spec.build())
+                .and_then(|spec| spec.bind(iceberg_schema.clone()))?;
 
             let table = catalog
                 .create_table(
@@ -353,7 +360,8 @@ impl Registry {
                     TableCreation::builder()
                         .name(topic.into())
                         .schema(iceberg_schema.clone())
-                        .location(String::from("s3://lake/table"))
+                        .partition_spec(partition_spec)
+                        // .location(String::from("s3://lake/table"))
                         .build(),
                 )
                 .await
@@ -368,31 +376,38 @@ impl Registry {
             let topition = Topition::new(topic, partition);
             let offset = Offset::from(offset);
 
-            let writer_properties = WriterProperties::default();
-
-            let mut writer = ParquetWriterBuilder::new(
-                writer_properties,
-                Arc::new(iceberg_schema),
-                file_io,
+            let writer = ParquetWriterBuilder::new(
+                WriterProperties::default(),
+                table.metadata().current_schema().clone(),
+                table.file_io().clone(),
                 topition.clone(),
                 offset.clone(),
+            );
+
+            let mut data_file_writer = DataFileWriterBuilder::new(
+                writer,
+                Some(Struct::from_iter([
+                    Some(Literal::Primitive(PrimitiveLiteral::Long(0))),
+                    Some(Literal::Primitive(PrimitiveLiteral::Long(0))),
+                    Some(Literal::Primitive(PrimitiveLiteral::Float(OrderedFloat(
+                        0.0,
+                    )))),
+                    Some(Literal::Primitive(PrimitiveLiteral::Double(OrderedFloat(
+                        0.0f64,
+                    )))),
+                    Some(Literal::Primitive(PrimitiveLiteral::Int(0))),
+                ])),
+                0,
             )
             .build()
-            .await
-            .inspect_err(|err| debug!(?err))?;
+            .await?;
 
-            writer
-                .write(&record_batch)
-                .await
-                .inspect_err(|err| debug!(?err))?;
+            data_file_writer.write(record_batch).await?;
 
-            let data_files = writer
+            let data_files = data_file_writer
                 .close()
-                .await?
-                .iter()
-                .map(DataFileBuilder::build)
-                .inspect(|r| debug!(?r))
-                .collect::<Result<Vec<_>, _>>()
+                .await
+                .inspect(|data_files| debug!(?data_files))
                 .inspect_err(|err| debug!(?err))?;
 
             let commit_uuid = Uuid::now_v7();

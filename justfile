@@ -44,47 +44,41 @@ minio-lake-bucket: (minio-mc "mb" "local/lake")
 
 minio-ready-local: (minio-mc "ready" "local")
 
-tansu-up:
-    docker compose up --detach tansu
+tansu-up: (docker-compose-up "tansu")
 
-tansu-down:
-    docker compose down --volumes tansu
+tansu-down: (docker-compose-down "tansu")
 
-db-up:
-    docker compose up --detach db
+db-up: (docker-compose-up "db")
 
-db-down:
-    docker compose down --volumes db
+db-down: (docker-compose-down "db")
 
-jaeger-up:
-    docker compose up --detach jaeger
+jaeger-up: (docker-compose-up "jaeger")
 
-jaeger-down:
-    docker compose down --volumes jaeger
+jaeger-down: (docker-compose-down "jaeger")
 
-prometheus-up:
-    docker compose up --detach prometheus
+prometheus-up: (docker-compose-up "prometheus")
 
-prometheus-down:
-    docker compose down --volumes prometheus
+prometheus-down: (docker-compose-down "prometheus")
 
-grafana-up:
-    docker compose up --detach grafana
+grafana-up: (docker-compose-up "grafana")
 
-grafana-down:
-    docker compose down --volumes grafana
+grafana-down: (docker-compose-down "grafana")
 
-docker-compose-up:
-    docker compose up --detach
+iceberg-catalog-up: (docker-compose-up "iceberg-catalog")
 
-docker-compose-down:
-    docker compose down --volumes
+iceberg-catalog-down: (docker-compose-down "iceberg-catalog")
+
+docker-compose-up *args:
+    docker compose up --detach {{args}}
+
+docker-compose-down *args:
+    docker compose down --volumes {{args}}
 
 docker-compose-ps:
     docker compose ps
 
-docker-compose-logs:
-    docker compose logs
+docker-compose-logs *args:
+    docker compose logs {{args}}
 
 psql:
     docker compose exec db psql $*
@@ -271,7 +265,7 @@ otel: build docker-compose-down db-up minio-up minio-ready-local minio-local-ali
 otel-up: docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up tansu-up
 
 # teardown compose, rebuild: minio, db, tansu and lake buckets
-server: (cargo-build "--package" "tansu-cli") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket
+server: (cargo-build "--package" "tansu-cli") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket iceberg-catalog-up
 	target/debug/tansu broker 2>&1  | tee tansu.log
 
 gdb: (cargo-build "--package" "tansu-cli") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket

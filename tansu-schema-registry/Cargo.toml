@@ -21,6 +21,7 @@ num-bigint.workspace = true
 object_store.workspace = true
 opentelemetry-semantic-conventions.workspace = true
 opentelemetry.workspace = true
+ordered-float.workspace = true
 parquet.workspace = true
 protobuf-json-mapping.workspace = true
 protobuf-parse.workspace = true
