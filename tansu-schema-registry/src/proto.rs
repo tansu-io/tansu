@@ -219,7 +219,11 @@ fn runtime_type_to_array_builder(runtime_type: &RuntimeType) -> Box<dyn ArrayBui
                                 field.name(),
                                 runtime_type_to_data_type(singular),
                                 !field.is_required(),
-                            ),
+                            )
+                            .with_metadata(HashMap::from([(
+                                PARQUET_FIELD_ID_META_KEY.to_string(),
+                                field.number().to_string(),
+                            )])),
                             runtime_type_to_array_builder(singular),
                         )
                     }
@@ -236,7 +240,11 @@ fn runtime_type_to_array_builder(runtime_type: &RuntimeType) -> Box<dyn ArrayBui
                                 field.name(),
                                 DataType::new_list(runtime_type_to_data_type(repeated), NULLABLE),
                                 !field.is_required(),
-                            ),
+                            )
+                            .with_metadata(HashMap::from([(
+                                PARQUET_FIELD_ID_META_KEY.to_string(),
+                                field.number().to_string(),
+                            )])),
                             Box::new(ListBuilder::new(runtime_type_to_array_builder(repeated)))
                                 as Box<dyn ArrayBuilder>,
                         )
@@ -264,7 +272,11 @@ fn runtime_type_to_array_builder(runtime_type: &RuntimeType) -> Box<dyn ArrayBui
                                 field.name(),
                                 DataType::Map(children, SORTED_MAP_KEYS),
                                 NULLABLE,
-                            ),
+                            )
+                            .with_metadata(HashMap::from([(
+                                PARQUET_FIELD_ID_META_KEY.to_string(),
+                                field.number().to_string(),
+                            )])),
                             Box::new(MapBuilder::new(
                                 None,
                                 runtime_type_to_array_builder(key),

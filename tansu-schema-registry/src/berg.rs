@@ -80,7 +80,7 @@ pub fn env_mapping(k: &str) -> &str {
 
 pub fn env_s3_props() -> impl Iterator<Item = (String, String)> {
     vars()
-        .filter(|&(ref k, _)| {
+        .filter(|(k, _)| {
             k == "AWS_ACCESS_KEY_ID"
                 || k == "AWS_SECRET_ACCESS_KEY"
                 || k == "AWS_DEFAULT_REGION"
