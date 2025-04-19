@@ -13,60 +13,13 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::{env::vars, fmt::Display};
+use std::env::vars;
 
 use iceberg::{
     io::{S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY},
-    writer::file_writer::location_generator::{FileNameGenerator, LocationGenerator},
+    spec::{Literal, PrimitiveLiteral, PrimitiveType, Schema, Struct, Type},
 };
-
-#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct Topition {
-    topic: String,
-    partition: i32,
-}
-
-impl Display for Topition {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "s3://lake/topic/{}/{:0>10}", self.topic, self.partition)
-    }
-}
-
-impl Topition {
-    pub fn new(topic: impl Into<String>, partition: i32) -> Self {
-        Self {
-            topic: topic.into(),
-            partition,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct Offset(i64);
-
-impl From<i64> for Offset {
-    fn from(offset: i64) -> Self {
-        Self(offset)
-    }
-}
-
-impl Display for Offset {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:0>20}", self.0)
-    }
-}
-
-impl LocationGenerator for Topition {
-    fn generate_location(&self, file_name: &str) -> String {
-        format!("{self}/{file_name}")
-    }
-}
-
-impl FileNameGenerator for Offset {
-    fn generate_file_name(&self) -> String {
-        format!("{self}.parquet")
-    }
-}
+use ordered_float::OrderedFloat;
 
 pub fn env_mapping(k: &str) -> &str {
     match k {
@@ -87,4 +40,40 @@ pub fn env_s3_props() -> impl Iterator<Item = (String, String)> {
                 || k == "AWS_ENDPOINT"
         })
         .map(|(k, v)| (env_mapping(k.as_str()).to_owned(), v))
+}
+
+pub fn partition_value(schema: &Schema) -> Struct {
+    Struct::from_iter(schema.as_struct().fields().iter().map(|field| {
+        match field.as_ref().field_type.as_ref() {
+            Type::Primitive(primitive_type) => primitive_type_partition_value(primitive_type),
+            Type::Struct(_struct_type) => todo!(),
+            Type::List(_list_type) => todo!(),
+            Type::Map(_map_type) => todo!(),
+        }
+    }))
+}
+
+fn primitive_type_partition_value(primitive: &PrimitiveType) -> Option<Literal> {
+    match primitive {
+        PrimitiveType::Boolean => todo!(),
+        PrimitiveType::Int => Some(Literal::Primitive(PrimitiveLiteral::Int(0))),
+        PrimitiveType::Long => Some(Literal::Primitive(PrimitiveLiteral::Long(0))),
+        PrimitiveType::Float => Some(Literal::Primitive(PrimitiveLiteral::Float(OrderedFloat(
+            0.0,
+        )))),
+        PrimitiveType::Double => Some(Literal::Primitive(PrimitiveLiteral::Double(OrderedFloat(
+            0.0f64,
+        )))),
+        PrimitiveType::Decimal { .. } => todo!(),
+        PrimitiveType::Date => todo!(),
+        PrimitiveType::Time => todo!(),
+        PrimitiveType::Timestamp => todo!(),
+        PrimitiveType::Timestamptz => todo!(),
+        PrimitiveType::TimestampNs => todo!(),
+        PrimitiveType::TimestamptzNs => todo!(),
+        PrimitiveType::String => todo!(),
+        PrimitiveType::Uuid => todo!(),
+        PrimitiveType::Fixed(_) => todo!(),
+        PrimitiveType::Binary => todo!(),
+    }
 }

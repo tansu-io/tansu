@@ -25,22 +25,26 @@ use std::{
 };
 
 use ::arrow::{datatypes::DataType, error::ArrowError, record_batch::RecordBatch};
-use berg::{Offset, Topition, env_s3_props};
+use berg::{env_s3_props, partition_value};
 use bytes::Bytes;
 use datafusion::{
     error::DataFusionError,
     parquet::{arrow::AsyncArrowWriter, errors::ParquetError},
 };
 use iceberg::{
-    Catalog, NamespaceIdent, TableCreation,
+    Catalog, NamespaceIdent, TableCreation, TableIdent,
     spec::{
-        DataFileBuilderError, Literal, PrimitiveLiteral, Schema as IcebergSchema, Struct,
-        Transform, UnboundPartitionField, UnboundPartitionSpec,
+        DataFileBuilderError, DataFileFormat::Parquet, Schema as IcebergSchema, Transform,
+        UnboundPartitionField, UnboundPartitionSpec,
     },
     transaction::Transaction,
     writer::{
-        IcebergWriter, IcebergWriterBuilder, base_writer::data_file_writer::DataFileWriterBuilder,
-        file_writer::ParquetWriterBuilder,
+        IcebergWriter, IcebergWriterBuilder,
+        base_writer::data_file_writer::DataFileWriterBuilder,
+        file_writer::{
+            ParquetWriterBuilder,
+            location_generator::{DefaultFileNameGenerator, DefaultLocationGenerator},
+        },
     },
 };
 use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
@@ -54,7 +58,6 @@ use opentelemetry::{
     metrics::{Counter, Histogram},
 };
 use opentelemetry_semantic_conventions::SCHEMA_URL;
-use ordered_float::OrderedFloat;
 use parquet::file::properties::WriterProperties;
 use serde_json::Value;
 use tansu_kafka_sans_io::{ErrorCode, record::inflated::Batch};
@@ -329,16 +332,19 @@ impl Registry {
             let catalog = RestCatalog::new(catalog_config);
             debug!(?catalog);
 
-            let namespace_ident = NamespaceIdent::new(String::from("tansu"));
+            let namespace = "tansu";
+            let namespace_ident = NamespaceIdent::new(namespace.into());
 
-            catalog
-                .create_namespace(&namespace_ident, HashMap::new())
-                .await
-                .inspect(|namespace| debug!(?namespace))
-                .inspect_err(|err| debug!(?err))?;
+            if !catalog.namespace_exists(&namespace_ident).await? {
+                catalog
+                    .create_namespace(&namespace_ident, HashMap::new())
+                    .await
+                    .inspect(|namespace| debug!(?namespace))
+                    .inspect_err(|err| debug!(?err))?;
+            }
 
             let iceberg_schema = IcebergSchema::try_from(record_batch.schema().as_ref())
-                .inspect(|schema| debug!(%schema))
+                .inspect(|schema| debug!(?schema))
                 .inspect_err(|err| debug!(?err))?;
 
             let partition_spec = UnboundPartitionSpec::builder()
@@ -354,53 +360,45 @@ impl Registry {
                 .map(|spec| spec.build())
                 .and_then(|spec| spec.bind(iceberg_schema.clone()))?;
 
-            let table = catalog
-                .create_table(
-                    &namespace_ident,
-                    TableCreation::builder()
-                        .name(topic.into())
-                        .schema(iceberg_schema.clone())
-                        .partition_spec(partition_spec)
-                        // .location(String::from("s3://lake/table"))
-                        .build(),
-                )
-                .await
-                .inspect(|table| debug!(?table))
-                .inspect_err(|err| debug!(?err))?;
-
-            // let table = catalog
-            //     .load_table(&TableIdent::from_strs(["tansu", topic])?)
-            //     .await
-            //     .inspect_err(|err| debug!(?err))?;
-
-            let topition = Topition::new(topic, partition);
-            let offset = Offset::from(offset);
+            let table = if catalog
+                .table_exists(&TableIdent::new(namespace_ident.clone(), topic.into()))
+                .await?
+            {
+                catalog
+                    .load_table(&TableIdent::from_strs([namespace, topic])?)
+                    .await
+                    .inspect_err(|err| debug!(?err))
+            } else {
+                catalog
+                    .create_table(
+                        &namespace_ident,
+                        TableCreation::builder()
+                            .name(topic.into())
+                            .schema(iceberg_schema.clone())
+                            .partition_spec(partition_spec)
+                            .build(),
+                    )
+                    .await
+                    .inspect(|table| debug!(?table))
+                    .inspect_err(|err| debug!(?err))
+            }?;
 
             let writer = ParquetWriterBuilder::new(
                 WriterProperties::default(),
                 table.metadata().current_schema().clone(),
                 table.file_io().clone(),
-                topition.clone(),
-                offset.clone(),
+                DefaultLocationGenerator::new(table.metadata().clone())?,
+                DefaultFileNameGenerator::new(
+                    topic.to_owned(),
+                    Some(format!("{partition:0>10}-{offset:0>20}")),
+                    Parquet,
+                ),
             );
 
-            let mut data_file_writer = DataFileWriterBuilder::new(
-                writer,
-                Some(Struct::from_iter([
-                    Some(Literal::Primitive(PrimitiveLiteral::Long(0))),
-                    Some(Literal::Primitive(PrimitiveLiteral::Long(0))),
-                    Some(Literal::Primitive(PrimitiveLiteral::Float(OrderedFloat(
-                        0.0,
-                    )))),
-                    Some(Literal::Primitive(PrimitiveLiteral::Double(OrderedFloat(
-                        0.0f64,
-                    )))),
-                    Some(Literal::Primitive(PrimitiveLiteral::Int(0))),
-                ])),
-                0,
-            )
-            .build()
-            .await?;
+            let mut data_file_writer =
+                DataFileWriterBuilder::new(writer, Some(partition_value(&iceberg_schema)), 0)
+                    .build()
+                    .await?;
 
             data_file_writer.write(record_batch).await?;
 
@@ -412,7 +410,7 @@ impl Registry {
 
             let commit_uuid = Uuid::now_v7();
             debug!(%commit_uuid);
-            let key_metadata = format!("{topition}/{offset}").into_bytes();
+            let key_metadata = format!("{topic}/{partition}/{offset}").into_bytes();
 
             let tx = Transaction::new(&table);
 
