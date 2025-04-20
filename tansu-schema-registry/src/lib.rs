@@ -27,10 +27,7 @@ use std::{
 use ::arrow::{datatypes::DataType, error::ArrowError, record_batch::RecordBatch};
 use berg::env_s3_props;
 use bytes::Bytes;
-use datafusion::{
-    error::DataFusionError,
-    parquet::{arrow::AsyncArrowWriter, errors::ParquetError},
-};
+use datafusion::error::DataFusionError;
 use iceberg::{
     Catalog, NamespaceIdent, TableCreation, TableIdent,
     spec::{
@@ -58,7 +55,7 @@ use opentelemetry::{
     metrics::{Counter, Histogram},
 };
 use opentelemetry_semantic_conventions::SCHEMA_URL;
-use parquet::file::properties::WriterProperties;
+use parquet::{arrow::AsyncArrowWriter, errors::ParquetError, file::properties::WriterProperties};
 use serde_json::Value;
 use tansu_kafka_sans_io::{ErrorCode, record::inflated::Batch};
 use tracing::{debug, error};
