@@ -19,14 +19,12 @@ use ::arrow::{
     array::{
         ArrayBuilder, BinaryBuilder, BooleanBuilder, Date32Builder, Decimal128Builder,
         Decimal256Builder, Float32Builder, Float64Builder, Int32Builder, Int64Builder, ListBuilder,
-        MapBuilder, NullBuilder, StringBuilder, StringDictionaryBuilder, StructBuilder,
-        Time32MillisecondBuilder, Time64MicrosecondBuilder, Time64NanosecondBuilder,
-        TimestampMicrosecondBuilder, TimestampMillisecondBuilder, TimestampNanosecondBuilder,
-        UInt32Builder,
+        MapBuilder, NullBuilder, StringBuilder, StructBuilder, Time32MillisecondBuilder,
+        Time64MicrosecondBuilder, Time64NanosecondBuilder, TimestampMicrosecondBuilder,
+        TimestampMillisecondBuilder, TimestampNanosecondBuilder, UInt32Builder,
     },
     datatypes::{
-        DataType, Field, FieldRef, Fields, Schema as ArrowSchema, TimeUnit, UInt32Type,
-        UnionFields, UnionMode,
+        DataType, Field, FieldRef, Fields, Schema as ArrowSchema, TimeUnit, UnionFields, UnionMode,
     },
     record_batch::RecordBatch,
 };
@@ -137,7 +135,7 @@ fn schema_data_type(schema: &AvroSchema) -> Result<DataType> {
         AvroSchema::Float => Ok(DataType::Float32),
         AvroSchema::Double => Ok(DataType::Float64),
         AvroSchema::Bytes => Ok(DataType::Binary),
-        AvroSchema::String => Ok(DataType::Utf8),
+        AvroSchema::String | AvroSchema::Enum(_) => Ok(DataType::Utf8),
 
         AvroSchema::Array(schema) => schema_data_type(&schema.items)
             .inspect(|item| debug!(?schema, ?item))
@@ -204,15 +202,6 @@ fn schema_data_type(schema: &AvroSchema) -> Result<DataType> {
                 .map(DataType::Struct)
         }
 
-        AvroSchema::Enum(schema) => {
-            debug!(?schema);
-
-            Ok(DataType::Dictionary(
-                Box::new(DataType::UInt32),
-                Box::new(DataType::Utf8),
-            ))
-        }
-
         AvroSchema::Fixed(schema) => i32::try_from(schema.size)
             .map(DataType::FixedSizeBinary)
             .map_err(Into::into),
@@ -271,7 +260,7 @@ fn schema_array_builder(schema: &AvroSchema) -> Result<Box<dyn ArrayBuilder>> {
         AvroSchema::Float => Ok(Box::new(Float32Builder::new())),
         AvroSchema::Double => Ok(Box::new(Float64Builder::new())),
         AvroSchema::Bytes => Ok(Box::new(BinaryBuilder::new())),
-        AvroSchema::String => Ok(Box::new(StringBuilder::new())),
+        AvroSchema::String | AvroSchema::Enum(_) => Ok(Box::new(StringBuilder::new())),
 
         AvroSchema::Array(schema) => schema_array_builder(&schema.items)
             .map(ListBuilder::new)
@@ -310,8 +299,6 @@ fn schema_array_builder(schema: &AvroSchema) -> Result<Box<dyn ArrayBuilder>> {
             })
             .map(|(fields, builders)| StructBuilder::new(fields, builders))
             .map(|builder| Box::new(builder) as Box<dyn ArrayBuilder>),
-
-        AvroSchema::Enum(_schema) => Ok(Box::new(StringDictionaryBuilder::<UInt32Type>::new())),
 
         AvroSchema::Fixed(_schema) => Ok(Box::new(BinaryBuilder::new())),
 
@@ -685,7 +672,8 @@ fn append_struct_builder(
                 .ok_or(Error::BadDowncast { field: name })
                 .map(|values| values.append_value(value))?,
 
-            (AvroSchema::String, Value::String(value)) => builder
+            (AvroSchema::String, Value::String(value))
+            | (AvroSchema::Enum(_), Value::Enum(_, value)) => builder
                 .field_builder::<StringBuilder>(index)
                 .ok_or(Error::BadDowncast { field: name })
                 .map(|values| values.append_value(value))?,
@@ -710,11 +698,6 @@ fn append_struct_builder(
                 .field_builder::<StructBuilder>(index)
                 .ok_or(Error::BadDowncast { field: name })
                 .and_then(|builder| append_struct_builder(schema, items, builder))?,
-
-            (AvroSchema::Enum(_), Value::Enum(_, symbol)) => builder
-                .field_builder::<StringDictionaryBuilder<UInt32Type>>(index)
-                .ok_or(Error::BadDowncast { field: name })
-                .map(|values| values.append_value(symbol))?,
 
             (AvroSchema::Fixed(_fixed_schema), _) => todo!(),
             (AvroSchema::Decimal(_decimal_schema), _) => todo!(),
@@ -815,21 +798,17 @@ fn append_value(
             .ok_or(Error::Downcast)
             .map(|builder| builder.append_null()),
 
-        (Some(AvroSchema::String), Value::Null) => column
-            .as_any_mut()
-            .downcast_mut::<StringBuilder>()
-            .ok_or(Error::Downcast)
-            .map(|builder| builder.append_null()),
+        (Some(AvroSchema::String), Value::Null) | (Some(AvroSchema::Enum(_)), Value::Null) => {
+            column
+                .as_any_mut()
+                .downcast_mut::<StringBuilder>()
+                .ok_or(Error::Downcast)
+                .map(|builder| builder.append_null())
+        }
 
         (Some(AvroSchema::Fixed(_)), Value::Null) => column
             .as_any_mut()
             .downcast_mut::<BinaryBuilder>()
-            .ok_or(Error::Downcast)
-            .map(|builder| builder.append_null()),
-
-        (Some(AvroSchema::Enum(_)), Value::Null) => column
-            .as_any_mut()
-            .downcast_mut::<StringDictionaryBuilder<UInt32Type>>()
             .ok_or(Error::Downcast)
             .map(|builder| builder.append_null()),
 
@@ -937,7 +916,7 @@ fn append_value(
             .ok_or(Error::Downcast)
             .map(|builder| builder.append_value(value)),
 
-        (_, Value::String(value)) => column
+        (_, Value::String(value)) | (Some(AvroSchema::Enum(_)), Value::Enum(_, value)) => column
             .as_any_mut()
             .downcast_mut::<StringBuilder>()
             .ok_or(Error::Downcast)
@@ -948,12 +927,6 @@ fn append_value(
             .downcast_mut::<BinaryBuilder>()
             .ok_or(Error::Downcast)
             .map(|builder| builder.append_value(value)),
-
-        (Some(AvroSchema::Enum(_)), Value::Enum(_, symbol)) => column
-            .as_any_mut()
-            .downcast_mut::<StringDictionaryBuilder<UInt32Type>>()
-            .ok_or(Error::Downcast)
-            .and_then(|builder| builder.append(symbol).and(Ok(())).map_err(Into::into)),
 
         (Some(AvroSchema::Union(schema)), Value::Union(_, value)) => {
             debug!(?schema, ?value);
