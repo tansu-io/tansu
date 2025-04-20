@@ -289,14 +289,14 @@ fn schema_array_builder(schema: &AvroSchema) -> Result<Box<dyn ArrayBuilder>> {
         AvroSchema::Record(schema) => schema
             .fields
             .iter()
-            .try_fold((vec![], vec![]), |(mut fields, mut builders), field| {
-                schema_data_type(&field.schema)
-                    .map(|data_type| {
-                        fields.push(Field::new(field.name.clone(), data_type, NULLABLE))
+            .map(|f| {
+                schema_data_type(&f.schema)
+                    .map(|data_type| Field::new(f.name.clone(), data_type, NULLABLE))
+                    .and_then(|field| {
+                        schema_array_builder(&f.schema).map(|builder| (field, builder))
                     })
-                    .and(schema_array_builder(&field.schema).map(|builder| builders.push(builder)))
-                    .map(|()| (fields, builders))
             })
+            .collect::<Result<(Vec<_>, Vec<_>)>>()
             .map(|(fields, builders)| StructBuilder::new(fields, builders))
             .map(|builder| Box::new(builder) as Box<dyn ArrayBuilder>),
 
