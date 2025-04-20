@@ -25,7 +25,7 @@ use std::{
 };
 
 use ::arrow::{datatypes::DataType, error::ArrowError, record_batch::RecordBatch};
-use berg::{env_s3_props, partition_value};
+use berg::env_s3_props;
 use bytes::Bytes;
 use datafusion::{
     error::DataFusionError,
@@ -34,7 +34,7 @@ use datafusion::{
 use iceberg::{
     Catalog, NamespaceIdent, TableCreation, TableIdent,
     spec::{
-        DataFileBuilderError, DataFileFormat::Parquet, Schema as IcebergSchema, Transform,
+        DataFileBuilderError, DataFileFormat::Parquet, Schema as IcebergSchema, Struct, Transform,
         UnboundPartitionField, UnboundPartitionSpec,
     },
     transaction::Transaction,
@@ -395,10 +395,15 @@ impl Registry {
                 ),
             );
 
-            let mut data_file_writer =
-                DataFileWriterBuilder::new(writer, Some(partition_value(&iceberg_schema)), 0)
-                    .build()
-                    .await?;
+            let mut data_file_writer = DataFileWriterBuilder::new(
+                writer,
+                Some(Struct::from_iter(
+                    iceberg_schema.as_struct().fields().iter().map(|_| None),
+                )),
+                0,
+            )
+            .build()
+            .await?;
 
             data_file_writer.write(record_batch).await?;
 

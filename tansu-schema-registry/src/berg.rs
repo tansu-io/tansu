@@ -15,11 +15,7 @@
 
 use std::env::vars;
 
-use iceberg::{
-    io::{S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY},
-    spec::{Literal, PrimitiveLiteral, PrimitiveType, Schema, Struct, Type},
-};
-use ordered_float::OrderedFloat;
+use iceberg::io::{S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY};
 
 pub fn env_mapping(k: &str) -> &str {
     match k {
@@ -40,40 +36,4 @@ pub fn env_s3_props() -> impl Iterator<Item = (String, String)> {
                 || k == "AWS_ENDPOINT"
         })
         .map(|(k, v)| (env_mapping(k.as_str()).to_owned(), v))
-}
-
-pub fn partition_value(schema: &Schema) -> Struct {
-    Struct::from_iter(schema.as_struct().fields().iter().map(|field| {
-        match field.as_ref().field_type.as_ref() {
-            Type::Primitive(primitive_type) => primitive_type_partition_value(primitive_type),
-            Type::Struct(_struct_type) => todo!(),
-            Type::List(_list_type) => todo!(),
-            Type::Map(_map_type) => todo!(),
-        }
-    }))
-}
-
-fn primitive_type_partition_value(primitive: &PrimitiveType) -> Option<Literal> {
-    match primitive {
-        PrimitiveType::Boolean => todo!(),
-        PrimitiveType::Int => Some(Literal::Primitive(PrimitiveLiteral::Int(0))),
-        PrimitiveType::Long => Some(Literal::Primitive(PrimitiveLiteral::Long(0))),
-        PrimitiveType::Float => Some(Literal::Primitive(PrimitiveLiteral::Float(OrderedFloat(
-            0.0,
-        )))),
-        PrimitiveType::Double => Some(Literal::Primitive(PrimitiveLiteral::Double(OrderedFloat(
-            0.0f64,
-        )))),
-        PrimitiveType::Decimal { .. } => todo!(),
-        PrimitiveType::Date => todo!(),
-        PrimitiveType::Time => todo!(),
-        PrimitiveType::Timestamp => todo!(),
-        PrimitiveType::Timestamptz => todo!(),
-        PrimitiveType::TimestampNs => todo!(),
-        PrimitiveType::TimestamptzNs => todo!(),
-        PrimitiveType::String => todo!(),
-        PrimitiveType::Uuid => todo!(),
-        PrimitiveType::Fixed(_) => todo!(),
-        PrimitiveType::Binary => todo!(),
-    }
 }
