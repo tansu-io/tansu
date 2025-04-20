@@ -347,7 +347,7 @@ fn schema_array_builder(schema: &AvroSchema) -> Result<Box<dyn ArrayBuilder>> {
 impl TryFrom<&Schema> for RecordBuilder {
     type Error = Error;
 
-    fn try_from(value: &Schema) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: &Schema) -> Result<Self, Self::Error> {
         let mut keys = vec![];
 
         if let Some(ref schema) = value.key {
