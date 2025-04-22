@@ -30,10 +30,7 @@ use bytes::Bytes;
 use datafusion::error::DataFusionError;
 use iceberg::{
     Catalog, NamespaceIdent, TableCreation, TableIdent,
-    spec::{
-        DataFileBuilderError, DataFileFormat::Parquet, Schema as IcebergSchema, Struct, Transform,
-        UnboundPartitionField, UnboundPartitionSpec,
-    },
+    spec::{DataFileBuilderError, DataFileFormat::Parquet, Schema as IcebergSchema},
     transaction::Transaction,
     writer::{
         IcebergWriter, IcebergWriterBuilder,
@@ -344,19 +341,6 @@ impl Registry {
                 .inspect(|schema| debug!(?schema))
                 .inspect_err(|err| debug!(?err))?;
 
-            let partition_spec = UnboundPartitionSpec::builder()
-                .add_partition_fields(record_batch.schema().fields().iter().enumerate().map(
-                    |(id, field)| {
-                        UnboundPartitionField::builder()
-                            .source_id(id as i32 + 1)
-                            .name(field.name().into())
-                            .transform(Transform::Identity)
-                            .build()
-                    },
-                ))
-                .map(|spec| spec.build())
-                .and_then(|spec| spec.bind(iceberg_schema.clone()))?;
-
             let table = if catalog
                 .table_exists(&TableIdent::new(namespace_ident.clone(), topic.into()))
                 .await?
@@ -372,7 +356,6 @@ impl Registry {
                         TableCreation::builder()
                             .name(topic.into())
                             .schema(iceberg_schema.clone())
-                            .partition_spec(partition_spec)
                             .build(),
                     )
                     .await
@@ -392,15 +375,7 @@ impl Registry {
                 ),
             );
 
-            let mut data_file_writer = DataFileWriterBuilder::new(
-                writer,
-                Some(Struct::from_iter(
-                    iceberg_schema.as_struct().fields().iter().map(|_| None),
-                )),
-                0,
-            )
-            .build()
-            .await?;
+            let mut data_file_writer = DataFileWriterBuilder::new(writer, None, 0).build().await?;
 
             data_file_writer.write(record_batch).await?;
 

@@ -15,7 +15,7 @@
 
 use std::{collections::HashMap, io::Write, ops::Deref};
 
-use crate::{AsArrow, AsJsonValue, AsKafkaRecord, Error, Result, Validator, arrow::RecordBuilder};
+use crate::{AsArrow, AsJsonValue, AsKafkaRecord, Error, Result, Validator};
 use ::arrow::{
     array::{
         ArrayBuilder, BinaryBuilder, BooleanBuilder, Float32Builder, Float64Builder, Int32Builder,
@@ -45,6 +45,12 @@ const SORTED_MAP_KEYS: bool = false;
 
 const KEY: &str = "Key";
 const VALUE: &str = "Value";
+
+#[derive(Default)]
+struct RecordBuilder {
+    keys: Vec<Box<dyn ArrayBuilder>>,
+    values: Vec<Box<dyn ArrayBuilder>>,
+}
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Schema {
@@ -135,10 +141,7 @@ fn message_descriptor_to_fields(descriptor: &MessageDescriptor) -> Vec<Field> {
                     runtime_type_to_data_type(singular),
                     !field.is_required(),
                 )
-                .with_metadata(HashMap::from([(
-                    PARQUET_FIELD_ID_META_KEY.to_string(),
-                    field.number().to_string(),
-                )]))
+                .with_metadata(HashMap::from([parquet_field_id(field.number())]))
             }
 
             RuntimeFieldType::Repeated(ref repeated) => {
@@ -153,10 +156,7 @@ fn message_descriptor_to_fields(descriptor: &MessageDescriptor) -> Vec<Field> {
                     DataType::new_list(runtime_type_to_data_type(repeated), NULLABLE),
                     !field.is_required(),
                 )
-                .with_metadata(HashMap::from([(
-                    PARQUET_FIELD_ID_META_KEY.to_string(),
-                    field.number().to_string(),
-                )]))
+                .with_metadata(HashMap::from([parquet_field_id(field.number())]))
             }
 
             RuntimeFieldType::Map(ref key, ref value) => {
@@ -181,10 +181,7 @@ fn message_descriptor_to_fields(descriptor: &MessageDescriptor) -> Vec<Field> {
                     DataType::Map(children, SORTED_MAP_KEYS),
                     NULLABLE,
                 )
-                .with_metadata(HashMap::from([(
-                    PARQUET_FIELD_ID_META_KEY.to_string(),
-                    field.number().to_string(),
-                )]))
+                .with_metadata(HashMap::from([parquet_field_id(field.number())]))
             }
         })
         .collect::<Vec<_>>()
@@ -220,10 +217,7 @@ fn runtime_type_to_array_builder(runtime_type: &RuntimeType) -> Box<dyn ArrayBui
                                 runtime_type_to_data_type(singular),
                                 !field.is_required(),
                             )
-                            .with_metadata(HashMap::from([(
-                                PARQUET_FIELD_ID_META_KEY.to_string(),
-                                field.number().to_string(),
-                            )])),
+                            .with_metadata(HashMap::from([parquet_field_id(field.number())])),
                             runtime_type_to_array_builder(singular),
                         )
                     }
@@ -241,10 +235,7 @@ fn runtime_type_to_array_builder(runtime_type: &RuntimeType) -> Box<dyn ArrayBui
                                 DataType::new_list(runtime_type_to_data_type(repeated), NULLABLE),
                                 !field.is_required(),
                             )
-                            .with_metadata(HashMap::from([(
-                                PARQUET_FIELD_ID_META_KEY.to_string(),
-                                field.number().to_string(),
-                            )])),
+                            .with_metadata(HashMap::from([parquet_field_id(field.number())])),
                             Box::new(ListBuilder::new(runtime_type_to_array_builder(repeated)))
                                 as Box<dyn ArrayBuilder>,
                         )
@@ -273,10 +264,7 @@ fn runtime_type_to_array_builder(runtime_type: &RuntimeType) -> Box<dyn ArrayBui
                                 DataType::Map(children, SORTED_MAP_KEYS),
                                 NULLABLE,
                             )
-                            .with_metadata(HashMap::from([(
-                                PARQUET_FIELD_ID_META_KEY.to_string(),
-                                field.number().to_string(),
-                            )])),
+                            .with_metadata(HashMap::from([parquet_field_id(field.number())])),
                             Box::new(MapBuilder::new(
                                 None,
                                 runtime_type_to_array_builder(key),
@@ -1097,6 +1085,10 @@ impl AsJsonValue for Schema {
                 .collect::<Vec<_>>(),
         ))
     }
+}
+
+pub(crate) fn parquet_field_id(id: i32) -> (String, String) {
+    (PARQUET_FIELD_ID_META_KEY.to_string(), id.to_string())
 }
 
 #[cfg(test)]

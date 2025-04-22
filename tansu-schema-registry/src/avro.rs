@@ -36,18 +36,23 @@ use apache_avro::{
 use bytes::Bytes;
 use chrono::NaiveDateTime;
 use num_bigint::BigInt;
+use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use serde_json::{Map, Number, Value as JsonValue};
 use tansu_kafka_sans_io::{ErrorCode, record::inflated::Batch};
 use tracing::{debug, error, info};
 use uuid::Uuid;
 
-use crate::{AsArrow, AsJsonValue, AsKafkaRecord, Error, Result, Validator, arrow::RecordBuilder};
+use crate::{AsArrow, AsJsonValue, AsKafkaRecord, Error, Result, Validator};
 
 const NULLABLE: bool = true;
 const SORTED_MAP_KEYS: bool = false;
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Default)]
+struct RecordBuilder(Vec<Box<dyn ArrayBuilder>>);
+
+#[derive(Clone, Debug, Default)]
 pub struct Schema {
+    complete: Option<RecordSchema>,
     key: Option<AvroSchema>,
     value: Option<AvroSchema>,
 }
@@ -73,10 +78,24 @@ impl From<&JsonValue> for Schema {
             .inspect(|fields| debug!(?fields))
             .map_or(
                 Self {
+                    complete: None,
                     key: None,
                     value: None,
                 },
                 |fields| Self {
+                    complete: AvroSchema::parse(schema)
+                        .inspect_err(|err| error!(?err, ?schema))
+                        .ok()
+                        .and_then(|schema| match schema {
+                            AvroSchema::Record(mut inner) => {
+                                decorate_with_field_id(&mut inner);
+                                Some(inner)
+                            }
+
+                            _otherwise => None,
+                        })
+                        .inspect(|schema| debug!(?schema)),
+
                     key: fields
                         .iter()
                         .find(|field| field.get("name").is_some_and(|name| name == "key"))
@@ -98,6 +117,33 @@ impl From<&JsonValue> for Schema {
                         }),
                 },
             )
+    }
+}
+
+#[derive(Copy, Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+struct FieldId(i32);
+
+impl FieldId {
+    fn incr(&mut self) -> i32 {
+        self.0 += 1;
+        self.0
+    }
+}
+
+fn decorate_with_field_id(schema: &mut RecordSchema) {
+    decorate(&mut FieldId::default(), schema)
+}
+
+fn decorate(field_id: &mut FieldId, schema: &mut RecordSchema) {
+    for field in schema.fields.iter_mut() {
+        _ = field.custom_attributes.insert(
+            PARQUET_FIELD_ID_META_KEY.into(),
+            JsonValue::Number(Number::from(field_id.incr())),
+        );
+
+        if let AvroSchema::Record(inner) = &mut field.schema {
+            decorate(field_id, inner)
+        }
     }
 }
 
@@ -194,8 +240,16 @@ fn schema_data_type(schema: &AvroSchema) -> Result<DataType> {
                 .fields
                 .iter()
                 .map(|field| {
-                    schema_data_type(&field.schema)
-                        .map(|data_type| Field::new(field.name.clone(), data_type, NULLABLE))
+                    schema_data_type(&field.schema).map(|data_type| {
+                        Field::new(field.name.clone(), data_type, NULLABLE).with_metadata(
+                            field
+                                .custom_attributes
+                                .get(PARQUET_FIELD_ID_META_KEY)
+                                .map(parquet_field_id)
+                                .into_iter()
+                                .collect(),
+                        )
+                    })
                 })
                 .collect::<Result<Vec<_>>>()
                 .map(Fields::from)
@@ -252,6 +306,7 @@ fn schema_data_type(schema: &AvroSchema) -> Result<DataType> {
 }
 
 fn schema_array_builder(schema: &AvroSchema) -> Result<Box<dyn ArrayBuilder>> {
+    debug!(?schema);
     match schema {
         AvroSchema::Null => Ok(Box::new(NullBuilder::new())),
         AvroSchema::Boolean => Ok(Box::new(BooleanBuilder::new())),
@@ -277,8 +332,6 @@ fn schema_array_builder(schema: &AvroSchema) -> Result<Box<dyn ArrayBuilder>> {
             .map(|builder| Box::new(builder) as Box<dyn ArrayBuilder>),
 
         AvroSchema::Union(schema) => {
-            debug!(?schema);
-
             if let Some(schema) = schema.nullable_variant() {
                 schema_array_builder(schema)
             } else {
@@ -289,11 +342,20 @@ fn schema_array_builder(schema: &AvroSchema) -> Result<Box<dyn ArrayBuilder>> {
         AvroSchema::Record(schema) => schema
             .fields
             .iter()
-            .map(|f| {
-                schema_data_type(&f.schema)
-                    .map(|data_type| Field::new(f.name.clone(), data_type, NULLABLE))
+            .map(|record_field| {
+                schema_data_type(&record_field.schema)
+                    .map(|data_type| {
+                        Field::new(record_field.name.clone(), data_type, NULLABLE).with_metadata(
+                            record_field
+                                .custom_attributes
+                                .get(PARQUET_FIELD_ID_META_KEY)
+                                .map(parquet_field_id)
+                                .into_iter()
+                                .collect(),
+                        )
+                    })
                     .and_then(|field| {
-                        schema_array_builder(&f.schema).map(|builder| (field, builder))
+                        schema_array_builder(&record_field.schema).map(|builder| (field, builder))
                     })
             })
             .collect::<Result<(Vec<_>, Vec<_>)>>()
@@ -347,20 +409,21 @@ fn schema_array_builder(schema: &AvroSchema) -> Result<Box<dyn ArrayBuilder>> {
 impl TryFrom<&Schema> for RecordBuilder {
     type Error = Error;
 
-    fn try_from(value: &Schema) -> Result<Self, Self::Error> {
-        let mut keys = vec![];
+    fn try_from(schema: &Schema) -> Result<Self, Self::Error> {
+        debug!(?schema);
 
-        if let Some(ref schema) = value.key {
-            keys.push(schema_array_builder(schema)?);
-        }
-
-        let mut values = vec![];
-
-        if let Some(ref schema) = value.value {
-            values.push(schema_array_builder(schema)?)
-        }
-
-        Ok(Self { keys, values })
+        schema
+            .complete
+            .as_ref()
+            .map_or(Ok(vec![]), |complete| {
+                complete
+                    .fields
+                    .iter()
+                    .inspect(|field| debug!(?field))
+                    .map(|field| schema_array_builder(&field.schema))
+                    .collect::<Result<Vec<_>>>()
+            })
+            .map(Self)
     }
 }
 
@@ -383,7 +446,6 @@ try_as!(try_as_f32, Value::Float, f32);
 try_as!(try_as_f64, Value::Double, f64);
 try_as!(try_as_bytes, Value::Bytes, Vec<u8>);
 try_as!(try_as_string, Value::String, String);
-// try_as!(try_as_map, Value::Map, HashMap<String, Value>);
 try_as!(try_as_record, Value::Record, Vec<(String, Value)>);
 
 fn append_list_builder(
@@ -1024,14 +1086,16 @@ fn append_value(
     }
 }
 
-fn process(
+fn process<'a, T>(
     schema: Option<&AvroSchema>,
     encoded: Option<Bytes>,
-    builders: &mut Vec<Box<dyn ArrayBuilder>>,
-) -> Result<()> {
+    builders: &mut T,
+) -> Result<()>
+where
+    T: Iterator<Item = &'a mut Box<dyn ArrayBuilder>>,
+{
     schema.map_or(Ok(()), |schema| {
         builders
-            .iter_mut()
             .next()
             .ok_or(Error::BuilderExhausted)
             .and_then(|builder| {
@@ -1059,41 +1123,26 @@ impl AsArrow for Schema {
 
         let mut record_builder = RecordBuilder::try_from(self)?;
 
-        debug!(
-            keys = record_builder.keys.len(),
-            values = record_builder.values.len()
-        );
-
         for record in &batch.records {
             debug!(?record);
+            let mut builders = record_builder.0.iter_mut();
 
-            process(
-                self.key.as_ref(),
-                record.key.clone(),
-                &mut record_builder.keys,
-            )?;
+            process(self.key.as_ref(), record.key.clone(), &mut builders)?;
 
-            process(
-                self.value.as_ref(),
-                record.value.clone(),
-                &mut record_builder.values,
-            )?;
+            process(self.value.as_ref(), record.value.clone(), &mut builders)?;
         }
 
         debug!(
-            key_rows = ?record_builder.keys.iter().map(|rows| rows.len()).collect::<Vec<_>>(),
-            value_rows = ?record_builder.values.iter().map(|rows| rows.len()).collect::<Vec<_>>()
+            rows = ?record_builder.0.iter().map(|rows| rows.len()).collect::<Vec<_>>(),
         );
-
-        let mut columns = vec![];
-        columns.append(&mut record_builder.keys);
-        columns.append(&mut record_builder.values);
-
-        debug!(columns = columns.len());
 
         RecordBatch::try_new(
             schema.into(),
-            columns.iter_mut().map(|builder| builder.finish()).collect(),
+            record_builder
+                .0
+                .iter_mut()
+                .map(|builder| builder.finish())
+                .collect(),
         )
         .map_err(Into::into)
     }
@@ -1103,33 +1152,29 @@ impl TryFrom<&Schema> for Fields {
     type Error = Error;
 
     fn try_from(schema: &Schema) -> Result<Self, Self::Error> {
-        let mut fields = vec![];
-
-        if let Some(ref schema) = schema.key {
-            schema_data_type(schema)
-                .map(|data_type| {
-                    Field::new(
-                        schema.name().map_or("key", |name| name.name.as_str()),
-                        data_type,
-                        NULLABLE,
-                    )
-                })
-                .map(|field| fields.push(field))?;
-        }
-
-        if let Some(ref schema) = schema.value {
-            schema_data_type(schema)
-                .map(|data_type| {
-                    Field::new(
-                        schema.name().map_or("value", |name| name.name.as_str()),
-                        data_type,
-                        NULLABLE,
-                    )
-                })
-                .map(|field| fields.push(field))?;
-        }
-
-        Ok(fields.into())
+        schema
+            .complete
+            .as_ref()
+            .map_or(Ok(vec![]), |complete| {
+                complete
+                    .fields
+                    .iter()
+                    .inspect(|field| debug!(?field))
+                    .map(|field| {
+                        schema_data_type(&field.schema).map(|data_type| {
+                            Field::new(field.name.clone(), data_type, NULLABLE).with_metadata(
+                                field
+                                    .custom_attributes
+                                    .get(PARQUET_FIELD_ID_META_KEY)
+                                    .map(parquet_field_id)
+                                    .into_iter()
+                                    .collect(),
+                            )
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()
+            })
+            .map(Into::into)
     }
 }
 
@@ -1441,6 +1486,10 @@ impl AsJsonValue for Schema {
                 .collect::<Vec<_>>(),
         ))
     }
+}
+
+fn parquet_field_id(id: &JsonValue) -> (String, String) {
+    (PARQUET_FIELD_ID_META_KEY.to_string(), id.to_string())
 }
 
 #[cfg(test)]
@@ -2151,6 +2200,7 @@ mod tests {
         };
 
         let record_batch = schema.as_arrow(&batch)?;
+        debug!(?record_batch);
 
         let ctx = SessionContext::new();
 
