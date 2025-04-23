@@ -19,7 +19,7 @@ use crate::{AsArrow, AsJsonValue, AsKafkaRecord, Error, Result, Validator};
 use arrow::{
     array::{
         ArrayBuilder, BooleanBuilder, Float64Builder, Int64Builder, ListBuilder, NullBuilder,
-        StringBuilder, StructBuilder, UInt64Builder,
+        StringBuilder, StructBuilder,
     },
     datatypes::{DataType, Field, Fields, Schema as ArrowSchema},
     record_batch::RecordBatch,
@@ -115,7 +115,7 @@ fn data_type_builder(data_type: &DataType) -> Box<dyn ArrayBuilder> {
     match data_type {
         DataType::Null => Box::new(NullBuilder::new()),
         DataType::Boolean => Box::new(BooleanBuilder::new()),
-        DataType::UInt64 => Box::new(UInt64Builder::new()),
+        DataType::UInt64 => Box::new(Int64Builder::new()),
         DataType::Int64 => Box::new(Int64Builder::new()),
         DataType::Float64 => Box::new(Float64Builder::new()),
         DataType::Utf8 => Box::new(StringBuilder::new()),
@@ -158,9 +158,7 @@ fn data_type(value: &Value) -> Result<DataType> {
         Value::Null => Ok(DataType::Null),
         Value::Bool(_) => Ok(DataType::Boolean),
         Value::Number(value) => {
-            if value.is_u64() {
-                Ok(DataType::UInt64)
-            } else if value.is_i64() {
+            if value.is_i64() | value.is_u64() {
                 Ok(DataType::Int64)
             } else {
                 Ok(DataType::Float64)
@@ -200,12 +198,12 @@ fn append_list_builder(
                 .ok_or(Error::Downcast)
                 .map(|builder| builder.append_value(value))?,
 
-            (DataType::UInt64, Value::Number(value)) if value.is_u64() => values
-                .downcast_mut::<UInt64Builder>()
+            (DataType::Int64, Value::Number(value)) if value.is_u64() => values
+                .downcast_mut::<Int64Builder>()
                 .ok_or(Error::Downcast)
                 .map(|builder| {
                     if let Some(value) = value.as_u64() {
-                        builder.append_value(value)
+                        builder.append_value(value as i64)
                     } else {
                         builder.append_null()
                     }
@@ -287,12 +285,12 @@ fn append_struct_builder(
                     .map(|builder| builder.append_value(value))
                     .inspect_err(|err| error!(?err))?,
 
-                (DataType::UInt64, Value::Number(value)) if value.is_u64() => builder
-                    .field_builder::<UInt64Builder>(index)
+                (DataType::Int64, Value::Number(value)) if value.is_u64() => builder
+                    .field_builder::<Int64Builder>(index)
                     .ok_or(Error::Downcast)
                     .map(|builder| {
                         if let Some(value) = value.as_u64() {
-                            builder.append_value(value)
+                            builder.append_value(value as i64)
                         } else {
                             builder.append_null()
                         }
@@ -368,13 +366,13 @@ fn append(field: &Field, value: Value, builder: &mut dyn ArrayBuilder) -> Result
             .ok_or(Error::Downcast)
             .map(|builder| builder.append_value(value)),
 
-        (DataType::UInt64, Value::Number(value)) if value.is_u64() => builder
+        (DataType::Int64, Value::Number(value)) if value.is_u64() => builder
             .as_any_mut()
-            .downcast_mut::<UInt64Builder>()
+            .downcast_mut::<Int64Builder>()
             .ok_or(Error::Downcast)
             .map(|builder| {
                 if let Some(value) = value.as_u64() {
-                    builder.append_value(value)
+                    builder.append_value(value as i64)
                 } else {
                     builder.append_null()
                 }
