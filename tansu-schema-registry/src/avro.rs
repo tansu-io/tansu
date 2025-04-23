@@ -15,7 +15,12 @@
 
 use std::{collections::HashMap, iter::zip};
 
-use ::arrow::{
+use apache_avro::{
+    Reader,
+    schema::{ArraySchema, MapSchema, RecordSchema, Schema as AvroSchema, UnionSchema},
+    types::Value,
+};
+use arrow::{
     array::{
         ArrayBuilder, BinaryBuilder, BooleanBuilder, Date32Builder, Decimal128Builder,
         Decimal256Builder, Float32Builder, Float64Builder, Int32Builder, Int64Builder, ListBuilder,
@@ -27,11 +32,6 @@ use ::arrow::{
         DataType, Field, FieldRef, Fields, Schema as ArrowSchema, TimeUnit, UnionFields, UnionMode,
     },
     record_batch::RecordBatch,
-};
-use apache_avro::{
-    Reader,
-    schema::{ArraySchema, MapSchema, RecordSchema, Schema as AvroSchema, UnionSchema},
-    types::Value,
 };
 use bytes::Bytes;
 use chrono::NaiveDateTime;

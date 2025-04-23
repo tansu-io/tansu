@@ -24,7 +24,7 @@ use std::{
     time::SystemTime,
 };
 
-use ::arrow::{datatypes::DataType, error::ArrowError, record_batch::RecordBatch};
+use arrow::{datatypes::DataType, error::ArrowError, record_batch::RecordBatch};
 use berg::env_s3_props;
 use bytes::Bytes;
 use datafusion::error::DataFusionError;
@@ -62,7 +62,6 @@ use url::Url;
 use tracing_subscriber::filter::ParseError;
 use uuid::Uuid;
 
-mod arrow;
 mod avro;
 mod berg;
 mod json;

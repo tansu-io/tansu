@@ -16,7 +16,7 @@
 use std::{collections::HashMap, io::Write, ops::Deref};
 
 use crate::{AsArrow, AsJsonValue, AsKafkaRecord, Error, Result, Validator};
-use ::arrow::{
+use arrow::{
     array::{
         ArrayBuilder, BinaryBuilder, BooleanBuilder, Float32Builder, Float64Builder, Int32Builder,
         Int64Builder, ListBuilder, MapBuilder, StringBuilder, StructBuilder, UInt32Builder,

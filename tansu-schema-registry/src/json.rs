@@ -16,7 +16,7 @@
 use std::{any::type_name_of_val, sync::Arc};
 
 use crate::{AsArrow, AsJsonValue, AsKafkaRecord, Error, Result, Validator};
-use ::arrow::{
+use arrow::{
     array::{
         ArrayBuilder, BooleanBuilder, Float64Builder, Int64Builder, ListBuilder, NullBuilder,
         StringBuilder, StructBuilder, UInt64Builder,
