@@ -13,7 +13,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::{any::type_name_of_val, sync::Arc};
+use std::{any::type_name_of_val, collections::HashMap, sync::Arc};
 
 use crate::{AsArrow, AsJsonValue, AsKafkaRecord, Error, Result, Validator};
 use arrow::{
@@ -25,14 +25,18 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use bytes::Bytes;
+use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use serde_json::{Map, Value};
 use tansu_kafka_sans_io::{ErrorCode, record::inflated::Batch};
 use tracing::{debug, error, warn};
+
+const NULLABLE: bool = true;
 
 #[derive(Debug, Default)]
 pub struct Schema {
     key: Option<jsonschema::Validator>,
     value: Option<jsonschema::Validator>,
+    ids: HashMap<String, i32>,
 }
 
 fn validate(validator: Option<&jsonschema::Validator>, encoded: Option<Bytes>) -> Result<()> {
@@ -70,6 +74,7 @@ impl TryFrom<Bytes> for Schema {
                     Self {
                         key: None,
                         value: None,
+                        ids: HashMap::new(),
                     },
                     |properties| Self {
                         key: properties
@@ -79,6 +84,8 @@ impl TryFrom<Bytes> for Schema {
                         value: properties
                             .get("value")
                             .and_then(|schema| jsonschema::validator_for(schema).ok()),
+
+                        ids: field_ids(&schema),
                     },
                 )
             })
@@ -111,6 +118,80 @@ struct Record {
     value: Option<Value>,
 }
 
+impl Schema {
+    fn new_field(&self, path: &[&str], name: &str, data_type: DataType) -> Field {
+        debug!(?path, name, ?data_type);
+
+        let path = {
+            let mut path = Vec::from(path);
+            path.push(name);
+            path.join(".")
+        };
+
+        Field::new(name.to_owned(), data_type, NULLABLE).with_metadata(
+            self.ids
+                .get(path.as_str())
+                .map(|field_id| (PARQUET_FIELD_ID_META_KEY.to_string(), field_id.to_string()))
+                .into_iter()
+                .collect(),
+        )
+    }
+
+    fn data_type(&self, path: &[&str], value: &Value) -> Result<DataType> {
+        match value {
+            Value::Null => Ok(DataType::Null),
+            Value::Bool(_) => Ok(DataType::Boolean),
+            Value::Number(value) => {
+                if value.is_i64() | value.is_u64() {
+                    Ok(DataType::Int64)
+                } else {
+                    Ok(DataType::Float64)
+                }
+            }
+            Value::String(_) => Ok(DataType::Utf8),
+            Value::Array(values) => self
+                .common_data_type(path, values)
+                .map(|data_type| DataType::new_list(data_type, NULLABLE)),
+            Value::Object(object) => object
+                .iter()
+                .map(|(k, v)| {
+                    let child_path = {
+                        let mut path = Vec::from(path);
+                        path.push(k.as_str());
+                        path
+                    };
+
+                    self.data_type(&child_path[..], v)
+                        .map(|data_type| self.new_field(path, k, data_type))
+                })
+                .collect::<Result<Vec<_>>>()
+                .map(Fields::from)
+                .map(DataType::Struct),
+        }
+        .inspect(|data_type| debug!(?value, ?data_type))
+        .inspect_err(|err| error!(?err, ?value))
+    }
+
+    fn common_data_type(&self, path: &[&str], values: &[Value]) -> Result<DataType> {
+        values
+            .iter()
+            .map(|value| self.data_type(path, value))
+            .collect::<Result<Vec<_>>>()
+            .map(sort_dedup)
+            .and_then(|mut data_types| {
+                if data_types.len() > 1 {
+                    Err(Error::NoCommonType(data_types))
+                } else if let Some(data_type) = data_types.pop() {
+                    Ok(data_type)
+                } else {
+                    Ok(DataType::Null)
+                }
+            })
+            .inspect(|data_type| debug!(?values, ?data_type))
+            .inspect_err(|err| error!(?err, ?values))
+    }
+}
+
 fn data_type_builder(data_type: &DataType) -> Box<dyn ArrayBuilder> {
     match data_type {
         DataType::Null => Box::new(NullBuilder::new()),
@@ -132,51 +213,6 @@ fn data_type_builder(data_type: &DataType) -> Box<dyn ArrayBuilder> {
 
         _ => unimplemented!("unexpected: {}", type_name_of_val(data_type)),
     }
-}
-
-fn common_data_type(values: &[Value]) -> Result<DataType> {
-    values
-        .iter()
-        .map(data_type)
-        .collect::<Result<Vec<_>>>()
-        .map(sort_dedup)
-        .and_then(|mut data_types| {
-            if data_types.len() > 1 {
-                Err(Error::NoCommonType(data_types))
-            } else if let Some(data_type) = data_types.pop() {
-                Ok(data_type)
-            } else {
-                Ok(DataType::Null)
-            }
-        })
-        .inspect(|data_type| debug!(?values, ?data_type))
-        .inspect_err(|err| error!(?err, ?values))
-}
-
-fn data_type(value: &Value) -> Result<DataType> {
-    match value {
-        Value::Null => Ok(DataType::Null),
-        Value::Bool(_) => Ok(DataType::Boolean),
-        Value::Number(value) => {
-            if value.is_i64() | value.is_u64() {
-                Ok(DataType::Int64)
-            } else {
-                Ok(DataType::Float64)
-            }
-        }
-        Value::String(_) => Ok(DataType::Utf8),
-        Value::Array(values) => {
-            common_data_type(values).map(|data_type| DataType::new_list(data_type, true))
-        }
-        Value::Object(object) => object
-            .iter()
-            .map(|(k, v)| data_type(v).map(|data_type| Field::new(k.to_owned(), data_type, true)))
-            .collect::<Result<Vec<_>>>()
-            .map(Fields::from)
-            .map(DataType::Struct),
-    }
-    .inspect(|data_type| debug!(?value, ?data_type))
-    .inspect_err(|err| error!(?err, ?value))
 }
 
 fn append_list_builder(
@@ -453,13 +489,13 @@ impl AsArrow for Schema {
                 if values.is_empty() {
                     Ok(None)
                 } else {
-                    common_data_type(values.as_slice()).map(Some)
+                    self.common_data_type(&["key"], values.as_slice()).map(Some)
                 }
             })
             .inspect(|data_type| debug!(?data_type))?
         {
             builders.push(data_type_builder(&data_type));
-            fields.push(Field::new("key", data_type, true))
+            fields.push(self.new_field(&[], "key", data_type))
         };
 
         if let Some(data_type) = batch
@@ -478,13 +514,14 @@ impl AsArrow for Schema {
                 if values.is_empty() {
                     Ok(None)
                 } else {
-                    common_data_type(values.as_slice()).map(Some)
+                    self.common_data_type(&["value"], values.as_slice())
+                        .map(Some)
                 }
             })
             .inspect(|data_type| debug!(?data_type))?
         {
             builders.push(data_type_builder(&data_type));
-            fields.push(Field::new("value", data_type, true))
+            fields.push(self.new_field(&[], "value", data_type))
         };
 
         for kv in batch
@@ -567,6 +604,40 @@ impl AsJsonValue for Schema {
     }
 }
 
+fn field_ids(schema: &Value) -> HashMap<String, i32> {
+    let mut id = 0;
+    field_ids_with_path(&[], schema, &mut id)
+}
+
+fn field_ids_with_path(path: &[&str], schema: &Value, id: &mut i32) -> HashMap<String, i32> {
+    debug!(?path, ?schema, id);
+
+    let mut m = HashMap::new();
+
+    if let Some(kv) = schema.as_object() {
+        if let Some("object") = kv.get("type").and_then(|r#type| r#type.as_str()) {
+            if let Some(properties) = kv
+                .get("properties")
+                .and_then(|properties| properties.as_object())
+            {
+                for (k, v) in properties {
+                    let mut path = Vec::from(path);
+                    path.push(k);
+
+                    m.insert(path.join("."), *id);
+                    *id += 1;
+
+                    if let Some("object") = v.get("type").and_then(|r#type| r#type.as_str()) {
+                        m.extend(field_ids_with_path(&path[..], v, id).into_iter());
+                    }
+                }
+            }
+        }
+    }
+
+    m
+}
+
 #[cfg(test)]
 mod tests {
     use crate::Registry;
@@ -604,6 +675,37 @@ mod tests {
                 )
                 .finish(),
         ))
+    }
+
+    #[test]
+    fn assign_field_id() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "number"
+                },
+                "value": {
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                        },
+                        "email": {
+                            "type": "string",
+                            "format": "email"
+                        }
+                    }
+                }
+            }
+        });
+
+        let ids = field_ids(&schema);
+
+        assert_eq!(Some(&0), ids.get("key"));
+        assert_eq!(Some(&1), ids.get("value"));
+        assert_eq!(Some(&3), ids.get("value.name"));
+        assert_eq!(Some(&2), ids.get("value.email"));
     }
 
     #[tokio::test]

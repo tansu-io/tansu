@@ -374,9 +374,15 @@ impl Registry {
                 ),
             );
 
-            let mut data_file_writer = DataFileWriterBuilder::new(writer, None, 0).build().await?;
+            let mut data_file_writer = DataFileWriterBuilder::new(writer, None, 0)
+                .build()
+                .await
+                .inspect_err(|err| error!(?err))?;
 
-            data_file_writer.write(record_batch).await?;
+            data_file_writer
+                .write(record_batch)
+                .await
+                .inspect_err(|err| debug!(?err))?;
 
             let data_files = data_file_writer
                 .close()
