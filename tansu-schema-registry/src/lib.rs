@@ -67,6 +67,8 @@ mod berg;
 mod json;
 mod proto;
 
+pub(crate) const ARROW_LIST_FIELD_NAME: &str = "element";
+
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
     #[error("{:?}", self)]

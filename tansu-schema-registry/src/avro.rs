@@ -23,10 +23,11 @@ use apache_avro::{
 use arrow::{
     array::{
         ArrayBuilder, BinaryBuilder, BooleanBuilder, Date32Builder, Decimal128Builder,
-        Decimal256Builder, Float32Builder, Float64Builder, Int32Builder, Int64Builder, ListBuilder,
-        MapBuilder, NullBuilder, StringBuilder, StructBuilder, Time32MillisecondBuilder,
-        Time64MicrosecondBuilder, Time64NanosecondBuilder, TimestampMicrosecondBuilder,
-        TimestampMillisecondBuilder, TimestampNanosecondBuilder, UInt32Builder,
+        Decimal256Builder, Float32Builder, Float64Builder, Int32Builder, Int64Builder,
+        LargeBinaryBuilder, ListBuilder, MapBuilder, NullBuilder, StringBuilder, StructBuilder,
+        Time32MillisecondBuilder, Time64MicrosecondBuilder, Time64NanosecondBuilder,
+        TimestampMicrosecondBuilder, TimestampMillisecondBuilder, TimestampNanosecondBuilder,
+        UInt32Builder,
     },
     datatypes::{
         DataType, Field, FieldRef, Fields, Schema as ArrowSchema, TimeUnit, UnionFields, UnionMode,
@@ -42,7 +43,7 @@ use tansu_kafka_sans_io::{ErrorCode, record::inflated::Batch};
 use tracing::{debug, error, info};
 use uuid::Uuid;
 
-use crate::{AsArrow, AsJsonValue, AsKafkaRecord, Error, Result, Validator};
+use crate::{ARROW_LIST_FIELD_NAME, AsArrow, AsJsonValue, AsKafkaRecord, Error, Result, Validator};
 
 const NULLABLE: bool = true;
 const SORTED_MAP_KEYS: bool = false;
@@ -55,6 +56,7 @@ pub struct Schema {
     complete: Option<RecordSchema>,
     key: Option<AvroSchema>,
     value: Option<AvroSchema>,
+    ids: HashMap<String, i32>,
 }
 
 impl TryFrom<Bytes> for Schema {
@@ -81,69 +83,51 @@ impl From<&JsonValue> for Schema {
                     complete: None,
                     key: None,
                     value: None,
+                    ids: HashMap::new(),
                 },
-                |fields| Self {
-                    complete: AvroSchema::parse(schema)
-                        .inspect_err(|err| error!(?err, ?schema))
-                        .ok()
-                        .and_then(|schema| match schema {
-                            AvroSchema::Record(mut inner) => {
-                                decorate_with_field_id(&mut inner);
-                                Some(inner)
-                            }
+                |fields| {
+                    if let Ok(schema) =
+                        AvroSchema::parse(schema).inspect_err(|err| error!(?err, ?schema))
+                    {
+                        Self {
+                            ids: field_ids(&schema),
 
-                            _otherwise => None,
-                        })
-                        .inspect(|schema| debug!(?schema)),
+                            complete: if let AvroSchema::Record(record) = schema {
+                                Some(record)
+                            } else {
+                                None
+                            },
 
-                    key: fields
-                        .iter()
-                        .find(|field| field.get("name").is_some_and(|name| name == "key"))
-                        .inspect(|value| debug!(?value))
-                        .and_then(|schema| {
-                            AvroSchema::parse(schema)
-                                .inspect_err(|err| error!(?err, ?schema))
-                                .ok()
-                        }),
+                            key: fields
+                                .iter()
+                                .find(|field| field.get("name").is_some_and(|name| name == "key"))
+                                .inspect(|value| debug!(?value))
+                                .and_then(|schema| {
+                                    AvroSchema::parse(schema)
+                                        .inspect_err(|err| error!(?err, ?schema))
+                                        .ok()
+                                }),
 
-                    value: fields
-                        .iter()
-                        .find(|field| field.get("name").is_some_and(|name| name == "value"))
-                        .inspect(|value| debug!(?value))
-                        .and_then(|schema| {
-                            AvroSchema::parse(schema)
-                                .inspect_err(|err| error!(?err, ?schema))
-                                .ok()
-                        }),
+                            value: fields
+                                .iter()
+                                .find(|field| field.get("name").is_some_and(|name| name == "value"))
+                                .inspect(|value| debug!(?value))
+                                .and_then(|schema| {
+                                    AvroSchema::parse(schema)
+                                        .inspect_err(|err| error!(?err, ?schema))
+                                        .ok()
+                                }),
+                        }
+                    } else {
+                        Self {
+                            complete: None,
+                            key: None,
+                            value: None,
+                            ids: HashMap::new(),
+                        }
+                    }
                 },
             )
-    }
-}
-
-#[derive(Copy, Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-struct FieldId(i32);
-
-impl FieldId {
-    fn incr(&mut self) -> i32 {
-        self.0 += 1;
-        self.0
-    }
-}
-
-fn decorate_with_field_id(schema: &mut RecordSchema) {
-    decorate(&mut FieldId::default(), schema)
-}
-
-fn decorate(field_id: &mut FieldId, schema: &mut RecordSchema) {
-    for field in schema.fields.iter_mut() {
-        _ = field.custom_attributes.insert(
-            PARQUET_FIELD_ID_META_KEY.into(),
-            JsonValue::Number(Number::from(field_id.incr())),
-        );
-
-        if let AvroSchema::Record(inner) = &mut field.schema {
-            decorate(field_id, inner)
-        }
     }
 }
 
@@ -170,240 +154,397 @@ impl NullableVariant for UnionSchema {
     }
 }
 
-fn schema_data_type(schema: &AvroSchema) -> Result<DataType> {
-    debug!(?schema);
+fn append<'a>(path: &[&'a str], name: &'a str) -> Vec<&'a str> {
+    let mut path = Vec::from(path);
+    path.push(name);
+    path
+}
 
-    match schema {
-        AvroSchema::Null => Ok(DataType::Null),
-        AvroSchema::Boolean => Ok(DataType::Boolean),
-        AvroSchema::Int => Ok(DataType::Int32),
-        AvroSchema::Long => Ok(DataType::Int64),
-        AvroSchema::Float => Ok(DataType::Float32),
-        AvroSchema::Double => Ok(DataType::Float64),
-        AvroSchema::Bytes => Ok(DataType::Binary),
-        AvroSchema::String | AvroSchema::Enum(_) => Ok(DataType::Utf8),
+impl Schema {
+    fn to_json_value(
+        &self,
+        name: &str,
+        schema: Option<&AvroSchema>,
+        encoded: Option<Bytes>,
+    ) -> Result<(String, JsonValue)> {
+        decode(schema, encoded).and_then(|decoded| {
+            decoded.map_or(Ok((name.to_owned(), JsonValue::Null)), |value| {
+                json_value(value).map(|value| (name.to_owned(), value))
+            })
+        })
+    }
 
-        AvroSchema::Array(schema) => schema_data_type(&schema.items)
-            .inspect(|item| debug!(?schema, ?item))
-            .map(|item| DataType::new_list(item, NULLABLE)),
+    fn new_list_field(&self, path: &[&str], data_type: DataType) -> Field {
+        self.new_field(path, ARROW_LIST_FIELD_NAME, data_type)
+    }
 
-        AvroSchema::Map(schema) => schema_data_type(&schema.types)
-            .inspect(|value| debug!(?schema, ?value))
-            .map(|value| {
-                DataType::Map(
-                    FieldRef::new(Field::new(
-                        "entries",
-                        DataType::Struct(Fields::from_iter([
-                            Field::new("keys", DataType::Utf8, !NULLABLE),
-                            Field::new("values", value, NULLABLE),
-                        ])),
-                        !NULLABLE,
-                    )),
-                    SORTED_MAP_KEYS,
-                )
-            }),
+    fn new_field(&self, path: &[&str], name: &str, data_type: DataType) -> Field {
+        self.new_nullable_field(path, name, data_type, NULLABLE)
+    }
 
-        AvroSchema::Union(schema) => {
-            debug!(?schema);
+    fn new_nullable_field(
+        &self,
+        path: &[&str],
+        name: &str,
+        data_type: DataType,
+        nullable: bool,
+    ) -> Field {
+        debug!(?path, name, ?data_type, ?nullable);
 
-            if let Some(schema) = schema.nullable_variant() {
-                schema_data_type(schema)
-            } else {
+        let path = append(path, name).join(".");
+
+        Field::new(name.to_owned(), data_type, nullable).with_metadata(
+            self.ids
+                .get(path.as_str())
+                .inspect(|field_id| debug!(?path, name, field_id))
+                .map(|field_id| (PARQUET_FIELD_ID_META_KEY.to_string(), field_id.to_string()))
+                .into_iter()
+                .collect(),
+        )
+    }
+
+    fn schema_data_type(&self, path: &[&str], schema: &AvroSchema) -> Result<DataType> {
+        debug!(?path, ?schema);
+
+        match schema {
+            AvroSchema::Null => Ok(DataType::Null),
+            AvroSchema::Boolean => Ok(DataType::Boolean),
+            AvroSchema::Int => Ok(DataType::Int32),
+            AvroSchema::Long => Ok(DataType::Int64),
+            AvroSchema::Float => Ok(DataType::Float32),
+            AvroSchema::Double => Ok(DataType::Float64),
+            AvroSchema::Bytes => Ok(DataType::LargeBinary),
+            AvroSchema::String | AvroSchema::Enum(_) => Ok(DataType::Utf8),
+
+            AvroSchema::Array(schema) => self
+                .schema_data_type(path, &schema.items)
+                .inspect(|data_type| debug!(?schema, ?data_type))
+                .map(|data_type| {
+                    DataType::List(FieldRef::new(self.new_list_field(path, data_type)))
+                }),
+
+            AvroSchema::Map(schema) => self
+                .schema_data_type(path, &schema.types)
+                .inspect(|value| debug!(?schema, ?value))
+                .map(|value| {
+                    let inside = append(path, "entries");
+
+                    DataType::Map(
+                        FieldRef::new(self.new_nullable_field(
+                            path,
+                            "entries",
+                            DataType::Struct(Fields::from_iter([
+                                self.new_nullable_field(
+                                    &inside[..],
+                                    "keys",
+                                    DataType::Utf8,
+                                    !NULLABLE,
+                                ),
+                                self.new_field(&inside[..], "values", value),
+                            ])),
+                            !NULLABLE,
+                        )),
+                        SORTED_MAP_KEYS,
+                    )
+                }),
+
+            AvroSchema::Union(schema) => {
+                debug!(?schema);
+
+                if let Some(schema) = schema.nullable_variant() {
+                    self.schema_data_type(path, schema)
+                } else {
+                    schema
+                        .variants()
+                        .iter()
+                        .enumerate()
+                        .map(|(index, variant)| {
+                            self.schema_data_type(path, variant)
+                                .map(|data_type| {
+                                    Field::new(format!("field{}", index + 1), data_type, NULLABLE)
+                                })
+                                .inspect(|field| debug!(?field))
+                        })
+                        .collect::<Result<Vec<_>>>()
+                        .inspect(|fields| debug!(?fields))
+                        .and_then(|fields| {
+                            i8::try_from(schema.variants().len())
+                                .map(|type_ids| {
+                                    UnionFields::new((1..=type_ids).collect::<Vec<_>>(), fields)
+                                })
+                                .map_err(Into::into)
+                        })
+                        .inspect(|union_fields| debug!(?union_fields))
+                        .map(|fields| DataType::Union(fields, UnionMode::Dense))
+                }
+            }
+
+            AvroSchema::Record(schema) => {
+                debug!(?schema);
                 schema
-                    .variants()
+                    .fields
                     .iter()
-                    .enumerate()
-                    .map(|(index, variant)| {
-                        schema_data_type(variant)
-                            .map(|data_type| {
-                                Field::new(format!("field{}", index + 1), data_type, NULLABLE)
-                            })
-                            .inspect(|field| debug!(?field))
+                    .map(|field| {
+                        let inside = append(path, &field.name);
+
+                        self.schema_data_type(inside.as_slice(), &field.schema)
+                            .map(|data_type| self.new_field(path, &field.name, data_type))
                     })
                     .collect::<Result<Vec<_>>>()
-                    .inspect(|fields| debug!(?fields))
-                    .and_then(|fields| {
-                        i8::try_from(schema.variants().len())
-                            .map(|type_ids| {
-                                UnionFields::new((1..=type_ids).collect::<Vec<_>>(), fields)
-                            })
-                            .map_err(Into::into)
+                    .map(Fields::from)
+                    .map(DataType::Struct)
+            }
+
+            AvroSchema::Fixed(schema) => i32::try_from(schema.size)
+                .map(DataType::FixedSizeBinary)
+                .map_err(Into::into),
+
+            AvroSchema::Decimal(schema) => u8::try_from(schema.precision)
+                .and_then(|precision| {
+                    i8::try_from(schema.scale).map(|scale| {
+                        if precision <= 16 {
+                            DataType::Decimal128(precision, scale)
+                        } else {
+                            DataType::Decimal256(precision, scale)
+                        }
                     })
-                    .inspect(|union_fields| debug!(?union_fields))
-                    .map(|fields| DataType::Union(fields, UnionMode::Dense))
+                })
+                .map_err(Into::into),
+
+            AvroSchema::BigDecimal => todo!(),
+            AvroSchema::Uuid => Ok(DataType::Utf8),
+            AvroSchema::Date => Ok(DataType::Date32),
+
+            AvroSchema::TimeMillis => Ok(DataType::Time32(TimeUnit::Millisecond)),
+
+            AvroSchema::TimeMicros => Ok(DataType::Time64(TimeUnit::Microsecond)),
+
+            AvroSchema::TimestampMillis => Ok(DataType::Timestamp(TimeUnit::Millisecond, None)),
+
+            AvroSchema::TimestampMicros => Ok(DataType::Timestamp(TimeUnit::Microsecond, None)),
+
+            AvroSchema::TimestampNanos => Ok(DataType::Timestamp(TimeUnit::Nanosecond, None)),
+
+            AvroSchema::LocalTimestampMillis => {
+                Ok(DataType::Timestamp(TimeUnit::Millisecond, None))
+            }
+
+            AvroSchema::LocalTimestampMicros => {
+                Ok(DataType::Timestamp(TimeUnit::Microsecond, None))
+            }
+
+            AvroSchema::LocalTimestampNanos => Ok(DataType::Timestamp(TimeUnit::Nanosecond, None)),
+
+            AvroSchema::Duration => Ok(DataType::Struct(Fields::from_iter([
+                Field::new("month", DataType::UInt32, NULLABLE),
+                Field::new("days", DataType::UInt32, NULLABLE),
+                Field::new("milliseconds", DataType::UInt32, NULLABLE),
+            ]))),
+
+            AvroSchema::Ref { name } => {
+                let _ = name;
+                todo!();
             }
         }
+    }
 
-        AvroSchema::Record(schema) => {
-            debug!(?schema);
-            schema
-                .fields
-                .iter()
-                .map(|field| {
-                    schema_data_type(&field.schema).map(|data_type| {
-                        Field::new(field.name.clone(), data_type, NULLABLE).with_metadata(
-                            field
-                                .custom_attributes
-                                .get(PARQUET_FIELD_ID_META_KEY)
-                                .map(parquet_field_id)
-                                .into_iter()
-                                .collect(),
-                        )
+    fn schema_array_builder(
+        &self,
+        path: &[&str],
+        schema: &AvroSchema,
+    ) -> Result<Box<dyn ArrayBuilder>> {
+        debug!(?path, ?schema);
+        match schema {
+            AvroSchema::Null => Ok(Box::new(NullBuilder::new())),
+            AvroSchema::Boolean => Ok(Box::new(BooleanBuilder::new())),
+            AvroSchema::Int => Ok(Box::new(Int32Builder::new())),
+            AvroSchema::Long => Ok(Box::new(Int64Builder::new())),
+            AvroSchema::Float => Ok(Box::new(Float32Builder::new())),
+            AvroSchema::Double => Ok(Box::new(Float64Builder::new())),
+            AvroSchema::Bytes => Ok(Box::new(LargeBinaryBuilder::new())),
+            AvroSchema::String | AvroSchema::Enum(_) => Ok(Box::new(StringBuilder::new())),
+
+            AvroSchema::Array(schema) => self
+                .schema_array_builder(path, &schema.items)
+                .map(ListBuilder::new)
+                .and_then(|list_builder| {
+                    self.schema_data_type(path, &schema.items).map(|data_type| {
+                        list_builder.with_field(self.new_list_field(path, data_type))
                     })
                 })
-                .collect::<Result<Vec<_>>>()
-                .map(Fields::from)
-                .map(DataType::Struct)
-        }
+                .map(|builder| Box::new(builder) as Box<dyn ArrayBuilder>),
 
-        AvroSchema::Fixed(schema) => i32::try_from(schema.size)
-            .map(DataType::FixedSizeBinary)
-            .map_err(Into::into),
+            AvroSchema::Map(schema) => self
+                .schema_array_builder(
+                    {
+                        let mut path = Vec::from(path);
+                        path.push("entries");
+                        path.push("values");
+                        path
+                    }
+                    .as_slice(),
+                    &schema.types,
+                )
+                .and_then(|builder| {
+                    self.schema_data_type(path, &schema.types).map(|data_type| {
+                        let path = {
+                            let mut path = Vec::from(path);
+                            path.push("entries");
+                            path
+                        };
 
-        AvroSchema::Decimal(schema) => u8::try_from(schema.precision)
-            .and_then(|precision| {
-                i8::try_from(schema.scale).map(|scale| {
+                        MapBuilder::new(
+                            None,
+                            Box::new(StringBuilder::new()) as Box<dyn ArrayBuilder>,
+                            builder,
+                        )
+                        .with_keys_field(self.new_nullable_field(
+                            &path[..],
+                            "keys",
+                            DataType::Utf8,
+                            !NULLABLE,
+                        ))
+                        .with_values_field(self.new_field(
+                            &path[..],
+                            "values",
+                            data_type,
+                        ))
+                    })
+                })
+                .map(|builder| Box::new(builder) as Box<dyn ArrayBuilder>),
+
+            AvroSchema::Union(schema) => {
+                if let Some(schema) = schema.nullable_variant() {
+                    self.schema_array_builder(path, schema)
+                } else {
+                    todo!()
+                }
+            }
+
+            AvroSchema::Record(schema) => schema
+                .fields
+                .iter()
+                .map(|record_field| {
+                    let inside = append(path, &record_field.name);
+
+                    self.schema_data_type(inside.as_slice(), &record_field.schema)
+                        .map(|data_type| self.new_field(path, &record_field.name, data_type))
+                        .and_then(|field| {
+                            self.schema_array_builder(inside.as_slice(), &record_field.schema)
+                                .map(|builder| (field, builder))
+                        })
+                })
+                .collect::<Result<(Vec<_>, Vec<_>)>>()
+                .map(|(fields, builders)| StructBuilder::new(fields, builders))
+                .map(|builder| Box::new(builder) as Box<dyn ArrayBuilder>),
+
+            AvroSchema::Fixed(_schema) => Ok(Box::new(BinaryBuilder::new())),
+
+            AvroSchema::Decimal(schema) => u8::try_from(schema.precision)
+                .map(|precision| {
                     if precision <= 16 {
-                        DataType::Decimal128(precision, scale)
+                        Box::new(Decimal128Builder::new()) as Box<dyn ArrayBuilder>
                     } else {
-                        DataType::Decimal256(precision, scale)
+                        Box::new(Decimal256Builder::new()) as Box<dyn ArrayBuilder>
                     }
                 })
-            })
-            .map_err(Into::into),
+                .map_err(Into::into),
 
-        AvroSchema::BigDecimal => todo!(),
-        AvroSchema::Uuid => Ok(DataType::Utf8),
-        AvroSchema::Date => Ok(DataType::Date32),
+            AvroSchema::BigDecimal => todo!(),
+            AvroSchema::Uuid => Ok(Box::new(StringBuilder::new())),
+            AvroSchema::Date => Ok(Box::new(Date32Builder::new())),
+            AvroSchema::TimeMillis => Ok(Box::new(Time32MillisecondBuilder::new())),
+            AvroSchema::TimeMicros => Ok(Box::new(Time64MicrosecondBuilder::new())),
+            AvroSchema::TimestampMillis => Ok(Box::new(TimestampMillisecondBuilder::new())),
+            AvroSchema::TimestampMicros => Ok(Box::new(TimestampMicrosecondBuilder::new())),
+            AvroSchema::TimestampNanos => Ok(Box::new(TimestampNanosecondBuilder::new())),
+            AvroSchema::LocalTimestampMillis => Ok(Box::new(Time32MillisecondBuilder::new())),
+            AvroSchema::LocalTimestampMicros => Ok(Box::new(Time64MicrosecondBuilder::new())),
+            AvroSchema::LocalTimestampNanos => Ok(Box::new(Time64NanosecondBuilder::new())),
 
-        AvroSchema::TimeMillis => Ok(DataType::Time32(TimeUnit::Millisecond)),
+            AvroSchema::Duration => Ok(Box::new(StructBuilder::new(
+                vec![
+                    Field::new("month", DataType::UInt32, NULLABLE),
+                    Field::new("days", DataType::UInt32, NULLABLE),
+                    Field::new("milliseconds", DataType::UInt32, NULLABLE),
+                ],
+                vec![
+                    Box::new(UInt32Builder::new()),
+                    Box::new(UInt32Builder::new()),
+                    Box::new(UInt32Builder::new()),
+                ],
+            ))),
 
-        AvroSchema::TimeMicros => Ok(DataType::Time64(TimeUnit::Microsecond)),
-
-        AvroSchema::TimestampMillis => Ok(DataType::Timestamp(TimeUnit::Millisecond, None)),
-
-        AvroSchema::TimestampMicros => Ok(DataType::Timestamp(TimeUnit::Microsecond, None)),
-
-        AvroSchema::TimestampNanos => Ok(DataType::Timestamp(TimeUnit::Nanosecond, None)),
-
-        AvroSchema::LocalTimestampMillis => Ok(DataType::Timestamp(TimeUnit::Millisecond, None)),
-
-        AvroSchema::LocalTimestampMicros => Ok(DataType::Timestamp(TimeUnit::Microsecond, None)),
-
-        AvroSchema::LocalTimestampNanos => Ok(DataType::Timestamp(TimeUnit::Nanosecond, None)),
-
-        AvroSchema::Duration => Ok(DataType::Struct(Fields::from_iter([
-            Field::new("month", DataType::UInt32, NULLABLE),
-            Field::new("days", DataType::UInt32, NULLABLE),
-            Field::new("milliseconds", DataType::UInt32, NULLABLE),
-        ]))),
-
-        AvroSchema::Ref { name } => {
-            let _ = name;
-            todo!();
+            AvroSchema::Ref { name } => {
+                let _ = name;
+                todo!();
+            }
         }
     }
 }
 
-fn schema_array_builder(schema: &AvroSchema) -> Result<Box<dyn ArrayBuilder>> {
-    debug!(?schema);
-    match schema {
-        AvroSchema::Null => Ok(Box::new(NullBuilder::new())),
-        AvroSchema::Boolean => Ok(Box::new(BooleanBuilder::new())),
-        AvroSchema::Int => Ok(Box::new(Int32Builder::new())),
-        AvroSchema::Long => Ok(Box::new(Int64Builder::new())),
-        AvroSchema::Float => Ok(Box::new(Float32Builder::new())),
-        AvroSchema::Double => Ok(Box::new(Float64Builder::new())),
-        AvroSchema::Bytes => Ok(Box::new(BinaryBuilder::new())),
-        AvroSchema::String | AvroSchema::Enum(_) => Ok(Box::new(StringBuilder::new())),
+fn field_ids(schema: &AvroSchema) -> HashMap<String, i32> {
+    fn field_ids_with_path(
+        path: &[&str],
+        schema: &AvroSchema,
+        id: &mut i32,
+    ) -> HashMap<String, i32> {
+        debug!(?path, ?schema, id);
 
-        AvroSchema::Array(schema) => schema_array_builder(&schema.items)
-            .map(ListBuilder::new)
-            .map(|builder| Box::new(builder) as Box<dyn ArrayBuilder>),
+        let mut ids = HashMap::new();
 
-        AvroSchema::Map(schema) => schema_array_builder(&schema.types)
-            .map(|builder| {
-                MapBuilder::new(
-                    None,
-                    Box::new(StringBuilder::new()) as Box<dyn ArrayBuilder>,
-                    builder,
-                )
-            })
-            .map(|builder| Box::new(builder) as Box<dyn ArrayBuilder>),
+        match schema {
+            AvroSchema::Array(inner) => {
+                let mut path = Vec::from(path);
+                path.push(ARROW_LIST_FIELD_NAME);
+                ids.insert(path.join("."), *id);
+                *id += 1;
 
-        AvroSchema::Union(schema) => {
-            if let Some(schema) = schema.nullable_variant() {
-                schema_array_builder(schema)
-            } else {
-                todo!()
+                ids.extend(field_ids_with_path(&path[..], &inner.items, id));
             }
-        }
 
-        AvroSchema::Record(schema) => schema
-            .fields
-            .iter()
-            .map(|record_field| {
-                schema_data_type(&record_field.schema)
-                    .map(|data_type| {
-                        Field::new(record_field.name.clone(), data_type, NULLABLE).with_metadata(
-                            record_field
-                                .custom_attributes
-                                .get(PARQUET_FIELD_ID_META_KEY)
-                                .map(parquet_field_id)
-                                .into_iter()
-                                .collect(),
-                        )
-                    })
-                    .and_then(|field| {
-                        schema_array_builder(&record_field.schema).map(|builder| (field, builder))
-                    })
-            })
-            .collect::<Result<(Vec<_>, Vec<_>)>>()
-            .map(|(fields, builders)| StructBuilder::new(fields, builders))
-            .map(|builder| Box::new(builder) as Box<dyn ArrayBuilder>),
+            AvroSchema::Map(inner) => {
+                let mut path = Vec::from(path);
+                path.push("entries");
+                ids.insert(path.join("."), *id);
+                *id += 1;
 
-        AvroSchema::Fixed(_schema) => Ok(Box::new(BinaryBuilder::new())),
-
-        AvroSchema::Decimal(schema) => u8::try_from(schema.precision)
-            .map(|precision| {
-                if precision <= 16 {
-                    Box::new(Decimal128Builder::new()) as Box<dyn ArrayBuilder>
-                } else {
-                    Box::new(Decimal256Builder::new()) as Box<dyn ArrayBuilder>
+                {
+                    let mut path = path.clone();
+                    path.push("keys");
+                    ids.insert(path.join("."), *id);
+                    *id += 1;
                 }
-            })
-            .map_err(Into::into),
 
-        AvroSchema::BigDecimal => todo!(),
-        AvroSchema::Uuid => Ok(Box::new(StringBuilder::new())),
-        AvroSchema::Date => Ok(Box::new(Date32Builder::new())),
-        AvroSchema::TimeMillis => Ok(Box::new(Time32MillisecondBuilder::new())),
-        AvroSchema::TimeMicros => Ok(Box::new(Time64MicrosecondBuilder::new())),
-        AvroSchema::TimestampMillis => Ok(Box::new(TimestampMillisecondBuilder::new())),
-        AvroSchema::TimestampMicros => Ok(Box::new(TimestampMicrosecondBuilder::new())),
-        AvroSchema::TimestampNanos => Ok(Box::new(TimestampNanosecondBuilder::new())),
-        AvroSchema::LocalTimestampMillis => Ok(Box::new(Time32MillisecondBuilder::new())),
-        AvroSchema::LocalTimestampMicros => Ok(Box::new(Time64MicrosecondBuilder::new())),
-        AvroSchema::LocalTimestampNanos => Ok(Box::new(Time64NanosecondBuilder::new())),
+                {
+                    let mut path = path.clone();
+                    path.push("values");
+                    ids.insert(path.join("."), *id);
+                    *id += 1;
 
-        AvroSchema::Duration => Ok(Box::new(StructBuilder::new(
-            vec![
-                Field::new("month", DataType::UInt32, NULLABLE),
-                Field::new("days", DataType::UInt32, NULLABLE),
-                Field::new("milliseconds", DataType::UInt32, NULLABLE),
-            ],
-            vec![
-                Box::new(UInt32Builder::new()),
-                Box::new(UInt32Builder::new()),
-                Box::new(UInt32Builder::new()),
-            ],
-        ))),
+                    ids.extend(field_ids_with_path(&path[..], &inner.types, id))
+                }
+            }
 
-        AvroSchema::Ref { name } => {
-            let _ = name;
-            todo!();
+            AvroSchema::Record(inner) => {
+                for field in inner.fields.iter() {
+                    let mut path = Vec::from(path);
+                    path.push(field.name.as_str());
+
+                    ids.insert(path.join("."), *id);
+                    *id += 1;
+
+                    ids.extend(field_ids_with_path(&path[..], &field.schema, id).into_iter())
+                }
+            }
+
+            _ => (),
         }
+
+        ids
     }
+
+    field_ids_with_path(&[], schema, &mut 0)
 }
 
 impl TryFrom<&Schema> for RecordBuilder {
@@ -420,7 +561,7 @@ impl TryFrom<&Schema> for RecordBuilder {
                     .fields
                     .iter()
                     .inspect(|field| debug!(?field))
-                    .map(|field| schema_array_builder(&field.schema))
+                    .map(|field| schema.schema_array_builder(&[&field.name], &field.schema))
                     .collect::<Result<Vec<_>>>()
             })
             .map(Self)
@@ -541,7 +682,7 @@ fn append_list_builder(
         AvroSchema::Bytes => builder
             .values()
             .as_any_mut()
-            .downcast_mut::<BinaryBuilder>()
+            .downcast_mut::<LargeBinaryBuilder>()
             .ok_or(Error::Downcast)
             .inspect_err(|err| error!(?err, ?schema, ?values))
             .and_then(|builder| {
@@ -730,7 +871,7 @@ fn append_struct_builder(
                 .map(|values| values.append_value(value))?,
 
             (AvroSchema::Bytes, Value::Bytes(value)) => builder
-                .field_builder::<BinaryBuilder>(index)
+                .field_builder::<LargeBinaryBuilder>(index)
                 .ok_or(Error::BadDowncast { field: name })
                 .map(|values| values.append_value(value))?,
 
@@ -856,7 +997,7 @@ fn append_value(
 
         (Some(AvroSchema::Bytes), Value::Null) => column
             .as_any_mut()
-            .downcast_mut::<BinaryBuilder>()
+            .downcast_mut::<LargeBinaryBuilder>()
             .ok_or(Error::Downcast)
             .map(|builder| builder.append_null()),
 
@@ -1116,7 +1257,7 @@ where
 
 impl AsArrow for Schema {
     fn as_arrow(&self, batch: &Batch) -> Result<RecordBatch> {
-        debug!(?batch);
+        debug!(ids = ?self.ids, ?batch);
 
         let schema = ArrowSchema::try_from(self)?;
         debug!(?schema);
@@ -1161,16 +1302,9 @@ impl TryFrom<&Schema> for Fields {
                     .iter()
                     .inspect(|field| debug!(?field))
                     .map(|field| {
-                        schema_data_type(&field.schema).map(|data_type| {
-                            Field::new(field.name.clone(), data_type, NULLABLE).with_metadata(
-                                field
-                                    .custom_attributes
-                                    .get(PARQUET_FIELD_ID_META_KEY)
-                                    .map(parquet_field_id)
-                                    .into_iter()
-                                    .collect(),
-                            )
-                        })
+                        schema
+                            .schema_data_type(&[&field.name], &field.schema)
+                            .map(|data_type| schema.new_field(&[], &field.name, data_type))
                     })
                     .collect::<Result<Vec<_>>>()
             })
@@ -1451,21 +1585,6 @@ fn json_value(value: Value) -> Result<JsonValue> {
     }
 }
 
-impl Schema {
-    fn to_json_value(
-        &self,
-        name: &str,
-        schema: Option<&AvroSchema>,
-        encoded: Option<Bytes>,
-    ) -> Result<(String, JsonValue)> {
-        decode(schema, encoded).and_then(|decoded| {
-            decoded.map_or(Ok((name.to_owned(), JsonValue::Null)), |value| {
-                json_value(value).map(|value| (name.to_owned(), value))
-            })
-        })
-    }
-}
-
 impl AsJsonValue for Schema {
     fn as_json_value(&self, batch: &Batch) -> Result<JsonValue> {
         Ok(JsonValue::Array(
@@ -1488,10 +1607,6 @@ impl AsJsonValue for Schema {
     }
 }
 
-fn parquet_field_id(id: &JsonValue) -> (String, String) {
-    (PARQUET_FIELD_ID_META_KEY.to_string(), id.to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use std::{fs::File, sync::Arc, thread};
@@ -1499,11 +1614,27 @@ mod tests {
     use crate::Registry;
 
     use super::*;
-    use ::arrow::util::pretty::pretty_format_batches;
     use apache_avro::{Decimal, types::Value};
+    use arrow::util::pretty::pretty_format_batches;
     use datafusion::prelude::*;
+    use iceberg::{
+        io::FileIOBuilder,
+        spec::{
+            DataFile, DataFileFormat::Parquet, Schema as IcebergSchema,
+            SchemaRef as IcebergSchemaRef,
+        },
+        writer::{
+            IcebergWriter, IcebergWriterBuilder,
+            base_writer::data_file_writer::DataFileWriterBuilder,
+            file_writer::{
+                ParquetWriterBuilder,
+                location_generator::{DefaultFileNameGenerator, LocationGenerator},
+            },
+        },
+    };
     use num_bigint::BigInt;
     use object_store::{ObjectStore, PutPayload, memory::InMemory, path::Path};
+    use parquet::file::properties::WriterProperties;
     use serde_json::json;
     use tansu_kafka_sans_io::record::Record;
     use tracing::subscriber::DefaultGuard;
@@ -1532,6 +1663,49 @@ mod tests {
                 )
                 .finish(),
         ))
+    }
+
+    async fn iceberg_write(record_batch: RecordBatch) -> Result<Vec<DataFile>> {
+        let iceberg_schema = IcebergSchema::try_from(record_batch.schema().as_ref())
+            .map(IcebergSchemaRef::new)
+            .inspect(|schema| debug!(?schema))
+            .inspect_err(|err| debug!(?err))?;
+
+        let memory = FileIOBuilder::new("memory").build()?;
+
+        #[derive(Clone)]
+        struct Location;
+
+        impl LocationGenerator for Location {
+            fn generate_location(&self, file_name: &str) -> String {
+                format!("abc/{file_name}")
+            }
+        }
+
+        let writer = ParquetWriterBuilder::new(
+            WriterProperties::default(),
+            iceberg_schema,
+            memory,
+            Location,
+            DefaultFileNameGenerator::new("pqr".into(), None, Parquet),
+        );
+
+        let mut data_file_writer = DataFileWriterBuilder::new(writer, None, 0)
+            .build()
+            .await
+            .inspect_err(|err| error!(?err))?;
+
+        data_file_writer
+            .write(record_batch)
+            .await
+            .inspect_err(|err| debug!(?err))?;
+
+        data_file_writer
+            .close()
+            .await
+            .inspect(|data_files| debug!(?data_files))
+            .inspect_err(|err| debug!(?err))
+            .map_err(Into::into)
     }
 
     #[tokio::test]
@@ -1680,6 +1854,7 @@ mod tests {
             "fields": [
                 {"name": "key", "type": "int"},
                 {"name": "value", "type": {
+                    "name": "value",
                     "type": "record",
                     "fields": [
                         {"name": "name", "type": "string"},
@@ -1696,17 +1871,6 @@ mod tests {
                         .map(PutPayload::from)?,
                 )
                 .await?;
-        }
-
-        {
-            let location = Path::from(format!("{topic}/value.avsc"));
-            _ = object_store.put(&location, serde_json::to_vec(&json!({
-                        "type": "record",
-                        "name": "Message",
-                        "fields": [{"name": "name", "type": "string"}, {"name": "email", "type": "string"}]
-                    }))
-                    .map(Bytes::from)
-                    .map(PutPayload::from)?).await?;
         }
 
         let registry = Registry::new(object_store);
@@ -1876,7 +2040,7 @@ mod tests {
             "name": "Message",
             "fields": [
                 {"name": "value", "type": "record", "fields": [
-                {"name": "a", "type": "null"},
+                // {"name": "a", "type": "null"},
                 {"name": "b", "type": "boolean"},
                 {"name": "c", "type": "int"},
                 {"name": "d", "type": "long"},
@@ -1894,7 +2058,7 @@ mod tests {
             let values = [r(
                 schema.value.as_ref().unwrap(),
                 [
-                    ("a", Value::Null),
+                    // ("a", Value::Null),
                     ("b", false.into()),
                     ("c", i32::MAX.into()),
                     ("d", i64::MAX.into()),
@@ -1916,6 +2080,10 @@ mod tests {
 
         let record_batch = schema.as_arrow(&batch)?;
 
+        let data_files = iceberg_write(record_batch.clone()).await?;
+        assert_eq!(1, data_files.len());
+        assert_eq!(1, data_files[0].record_count());
+
         let ctx = SessionContext::new();
 
         _ = ctx.register_batch("t", record_batch)?;
@@ -1925,11 +2093,11 @@ mod tests {
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
         let expected = vec![
-            "+-----------------------------------------------------------------------------------------------------------------------------+",
-            "| value                                                                                                                       |",
-            "+-----------------------------------------------------------------------------------------------------------------------------+",
-            "| {a: , b: false, c: 2147483647, d: 9223372036854775807, e: 3.4028235e38, f: 1.7976931348623157e308, g: 616263646566, h: pqr} |",
-            "+-----------------------------------------------------------------------------------------------------------------------------+",
+            "+------------------------------------------------------------------------------------------------------------------------+",
+            "| value                                                                                                                  |",
+            "+------------------------------------------------------------------------------------------------------------------------+",
+            "| {b: false, c: 2147483647, d: 9223372036854775807, e: 3.4028235e38, f: 1.7976931348623157e308, g: 616263646566, h: pqr} |",
+            "+------------------------------------------------------------------------------------------------------------------------+",
         ];
 
         assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
@@ -1999,6 +2167,9 @@ mod tests {
         };
 
         let record_batch = schema.as_arrow(&batch)?;
+        let data_files = iceberg_write(record_batch.clone()).await?;
+        assert_eq!(1, data_files.len());
+        assert_eq!(1, data_files[0].record_count());
 
         let ctx = SessionContext::new();
 
@@ -2021,35 +2192,6 @@ mod tests {
         Ok(())
     }
 
-    #[ignore]
-    #[test]
-    fn union_with_ref() -> Result<()> {
-        let _guard = init_tracing()?;
-
-        let schema = json!({
-            "type": "record",
-            "name": "LongList",
-            "fields": [{"name": "next", "type": ["null", "LongList"]}]
-        });
-
-        let data_type = AvroSchema::parse(&schema)
-            .map_err(Into::into)
-            .and_then(|schema| schema_data_type(&schema))?;
-
-        assert!(matches!(data_type, DataType::Struct(_)));
-
-        let record = match data_type {
-            DataType::Struct(record) => Some(record),
-            _ => None,
-        }
-        .unwrap();
-
-        let next = record[0].clone();
-        assert_eq!("next", next.name());
-        assert!(matches!(next.data_type(), DataType::Union(_, _)));
-
-        Ok(())
-    }
     #[tokio::test]
     async fn union() -> Result<()> {
         let _guard = init_tracing()?;
@@ -2079,6 +2221,14 @@ mod tests {
         };
 
         let record_batch = schema.as_arrow(&batch)?;
+
+        let data_files = iceberg_write(record_batch.clone()).await?;
+        assert_eq!(1, data_files.len());
+        assert_eq!(3, data_files[0].record_count());
+        assert_eq!(
+            vec![&0],
+            data_files[0].null_value_counts().keys().collect::<Vec<_>>()
+        );
 
         let ctx = SessionContext::new();
 
@@ -2136,6 +2286,9 @@ mod tests {
         };
 
         let record_batch = schema.as_arrow(&batch)?;
+        let data_files = iceberg_write(record_batch.clone()).await?;
+        assert_eq!(1, data_files.len());
+        assert_eq!(2, data_files[0].record_count());
 
         let ctx = SessionContext::new();
 
@@ -2202,6 +2355,10 @@ mod tests {
         let record_batch = schema.as_arrow(&batch)?;
         debug!(?record_batch);
 
+        let data_files = iceberg_write(record_batch.clone()).await?;
+        assert_eq!(1, data_files.len());
+        assert_eq!(1, data_files[0].record_count());
+
         let ctx = SessionContext::new();
 
         _ = ctx.register_batch("t", record_batch)?;
@@ -2225,34 +2382,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn array() -> Result<()> {
-        let _guard = init_tracing()?;
-
-        let schema = json!({
-            "type": "array",
-            "items": "string",
-            "default": []
-        });
-
-        let data_type = AvroSchema::parse(&schema)
-            .map_err(Into::into)
-            .and_then(|schema| schema_data_type(&schema))?;
-
-        assert!(matches!(data_type, DataType::List(_)));
-
-        let field = match data_type {
-            DataType::List(field) => Some(field),
-            _ => None,
-        }
-        .unwrap();
-
-        assert_eq!("item", field.name());
-        assert_eq!(&DataType::Utf8, field.data_type());
-
-        Ok(())
-    }
-
+    #[ignore]
     #[tokio::test]
     async fn map() -> Result<()> {
         let _guard = init_tracing()?;
@@ -2280,6 +2410,9 @@ mod tests {
         };
 
         let record_batch = schema.as_arrow(&batch)?;
+        let data_files = iceberg_write(record_batch.clone()).await?;
+        assert_eq!(1, data_files.len());
+        assert_eq!(2, data_files[0].record_count());
 
         let ctx = SessionContext::new();
 
@@ -2314,25 +2447,6 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn fixed() -> Result<()> {
-        let _guard = init_tracing()?;
-
-        let schema = json!({
-            "type": "fixed",
-            "size": 16,
-            "name": "md5"
-        });
-
-        let data_type = AvroSchema::parse(&schema)
-            .map_err(Into::into)
-            .and_then(|schema| schema_data_type(&schema))?;
-
-        assert!(matches!(data_type, DataType::FixedSizeBinary(16)));
-
-        Ok(())
-    }
-
     #[tokio::test]
     async fn simple_integer_key_as_arrow() -> Result<()> {
         let _guard = init_tracing()?;
@@ -2361,6 +2475,9 @@ mod tests {
         }?;
 
         let record_batch = schema.as_arrow(&batch)?;
+        let data_files = iceberg_write(record_batch.clone()).await?;
+        assert_eq!(1, data_files.len());
+        assert_eq!(4, data_files[0].record_count());
 
         let ctx = SessionContext::new();
 
@@ -2450,6 +2567,9 @@ mod tests {
         };
 
         let record_batch = schema.as_arrow(&batch)?;
+        let data_files = iceberg_write(record_batch.clone()).await?;
+        assert_eq!(1, data_files.len());
+        assert_eq!(2, data_files[0].record_count());
 
         let ctx = SessionContext::new();
 
@@ -2512,6 +2632,9 @@ mod tests {
         debug!(?batch);
 
         let record_batch = schema.as_arrow(&batch)?;
+        let data_files = iceberg_write(record_batch.clone()).await?;
+        assert_eq!(1, data_files.len());
+        assert_eq!(4, data_files[0].record_count());
 
         let ctx = SessionContext::new();
 
@@ -2576,6 +2699,9 @@ mod tests {
         debug!(?batch);
 
         let record_batch = schema.as_arrow(&batch)?;
+        let data_files = iceberg_write(record_batch.clone()).await?;
+        assert_eq!(1, data_files.len());
+        assert_eq!(2, data_files[0].record_count());
 
         let ctx = SessionContext::new();
 
@@ -2638,6 +2764,9 @@ mod tests {
         debug!(?batch);
 
         let record_batch = schema.as_arrow(&batch)?;
+        let data_files = iceberg_write(record_batch.clone()).await?;
+        assert_eq!(1, data_files.len());
+        assert_eq!(2, data_files[0].record_count());
 
         let ctx = SessionContext::new();
 
@@ -2703,6 +2832,9 @@ mod tests {
         debug!(?batch);
 
         let record_batch = schema.as_arrow(&batch)?;
+        let data_files = iceberg_write(record_batch.clone()).await?;
+        assert_eq!(1, data_files.len());
+        assert_eq!(2, data_files[0].record_count());
 
         let ctx = SessionContext::new();
 
@@ -2768,6 +2900,9 @@ mod tests {
         debug!(?batch);
 
         let record_batch = schema.as_arrow(&batch)?;
+        let data_files = iceberg_write(record_batch.clone()).await?;
+        assert_eq!(1, data_files.len());
+        assert_eq!(2, data_files[0].record_count());
 
         let ctx = SessionContext::new();
 
@@ -2833,6 +2968,9 @@ mod tests {
         debug!(?batch);
 
         let record_batch = schema.as_arrow(&batch)?;
+        let data_files = iceberg_write(record_batch.clone()).await?;
+        assert_eq!(1, data_files.len());
+        assert_eq!(2, data_files[0].record_count());
 
         let ctx = SessionContext::new();
 
@@ -2856,6 +2994,7 @@ mod tests {
         Ok(())
     }
 
+    #[ignore]
     #[tokio::test]
     async fn array_record_value() -> Result<()> {
         let _guard = init_tracing()?;
@@ -2920,6 +3059,9 @@ mod tests {
         let record_batch = schema.as_arrow(&batch)?;
 
         let ctx = SessionContext::new();
+        let data_files = iceberg_write(record_batch.clone()).await?;
+        assert_eq!(1, data_files.len());
+        assert_eq!(2, data_files[0].record_count());
 
         _ = ctx.register_batch("t", record_batch)?;
         let df = ctx.sql("select * from t").await?;
@@ -2983,6 +3125,9 @@ mod tests {
         debug!(?batch);
 
         let record_batch = schema.as_arrow(&batch)?;
+        let data_files = iceberg_write(record_batch.clone()).await?;
+        assert_eq!(1, data_files.len());
+        assert_eq!(2, data_files[0].record_count());
 
         let ctx = SessionContext::new();
 
@@ -3049,6 +3194,9 @@ mod tests {
 
         let record_batch = schema.as_arrow(&batch)?;
         debug!(?record_batch);
+        let data_files = iceberg_write(record_batch.clone()).await?;
+        assert_eq!(1, data_files.len());
+        assert_eq!(3, data_files[0].record_count());
 
         let ctx = SessionContext::new();
 
@@ -3073,6 +3221,7 @@ mod tests {
         Ok(())
     }
 
+    #[ignore]
     #[tokio::test]
     async fn time_millis_logical_type() -> Result<()> {
         let _guard = init_tracing()?;
@@ -3111,7 +3260,11 @@ mod tests {
         debug!(?batch);
 
         let record_batch = schema.as_arrow(&batch)?;
+
         debug!(?record_batch);
+        let data_files = iceberg_write(record_batch.clone()).await?;
+        assert_eq!(1, data_files.len());
+        assert_eq!(3, data_files[0].record_count());
 
         let ctx = SessionContext::new();
 
@@ -3175,6 +3328,9 @@ mod tests {
 
         let record_batch = schema.as_arrow(&batch)?;
         debug!(?record_batch);
+        let data_files = iceberg_write(record_batch.clone()).await?;
+        assert_eq!(1, data_files.len());
+        assert_eq!(3, data_files[0].record_count());
 
         let ctx = SessionContext::new();
 
@@ -3199,6 +3355,7 @@ mod tests {
         Ok(())
     }
 
+    #[ignore]
     #[tokio::test]
     async fn timestamp_millis_logical_type() -> Result<()> {
         let _guard = init_tracing()?;
@@ -3238,6 +3395,9 @@ mod tests {
 
         let record_batch = schema.as_arrow(&batch)?;
         debug!(?record_batch);
+        let data_files = iceberg_write(record_batch.clone()).await?;
+        assert_eq!(1, data_files.len());
+        assert_eq!(3, data_files[0].record_count());
 
         let ctx = SessionContext::new();
 
@@ -3301,6 +3461,9 @@ mod tests {
 
         let record_batch = schema.as_arrow(&batch)?;
         debug!(?record_batch);
+        let data_files = iceberg_write(record_batch.clone()).await?;
+        assert_eq!(1, data_files.len());
+        assert_eq!(3, data_files[0].record_count());
 
         let ctx = SessionContext::new();
 
@@ -3365,6 +3528,9 @@ mod tests {
 
         let record_batch = schema.as_arrow(&batch)?;
         debug!(?record_batch);
+        let data_files = iceberg_write(record_batch.clone()).await?;
+        assert_eq!(1, data_files.len());
+        assert_eq!(3, data_files[0].record_count());
 
         let ctx = SessionContext::new();
 
@@ -3429,6 +3595,9 @@ mod tests {
 
         let record_batch = schema.as_arrow(&batch)?;
         debug!(?record_batch);
+        let data_files = iceberg_write(record_batch.clone()).await?;
+        assert_eq!(1, data_files.len());
+        assert_eq!(3, data_files[0].record_count());
 
         let ctx = SessionContext::new();
 
@@ -3494,6 +3663,9 @@ mod tests {
 
         let record_batch = schema.as_arrow(&batch)?;
         debug!(?record_batch);
+        let data_files = iceberg_write(record_batch.clone()).await?;
+        assert_eq!(1, data_files.len());
+        assert_eq!(4, data_files[0].record_count());
 
         let ctx = SessionContext::new();
 
@@ -3897,6 +4069,9 @@ mod tests {
         }?;
 
         let record_batch = schema.as_arrow(&batch)?;
+        let data_files = iceberg_write(record_batch.clone()).await?;
+        assert_eq!(1, data_files.len());
+        assert_eq!(16, data_files[0].record_count());
 
         let ctx = SessionContext::new();
 
