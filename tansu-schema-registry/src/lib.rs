@@ -296,15 +296,33 @@ impl Registry {
         }
     }
 
+    fn iceberg_catalog(&self, catalog: &Url) -> impl Catalog {
+        debug!(?catalog);
+
+        match catalog.scheme() {
+            "http" | "https" => {
+                let catalog_config = RestCatalogConfig::builder()
+                    .uri(catalog.to_string())
+                    .props(env_s3_props().collect())
+                    .build();
+
+                RestCatalog::new(catalog_config)
+            }
+
+            scheme => unimplemented!("unsupported iceberg catalog scheme: {scheme}"),
+        }
+    }
+
     pub async fn store_as_iceberg(
         &self,
         topic: &str,
         partition: i32,
         offset: i64,
         batch: &Batch,
-        lake: &str,
+        catalog: &Url,
+        namespace: Option<&str>,
     ) -> Result<()> {
-        debug!(topic, partition, offset, lake);
+        debug!(topic, partition, offset);
 
         if let Some(record_batch) = self
             .schemas
@@ -319,15 +337,10 @@ impl Registry {
             .inspect(|record_batch| debug!(?record_batch))
             .inspect_err(|err| debug!(?err))?
         {
-            let catalog_config = RestCatalogConfig::builder()
-                .uri(format!("http://{}:{}", "localhost", "8181"))
-                .props(env_s3_props().collect())
-                .build();
-
-            let catalog = RestCatalog::new(catalog_config);
+            let catalog = self.iceberg_catalog(catalog);
             debug!(?catalog);
 
-            let namespace = "tansu";
+            let namespace = namespace.unwrap_or("tansu");
             let namespace_ident = NamespaceIdent::new(namespace.into());
 
             if !catalog.namespace_exists(&namespace_ident).await? {
