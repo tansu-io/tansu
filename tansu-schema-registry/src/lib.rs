@@ -301,8 +301,17 @@ impl Registry {
 
         match catalog.scheme() {
             "http" | "https" => {
+                let uri = format!(
+                    "{}://{}:{}",
+                    catalog.scheme(),
+                    catalog.host_str().unwrap_or("localhost"),
+                    catalog.port().unwrap_or(8181)
+                );
+
+                debug!(%uri);
+
                 let catalog_config = RestCatalogConfig::builder()
-                    .uri(catalog.to_string())
+                    .uri(uri)
                     .props(env_s3_props().collect())
                     .build();
 
@@ -342,8 +351,14 @@ impl Registry {
 
             let namespace = namespace.unwrap_or("tansu");
             let namespace_ident = NamespaceIdent::new(namespace.into());
+            debug!(%namespace_ident);
 
-            if !catalog.namespace_exists(&namespace_ident).await? {
+            if !catalog
+                .namespace_exists(&namespace_ident)
+                .await
+                .inspect(|namespace| debug!(?namespace))
+                .inspect_err(|err| debug!(?err))?
+            {
                 catalog
                     .create_namespace(&namespace_ident, HashMap::new())
                     .await
