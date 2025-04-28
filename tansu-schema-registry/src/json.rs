@@ -674,7 +674,7 @@ fn field_ids(schema: &Value) -> HashMap<String, i32> {
         ids
     }
 
-    field_ids_with_path(&[], schema, &mut 0)
+    field_ids_with_path(&[], schema, &mut 1)
 }
 
 #[cfg(test)]

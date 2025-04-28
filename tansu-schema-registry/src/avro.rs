@@ -544,7 +544,7 @@ fn field_ids(schema: &AvroSchema) -> HashMap<String, i32> {
         ids
     }
 
-    field_ids_with_path(&[], schema, &mut 0)
+    field_ids_with_path(&[], schema, &mut 1)
 }
 
 impl TryFrom<&Schema> for RecordBuilder {
@@ -2226,7 +2226,7 @@ mod tests {
         assert_eq!(1, data_files.len());
         assert_eq!(3, data_files[0].record_count());
         assert_eq!(
-            vec![&0],
+            vec![&1],
             data_files[0].null_value_counts().keys().collect::<Vec<_>>()
         );
 

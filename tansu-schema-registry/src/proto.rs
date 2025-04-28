@@ -751,7 +751,7 @@ fn field_ids(schema: &FileDescriptor) -> HashMap<String, i32> {
         ids
     }
 
-    let mut id = 0;
+    let mut id = 1;
 
     let mut fields_by_package = |relative_name: &str| -> HashMap<String, i32> {
         schema
