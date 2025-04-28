@@ -2,9 +2,8 @@
 
 [Tansu][github-com-tansu-io] is a drop-in replacement for
 Apache Kafka with PostgreSQL, S3 or memory storage engines.
-Without the cost of broker replicated storage for
-durability. Licensed under the [GNU AGPL][agpl-license].
-Written in 100% safe 🦺 async 🚀 [Rust][rust-lang-org] 🦀
+🆕 Schema backed topics (Avro, JSON or Protocol buffers) can
+be written as [Apache Iceberg tables](https://iceberg.apache.org).
 
 Features:
 
@@ -13,9 +12,8 @@ Features:
 - [JSON Schema][json-schema-org], [Apache Avro](https://avro.apache.org) or [Protocol Buffers](protocol-buffers)
   broker [validation](docs/schema-registry.md) of messages
 - Topics validated by [JSON Schema][json-schema-org], [Apache Avro](https://avro.apache.org)
-  or [Protocol buffers](protocol-buffers) are generated as
-  [Apache Parquet](https://parquet.apache.org) files for easy consumption into
-  your [data lake](https://en.wikipedia.org/wiki/Data_lake)
+  or [Protocol buffers](protocol-buffers) can be written as 🆕 [Apache Iceberg tables](https://iceberg.apache.org),
+  for examples see: [example-pyiceberg](https://github.com/tansu-io/example-pyiceberg)
 
 For data durability:
 
