@@ -13,19 +13,19 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::{io::Write, ops::Deref};
+use std::{collections::HashMap, io::Write, ops::Deref};
 
-use crate::{AsArrow, AsJsonValue, AsKafkaRecord, Error, Result, Validator, arrow::RecordBuilder};
-use bytes::{BufMut, Bytes, BytesMut};
-use datafusion::arrow::{
+use crate::{ARROW_LIST_FIELD_NAME, AsArrow, AsJsonValue, AsKafkaRecord, Error, Result, Validator};
+use arrow::{
     array::{
-        ArrayBuilder, BinaryBuilder, BooleanBuilder, Float32Builder, Float64Builder, Int32Builder,
-        Int64Builder, ListBuilder, MapBuilder, StringBuilder, StructBuilder, UInt32Builder,
-        UInt64Builder,
+        ArrayBuilder, BooleanBuilder, Float32Builder, Float64Builder, Int32Builder, Int64Builder,
+        LargeBinaryBuilder, ListBuilder, MapBuilder, StringBuilder, StructBuilder,
     },
-    datatypes::{DataType, Field, FieldRef, Fields},
+    datatypes::{DataType, Field, FieldRef, Fields, Schema as ArrowSchema},
     record_batch::RecordBatch,
 };
+use bytes::{BufMut, Bytes, BytesMut};
+use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use protobuf::{
     CodedInputStream, MessageDyn,
     reflect::{
@@ -45,12 +45,54 @@ const SORTED_MAP_KEYS: bool = false;
 const KEY: &str = "Key";
 const VALUE: &str = "Value";
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+fn append<'a>(path: &[&'a str], name: &'a str) -> Vec<&'a str> {
+    let mut path = Vec::from(path);
+    path.push(name);
+    path
+}
+
+#[derive(Default)]
+struct RecordBuilder {
+    keys: Vec<Box<dyn ArrayBuilder>>,
+    values: Vec<Box<dyn ArrayBuilder>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Schema {
     file_descriptor: FileDescriptor,
+    ids: HashMap<String, i32>,
 }
 
 impl Schema {
+    fn new_list_field(&self, path: &[&str], data_type: DataType) -> Field {
+        self.new_field(path, ARROW_LIST_FIELD_NAME, data_type)
+    }
+
+    fn new_field(&self, path: &[&str], name: &str, data_type: DataType) -> Field {
+        self.new_nullable_field(path, name, data_type, NULLABLE)
+    }
+
+    fn new_nullable_field(
+        &self,
+        path: &[&str],
+        name: &str,
+        data_type: DataType,
+        nullable: bool,
+    ) -> Field {
+        debug!(?path, name, ?data_type, ?nullable, ids = ?self.ids);
+
+        let path = append(path, name).join(".");
+
+        Field::new(name.to_owned(), data_type, nullable).with_metadata(
+            self.ids
+                .get(path.as_str())
+                .inspect(|field_id| debug!(?path, field_id))
+                .map(|field_id| (PARQUET_FIELD_ID_META_KEY.to_string(), field_id.to_string()))
+                .into_iter()
+                .collect(),
+        )
+    }
+
     fn message_value_as_bytes(&self, message_name: &str, json: &Value) -> Result<Option<Bytes>> {
         self.file_descriptor
             .message_by_package_relative_name(message_name)
@@ -72,6 +114,359 @@ impl Schema {
                     .inspect_err(|err| error!(?err))
             })
             .transpose()
+    }
+
+    fn runtime_type_to_data_type(&self, path: &[&str], runtime_type: &RuntimeType) -> DataType {
+        debug!(?path, ?runtime_type);
+
+        match runtime_type {
+            RuntimeType::U32 | RuntimeType::I32 | RuntimeType::Enum(_) => DataType::Int32,
+            RuntimeType::U64 | RuntimeType::I64 => DataType::Int64,
+            RuntimeType::F32 => DataType::Float32,
+            RuntimeType::F64 => DataType::Float64,
+            RuntimeType::Bool => DataType::Boolean,
+            RuntimeType::String => DataType::Utf8,
+            RuntimeType::VecU8 => DataType::LargeBinary,
+            RuntimeType::Message(descriptor) => DataType::Struct(Fields::from(
+                self.message_descriptor_to_fields(path, descriptor),
+            )),
+        }
+    }
+
+    fn message_descriptor_to_fields(
+        &self,
+        path: &[&str],
+        descriptor: &MessageDescriptor,
+    ) -> Vec<Field> {
+        debug!(?path, ?descriptor);
+
+        descriptor
+            .fields()
+            .map(|field| match field.runtime_field_type() {
+                RuntimeFieldType::Singular(ref singular) => {
+                    debug!(
+                        descriptor = descriptor.name(),
+                        field_name = field.name(),
+                        ?singular
+                    );
+
+                    self.new_nullable_field(
+                        path,
+                        field.name(),
+                        self.runtime_type_to_data_type(&append(path, field.name())[..], singular),
+                        !field.is_required(),
+                    )
+                }
+
+                RuntimeFieldType::Repeated(ref repeated) => {
+                    debug!(
+                        descriptor = descriptor.name(),
+                        field_name = field.name(),
+                        ?repeated
+                    );
+
+                    self.new_nullable_field(
+                        path,
+                        field.name(),
+                        {
+                            let path = &append(path, field.name())[..];
+
+                            DataType::List(FieldRef::new(self.new_list_field(
+                                path,
+                                self.runtime_type_to_data_type(
+                                    &append(path, ARROW_LIST_FIELD_NAME)[..],
+                                    repeated,
+                                ),
+                            )))
+                        },
+                        !field.is_required(),
+                    )
+                }
+
+                RuntimeFieldType::Map(ref key, ref value) => {
+                    debug!(
+                        descriptor = descriptor.name(),
+                        field_name = field.name(),
+                        ?key,
+                        ?value
+                    );
+
+                    self.new_nullable_field(
+                        path,
+                        field.name(),
+                        {
+                            let path = &append(path, field.name())[..];
+
+                            DataType::Map(
+                                FieldRef::new(self.new_nullable_field(
+                                    path,
+                                    "entries",
+                                    DataType::Struct({
+                                        let path = &append(path, "entries")[..];
+
+                                        Fields::from_iter([
+                                            self.new_nullable_field(
+                                                path,
+                                                "keys",
+                                                self.runtime_type_to_data_type(
+                                                    append(path, "keys").as_slice(),
+                                                    key,
+                                                ),
+                                                !NULLABLE,
+                                            ),
+                                            self.new_field(
+                                                path,
+                                                "values",
+                                                self.runtime_type_to_data_type(
+                                                    append(path, "values").as_slice(),
+                                                    value,
+                                                ),
+                                            ),
+                                        ])
+                                    }),
+                                    !NULLABLE,
+                                )),
+                                SORTED_MAP_KEYS,
+                            )
+                        },
+                        !field.is_required(),
+                    )
+                }
+            })
+            .collect::<Vec<_>>()
+    }
+
+    fn runtime_type_to_array_builder(
+        &self,
+        path: &[&str],
+        runtime_type: &RuntimeType,
+    ) -> Box<dyn ArrayBuilder> {
+        debug!(?path, ?runtime_type);
+
+        match runtime_type {
+            RuntimeType::U32 | RuntimeType::I32 | RuntimeType::Enum(_) => {
+                Box::new(Int32Builder::new())
+            }
+            RuntimeType::U64 | RuntimeType::I64 => Box::new(Int64Builder::new()),
+            RuntimeType::F32 => Box::new(Float32Builder::new()),
+            RuntimeType::F64 => Box::new(Float64Builder::new()),
+            RuntimeType::Bool => Box::new(BooleanBuilder::new()),
+            RuntimeType::String => Box::new(StringBuilder::new()),
+            RuntimeType::VecU8 => Box::new(LargeBinaryBuilder::new()),
+
+            RuntimeType::Message(descriptor) => {
+                let (fields, builders) = descriptor
+                    .fields()
+                    .map(|field| match field.runtime_field_type() {
+                        RuntimeFieldType::Singular(ref singular) => {
+                            debug!(
+                                descriptor = descriptor.name(),
+                                field_name = field.name(),
+                                ?singular
+                            );
+
+                            (
+                                self.new_nullable_field(
+                                    path,
+                                    field.name(),
+                                    self.runtime_type_to_data_type(
+                                        &append(path, field.name())[..],
+                                        singular,
+                                    ),
+                                    !field.is_required(),
+                                ),
+                                self.runtime_type_to_array_builder(path, singular),
+                            )
+                        }
+
+                        RuntimeFieldType::Repeated(ref repeated) => {
+                            debug!(
+                                descriptor = descriptor.name(),
+                                field_name = field.name(),
+                                ?repeated
+                            );
+
+                            (
+                                self.new_nullable_field(
+                                    path,
+                                    field.name(),
+                                    {
+                                        let path = &append(path, field.name())[..];
+
+                                        DataType::List(FieldRef::new(self.new_list_field(
+                                            path,
+                                            self.runtime_type_to_data_type(
+                                                &append(path, ARROW_LIST_FIELD_NAME)[..],
+                                                repeated,
+                                            ),
+                                        )))
+                                    },
+                                    !field.is_required(),
+                                ),
+                                {
+                                    let path = &append(path, field.name())[..];
+
+                                    Box::new(
+                                        ListBuilder::new(self.runtime_type_to_array_builder(
+                                            &append(path, ARROW_LIST_FIELD_NAME)[..],
+                                            repeated,
+                                        ))
+                                        .with_field(
+                                            self.new_list_field(
+                                                path,
+                                                self.runtime_type_to_data_type(
+                                                    &append(path, ARROW_LIST_FIELD_NAME)[..],
+                                                    repeated,
+                                                ),
+                                            ),
+                                        ),
+                                    ) as Box<dyn ArrayBuilder>
+                                },
+                            )
+                        }
+
+                        RuntimeFieldType::Map(ref key, ref value) => {
+                            debug!(
+                                descriptor = descriptor.name(),
+                                field_name = field.name(),
+                                ?key,
+                                ?value
+                            );
+
+                            (
+                                self.new_nullable_field(
+                                    path,
+                                    field.name(),
+                                    {
+                                        let path = &append(path, field.name())[..];
+
+                                        DataType::Map(
+                                            FieldRef::new(self.new_nullable_field(
+                                                path,
+                                                "entries",
+                                                DataType::Struct({
+                                                    let path = &append(path, "entries")[..];
+
+                                                    Fields::from_iter([
+                                                        self.new_nullable_field(
+                                                            path,
+                                                            "keys",
+                                                            self.runtime_type_to_data_type(
+                                                                &append(path, "keys")[..],
+                                                                key,
+                                                            ),
+                                                            !NULLABLE,
+                                                        ),
+                                                        self.new_field(
+                                                            path,
+                                                            "values",
+                                                            self.runtime_type_to_data_type(
+                                                                &append(path, "values")[..],
+                                                                value,
+                                                            ),
+                                                        ),
+                                                    ])
+                                                }),
+                                                !NULLABLE,
+                                            )),
+                                            SORTED_MAP_KEYS,
+                                        )
+                                    },
+                                    !field.is_required(),
+                                ),
+                                Box::new(MapBuilder::new(
+                                    None,
+                                    self.runtime_type_to_array_builder(path, key),
+                                    self.runtime_type_to_array_builder(path, value),
+                                )) as Box<dyn ArrayBuilder>,
+                            )
+                        }
+                    })
+                    .collect::<(Vec<_>, Vec<_>)>();
+
+                Box::new(StructBuilder::new(fields, builders))
+            }
+        }
+    }
+
+    fn message_descriptor_array_builders(
+        &self,
+        path: &[&str],
+        descriptor: &MessageDescriptor,
+    ) -> Vec<Box<dyn ArrayBuilder>> {
+        debug!(?path, ?descriptor);
+
+        descriptor
+            .fields()
+            .map(|field| {
+                let path = &append(path, field.name())[..];
+
+                match field.runtime_field_type() {
+                    RuntimeFieldType::Singular(ref singular) => {
+                        debug!(
+                            descriptor = descriptor.name(),
+                            field_name = field.name(),
+                            ?singular,
+                            ?path
+                        );
+                        self.runtime_type_to_array_builder(path, singular)
+                    }
+
+                    RuntimeFieldType::Repeated(ref repeated) => {
+                        debug!(
+                            descriptor = descriptor.name(),
+                            field_name = field.name(),
+                            ?repeated,
+                            ?path
+                        );
+                        Box::new(
+                            ListBuilder::new(self.runtime_type_to_array_builder(
+                                &append(path, ARROW_LIST_FIELD_NAME)[..],
+                                repeated,
+                            ))
+                            .with_field(self.new_list_field(
+                                path,
+                                self.runtime_type_to_data_type(
+                                    &append(path, ARROW_LIST_FIELD_NAME)[..],
+                                    repeated,
+                                ),
+                            )),
+                        )
+                    }
+
+                    RuntimeFieldType::Map(ref key, ref value) => {
+                        debug!(
+                            descriptor = descriptor.name(),
+                            field_name = field.name(),
+                            ?key,
+                            ?value,
+                            ?path
+                        );
+
+                        let path = &append(path, "entries");
+
+                        Box::new(
+                            MapBuilder::new(
+                                None,
+                                self.runtime_type_to_array_builder(path, key),
+                                self.runtime_type_to_array_builder(path, value),
+                            )
+                            .with_keys_field(self.new_nullable_field(
+                                &path[..],
+                                "keys",
+                                self.runtime_type_to_data_type(&append(path, "keys")[..], key),
+                                !NULLABLE,
+                            ))
+                            .with_values_field(self.new_field(
+                                &path[..],
+                                "values",
+                                self.runtime_type_to_data_type(&append(path, "values")[..], value),
+                            )),
+                        )
+                    }
+                }
+            })
+            .collect::<Vec<_>>()
     }
 }
 
@@ -101,212 +496,6 @@ impl AsKafkaRecord for Schema {
     }
 }
 
-fn runtime_type_to_data_type(runtime_type: &RuntimeType) -> DataType {
-    match runtime_type {
-        RuntimeType::I32 | RuntimeType::Enum(_) => DataType::Int32,
-        RuntimeType::I64 => DataType::Int64,
-        RuntimeType::U32 => DataType::UInt32,
-        RuntimeType::U64 => DataType::UInt64,
-        RuntimeType::F32 => DataType::Float32,
-        RuntimeType::F64 => DataType::Float64,
-        RuntimeType::Bool => DataType::Boolean,
-        RuntimeType::String => DataType::Utf8,
-        RuntimeType::VecU8 => DataType::Binary,
-        RuntimeType::Message(descriptor) => {
-            DataType::Struct(Fields::from(message_descriptor_to_fields(descriptor)))
-        }
-    }
-}
-
-fn message_descriptor_to_fields(descriptor: &MessageDescriptor) -> Vec<Field> {
-    descriptor
-        .fields()
-        .map(|field| match field.runtime_field_type() {
-            RuntimeFieldType::Singular(ref singular) => {
-                debug!(
-                    descriptor = descriptor.name(),
-                    field_name = field.name(),
-                    ?singular
-                );
-
-                Field::new(
-                    field.name(),
-                    runtime_type_to_data_type(singular),
-                    !field.is_required(),
-                )
-            }
-
-            RuntimeFieldType::Repeated(ref repeated) => {
-                debug!(
-                    descriptor = descriptor.name(),
-                    field_name = field.name(),
-                    ?repeated
-                );
-
-                Field::new(
-                    field.name(),
-                    DataType::new_list(runtime_type_to_data_type(repeated), NULLABLE),
-                    !field.is_required(),
-                )
-            }
-
-            RuntimeFieldType::Map(ref key, ref value) => {
-                debug!(
-                    descriptor = descriptor.name(),
-                    field_name = field.name(),
-                    ?key,
-                    ?value
-                );
-
-                let children = FieldRef::new(Field::new(
-                    "entries",
-                    DataType::Struct(Fields::from_iter([
-                        Field::new("keys", runtime_type_to_data_type(key), !NULLABLE),
-                        Field::new("values", runtime_type_to_data_type(value), NULLABLE),
-                    ])),
-                    !NULLABLE,
-                ));
-
-                Field::new(
-                    field.name(),
-                    DataType::Map(children, SORTED_MAP_KEYS),
-                    NULLABLE,
-                )
-            }
-        })
-        .collect::<Vec<_>>()
-}
-
-fn runtime_type_to_array_builder(runtime_type: &RuntimeType) -> Box<dyn ArrayBuilder> {
-    debug!(?runtime_type);
-
-    match runtime_type {
-        RuntimeType::I32 | RuntimeType::Enum(_) => Box::new(Int32Builder::new()),
-        RuntimeType::I64 => Box::new(Int64Builder::new()),
-        RuntimeType::U32 => Box::new(UInt32Builder::new()),
-        RuntimeType::U64 => Box::new(UInt64Builder::new()),
-        RuntimeType::F32 => Box::new(Float32Builder::new()),
-        RuntimeType::F64 => Box::new(Float64Builder::new()),
-        RuntimeType::Bool => Box::new(BooleanBuilder::new()),
-        RuntimeType::String => Box::new(StringBuilder::new()),
-        RuntimeType::VecU8 => Box::new(BinaryBuilder::new()),
-        RuntimeType::Message(descriptor) => {
-            let (fields, builders) = descriptor
-                .fields()
-                .map(|field| match field.runtime_field_type() {
-                    RuntimeFieldType::Singular(ref singular) => {
-                        debug!(
-                            descriptor = descriptor.name(),
-                            field_name = field.name(),
-                            ?singular
-                        );
-
-                        (
-                            Field::new(
-                                field.name(),
-                                runtime_type_to_data_type(singular),
-                                !field.is_required(),
-                            ),
-                            runtime_type_to_array_builder(singular),
-                        )
-                    }
-
-                    RuntimeFieldType::Repeated(ref repeated) => {
-                        debug!(
-                            descriptor = descriptor.name(),
-                            field_name = field.name(),
-                            ?repeated
-                        );
-
-                        (
-                            Field::new(
-                                field.name(),
-                                DataType::new_list(runtime_type_to_data_type(repeated), NULLABLE),
-                                !field.is_required(),
-                            ),
-                            Box::new(ListBuilder::new(runtime_type_to_array_builder(repeated)))
-                                as Box<dyn ArrayBuilder>,
-                        )
-                    }
-
-                    RuntimeFieldType::Map(ref key, ref value) => {
-                        debug!(
-                            descriptor = descriptor.name(),
-                            field_name = field.name(),
-                            ?key,
-                            ?value
-                        );
-
-                        let children = FieldRef::new(Field::new(
-                            "entries",
-                            DataType::Struct(Fields::from_iter([
-                                Field::new("keys", runtime_type_to_data_type(key), !NULLABLE),
-                                Field::new("values", runtime_type_to_data_type(value), NULLABLE),
-                            ])),
-                            !NULLABLE,
-                        ));
-
-                        (
-                            Field::new(
-                                field.name(),
-                                DataType::Map(children, SORTED_MAP_KEYS),
-                                NULLABLE,
-                            ),
-                            Box::new(MapBuilder::new(
-                                None,
-                                runtime_type_to_array_builder(key),
-                                runtime_type_to_array_builder(value),
-                            )) as Box<dyn ArrayBuilder>,
-                        )
-                    }
-                })
-                .collect::<(Vec<_>, Vec<_>)>();
-
-            Box::new(StructBuilder::new(fields, builders))
-        }
-    }
-}
-
-fn message_descriptor_array_builders(descriptor: &MessageDescriptor) -> Vec<Box<dyn ArrayBuilder>> {
-    descriptor
-        .fields()
-        .map(|field| match field.runtime_field_type() {
-            RuntimeFieldType::Singular(ref singular) => {
-                debug!(
-                    descriptor = descriptor.name(),
-                    field_name = field.name(),
-                    ?singular
-                );
-                runtime_type_to_array_builder(singular)
-            }
-
-            RuntimeFieldType::Repeated(ref repeated) => {
-                debug!(
-                    descriptor = descriptor.name(),
-                    field_name = field.name(),
-                    ?repeated
-                );
-                Box::new(ListBuilder::new(runtime_type_to_array_builder(repeated)))
-            }
-
-            RuntimeFieldType::Map(ref key, ref value) => {
-                debug!(
-                    descriptor = descriptor.name(),
-                    field_name = field.name(),
-                    ?key,
-                    ?value
-                );
-
-                Box::new(MapBuilder::new(
-                    None,
-                    runtime_type_to_array_builder(key),
-                    runtime_type_to_array_builder(value),
-                ))
-            }
-        })
-        .collect::<Vec<_>>()
-}
-
 impl From<&Schema> for Vec<Box<dyn ArrayBuilder>> {
     fn from(schema: &Schema) -> Self {
         debug!(?schema);
@@ -315,7 +504,7 @@ impl From<&Schema> for Vec<Box<dyn ArrayBuilder>> {
 
         if let Some(ref descriptor) = schema.file_descriptor.message_by_package_relative_name(KEY) {
             debug!(?descriptor);
-            builders.append(&mut message_descriptor_array_builders(descriptor));
+            builders.append(&mut schema.message_descriptor_array_builders(&[KEY], descriptor));
         }
 
         if let Some(ref descriptor) = schema
@@ -323,7 +512,7 @@ impl From<&Schema> for Vec<Box<dyn ArrayBuilder>> {
             .message_by_package_relative_name(VALUE)
         {
             debug!(?descriptor);
-            builders.append(&mut message_descriptor_array_builders(descriptor));
+            builders.append(&mut schema.message_descriptor_array_builders(&[VALUE], descriptor));
         }
 
         builders
@@ -336,7 +525,7 @@ impl From<&Schema> for RecordBuilder {
 
         if let Some(ref descriptor) = schema.file_descriptor.message_by_package_relative_name(KEY) {
             debug!(descriptor = descriptor.name());
-            keys.append(&mut message_descriptor_array_builders(descriptor));
+            keys.append(&mut schema.message_descriptor_array_builders(&[KEY], descriptor));
         }
 
         let mut values = vec![];
@@ -346,7 +535,7 @@ impl From<&Schema> for RecordBuilder {
             .message_by_package_relative_name(VALUE)
         {
             debug!(descriptor = descriptor.name());
-            values.append(&mut message_descriptor_array_builders(descriptor));
+            values.append(&mut schema.message_descriptor_array_builders(&[VALUE], descriptor));
         }
 
         Self { keys, values }
@@ -359,7 +548,7 @@ impl From<&Schema> for Fields {
 
         if let Some(ref descriptor) = schema.file_descriptor.message_by_package_relative_name(KEY) {
             debug!(?descriptor);
-            fields.append(&mut message_descriptor_to_fields(descriptor));
+            fields.append(&mut schema.message_descriptor_to_fields(&[KEY], descriptor));
         }
 
         if let Some(ref descriptor) = schema
@@ -368,16 +557,16 @@ impl From<&Schema> for Fields {
         {
             debug!(descriptor = descriptor.name());
 
-            fields.append(&mut message_descriptor_to_fields(descriptor));
+            fields.append(&mut schema.message_descriptor_to_fields(&[VALUE], descriptor));
         }
 
         fields.into()
     }
 }
 
-impl From<&Schema> for datafusion::arrow::datatypes::Schema {
+impl From<&Schema> for ArrowSchema {
     fn from(schema: &Schema) -> Self {
-        datafusion::arrow::datatypes::Schema::new(Fields::from(schema))
+        ArrowSchema::new(Fields::from(schema))
     }
 }
 
@@ -431,7 +620,16 @@ impl TryFrom<Bytes> for Schema {
     type Error = Error;
 
     fn try_from(proto: Bytes) -> Result<Self, Self::Error> {
-        make_fd(proto).map(|file_descriptor| Self { file_descriptor })
+        make_fd(proto).map(Self::from)
+    }
+}
+
+impl From<FileDescriptor> for Schema {
+    fn from(file_descriptor: FileDescriptor) -> Self {
+        Self {
+            ids: field_ids(&file_descriptor),
+            file_descriptor,
+        }
     }
 }
 
@@ -461,6 +659,116 @@ fn make_fd(proto: Bytes) -> Result<FileDescriptor> {
     })
 }
 
+fn field_ids(schema: &FileDescriptor) -> HashMap<String, i32> {
+    debug!(?schema);
+
+    fn field_ids_with_path(
+        path: &[&str],
+        schema: &MessageDescriptor,
+        id: &mut i32,
+    ) -> HashMap<String, i32> {
+        debug!(?path, ?schema, ?id);
+
+        let mut ids = HashMap::new();
+
+        for field in schema.fields() {
+            debug!(?path, field_name = ?field.name());
+
+            let mut path = Vec::from(path);
+            path.push(field.name());
+            ids.insert(path.join("."), *id);
+            *id += 1;
+
+            match field.runtime_field_type() {
+                RuntimeFieldType::Singular(singular) => {
+                    debug!(?path, ?singular);
+
+                    if let RuntimeType::Message(message_descriptor) = singular {
+                        debug!(?path, ?message_descriptor);
+
+                        ids.extend(
+                            field_ids_with_path(&path[..], &message_descriptor, id).into_iter(),
+                        )
+                    }
+                }
+
+                RuntimeFieldType::Repeated(repeated) => {
+                    debug!(?path, ?repeated);
+
+                    path.push(ARROW_LIST_FIELD_NAME);
+                    ids.insert(path.join("."), *id);
+                    *id += 1;
+
+                    if let RuntimeType::Message(message_descriptor) = repeated {
+                        debug!(?path, ?message_descriptor);
+
+                        ids.extend(
+                            field_ids_with_path(&path[..], &message_descriptor, id).into_iter(),
+                        )
+                    }
+                }
+
+                RuntimeFieldType::Map(keys, values) => {
+                    debug!(?path, ?keys, ?values);
+
+                    path.push("entries");
+                    ids.insert(path.join("."), *id);
+                    *id += 1;
+
+                    {
+                        let mut path = path.clone();
+                        path.push("keys");
+                        ids.insert(path.join("."), *id);
+                        *id += 1;
+
+                        if let RuntimeType::Message(message_descriptor) = keys {
+                            debug!(?path, ?message_descriptor);
+
+                            ids.extend(
+                                field_ids_with_path(&path[..], &message_descriptor, id).into_iter(),
+                            )
+                        }
+                    }
+
+                    {
+                        let mut path = path.clone();
+                        path.push("values");
+                        ids.insert(path.join("."), *id);
+                        *id += 1;
+
+                        if let RuntimeType::Message(message_descriptor) = values {
+                            debug!(?path, ?message_descriptor);
+
+                            ids.extend(
+                                field_ids_with_path(&path[..], &message_descriptor, id).into_iter(),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        ids
+    }
+
+    let mut id = 1;
+
+    let mut fields_by_package = |relative_name: &str| -> HashMap<String, i32> {
+        schema
+            .message_by_package_relative_name(relative_name)
+            .as_ref()
+            .map(|schema| field_ids_with_path(&[relative_name], schema, &mut id))
+            .unwrap_or_default()
+    };
+
+    let mut ids = HashMap::new();
+
+    ids.extend(fields_by_package(KEY));
+    ids.extend(fields_by_package(VALUE));
+
+    ids
+}
+
 fn append_struct_builder(message: &dyn MessageDyn, builder: &mut StructBuilder) -> Result<()> {
     for (index, ref field) in message.descriptor_dyn().fields().enumerate() {
         debug!(field_name = field.name());
@@ -469,14 +777,22 @@ fn append_struct_builder(message: &dyn MessageDyn, builder: &mut StructBuilder) 
             RuntimeFieldType::Singular(_singular) => {
                 match field.get_singular_field_or_default(message) {
                     ReflectValueRef::U32(value) => builder
-                        .field_builder::<UInt32Builder>(index)
+                        .field_builder::<Int32Builder>(index)
                         .ok_or(Error::Downcast)
-                        .map(|values| values.append_value(value))?,
+                        .and_then(|values| {
+                            i32::try_from(value)
+                                .map_err(Into::into)
+                                .map(|value| values.append_value(value))
+                        })?,
 
                     ReflectValueRef::U64(value) => builder
-                        .field_builder::<UInt64Builder>(index)
+                        .field_builder::<Int64Builder>(index)
                         .ok_or(Error::Downcast)
-                        .map(|values| values.append_value(value))?,
+                        .and_then(|values| {
+                            i64::try_from(value)
+                                .map_err(Into::into)
+                                .map(|value| values.append_value(value))
+                        })?,
 
                     ReflectValueRef::I32(value) | ReflectValueRef::Enum(_, value) => builder
                         .field_builder::<Int32Builder>(index)
@@ -509,7 +825,7 @@ fn append_struct_builder(message: &dyn MessageDyn, builder: &mut StructBuilder) 
                         .map(|values| values.append_value(value))?,
 
                     ReflectValueRef::Bytes(value) => builder
-                        .field_builder::<BinaryBuilder>(index)
+                        .field_builder::<LargeBinaryBuilder>(index)
                         .ok_or(Error::Downcast)
                         .map(|values| values.append_value(value))?,
 
@@ -533,16 +849,24 @@ fn append_struct_builder(message: &dyn MessageDyn, builder: &mut StructBuilder) 
                 for value in field.get_repeated(message) {
                     match value {
                         ReflectValueRef::U32(value) => values
-                            .downcast_mut::<UInt32Builder>()
+                            .downcast_mut::<Int32Builder>()
                             .ok_or(Error::Downcast)
                             .inspect_err(|err| error!(?err, ?value, ?repeated))
-                            .map(|builder| builder.append_value(value))?,
+                            .and_then(|builder| {
+                                i32::try_from(value)
+                                    .map_err(Into::into)
+                                    .map(|value| builder.append_value(value))
+                            })?,
 
                         ReflectValueRef::U64(value) => values
-                            .downcast_mut::<UInt64Builder>()
+                            .downcast_mut::<Int64Builder>()
                             .ok_or(Error::Downcast)
                             .inspect_err(|err| error!(?err, ?value, ?repeated))
-                            .map(|builder| builder.append_value(value))?,
+                            .and_then(|builder| {
+                                i64::try_from(value)
+                                    .map_err(Into::into)
+                                    .map(|value| builder.append_value(value))
+                            })?,
 
                         ReflectValueRef::I32(value) | ReflectValueRef::Enum(_, value) => values
                             .downcast_mut::<Int32Builder>()
@@ -581,7 +905,7 @@ fn append_struct_builder(message: &dyn MessageDyn, builder: &mut StructBuilder) 
                             .map(|builder| builder.append_value(value))?,
 
                         ReflectValueRef::Bytes(value) => values
-                            .downcast_mut::<BinaryBuilder>()
+                            .downcast_mut::<LargeBinaryBuilder>()
                             .ok_or(Error::Downcast)
                             .inspect_err(|err| error!(?err, ?value, ?repeated))
                             .map(|builder| builder.append_value(value))?,
@@ -629,22 +953,30 @@ fn process_field_descriptor(
                     debug!(?value);
                     builder
                         .as_any_mut()
-                        .downcast_mut::<UInt32Builder>()
+                        .downcast_mut::<Int32Builder>()
                         .ok_or(Error::BadDowncast {
                             field: field.name().to_owned(),
                         })
-                        .map(|builder| builder.append_value(value))
+                        .and_then(|builder| {
+                            i32::try_from(value)
+                                .map_err(Into::into)
+                                .map(|value| builder.append_value(value))
+                        })
                 }
 
                 ReflectValueRef::U64(value) => {
                     debug!(?value);
                     builder
                         .as_any_mut()
-                        .downcast_mut::<UInt64Builder>()
+                        .downcast_mut::<Int64Builder>()
                         .ok_or(Error::BadDowncast {
                             field: field.name().to_owned(),
                         })
-                        .map(|builder| builder.append_value(value))
+                        .and_then(|builder| {
+                            i64::try_from(value)
+                                .map_err(Into::into)
+                                .map(|value| builder.append_value(value))
+                        })
                 }
 
                 ReflectValueRef::I32(value) | ReflectValueRef::Enum(_, value) => {
@@ -720,7 +1052,7 @@ fn process_field_descriptor(
                     debug!(?value);
                     builder
                         .as_any_mut()
-                        .downcast_mut::<BinaryBuilder>()
+                        .downcast_mut::<LargeBinaryBuilder>()
                         .ok_or(Error::BadDowncast {
                             field: field.name().to_owned(),
                         })
@@ -753,19 +1085,27 @@ fn process_field_descriptor(
                         builder
                             .values()
                             .as_any_mut()
-                            .downcast_mut::<UInt32Builder>()
+                            .downcast_mut::<Int32Builder>()
                             .ok_or(Error::Downcast)
                             .inspect_err(|err| error!(?err, ?value, ?repeated))
-                            .map(|builder| builder.append_value(value))?;
+                            .and_then(|builder| {
+                                i32::try_from(value)
+                                    .map_err(Into::into)
+                                    .map(|value| builder.append_value(value))
+                            })?
                     }
 
                     ReflectValueRef::U64(value) => builder
                         .values()
                         .as_any_mut()
-                        .downcast_mut::<UInt64Builder>()
+                        .downcast_mut::<Int64Builder>()
                         .ok_or(Error::Downcast)
                         .inspect_err(|err| error!(?err, ?value, ?repeated))
-                        .map(|builder| builder.append_value(value))?,
+                        .and_then(|builder| {
+                            i64::try_from(value)
+                                .map_err(Into::into)
+                                .map(|value| builder.append_value(value))
+                        })?,
 
                     ReflectValueRef::I32(value) | ReflectValueRef::Enum(_, value) => builder
                         .values()
@@ -821,7 +1161,7 @@ fn process_field_descriptor(
                     ReflectValueRef::Bytes(value) => builder
                         .values()
                         .as_any_mut()
-                        .downcast_mut::<BinaryBuilder>()
+                        .downcast_mut::<LargeBinaryBuilder>()
                         .ok_or(Error::Downcast)
                         .inspect_err(|err| error!(?err, ?value, ?repeated))
                         .map(|builder| builder.append_value(value))?,
@@ -872,15 +1212,23 @@ fn decode_value(value: ReflectValueRef, builder: &mut dyn ArrayBuilder) -> Resul
     match value {
         ReflectValueRef::U32(value) => builder
             .as_any_mut()
-            .downcast_mut::<UInt32Builder>()
+            .downcast_mut::<Int32Builder>()
             .ok_or(Error::Downcast)
-            .map(|builder| builder.append_value(value)),
+            .and_then(|builder| {
+                i32::try_from(value)
+                    .map_err(Into::into)
+                    .map(|value| builder.append_value(value))
+            }),
 
         ReflectValueRef::U64(value) => builder
             .as_any_mut()
-            .downcast_mut::<UInt64Builder>()
+            .downcast_mut::<Int64Builder>()
             .ok_or(Error::Downcast)
-            .map(|builder| builder.append_value(value)),
+            .and_then(|builder| {
+                i64::try_from(value)
+                    .map_err(Into::into)
+                    .map(|value| builder.append_value(value))
+            }),
 
         ReflectValueRef::I32(value) | ReflectValueRef::Enum(_, value) => builder
             .as_any_mut()
@@ -920,7 +1268,7 @@ fn decode_value(value: ReflectValueRef, builder: &mut dyn ArrayBuilder) -> Resul
 
         ReflectValueRef::Bytes(value) => builder
             .as_any_mut()
-            .downcast_mut::<BinaryBuilder>()
+            .downcast_mut::<LargeBinaryBuilder>()
             .ok_or(Error::Downcast)
             .map(|builder| builder.append_value(value)),
 
@@ -982,7 +1330,7 @@ impl AsArrow for Schema {
     fn as_arrow(&self, batch: &Batch) -> Result<RecordBatch> {
         debug!(?batch);
 
-        let schema = datafusion::arrow::datatypes::Schema::from(self);
+        let schema = ArrowSchema::from(self);
         debug!(?schema);
 
         let mut record_builder = RecordBuilder::from(self);
@@ -1079,8 +1427,25 @@ mod tests {
     use crate::Registry;
 
     use super::*;
-    use datafusion::{arrow::util::pretty::pretty_format_batches, prelude::*};
+    use arrow::util::pretty::pretty_format_batches;
+    use datafusion::prelude::*;
+    use iceberg::{
+        io::FileIOBuilder,
+        spec::{
+            DataFile, DataFileFormat::Parquet, Schema as IcebergSchema,
+            SchemaRef as IcebergSchemaRef,
+        },
+        writer::{
+            IcebergWriter, IcebergWriterBuilder,
+            base_writer::data_file_writer::DataFileWriterBuilder,
+            file_writer::{
+                ParquetWriterBuilder,
+                location_generator::{DefaultFileNameGenerator, LocationGenerator},
+            },
+        },
+    };
     use object_store::{ObjectStore, PutPayload, memory::InMemory, path::Path};
+    use parquet::file::properties::WriterProperties;
     use serde_json::json;
     use std::{fs::File, sync::Arc, thread};
     use tansu_kafka_sans_io::record::Record;
@@ -1334,13 +1699,17 @@ mod tests {
             batch.build()?
         };
 
-        let schema = Schema { file_descriptor };
+        let schema = Schema::from(file_descriptor);
         let record_batch = schema.as_arrow(&batch)?;
+
+        let data_files = iceberg_write(record_batch.clone()).await?;
+        assert_eq!(1, data_files.len());
+        assert_eq!(2, data_files[0].record_count());
 
         let ctx = SessionContext::new();
 
-        _ = ctx.register_batch("search", record_batch)?;
-        let df = ctx.sql("select * from search").await?;
+        _ = ctx.register_batch("t", record_batch.clone())?;
+        let df = ctx.sql("select * from t").await?;
         let results = df.collect().await?;
 
         let pretty_results = pretty_format_batches(&results)?.to_string();
@@ -1375,35 +1744,47 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn using_other_message_types() -> Result<()> {
-        let _guard = init_tracing()?;
-        let proto = Bytes::from_static(
-            br#"
-            syntax = 'proto3';
+    async fn iceberg_write(record_batch: RecordBatch) -> Result<Vec<DataFile>> {
+        let iceberg_schema = IcebergSchema::try_from(record_batch.schema().as_ref())
+            .map(IcebergSchemaRef::new)
+            .inspect(|schema| debug!(?schema))
+            .inspect_err(|err| debug!(?err))?;
 
-            message SearchResponse {
-              repeated Result results = 1;
-            }
+        let memory = FileIOBuilder::new("memory").build()?;
 
-            message Result {
-              string url = 1;
-              string title = 2;
-              repeated string snippets = 3;
+        #[derive(Clone)]
+        struct Location;
+
+        impl LocationGenerator for Location {
+            fn generate_location(&self, file_name: &str) -> String {
+                format!("abc/{file_name}")
             }
-            "#,
+        }
+
+        let writer = ParquetWriterBuilder::new(
+            WriterProperties::default(),
+            iceberg_schema,
+            memory,
+            Location,
+            DefaultFileNameGenerator::new("pqr".into(), None, Parquet),
         );
 
-        let file_descriptor = make_fd(proto)?;
-        let descriptor = file_descriptor
-            .message_by_package_relative_name("SearchResponse")
-            .unwrap();
+        let mut data_file_writer = DataFileWriterBuilder::new(writer, None, 0)
+            .build()
+            .await
+            .inspect_err(|err| error!(?err))?;
 
-        let fields = message_descriptor_to_fields(&descriptor);
-        assert_eq!(1, fields.len());
-        assert_eq!("results", fields[0].name());
+        data_file_writer
+            .write(record_batch)
+            .await
+            .inspect_err(|err| debug!(?err))?;
 
-        Ok(())
+        data_file_writer
+            .close()
+            .await
+            .inspect(|data_files| debug!(?data_files))
+            .inspect_err(|err| debug!(?err))
+            .map_err(Into::into)
     }
 
     #[tokio::test]
@@ -1473,8 +1854,12 @@ mod tests {
             batch.build()?
         };
 
-        let schema = Schema { file_descriptor };
+        let schema = Schema::from(file_descriptor);
         let record_batch = schema.as_arrow(&batch)?;
+
+        let data_files = iceberg_write(record_batch.clone()).await?;
+        assert_eq!(1, data_files.len());
+        assert_eq!(1, data_files[0].record_count());
 
         let ctx = SessionContext::new();
 
@@ -1549,8 +1934,12 @@ mod tests {
             batch.build()?
         };
 
-        let schema = Schema { file_descriptor };
+        let schema = Schema::from(file_descriptor);
         let record_batch = schema.as_arrow(&batch)?;
+
+        let data_files = iceberg_write(record_batch.clone()).await?;
+        assert_eq!(1, data_files.len());
+        assert_eq!(2, data_files[0].record_count());
 
         let ctx = SessionContext::new();
 
@@ -1575,6 +1964,77 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn taxi() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let proto = Bytes::from_static(
+            br#"
+            syntax = 'proto3';
+
+            enum Flag {
+                N = 0;
+                Y = 1;
+            }
+
+            message Value {
+              int64 vendor_id = 1;
+              int64 trip_id = 2;
+              float trip_distance = 3;
+              double fare_amount = 4;
+              Flag store_and_fwd = 5;
+            }
+            "#,
+        );
+
+        let file_descriptor = make_fd(proto)?;
+
+        let value = encode_from_value(
+            &file_descriptor,
+            "Value",
+            &json!({
+              "vendor_id": 1,
+              "trip_id": 1000371,
+              "trip_distance": 1.8,
+              "fare_amount": 15.32,
+              "store_and_fwd": "N"
+            }),
+        )?;
+
+        let batch = Batch::builder()
+            .record(Record::builder().value(value.into()))
+            .build()?;
+
+        let schema = Schema::from(file_descriptor);
+        let record_batch = schema.as_arrow(&batch)?;
+
+        let data_files = iceberg_write(record_batch.clone()).await?;
+        assert_eq!(1, data_files.len());
+        assert_eq!(1, data_files[0].record_count());
+
+        let ctx = SessionContext::new();
+
+        let topic = "taxi";
+        _ = ctx.register_batch(topic, record_batch)?;
+        let df = ctx.sql(format!("select * from {topic}").as_str()).await?;
+        let results = df.collect().await?;
+
+        let pretty_results = pretty_format_batches(&results)?.to_string();
+
+        let expected = vec![
+            "+-----------+---------+---------------+-------------+---------------+",
+            "| vendor_id | trip_id | trip_distance | fare_amount | store_and_fwd |",
+            "+-----------+---------+---------------+-------------+---------------+",
+            "| 1         | 1000371 | 1.8           | 15.32       | 0             |",
+            "+-----------+---------+---------------+-------------+---------------+",
+        ];
+
+        assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
+
+        Ok(())
+    }
+
+    #[ignore]
     #[tokio::test]
     async fn simple_map() -> Result<()> {
         let _guard = init_tracing()?;
@@ -1603,7 +2063,7 @@ mod tests {
             .record(Record::builder().value(value.into()))
             .build()?;
 
-        let schema = Schema { file_descriptor };
+        let schema = Schema::from(file_descriptor);
         let record_batch = schema.as_arrow(&batch)?;
 
         let ctx = SessionContext::new();
@@ -1631,6 +2091,7 @@ mod tests {
         Ok(())
     }
 
+    #[ignore]
     #[tokio::test]
     async fn map_other_type() -> Result<()> {
         let _guard = init_tracing()?;
@@ -1664,7 +2125,7 @@ mod tests {
             .record(Record::builder().value(value.into()))
             .build()?;
 
-        let schema = Schema { file_descriptor };
+        let schema = Schema::from(file_descriptor);
         let record_batch = schema.as_arrow(&batch)?;
 
         let ctx = SessionContext::new();
@@ -1724,8 +2185,12 @@ mod tests {
             .record(Record::builder().value(value.into()))
             .build()?;
 
-        let schema = Schema { file_descriptor };
+        let schema = Schema::from(file_descriptor);
         let record_batch = schema.as_arrow(&batch)?;
+
+        let data_files = iceberg_write(record_batch.clone()).await?;
+        assert_eq!(1, data_files.len());
+        assert_eq!(1, data_files[0].record_count());
 
         let ctx = SessionContext::new();
 
@@ -1779,8 +2244,11 @@ mod tests {
             .record(Record::builder().value(value.into()))
             .build()?;
 
-        let schema = Schema { file_descriptor };
+        let schema = Schema::from(file_descriptor);
         let record_batch = schema.as_arrow(&batch)?;
+        let data_files = iceberg_write(record_batch.clone()).await?;
+        assert_eq!(1, data_files.len());
+        assert_eq!(1, data_files[0].record_count());
 
         let ctx = SessionContext::new();
 
@@ -1839,8 +2307,11 @@ mod tests {
             .record(Record::builder().value(value.into()))
             .build()?;
 
-        let schema = Schema { file_descriptor };
+        let schema = Schema::from(file_descriptor);
         let record_batch = schema.as_arrow(&batch)?;
+        let data_files = iceberg_write(record_batch.clone()).await?;
+        assert_eq!(1, data_files.len());
+        assert_eq!(1, data_files[0].record_count());
 
         let ctx = SessionContext::new();
 

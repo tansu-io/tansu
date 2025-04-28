@@ -13,10 +13,27 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use datafusion::arrow::array::ArrayBuilder;
+use std::env::vars;
 
-#[derive(Default)]
-pub(crate) struct RecordBuilder {
-    pub(crate) keys: Vec<Box<dyn ArrayBuilder>>,
-    pub(crate) values: Vec<Box<dyn ArrayBuilder>>,
+use iceberg::io::{S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY};
+
+fn env_mapping(k: &str) -> &str {
+    match k {
+        "AWS_ACCESS_KEY_ID" => S3_ACCESS_KEY_ID,
+        "AWS_SECRET_ACCESS_KEY" => S3_SECRET_ACCESS_KEY,
+        "AWS_DEFAULT_REGION" => S3_REGION,
+        "AWS_ENDPOINT" => S3_ENDPOINT,
+        _ => unreachable!("{k}"),
+    }
+}
+
+pub fn env_s3_props() -> impl Iterator<Item = (String, String)> {
+    vars()
+        .filter(|(k, _)| {
+            k == "AWS_ACCESS_KEY_ID"
+                || k == "AWS_SECRET_ACCESS_KEY"
+                || k == "AWS_DEFAULT_REGION"
+                || k == "AWS_ENDPOINT"
+        })
+        .map(|(k, v)| (env_mapping(k.as_str()).to_owned(), v))
 }

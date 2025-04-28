@@ -74,6 +74,21 @@ pub(super) struct Arg {
 
     #[arg(
         long,
+        env = "ICEBERG_CATALOG",
+        help = "Apache Iceberg Catalog, examples are: http://localhost:8181/"
+    )]
+    iceberg_catalog: Option<EnvVarExp<Url>>,
+
+    #[arg(
+        long,
+        env = "ICEBERG_NAMESPACE",
+        help = "Iceberg namespace",
+        default_value = "tansu"
+    )]
+    iceberg_namespace: Option<String>,
+
+    #[arg(
+        long,
         env = "PROMETHEUS_LISTENER_URL",
         default_value = "tcp://[::]:9100",
         help = "Broker metrics can be scraped by Prometheus from this URL"
@@ -108,6 +123,9 @@ impl TryFrom<Arg> for tansu_server::broker::Broker<Controller<StorageContainer>,
             .schema_registry
             .map(|env_var_exp| env_var_exp.into_inner());
         let data_lake = args.data_lake.map(|env_var_exp| env_var_exp.into_inner());
+        let iceberg_catalog = args
+            .iceberg_catalog
+            .map(|iceberg_catalog| iceberg_catalog.into_inner());
 
         Broker::<Controller<StorageContainer>, StorageContainer>::builder()
             .node_id(NODE_ID)
@@ -119,6 +137,8 @@ impl TryFrom<Arg> for tansu_server::broker::Broker<Controller<StorageContainer>,
             .data_lake(data_lake)
             .storage(storage_engine)
             .listener(listener)
+            .iceberg_catalog(iceberg_catalog)
+            .iceberg_namespace(args.iceberg_namespace)
             .build()
             .map_err(Into::into)
     }

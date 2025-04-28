@@ -81,6 +81,8 @@ pub struct Postgres {
     pool: Pool,
     schemas: Option<Registry>,
     lake: Option<Arc<dyn ObjectStore>>,
+    iceberg_catalog: Option<Url>,
+    iceberg_namespace: Option<String>,
 }
 
 #[derive(Clone, Default, Debug)]
@@ -91,6 +93,8 @@ pub struct Builder<C, N, L, P> {
     pool: P,
     schemas: Option<Registry>,
     lake: Option<Arc<dyn ObjectStore>>,
+    iceberg_catalog: Option<Url>,
+    iceberg_namespace: Option<String>,
 }
 
 impl<C, N, L, P> Builder<C, N, L, P> {
@@ -102,6 +106,8 @@ impl<C, N, L, P> Builder<C, N, L, P> {
             pool: self.pool,
             schemas: self.schemas,
             lake: self.lake,
+            iceberg_catalog: self.iceberg_catalog,
+            iceberg_namespace: self.iceberg_namespace,
         }
     }
 }
@@ -115,6 +121,8 @@ impl<C, N, L, P> Builder<C, N, L, P> {
             pool: self.pool,
             schemas: self.schemas,
             lake: self.lake,
+            iceberg_catalog: self.iceberg_catalog,
+            iceberg_namespace: self.iceberg_namespace,
         }
     }
 }
@@ -128,6 +136,8 @@ impl<C, N, L, P> Builder<C, N, L, P> {
             pool: self.pool,
             schemas: self.schemas,
             lake: self.lake,
+            iceberg_catalog: self.iceberg_catalog,
+            iceberg_namespace: self.iceberg_namespace,
         }
     }
 
@@ -138,6 +148,20 @@ impl<C, N, L, P> Builder<C, N, L, P> {
     pub fn lake(self, lake: Option<impl ObjectStore>) -> Self {
         let lake = lake.map(|lake| Arc::new(lake) as Arc<dyn ObjectStore>);
         Self { lake, ..self }
+    }
+
+    pub fn iceberg_catalog(self, iceberg_catalog: Option<Url>) -> Self {
+        Self {
+            iceberg_catalog,
+            ..self
+        }
+    }
+
+    pub fn iceberg_namespace(self, iceberg_namespace: Option<String>) -> Self {
+        Self {
+            iceberg_namespace,
+            ..self
+        }
     }
 }
 
@@ -150,6 +174,8 @@ impl Builder<String, i32, Url, Pool> {
             pool: self.pool,
             schemas: self.schemas,
             lake: self.lake,
+            iceberg_catalog: self.iceberg_catalog,
+            iceberg_namespace: self.iceberg_namespace,
         }
     }
 }
@@ -181,6 +207,8 @@ where
                 cluster: C::default(),
                 schemas: None,
                 lake: None,
+                iceberg_catalog: None,
+                iceberg_namespace: None,
             })
             .map_err(Into::into)
     }
@@ -854,8 +882,19 @@ impl Postgres {
             .inspect(|n| debug!(?n))
             .inspect_err(|err| error!(?err))?;
 
-        if let Some(ref lake) = self.lake {
-            if let Some(ref registry) = self.schemas {
+        if let Some(ref registry) = self.schemas {
+            if let Some(ref catalog) = self.iceberg_catalog {
+                registry
+                    .store_as_iceberg(
+                        topition.topic(),
+                        topition.partition(),
+                        high.unwrap_or_default(),
+                        &inflated,
+                        catalog,
+                        self.iceberg_namespace.as_deref(),
+                    )
+                    .await?;
+            } else if let Some(ref lake) = self.lake {
                 registry
                     .store_as_parquet(
                         topition.topic(),

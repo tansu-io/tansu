@@ -14,8 +14,9 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use std::{
-    collections::BTreeMap,
-    env, io,
+    collections::{BTreeMap, HashMap},
+    env::{self},
+    io,
     num::TryFromIntError,
     result,
     string::FromUtf8Error,
@@ -23,12 +24,24 @@ use std::{
     time::SystemTime,
 };
 
+use arrow::{datatypes::DataType, error::ArrowError, record_batch::RecordBatch};
+use berg::env_s3_props;
 use bytes::Bytes;
-use datafusion::{
-    arrow::{datatypes::DataType, error::ArrowError, record_batch::RecordBatch},
-    error::DataFusionError,
-    parquet::{arrow::AsyncArrowWriter, errors::ParquetError},
+use datafusion::error::DataFusionError;
+use iceberg::{
+    Catalog, NamespaceIdent, TableCreation, TableIdent,
+    spec::{DataFileBuilderError, DataFileFormat::Parquet, Schema as IcebergSchema},
+    transaction::Transaction,
+    writer::{
+        IcebergWriter, IcebergWriterBuilder,
+        base_writer::data_file_writer::DataFileWriterBuilder,
+        file_writer::{
+            ParquetWriterBuilder,
+            location_generator::{DefaultFileNameGenerator, DefaultLocationGenerator},
+        },
+    },
 };
+use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
 use jsonschema::ValidationError;
 use object_store::{
     DynObjectStore, ObjectStore, PutMode, PutOptions, PutPayload, aws::AmazonS3Builder,
@@ -39,6 +52,7 @@ use opentelemetry::{
     metrics::{Counter, Histogram},
 };
 use opentelemetry_semantic_conventions::SCHEMA_URL;
+use parquet::{arrow::AsyncArrowWriter, errors::ParquetError, file::properties::WriterProperties};
 use serde_json::Value;
 use tansu_kafka_sans_io::{ErrorCode, record::inflated::Batch};
 use tracing::{debug, error};
@@ -46,11 +60,14 @@ use url::Url;
 
 #[cfg(test)]
 use tracing_subscriber::filter::ParseError;
+use uuid::Uuid;
 
-mod arrow;
 mod avro;
+mod berg;
 mod json;
 mod proto;
+
+pub(crate) const ARROW_LIST_FIELD_NAME: &str = "element";
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
@@ -79,6 +96,9 @@ pub enum Error {
     ChronoParse(#[from] chrono::ParseError),
 
     #[error("{:?}", self)]
+    DataFileBuilder(#[from] DataFileBuilderError),
+
+    #[error("{:?}", self)]
     DataFusion(#[from] DataFusionError),
 
     #[error("{:?}", self)]
@@ -86,6 +106,9 @@ pub enum Error {
 
     #[error("{:?}", self)]
     FromUtf8(#[from] FromUtf8Error),
+
+    #[error("{:?}", self)]
+    Iceberg(#[from] ::iceberg::Error),
 
     #[error("{:?}", self)]
     InvalidValue(apache_avro::types::Value),
@@ -273,6 +296,151 @@ impl Registry {
         }
     }
 
+    fn iceberg_catalog(&self, catalog: &Url) -> impl Catalog {
+        debug!(?catalog);
+
+        match catalog.scheme() {
+            "http" | "https" => {
+                let uri = format!(
+                    "{}://{}:{}",
+                    catalog.scheme(),
+                    catalog.host_str().unwrap_or("localhost"),
+                    catalog.port().unwrap_or(8181)
+                );
+
+                debug!(%uri);
+
+                let catalog_config = RestCatalogConfig::builder()
+                    .uri(uri)
+                    .props(env_s3_props().collect())
+                    .build();
+
+                RestCatalog::new(catalog_config)
+            }
+
+            scheme => unimplemented!("unsupported iceberg catalog scheme: {scheme}"),
+        }
+    }
+
+    pub async fn store_as_iceberg(
+        &self,
+        topic: &str,
+        partition: i32,
+        offset: i64,
+        batch: &Batch,
+        catalog: &Url,
+        namespace: Option<&str>,
+    ) -> Result<()> {
+        debug!(topic, partition, offset);
+
+        if let Some(record_batch) = self
+            .schemas
+            .lock()
+            .map_err(Into::into)
+            .and_then(|guard| {
+                guard
+                    .get(topic)
+                    .map(|schema| schema.as_arrow(batch))
+                    .transpose()
+            })
+            .inspect(|record_batch| debug!(?record_batch))
+            .inspect_err(|err| debug!(?err))?
+        {
+            let catalog = self.iceberg_catalog(catalog);
+            debug!(?catalog);
+
+            let namespace = namespace.unwrap_or("tansu");
+            let namespace_ident = NamespaceIdent::new(namespace.into());
+            debug!(%namespace_ident);
+
+            if !catalog
+                .namespace_exists(&namespace_ident)
+                .await
+                .inspect(|namespace| debug!(?namespace))
+                .inspect_err(|err| debug!(?err))?
+            {
+                catalog
+                    .create_namespace(&namespace_ident, HashMap::new())
+                    .await
+                    .inspect(|namespace| debug!(?namespace))
+                    .inspect_err(|err| debug!(?err))?;
+            }
+
+            let iceberg_schema = IcebergSchema::try_from(record_batch.schema().as_ref())
+                .inspect(|schema| debug!(?schema))
+                .inspect_err(|err| debug!(?err))?;
+
+            let table = if catalog
+                .table_exists(&TableIdent::new(namespace_ident.clone(), topic.into()))
+                .await?
+            {
+                catalog
+                    .load_table(&TableIdent::from_strs([namespace, topic])?)
+                    .await
+                    .inspect_err(|err| debug!(?err))
+            } else {
+                catalog
+                    .create_table(
+                        &namespace_ident,
+                        TableCreation::builder()
+                            .name(topic.into())
+                            .schema(iceberg_schema.clone())
+                            .build(),
+                    )
+                    .await
+                    .inspect(|table| debug!(?table))
+                    .inspect_err(|err| debug!(?err))
+            }?;
+
+            let writer = ParquetWriterBuilder::new(
+                WriterProperties::default(),
+                table.metadata().current_schema().clone(),
+                table.file_io().clone(),
+                DefaultLocationGenerator::new(table.metadata().clone())?,
+                DefaultFileNameGenerator::new(
+                    topic.to_owned(),
+                    Some(format!("{partition:0>10}-{offset:0>20}")),
+                    Parquet,
+                ),
+            );
+
+            let mut data_file_writer = DataFileWriterBuilder::new(writer, None, 0)
+                .build()
+                .await
+                .inspect_err(|err| error!(?err))?;
+
+            data_file_writer
+                .write(record_batch)
+                .await
+                .inspect_err(|err| debug!(?err))?;
+
+            let data_files = data_file_writer
+                .close()
+                .await
+                .inspect(|data_files| debug!(?data_files))
+                .inspect_err(|err| debug!(?err))?;
+
+            let commit_uuid = Uuid::now_v7();
+            debug!(%commit_uuid);
+            let key_metadata = format!("{topic}/{partition}/{offset}").into_bytes();
+
+            let tx = Transaction::new(&table);
+
+            let mut fast_append = tx
+                .fast_append(Some(commit_uuid), key_metadata)
+                .inspect_err(|err| debug!(?err))?;
+
+            fast_append
+                .add_data_files(data_files)
+                .inspect_err(|err| debug!(?err))?;
+
+            let tx = fast_append.apply().await.inspect_err(|err| debug!(?err))?;
+            let _table = tx.commit(&catalog).await.inspect_err(|err| debug!(?err))?;
+        }
+
+        Ok(())
+    }
+
     pub async fn store_as_parquet(
         &self,
         topic: &str,
@@ -282,6 +450,7 @@ impl Registry {
         object_store: &impl ObjectStore,
     ) -> Result<()> {
         debug!(%topic, partition, offset, ?object_store);
+        let _ = batch;
 
         if let Some(record_batch) = self.schemas.lock().map_err(Into::into).and_then(|guard| {
             guard

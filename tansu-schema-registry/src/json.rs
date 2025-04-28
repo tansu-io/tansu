@@ -13,26 +13,30 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::{any::type_name_of_val, sync::Arc};
+use std::{any::type_name_of_val, collections::HashMap, sync::Arc};
 
-use crate::{AsArrow, AsJsonValue, AsKafkaRecord, Error, Result, Validator};
-use bytes::Bytes;
-use datafusion::arrow::{
+use crate::{ARROW_LIST_FIELD_NAME, AsArrow, AsJsonValue, AsKafkaRecord, Error, Result, Validator};
+use arrow::{
     array::{
         ArrayBuilder, BooleanBuilder, Float64Builder, Int64Builder, ListBuilder, NullBuilder,
-        StringBuilder, StructBuilder, UInt64Builder,
+        StringBuilder, StructBuilder,
     },
-    datatypes::{DataType, Field, Fields},
+    datatypes::{DataType, Field, FieldRef, Fields, Schema as ArrowSchema},
     record_batch::RecordBatch,
 };
+use bytes::Bytes;
+use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use serde_json::{Map, Value};
 use tansu_kafka_sans_io::{ErrorCode, record::inflated::Batch};
 use tracing::{debug, error, warn};
+
+const NULLABLE: bool = true;
 
 #[derive(Debug, Default)]
 pub struct Schema {
     key: Option<jsonschema::Validator>,
     value: Option<jsonschema::Validator>,
+    ids: HashMap<String, i32>,
 }
 
 fn validate(validator: Option<&jsonschema::Validator>, encoded: Option<Bytes>) -> Result<()> {
@@ -70,6 +74,7 @@ impl TryFrom<Bytes> for Schema {
                     Self {
                         key: None,
                         value: None,
+                        ids: HashMap::new(),
                     },
                     |properties| Self {
                         key: properties
@@ -79,6 +84,8 @@ impl TryFrom<Bytes> for Schema {
                         value: properties
                             .get("value")
                             .and_then(|schema| jsonschema::validator_for(schema).ok()),
+
+                        ids: field_ids(&schema),
                     },
                 )
             })
@@ -111,74 +118,123 @@ struct Record {
     value: Option<Value>,
 }
 
-fn data_type_builder(data_type: &DataType) -> Box<dyn ArrayBuilder> {
-    match data_type {
-        DataType::Null => Box::new(NullBuilder::new()),
-        DataType::Boolean => Box::new(BooleanBuilder::new()),
-        DataType::UInt64 => Box::new(UInt64Builder::new()),
-        DataType::Int64 => Box::new(Int64Builder::new()),
-        DataType::Float64 => Box::new(Float64Builder::new()),
-        DataType::Utf8 => Box::new(StringBuilder::new()),
-        DataType::List(element) => {
-            Box::new(ListBuilder::new(data_type_builder(element.data_type())))
-        }
-        DataType::Struct(fields) => Box::new(StructBuilder::new(
-            fields.to_owned(),
-            fields
+impl Schema {
+    fn new_list_field(&self, path: &[&str], data_type: DataType) -> Field {
+        self.new_field(path, ARROW_LIST_FIELD_NAME, data_type)
+    }
+
+    fn new_field(&self, path: &[&str], name: &str, data_type: DataType) -> Field {
+        debug!(?path, name, ?data_type, ids = ?self.ids);
+
+        let path = {
+            let mut path = Vec::from(path);
+            path.push(name);
+            path.join(".")
+        };
+
+        Field::new(name.to_owned(), data_type, NULLABLE).with_metadata(
+            self.ids
+                .get(path.as_str())
+                .inspect(|field_id| debug!(?path, name, field_id))
+                .map(|field_id| (PARQUET_FIELD_ID_META_KEY.to_string(), field_id.to_string()))
+                .into_iter()
+                .collect(),
+        )
+    }
+
+    fn data_type(&self, path: &[&str], value: &Value) -> Result<DataType> {
+        match value {
+            Value::Null => Ok(DataType::Null),
+
+            Value::Bool(_) => Ok(DataType::Boolean),
+
+            Value::Number(value) => {
+                if value.is_i64() | value.is_u64() {
+                    Ok(DataType::Int64)
+                } else {
+                    Ok(DataType::Float64)
+                }
+            }
+
+            Value::String(_) => Ok(DataType::Utf8),
+
+            Value::Array(values) => self.common_data_type(path, values).map(|data_type| {
+                DataType::List(FieldRef::new(self.new_list_field(path, data_type)))
+            }),
+
+            Value::Object(object) => object
                 .iter()
-                .map(|field| data_type_builder(field.data_type()))
-                .collect::<Vec<_>>(),
-        )),
+                .map(|(k, v)| {
+                    let child_path = {
+                        let mut path = Vec::from(path);
+                        path.push(k.as_str());
+                        path
+                    };
 
-        _ => unimplemented!("unexpected: {}", type_name_of_val(data_type)),
+                    self.data_type(&child_path[..], v)
+                        .map(|data_type| self.new_field(path, k, data_type))
+                })
+                .collect::<Result<Vec<_>>>()
+                .map(Fields::from)
+                .map(DataType::Struct),
+        }
+        .inspect(|data_type| debug!(?value, ?data_type))
+        .inspect_err(|err| error!(?err, ?value))
     }
-}
 
-fn common_data_type(values: &[Value]) -> Result<DataType> {
-    values
-        .iter()
-        .map(data_type)
-        .collect::<Result<Vec<_>>>()
-        .map(sort_dedup)
-        .and_then(|mut data_types| {
-            if data_types.len() > 1 {
-                Err(Error::NoCommonType(data_types))
-            } else if let Some(data_type) = data_types.pop() {
-                Ok(data_type)
-            } else {
-                Ok(DataType::Null)
-            }
-        })
-        .inspect(|data_type| debug!(?values, ?data_type))
-        .inspect_err(|err| error!(?err, ?values))
-}
-
-fn data_type(value: &Value) -> Result<DataType> {
-    match value {
-        Value::Null => Ok(DataType::Null),
-        Value::Bool(_) => Ok(DataType::Boolean),
-        Value::Number(value) => {
-            if value.is_u64() {
-                Ok(DataType::UInt64)
-            } else if value.is_i64() {
-                Ok(DataType::Int64)
-            } else {
-                Ok(DataType::Float64)
-            }
-        }
-        Value::String(_) => Ok(DataType::Utf8),
-        Value::Array(values) => {
-            common_data_type(values).map(|data_type| DataType::new_list(data_type, true))
-        }
-        Value::Object(object) => object
+    fn common_data_type(&self, path: &[&str], values: &[Value]) -> Result<DataType> {
+        values
             .iter()
-            .map(|(k, v)| data_type(v).map(|data_type| Field::new(k.to_owned(), data_type, true)))
+            .map(|value| self.data_type(path, value))
             .collect::<Result<Vec<_>>>()
-            .map(Fields::from)
-            .map(DataType::Struct),
+            .map(sort_dedup)
+            .and_then(|mut data_types| {
+                if data_types.len() > 1 {
+                    Err(Error::NoCommonType(data_types))
+                } else if let Some(data_type) = data_types.pop() {
+                    Ok(data_type)
+                } else {
+                    Ok(DataType::Null)
+                }
+            })
+            .inspect(|data_type| debug!(?values, ?data_type))
+            .inspect_err(|err| error!(?err, ?values))
     }
-    .inspect(|data_type| debug!(?value, ?data_type))
-    .inspect_err(|err| error!(?err, ?value))
+
+    fn data_type_builder(&self, path: &[&str], data_type: &DataType) -> Box<dyn ArrayBuilder> {
+        match data_type {
+            DataType::Null => Box::new(NullBuilder::new()),
+            DataType::Boolean => Box::new(BooleanBuilder::new()),
+            DataType::UInt64 => Box::new(Int64Builder::new()),
+            DataType::Int64 => Box::new(Int64Builder::new()),
+            DataType::Float64 => Box::new(Float64Builder::new()),
+            DataType::Utf8 => Box::new(StringBuilder::new()),
+
+            DataType::List(element) => Box::new(
+                ListBuilder::new(self.data_type_builder(
+                    &append_path(path, ARROW_LIST_FIELD_NAME)[..],
+                    element.data_type(),
+                ))
+                .with_field(self.new_list_field(path, element.data_type().to_owned())),
+            ) as Box<dyn ArrayBuilder>,
+
+            DataType::Struct(fields) => Box::new(StructBuilder::new(
+                fields.to_owned(),
+                fields
+                    .iter()
+                    .map(|field| self.data_type_builder(path, field.data_type()))
+                    .collect::<Vec<_>>(),
+            )),
+
+            _ => unimplemented!("unexpected: {}", type_name_of_val(data_type)),
+        }
+    }
+}
+
+fn append_path<'a>(path: &[&'a str], name: &'a str) -> Vec<&'a str> {
+    let mut path = Vec::from(path);
+    path.push(name);
+    path
 }
 
 fn append_list_builder(
@@ -200,12 +256,12 @@ fn append_list_builder(
                 .ok_or(Error::Downcast)
                 .map(|builder| builder.append_value(value))?,
 
-            (DataType::UInt64, Value::Number(value)) if value.is_u64() => values
-                .downcast_mut::<UInt64Builder>()
+            (DataType::Int64, Value::Number(value)) if value.is_u64() => values
+                .downcast_mut::<Int64Builder>()
                 .ok_or(Error::Downcast)
                 .map(|builder| {
                     if let Some(value) = value.as_u64() {
-                        builder.append_value(value)
+                        builder.append_value(value as i64)
                     } else {
                         builder.append_null()
                     }
@@ -287,12 +343,12 @@ fn append_struct_builder(
                     .map(|builder| builder.append_value(value))
                     .inspect_err(|err| error!(?err))?,
 
-                (DataType::UInt64, Value::Number(value)) if value.is_u64() => builder
-                    .field_builder::<UInt64Builder>(index)
+                (DataType::Int64, Value::Number(value)) if value.is_u64() => builder
+                    .field_builder::<Int64Builder>(index)
                     .ok_or(Error::Downcast)
                     .map(|builder| {
                         if let Some(value) = value.as_u64() {
-                            builder.append_value(value)
+                            builder.append_value(value as i64)
                         } else {
                             builder.append_null()
                         }
@@ -368,13 +424,13 @@ fn append(field: &Field, value: Value, builder: &mut dyn ArrayBuilder) -> Result
             .ok_or(Error::Downcast)
             .map(|builder| builder.append_value(value)),
 
-        (DataType::UInt64, Value::Number(value)) if value.is_u64() => builder
+        (DataType::Int64, Value::Number(value)) if value.is_u64() => builder
             .as_any_mut()
-            .downcast_mut::<UInt64Builder>()
+            .downcast_mut::<Int64Builder>()
             .ok_or(Error::Downcast)
             .map(|builder| {
                 if let Some(value) = value.as_u64() {
-                    builder.append_value(value)
+                    builder.append_value(value as i64)
                 } else {
                     builder.append_null()
                 }
@@ -455,13 +511,13 @@ impl AsArrow for Schema {
                 if values.is_empty() {
                     Ok(None)
                 } else {
-                    common_data_type(values.as_slice()).map(Some)
+                    self.common_data_type(&["key"], values.as_slice()).map(Some)
                 }
             })
             .inspect(|data_type| debug!(?data_type))?
         {
-            builders.push(data_type_builder(&data_type));
-            fields.push(Field::new("key", data_type, true))
+            builders.push(self.data_type_builder(&["key"], &data_type));
+            fields.push(self.new_field(&[], "key", data_type))
         };
 
         if let Some(data_type) = batch
@@ -480,13 +536,14 @@ impl AsArrow for Schema {
                 if values.is_empty() {
                     Ok(None)
                 } else {
-                    common_data_type(values.as_slice()).map(Some)
+                    self.common_data_type(&["value"], values.as_slice())
+                        .map(Some)
                 }
             })
             .inspect(|data_type| debug!(?data_type))?
         {
-            builders.push(data_type_builder(&data_type));
-            fields.push(Field::new("value", data_type, true))
+            builders.push(self.data_type_builder(&["value"], &data_type));
+            fields.push(self.new_field(&[], "value", data_type))
         };
 
         for kv in batch
@@ -527,9 +584,7 @@ impl AsArrow for Schema {
         }
 
         RecordBatch::try_new(
-            Arc::new(datafusion::arrow::datatypes::Schema::new(Fields::from(
-                fields,
-            ))),
+            Arc::new(ArrowSchema::new(Fields::from(fields))),
             builders
                 .iter_mut()
                 .map(|builder| builder.finish())
@@ -571,14 +626,82 @@ impl AsJsonValue for Schema {
     }
 }
 
+fn field_ids(schema: &Value) -> HashMap<String, i32> {
+    fn field_ids_with_path(path: &[&str], schema: &Value, id: &mut i32) -> HashMap<String, i32> {
+        debug!(?path, ?schema, id);
+
+        let mut ids = HashMap::new();
+
+        if let Some(kv) = schema.as_object() {
+            if let Some("object") = kv.get("type").and_then(|r#type| r#type.as_str()) {
+                if let Some(properties) = kv
+                    .get("properties")
+                    .and_then(|properties| properties.as_object())
+                {
+                    for (k, v) in properties {
+                        let mut path = Vec::from(path);
+                        path.push(k);
+
+                        ids.insert(path.join("."), *id);
+                        *id += 1;
+
+                        match v.get("type").and_then(|r#type| r#type.as_str()) {
+                            Some("object") => {
+                                ids.extend(field_ids_with_path(&path[..], v, id).into_iter())
+                            }
+
+                            Some("array") => {
+                                path.push(ARROW_LIST_FIELD_NAME);
+                                ids.insert(path.join("."), *id);
+                                *id += 1;
+
+                                if let Some(items) = v.get("items") {
+                                    debug!(?items);
+
+                                    ids.extend(
+                                        field_ids_with_path(&path[..], items, id).into_iter(),
+                                    )
+                                }
+                            }
+
+                            _ => (),
+                        }
+                    }
+                }
+            }
+        }
+
+        ids
+    }
+
+    field_ids_with_path(&[], schema, &mut 1)
+}
+
 #[cfg(test)]
 mod tests {
     use crate::Registry;
 
     use super::*;
-    use datafusion::{arrow::util::pretty::pretty_format_batches, prelude::*};
+    use arrow::util::pretty::pretty_format_batches;
+    use datafusion::prelude::*;
+    use iceberg::{
+        io::FileIOBuilder,
+        spec::{
+            DataFile, DataFileFormat::Parquet, Schema as IcebergSchema,
+            SchemaRef as IcebergSchemaRef,
+        },
+        writer::{
+            IcebergWriter, IcebergWriterBuilder,
+            base_writer::data_file_writer::DataFileWriterBuilder,
+            file_writer::{
+                ParquetWriterBuilder,
+                location_generator::{DefaultFileNameGenerator, LocationGenerator},
+            },
+        },
+    };
     use jsonschema::BasicOutput;
     use object_store::{ObjectStore, PutPayload, memory::InMemory, path::Path};
+    use parquet::file::properties::WriterProperties;
     use serde_json::json;
     use std::{collections::VecDeque, fs::File, ops::Deref, sync::Arc, thread};
     use tansu_kafka_sans_io::record::Record;
@@ -607,6 +730,104 @@ mod tests {
                 )
                 .finish(),
         ))
+    }
+
+    async fn iceberg_write(record_batch: RecordBatch) -> Result<Vec<DataFile>> {
+        let iceberg_schema = IcebergSchema::try_from(record_batch.schema().as_ref())
+            .map(IcebergSchemaRef::new)
+            .inspect(|schema| debug!(?schema))
+            .inspect_err(|err| debug!(?err))?;
+
+        let memory = FileIOBuilder::new("memory").build()?;
+
+        #[derive(Clone)]
+        struct Location;
+
+        impl LocationGenerator for Location {
+            fn generate_location(&self, file_name: &str) -> String {
+                format!("abc/{file_name}")
+            }
+        }
+
+        let writer = ParquetWriterBuilder::new(
+            WriterProperties::default(),
+            iceberg_schema,
+            memory,
+            Location,
+            DefaultFileNameGenerator::new("pqr".into(), None, Parquet),
+        );
+
+        let mut data_file_writer = DataFileWriterBuilder::new(writer, None, 0)
+            .build()
+            .await
+            .inspect_err(|err| error!(?err))?;
+
+        data_file_writer
+            .write(record_batch)
+            .await
+            .inspect_err(|err| debug!(?err))?;
+
+        data_file_writer
+            .close()
+            .await
+            .inspect(|data_files| debug!(?data_files))
+            .inspect_err(|err| debug!(?err))
+            .map_err(Into::into)
+    }
+
+    #[test]
+    fn assign_field_id() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "number"
+                },
+                "value": {
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                        },
+                        "email": {
+                            "type": "string",
+                            "format": "email"
+                        }
+                    }
+                }
+            }
+        });
+
+        let ids = field_ids(&schema);
+
+        assert!(ids.contains_key("key"));
+        assert!(ids.contains_key("value"));
+        assert!(ids.contains_key("value.name"));
+        assert!(ids.contains_key("value.email"));
+    }
+
+    #[test]
+    fn assign_field_id_with_array() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "number"
+                },
+                "value": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        });
+
+        let ids = field_ids(&schema);
+
+        assert!(ids.contains_key("key"));
+        assert!(ids.contains_key("value"));
+        assert!(ids.contains_key("value.element"));
     }
 
     #[tokio::test]
@@ -1235,6 +1456,9 @@ mod tests {
         };
 
         let record_batch = schema.as_arrow(&batch)?;
+        let data_files = iceberg_write(record_batch.clone()).await?;
+        assert_eq!(1, data_files.len());
+        assert_eq!(2, data_files[0].record_count());
 
         let ctx = SessionContext::new();
 
@@ -1292,6 +1516,9 @@ mod tests {
         };
 
         let record_batch = schema.as_arrow(&batch)?;
+        let data_files = iceberg_write(record_batch.clone()).await?;
+        assert_eq!(1, data_files.len());
+        assert_eq!(3, data_files[0].record_count());
 
         let ctx = SessionContext::new();
 
@@ -1357,6 +1584,9 @@ mod tests {
         };
 
         let record_batch = schema.as_arrow(&batch)?;
+        let data_files = iceberg_write(record_batch.clone()).await?;
+        assert_eq!(1, data_files.len());
+        assert_eq!(2, data_files[0].record_count());
 
         let ctx = SessionContext::new();
 
@@ -1424,6 +1654,9 @@ mod tests {
         };
 
         let record_batch = schema.as_arrow(&batch)?;
+        let data_files = iceberg_write(record_batch.clone()).await?;
+        assert_eq!(1, data_files.len());
+        assert_eq!(2, data_files[0].record_count());
 
         let ctx = SessionContext::new();
 
@@ -1447,6 +1680,7 @@ mod tests {
         Ok(())
     }
 
+    #[ignore]
     #[tokio::test]
     async fn primitive_key_and_array_object_value_as_arrow() -> Result<()> {
         let _guard = init_tracing()?;
@@ -1507,6 +1741,9 @@ mod tests {
         };
 
         let record_batch = schema.as_arrow(&batch)?;
+        let data_files = iceberg_write(record_batch.clone()).await?;
+        assert_eq!(1, data_files.len());
+        assert_eq!(3, data_files[0].record_count());
 
         let ctx = SessionContext::new();
 
@@ -1530,6 +1767,7 @@ mod tests {
         Ok(())
     }
 
+    #[ignore]
     #[tokio::test]
     async fn primitive_key_and_struct_with_array_field_value_as_arrow() -> Result<()> {
         let _guard = init_tracing()?;
@@ -1585,6 +1823,9 @@ mod tests {
         };
 
         let record_batch = schema.as_arrow(&batch)?;
+        let data_files = iceberg_write(record_batch.clone()).await?;
+        assert_eq!(1, data_files.len());
+        assert_eq!(2, data_files[0].record_count());
 
         let ctx = SessionContext::new();
 

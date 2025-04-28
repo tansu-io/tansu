@@ -86,7 +86,12 @@ pub struct DynoStore {
     node: i32,
     advertised_listener: Url,
     schemas: Option<Registry>,
+
     lake: Option<Arc<dyn ObjectStore>>,
+
+    iceberg_catalog: Option<Url>,
+    iceberg_namespace: Option<String>,
+
     watermarks: Arc<Mutex<BTreeMap<Topition, OptiCon<Watermark>>>>,
     meta: OptiCon<Meta>,
 
@@ -363,6 +368,8 @@ impl DynoStore {
             advertised_listener: Url::parse("tcp://127.0.0.1/").unwrap(),
             schemas: None,
             lake: None,
+            iceberg_catalog: None,
+            iceberg_namespace: None,
             watermarks: Arc::new(Mutex::new(BTreeMap::new())),
             meta: OptiCon::<Meta>::new(cluster),
             object_store: Arc::new(Cache::new(
@@ -386,6 +393,20 @@ impl DynoStore {
     pub fn lake(self, lake: Option<impl ObjectStore>) -> Self {
         let lake = lake.map(|lake| Arc::new(lake) as Arc<dyn ObjectStore>);
         Self { lake, ..self }
+    }
+
+    pub fn iceberg_catalog(self, iceberg_catalog: Option<Url>) -> Self {
+        Self {
+            iceberg_catalog,
+            ..self
+        }
+    }
+
+    pub fn iceberg_namespace(self, iceberg_namespace: Option<String>) -> Self {
+        Self {
+            iceberg_namespace,
+            ..self
+        }
     }
 
     async fn topic_metadata(&self, topic: &TopicId) -> Result<Option<TopicMetadata>> {
@@ -814,10 +835,21 @@ impl Storage for DynoStore {
             .inspect(|offset| debug!(offset, transaction_id, ?topition))
             .inspect_err(|err| error!(?err, transaction_id, ?topition))?;
 
-        if let Some(ref lake) = self.lake {
-            if let Some(ref registry) = self.schemas {
-                let inflated = inflated::Batch::try_from(&deflated)?;
+        if let Some(ref registry) = self.schemas {
+            let inflated = inflated::Batch::try_from(&deflated)?;
 
+            if let Some(ref catalog) = self.iceberg_catalog {
+                registry
+                    .store_as_iceberg(
+                        topition.topic(),
+                        topition.partition(),
+                        offset,
+                        &inflated,
+                        catalog,
+                        self.iceberg_namespace.as_deref(),
+                    )
+                    .await?;
+            } else if let Some(ref lake) = self.lake {
                 registry
                     .store_as_parquet(
                         topition.topic(),

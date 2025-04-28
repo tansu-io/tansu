@@ -1268,6 +1268,8 @@ pub struct Builder<N, C, I, A, S, L> {
     prometheus: Option<Url>,
     schema_registry: Option<Url>,
     data_lake: Option<Url>,
+    iceberg_catalog: Option<Url>,
+    iceberg_namespace: Option<String>,
 }
 
 type PhantomBuilder = Builder<
@@ -1291,6 +1293,8 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             prometheus: self.prometheus,
             schema_registry: self.schema_registry,
             data_lake: self.data_lake,
+            iceberg_catalog: self.iceberg_catalog,
+            iceberg_namespace: self.iceberg_namespace,
         }
     }
 
@@ -1305,6 +1309,8 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             prometheus: self.prometheus,
             schema_registry: self.schema_registry,
             data_lake: self.data_lake,
+            iceberg_catalog: self.iceberg_catalog,
+            iceberg_namespace: self.iceberg_namespace,
         }
     }
 
@@ -1319,6 +1325,8 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             prometheus: self.prometheus,
             schema_registry: self.schema_registry,
             data_lake: self.data_lake,
+            iceberg_catalog: self.iceberg_catalog,
+            iceberg_namespace: self.iceberg_namespace,
         }
     }
 
@@ -1336,10 +1344,14 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             prometheus: self.prometheus,
             schema_registry: self.schema_registry,
             data_lake: self.data_lake,
+            iceberg_catalog: self.iceberg_catalog,
+            iceberg_namespace: self.iceberg_namespace,
         }
     }
 
     pub fn storage(self, storage: Url) -> Builder<N, C, I, A, Url, L> {
+        debug!(%storage);
+
         Builder {
             node_id: self.node_id,
             cluster_id: self.cluster_id,
@@ -1350,10 +1362,14 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             prometheus: self.prometheus,
             schema_registry: self.schema_registry,
             data_lake: self.data_lake,
+            iceberg_catalog: self.iceberg_catalog,
+            iceberg_namespace: self.iceberg_namespace,
         }
     }
 
     pub fn listener(self, listener: Url) -> Builder<N, C, I, A, S, Url> {
+        debug!(%listener);
+
         Builder {
             node_id: self.node_id,
             cluster_id: self.cluster_id,
@@ -1364,10 +1380,16 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             prometheus: self.prometheus,
             schema_registry: self.schema_registry,
             data_lake: self.data_lake,
+            iceberg_catalog: self.iceberg_catalog,
+            iceberg_namespace: self.iceberg_namespace,
         }
     }
 
     pub fn schema_registry(self, schema_registry: Option<Url>) -> Builder<N, C, I, A, S, L> {
+        schema_registry
+            .as_ref()
+            .inspect(|schema_registry| debug!(%schema_registry));
+
         Builder {
             node_id: self.node_id,
             cluster_id: self.cluster_id,
@@ -1378,10 +1400,14 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             prometheus: self.prometheus,
             schema_registry,
             data_lake: self.data_lake,
+            iceberg_catalog: self.iceberg_catalog,
+            iceberg_namespace: self.iceberg_namespace,
         }
     }
 
     pub fn data_lake(self, data_lake: Option<Url>) -> Builder<N, C, I, A, S, L> {
+        data_lake.as_ref().inspect(|data_lake| debug!(%data_lake));
+
         Builder {
             node_id: self.node_id,
             cluster_id: self.cluster_id,
@@ -1392,6 +1418,44 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             prometheus: self.prometheus,
             schema_registry: self.schema_registry,
             data_lake,
+            iceberg_catalog: self.iceberg_catalog,
+            iceberg_namespace: self.iceberg_namespace,
+        }
+    }
+
+    pub fn iceberg_catalog(self, iceberg_catalog: Option<Url>) -> Builder<N, C, I, A, S, L> {
+        iceberg_catalog
+            .as_ref()
+            .inspect(|iceberg_catalog| debug!(%iceberg_catalog));
+
+        Builder {
+            node_id: self.node_id,
+            cluster_id: self.cluster_id,
+            incarnation_id: self.incarnation_id,
+            advertised_listener: self.advertised_listener,
+            storage: self.storage,
+            listener: self.listener,
+            prometheus: self.prometheus,
+            schema_registry: self.schema_registry,
+            data_lake: self.data_lake,
+            iceberg_catalog,
+            iceberg_namespace: self.iceberg_namespace,
+        }
+    }
+
+    pub fn iceberg_namespace(self, iceberg_namespace: Option<String>) -> Builder<N, C, I, A, S, L> {
+        Builder {
+            node_id: self.node_id,
+            cluster_id: self.cluster_id,
+            incarnation_id: self.incarnation_id,
+            advertised_listener: self.advertised_listener,
+            storage: self.storage,
+            listener: self.listener,
+            prometheus: self.prometheus,
+            schema_registry: self.schema_registry,
+            data_lake: self.data_lake,
+            iceberg_catalog: self.iceberg_catalog,
+            iceberg_namespace,
         }
     }
 
@@ -1406,16 +1470,17 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             prometheus,
             schema_registry: self.schema_registry,
             data_lake: self.data_lake,
+            iceberg_catalog: self.iceberg_catalog,
+            iceberg_namespace: self.iceberg_namespace,
         }
     }
 }
 
 impl Builder<i32, String, Uuid, Url, Url, Url> {
     fn lake(&self) -> Result<Option<Box<dyn ObjectStore>>> {
-        self.data_lake.as_ref().map_or(Ok(None), |url| {
-            debug!(data_lake = %url);
-
-            match url.scheme() {
+        self.data_lake
+            .as_ref()
+            .map_or(Ok(None), |url| match url.scheme() {
                 "s3" => {
                     let bucket_name = url.host_str().unwrap_or("lake");
 
@@ -1453,13 +1518,10 @@ impl Builder<i32, String, Uuid, Url, Url, Url> {
                 }
 
                 _unsupported => Err(Error::UnsupportedStorageUrl(url.to_owned())),
-            }
-        })
+            })
     }
 
     fn storage_engine(&self) -> Result<StorageContainer> {
-        debug!(storage = %self.storage);
-
         let schemas = self
             .schema_registry
             .as_ref()
@@ -1474,6 +1536,8 @@ impl Builder<i32, String, Uuid, Url, Url, Url> {
                 .map(|builder| builder.advertised_listener(self.advertised_listener.clone()))
                 .map(|builder| builder.schemas(schemas))
                 .map(|builder| builder.lake(lake))
+                .map(|builder| builder.iceberg_catalog(self.iceberg_catalog.clone()))
+                .map(|builder| builder.iceberg_namespace(self.iceberg_namespace.clone()))
                 .map(|builder| builder.build())
                 .map(StorageContainer::Postgres)
                 .map_err(Into::into),
@@ -1490,6 +1554,8 @@ impl Builder<i32, String, Uuid, Url, Url, Url> {
                             .advertised_listener(self.advertised_listener.clone())
                             .schemas(schemas)
                             .lake(lake)
+                            .iceberg_catalog(self.iceberg_catalog.clone())
+                            .iceberg_namespace(self.iceberg_namespace.clone())
                     })
                     .map(StorageContainer::DynoStore)
                     .map_err(Into::into)

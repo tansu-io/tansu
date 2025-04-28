@@ -92,6 +92,22 @@ services:
     configs:
       - source: prometheus_yaml
         target: /prometheus/prometheus.yml
+  iceberg-catalog:
+    image: apache/iceberg-rest-fixture
+    environment:
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_REGION: ${AWS_DEFAULT_REGION}
+      CATALOG_CATALOG__IMPL: org.apache.iceberg.jdbc.JdbcCatalog
+      CATALOG_URI: jdbc:sqlite:file:/tmp/iceberg_rest_mode=memory
+      CATALOG_WAREHOUSE: ${DATA_LAKE}
+      CATALOG_IO__IMPL: org.apache.iceberg.aws.s3.S3FileIO
+      CATALOG_S3_ENDPOINT: http://minio:9000
+      CATALOG_S3_PATH__STYLE__ACCESS: true
+    ports:
+      - 8181:8181
+    links:
+      - minio
 configs:
   prometheus_yaml:
     file: etc/prometheus.yaml
