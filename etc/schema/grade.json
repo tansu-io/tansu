@@ -1,24 +1,25 @@
 {
-  "type": "record",
-  "name": "Grade",
+  "title": "Grade",
+  "type": "object",
 
-  "fields": [
-    { "name": "key", "type": "string" },
-    {
-      "name": "value",
-      "type": {
-        "type": "record",
-        "fields": [
-          { "name": "first", "type": "string" },
-          { "name": "last", "type": "string" },
-          { "name": "test1", "type": "double" },
-          { "name": "test2", "type": "double" },
-          { "name": "test3", "type": "double" },
-          { "name": "test4", "type": "double" },
-          { "name": "final", "type": "double" },
-          { "name": "grade", "type": "string" }
-        ]
+  "properties": {
+    "key": {
+      "type": "string",
+      "pattern": "^\\d{3}-\\d{2}-\\d{4}$"
+    },
+
+    "value": {
+      "type": "object",
+      "properties": {
+        "first": { "type": "string" },
+        "last": { "type": "string" },
+        "test1": { "type": "number" },
+        "test2": { "type": "number" },
+        "test3": { "type": "number" },
+        "test4": { "type": "number" },
+        "final": { "type": "number" },
+        "grade": { "type": "string" }
       }
     }
-  ]
+  }
 }
