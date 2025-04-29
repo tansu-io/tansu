@@ -422,12 +422,11 @@ impl Registry {
 
             let commit_uuid = Uuid::now_v7();
             debug!(%commit_uuid);
-            let key_metadata = format!("{topic}/{partition}/{offset}").into_bytes();
 
             let tx = Transaction::new(&table);
 
             let mut fast_append = tx
-                .fast_append(Some(commit_uuid), key_metadata)
+                .fast_append(Some(commit_uuid), vec![])
                 .inspect_err(|err| debug!(?err))?;
 
             fast_append
