@@ -9,11 +9,9 @@ Features:
 
 - Apache Kafka API compatible
 - Available with [PostgreSQL](https://www.postgresql.org), [S3](https://en.wikipedia.org/wiki/Amazon_S3) or memory storage engines
-- [JSON Schema][json-schema-org], [Apache Avro](https://avro.apache.org) or [Protocol Buffers](protocol-buffers)
-  broker [validation](docs/schema-registry.md) of messages
-- Topics validated by [JSON Schema][json-schema-org], [Apache Avro](https://avro.apache.org)
+- Topics [validated](docs/schema-registry.md) by [JSON Schema][json-schema-org], [Apache Avro](https://avro.apache.org)
   or [Protocol buffers](protocol-buffers) can be written as 🆕 [Apache Iceberg tables](https://iceberg.apache.org),
-  for examples see: [example-pyiceberg](https://github.com/tansu-io/example-pyiceberg)
+  see [examples using pyiceberg](https://github.com/tansu-io/example-pyiceberg) or [examples using Apache Spark](https://github.com/tansu-io/example-spark)
 
 For data durability:
 
