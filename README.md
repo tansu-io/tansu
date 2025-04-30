@@ -37,31 +37,34 @@ Usage: tansu [OPTIONS]
 
 Commands:
   broker  Apache Kafka compatible broker with Avro, JSON, Protobuf schema validation [default if no command supplied]
-  topic   Create or delete topics managed by the broker
   cat     Easily consume or produce Avro, JSON or Protobuf messages to a topic
+  topic   Create or delete topics managed by the broker
   proxy   Apache Kafka compatible proxy
   help    Print this message or the help of the given subcommand(s)
 
 Options:
       --kafka-cluster-id <KAFKA_CLUSTER_ID>
-          All members of the same cluster should use the same id [env: CLUSTER_ID=] [default: tansu_cluster]
+          All members of the same cluster should use the same id [env: CLUSTER_ID=RvQwrYegSUCkIPkaiAZQlQ] [default: tansu_cluster]
       --kafka-listener-url <KAFKA_LISTENER_URL>
           The broker will listen on this address [env: LISTENER_URL=] [default: tcp://[::]:9092]
       --kafka-advertised-listener-url <KAFKA_ADVERTISED_LISTENER_URL>
-          This location is advertised to clients in metadata [env: ADVERTISED_LISTENER_URL=] [default: tcp://localhost:9092]
+          This location is advertised to clients in metadata [env: ADVERTISED_LISTENER_URL=tcp://localhost:9092] [default: tcp://localhost:9092]
       --storage-engine <STORAGE_ENGINE>
-          Storage engine examples are: postgres://postgres:postgres@localhost, memory://tansu/ or s3://tansu/ [env: STORAGE_ENGINE=] [default: memory://tansu/]
+          Storage engine examples are: postgres://postgres:postgres@localhost, memory://tansu/ or s3://tansu/ [env: STORAGE_ENGINE=s3://tansu/] [default: memory://tansu/]
       --schema-registry <SCHEMA_REGISTRY>
-          Schema registry examples are: file://./etc/schema or s3://tansu/, containing: topic.json, topic.proto or topic.avsc [env: SCHEMA_REGISTRY=]
+          Schema registry examples are: file://./etc/schema or s3://tansu/, containing: topic.json, topic.proto or topic.avsc [env: SCHEMA_REGISTRY=file://./etc/schema]
       --data-lake <DATA_LAKE>
-          Apache Parquet files are written to this location, examples are: file://./lake or s3://lake/ [env: DATA_LAKE=]
+          Apache Parquet files are written to this location, examples are: file://./lake or s3://lake/ [env: DATA_LAKE=s3://lake/]
+      --iceberg-catalog <ICEBERG_CATALOG>
+          Apache Iceberg Catalog, examples are: http://localhost:8181/ [env: ICEBERG_CATALOG=http://localhost:8181/]
+      --iceberg-namespace <ICEBERG_NAMESPACE>
+          Iceberg namespace [env: ICEBERG_NAMESPACE=] [default: tansu]
       --prometheus-listener-url <PROMETHEUS_LISTENER_URL>
-          Broker metrics can be scraped by Prometheus from this URL [env: PROMETHEUS_LISTENER_URL=] [default: tcp://[::]:9100]
+          Broker metrics can be scraped by Prometheus from this URL [env: PROMETHEUS_LISTENER_URL=tcp://0.0.0.0:9100] [default: tcp://[::]:9100]
   -h, --help
           Print help
   -V, --version
           Print version
-
 ```
 
 A broker can be started by simply running `tansu`, all options have defaults. Tansu pickup any existing environment,
