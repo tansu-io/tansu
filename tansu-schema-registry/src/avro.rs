@@ -214,7 +214,7 @@ impl Schema {
             AvroSchema::Float => Ok(DataType::Float32),
             AvroSchema::Double => Ok(DataType::Float64),
             AvroSchema::Bytes => Ok(DataType::LargeBinary),
-            AvroSchema::String | AvroSchema::Enum(_) => Ok(DataType::Utf8),
+            AvroSchema::String | AvroSchema::Uuid | AvroSchema::Enum(_) => Ok(DataType::Utf8),
 
             AvroSchema::Array(schema) => self
                 .schema_data_type(path, &schema.items)
@@ -287,7 +287,7 @@ impl Schema {
                     .map(|field| {
                         let inside = append(path, &field.name);
 
-                        self.schema_data_type(inside.as_slice(), &field.schema)
+                        self.schema_data_type(&inside[..], &field.schema)
                             .map(|data_type| self.new_field(path, &field.name, data_type))
                     })
                     .collect::<Result<Vec<_>>>()
@@ -312,7 +312,7 @@ impl Schema {
                 .map_err(Into::into),
 
             AvroSchema::BigDecimal => todo!(),
-            AvroSchema::Uuid => Ok(DataType::Utf8),
+
             AvroSchema::Date => Ok(DataType::Date32),
 
             AvroSchema::TimeMillis => Ok(DataType::Time32(TimeUnit::Millisecond)),
@@ -362,7 +362,9 @@ impl Schema {
             AvroSchema::Float => Ok(Box::new(Float32Builder::new())),
             AvroSchema::Double => Ok(Box::new(Float64Builder::new())),
             AvroSchema::Bytes => Ok(Box::new(LargeBinaryBuilder::new())),
-            AvroSchema::String | AvroSchema::Enum(_) => Ok(Box::new(StringBuilder::new())),
+            AvroSchema::String | AvroSchema::Uuid | AvroSchema::Enum(_) => {
+                Ok(Box::new(StringBuilder::new()))
+            }
 
             AvroSchema::Array(schema) => self
                 .schema_array_builder(path, &schema.items)
@@ -427,10 +429,10 @@ impl Schema {
                 .map(|record_field| {
                     let inside = append(path, &record_field.name);
 
-                    self.schema_data_type(inside.as_slice(), &record_field.schema)
+                    self.schema_data_type(&inside[..], &record_field.schema)
                         .map(|data_type| self.new_field(path, &record_field.name, data_type))
                         .and_then(|field| {
-                            self.schema_array_builder(inside.as_slice(), &record_field.schema)
+                            self.schema_array_builder(&inside[..], &record_field.schema)
                                 .map(|builder| (field, builder))
                         })
                 })
@@ -451,7 +453,6 @@ impl Schema {
                 .map_err(Into::into),
 
             AvroSchema::BigDecimal => todo!(),
-            AvroSchema::Uuid => Ok(Box::new(StringBuilder::new())),
             AvroSchema::Date => Ok(Box::new(Date32Builder::new())),
             AvroSchema::TimeMillis => Ok(Box::new(Time32MillisecondBuilder::new())),
             AvroSchema::TimeMicros => Ok(Box::new(Time64MicrosecondBuilder::new())),

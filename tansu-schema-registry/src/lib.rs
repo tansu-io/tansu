@@ -245,9 +245,9 @@ impl AsArrow for Schema {
         debug!(?batch);
 
         match self {
-            Schema::Avro(schema) => schema.as_arrow(batch),
-            Schema::Json(schema) => schema.as_arrow(batch),
-            Schema::Proto(schema) => schema.as_arrow(batch),
+            Self::Avro(schema) => schema.as_arrow(batch),
+            Self::Json(schema) => schema.as_arrow(batch),
+            Self::Proto(schema) => schema.as_arrow(batch),
         }
     }
 }
@@ -257,9 +257,9 @@ impl AsJsonValue for Schema {
         debug!(?batch);
 
         match self {
-            Schema::Avro(schema) => schema.as_json_value(batch),
-            Schema::Json(schema) => schema.as_json_value(batch),
-            Schema::Proto(schema) => schema.as_json_value(batch),
+            Self::Avro(schema) => schema.as_json_value(batch),
+            Self::Json(schema) => schema.as_json_value(batch),
+            Self::Proto(schema) => schema.as_json_value(batch),
         }
     }
 }
