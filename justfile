@@ -25,7 +25,7 @@ miri:
     cargo +nightly miri test --no-fail-fast --all-features
 
 docker-build:
-    docker build --tag ghcr.io/tansu-io/tansu --no-cache --progress plain .
+    docker build --tag ghcr.io/tansu-io/tansu --no-cache --progress plain --platform linux/amd64,linux/arm64 --debug .
 
 minio-up:
     docker compose up --detach --wait minio
