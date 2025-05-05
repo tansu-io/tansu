@@ -12,6 +12,7 @@ regex.workspace = true
 tansu-cat = { path = "../tansu-cat" }
 tansu-kafka-sans-io = { path = "../tansu-kafka-sans-io" }
 tansu-proxy = { path = "../tansu-proxy" }
+tansu-schema-registry = { path = "../tansu-schema-registry" }
 tansu-server = { path = "../tansu-server" }
 tansu-storage = { path = "../tansu-storage" }
 tansu-topic = { path = "../tansu-topic" }

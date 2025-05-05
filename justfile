@@ -266,7 +266,7 @@ otel-up: docker-compose-down db-up minio-up minio-ready-local minio-local-alias 
 
 # teardown compose, rebuild: minio, db, tansu and lake buckets
 server: (cargo-build "--package" "tansu-cli") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket iceberg-catalog-up
-	target/debug/tansu broker 2>&1  | tee tansu.log
+	target/debug/tansu broker delta 2>&1  | tee tansu.log
 
 gdb: (cargo-build "--package" "tansu-cli") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket
     rust-gdb --args target/debug/tansu broker
