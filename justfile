@@ -202,10 +202,6 @@ search-duckdb-parquet: (duckdb-parquet "search")
 tansu-server:
     target/debug/tansu broker --schema-registry file://./etc/schema 2>&1 | tee tansu.log
 
-# run a broker with configuration from .env
-broker:
-    target/debug/tansu broker 2>&1 | tee tansu.log
-
 kafka-proxy:
     docker run -d -p 19092:9092 apache/kafka:3.9.0
 
@@ -264,14 +260,20 @@ otel: build docker-compose-down db-up minio-up minio-ready-local minio-local-ali
 
 otel-up: docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up tansu-up
 
-# teardown compose, rebuild: minio, db, tansu and lake buckets
-server: (cargo-build "--package" "tansu-cli") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket iceberg-catalog-up
-	target/debug/tansu broker delta 2>&1  | tee tansu.log
+tansu-broker lake:
+    target/debug/tansu broker {{lake}} 2>&1  | tee tansu.log
 
-gdb: (cargo-build "--package" "tansu-cli") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket
+# run a broker with configuration from .env
+broker *args: (cargo-build "--bin" "tansu") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket iceberg-catalog-up (tansu-broker args)
+
+# teardown compose, rebuild: minio, db, tansu and lake buckets
+server: (cargo-build "--bin" "tansu") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket iceberg-catalog-up
+	target/debug/tansu broker 2>&1  | tee tansu.log
+
+gdb: (cargo-build "--bin" "tansu") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket
     rust-gdb --args target/debug/tansu broker
 
-lldb: (cargo-build "--package" "tansu-cli") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket iceberg-catalog-up
+lldb: (cargo-build "--bin" "tansu") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket iceberg-catalog-up
     rust-lldb target/debug/tansu broker
 
 # produce etc/data/observations.json with schema etc/schema/observation.avsc
