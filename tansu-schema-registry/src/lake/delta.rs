@@ -13,7 +13,10 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 use crate::{Error, Result};
 use arrow::{array::RecordBatch, datatypes::Schema};
@@ -21,6 +24,8 @@ use async_trait::async_trait;
 use deltalake::{
     DeltaOps, DeltaTable, aws,
     kernel::StructField,
+    operations::optimize::OptimizeType,
+    protocol::SaveMode,
     writer::{DeltaWriter, RecordBatchWriter},
 };
 use parquet::file::properties::WriterProperties;
@@ -57,11 +62,21 @@ impl Builder<Url> {
 #[derive(Clone, Debug)]
 pub struct Delta {
     location: Url,
+    tables: Arc<Mutex<HashMap<String, DeltaTable>>>,
+    database: String,
 }
 
 impl Delta {
-    async fn create_initialized_table(&self, table: &str, schema: &Schema) -> Result<DeltaTable> {
-        debug!(?table, ?schema);
+    fn table_uri(&self, name: &str) -> String {
+        format!("{}/{}.{name}", self.location, self.database)
+    }
+
+    async fn create_initialized_table(&self, name: &str, schema: &Schema) -> Result<DeltaTable> {
+        debug!(?name, ?schema);
+
+        if let Some(table) = self.tables.lock().map(|guard| guard.get(name).cloned())? {
+            return Ok(table);
+        }
 
         let columns = schema
             .fields()
@@ -78,26 +93,30 @@ impl Delta {
             .inspect(|columns| debug!(?columns))
             .inspect_err(|err| debug!(?err))?;
 
-        let table_uri = format!("{}/{table}", self.location);
-
-        DeltaOps::try_from_uri(&table_uri)
+        let table = DeltaOps::try_from_uri(&self.table_uri(name))
             .await
             .inspect_err(|err| debug!(?err))?
             .create()
+            .with_save_mode(SaveMode::Ignore)
             .with_columns(columns)
             .await
-            .inspect_err(|err| debug!(?err))
-            .map_err(Into::into)
+            .inspect(|table| debug!(?table))
+            .inspect_err(|err| debug!(?err))?;
+
+        _ = self
+            .tables
+            .lock()
+            .map(|mut guard| guard.insert(name.to_owned(), table.clone()))?;
+
+        Ok(table)
     }
 
     async fn write_with_datafusion(
         &self,
-        table: &str,
+        name: &str,
         batches: impl Iterator<Item = RecordBatch>,
     ) -> Result<DeltaTable> {
-        let table_uri = format!("{}/{table}", self.location);
-
-        DeltaOps::try_from_uri(&table_uri)
+        DeltaOps::try_from_uri(&self.table_uri(name))
             .await
             .inspect_err(|err| debug!(?err))?
             .write(batches)
@@ -122,6 +141,19 @@ impl Delta {
             .inspect_err(|err| debug!(?err))
             .map_err(Into::into)
     }
+
+    async fn compact(&self, name: &str) -> Result<()> {
+        DeltaOps::try_from_uri(&self.table_uri(name))
+            .await
+            .inspect_err(|err| debug!(?err))?
+            .optimize()
+            .with_type(OptimizeType::Compact)
+            .await
+            .inspect(|(table, metrics)| debug!(?table, ?metrics))
+            .inspect_err(|err| debug!(?err))
+            .map_err(Into::into)
+            .and(Ok(()))
+    }
 }
 
 #[async_trait]
@@ -133,13 +165,17 @@ impl LakeHouse for Delta {
         _offset: i64,
         record_batch: RecordBatch,
     ) -> Result<()> {
-        let mut _table = self
+        _ = self
             .create_initialized_table(topic, record_batch.schema().as_ref())
             .await?;
 
-        self.write_with_datafusion(topic, [record_batch].into_iter())
+        _ = self
+            .write_with_datafusion(topic, [record_batch].into_iter())
             .await
-            .and(Ok(()))
+            .inspect(|table| debug!(?table))
+            .inspect_err(|err| debug!(?err))?;
+
+        self.compact(topic).await
     }
 }
 
@@ -151,6 +187,8 @@ impl TryFrom<Builder<Url>> for Delta {
 
         Ok(Self {
             location: value.location,
+            database: value.database.unwrap_or(String::from("tansu")),
+            tables: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 }
