@@ -81,14 +81,7 @@ impl Delta {
         let columns = schema
             .fields()
             .iter()
-            .map(|field| {
-                StructField::try_from(field.as_ref())
-                    .map_err(Into::into)
-                    .map(|mut sf| {
-                        sf.metadata = HashMap::new();
-                        sf
-                    })
-            })
+            .map(|field| StructField::try_from(field.as_ref()).map_err(Into::into))
             .collect::<Result<Vec<_>>>()
             .inspect(|columns| debug!(?columns))
             .inspect_err(|err| debug!(?err))?;

@@ -260,8 +260,8 @@ otel: build docker-compose-down db-up minio-up minio-ready-local minio-local-ali
 
 otel-up: docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up tansu-up
 
-tansu-broker lake:
-    target/debug/tansu broker {{lake}} 2>&1  | tee tansu.log
+tansu-broker *args:
+    target/debug/tansu broker {{args}} 2>&1  | tee tansu.log
 
 # run a broker with configuration from .env
 broker *args: (cargo-build "--bin" "tansu") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket iceberg-catalog-up (tansu-broker args)

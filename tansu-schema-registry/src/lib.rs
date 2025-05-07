@@ -196,7 +196,7 @@ trait Validator {
 }
 
 trait AsArrow {
-    fn as_arrow(&self, batch: &Batch) -> Result<RecordBatch>;
+    fn as_arrow(&self, partition: i32, batch: &Batch) -> Result<RecordBatch>;
 }
 
 pub trait AsKafkaRecord {
@@ -239,13 +239,13 @@ impl Validator for Schema {
 }
 
 impl AsArrow for Schema {
-    fn as_arrow(&self, batch: &Batch) -> Result<RecordBatch> {
+    fn as_arrow(&self, partition: i32, batch: &Batch) -> Result<RecordBatch> {
         debug!(?batch);
 
         match self {
-            Self::Avro(schema) => schema.as_arrow(batch),
-            Self::Json(schema) => schema.as_arrow(batch),
-            Self::Proto(schema) => schema.as_arrow(batch),
+            Self::Avro(schema) => schema.as_arrow(partition, batch),
+            Self::Json(schema) => schema.as_arrow(partition, batch),
+            Self::Proto(schema) => schema.as_arrow(partition, batch),
         }
     }
 }
@@ -294,11 +294,16 @@ impl Registry {
         }
     }
 
-    pub fn as_arrow(&self, topic: &str, batch: &Batch) -> Result<Option<RecordBatch>> {
+    pub fn as_arrow(
+        &self,
+        topic: &str,
+        partition: i32,
+        batch: &Batch,
+    ) -> Result<Option<RecordBatch>> {
         self.schemas.lock().map_err(Into::into).and_then(|guard| {
             guard
                 .get(topic)
-                .map(|schema| schema.as_arrow(batch))
+                .map(|schema| schema.as_arrow(partition, batch))
                 .transpose()
         })
     }

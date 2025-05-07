@@ -786,9 +786,13 @@ impl Storage for DynoStore {
         }
 
         if let Some(ref registry) = self.schemas {
-            let inflated = inflated::Batch::try_from(&deflated)?;
+            let batch_attribute = BatchAttribute::try_from(deflated.attributes)?;
 
-            registry.validate(topition.topic(), &inflated).await?;
+            if !batch_attribute.control {
+                let inflated = inflated::Batch::try_from(&deflated)?;
+
+                registry.validate(topition.topic(), &inflated).await?;
+            }
         }
 
         let watermark = self.watermarks.lock().map(|mut locked| {
@@ -818,11 +822,17 @@ impl Storage for DynoStore {
             .inspect_err(|err| error!(?err, transaction_id, ?topition))?;
 
         if let Some(ref registry) = self.schemas {
-            if let Some(ref lake) = self.lake {
-                let inflated = inflated::Batch::try_from(&deflated)?;
-                if let Some(record_batch) = registry.as_arrow(topition.topic(), &inflated)? {
-                    lake.store(topition.topic(), topition.partition(), offset, record_batch)
-                        .await?;
+            let batch_attribute = BatchAttribute::try_from(deflated.attributes)?;
+
+            if !batch_attribute.control {
+                if let Some(ref lake) = self.lake {
+                    let inflated = inflated::Batch::try_from(&deflated)?;
+                    if let Some(record_batch) =
+                        registry.as_arrow(topition.topic(), topition.partition(), &inflated)?
+                    {
+                        lake.store(topition.topic(), topition.partition(), offset, record_batch)
+                            .await?;
+                    }
                 }
             }
         }

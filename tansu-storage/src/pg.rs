@@ -731,11 +731,13 @@ impl Postgres {
 
         let inflated = inflated::Batch::try_from(deflated).inspect_err(|err| error!(?err))?;
 
-        if let Some(ref schemas) = self.schemas {
-            schemas.validate(topition.topic(), &inflated).await?;
-        }
-
         let attributes = BatchAttribute::try_from(inflated.attributes)?;
+
+        if !attributes.control {
+            if let Some(ref schemas) = self.schemas {
+                schemas.validate(topition.topic(), &inflated).await?;
+            }
+        }
 
         let last_offset_delta = i64::from(inflated.last_offset_delta);
 
@@ -855,20 +857,23 @@ impl Postgres {
             .inspect(|n| debug!(?n))
             .inspect_err(|err| error!(?err))?;
 
-        if let Some(ref registry) = self.schemas {
-            if let Some(ref lake) = self.lake {
-                if let Some(record_batch) = registry.as_arrow(topition.topic(), &inflated)? {
-                    lake.store(
-                        topition.topic(),
-                        topition.partition(),
-                        high.unwrap_or_default(),
-                        record_batch,
-                    )
-                    .await?;
+        if !attributes.control {
+            if let Some(ref registry) = self.schemas {
+                if let Some(ref lake) = self.lake {
+                    if let Some(record_batch) =
+                        registry.as_arrow(topition.topic(), topition.partition(), &inflated)?
+                    {
+                        lake.store(
+                            topition.topic(),
+                            topition.partition(),
+                            high.unwrap_or_default(),
+                            record_batch,
+                        )
+                        .await?;
+                    }
                 }
             }
         }
-
         Ok(high.unwrap_or_default())
     }
 
