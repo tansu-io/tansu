@@ -29,6 +29,7 @@ use deltalake::{
     writer::{DeltaWriter, RecordBatchWriter},
 };
 use parquet::file::properties::WriterProperties;
+use tansu_kafka_sans_io::describe_configs_response::DescribeConfigsResult;
 use tracing::debug;
 use url::Url;
 
@@ -71,12 +72,30 @@ impl Delta {
         format!("{}/{}.{name}", self.location, self.database)
     }
 
-    async fn create_initialized_table(&self, name: &str, schema: &Schema) -> Result<DeltaTable> {
+    async fn create_initialized_table(
+        &self,
+        name: &str,
+        schema: &Schema,
+        config: DescribeConfigsResult,
+    ) -> Result<DeltaTable> {
         debug!(?name, ?schema);
 
         if let Some(table) = self.tables.lock().map(|guard| guard.get(name).cloned())? {
             return Ok(table);
         }
+
+        let partitions = config
+            .configs
+            .and_then(|configs| {
+                configs.iter().find_map(|config| {
+                    if config.name == "tansu.lake.partition" {
+                        config.value.clone()
+                    } else {
+                        None
+                    }
+                })
+            })
+            .inspect(|partitions| debug!(?partitions));
 
         let columns = schema
             .fields()
@@ -92,6 +111,7 @@ impl Delta {
             .create()
             .with_save_mode(SaveMode::Ignore)
             .with_columns(columns)
+            .with_partition_columns(partitions)
             .await
             .inspect(|table| debug!(?table))
             .inspect_err(|err| debug!(?err))?;
@@ -157,9 +177,10 @@ impl LakeHouse for Delta {
         _partition: i32,
         _offset: i64,
         record_batch: RecordBatch,
+        config: DescribeConfigsResult,
     ) -> Result<()> {
         _ = self
-            .create_initialized_table(topic, record_batch.schema().as_ref())
+            .create_initialized_table(topic, record_batch.schema().as_ref(), config)
             .await?;
 
         _ = self

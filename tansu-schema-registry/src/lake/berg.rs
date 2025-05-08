@@ -40,6 +40,7 @@ use iceberg::{
 };
 use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
 use parquet::file::properties::WriterProperties;
+use tansu_kafka_sans_io::describe_configs_response::DescribeConfigsResult;
 use tracing::{debug, error};
 use url::Url;
 use uuid::Uuid;
@@ -207,7 +208,10 @@ impl LakeHouse for Iceberg {
         partition: i32,
         offset: i64,
         record_batch: RecordBatch,
+        config: DescribeConfigsResult,
     ) -> Result<()> {
+        let _ = config;
+
         let schema = Schema::try_from(record_batch.schema().as_ref())
             .inspect(|schema| debug!(?schema))
             .inspect_err(|err| debug!(?err))?;

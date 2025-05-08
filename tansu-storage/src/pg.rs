@@ -863,11 +863,16 @@ impl Postgres {
                     if let Some(record_batch) =
                         registry.as_arrow(topition.topic(), topition.partition(), &inflated)?
                     {
+                        let config = self
+                            .describe_config(topition.topic(), ConfigResource::Topic, None)
+                            .await?;
+
                         lake.store(
                             topition.topic(),
                             topition.partition(),
                             high.unwrap_or_default(),
                             record_batch,
+                            config,
                         )
                         .await?;
                     }
@@ -2465,7 +2470,7 @@ impl Storage for Postgres {
     }
 
     async fn describe_config(
-        &mut self,
+        &self,
         name: &str,
         resource: ConfigResource,
         keys: Option<&[String]>,

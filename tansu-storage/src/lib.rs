@@ -1092,7 +1092,7 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
     async fn metadata(&mut self, topics: Option<&[TopicId]>) -> Result<MetadataResponse>;
 
     async fn describe_config(
-        &mut self,
+        &self,
         name: &str,
         resource: ConfigResource,
         keys: Option<&[String]>,
@@ -1472,7 +1472,7 @@ impl Storage for StorageContainer {
     }
 
     async fn describe_config(
-        &mut self,
+        &self,
         name: &str,
         resource: ConfigResource,
         keys: Option<&[String]>,

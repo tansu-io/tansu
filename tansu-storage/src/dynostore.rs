@@ -830,8 +830,18 @@ impl Storage for DynoStore {
                     if let Some(record_batch) =
                         registry.as_arrow(topition.topic(), topition.partition(), &inflated)?
                     {
-                        lake.store(topition.topic(), topition.partition(), offset, record_batch)
+                        let config = self
+                            .describe_config(topition.topic(), ConfigResource::Topic, None)
                             .await?;
+
+                        lake.store(
+                            topition.topic(),
+                            topition.partition(),
+                            offset,
+                            record_batch,
+                            config,
+                        )
+                        .await?;
                     }
                 }
             }
@@ -1527,7 +1537,7 @@ impl Storage for DynoStore {
     }
 
     async fn describe_config(
-        &mut self,
+        &self,
         name: &str,
         resource: ConfigResource,
         keys: Option<&[String]>,

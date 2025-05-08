@@ -26,6 +26,7 @@ use object_store::{
     path::Path,
 };
 use parquet::arrow::AsyncArrowWriter;
+use tansu_kafka_sans_io::describe_configs_response::DescribeConfigsResult;
 use tracing::debug;
 use url::Url;
 
@@ -63,6 +64,7 @@ impl LakeHouse for Parquet {
         partition: i32,
         offset: i64,
         record_batch: RecordBatch,
+        _config: DescribeConfigsResult,
     ) -> Result<()> {
         let payload = {
             let mut buffer = Vec::new();

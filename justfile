@@ -135,8 +135,8 @@ consumer-group-list:
 test-reset-offsets-to-earliest:
     kafka-consumer-groups --bootstrap-server ${ADVERTISED_LISTENER} --group test-consumer-group --topic test:0 --reset-offsets --to-earliest --execute
 
-topic-create topic:
-    target/debug/tansu topic create {{topic}}
+topic-create topic *args:
+    target/debug/tansu topic create {{topic}} {{args}}
 
 topic-delete topic:
     target/debug/tansu topic delete {{topic}}
@@ -298,7 +298,7 @@ taxi-topic-populate: (cat-produce "taxi" "etc/data/trips.json")
 taxi-topic-consume: (cat-consume "taxi")
 
 # create taxi topic with schema etc/schema/taxi.proto
-taxi-topic-create: (topic-create "taxi")
+taxi-topic-create: (topic-create "taxi" "--config" "tansu.lake.partition=partition")
 
 # delete taxi topic
 taxi-topic-delete: (topic-delete "taxi")

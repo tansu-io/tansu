@@ -17,6 +17,7 @@ use crate::Result;
 use arrow::array::RecordBatch;
 use async_trait::async_trait;
 use std::{fmt::Debug, marker::PhantomData};
+use tansu_kafka_sans_io::describe_configs_response::DescribeConfigsResult;
 use tracing::debug;
 use url::Url;
 
@@ -39,6 +40,7 @@ pub trait LakeHouse: Clone + Debug + Send + Sync + 'static {
         partition: i32,
         offset: i64,
         record_batch: RecordBatch,
+        config: DescribeConfigsResult,
     ) -> Result<()>;
 }
 
@@ -50,13 +52,26 @@ impl LakeHouse for House {
         partition: i32,
         offset: i64,
         record_batch: RecordBatch,
+        configs: DescribeConfigsResult,
     ) -> Result<()> {
         debug!(?topic, ?partition, ?offset, ?record_batch);
 
         match self {
-            House::Delta(inner) => inner.store(topic, partition, offset, record_batch).await,
-            House::Iceberg(inner) => inner.store(topic, partition, offset, record_batch).await,
-            House::Parquet(inner) => inner.store(topic, partition, offset, record_batch).await,
+            House::Delta(inner) => {
+                inner
+                    .store(topic, partition, offset, record_batch, configs)
+                    .await
+            }
+            House::Iceberg(inner) => {
+                inner
+                    .store(topic, partition, offset, record_batch, configs)
+                    .await
+            }
+            House::Parquet(inner) => {
+                inner
+                    .store(topic, partition, offset, record_batch, configs)
+                    .await
+            }
         }
     }
 }

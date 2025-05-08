@@ -13,7 +13,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::{collections::HashMap, io::Write, ops::Deref};
+use std::{collections::HashMap, io::Write, ops::Deref, sync::LazyLock};
 
 use crate::{ARROW_LIST_FIELD_NAME, AsArrow, AsJsonValue, AsKafkaRecord, Error, Result, Validator};
 use arrow::{
@@ -27,14 +27,15 @@ use arrow::{
 use bytes::{BufMut, Bytes, BytesMut};
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use protobuf::{
-    CodedInputStream, MessageDyn,
+    CodedInputStream, MessageDyn, descriptor,
     reflect::{
         FieldDescriptor, FileDescriptor, MessageDescriptor, ReflectValueRef, RuntimeFieldType,
         RuntimeType,
     },
+    well_known_types,
 };
 use protobuf_json_mapping::{parse_dyn_from_str, print_to_string};
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 use tansu_kafka_sans_io::{ErrorCode, record::inflated::Batch};
 use tempfile::{NamedTempFile, tempdir};
 use tracing::{debug, error};
@@ -43,6 +44,7 @@ const NULLABLE: bool = true;
 const SORTED_MAP_KEYS: bool = false;
 
 const KEY: &str = "Key";
+const META: &str = "Meta";
 const VALUE: &str = "Value";
 
 fn append<'a>(path: &[&'a str], name: &'a str) -> Vec<&'a str> {
@@ -53,13 +55,14 @@ fn append<'a>(path: &[&'a str], name: &'a str) -> Vec<&'a str> {
 
 #[derive(Default)]
 struct RecordBuilder {
+    meta: Vec<Box<dyn ArrayBuilder>>,
     keys: Vec<Box<dyn ArrayBuilder>>,
     values: Vec<Box<dyn ArrayBuilder>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Schema {
-    file_descriptor: FileDescriptor,
+    file_descriptors: Vec<FileDescriptor>,
     ids: HashMap<String, i32>,
 }
 
@@ -93,9 +96,41 @@ impl Schema {
         )
     }
 
+    fn message_by_package_relative_name(&self, message_name: &str) -> Option<MessageDescriptor> {
+        self.file_descriptors
+            .iter()
+            .find_map(|fd| fd.message_by_package_relative_name(message_name))
+    }
+
+    fn value_to_message(&self, message_name: &str, json: &Value) -> Result<Box<dyn MessageDyn>> {
+        self.file_descriptors
+            .iter()
+            .find_map(|fd| fd.message_by_package_relative_name(message_name))
+            .ok_or(Error::Message(format!("message {message_name} not found")))
+            .and_then(|message_descriptor| {
+                serde_json::to_string(json)
+                    .map_err(Error::from)
+                    .and_then(|json| {
+                        parse_dyn_from_str(&message_descriptor, json.as_str()).map_err(Into::into)
+                    })
+            })
+    }
+
+    fn message_to_bytes(message: Box<dyn MessageDyn>) -> Result<Bytes> {
+        let mut w = BytesMut::new().writer();
+        message
+            .write_to_writer_dyn(&mut w)
+            .and(Ok(Bytes::from(w.into_inner())))
+            .map_err(Into::into)
+    }
+
+    fn encode_from_value(&self, message_name: &str, json: &Value) -> Result<Bytes> {
+        self.value_to_message(message_name, json)
+            .and_then(Self::message_to_bytes)
+    }
+
     fn message_value_as_bytes(&self, message_name: &str, json: &Value) -> Result<Option<Bytes>> {
-        self.file_descriptor
-            .message_by_package_relative_name(message_name)
+        self.message_by_package_relative_name(message_name)
             .map(|message_descriptor| {
                 serde_json::to_string(json)
                     .map_err(Error::from)
@@ -142,6 +177,13 @@ impl Schema {
 
         descriptor
             .fields()
+            .inspect(|field| {
+                debug!(
+                    name = field.name(),
+                    full_name = field.full_name(),
+                    type_name = field.proto().type_name()
+                )
+            })
             .map(|field| match field.runtime_field_type() {
                 RuntimeFieldType::Singular(ref singular) => {
                     debug!(
@@ -502,15 +544,12 @@ impl From<&Schema> for Vec<Box<dyn ArrayBuilder>> {
 
         let mut builders = vec![];
 
-        if let Some(ref descriptor) = schema.file_descriptor.message_by_package_relative_name(KEY) {
+        if let Some(ref descriptor) = schema.message_by_package_relative_name(KEY) {
             debug!(?descriptor);
             builders.append(&mut schema.message_descriptor_array_builders(&[KEY], descriptor));
         }
 
-        if let Some(ref descriptor) = schema
-            .file_descriptor
-            .message_by_package_relative_name(VALUE)
-        {
+        if let Some(ref descriptor) = schema.message_by_package_relative_name(VALUE) {
             debug!(?descriptor);
             builders.append(&mut schema.message_descriptor_array_builders(&[VALUE], descriptor));
         }
@@ -521,24 +560,39 @@ impl From<&Schema> for Vec<Box<dyn ArrayBuilder>> {
 
 impl From<&Schema> for RecordBuilder {
     fn from(schema: &Schema) -> Self {
-        let mut keys = vec![];
+        let meta = {
+            let mut meta = vec![];
+            if let Some(ref descriptor) = schema.message_by_package_relative_name(META) {
+                debug!(descriptor = descriptor.name());
+                meta.append(&mut schema.message_descriptor_array_builders(&[META], descriptor))
+            }
 
-        if let Some(ref descriptor) = schema.file_descriptor.message_by_package_relative_name(KEY) {
-            debug!(descriptor = descriptor.name());
-            keys.append(&mut schema.message_descriptor_array_builders(&[KEY], descriptor));
-        }
+            meta
+        };
 
-        let mut values = vec![];
+        let keys = {
+            let mut keys = vec![];
 
-        if let Some(ref descriptor) = schema
-            .file_descriptor
-            .message_by_package_relative_name(VALUE)
-        {
-            debug!(descriptor = descriptor.name());
-            values.append(&mut schema.message_descriptor_array_builders(&[VALUE], descriptor));
-        }
+            if let Some(ref descriptor) = schema.message_by_package_relative_name(KEY) {
+                debug!(descriptor = descriptor.name());
+                keys.append(&mut schema.message_descriptor_array_builders(&[KEY], descriptor));
+            }
 
-        Self { keys, values }
+            keys
+        };
+
+        let values = {
+            let mut values = vec![];
+
+            if let Some(ref descriptor) = schema.message_by_package_relative_name(VALUE) {
+                debug!(descriptor = descriptor.name());
+                values.append(&mut schema.message_descriptor_array_builders(&[VALUE], descriptor));
+            }
+
+            values
+        };
+
+        Self { meta, keys, values }
     }
 }
 
@@ -546,17 +600,24 @@ impl From<&Schema> for Fields {
     fn from(schema: &Schema) -> Self {
         let mut fields = vec![];
 
-        if let Some(ref descriptor) = schema.file_descriptor.message_by_package_relative_name(KEY) {
-            debug!(?descriptor);
+        if let Some(ref descriptor) = schema
+            .message_by_package_relative_name(META)
+            .inspect(|descriptor| debug!(?descriptor))
+        {
+            fields.append(&mut schema.message_descriptor_to_fields(&[META], descriptor));
+        }
+
+        if let Some(ref descriptor) = schema
+            .message_by_package_relative_name(KEY)
+            .inspect(|descriptor| debug!(?descriptor))
+        {
             fields.append(&mut schema.message_descriptor_to_fields(&[KEY], descriptor));
         }
 
         if let Some(ref descriptor) = schema
-            .file_descriptor
             .message_by_package_relative_name(VALUE)
+            .inspect(|descriptor| debug!(?descriptor))
         {
-            debug!(descriptor = descriptor.name());
-
             fields.append(&mut schema.message_descriptor_to_fields(&[VALUE], descriptor));
         }
 
@@ -602,11 +663,11 @@ impl Validator for Schema {
             debug!(?record);
 
             validate(
-                self.file_descriptor.message_by_package_relative_name(KEY),
+                self.message_by_package_relative_name(KEY),
                 record.key.clone(),
             )
             .and(validate(
-                self.file_descriptor.message_by_package_relative_name(VALUE),
+                self.message_by_package_relative_name(VALUE),
                 record.value.clone(),
             ))
             .inspect_err(|err| error!(?err))?
@@ -620,47 +681,97 @@ impl TryFrom<Bytes> for Schema {
     type Error = Error;
 
     fn try_from(proto: Bytes) -> Result<Self, Self::Error> {
-        make_fd(proto).map(Self::from)
-    }
-}
+        make_fd(proto)
+            .map(|mut protos| {
+                debug!(
+                    protos = ?protos
+                        .iter()
+                        .flat_map(|proto| {
+                            proto
+                                .messages()
+                                .map(|message| message.name_to_package().to_owned())
+                        })
+                        .collect::<Vec<_>>()
+                );
 
-impl From<FileDescriptor> for Schema {
-    fn from(file_descriptor: FileDescriptor) -> Self {
-        Self {
-            ids: field_ids(&file_descriptor),
-            file_descriptor,
-        }
-    }
-}
+                if let Some(mut meta) = META_FILE_DESCRIPTOR.clone() {
+                    debug!(
+                        meta = ?meta
+                            .iter()
+                            .flat_map(|proto| {
+                                proto
+                                    .messages()
+                                    .map(|message| message.name_to_package().to_owned())
+                            })
+                            .collect::<Vec<_>>()
+                    );
 
-fn make_fd(proto: Bytes) -> Result<FileDescriptor> {
-    tempdir().map_err(Into::into).and_then(|temp_dir| {
-        NamedTempFile::new_in(&temp_dir)
-            .map_err(Into::into)
-            .and_then(|mut temp_file| {
-                temp_file.write_all(&proto).map_err(Into::into).and(
-                    protobuf_parse::Parser::new()
-                        .pure()
-                        .input(&temp_file)
-                        .include(&temp_dir)
-                        .parse_and_typecheck()
-                        .map_err(Into::into)
-                        .and_then(|mut parsed| {
-                            parsed.file_descriptors.pop().map_or(
-                                Err(Error::ProtobufFileDescriptorMissing(proto)),
-                                |file_descriptor_proto| {
-                                    FileDescriptor::new_dynamic(file_descriptor_proto, &[])
-                                        .map_err(Into::into)
-                                },
-                            )
-                        }),
-                )
+                    protos.append(&mut meta);
+                }
+
+                protos
             })
-    })
+            .map(|file_descriptors| Self {
+                ids: field_ids(&file_descriptors),
+                file_descriptors,
+            })
+    }
 }
 
-fn field_ids(schema: &FileDescriptor) -> HashMap<String, i32> {
-    debug!(?schema);
+static WELL_KNOWN_TYPES: LazyLock<Vec<FileDescriptor>> = LazyLock::new(|| {
+    vec![
+        descriptor::file_descriptor().to_owned(),
+        well_known_types::duration::file_descriptor().to_owned(),
+        well_known_types::empty::file_descriptor().to_owned(),
+        well_known_types::source_context::file_descriptor().to_owned(),
+        well_known_types::timestamp::file_descriptor().to_owned(),
+        well_known_types::wrappers::file_descriptor().to_owned(),
+    ]
+});
+
+static META_FILE_DESCRIPTOR: LazyLock<Option<Vec<FileDescriptor>>> =
+    LazyLock::new(|| make_fd(Bytes::from_static(include_bytes!("meta.proto"))).ok());
+
+fn make_fd(proto: Bytes) -> Result<Vec<FileDescriptor>> {
+    tempdir()
+        .map_err(Into::into)
+        .and_then(|temp_dir| {
+            NamedTempFile::new_in(&temp_dir)
+                .inspect(|temp_dir| debug!(?temp_dir))
+                .map_err(Into::into)
+                .and_then(|mut temp_file| {
+                    temp_file.write_all(&proto).map_err(Into::into).and(
+                        protobuf_parse::Parser::new()
+                            .pure()
+                            .input(&temp_file)
+                            .include(&temp_dir)
+                            .parse_and_typecheck()
+                            .inspect_err(|err| debug!(?err))
+                            .map_err(Into::into)
+                            .and_then(|parsed| {
+                                parsed
+                                    .file_descriptors
+                                    .into_iter()
+                                    .inspect(|parsed| debug!(?parsed))
+                                    .map(|file_descriptor_proto| {
+                                        FileDescriptor::new_dynamic(
+                                            file_descriptor_proto,
+                                            &WELL_KNOWN_TYPES[..],
+                                        )
+                                        .inspect(|fd| debug!(?fd))
+                                        .inspect_err(|err| debug!(?err))
+                                        .map_err(Into::into)
+                                    })
+                                    .collect::<Result<Vec<_>>>()
+                            }),
+                    )
+                })
+        })
+        .inspect(|fds| debug!(?fds))
+}
+
+fn field_ids(schemas: &[FileDescriptor]) -> HashMap<String, i32> {
+    debug!(?schemas);
 
     fn field_ids_with_path(
         path: &[&str],
@@ -754,8 +865,9 @@ fn field_ids(schema: &FileDescriptor) -> HashMap<String, i32> {
     let mut id = 1;
 
     let mut fields_by_package = |relative_name: &str| -> HashMap<String, i32> {
-        schema
-            .message_by_package_relative_name(relative_name)
+        schemas
+            .iter()
+            .find_map(|fd| fd.message_by_package_relative_name(relative_name))
             .as_ref()
             .map(|schema| field_ids_with_path(&[relative_name], schema, &mut id))
             .unwrap_or_default()
@@ -763,6 +875,7 @@ fn field_ids(schema: &FileDescriptor) -> HashMap<String, i32> {
 
     let mut ids = HashMap::new();
 
+    ids.extend(fields_by_package(META));
     ids.extend(fields_by_package(KEY));
     ids.extend(fields_by_package(VALUE));
 
@@ -1327,7 +1440,7 @@ fn process_message_descriptor(
 }
 
 impl AsArrow for Schema {
-    fn as_arrow(&self, _partition: i32, batch: &Batch) -> Result<RecordBatch> {
+    fn as_arrow(&self, partition: i32, batch: &Batch) -> Result<RecordBatch> {
         debug!(?batch);
 
         let schema = ArrowSchema::from(self);
@@ -1336,6 +1449,7 @@ impl AsArrow for Schema {
         let mut record_builder = RecordBuilder::from(self);
 
         debug!(
+            meta = record_builder.meta.len(),
             keys = record_builder.keys.len(),
             values = record_builder.values.len()
         );
@@ -1344,24 +1458,33 @@ impl AsArrow for Schema {
             debug!(?record);
 
             process_message_descriptor(
-                self.file_descriptor.message_by_package_relative_name(KEY),
+                self.message_by_package_relative_name(META),
+                self.encode_from_value(META, &json!({"partition": partition}))
+                    .map(Some)?,
+                &mut record_builder.meta,
+            )?;
+
+            process_message_descriptor(
+                self.message_by_package_relative_name(KEY),
                 record.key(),
                 &mut record_builder.keys,
             )?;
 
             process_message_descriptor(
-                self.file_descriptor.message_by_package_relative_name(VALUE),
+                self.message_by_package_relative_name(VALUE),
                 record.value(),
                 &mut record_builder.values,
             )?;
         }
 
         debug!(
+            meta_rows = ?record_builder.meta.iter().map(|rows| rows.len()).collect::<Vec<_>>(),
             key_rows = ?record_builder.keys.iter().map(|rows| rows.len()).collect::<Vec<_>>(),
             value_rows = ?record_builder.values.iter().map(|rows| rows.len()).collect::<Vec<_>>()
         );
 
         let mut columns = vec![];
+        columns.append(&mut record_builder.meta);
         columns.append(&mut record_builder.keys);
         columns.append(&mut record_builder.values);
 
@@ -1382,8 +1505,7 @@ impl Schema {
         encoded: Option<Bytes>,
     ) -> Result<(String, Value)> {
         decode(
-            self.file_descriptor
-                .message_by_package_relative_name(package_relative_name),
+            self.message_by_package_relative_name(package_relative_name),
             encoded,
         )
         .inspect(|decoded| debug!(?decoded))
@@ -1452,25 +1574,6 @@ mod tests {
     use tracing::subscriber::DefaultGuard;
     use tracing_subscriber::EnvFilter;
 
-    fn encode_from_value(fd: &FileDescriptor, message_name: &str, json: &Value) -> Result<Bytes> {
-        fd.message_by_package_relative_name(message_name)
-            .ok_or(Error::Message(format!("message {message_name} not found")))
-            .and_then(|message_descriptor| {
-                serde_json::to_string(json)
-                    .map_err(Error::from)
-                    .and_then(|json| {
-                        parse_dyn_from_str(&message_descriptor, json.as_str()).map_err(Into::into)
-                    })
-                    .and_then(|message| {
-                        let mut w = BytesMut::new().writer();
-                        message
-                            .write_to_writer_dyn(&mut w)
-                            .map(|()| Bytes::from(w.into_inner()))
-                            .map_err(Into::into)
-                    })
-            })
-    }
-
     fn init_tracing() -> Result<DefaultGuard> {
         Ok(tracing::subscriber::set_default(
             tracing_subscriber::fmt()
@@ -1523,9 +1626,8 @@ mod tests {
 
         let registry = Registry::new(object_store);
 
-        let file_descriptor = make_fd(proto)?;
-
-        let key = encode_from_value(&file_descriptor, "Key", &json!({"id": 12321}))?;
+        let key = Schema::try_from(proto.clone())
+            .and_then(|schema| schema.encode_from_value(KEY, &json!({"id": 12321})))?;
 
         let batch = Batch::builder()
             .record(Record::builder().key(key.clone().into()))
@@ -1567,16 +1669,15 @@ mod tests {
 
         let registry = Registry::new(object_store);
 
-        let file_descriptor = make_fd(proto)?;
-
-        let value = encode_from_value(
-            &file_descriptor,
-            "Value",
-            &json!({
-                "name": "alice",
-                "email": "alice@example.com"
-            }),
-        )?;
+        let value = Schema::try_from(proto).and_then(|schema| {
+            schema.encode_from_value(
+                VALUE,
+                &json!({
+                    "name": "alice",
+                    "email": "alice@example.com"
+                }),
+            )
+        })?;
 
         let batch = Batch::builder()
             .record(Record::builder().value(value.clone().into()))
@@ -1618,12 +1719,11 @@ mod tests {
 
         let registry = Registry::new(object_store);
 
-        let file_descriptor = make_fd(proto.clone())?;
+        let schema = Schema::try_from(proto.clone())?;
 
-        let key = encode_from_value(&file_descriptor, "Key", &json!({"id": 12321}))?;
-        let value = encode_from_value(
-            &file_descriptor,
-            "Value",
+        let key = schema.encode_from_value(KEY, &json!({"id": 12321}))?;
+        let value = schema.encode_from_value(
+            VALUE,
             &json!({
                 "name": "alice",
                 "email": "alice@example.com"
@@ -1683,7 +1783,7 @@ mod tests {
             ),
         ];
 
-        let file_descriptor = make_fd(proto)?;
+        let schema = Schema::try_from(proto)?;
 
         let batch = {
             let mut batch = Batch::builder();
@@ -1691,15 +1791,14 @@ mod tests {
             for (key, value) in kv {
                 batch = batch.record(
                     Record::builder()
-                        .key(encode_from_value(&file_descriptor, KEY, key)?.into())
-                        .value(encode_from_value(&file_descriptor, VALUE, value)?.into()),
+                        .key(schema.encode_from_value(KEY, key)?.into())
+                        .value(schema.encode_from_value(VALUE, value)?.into()),
                 );
             }
 
             batch.build()?
         };
 
-        let schema = Schema::from(file_descriptor);
         let record_batch = schema.as_arrow(0, &batch)?;
 
         let data_files = iceberg_write(record_batch.clone()).await?;
@@ -1715,12 +1814,12 @@ mod tests {
         let pretty_results = pretty_format_batches(&results)?.to_string();
 
         let expected = vec![
-            "+-------+---------+-------------+------------------+--------+",
-            "| id    | query   | page_number | results_per_page | corpus |",
-            "+-------+---------+-------------+------------------+--------+",
-            "| 32123 | abc/def | 6           | 13               | 2      |",
-            "| 45654 | pqr/stu | 42          | 5                | 6      |",
-            "+-------+---------+-------------+------------------+--------+",
+            "+-----------+------------------------+-------+---------+-------------+------------------+--------+",
+            "| partition | timestamp              | id    | query   | page_number | results_per_page | corpus |",
+            "+-----------+------------------------+-------+---------+-------------+------------------+--------+",
+            "| 0         | {seconds: 0, nanos: 0} | 32123 | abc/def | 6           | 13               | 2      |",
+            "| 0         | {seconds: 0, nanos: 0} | 45654 | pqr/stu | 42          | 5                | 6      |",
+            "+-----------+------------------------+-------+---------+-------------+------------------+--------+",
         ];
 
         assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
@@ -1838,7 +1937,7 @@ mod tests {
                     "o": "YWJjMTIzIT8kKiYoKSctPUB+"}),
         )];
 
-        let file_descriptor = make_fd(proto)?;
+        let schema = Schema::try_from(proto)?;
 
         let batch = {
             let mut batch = Batch::builder();
@@ -1846,15 +1945,14 @@ mod tests {
             for (ref key, ref value) in kv {
                 batch = batch.record(
                     Record::builder()
-                        .key(encode_from_value(&file_descriptor, KEY, key)?.into())
-                        .value(encode_from_value(&file_descriptor, VALUE, value)?.into()),
+                        .key(schema.encode_from_value(KEY, key)?.into())
+                        .value(schema.encode_from_value(VALUE, value)?.into()),
                 );
             }
 
             batch.build()?
         };
 
-        let schema = Schema::from(file_descriptor);
         let record_batch = schema.as_arrow(0, &batch)?;
 
         let data_files = iceberg_write(record_batch.clone()).await?;
@@ -1870,11 +1968,11 @@ mod tests {
         let pretty_results = pretty_format_batches(&results)?.to_string();
 
         let expected = vec![
-            "+-------+--------+--------+----+-----+-------+-------+-------+-------+-------+-------+-------+-------+------+--------------+--------------------------------------+",
-            "| id    | a      | b      | c  | d   | e     | f     | g     | h     | i     | j     | k     | l     | m    | n            | o                                    |",
-            "+-------+--------+--------+----+-----+-------+-------+-------+-------+-------+-------+-------+-------+------+--------------+--------------------------------------+",
-            "| 32123 | 567.65 | 45.654 | -6 | -66 | 23432 | 34543 | 45654 | 67876 | 78987 | 89098 | 90109 | 12321 | true | Hello World! | 616263313233213f242a262829272d3d407e |",
-            "+-------+--------+--------+----+-----+-------+-------+-------+-------+-------+-------+-------+-------+------+--------------+--------------------------------------+",
+            "+-----------+------------------------+-------+--------+--------+----+-----+-------+-------+-------+-------+-------+-------+-------+-------+------+--------------+--------------------------------------+",
+            "| partition | timestamp              | id    | a      | b      | c  | d   | e     | f     | g     | h     | i     | j     | k     | l     | m    | n            | o                                    |",
+            "+-----------+------------------------+-------+--------+--------+----+-----+-------+-------+-------+-------+-------+-------+-------+-------+------+--------------+--------------------------------------+",
+            "| 0         | {seconds: 0, nanos: 0} | 32123 | 567.65 | 45.654 | -6 | -66 | 23432 | 34543 | 45654 | 67876 | 78987 | 89098 | 90109 | 12321 | true | Hello World! | 616263313233213f242a262829272d3d407e |",
+            "+-----------+------------------------+-------+--------+--------+----+-----+-------+-------+-------+-------+-------+-------+-------+-------+------+--------------+--------------------------------------+",
         ];
 
         assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
@@ -1918,7 +2016,7 @@ mod tests {
             ),
         ];
 
-        let file_descriptor = make_fd(proto)?;
+        let schema = Schema::try_from(proto)?;
 
         let batch = {
             let mut batch = Batch::builder();
@@ -1926,15 +2024,14 @@ mod tests {
             for (ref key, ref value) in kv {
                 batch = batch.record(
                     Record::builder()
-                        .key(encode_from_value(&file_descriptor, KEY, key)?.into())
-                        .value(encode_from_value(&file_descriptor, VALUE, value)?.into()),
+                        .key(schema.encode_from_value(KEY, key)?.into())
+                        .value(schema.encode_from_value(VALUE, value)?.into()),
                 );
             }
 
             batch.build()?
         };
 
-        let schema = Schema::from(file_descriptor);
         let record_batch = schema.as_arrow(0, &batch)?;
 
         let data_files = iceberg_write(record_batch.clone()).await?;
@@ -1952,12 +2049,12 @@ mod tests {
         let pretty_results = pretty_format_batches(&results)?.to_string();
 
         let expected = vec![
-            "+-------+-------+-------------------+",
-            "| id    | name  | email             |",
-            "+-------+-------+-------------------+",
-            "| 12321 | alice | alice@example.com |",
-            "| 32123 | bob   | bob@example.com   |",
-            "+-------+-------+-------------------+",
+            "+-----------+------------------------+-------+-------+-------------------+",
+            "| partition | timestamp              | id    | name  | email             |",
+            "+-----------+------------------------+-------+-------+-------------------+",
+            "| 0         | {seconds: 0, nanos: 0} | 12321 | alice | alice@example.com |",
+            "| 0         | {seconds: 0, nanos: 0} | 32123 | bob   | bob@example.com   |",
+            "+-----------+------------------------+-------+-------+-------------------+",
         ];
 
         assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
@@ -1968,29 +2065,11 @@ mod tests {
     async fn taxi() -> Result<()> {
         let _guard = init_tracing()?;
 
-        let proto = Bytes::from_static(
-            br#"
-            syntax = 'proto3';
+        let schema = Schema::try_from(Bytes::from_static(include_bytes!(
+            "../../../tansu/etc/schema/taxi.proto"
+        )))?;
 
-            enum Flag {
-                N = 0;
-                Y = 1;
-            }
-
-            message Value {
-              int64 vendor_id = 1;
-              int64 trip_id = 2;
-              float trip_distance = 3;
-              double fare_amount = 4;
-              Flag store_and_fwd = 5;
-            }
-            "#,
-        );
-
-        let file_descriptor = make_fd(proto)?;
-
-        let value = encode_from_value(
-            &file_descriptor,
+        let value = schema.encode_from_value(
             "Value",
             &json!({
               "vendor_id": 1,
@@ -2005,7 +2084,6 @@ mod tests {
             .record(Record::builder().value(value.into()))
             .build()?;
 
-        let schema = Schema::from(file_descriptor);
         let record_batch = schema.as_arrow(0, &batch)?;
 
         let data_files = iceberg_write(record_batch.clone()).await?;
@@ -2022,11 +2100,11 @@ mod tests {
         let pretty_results = pretty_format_batches(&results)?.to_string();
 
         let expected = vec![
-            "+-----------+---------+---------------+-------------+---------------+",
-            "| vendor_id | trip_id | trip_distance | fare_amount | store_and_fwd |",
-            "+-----------+---------+---------------+-------------+---------------+",
-            "| 1         | 1000371 | 1.8           | 15.32       | 0             |",
-            "+-----------+---------+---------------+-------------+---------------+",
+            "+-----------+------------------------+-----------+---------+---------------+-------------+---------------+",
+            "| partition | timestamp              | vendor_id | trip_id | trip_distance | fare_amount | store_and_fwd |",
+            "+-----------+------------------------+-----------+---------+---------------+-------------+---------------+",
+            "| 0         | {seconds: 0, nanos: 0} | 1         | 1000371 | 1.8           | 15.32       | 0             |",
+            "+-----------+------------------------+-----------+---------+---------------+-------------+---------------+",
         ];
 
         assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
@@ -2049,11 +2127,10 @@ mod tests {
             "#,
         );
 
-        let file_descriptor = make_fd(proto)?;
+        let schema = Schema::try_from(proto)?;
 
-        let value = encode_from_value(
-            &file_descriptor,
-            "Value",
+        let value = schema.encode_from_value(
+            VALUE,
             &json!({
                 "kv": {"a": 31234, "b": 56765, "c": 12321}
             }),
@@ -2063,7 +2140,6 @@ mod tests {
             .record(Record::builder().value(value.into()))
             .build()?;
 
-        let schema = Schema::from(file_descriptor);
         let record_batch = schema.as_arrow(0, &batch)?;
 
         let ctx = SessionContext::new();
@@ -2111,11 +2187,10 @@ mod tests {
             "#,
         );
 
-        let file_descriptor = make_fd(proto)?;
+        let schema = Schema::try_from(proto)?;
 
-        let value = encode_from_value(
-            &file_descriptor,
-            "Value",
+        let value = schema.encode_from_value(
+            VALUE,
             &json!({
                 "kv": {"a": {"name": "xyz", "complete": 0.99}}
             }),
@@ -2125,7 +2200,6 @@ mod tests {
             .record(Record::builder().value(value.into()))
             .build()?;
 
-        let schema = Schema::from(file_descriptor);
         let record_batch = schema.as_arrow(0, &batch)?;
 
         let ctx = SessionContext::new();
@@ -2170,11 +2244,10 @@ mod tests {
                 "#,
         );
 
-        let file_descriptor = make_fd(proto)?;
+        let schema = Schema::try_from(proto)?;
 
-        let value = encode_from_value(
-            &file_descriptor,
-            "Value",
+        let value = schema.encode_from_value(
+            VALUE,
             &json!({
                 "project": {"name": "xyz", "complete": 0.99},
                 "title": "abc",
@@ -2185,7 +2258,6 @@ mod tests {
             .record(Record::builder().value(value.into()))
             .build()?;
 
-        let schema = Schema::from(file_descriptor);
         let record_batch = schema.as_arrow(0, &batch)?;
 
         let data_files = iceberg_write(record_batch.clone()).await?;
@@ -2202,11 +2274,11 @@ mod tests {
         let pretty_results = pretty_format_batches(&results)?.to_string();
 
         let expected = vec![
-            "+-----------------------------+-------+",
-            "| project                     | title |",
-            "+-----------------------------+-------+",
-            "| {name: xyz, complete: 0.99} | abc   |",
-            "+-----------------------------+-------+",
+            "+-----------+------------------------+-----------------------------+-------+",
+            "| partition | timestamp              | project                     | title |",
+            "+-----------+------------------------+-----------------------------+-------+",
+            "| 0         | {seconds: 0, nanos: 0} | {name: xyz, complete: 0.99} | abc   |",
+            "+-----------+------------------------+-----------------------------+-------+",
         ];
 
         assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
@@ -2230,11 +2302,10 @@ mod tests {
             "#,
         );
 
-        let file_descriptor = make_fd(proto)?;
+        let schema = Schema::try_from(proto)?;
 
-        let value = encode_from_value(
-            &file_descriptor,
-            "Value",
+        let value = schema.encode_from_value(
+            VALUE,
             &json!({
                 "url": "https://example.com/a", "title": "a", "snippets": ["p", "q", "r"]
             }),
@@ -2244,7 +2315,6 @@ mod tests {
             .record(Record::builder().value(value.into()))
             .build()?;
 
-        let schema = Schema::from(file_descriptor);
         let record_batch = schema.as_arrow(0, &batch)?;
         let data_files = iceberg_write(record_batch.clone()).await?;
         assert_eq!(1, data_files.len());
@@ -2260,11 +2330,11 @@ mod tests {
         let pretty_results = pretty_format_batches(&results)?.to_string();
 
         let expected = vec![
-            "+-----------------------+-------+-----------+",
-            "| url                   | title | snippets  |",
-            "+-----------------------+-------+-----------+",
-            "| https://example.com/a | a     | [p, q, r] |",
-            "+-----------------------+-------+-----------+",
+            "+-----------+------------------------+-----------------------+-------+-----------+",
+            "| partition | timestamp              | url                   | title | snippets  |",
+            "+-----------+------------------------+-----------------------+-------+-----------+",
+            "| 0         | {seconds: 0, nanos: 0} | https://example.com/a | a     | [p, q, r] |",
+            "+-----------+------------------------+-----------------------+-------+-----------+",
         ];
 
         assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
@@ -2292,11 +2362,10 @@ mod tests {
                 "#,
         );
 
-        let file_descriptor = make_fd(proto)?;
+        let schema = Schema::try_from(proto)?;
 
-        let value = encode_from_value(
-            &file_descriptor,
-            "Value",
+        let value = schema.encode_from_value(
+            VALUE,
             &json!({
                 "results": [{"url": "https://example.com/abc", "title": "a", "snippets": ["p", "q", "r"]},
                             {"url": "https://example.com/def", "title": "b", "snippets": ["x", "y", "z"]}]
@@ -2307,7 +2376,6 @@ mod tests {
             .record(Record::builder().value(value.into()))
             .build()?;
 
-        let schema = Schema::from(file_descriptor);
         let record_batch = schema.as_arrow(0, &batch)?;
         let data_files = iceberg_write(record_batch.clone()).await?;
         assert_eq!(1, data_files.len());
@@ -2323,11 +2391,11 @@ mod tests {
         let pretty_results = pretty_format_batches(&results)?.to_string();
 
         let expected = vec![
-            "+--------------------------------------------------------------------------------------------------------------------------------+",
-            "| results                                                                                                                        |",
-            "+--------------------------------------------------------------------------------------------------------------------------------+",
-            "| [{url: https://example.com/abc, title: a, snippets: [p, q, r]}, {url: https://example.com/def, title: b, snippets: [x, y, z]}] |",
-            "+--------------------------------------------------------------------------------------------------------------------------------+",
+            "+-----------+------------------------+--------------------------------------------------------------------------------------------------------------------------------+",
+            "| partition | timestamp              | results                                                                                                                        |",
+            "+-----------+------------------------+--------------------------------------------------------------------------------------------------------------------------------+",
+            "| 0         | {seconds: 0, nanos: 0} | [{url: https://example.com/abc, title: a, snippets: [p, q, r]}, {url: https://example.com/def, title: b, snippets: [x, y, z]}] |",
+            "+-----------+------------------------+--------------------------------------------------------------------------------------------------------------------------------+",
         ];
 
         assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
@@ -2409,9 +2477,9 @@ mod tests {
 
         let registry = Registry::new(object_store);
 
-        let file_descriptor = make_fd(proto.clone())?;
+        let schema = Schema::try_from(proto)?;
 
-        let key = encode_from_value(&file_descriptor, "Key", &json!({"id": 12321}))?;
+        let key = schema.encode_from_value(KEY, &json!({"id": 12321}))?;
         let value = Bytes::from_static(b"Consectetur adipiscing elit");
 
         let batch = Batch::builder()
@@ -2486,13 +2554,12 @@ mod tests {
 
         let registry = Registry::new(object_store);
 
-        let file_descriptor = make_fd(proto.clone())?;
+        let schema = Schema::try_from(proto)?;
 
         let key = Bytes::from_static(b"Lorem ipsum dolor sit amet");
 
-        let value = encode_from_value(
-            &file_descriptor,
-            "Value",
+        let value = schema.encode_from_value(
+            VALUE,
             &json!({
                 "name": "alice",
                 "email": "alice@example.com"
@@ -2544,6 +2611,26 @@ mod tests {
             registry.validate(topic, &batch).await,
             Err(Error::Api(ErrorCode::InvalidRecord))
         ));
+
+        Ok(())
+    }
+
+    #[test]
+    fn timestamp_well_known_type() -> Result<()> {
+        let _guard = init_tracing()?;
+        let proto = Bytes::from_static(
+            br#"
+            syntax = "proto3";
+
+            import "google/protobuf/timestamp.proto";
+
+            message Value {
+                google.protobuf.Timestamp timestamp = 1;
+            }
+            "#,
+        );
+
+        let _file_descriptor = make_fd(proto).inspect(|fds| debug!(?fds))?;
 
         Ok(())
     }
