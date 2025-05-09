@@ -23,6 +23,8 @@ opentelemetry.workspace = true
 protobuf.workspace = true
 rand.workspace = true
 regex.workspace = true
+rustls-native-certs.workspace = true
+rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tansu-kafka-sans-io = { path = "../tansu-kafka-sans-io" }
@@ -30,6 +32,7 @@ tansu-schema-registry = { path = "../tansu-schema-registry" }
 thiserror.workspace = true
 tokio-postgres.workspace = true
 tokio.workspace = true
+tokio-postgres-rustls.workspace = true
 tracing-subscriber.workspace = true
 tracing.workspace = true
 url.workspace = true

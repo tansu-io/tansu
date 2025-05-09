@@ -145,6 +145,9 @@ pub enum Error {
     #[error("regex")]
     Regex(#[from] regex::Error),
 
+    #[error("rustls: {0}")]
+    Rustls(#[from] rustls::Error),
+
     #[error("schema registry")]
     SchemaRegistry(tansu_schema_registry::Error),
 
