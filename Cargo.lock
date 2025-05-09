@@ -5765,6 +5765,7 @@ dependencies = [
  "bytes",
  "chrono",
  "datafusion",
+ "delta_kernel",
  "deltalake",
  "futures",
  "iceberg",

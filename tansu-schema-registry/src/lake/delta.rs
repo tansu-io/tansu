@@ -23,12 +23,13 @@ use arrow::{array::RecordBatch, datatypes::Schema};
 use async_trait::async_trait;
 use deltalake::{
     DeltaOps, DeltaTable, aws,
-    kernel::StructField,
+    kernel::{ColumnMetadataKey, DataType, StructField},
     operations::optimize::OptimizeType,
     protocol::SaveMode,
     writer::{DeltaWriter, RecordBatchWriter},
 };
 use parquet::file::properties::WriterProperties;
+use serde_json::json;
 use tansu_kafka_sans_io::describe_configs_response::DescribeConfigsResult;
 use tracing::debug;
 use url::Url;
@@ -110,6 +111,18 @@ impl Delta {
             .inspect_err(|err| debug!(?err))?
             .create()
             .with_save_mode(SaveMode::Ignore)
+            .with_column(
+                "date",
+                DataType::DATE,
+                true,
+                Some(HashMap::from_iter(
+                    [(
+                        ColumnMetadataKey::GenerationExpression.as_ref().into(),
+                        json!("cast(timestamp as date)"),
+                    )]
+                    .into_iter(),
+                )),
+            )
             .with_columns(columns)
             .with_partition_columns(partitions)
             .await

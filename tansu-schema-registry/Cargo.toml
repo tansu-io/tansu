@@ -13,6 +13,7 @@ async-trait.workspace = true
 bytes.workspace = true
 chrono.workspace = true
 datafusion.workspace = true
+delta_kernel.workspace = true
 deltalake.workspace = true
 futures.workspace = true
 iceberg-catalog-memory.workspace = true

@@ -20,7 +20,7 @@ use arrow::{
     array::{
         ArrayBuilder, BooleanBuilder, Float32Builder, Float64Builder, Int32Builder, Int64Builder,
         LargeBinaryBuilder, ListBuilder, MapBuilder, StringBuilder, StructBuilder,
-        TimestampNanosecondBuilder,
+        TimestampMicrosecondBuilder,
     },
     datatypes::{DataType, Field, FieldRef, Fields, Schema as ArrowSchema, TimeUnit},
     record_batch::RecordBatch,
@@ -168,7 +168,7 @@ impl Schema {
             RuntimeType::VecU8 => DataType::LargeBinary,
             RuntimeType::Message(descriptor) => {
                 if descriptor.full_name() == GOOGLE_PROTOBUF_TIMESTAMP {
-                    DataType::Timestamp(TimeUnit::Nanosecond, None)
+                    DataType::Timestamp(TimeUnit::Microsecond, None)
                 } else {
                     DataType::Struct(Fields::from(
                         self.message_descriptor_to_fields(path, descriptor),
@@ -308,7 +308,7 @@ impl Schema {
 
             RuntimeType::Message(descriptor) => {
                 if descriptor.full_name() == GOOGLE_PROTOBUF_TIMESTAMP {
-                    Box::new(TimestampNanosecondBuilder::new())
+                    Box::new(TimestampMicrosecondBuilder::new())
                 } else {
                     let (fields, builders) = descriptor
                         .fields()
@@ -1197,22 +1197,16 @@ fn process_field_descriptor(
 
                         let value = DateTime::parse_from_rfc3339(message.trim_matches('"'))
                             .inspect(|dt| debug!(?dt))
-                            .map(|dt| dt.timestamp_nanos_opt())?;
+                            .map(|dt| dt.timestamp_micros())?;
                         debug!(?value);
 
                         builder
                             .as_any_mut()
-                            .downcast_mut::<TimestampNanosecondBuilder>()
+                            .downcast_mut::<TimestampMicrosecondBuilder>()
                             .ok_or(Error::BadDowncast {
                                 field: field.name().to_owned(),
                             })
-                            .map(|builder| {
-                                if let Some(value) = value {
-                                    builder.append_value(value)
-                                } else {
-                                    builder.append_null()
-                                }
-                            })
+                            .map(|builder| builder.append_value(value))
                     } else {
                         builder
                             .as_any_mut()
