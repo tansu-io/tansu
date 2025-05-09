@@ -20,11 +20,13 @@ use arrow::{
     array::{
         ArrayBuilder, BooleanBuilder, Float32Builder, Float64Builder, Int32Builder, Int64Builder,
         LargeBinaryBuilder, ListBuilder, MapBuilder, StringBuilder, StructBuilder,
+        TimestampNanosecondBuilder,
     },
-    datatypes::{DataType, Field, FieldRef, Fields, Schema as ArrowSchema},
+    datatypes::{DataType, Field, FieldRef, Fields, Schema as ArrowSchema, TimeUnit},
     record_batch::RecordBatch,
 };
 use bytes::{BufMut, Bytes, BytesMut};
+use chrono::DateTime;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use protobuf::{
     CodedInputStream, MessageDyn, descriptor,
@@ -46,6 +48,8 @@ const SORTED_MAP_KEYS: bool = false;
 const KEY: &str = "Key";
 const META: &str = "Meta";
 const VALUE: &str = "Value";
+
+const GOOGLE_PROTOBUF_TIMESTAMP: &str = "google.protobuf.Timestamp";
 
 fn append<'a>(path: &[&'a str], name: &'a str) -> Vec<&'a str> {
     let mut path = Vec::from(path);
@@ -162,9 +166,15 @@ impl Schema {
             RuntimeType::Bool => DataType::Boolean,
             RuntimeType::String => DataType::Utf8,
             RuntimeType::VecU8 => DataType::LargeBinary,
-            RuntimeType::Message(descriptor) => DataType::Struct(Fields::from(
-                self.message_descriptor_to_fields(path, descriptor),
-            )),
+            RuntimeType::Message(descriptor) => {
+                if descriptor.full_name() == GOOGLE_PROTOBUF_TIMESTAMP {
+                    DataType::Timestamp(TimeUnit::Nanosecond, None)
+                } else {
+                    DataType::Struct(Fields::from(
+                        self.message_descriptor_to_fields(path, descriptor),
+                    ))
+                }
+            }
         }
     }
 
@@ -173,7 +183,7 @@ impl Schema {
         path: &[&str],
         descriptor: &MessageDescriptor,
     ) -> Vec<Field> {
-        debug!(?path, ?descriptor);
+        debug!(?path, descriptor_full_name = ?descriptor.full_name());
 
         descriptor
             .fields()
@@ -297,136 +307,139 @@ impl Schema {
             RuntimeType::VecU8 => Box::new(LargeBinaryBuilder::new()),
 
             RuntimeType::Message(descriptor) => {
-                let (fields, builders) = descriptor
-                    .fields()
-                    .map(|field| match field.runtime_field_type() {
-                        RuntimeFieldType::Singular(ref singular) => {
-                            debug!(
-                                descriptor = descriptor.name(),
-                                field_name = field.name(),
-                                ?singular
-                            );
+                if descriptor.full_name() == GOOGLE_PROTOBUF_TIMESTAMP {
+                    Box::new(TimestampNanosecondBuilder::new())
+                } else {
+                    let (fields, builders) = descriptor
+                        .fields()
+                        .map(|field| match field.runtime_field_type() {
+                            RuntimeFieldType::Singular(ref singular) => {
+                                debug!(
+                                    descriptor = descriptor.name(),
+                                    field_name = field.name(),
+                                    ?singular
+                                );
 
-                            (
-                                self.new_nullable_field(
-                                    path,
-                                    field.name(),
-                                    self.runtime_type_to_data_type(
-                                        &append(path, field.name())[..],
-                                        singular,
+                                (
+                                    self.new_nullable_field(
+                                        path,
+                                        field.name(),
+                                        self.runtime_type_to_data_type(
+                                            &append(path, field.name())[..],
+                                            singular,
+                                        ),
+                                        !field.is_required(),
                                     ),
-                                    !field.is_required(),
-                                ),
-                                self.runtime_type_to_array_builder(path, singular),
-                            )
-                        }
+                                    self.runtime_type_to_array_builder(path, singular),
+                                )
+                            }
 
-                        RuntimeFieldType::Repeated(ref repeated) => {
-                            debug!(
-                                descriptor = descriptor.name(),
-                                field_name = field.name(),
-                                ?repeated
-                            );
+                            RuntimeFieldType::Repeated(ref repeated) => {
+                                debug!(
+                                    descriptor = descriptor.name(),
+                                    field_name = field.name(),
+                                    ?repeated
+                                );
 
-                            (
-                                self.new_nullable_field(
-                                    path,
-                                    field.name(),
-                                    {
-                                        let path = &append(path, field.name())[..];
+                                (
+                                    self.new_nullable_field(
+                                        path,
+                                        field.name(),
+                                        {
+                                            let path = &append(path, field.name())[..];
 
-                                        DataType::List(FieldRef::new(self.new_list_field(
-                                            path,
-                                            self.runtime_type_to_data_type(
-                                                &append(path, ARROW_LIST_FIELD_NAME)[..],
-                                                repeated,
-                                            ),
-                                        )))
-                                    },
-                                    !field.is_required(),
-                                ),
-                                {
-                                    let path = &append(path, field.name())[..];
-
-                                    Box::new(
-                                        ListBuilder::new(self.runtime_type_to_array_builder(
-                                            &append(path, ARROW_LIST_FIELD_NAME)[..],
-                                            repeated,
-                                        ))
-                                        .with_field(
-                                            self.new_list_field(
+                                            DataType::List(FieldRef::new(self.new_list_field(
                                                 path,
                                                 self.runtime_type_to_data_type(
                                                     &append(path, ARROW_LIST_FIELD_NAME)[..],
                                                     repeated,
                                                 ),
-                                            ),
-                                        ),
-                                    ) as Box<dyn ArrayBuilder>
-                                },
-                            )
-                        }
-
-                        RuntimeFieldType::Map(ref key, ref value) => {
-                            debug!(
-                                descriptor = descriptor.name(),
-                                field_name = field.name(),
-                                ?key,
-                                ?value
-                            );
-
-                            (
-                                self.new_nullable_field(
-                                    path,
-                                    field.name(),
+                                            )))
+                                        },
+                                        !field.is_required(),
+                                    ),
                                     {
                                         let path = &append(path, field.name())[..];
 
-                                        DataType::Map(
-                                            FieldRef::new(self.new_nullable_field(
+                                        Box::new(
+                                            ListBuilder::new(self.runtime_type_to_array_builder(
+                                                &append(path, ARROW_LIST_FIELD_NAME)[..],
+                                                repeated,
+                                            ))
+                                            .with_field(self.new_list_field(
                                                 path,
-                                                "entries",
-                                                DataType::Struct({
-                                                    let path = &append(path, "entries")[..];
-
-                                                    Fields::from_iter([
-                                                        self.new_nullable_field(
-                                                            path,
-                                                            "keys",
-                                                            self.runtime_type_to_data_type(
-                                                                &append(path, "keys")[..],
-                                                                key,
-                                                            ),
-                                                            !NULLABLE,
-                                                        ),
-                                                        self.new_field(
-                                                            path,
-                                                            "values",
-                                                            self.runtime_type_to_data_type(
-                                                                &append(path, "values")[..],
-                                                                value,
-                                                            ),
-                                                        ),
-                                                    ])
-                                                }),
-                                                !NULLABLE,
+                                                self.runtime_type_to_data_type(
+                                                    &append(path, ARROW_LIST_FIELD_NAME)[..],
+                                                    repeated,
+                                                ),
                                             )),
-                                            SORTED_MAP_KEYS,
                                         )
+                                            as Box<dyn ArrayBuilder>
                                     },
-                                    !field.is_required(),
-                                ),
-                                Box::new(MapBuilder::new(
-                                    None,
-                                    self.runtime_type_to_array_builder(path, key),
-                                    self.runtime_type_to_array_builder(path, value),
-                                )) as Box<dyn ArrayBuilder>,
-                            )
-                        }
-                    })
-                    .collect::<(Vec<_>, Vec<_>)>();
+                                )
+                            }
 
-                Box::new(StructBuilder::new(fields, builders))
+                            RuntimeFieldType::Map(ref key, ref value) => {
+                                debug!(
+                                    descriptor = descriptor.name(),
+                                    field_name = field.name(),
+                                    ?key,
+                                    ?value
+                                );
+
+                                (
+                                    self.new_nullable_field(
+                                        path,
+                                        field.name(),
+                                        {
+                                            let path = &append(path, field.name())[..];
+
+                                            DataType::Map(
+                                                FieldRef::new(self.new_nullable_field(
+                                                    path,
+                                                    "entries",
+                                                    DataType::Struct({
+                                                        let path = &append(path, "entries")[..];
+
+                                                        Fields::from_iter([
+                                                            self.new_nullable_field(
+                                                                path,
+                                                                "keys",
+                                                                self.runtime_type_to_data_type(
+                                                                    &append(path, "keys")[..],
+                                                                    key,
+                                                                ),
+                                                                !NULLABLE,
+                                                            ),
+                                                            self.new_field(
+                                                                path,
+                                                                "values",
+                                                                self.runtime_type_to_data_type(
+                                                                    &append(path, "values")[..],
+                                                                    value,
+                                                                ),
+                                                            ),
+                                                        ])
+                                                    }),
+                                                    !NULLABLE,
+                                                )),
+                                                SORTED_MAP_KEYS,
+                                            )
+                                        },
+                                        !field.is_required(),
+                                    ),
+                                    Box::new(MapBuilder::new(
+                                        None,
+                                        self.runtime_type_to_array_builder(path, key),
+                                        self.runtime_type_to_array_builder(path, value),
+                                    )) as Box<dyn ArrayBuilder>,
+                                )
+                            }
+                        })
+                        .collect::<(Vec<_>, Vec<_>)>();
+
+                    Box::new(StructBuilder::new(fields, builders))
+                }
             }
         }
     }
@@ -796,6 +809,10 @@ fn field_ids(schemas: &[FileDescriptor]) -> HashMap<String, i32> {
 
                     if let RuntimeType::Message(message_descriptor) = singular {
                         debug!(?path, ?message_descriptor);
+
+                        if message_descriptor.full_name() == GOOGLE_PROTOBUF_TIMESTAMP {
+                            continue;
+                        }
 
                         ids.extend(
                             field_ids_with_path(&path[..], &message_descriptor, id).into_iter(),
@@ -1172,12 +1189,39 @@ fn process_field_descriptor(
                         .map(|builder| builder.append_value(value))
                 }
 
-                ReflectValueRef::Message(message_ref) => builder
-                    .as_any_mut()
-                    .downcast_mut::<StructBuilder>()
-                    .ok_or(Error::Downcast)
-                    .inspect_err(|err| error!(?err, ?message_ref))
-                    .and_then(|builder| append_struct_builder(message_ref.deref(), builder)),
+                ReflectValueRef::Message(message_ref) => {
+                    if message_ref.deref().descriptor_dyn().full_name() == GOOGLE_PROTOBUF_TIMESTAMP
+                    {
+                        let message = print_to_string(message_ref.deref())?;
+                        debug!(message = message.trim_matches('"'));
+
+                        let value = DateTime::parse_from_rfc3339(message.trim_matches('"'))
+                            .inspect(|dt| debug!(?dt))
+                            .map(|dt| dt.timestamp_nanos_opt())?;
+                        debug!(?value);
+
+                        builder
+                            .as_any_mut()
+                            .downcast_mut::<TimestampNanosecondBuilder>()
+                            .ok_or(Error::BadDowncast {
+                                field: field.name().to_owned(),
+                            })
+                            .map(|builder| {
+                                if let Some(value) = value {
+                                    builder.append_value(value)
+                                } else {
+                                    builder.append_null()
+                                }
+                            })
+                    } else {
+                        builder
+                            .as_any_mut()
+                            .downcast_mut::<StructBuilder>()
+                            .ok_or(Error::Downcast)
+                            .inspect_err(|err| error!(?err, ?message_ref))
+                            .and_then(|builder| append_struct_builder(message_ref.deref(), builder))
+                    }
+                }
             }
         }
 
@@ -1457,10 +1501,20 @@ impl AsArrow for Schema {
         for record in batch.records.iter() {
             debug!(?record);
 
+            let timestamp =
+                DateTime::from_timestamp_millis(batch.base_timestamp + record.timestamp_delta)
+                    .map(|dt| dt.to_rfc3339());
+
             process_message_descriptor(
                 self.message_by_package_relative_name(META),
-                self.encode_from_value(META, &json!({"partition": partition}))
-                    .map(Some)?,
+                self.encode_from_value(
+                    META,
+                    &timestamp.map_or(
+                        json!({"partition": partition}),
+                        |timestamp| json!({"partition": partition, "timestamp": timestamp}),
+                    ),
+                )
+                .map(Some)?,
                 &mut record_builder.meta,
             )?;
 
@@ -1786,13 +1840,15 @@ mod tests {
         let schema = Schema::try_from(proto)?;
 
         let batch = {
-            let mut batch = Batch::builder();
+            let mut batch = Batch::builder().base_timestamp(119_731_017_000);
 
-            for (key, value) in kv {
+            for (delta, (key, value)) in kv.iter().enumerate() {
                 batch = batch.record(
                     Record::builder()
                         .key(schema.encode_from_value(KEY, key)?.into())
-                        .value(schema.encode_from_value(VALUE, value)?.into()),
+                        .value(schema.encode_from_value(VALUE, value)?.into())
+                        .timestamp_delta(delta as i64)
+                        .offset_delta(delta as i32),
                 );
             }
 
@@ -1814,12 +1870,12 @@ mod tests {
         let pretty_results = pretty_format_batches(&results)?.to_string();
 
         let expected = vec![
-            "+-----------+------------------------+-------+---------+-------------+------------------+--------+",
-            "| partition | timestamp              | id    | query   | page_number | results_per_page | corpus |",
-            "+-----------+------------------------+-------+---------+-------------+------------------+--------+",
-            "| 0         | {seconds: 0, nanos: 0} | 32123 | abc/def | 6           | 13               | 2      |",
-            "| 0         | {seconds: 0, nanos: 0} | 45654 | pqr/stu | 42          | 5                | 6      |",
-            "+-----------+------------------------+-------+---------+-------------+------------------+--------+",
+            "+-----------+-------------------------+-------+---------+-------------+------------------+--------+",
+            "| partition | timestamp               | id    | query   | page_number | results_per_page | corpus |",
+            "+-----------+-------------------------+-------+---------+-------------+------------------+--------+",
+            "| 0         | 1973-10-17T18:36:57     | 32123 | abc/def | 6           | 13               | 2      |",
+            "| 0         | 1973-10-17T18:36:57.001 | 45654 | pqr/stu | 42          | 5                | 6      |",
+            "+-----------+-------------------------+-------+---------+-------------+------------------+--------+",
         ];
 
         assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
@@ -1940,13 +1996,15 @@ mod tests {
         let schema = Schema::try_from(proto)?;
 
         let batch = {
-            let mut batch = Batch::builder();
+            let mut batch = Batch::builder().base_timestamp(119_731_017_000);
 
-            for (ref key, ref value) in kv {
+            for (delta, (key, value)) in kv.iter().enumerate() {
                 batch = batch.record(
                     Record::builder()
                         .key(schema.encode_from_value(KEY, key)?.into())
-                        .value(schema.encode_from_value(VALUE, value)?.into()),
+                        .value(schema.encode_from_value(VALUE, value)?.into())
+                        .timestamp_delta(delta as i64)
+                        .offset_delta(delta as i32),
                 );
             }
 
@@ -1968,11 +2026,11 @@ mod tests {
         let pretty_results = pretty_format_batches(&results)?.to_string();
 
         let expected = vec![
-            "+-----------+------------------------+-------+--------+--------+----+-----+-------+-------+-------+-------+-------+-------+-------+-------+------+--------------+--------------------------------------+",
-            "| partition | timestamp              | id    | a      | b      | c  | d   | e     | f     | g     | h     | i     | j     | k     | l     | m    | n            | o                                    |",
-            "+-----------+------------------------+-------+--------+--------+----+-----+-------+-------+-------+-------+-------+-------+-------+-------+------+--------------+--------------------------------------+",
-            "| 0         | {seconds: 0, nanos: 0} | 32123 | 567.65 | 45.654 | -6 | -66 | 23432 | 34543 | 45654 | 67876 | 78987 | 89098 | 90109 | 12321 | true | Hello World! | 616263313233213f242a262829272d3d407e |",
-            "+-----------+------------------------+-------+--------+--------+----+-----+-------+-------+-------+-------+-------+-------+-------+-------+------+--------------+--------------------------------------+",
+            "+-----------+---------------------+-------+--------+--------+----+-----+-------+-------+-------+-------+-------+-------+-------+-------+------+--------------+--------------------------------------+",
+            "| partition | timestamp           | id    | a      | b      | c  | d   | e     | f     | g     | h     | i     | j     | k     | l     | m    | n            | o                                    |",
+            "+-----------+---------------------+-------+--------+--------+----+-----+-------+-------+-------+-------+-------+-------+-------+-------+------+--------------+--------------------------------------+",
+            "| 0         | 1973-10-17T18:36:57 | 32123 | 567.65 | 45.654 | -6 | -66 | 23432 | 34543 | 45654 | 67876 | 78987 | 89098 | 90109 | 12321 | true | Hello World! | 616263313233213f242a262829272d3d407e |",
+            "+-----------+---------------------+-------+--------+--------+----+-----+-------+-------+-------+-------+-------+-------+-------+-------+------+--------------+--------------------------------------+",
         ];
 
         assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
@@ -2019,13 +2077,15 @@ mod tests {
         let schema = Schema::try_from(proto)?;
 
         let batch = {
-            let mut batch = Batch::builder();
+            let mut batch = Batch::builder().base_timestamp(119_731_017_000);
 
-            for (ref key, ref value) in kv {
+            for (delta, (key, value)) in kv.iter().enumerate() {
                 batch = batch.record(
                     Record::builder()
                         .key(schema.encode_from_value(KEY, key)?.into())
-                        .value(schema.encode_from_value(VALUE, value)?.into()),
+                        .value(schema.encode_from_value(VALUE, value)?.into())
+                        .timestamp_delta(delta as i64)
+                        .offset_delta(delta as i32),
                 );
             }
 
@@ -2049,12 +2109,12 @@ mod tests {
         let pretty_results = pretty_format_batches(&results)?.to_string();
 
         let expected = vec![
-            "+-----------+------------------------+-------+-------+-------------------+",
-            "| partition | timestamp              | id    | name  | email             |",
-            "+-----------+------------------------+-------+-------+-------------------+",
-            "| 0         | {seconds: 0, nanos: 0} | 12321 | alice | alice@example.com |",
-            "| 0         | {seconds: 0, nanos: 0} | 32123 | bob   | bob@example.com   |",
-            "+-----------+------------------------+-------+-------+-------------------+",
+            "+-----------+-------------------------+-------+-------+-------------------+",
+            "| partition | timestamp               | id    | name  | email             |",
+            "+-----------+-------------------------+-------+-------+-------------------+",
+            "| 0         | 1973-10-17T18:36:57     | 12321 | alice | alice@example.com |",
+            "| 0         | 1973-10-17T18:36:57.001 | 32123 | bob   | bob@example.com   |",
+            "+-----------+-------------------------+-------+-------+-------------------+",
         ];
 
         assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
@@ -2082,6 +2142,7 @@ mod tests {
 
         let batch = Batch::builder()
             .record(Record::builder().value(value.into()))
+            .base_timestamp(119_731_017_000)
             .build()?;
 
         let record_batch = schema.as_arrow(0, &batch)?;
@@ -2100,11 +2161,11 @@ mod tests {
         let pretty_results = pretty_format_batches(&results)?.to_string();
 
         let expected = vec![
-            "+-----------+------------------------+-----------+---------+---------------+-------------+---------------+",
-            "| partition | timestamp              | vendor_id | trip_id | trip_distance | fare_amount | store_and_fwd |",
-            "+-----------+------------------------+-----------+---------+---------------+-------------+---------------+",
-            "| 0         | {seconds: 0, nanos: 0} | 1         | 1000371 | 1.8           | 15.32       | 0             |",
-            "+-----------+------------------------+-----------+---------+---------------+-------------+---------------+",
+            "+-----------+---------------------+-----------+---------+---------------+-------------+---------------+",
+            "| partition | timestamp           | vendor_id | trip_id | trip_distance | fare_amount | store_and_fwd |",
+            "+-----------+---------------------+-----------+---------+---------------+-------------+---------------+",
+            "| 0         | 1973-10-17T18:36:57 | 1         | 1000371 | 1.8           | 15.32       | 0             |",
+            "+-----------+---------------------+-----------+---------+---------------+-------------+---------------+",
         ];
 
         assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
@@ -2198,6 +2259,7 @@ mod tests {
 
         let batch = Batch::builder()
             .record(Record::builder().value(value.into()))
+            .base_timestamp(119_731_017_000)
             .build()?;
 
         let record_batch = schema.as_arrow(0, &batch)?;
@@ -2255,6 +2317,7 @@ mod tests {
         )?;
 
         let batch = Batch::builder()
+            .base_timestamp(119_731_017_000)
             .record(Record::builder().value(value.into()))
             .build()?;
 
@@ -2274,11 +2337,11 @@ mod tests {
         let pretty_results = pretty_format_batches(&results)?.to_string();
 
         let expected = vec![
-            "+-----------+------------------------+-----------------------------+-------+",
-            "| partition | timestamp              | project                     | title |",
-            "+-----------+------------------------+-----------------------------+-------+",
-            "| 0         | {seconds: 0, nanos: 0} | {name: xyz, complete: 0.99} | abc   |",
-            "+-----------+------------------------+-----------------------------+-------+",
+            "+-----------+---------------------+-----------------------------+-------+",
+            "| partition | timestamp           | project                     | title |",
+            "+-----------+---------------------+-----------------------------+-------+",
+            "| 0         | 1973-10-17T18:36:57 | {name: xyz, complete: 0.99} | abc   |",
+            "+-----------+---------------------+-----------------------------+-------+",
         ];
 
         assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
@@ -2312,6 +2375,7 @@ mod tests {
         )?;
 
         let batch = Batch::builder()
+            .base_timestamp(119_731_017_000)
             .record(Record::builder().value(value.into()))
             .build()?;
 
@@ -2330,11 +2394,11 @@ mod tests {
         let pretty_results = pretty_format_batches(&results)?.to_string();
 
         let expected = vec![
-            "+-----------+------------------------+-----------------------+-------+-----------+",
-            "| partition | timestamp              | url                   | title | snippets  |",
-            "+-----------+------------------------+-----------------------+-------+-----------+",
-            "| 0         | {seconds: 0, nanos: 0} | https://example.com/a | a     | [p, q, r] |",
-            "+-----------+------------------------+-----------------------+-------+-----------+",
+            "+-----------+---------------------+-----------------------+-------+-----------+",
+            "| partition | timestamp           | url                   | title | snippets  |",
+            "+-----------+---------------------+-----------------------+-------+-----------+",
+            "| 0         | 1973-10-17T18:36:57 | https://example.com/a | a     | [p, q, r] |",
+            "+-----------+---------------------+-----------------------+-------+-----------+",
         ];
 
         assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
@@ -2374,6 +2438,7 @@ mod tests {
 
         let batch = Batch::builder()
             .record(Record::builder().value(value.into()))
+            .base_timestamp(119_731_017_000)
             .build()?;
 
         let record_batch = schema.as_arrow(0, &batch)?;
@@ -2391,11 +2456,11 @@ mod tests {
         let pretty_results = pretty_format_batches(&results)?.to_string();
 
         let expected = vec![
-            "+-----------+------------------------+--------------------------------------------------------------------------------------------------------------------------------+",
-            "| partition | timestamp              | results                                                                                                                        |",
-            "+-----------+------------------------+--------------------------------------------------------------------------------------------------------------------------------+",
-            "| 0         | {seconds: 0, nanos: 0} | [{url: https://example.com/abc, title: a, snippets: [p, q, r]}, {url: https://example.com/def, title: b, snippets: [x, y, z]}] |",
-            "+-----------+------------------------+--------------------------------------------------------------------------------------------------------------------------------+",
+            "+-----------+---------------------+--------------------------------------------------------------------------------------------------------------------------------+",
+            "| partition | timestamp           | results                                                                                                                        |",
+            "+-----------+---------------------+--------------------------------------------------------------------------------------------------------------------------------+",
+            "| 0         | 1973-10-17T18:36:57 | [{url: https://example.com/abc, title: a, snippets: [p, q, r]}, {url: https://example.com/def, title: b, snippets: [x, y, z]}] |",
+            "+-----------+---------------------+--------------------------------------------------------------------------------------------------------------------------------+",
         ];
 
         assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
