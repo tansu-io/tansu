@@ -50,7 +50,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - env:
-          CARGO_ABOUT_VERSION: 0.6.1
+          CARGO_ABOUT_VERSION: 0.6.6
         run: |
           cargo install "cargo-about@$CARGO_ABOUT_VERSION"
           cargo about generate about.hbs >THIRD-PARTY-LICENSE.html

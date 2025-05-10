@@ -1,0 +1,8 @@
+syntax = 'proto3';
+
+import "google/protobuf/timestamp.proto";
+
+message Meta {
+  int32 partition = 1;
+  google.protobuf.Timestamp timestamp = 2;
+}

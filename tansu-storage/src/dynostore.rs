@@ -63,7 +63,10 @@ use tansu_kafka_sans_io::{
     record::{Record, deflated, inflated},
     txn_offset_commit_response::{TxnOffsetCommitResponsePartition, TxnOffsetCommitResponseTopic},
 };
-use tansu_schema_registry::Registry;
+use tansu_schema_registry::{
+    Registry,
+    lake::{House, LakeHouse},
+};
 use tracing::{debug, error, warn};
 use url::Url;
 use uuid::Uuid;
@@ -86,11 +89,7 @@ pub struct DynoStore {
     node: i32,
     advertised_listener: Url,
     schemas: Option<Registry>,
-
-    lake: Option<Arc<dyn ObjectStore>>,
-
-    iceberg_catalog: Option<Url>,
-    iceberg_namespace: Option<String>,
+    lake: Option<House>,
 
     watermarks: Arc<Mutex<BTreeMap<Topition, OptiCon<Watermark>>>>,
     meta: OptiCon<Meta>,
@@ -368,8 +367,6 @@ impl DynoStore {
             advertised_listener: Url::parse("tcp://127.0.0.1/").unwrap(),
             schemas: None,
             lake: None,
-            iceberg_catalog: None,
-            iceberg_namespace: None,
             watermarks: Arc::new(Mutex::new(BTreeMap::new())),
             meta: OptiCon::<Meta>::new(cluster),
             object_store: Arc::new(Cache::new(
@@ -390,23 +387,8 @@ impl DynoStore {
         Self { schemas, ..self }
     }
 
-    pub fn lake(self, lake: Option<impl ObjectStore>) -> Self {
-        let lake = lake.map(|lake| Arc::new(lake) as Arc<dyn ObjectStore>);
+    pub fn lake(self, lake: Option<House>) -> Self {
         Self { lake, ..self }
-    }
-
-    pub fn iceberg_catalog(self, iceberg_catalog: Option<Url>) -> Self {
-        Self {
-            iceberg_catalog,
-            ..self
-        }
-    }
-
-    pub fn iceberg_namespace(self, iceberg_namespace: Option<String>) -> Self {
-        Self {
-            iceberg_namespace,
-            ..self
-        }
     }
 
     async fn topic_metadata(&self, topic: &TopicId) -> Result<Option<TopicMetadata>> {
@@ -804,9 +786,13 @@ impl Storage for DynoStore {
         }
 
         if let Some(ref registry) = self.schemas {
-            let inflated = inflated::Batch::try_from(&deflated)?;
+            let batch_attribute = BatchAttribute::try_from(deflated.attributes)?;
 
-            registry.validate(topition.topic(), &inflated).await?;
+            if !batch_attribute.control {
+                let inflated = inflated::Batch::try_from(&deflated)?;
+
+                registry.validate(topition.topic(), &inflated).await?;
+            }
         }
 
         let watermark = self.watermarks.lock().map(|mut locked| {
@@ -836,29 +822,28 @@ impl Storage for DynoStore {
             .inspect_err(|err| error!(?err, transaction_id, ?topition))?;
 
         if let Some(ref registry) = self.schemas {
-            let inflated = inflated::Batch::try_from(&deflated)?;
+            let batch_attribute = BatchAttribute::try_from(deflated.attributes)?;
 
-            if let Some(ref catalog) = self.iceberg_catalog {
-                registry
-                    .store_as_iceberg(
-                        topition.topic(),
-                        topition.partition(),
-                        offset,
-                        &inflated,
-                        catalog,
-                        self.iceberg_namespace.as_deref(),
-                    )
-                    .await?;
-            } else if let Some(ref lake) = self.lake {
-                registry
-                    .store_as_parquet(
-                        topition.topic(),
-                        topition.partition(),
-                        offset,
-                        &inflated,
-                        lake,
-                    )
-                    .await?;
+            if !batch_attribute.control {
+                if let Some(ref lake) = self.lake {
+                    let inflated = inflated::Batch::try_from(&deflated)?;
+                    if let Some(record_batch) =
+                        registry.as_arrow(topition.topic(), topition.partition(), &inflated)?
+                    {
+                        let config = self
+                            .describe_config(topition.topic(), ConfigResource::Topic, None)
+                            .await?;
+
+                        lake.store(
+                            topition.topic(),
+                            topition.partition(),
+                            offset,
+                            record_batch,
+                            config,
+                        )
+                        .await?;
+                    }
+                }
             }
         }
 
@@ -1552,7 +1537,7 @@ impl Storage for DynoStore {
     }
 
     async fn describe_config(
-        &mut self,
+        &self,
         name: &str,
         resource: ConfigResource,
         keys: Option<&[String]>,

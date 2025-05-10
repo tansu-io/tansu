@@ -493,7 +493,7 @@ fn append(field: &Field, value: Value, builder: &mut dyn ArrayBuilder) -> Result
 }
 
 impl AsArrow for Schema {
-    fn as_arrow(&self, batch: &Batch) -> Result<RecordBatch> {
+    fn as_arrow(&self, _partition: i32, batch: &Batch) -> Result<RecordBatch> {
         debug!(?batch);
 
         let mut builders = vec![];
@@ -1459,7 +1459,7 @@ mod tests {
             batch.build()?
         };
 
-        let record_batch = schema.as_arrow(&batch)?;
+        let record_batch = schema.as_arrow(0, &batch)?;
         let data_files = iceberg_write(record_batch.clone()).await?;
         assert_eq!(1, data_files.len());
         assert_eq!(2, data_files[0].record_count());
@@ -1528,7 +1528,7 @@ mod tests {
             batch.build()?
         };
 
-        let record_batch = schema.as_arrow(&batch)?;
+        let record_batch = schema.as_arrow(0, &batch)?;
         let data_files = iceberg_write(record_batch.clone()).await?;
         assert_eq!(1, data_files.len());
         assert_eq!(16, data_files[0].record_count());
@@ -1602,7 +1602,7 @@ mod tests {
             batch.build()?
         };
 
-        let record_batch = schema.as_arrow(&batch)?;
+        let record_batch = schema.as_arrow(0, &batch)?;
         let data_files = iceberg_write(record_batch.clone()).await?;
         assert_eq!(1, data_files.len());
         assert_eq!(3, data_files[0].record_count());
@@ -1670,7 +1670,7 @@ mod tests {
             batch.build()?
         };
 
-        let record_batch = schema.as_arrow(&batch)?;
+        let record_batch = schema.as_arrow(0, &batch)?;
         let data_files = iceberg_write(record_batch.clone()).await?;
         assert_eq!(1, data_files.len());
         assert_eq!(2, data_files[0].record_count());
@@ -1740,7 +1740,7 @@ mod tests {
             batch.build()?
         };
 
-        let record_batch = schema.as_arrow(&batch)?;
+        let record_batch = schema.as_arrow(0, &batch)?;
         let data_files = iceberg_write(record_batch.clone()).await?;
         assert_eq!(1, data_files.len());
         assert_eq!(2, data_files[0].record_count());
@@ -1827,7 +1827,7 @@ mod tests {
             batch.build()?
         };
 
-        let record_batch = schema.as_arrow(&batch)?;
+        let record_batch = schema.as_arrow(0, &batch)?;
         let data_files = iceberg_write(record_batch.clone()).await?;
         assert_eq!(1, data_files.len());
         assert_eq!(3, data_files[0].record_count());
@@ -1909,7 +1909,7 @@ mod tests {
             batch.build()?
         };
 
-        let record_batch = schema.as_arrow(&batch)?;
+        let record_batch = schema.as_arrow(0, &batch)?;
         let data_files = iceberg_write(record_batch.clone()).await?;
         assert_eq!(1, data_files.len());
         assert_eq!(2, data_files[0].record_count());

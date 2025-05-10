@@ -16,8 +16,9 @@
 use crate::{EnvVarExp, Error, Result};
 
 use super::DEFAULT_BROKER;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use tansu_kafka_sans_io::ErrorCode;
+use tansu_schema_registry::lake::{self};
 use tansu_server::{NODE_ID, broker::Broker, coordinator::group::administrator::Controller};
 use tansu_storage::StorageContainer;
 use tracing::debug;
@@ -26,74 +27,73 @@ use uuid::Uuid;
 
 #[derive(Clone, Debug, Parser)]
 pub(super) struct Arg {
-    #[arg(
-        long,
-        env = "CLUSTER_ID",
-        default_value = "tansu_cluster",
-        help = "All members of the same cluster should use the same id"
-    )]
+    #[command(subcommand)]
+    command: Option<Command>,
+
+    /// All members of the same cluster should use the same id
+    #[arg(long, env = "CLUSTER_ID", default_value = "tansu_cluster")]
     kafka_cluster_id: String,
 
-    #[arg(
-        long,
-        env = "LISTENER_URL",
-        default_value = "tcp://[::]:9092",
-        help = "The broker will listen on this address"
-    )]
+    /// The broker will listen on this address
+    #[arg(long, env = "LISTENER_URL", default_value = "tcp://[::]:9092")]
     kafka_listener_url: EnvVarExp<Url>,
 
+    /// This location is advertised to clients in metadata
     #[arg(
         long,
         env = "ADVERTISED_LISTENER_URL",
         default_value = DEFAULT_BROKER,
-        help = "This location is advertised to clients in metadata"
     )]
     kafka_advertised_listener_url: EnvVarExp<Url>,
 
-    #[arg(
-        long,
-        env = "STORAGE_ENGINE",
-        help = "Storage engine examples are: postgres://postgres:postgres@localhost, memory://tansu/ or s3://tansu/",
-        default_value = "memory://tansu/"
-    )]
+    /// Storage engine examples are: postgres://postgres:postgres@localhost, memory://tansu/ or s3://tansu/
+    #[arg(long, env = "STORAGE_ENGINE", default_value = "memory://tansu/")]
     storage_engine: EnvVarExp<Url>,
 
-    #[arg(
-        long,
-        env = "SCHEMA_REGISTRY",
-        help = "Schema registry examples are: file://./etc/schema or s3://tansu/, containing: topic.json, topic.proto or topic.avsc"
-    )]
+    /// Schema registry examples are: file://./etc/schema or s3://tansu/, containing: topic.json, topic.proto or topic.avsc
+    #[arg(long, env = "SCHEMA_REGISTRY")]
     schema_registry: Option<EnvVarExp<Url>>,
 
-    #[arg(
-        long,
-        env = "DATA_LAKE",
-        help = "Apache Parquet files are written to this location, examples are: file://./lake or s3://lake/"
-    )]
-    data_lake: Option<EnvVarExp<Url>>,
-
-    #[arg(
-        long,
-        env = "ICEBERG_CATALOG",
-        help = "Apache Iceberg Catalog, examples are: http://localhost:8181/"
-    )]
-    iceberg_catalog: Option<EnvVarExp<Url>>,
-
-    #[arg(
-        long,
-        env = "ICEBERG_NAMESPACE",
-        help = "Iceberg namespace",
-        default_value = "tansu"
-    )]
-    iceberg_namespace: Option<String>,
-
+    /// Broker metrics can be scraped by Prometheus from this URL
     #[arg(
         long,
         env = "PROMETHEUS_LISTENER_URL",
-        default_value = "tcp://[::]:9100",
-        help = "Broker metrics can be scraped by Prometheus from this URL"
+        default_value = "tcp://[::]:9100"
     )]
     prometheus_listener_url: Option<EnvVarExp<Url>>,
+}
+
+#[derive(Clone, Debug, Subcommand)]
+pub(super) enum Command {
+    Iceberg {
+        /// Apache Parquet files are written to this location, examples are: file://./lake or s3://lake/
+        #[arg(long, env = "DATA_LAKE")]
+        location: EnvVarExp<Url>,
+
+        /// Apache Iceberg Catalog, examples are: http://localhost:8181/
+        #[arg(long, env = "ICEBERG_CATALOG")]
+        catalog: EnvVarExp<Url>,
+
+        /// Iceberg namespace
+        #[arg(long, env = "ICEBERG_NAMESPACE", default_value = "tansu")]
+        namespace: Option<String>,
+    },
+
+    Delta {
+        /// Apache Parquet files are written to this location, examples are: file://./lake or s3://lake/
+        #[arg(long, env = "DATA_LAKE")]
+        location: EnvVarExp<Url>,
+
+        /// Delta database
+        #[arg(long, env = "DELTA_DATABASE", default_value = "tansu")]
+        database: Option<String>,
+    },
+
+    Parquet {
+        /// Apache Parquet files are written to this location, examples are: file://./lake or s3://lake/
+        #[arg(long, env = "DATA_LAKE")]
+        location: EnvVarExp<Url>,
+    },
 }
 
 impl Arg {
@@ -122,10 +122,28 @@ impl TryFrom<Arg> for tansu_server::broker::Broker<Controller<StorageContainer>,
         let schema = args
             .schema_registry
             .map(|env_var_exp| env_var_exp.into_inner());
-        let data_lake = args.data_lake.map(|env_var_exp| env_var_exp.into_inner());
-        let iceberg_catalog = args
-            .iceberg_catalog
-            .map(|iceberg_catalog| iceberg_catalog.into_inner());
+
+        let lake_house = args
+            .command
+            .map(|command| match command {
+                Command::Iceberg {
+                    location,
+                    catalog,
+                    namespace,
+                } => lake::House::iceberg()
+                    .location(location.into_inner())
+                    .catalog(catalog.into_inner())
+                    .namespace(namespace)
+                    .build(),
+                Command::Delta { location, database } => lake::House::delta()
+                    .location(location.into_inner())
+                    .database(database)
+                    .build(),
+                Command::Parquet { location } => lake::House::parquet()
+                    .location(location.into_inner())
+                    .build(),
+            })
+            .transpose()?;
 
         Broker::<Controller<StorageContainer>, StorageContainer>::builder()
             .node_id(NODE_ID)
@@ -134,11 +152,9 @@ impl TryFrom<Arg> for tansu_server::broker::Broker<Controller<StorageContainer>,
             .advertised_listener(advertised_listener)
             .prometheus(prometheus_listener_url)
             .schema_registry(schema)
-            .data_lake(data_lake)
+            .lake_house(lake_house)
             .storage(storage_engine)
             .listener(listener)
-            .iceberg_catalog(iceberg_catalog)
-            .iceberg_namespace(args.iceberg_namespace)
             .build()
             .map_err(Into::into)
     }

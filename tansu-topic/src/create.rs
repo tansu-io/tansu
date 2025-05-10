@@ -13,8 +13,11 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+use std::collections::HashMap;
+
 use tansu_kafka_sans_io::{
-    Body, ErrorCode, Frame, Header, create_topics_request::CreatableTopic,
+    Body, ErrorCode, Frame, Header,
+    create_topics_request::{CreatableTopic, CreatableTopicConfig},
     create_topics_response::CreatableTopicResult,
 };
 use tokio::{
@@ -33,6 +36,7 @@ pub struct Builder<B, N, P> {
     broker: B,
     name: N,
     partitions: P,
+    configs: HashMap<String, String>,
 }
 
 impl<B, N, P> Builder<B, N, P> {
@@ -41,6 +45,7 @@ impl<B, N, P> Builder<B, N, P> {
             broker,
             name: self.name,
             partitions: self.partitions,
+            configs: self.configs,
         }
     }
 
@@ -49,6 +54,7 @@ impl<B, N, P> Builder<B, N, P> {
             broker: self.broker,
             name: name.into(),
             partitions: self.partitions,
+            configs: self.configs,
         }
     }
 
@@ -57,7 +63,12 @@ impl<B, N, P> Builder<B, N, P> {
             broker: self.broker,
             name: self.name,
             partitions,
+            configs: self.configs,
         }
+    }
+
+    pub fn config(self, configs: HashMap<String, String>) -> Builder<B, N, P> {
+        Self { configs, ..self }
     }
 }
 
@@ -67,18 +78,20 @@ impl Builder<Url, String, i32> {
             broker: self.broker,
             name: self.name,
             partitions: self.partitions,
+            configs: self.configs,
         })
     }
 }
 
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Configuration {
     broker: Url,
     name: String,
     partitions: i32,
+    configs: HashMap<String, String>,
 }
 
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Create {
     configuration: Configuration,
 }
@@ -99,6 +112,7 @@ impl Create {
             .create(
                 self.configuration.name.as_str(),
                 self.configuration.partitions,
+                self.configuration.configs,
             )
             .await
     }
@@ -127,7 +141,12 @@ impl Connection {
         .map_err(Into::into)
     }
 
-    async fn create(&mut self, topic: &str, partitions: i32) -> Result<ErrorCode> {
+    async fn create(
+        &mut self,
+        topic: &str,
+        partitions: i32,
+        configs: HashMap<String, String>,
+    ) -> Result<ErrorCode> {
         debug!(%topic, partitions);
 
         let api_key = 19;
@@ -150,7 +169,15 @@ impl Connection {
                     num_partitions: partitions,
                     replication_factor: -1,
                     assignments: Some([].into()),
-                    configs: Some([].into()),
+                    configs: Some(
+                        configs
+                            .into_iter()
+                            .map(|(name, value)| CreatableTopicConfig {
+                                name,
+                                value: Some(value),
+                            })
+                            .collect(),
+                    ),
                 }]
                 .into(),
             ),
