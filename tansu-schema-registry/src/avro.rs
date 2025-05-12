@@ -48,14 +48,32 @@ use crate::{ARROW_LIST_FIELD_NAME, AsArrow, AsJsonValue, AsKafkaRecord, Error, R
 const NULLABLE: bool = true;
 const SORTED_MAP_KEYS: bool = false;
 
+#[derive(Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub(crate) enum MessageKind {
+    Key,
+    Meta,
+    Value,
+}
+
+impl AsRef<str> for MessageKind {
+    fn as_ref(&self) -> &str {
+        match self {
+            MessageKind::Key => "key",
+            MessageKind::Meta => "meta",
+            MessageKind::Value => "value",
+        }
+    }
+}
+
 #[derive(Default)]
 struct RecordBuilder(Vec<Box<dyn ArrayBuilder>>);
 
 #[derive(Clone, Debug, Default)]
 pub struct Schema {
     complete: Option<RecordSchema>,
-    key: Option<AvroSchema>,
-    value: Option<AvroSchema>,
+    pub(crate) key: Option<AvroSchema>,
+    pub(crate) value: Option<AvroSchema>,
+    pub(crate) meta: Option<AvroSchema>,
     ids: HashMap<String, i32>,
 }
 
@@ -63,18 +81,60 @@ impl TryFrom<Bytes> for Schema {
     type Error = Error;
 
     fn try_from(encoded: Bytes) -> Result<Self, Self::Error> {
+        const FIELDS: &str = "fields";
+
+        let meta =
+            serde_json::from_slice::<JsonValue>(&Bytes::from_static(include_bytes!("meta.avsc")))
+                .inspect(|meta| debug!(%meta))
+                .map(|mut meta| meta[FIELDS].take())
+                .inspect(|meta| debug!(%meta))?;
+
         serde_json::from_slice::<JsonValue>(&encoded[..])
+            .map(|mut schema| {
+                schema
+                    .get_mut(FIELDS)
+                    .and_then(|fields| fields.as_object_mut())
+                    .and_then(|object| object.insert(MessageKind::Meta.as_ref().to_owned(), meta));
+                schema
+            })
             .map_err(Into::into)
-            .map(|schema| Self::from(&schema))
+            .map(Self::from)
     }
 }
 
-impl From<&JsonValue> for Schema {
-    fn from(schema: &JsonValue) -> Self {
+impl From<JsonValue> for Schema {
+    fn from(mut schema: JsonValue) -> Self {
         debug!(?schema);
 
+        const FIELDS: &str = "fields";
+
+        let meta =
+            serde_json::from_slice::<JsonValue>(&Bytes::from_static(include_bytes!("meta.avsc")))
+                .inspect(|meta| debug!(%meta))
+                .map(|mut meta| meta[FIELDS].take())
+                .inspect(|meta| debug!(%meta))
+                .ok();
+
+        let schema = {
+            if let Some(meta) = meta {
+                if let Some(fields) = schema.get_mut(FIELDS) {
+                    if let Some(array) = fields.as_array_mut() {
+                        array.push(JsonValue::Object(Map::from_iter([
+                            ("name".into(), MessageKind::Meta.as_ref().into()),
+                            ("type".into(), "record".into()),
+                            (FIELDS.into(), meta),
+                        ])))
+                    }
+                }
+            }
+
+            debug!(%schema);
+
+            schema
+        };
+
         schema
-            .get("fields")
+            .get(FIELDS)
             .inspect(|fields| debug!(?fields))
             .and_then(|fields| fields.as_array())
             .inspect(|fields| debug!(?fields))
@@ -83,11 +143,12 @@ impl From<&JsonValue> for Schema {
                     complete: None,
                     key: None,
                     value: None,
+                    meta: None,
                     ids: HashMap::new(),
                 },
                 |fields| {
                     if let Ok(schema) =
-                        AvroSchema::parse(schema).inspect_err(|err| error!(?err, ?schema))
+                        AvroSchema::parse(&schema).inspect_err(|err| error!(?err, ?schema))
                     {
                         Self {
                             ids: field_ids(&schema),
@@ -100,7 +161,11 @@ impl From<&JsonValue> for Schema {
 
                             key: fields
                                 .iter()
-                                .find(|field| field.get("name").is_some_and(|name| name == "key"))
+                                .find(|field| {
+                                    field
+                                        .get("name")
+                                        .is_some_and(|name| name == MessageKind::Key.as_ref())
+                                })
                                 .inspect(|value| debug!(?value))
                                 .and_then(|schema| {
                                     AvroSchema::parse(schema)
@@ -110,7 +175,25 @@ impl From<&JsonValue> for Schema {
 
                             value: fields
                                 .iter()
-                                .find(|field| field.get("name").is_some_and(|name| name == "value"))
+                                .find(|field| {
+                                    field
+                                        .get("name")
+                                        .is_some_and(|name| name == MessageKind::Value.as_ref())
+                                })
+                                .inspect(|value| debug!(?value))
+                                .and_then(|schema| {
+                                    AvroSchema::parse(schema)
+                                        .inspect_err(|err| error!(?err, ?schema))
+                                        .ok()
+                                }),
+
+                            meta: fields
+                                .iter()
+                                .find(|field| {
+                                    field
+                                        .get("name")
+                                        .is_some_and(|name| name == MessageKind::Meta.as_ref())
+                                })
                                 .inspect(|value| debug!(?value))
                                 .and_then(|schema| {
                                     AvroSchema::parse(schema)
@@ -123,6 +206,7 @@ impl From<&JsonValue> for Schema {
                             complete: None,
                             key: None,
                             value: None,
+                            meta: None,
                             ids: HashMap::new(),
                         }
                     }
@@ -163,14 +247,15 @@ fn append<'a>(path: &[&'a str], name: &'a str) -> Vec<&'a str> {
 impl Schema {
     fn to_json_value(
         &self,
-        name: &str,
+        message_kind: MessageKind,
         schema: Option<&AvroSchema>,
         encoded: Option<Bytes>,
     ) -> Result<(String, JsonValue)> {
         decode(schema, encoded).and_then(|decoded| {
-            decoded.map_or(Ok((name.to_owned(), JsonValue::Null)), |value| {
-                json_value(value).map(|value| (name.to_owned(), value))
-            })
+            decoded.map_or(
+                Ok((message_kind.as_ref().to_owned(), JsonValue::Null)),
+                |value| json_value(value).map(|value| (message_kind.as_ref().to_owned(), value)),
+            )
         })
     }
 
@@ -932,7 +1017,7 @@ fn append_struct_builder(
                 .ok_or(Error::BadDowncast { field: name })
                 .map(|values| values.append_value(value))?,
 
-            (AvroSchema::TimestampMicros, Value::TimeMicros(value)) => builder
+            (AvroSchema::TimestampMicros, Value::TimestampMicros(value)) => builder
                 .field_builder::<TimestampMicrosecondBuilder>(index)
                 .ok_or(Error::BadDowncast { field: name })
                 .map(|values| values.append_value(value))?,
@@ -1257,7 +1342,7 @@ where
 }
 
 impl AsArrow for Schema {
-    fn as_arrow(&self, _partition: i32, batch: &Batch) -> Result<RecordBatch> {
+    fn as_arrow(&self, partition: i32, batch: &Batch) -> Result<RecordBatch> {
         debug!(ids = ?self.ids, ?batch);
 
         let schema = ArrowSchema::try_from(self)?;
@@ -1267,11 +1352,38 @@ impl AsArrow for Schema {
 
         for record in &batch.records {
             debug!(?record);
+
             let mut builders = record_builder.0.iter_mut();
 
             process(self.key.as_ref(), record.key.clone(), &mut builders)?;
 
             process(self.value.as_ref(), record.value.clone(), &mut builders)?;
+
+            process(
+                self.meta.as_ref(),
+                self.meta
+                    .as_ref()
+                    .map(|meta| {
+                        schema_write(
+                            meta,
+                            r(
+                                meta,
+                                [
+                                    ("partition", Value::Int(partition)),
+                                    (
+                                        "timestamp",
+                                        Value::Long(
+                                            (batch.base_timestamp + record.timestamp_delta) * 1_000,
+                                        ),
+                                    ),
+                                ],
+                            )
+                            .into(),
+                        )
+                    })
+                    .transpose()?,
+                &mut builders,
+            )?;
         }
 
         debug!(
@@ -1317,7 +1429,9 @@ impl TryFrom<&Schema> for ArrowSchema {
     type Error = Error;
 
     fn try_from(schema: &Schema) -> Result<Self, Self::Error> {
-        Fields::try_from(schema).map(ArrowSchema::new)
+        Fields::try_from(schema)
+            .inspect(|fields| debug!(?fields))
+            .map(ArrowSchema::new)
     }
 }
 
@@ -1356,7 +1470,7 @@ impl Validator for Schema {
     }
 }
 
-fn schema_write(schema: &AvroSchema, value: Value) -> Result<Bytes> {
+pub(crate) fn schema_write(schema: &AvroSchema, value: Value) -> Result<Bytes> {
     debug!(?schema, ?value);
     let mut writer = apache_avro::Writer::new(schema, vec![]);
     writer.append(value)?;
@@ -1488,7 +1602,7 @@ impl AsKafkaRecord for Schema {
     fn as_kafka_record(&self, value: &JsonValue) -> Result<tansu_kafka_sans_io::record::Builder> {
         let mut builder = tansu_kafka_sans_io::record::Record::builder();
 
-        if let Some(value) = value.get("key") {
+        if let Some(value) = value.get(MessageKind::Key.as_ref()) {
             debug!(?value);
 
             if let Some(ref schema) = self.key {
@@ -1500,7 +1614,7 @@ impl AsKafkaRecord for Schema {
             }
         }
 
-        if let Some(value) = value.get("value") {
+        if let Some(value) = value.get(MessageKind::Value.as_ref()) {
             debug!(?value);
 
             if let Some(ref schema) = self.value {
@@ -1594,10 +1708,10 @@ impl AsJsonValue for Schema {
                 .iter()
                 .map(|record| {
                     JsonValue::Object(Map::from_iter(
-                        self.to_json_value("key", self.key.as_ref(), record.key.clone())
+                        self.to_json_value(MessageKind::Key, self.key.as_ref(), record.key.clone())
                             .into_iter()
                             .chain(self.to_json_value(
-                                "value",
+                                MessageKind::Value,
                                 self.value.as_ref(),
                                 record.value.clone(),
                             )),
@@ -1606,6 +1720,20 @@ impl AsJsonValue for Schema {
                 .collect::<Vec<_>>(),
         ))
     }
+}
+
+pub(crate) fn r<'a>(
+    schema: &AvroSchema,
+    fields: impl IntoIterator<Item = (&'a str, Value)>,
+) -> apache_avro::types::Record {
+    apache_avro::types::Record::new(schema)
+        .map(|mut record| {
+            for (name, value) in fields {
+                record.put(name, value);
+            }
+            record
+        })
+        .unwrap()
 }
 
 #[cfg(test)]
@@ -1931,7 +2059,7 @@ mod tests {
     fn key() -> Result<()> {
         let _guard = init_tracing()?;
 
-        let schema = Schema::from(&json!({
+        let schema = Schema::from(json!({
             "type": "record",
             "name": "test",
             "fields": [{"name": "key", "type": "int"}]
@@ -1958,7 +2086,7 @@ mod tests {
         let _guard = init_tracing()?;
 
         let input = {
-            let schema = Schema::from(&json!({
+            let schema = Schema::from(json!({
                 "type": "record",
                 "name": "test",
                 "fields": [{"name": "key", "type": "long"}]
@@ -1975,7 +2103,7 @@ mod tests {
             .record(Record::builder().key(input.clone().into()))
             .build()?;
 
-        let s = Schema::from(&json!({
+        let s = Schema::from(json!({
             "type": "record",
             "name": "test",
             "fields": [{
@@ -2036,7 +2164,7 @@ mod tests {
     async fn record_of_primitive_data_types() -> Result<()> {
         let _guard = init_tracing()?;
 
-        let schema = Schema::from(&json!({
+        let schema = Schema::from(json!({
             "type": "record",
             "name": "Message",
             "fields": [
@@ -2054,7 +2182,7 @@ mod tests {
         }));
 
         let batch = {
-            let mut batch = Batch::builder();
+            let mut batch = Batch::builder().base_timestamp(1_234_567_890 * 1_000);
 
             let values = [r(
                 schema.value.as_ref().unwrap(),
@@ -2094,11 +2222,11 @@ mod tests {
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
         let expected = vec![
-            "+------------------------------------------------------------------------------------------------------------------------+",
-            "| value                                                                                                                  |",
-            "+------------------------------------------------------------------------------------------------------------------------+",
-            "| {b: false, c: 2147483647, d: 9223372036854775807, e: 3.4028235e38, f: 1.7976931348623157e308, g: 616263646566, h: pqr} |",
-            "+------------------------------------------------------------------------------------------------------------------------+",
+            "+------------------------------------------------------------------------------------------------------------------------+------------------------------------------------+",
+            "| value                                                                                                                  | meta                                           |",
+            "+------------------------------------------------------------------------------------------------------------------------+------------------------------------------------+",
+            "| {b: false, c: 2147483647, d: 9223372036854775807, e: 3.4028235e38, f: 1.7976931348623157e308, g: 616263646566, h: pqr} | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "+------------------------------------------------------------------------------------------------------------------------+------------------------------------------------+",
         ];
 
         assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
@@ -2110,7 +2238,7 @@ mod tests {
     async fn record_of_with_list_of_primitive_data_types() -> Result<()> {
         let _guard = init_tracing()?;
 
-        let schema = Schema::from(&json!({
+        let schema = Schema::from(json!({
             "type": "record",
             "name": "Message",
             "fields": [
@@ -2127,7 +2255,7 @@ mod tests {
         }));
 
         let batch = {
-            let mut batch = Batch::builder();
+            let mut batch = Batch::builder().base_timestamp(1_234_567_890 * 1_000);
 
             let values = [r(
                 schema.value.as_ref().unwrap(),
@@ -2181,11 +2309,11 @@ mod tests {
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
         let expected = vec![
-            "+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+",
-            "| value                                                                                                                                                                                                                                           |",
-            "+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+",
-            "| {b: [false, true], c: [-2147483648, 0, 2147483647], d: [-9223372036854775808, 0, 9223372036854775807], e: [-3.4028235e38, 0.0, 3.4028235e38], f: [-1.7976931348623157e308, 0.0, 1.7976931348623157e308], g: [616263646566], h: [abc, pqr, xyz]} |",
-            "+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+",
+            "+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+------------------------------------------------+",
+            "| value                                                                                                                                                                                                                                           | meta                                           |",
+            "+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+------------------------------------------------+",
+            "| {b: [false, true], c: [-2147483648, 0, 2147483647], d: [-9223372036854775808, 0, 9223372036854775807], e: [-3.4028235e38, 0.0, 3.4028235e38], f: [-1.7976931348623157e308, 0.0, 1.7976931348623157e308], g: [616263646566], h: [abc, pqr, xyz]} | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+------------------------------------------------+",
         ];
 
         assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
@@ -2197,14 +2325,14 @@ mod tests {
     async fn union() -> Result<()> {
         let _guard = init_tracing()?;
 
-        let schema = Schema::from(&json!({
+        let schema = Schema::from(json!({
             "type": "record",
             "name": "union",
             "fields": [{"name": "value", "type": ["null", "float"]}]
         }));
 
         let batch = {
-            let mut batch = Batch::builder();
+            let mut batch = Batch::builder().base_timestamp(1_234_567_890 * 1_000);
 
             let values = [
                 Value::Union(1, Box::new(Value::Float(f32::MIN))),
@@ -2226,10 +2354,6 @@ mod tests {
         let data_files = iceberg_write(record_batch.clone()).await?;
         assert_eq!(1, data_files.len());
         assert_eq!(3, data_files[0].record_count());
-        assert_eq!(
-            vec![&1],
-            data_files[0].null_value_counts().keys().collect::<Vec<_>>()
-        );
 
         let ctx = SessionContext::new();
 
@@ -2240,13 +2364,13 @@ mod tests {
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
         let expected = vec![
-            "+---------------+",
-            "| value         |",
-            "+---------------+",
-            "| -3.4028235e38 |",
-            "|               |",
-            "| 3.4028235e38  |",
-            "+---------------+",
+            "+---------------+------------------------------------------------+",
+            "| value         | meta                                           |",
+            "+---------------+------------------------------------------------+",
+            "| -3.4028235e38 | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "|               | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "| 3.4028235e38  | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "+---------------+------------------------------------------------+",
         ]
         .into_iter()
         .collect::<Vec<_>>();
@@ -2260,7 +2384,7 @@ mod tests {
     async fn enumeration() -> Result<()> {
         let _guard = init_tracing()?;
 
-        let schema = Schema::from(&json!({
+        let schema = Schema::from(json!({
             "type": "record",
             "name": "Suit",
             "fields": [
@@ -2273,7 +2397,7 @@ mod tests {
         }));
 
         let batch = {
-            let mut batch = Batch::builder();
+            let mut batch = Batch::builder().base_timestamp(1_234_567_890 * 1_000);
 
             let values = [Value::from(json!("CLUBS")), Value::from(json!("HEARTS"))];
 
@@ -2300,12 +2424,12 @@ mod tests {
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
         let expected = vec![
-            "+--------+",
-            "| value  |",
-            "+--------+",
-            "| CLUBS  |",
-            "| HEARTS |",
-            "+--------+",
+            "+--------+------------------------------------------------+",
+            "| value  | meta                                           |",
+            "+--------+------------------------------------------------+",
+            "| CLUBS  | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "| HEARTS | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "+--------+------------------------------------------------+",
         ]
         .into_iter()
         .collect::<Vec<_>>();
@@ -2319,7 +2443,7 @@ mod tests {
     async fn observation_enumeration() -> Result<()> {
         let _guard = init_tracing()?;
 
-        let schema = Schema::from(&json!({
+        let schema = Schema::from(json!({
             "type": "record",
             "name": "observation",
             "fields": [
@@ -2337,7 +2461,7 @@ mod tests {
         ));
 
         let batch = {
-            let mut batch = Batch::builder();
+            let mut batch = Batch::builder().base_timestamp(1_234_567_890 * 1_000);
 
             let values = [json!({
                 "key": "1E44D9C2-5E7A-443B-BF10-2B1E5FD72F15",
@@ -2369,11 +2493,11 @@ mod tests {
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
         let expected = vec![
-            "+--------------------------------------+-------------------------------+",
-            "| key                                  | value                         |",
-            "+--------------------------------------+-------------------------------+",
-            "| 1e44d9c2-5e7a-443b-bf10-2b1e5fd72f15 | {amount: 23.2, unit: CELSIUS} |",
-            "+--------------------------------------+-------------------------------+",
+            "+--------------------------------------+-------------------------------+------------------------------------------------+",
+            "| key                                  | value                         | meta                                           |",
+            "+--------------------------------------+-------------------------------+------------------------------------------------+",
+            "| 1e44d9c2-5e7a-443b-bf10-2b1e5fd72f15 | {amount: 23.2, unit: CELSIUS} | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "+--------------------------------------+-------------------------------+------------------------------------------------+",
         ]
         .into_iter()
         .collect::<Vec<_>>();
@@ -2388,7 +2512,7 @@ mod tests {
     async fn map() -> Result<()> {
         let _guard = init_tracing()?;
 
-        let schema = Schema::from(&json!({
+        let schema = Schema::from(json!({
             "type": "record",
             "name": "Long",
             "fields": [
@@ -2452,7 +2576,7 @@ mod tests {
     async fn simple_integer_key_as_arrow() -> Result<()> {
         let _guard = init_tracing()?;
 
-        let schema = Schema::from(&json!({
+        let schema = Schema::from(json!({
             "type": "record",
             "name": "test",
             "fields": [
@@ -2461,7 +2585,7 @@ mod tests {
         }));
 
         let batch = {
-            let mut batch = Batch::builder();
+            let mut batch = Batch::builder().base_timestamp(1_234_567_890 * 1_000);
 
             let keys = [32123, 45654, 87678, 12321];
 
@@ -2489,14 +2613,14 @@ mod tests {
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
         let expected = vec![
-            "+-------+",
-            "| key   |",
-            "+-------+",
-            "| 32123 |",
-            "| 45654 |",
-            "| 87678 |",
-            "| 12321 |",
-            "+-------+",
+            "+-------+------------------------------------------------+",
+            "| key   | meta                                           |",
+            "+-------+------------------------------------------------+",
+            "| 32123 | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "| 45654 | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "| 87678 | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "| 12321 | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "+-------+------------------------------------------------+",
         ];
 
         assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
@@ -2504,25 +2628,11 @@ mod tests {
         Ok(())
     }
 
-    fn r<'a>(
-        schema: &AvroSchema,
-        fields: impl IntoIterator<Item = (&'a str, Value)>,
-    ) -> apache_avro::types::Record {
-        apache_avro::types::Record::new(schema)
-            .map(|mut record| {
-                for (name, value) in fields {
-                    record.put(name, value);
-                }
-                record
-            })
-            .unwrap()
-    }
-
     #[tokio::test]
     async fn simple_record_value_as_arrow() -> Result<()> {
         let _guard = init_tracing()?;
 
-        let schema = Schema::from(&json!({
+        let schema = Schema::from(json!({
             "type": "record",
             "name": "Person",
             "fields": [{
@@ -2537,7 +2647,7 @@ mod tests {
         }));
 
         let batch = {
-            let mut batch = Batch::builder();
+            let mut batch = Batch::builder().base_timestamp(1_234_567_890 * 1_000);
 
             let values = [
                 r(
@@ -2581,12 +2691,12 @@ mod tests {
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
         let expected = vec![
-            "+---------------------------------------+",
-            "| value                                 |",
-            "+---------------------------------------+",
-            "| {id: 32123, name: alice, lucky: [6]}  |",
-            "| {id: 45654, name: bob, lucky: [5, 9]} |",
-            "+---------------------------------------+",
+            "+---------------------------------------+------------------------------------------------+",
+            "| value                                 | meta                                           |",
+            "+---------------------------------------+------------------------------------------------+",
+            "| {id: 32123, name: alice, lucky: [6]}  | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "| {id: 45654, name: bob, lucky: [5, 9]} | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "+---------------------------------------+------------------------------------------------+",
         ];
 
         assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
@@ -2598,7 +2708,7 @@ mod tests {
     async fn array_bool_value() -> Result<()> {
         let _guard = init_tracing()?;
 
-        let schema = Schema::from(&json!({
+        let schema = Schema::from(json!({
             "type": "record",
             "name": "test",
             "fields": [{
@@ -2615,7 +2725,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         let batch = {
-            let mut batch = Batch::builder();
+            let mut batch = Batch::builder().base_timestamp(1_234_567_890 * 1_000);
 
             for value in values {
                 batch = batch.record(
@@ -2646,14 +2756,14 @@ mod tests {
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
         let expected = vec![
-            "+----------------+",
-            "| value          |",
-            "+----------------+",
-            "| [true, true]   |",
-            "| [false, true]  |",
-            "| [true, false]  |",
-            "| [false, false] |",
-            "+----------------+",
+            "+----------------+------------------------------------------------+",
+            "| value          | meta                                           |",
+            "+----------------+------------------------------------------------+",
+            "| [true, true]   | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "| [false, true]  | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "| [true, false]  | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "| [false, false] | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "+----------------+------------------------------------------------+",
         ];
 
         assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
@@ -2665,7 +2775,7 @@ mod tests {
     async fn array_int_value() -> Result<()> {
         let _guard = init_tracing()?;
 
-        let schema = Schema::from(&json!({
+        let schema = Schema::from(json!({
             "type": "record",
             "name": "test",
             "fields": [{
@@ -2677,7 +2787,7 @@ mod tests {
         }));
 
         let batch = {
-            let mut batch = Batch::builder();
+            let mut batch = Batch::builder().base_timestamp(1_234_567_890 * 1_000);
 
             let values = [vec![32123, 23432, 12321, 56765], vec![i32::MIN, i32::MAX]]
                 .into_iter()
@@ -2713,12 +2823,12 @@ mod tests {
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
         let expected = vec![
-            "+------------------------------+",
-            "| value                        |",
-            "+------------------------------+",
-            "| [32123, 23432, 12321, 56765] |",
-            "| [-2147483648, 2147483647]    |",
-            "+------------------------------+",
+            "+------------------------------+------------------------------------------------+",
+            "| value                        | meta                                           |",
+            "+------------------------------+------------------------------------------------+",
+            "| [32123, 23432, 12321, 56765] | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "| [-2147483648, 2147483647]    | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "+------------------------------+------------------------------------------------+",
         ];
 
         assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
@@ -2730,7 +2840,7 @@ mod tests {
     async fn array_long_value() -> Result<()> {
         let _guard = init_tracing()?;
 
-        let schema = Schema::from(&json!({
+        let schema = Schema::from(json!({
             "type": "record",
             "name": "test",
             "fields": [{
@@ -2742,7 +2852,7 @@ mod tests {
         }));
 
         let batch = {
-            let mut batch = Batch::builder();
+            let mut batch = Batch::builder().base_timestamp(1_234_567_890 * 1_000);
 
             let values = [vec![32123, 23432, 12321, 56765], vec![i64::MIN, i64::MAX]]
                 .into_iter()
@@ -2778,12 +2888,12 @@ mod tests {
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
         let expected = vec![
-            "+---------------------------------------------+",
-            "| value                                       |",
-            "+---------------------------------------------+",
-            "| [32123, 23432, 12321, 56765]                |",
-            "| [-9223372036854775808, 9223372036854775807] |",
-            "+---------------------------------------------+",
+            "+---------------------------------------------+------------------------------------------------+",
+            "| value                                       | meta                                           |",
+            "+---------------------------------------------+------------------------------------------------+",
+            "| [32123, 23432, 12321, 56765]                | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "| [-9223372036854775808, 9223372036854775807] | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "+---------------------------------------------+------------------------------------------------+",
         ];
 
         assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
@@ -2795,7 +2905,7 @@ mod tests {
     async fn array_float_value() -> Result<()> {
         let _guard = init_tracing()?;
 
-        let schema = Schema::from(&json!({
+        let schema = Schema::from(json!({
             "name": "test",
             "type": "record",
             "fields": [{
@@ -2807,7 +2917,7 @@ mod tests {
         }));
 
         let batch = {
-            let mut batch = Batch::builder();
+            let mut batch = Batch::builder().base_timestamp(1_234_567_890 * 1_000);
 
             let values = [
                 vec![3.2123, 23.432, 123.21, 5676.5],
@@ -2846,12 +2956,12 @@ mod tests {
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
         let expected = vec![
-            "+----------------------------------+",
-            "| value                            |",
-            "+----------------------------------+",
-            "| [3.2123, 23.432, 123.21, 5676.5] |",
-            "| [-3.4028235e38, 3.4028235e38]    |",
-            "+----------------------------------+",
+            "+----------------------------------+------------------------------------------------+",
+            "| value                            | meta                                           |",
+            "+----------------------------------+------------------------------------------------+",
+            "| [3.2123, 23.432, 123.21, 5676.5] | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "| [-3.4028235e38, 3.4028235e38]    | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "+----------------------------------+------------------------------------------------+",
         ];
 
         assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
@@ -2863,7 +2973,7 @@ mod tests {
     async fn array_double_value() -> Result<()> {
         let _guard = init_tracing()?;
 
-        let schema = Schema::from(&json!({
+        let schema = Schema::from(json!({
             "type": "record",
             "name": "test",
             "fields": [{
@@ -2875,7 +2985,7 @@ mod tests {
         }));
 
         let batch = {
-            let mut batch = Batch::builder();
+            let mut batch = Batch::builder().base_timestamp(1_234_567_890 * 1_000);
 
             let values = [
                 vec![3.2123, 23.432, 123.21, 5676.5],
@@ -2914,12 +3024,12 @@ mod tests {
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
         let expected = vec![
-            "+---------------------------------------------------+",
-            "| value                                             |",
-            "+---------------------------------------------------+",
-            "| [3.2123, 23.432, 123.21, 5676.5]                  |",
-            "| [-1.7976931348623157e308, 1.7976931348623157e308] |",
-            "+---------------------------------------------------+",
+            "+---------------------------------------------------+------------------------------------------------+",
+            "| value                                             | meta                                           |",
+            "+---------------------------------------------------+------------------------------------------------+",
+            "| [3.2123, 23.432, 123.21, 5676.5]                  | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "| [-1.7976931348623157e308, 1.7976931348623157e308] | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "+---------------------------------------------------+------------------------------------------------+",
         ];
 
         assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
@@ -2931,7 +3041,7 @@ mod tests {
     async fn array_string_value() -> Result<()> {
         let _guard = init_tracing()?;
 
-        let schema = Schema::from(&json!({
+        let schema = Schema::from(json!({
             "type": "record",
             "name": "test",
             "fields": [{
@@ -2943,7 +3053,7 @@ mod tests {
         }));
 
         let batch = {
-            let mut batch = Batch::builder();
+            let mut batch = Batch::builder().base_timestamp(1_234_567_890 * 1_000);
 
             let values = [
                 vec!["abc".to_string(), "def".to_string(), "pqr".to_string()],
@@ -2982,12 +3092,12 @@ mod tests {
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
         let expected = vec![
-            "+-----------------+",
-            "| value           |",
-            "+-----------------+",
-            "| [abc, def, pqr] |",
-            "| [xyz]           |",
-            "+-----------------+",
+            "+-----------------+------------------------------------------------+",
+            "| value           | meta                                           |",
+            "+-----------------+------------------------------------------------+",
+            "| [abc, def, pqr] | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "| [xyz]           | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "+-----------------+------------------------------------------------+",
         ];
 
         assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
@@ -3000,7 +3110,7 @@ mod tests {
     async fn array_record_value() -> Result<()> {
         let _guard = init_tracing()?;
 
-        let schema = Schema::from(&json!({
+        let schema = Schema::from(json!({
             "type": "record",
             "name": "test",
             "fields": [{
@@ -3088,7 +3198,7 @@ mod tests {
     async fn array_bytes_value() -> Result<()> {
         let _guard = init_tracing()?;
 
-        let schema = Schema::from(&json!({
+        let schema = Schema::from(json!({
             "type": "record",
             "name": "test",
             "fields": [{
@@ -3100,7 +3210,7 @@ mod tests {
         }));
 
         let batch = {
-            let mut batch = Batch::builder();
+            let mut batch = Batch::builder().base_timestamp(1_234_567_890 * 1_000);
 
             let values = [
                 vec![b"abc".to_vec(), b"def".to_vec(), b"pqr".to_vec()],
@@ -3139,12 +3249,12 @@ mod tests {
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
         let expected = vec![
-            "+--------------------------+",
-            "| value                    |",
-            "+--------------------------+",
-            "| [616263, 646566, 707172] |",
-            "| [3534333435]             |",
-            "+--------------------------+",
+            "+--------------------------+------------------------------------------------+",
+            "| value                    | meta                                           |",
+            "+--------------------------+------------------------------------------------+",
+            "| [616263, 646566, 707172] | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "| [3534333435]             | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "+--------------------------+------------------------------------------------+",
         ];
 
         assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
@@ -3156,7 +3266,7 @@ mod tests {
     async fn uuid_logical_type() -> Result<()> {
         let _guard = init_tracing()?;
 
-        let schema = Schema::from(&json!({
+        let schema = Schema::from(json!({
             "type": "record",
             "name": "test",
             "fields": [{
@@ -3167,7 +3277,7 @@ mod tests {
         }));
 
         let batch = {
-            let mut batch = Batch::builder();
+            let mut batch = Batch::builder().base_timestamp(1_234_567_890 * 1_000);
 
             let values = [
                 "383BB977-7D38-42B5-8BE7-58A1C606DE7A",
@@ -3208,13 +3318,13 @@ mod tests {
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
         let expected = vec![
-            "+--------------------------------------+",
-            "| value                                |",
-            "+--------------------------------------+",
-            "| 383bb977-7d38-42b5-8be7-58a1c606de7a |",
-            "| 2c1fddc8-4ebe-43fd-8f1c-47e18b7a4e21 |",
-            "| f9b45334-9aa2-4978-8735-9800d27a551c |",
-            "+--------------------------------------+",
+            "+--------------------------------------+------------------------------------------------+",
+            "| value                                | meta                                           |",
+            "+--------------------------------------+------------------------------------------------+",
+            "| 383bb977-7d38-42b5-8be7-58a1c606de7a | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "| 2c1fddc8-4ebe-43fd-8f1c-47e18b7a4e21 | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "| f9b45334-9aa2-4978-8735-9800d27a551c | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "+--------------------------------------+------------------------------------------------+",
         ];
 
         assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
@@ -3227,7 +3337,7 @@ mod tests {
     async fn time_millis_logical_type() -> Result<()> {
         let _guard = init_tracing()?;
 
-        let schema = Schema::from(&json!({
+        let schema = Schema::from(json!({
             "type": "record",
             "name": "test",
             "fields": [{
@@ -3294,7 +3404,7 @@ mod tests {
     async fn time_micros_logical_type() -> Result<()> {
         let _guard = init_tracing()?;
 
-        let schema = Schema::from(&json!({
+        let schema = Schema::from(json!({
             "type": "record",
             "name": "test",
             "fields": [{
@@ -3305,7 +3415,7 @@ mod tests {
         }));
 
         let batch = {
-            let mut batch = Batch::builder();
+            let mut batch = Batch::builder().base_timestamp(1_234_567_890 * 1_000);
 
             let values = [1, 2, 3]
                 .into_iter()
@@ -3342,13 +3452,13 @@ mod tests {
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
         let expected = vec![
-            "+-----------------+",
-            "| value           |",
-            "+-----------------+",
-            "| 00:00:00.000001 |",
-            "| 00:00:00.000002 |",
-            "| 00:00:00.000003 |",
-            "+-----------------+",
+            "+-----------------+------------------------------------------------+",
+            "| value           | meta                                           |",
+            "+-----------------+------------------------------------------------+",
+            "| 00:00:00.000001 | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "| 00:00:00.000002 | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "| 00:00:00.000003 | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "+-----------------+------------------------------------------------+",
         ];
 
         assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
@@ -3361,7 +3471,7 @@ mod tests {
     async fn timestamp_millis_logical_type() -> Result<()> {
         let _guard = init_tracing()?;
 
-        let schema = Schema::from(&json!({
+        let schema = Schema::from(json!({
             "type": "record",
             "name": "test",
             "fields": [{
@@ -3427,7 +3537,7 @@ mod tests {
     async fn timestamp_micros_logical_type() -> Result<()> {
         let _guard = init_tracing()?;
 
-        let schema = Schema::from(&json!({
+        let schema = Schema::from(json!({
             "type": "record",
             "name": "test",
             "fields": [{
@@ -3438,7 +3548,7 @@ mod tests {
         }));
 
         let batch = {
-            let mut batch = Batch::builder();
+            let mut batch = Batch::builder().base_timestamp(1_234_567_890 * 1_000);
 
             let values = [119_731_017, 1_000_000_000, 1_234_567_890]
                 .into_iter()
@@ -3475,13 +3585,13 @@ mod tests {
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
         let expected = vec![
-            "+---------------------+",
-            "| value               |",
-            "+---------------------+",
-            "| 1973-10-17T18:36:57 |",
-            "| 2001-09-09T01:46:40 |",
-            "| 2009-02-13T23:31:30 |",
-            "+---------------------+",
+            "+---------------------+------------------------------------------------+",
+            "| value               | meta                                           |",
+            "+---------------------+------------------------------------------------+",
+            "| 1973-10-17T18:36:57 | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "| 2001-09-09T01:46:40 | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "| 2009-02-13T23:31:30 | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "+---------------------+------------------------------------------------+",
         ];
 
         assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
@@ -3494,7 +3604,7 @@ mod tests {
     async fn local_timestamp_millis_logical_type() -> Result<()> {
         let _guard = init_tracing()?;
 
-        let schema = Schema::from(&json!({
+        let schema = Schema::from(json!({
             "type": "record",
             "name": "test",
                 "fields": [{
@@ -3561,7 +3671,7 @@ mod tests {
     async fn local_timestamp_micros_logical_type() -> Result<()> {
         let _guard = init_tracing()?;
 
-        let schema = Schema::from(&json!({
+        let schema = Schema::from(json!({
             "type": "record",
             "name": "test",
             "fields": [{
@@ -3627,7 +3737,7 @@ mod tests {
     async fn date_logical_type() -> Result<()> {
         let _guard = init_tracing()?;
 
-        let schema = Schema::from(&json!({
+        let schema = Schema::from(json!({
             "type": "record",
             "name": "test",
             "fields": [{
@@ -3638,7 +3748,7 @@ mod tests {
         }));
 
         let batch = {
-            let mut batch = Batch::builder();
+            let mut batch = Batch::builder().base_timestamp(1_234_567_890 * 1_000);
 
             let values = [
                 Value::Int(1),
@@ -3677,14 +3787,14 @@ mod tests {
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
         let expected = vec![
-            "+------------+",
-            "| value      |",
-            "+------------+",
-            "| 1970-01-02 |",
-            "| 1973-10-17 |",
-            "| 2001-09-09 |",
-            "| 2009-02-13 |",
-            "+------------+",
+            "+------------+------------------------------------------------+",
+            "| value      | meta                                           |",
+            "+------------+------------------------------------------------+",
+            "| 1970-01-02 | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "| 1973-10-17 | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "| 2001-09-09 | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "| 2009-02-13 | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "+------------+------------------------------------------------+",
         ];
 
         assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
@@ -3697,7 +3807,7 @@ mod tests {
     async fn decimal_fixed_logical_type() -> Result<()> {
         let _guard = init_tracing()?;
 
-        let schema = Schema::from(&json!({
+        let schema = Schema::from(json!({
             "type": "record",
             "name": "test",
             "fields": [{
@@ -3771,7 +3881,7 @@ mod tests {
     async fn decimal_variable_logical_type() -> Result<()> {
         let _guard = init_tracing()?;
 
-        let schema = Schema::from(&json!({
+        let schema = Schema::from(json!({
             "type": "record",
             "name": "test",
             "fields": [{
@@ -3840,7 +3950,7 @@ mod tests {
     async fn string_key_with_record_as_arrow() -> Result<()> {
         let _guard = init_tracing()?;
 
-        let schema = Schema::from(&json!({
+        let schema = Schema::from(json!({
             "type": "record",
             "name": "test",
             "fields": [{
@@ -4045,7 +4155,7 @@ mod tests {
         ];
 
         let batch = {
-            let mut batch = Batch::builder();
+            let mut batch = Batch::builder().base_timestamp(1_234_567_890 * 1_000);
 
             for grade in grades {
                 let mut value =
@@ -4083,26 +4193,26 @@ mod tests {
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
         let expected = vec![
-            "+-------------+---------------------------------------------------------------------------------------------------------------+",
-            "| key         | value                                                                                                         |",
-            "+-------------+---------------------------------------------------------------------------------------------------------------+",
-            "| 123-45-6789 | {first: Alfalfa, last: Aloysius, test1: 40.0, test2: 90.0, test3: 100.0, test4: 83.0, final: 49.0, grade: D-} |",
-            "| 123-12-1234 | {first: Alfred, last: University, test1: 41.0, test2: 97.0, test3: 96.0, test4: 97.0, final: 48.0, grade: D+} |",
-            "| 567-89-0123 | {first: Gerty, last: Gramma, test1: 41.0, test2: 80.0, test3: 60.0, test4: 40.0, final: 44.0, grade: C}       |",
-            "| 087-65-4321 | {first: Android, last: Electric, test1: 42.0, test2: 23.0, test3: 36.0, test4: 45.0, final: 47.0, grade: B-}  |",
-            "| 456-78-9012 | {first: Bumpkin, last: Fred, test1: 43.0, test2: 78.0, test3: 88.0, test4: 77.0, final: 45.0, grade: A-}      |",
-            "| 234-56-7890 | {first: Rubble, last: Betty, test1: 44.0, test2: 90.0, test3: 80.0, test4: 90.0, final: 46.0, grade: C-}      |",
-            "| 345-67-8901 | {first: Noshow, last: Cecil, test1: 45.0, test2: 11.0, test3: -1.0, test4: 4.0, final: 43.0, grade: F}        |",
-            "| 632-79-9939 | {first: Buff, last: Bif, test1: 46.0, test2: 20.0, test3: 30.0, test4: 40.0, final: 50.0, grade: B+}          |",
-            "| 223-45-6789 | {first: Airpump, last: Andrew, test1: 49.0, test2: 1.0, test3: 90.0, test4: 100.0, final: 83.0, grade: A}     |",
-            "| 143-12-1234 | {first: Backus, last: Jim, test1: 48.0, test2: 1.0, test3: 97.0, test4: 96.0, final: 97.0, grade: A+}         |",
-            "| 565-89-0123 | {first: Carnivore, last: Art, test1: 44.0, test2: 1.0, test3: 80.0, test4: 60.0, final: 40.0, grade: D+}      |",
-            "| 087-75-4321 | {first: Dandy, last: Jim, test1: 47.0, test2: 1.0, test3: 23.0, test4: 36.0, final: 45.0, grade: C+}          |",
-            "| 456-71-9012 | {first: Elephant, last: Ima, test1: 45.0, test2: 1.0, test3: 78.0, test4: 88.0, final: 77.0, grade: B-}       |",
-            "| 234-56-2890 | {first: Franklin, last: Benny, test1: 50.0, test2: 1.0, test3: 90.0, test4: 80.0, final: 90.0, grade: B-}     |",
-            "| 345-67-3901 | {first: George, last: Boy, test1: 40.0, test2: 1.0, test3: 11.0, test4: -1.0, final: 4.0, grade: B}           |",
-            "| 632-79-9439 | {first: Heffalump, last: Harvey, test1: 30.0, test2: 1.0, test3: 20.0, test4: 30.0, final: 40.0, grade: C}    |",
-            "+-------------+---------------------------------------------------------------------------------------------------------------+",
+            "+-------------+---------------------------------------------------------------------------------------------------------------+------------------------------------------------+",
+            "| key         | value                                                                                                         | meta                                           |",
+            "+-------------+---------------------------------------------------------------------------------------------------------------+------------------------------------------------+",
+            "| 123-45-6789 | {first: Alfalfa, last: Aloysius, test1: 40.0, test2: 90.0, test3: 100.0, test4: 83.0, final: 49.0, grade: D-} | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "| 123-12-1234 | {first: Alfred, last: University, test1: 41.0, test2: 97.0, test3: 96.0, test4: 97.0, final: 48.0, grade: D+} | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "| 567-89-0123 | {first: Gerty, last: Gramma, test1: 41.0, test2: 80.0, test3: 60.0, test4: 40.0, final: 44.0, grade: C}       | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "| 087-65-4321 | {first: Android, last: Electric, test1: 42.0, test2: 23.0, test3: 36.0, test4: 45.0, final: 47.0, grade: B-}  | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "| 456-78-9012 | {first: Bumpkin, last: Fred, test1: 43.0, test2: 78.0, test3: 88.0, test4: 77.0, final: 45.0, grade: A-}      | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "| 234-56-7890 | {first: Rubble, last: Betty, test1: 44.0, test2: 90.0, test3: 80.0, test4: 90.0, final: 46.0, grade: C-}      | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "| 345-67-8901 | {first: Noshow, last: Cecil, test1: 45.0, test2: 11.0, test3: -1.0, test4: 4.0, final: 43.0, grade: F}        | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "| 632-79-9939 | {first: Buff, last: Bif, test1: 46.0, test2: 20.0, test3: 30.0, test4: 40.0, final: 50.0, grade: B+}          | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "| 223-45-6789 | {first: Airpump, last: Andrew, test1: 49.0, test2: 1.0, test3: 90.0, test4: 100.0, final: 83.0, grade: A}     | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "| 143-12-1234 | {first: Backus, last: Jim, test1: 48.0, test2: 1.0, test3: 97.0, test4: 96.0, final: 97.0, grade: A+}         | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "| 565-89-0123 | {first: Carnivore, last: Art, test1: 44.0, test2: 1.0, test3: 80.0, test4: 60.0, final: 40.0, grade: D+}      | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "| 087-75-4321 | {first: Dandy, last: Jim, test1: 47.0, test2: 1.0, test3: 23.0, test4: 36.0, final: 45.0, grade: C+}          | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "| 456-71-9012 | {first: Elephant, last: Ima, test1: 45.0, test2: 1.0, test3: 78.0, test4: 88.0, final: 77.0, grade: B-}       | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "| 234-56-2890 | {first: Franklin, last: Benny, test1: 50.0, test2: 1.0, test3: 90.0, test4: 80.0, final: 90.0, grade: B-}     | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "| 345-67-3901 | {first: George, last: Boy, test1: 40.0, test2: 1.0, test3: 11.0, test4: -1.0, final: 4.0, grade: B}           | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "| 632-79-9439 | {first: Heffalump, last: Harvey, test1: 30.0, test2: 1.0, test3: 20.0, test4: 30.0, final: 40.0, grade: C}    | {partition: 0, timestamp: 2009-02-13T23:31:30} |",
+            "+-------------+---------------------------------------------------------------------------------------------------------------+------------------------------------------------+",
         ];
 
         assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);

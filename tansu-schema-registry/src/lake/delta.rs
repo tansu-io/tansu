@@ -118,7 +118,7 @@ impl Delta {
                 Some(HashMap::from_iter(
                     [(
                         ColumnMetadataKey::GenerationExpression.as_ref().into(),
-                        json!("cast(timestamp as date)"),
+                        json!("cast(meta.timestamp as date)"),
                     )]
                     .into_iter(),
                 )),
@@ -242,10 +242,7 @@ mod tests {
     use tracing::subscriber::DefaultGuard;
     use tracing_subscriber::EnvFilter;
 
-    use crate::{
-        AsArrow, Error,
-        proto::{MessageType, Schema as ProtoSchema},
-    };
+    use crate::{AsArrow, Error};
 
     use super::*;
 
@@ -273,138 +270,262 @@ mod tests {
         ))
     }
 
-    #[tokio::test]
-    async fn message_descriptor_singular_to_field() -> Result<()> {
-        let _guard = init_tracing()?;
+    mod proto {
+        use super::*;
+        use crate::proto::{MessageKind, Schema};
 
-        let proto = Bytes::from_static(
-            br#"
-            syntax = 'proto3';
+        #[tokio::test]
+        async fn proto() -> Result<()> {
+            let _guard = init_tracing()?;
 
-            message Key {
-                int32 id = 1;
-            }
+            let proto = Bytes::from_static(
+                br#"
+                syntax = 'proto3';
 
-            message Value {
-                double a = 1;
-                float b = 2;
-                int32 c = 3;
-                int64 d = 4;
-                uint32 e = 5;
-                uint64 f = 6;
-                sint32 g = 7;
-                sint64 h = 8;
-                fixed32 i = 9;
-                fixed64 j = 10;
-                sfixed32 k = 11;
-                sfixed64 l = 12;
-                bool m = 13;
-                string n = 14;
-                bytes o = 15;
-            }
-            "#,
-        );
+                message Key {
+                    int32 id = 1;
+                }
 
-        let kv = [(
-            json!({"id": 32123}),
-            json!({"a": 567.65,
-                    "b": 45.654,
-                    "c": -6,
-                    "d": -66,
-                    "e": 23432,
-                    "f": 34543,
-                    "g": 45654,
-                    "h": 67876,
-                    "i": 78987,
-                    "j": 89098,
-                    "k": 90109,
-                    "l": 12321,
-                    "m": true,
-                    "n": "Hello World!",
-                    "o": "YWJjMTIzIT8kKiYoKSctPUB+"}),
-        )];
+                message Value {
+                    double a = 1;
+                    float b = 2;
+                    int32 c = 3;
+                    int64 d = 4;
+                    uint32 e = 5;
+                    uint64 f = 6;
+                    sint32 g = 7;
+                    sint64 h = 8;
+                    fixed32 i = 9;
+                    fixed64 j = 10;
+                    sfixed32 k = 11;
+                    sfixed64 l = 12;
+                    bool m = 13;
+                    string n = 14;
+                    bytes o = 15;
+                }
+                "#,
+            );
 
-        let partition = 32123;
+            let kv = [(
+                json!({"id": 32123}),
+                json!({"a": 567.65,
+                        "b": 45.654,
+                        "c": -6,
+                        "d": -66,
+                        "e": 23432,
+                        "f": 34543,
+                        "g": 45654,
+                        "h": 67876,
+                        "i": 78987,
+                        "j": 89098,
+                        "k": 90109,
+                        "l": 12321,
+                        "m": true,
+                        "n": "Hello World!",
+                        "o": "YWJjMTIzIT8kKiYoKSctPUB+"}),
+            )];
 
-        let schema = ProtoSchema::try_from(proto)?;
+            let partition = 32123;
 
-        let record_batch = {
-            let mut batch = Batch::builder().base_timestamp(119_731_017_000);
+            let schema = Schema::try_from(proto)?;
 
-            for (delta, (key, value)) in kv.iter().enumerate() {
-                batch = batch.record(
-                    Record::builder()
-                        .key(schema.encode_from_value(MessageType::Key, key)?.into())
-                        .value(schema.encode_from_value(MessageType::Value, value)?.into())
-                        .timestamp_delta(delta as i64)
-                        .offset_delta(delta as i32),
-                );
-            }
+            let record_batch = {
+                let mut batch = Batch::builder().base_timestamp(119_731_017_000);
 
-            batch
-                .build()
-                .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch))
-        }?;
+                for (delta, (key, value)) in kv.iter().enumerate() {
+                    batch = batch.record(
+                        Record::builder()
+                            .key(schema.encode_from_value(MessageKind::Key, key)?.into())
+                            .value(schema.encode_from_value(MessageKind::Value, value)?.into())
+                            .timestamp_delta(delta as i64)
+                            .offset_delta(delta as i32),
+                    );
+                }
 
-        let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
-        let location = format!("file://{}", temp_dir.path().to_str().unwrap());
-        let database = "pqr";
+                batch
+                    .build()
+                    .map_err(Into::into)
+                    .and_then(|batch| schema.as_arrow(partition, &batch))
+            }?;
 
-        let lake_house =
-            Url::parse(location.as_ref())
-                .map_err(Into::into)
-                .and_then(|location| {
-                    Builder::<PhantomData<Url>>::default()
-                        .location(location)
-                        .database(Some(database.into()))
-                        .build()
-                })?;
+            let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
+            let location = format!("file://{}", temp_dir.path().to_str().unwrap());
+            let database = "pqr";
 
-        let topic = "abc";
+            let lake_house =
+                Url::parse(location.as_ref())
+                    .map_err(Into::into)
+                    .and_then(|location| {
+                        Builder::<PhantomData<Url>>::default()
+                            .location(location)
+                            .database(Some(database.into()))
+                            .build()
+                    })?;
 
-        let config = DescribeConfigsResult {
-            error_code: ErrorCode::None.into(),
-            error_message: None,
-            resource_type: ConfigResource::Topic.into(),
-            resource_name: topic.into(),
-            configs: Some(vec![]),
-        };
+            let topic = "abc";
 
-        let offset = 543212345;
+            let config = DescribeConfigsResult {
+                error_code: ErrorCode::None.into(),
+                error_message: None,
+                resource_type: ConfigResource::Topic.into(),
+                resource_name: topic.into(),
+                configs: Some(vec![]),
+            };
 
-        lake_house
-            .store(topic, partition, offset, record_batch, config)
-            .await
-            .inspect(|result| debug!(?result))
-            .inspect_err(|err| debug!(?err))?;
+            let offset = 543212345;
 
-        let table = {
-            let mut table =
-                DeltaTableBuilder::from_uri(format!("{location}/{database}.{topic}")).build()?;
-            table.load().await?;
-            table
-        };
+            lake_house
+                .store(topic, partition, offset, record_batch, config)
+                .await
+                .inspect(|result| debug!(?result))
+                .inspect_err(|err| debug!(?err))?;
 
-        let ctx = SessionContext::new();
+            let table = {
+                let mut table =
+                    DeltaTableBuilder::from_uri(format!("{location}/{database}.{topic}"))
+                        .build()?;
+                table.load().await?;
+                table
+            };
 
-        ctx.register_table("t", Arc::new(table))?;
+            let ctx = SessionContext::new();
 
-        let df = ctx.sql("select * from t").await?;
-        let results = df.collect().await?;
+            ctx.register_table("t", Arc::new(table))?;
 
-        let pretty_results = pretty_format_batches(&results)?.to_string();
+            let df = ctx.sql("select * from t").await?;
+            let results = df.collect().await?;
 
-        let expected = vec![
-            "+------------+-----------+---------------------+-------+--------+--------+----+-----+-------+-------+-------+-------+-------+-------+-------+-------+------+--------------+--------------------------------------+",
-            "| date       | partition | timestamp           | id    | a      | b      | c  | d   | e     | f     | g     | h     | i     | j     | k     | l     | m    | n            | o                                    |",
-            "+------------+-----------+---------------------+-------+--------+--------+----+-----+-------+-------+-------+-------+-------+-------+-------+-------+------+--------------+--------------------------------------+",
-            "| 1973-10-17 | 32123     | 1973-10-17T18:36:57 | 32123 | 567.65 | 45.654 | -6 | -66 | 23432 | 34543 | 45654 | 67876 | 78987 | 89098 | 90109 | 12321 | true | Hello World! | 616263313233213f242a262829272d3d407e |",
-            "+------------+-----------+---------------------+-------+--------+--------+----+-----+-------+-------+-------+-------+-------+-------+-------+-------+------+--------------+--------------------------------------+",
-        ];
+            let pretty_results = pretty_format_batches(&results)?.to_string();
 
-        assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
+            let expected = vec![
+                "+------------+-----------+---------------------+-------+--------+--------+----+-----+-------+-------+-------+-------+-------+-------+-------+-------+------+--------------+--------------------------------------+",
+                "| date       | partition | timestamp           | id    | a      | b      | c  | d   | e     | f     | g     | h     | i     | j     | k     | l     | m    | n            | o                                    |",
+                "+------------+-----------+---------------------+-------+--------+--------+----+-----+-------+-------+-------+-------+-------+-------+-------+-------+------+--------------+--------------------------------------+",
+                "| 1973-10-17 | 32123     | 1973-10-17T18:36:57 | 32123 | 567.65 | 45.654 | -6 | -66 | 23432 | 34543 | 45654 | 67876 | 78987 | 89098 | 90109 | 12321 | true | Hello World! | 616263313233213f242a262829272d3d407e |",
+                "+------------+-----------+---------------------+-------+--------+--------+----+-----+-------+-------+-------+-------+-------+-------+-------+-------+------+--------------+--------------------------------------+",
+            ];
 
-        Ok(())
+            assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
+
+            Ok(())
+        }
+    }
+
+    mod avro {
+        use super::*;
+        use crate::avro::{Schema, r, schema_write};
+
+        #[tokio::test]
+        async fn record_of_primitive_data_types() -> Result<()> {
+            let _guard = init_tracing()?;
+
+            let schema = Schema::from(json!({
+                "type": "record",
+                "name": "Message",
+                "fields": [
+                    {"name": "value", "type": "record", "fields": [
+                    {"name": "b", "type": "boolean"},
+                    {"name": "c", "type": "int"},
+                    {"name": "d", "type": "long"},
+                    {"name": "e", "type": "float"},
+                    {"name": "f", "type": "double"},
+                    {"name": "g", "type": "bytes"},
+                    {"name": "h", "type": "string"}
+                    ]}
+                ]
+            }));
+
+            let partition = 32123;
+
+            let record_batch = {
+                let mut batch = Batch::builder().base_timestamp(1_234_567_890 * 1_000);
+
+                let values = [r(
+                    schema.value.as_ref().unwrap(),
+                    [
+                        ("b", false.into()),
+                        ("c", i32::MAX.into()),
+                        ("d", i64::MAX.into()),
+                        ("e", f32::MAX.into()),
+                        ("f", f64::MAX.into()),
+                        ("g", Vec::from(&b"abcdef"[..]).into()),
+                        ("h", "pqr".into()),
+                    ],
+                )];
+
+                for value in values {
+                    batch =
+                        batch.record(Record::builder().value(
+                            schema_write(schema.value.as_ref().unwrap(), value.into())?.into(),
+                        ))
+                }
+
+                batch
+                    .build()
+                    .map_err(Into::into)
+                    .and_then(|batch| schema.as_arrow(partition, &batch))
+            }?;
+
+            let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
+            let location = format!("file://{}", temp_dir.path().to_str().unwrap());
+            let database = "pqr";
+
+            let lake_house =
+                Url::parse(location.as_ref())
+                    .map_err(Into::into)
+                    .and_then(|location| {
+                        Builder::<PhantomData<Url>>::default()
+                            .location(location)
+                            .database(Some(database.into()))
+                            .build()
+                    })?;
+
+            let topic = "abc";
+
+            let config = DescribeConfigsResult {
+                error_code: ErrorCode::None.into(),
+                error_message: None,
+                resource_type: ConfigResource::Topic.into(),
+                resource_name: topic.into(),
+                configs: Some(vec![]),
+            };
+
+            let offset = 543212345;
+
+            lake_house
+                .store(topic, partition, offset, record_batch, config)
+                .await
+                .inspect(|result| debug!(?result))
+                .inspect_err(|err| debug!(?err))?;
+
+            let table = {
+                let mut table =
+                    DeltaTableBuilder::from_uri(format!("{location}/{database}.{topic}"))
+                        .build()?;
+                table.load().await?;
+                table
+            };
+
+            let ctx = SessionContext::new();
+
+            ctx.register_table("t", Arc::new(table))?;
+
+            let df = ctx.sql("select * from t").await?;
+            let results = df.collect().await?;
+
+            let pretty_results = pretty_format_batches(&results)?.to_string();
+
+            let expected = vec![
+                "+------------+------------------------------------------------------------------------------------------------------------------------+----------------------------------------------------+",
+                "| date       | value                                                                                                                  | meta                                               |",
+                "+------------+------------------------------------------------------------------------------------------------------------------------+----------------------------------------------------+",
+                "| 2009-02-13 | {b: false, c: 2147483647, d: 9223372036854775807, e: 3.4028235e38, f: 1.7976931348623157e308, g: 616263646566, h: pqr} | {partition: 32123, timestamp: 2009-02-13T23:31:30} |",
+                "+------------+------------------------------------------------------------------------------------------------------------------------+----------------------------------------------------+",
+            ];
+
+            assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
+
+            Ok(())
+        }
     }
 }

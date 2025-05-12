@@ -50,18 +50,18 @@ const META: &str = "Meta";
 const VALUE: &str = "Value";
 
 #[derive(Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub(crate) enum MessageType {
+pub(crate) enum MessageKind {
     Key,
     Meta,
     Value,
 }
 
-impl AsRef<str> for MessageType {
+impl AsRef<str> for MessageKind {
     fn as_ref(&self) -> &str {
         match self {
-            MessageType::Key => "Key",
-            MessageType::Meta => "Meta",
-            MessageType::Value => "Value",
+            MessageKind::Key => "Key",
+            MessageKind::Meta => "Meta",
+            MessageKind::Value => "Value",
         }
     }
 }
@@ -119,7 +119,7 @@ impl Schema {
 
     fn message_by_package_relative_name(
         &self,
-        message_type: MessageType,
+        message_type: MessageKind,
     ) -> Option<MessageDescriptor> {
         self.file_descriptors
             .iter()
@@ -128,7 +128,7 @@ impl Schema {
 
     fn value_to_message(
         &self,
-        message_type: MessageType,
+        message_type: MessageKind,
         json: &Value,
     ) -> Result<Box<dyn MessageDyn>> {
         self.file_descriptors
@@ -156,7 +156,7 @@ impl Schema {
 
     pub(crate) fn encode_from_value(
         &self,
-        message_type: MessageType,
+        message_type: MessageKind,
         json: &Value,
     ) -> Result<Bytes> {
         self.value_to_message(message_type, json)
@@ -165,7 +165,7 @@ impl Schema {
 
     fn message_value_as_bytes(
         &self,
-        message_type: MessageType,
+        message_type: MessageKind,
         json: &Value,
     ) -> Result<Option<Bytes>> {
         self.message_by_package_relative_name(message_type)
@@ -568,7 +568,7 @@ impl AsKafkaRecord for Schema {
         if let Some(value) = value.get("key") {
             debug!(?value);
 
-            if let Some(encoded) = self.message_value_as_bytes(MessageType::Key, value)? {
+            if let Some(encoded) = self.message_value_as_bytes(MessageKind::Key, value)? {
                 builder = builder.key(encoded.into());
             }
         };
@@ -576,7 +576,7 @@ impl AsKafkaRecord for Schema {
         if let Some(value) = value.get("value") {
             debug!(?value);
 
-            if let Some(encoded) = self.message_value_as_bytes(MessageType::Value, value)? {
+            if let Some(encoded) = self.message_value_as_bytes(MessageKind::Value, value)? {
                 builder = builder.value(encoded.into());
             }
         };
@@ -591,19 +591,19 @@ impl From<&Schema> for Vec<Box<dyn ArrayBuilder>> {
 
         let mut builders = vec![];
 
-        if let Some(ref descriptor) = schema.message_by_package_relative_name(MessageType::Key) {
+        if let Some(ref descriptor) = schema.message_by_package_relative_name(MessageKind::Key) {
             debug!(?descriptor);
             builders.append(
                 &mut schema
-                    .message_descriptor_array_builders(&[MessageType::Key.as_ref()], descriptor),
+                    .message_descriptor_array_builders(&[MessageKind::Key.as_ref()], descriptor),
             );
         }
 
-        if let Some(ref descriptor) = schema.message_by_package_relative_name(MessageType::Value) {
+        if let Some(ref descriptor) = schema.message_by_package_relative_name(MessageKind::Value) {
             debug!(?descriptor);
             builders.append(
                 &mut schema
-                    .message_descriptor_array_builders(&[MessageType::Value.as_ref()], descriptor),
+                    .message_descriptor_array_builders(&[MessageKind::Value.as_ref()], descriptor),
             );
         }
 
@@ -615,12 +615,12 @@ impl From<&Schema> for RecordBuilder {
     fn from(schema: &Schema) -> Self {
         let meta = {
             let mut meta = vec![];
-            if let Some(ref descriptor) = schema.message_by_package_relative_name(MessageType::Meta)
+            if let Some(ref descriptor) = schema.message_by_package_relative_name(MessageKind::Meta)
             {
                 debug!(descriptor = descriptor.name());
                 meta.append(
                     &mut schema.message_descriptor_array_builders(
-                        &[MessageType::Meta.as_ref()],
+                        &[MessageKind::Meta.as_ref()],
                         descriptor,
                     ),
                 )
@@ -632,12 +632,12 @@ impl From<&Schema> for RecordBuilder {
         let keys = {
             let mut keys = vec![];
 
-            if let Some(ref descriptor) = schema.message_by_package_relative_name(MessageType::Key)
+            if let Some(ref descriptor) = schema.message_by_package_relative_name(MessageKind::Key)
             {
                 debug!(descriptor = descriptor.name());
                 keys.append(
                     &mut schema.message_descriptor_array_builders(
-                        &[MessageType::Key.as_ref()],
+                        &[MessageKind::Key.as_ref()],
                         descriptor,
                     ),
                 );
@@ -651,11 +651,11 @@ impl From<&Schema> for RecordBuilder {
                 let mut values = vec![];
 
                 if let Some(ref descriptor) =
-                    schema.message_by_package_relative_name(MessageType::Value)
+                    schema.message_by_package_relative_name(MessageKind::Value)
                 {
                     debug!(descriptor = descriptor.name());
                     values.append(&mut schema.message_descriptor_array_builders(
-                        &[MessageType::Value.as_ref()],
+                        &[MessageKind::Value.as_ref()],
                         descriptor,
                     ));
                 }
@@ -672,30 +672,30 @@ impl From<&Schema> for Fields {
         let mut fields = vec![];
 
         if let Some(ref descriptor) = schema
-            .message_by_package_relative_name(MessageType::Meta)
+            .message_by_package_relative_name(MessageKind::Meta)
             .inspect(|descriptor| debug!(?descriptor))
         {
             fields.append(
-                &mut schema.message_descriptor_to_fields(&[MessageType::Meta.as_ref()], descriptor),
+                &mut schema.message_descriptor_to_fields(&[MessageKind::Meta.as_ref()], descriptor),
             );
         }
 
         if let Some(ref descriptor) = schema
-            .message_by_package_relative_name(MessageType::Key)
+            .message_by_package_relative_name(MessageKind::Key)
             .inspect(|descriptor| debug!(?descriptor))
         {
             fields.append(
-                &mut schema.message_descriptor_to_fields(&[MessageType::Key.as_ref()], descriptor),
+                &mut schema.message_descriptor_to_fields(&[MessageKind::Key.as_ref()], descriptor),
             );
         }
 
         if let Some(ref descriptor) = schema
-            .message_by_package_relative_name(MessageType::Value)
+            .message_by_package_relative_name(MessageKind::Value)
             .inspect(|descriptor| debug!(?descriptor))
         {
             fields.append(
                 &mut schema
-                    .message_descriptor_to_fields(&[MessageType::Value.as_ref()], descriptor),
+                    .message_descriptor_to_fields(&[MessageKind::Value.as_ref()], descriptor),
             );
         }
 
@@ -741,11 +741,11 @@ impl Validator for Schema {
             debug!(?record);
 
             validate(
-                self.message_by_package_relative_name(MessageType::Key),
+                self.message_by_package_relative_name(MessageKind::Key),
                 record.key.clone(),
             )
             .and(validate(
-                self.message_by_package_relative_name(MessageType::Value),
+                self.message_by_package_relative_name(MessageKind::Value),
                 record.value.clone(),
             ))
             .inspect_err(|err| error!(?err))?
@@ -1565,9 +1565,9 @@ impl AsArrow for Schema {
                     .map(|dt| dt.to_rfc3339());
 
             process_message_descriptor(
-                self.message_by_package_relative_name(MessageType::Meta),
+                self.message_by_package_relative_name(MessageKind::Meta),
                 self.encode_from_value(
-                    MessageType::Meta,
+                    MessageKind::Meta,
                     &timestamp.map_or(
                         json!({"partition": partition}),
                         |timestamp| json!({"partition": partition, "timestamp": timestamp}),
@@ -1578,13 +1578,13 @@ impl AsArrow for Schema {
             )?;
 
             process_message_descriptor(
-                self.message_by_package_relative_name(MessageType::Key),
+                self.message_by_package_relative_name(MessageKind::Key),
                 record.key(),
                 &mut record_builder.keys,
             )?;
 
             process_message_descriptor(
-                self.message_by_package_relative_name(MessageType::Value),
+                self.message_by_package_relative_name(MessageKind::Value),
                 record.value(),
                 &mut record_builder.values,
             )?;
@@ -1614,7 +1614,7 @@ impl AsArrow for Schema {
 impl Schema {
     fn to_json_value(
         &self,
-        message_type: MessageType,
+        message_type: MessageKind,
         encoded: Option<Bytes>,
     ) -> Result<(String, Value)> {
         decode(self.message_by_package_relative_name(message_type), encoded)
@@ -1644,9 +1644,9 @@ impl AsJsonValue for Schema {
                 .inspect(|record| debug!(?record))
                 .map(|record| {
                     Value::Object(Map::from_iter(
-                        self.to_json_value(MessageType::Key, record.key.clone())
+                        self.to_json_value(MessageKind::Key, record.key.clone())
                             .into_iter()
-                            .chain(self.to_json_value(MessageType::Value, record.value.clone())),
+                            .chain(self.to_json_value(MessageKind::Value, record.value.clone())),
                     ))
                 })
                 .collect::<Vec<_>>(),
@@ -1737,7 +1737,7 @@ mod tests {
         let registry = Registry::new(object_store);
 
         let key = Schema::try_from(proto.clone())
-            .and_then(|schema| schema.encode_from_value(MessageType::Key, &json!({"id": 12321})))?;
+            .and_then(|schema| schema.encode_from_value(MessageKind::Key, &json!({"id": 12321})))?;
 
         let batch = Batch::builder()
             .record(Record::builder().key(key.clone().into()))
@@ -1781,7 +1781,7 @@ mod tests {
 
         let value = Schema::try_from(proto).and_then(|schema| {
             schema.encode_from_value(
-                MessageType::Value,
+                MessageKind::Value,
                 &json!({
                     "name": "alice",
                     "email": "alice@example.com"
@@ -1831,9 +1831,9 @@ mod tests {
 
         let schema = Schema::try_from(proto.clone())?;
 
-        let key = schema.encode_from_value(MessageType::Key, &json!({"id": 12321}))?;
+        let key = schema.encode_from_value(MessageKind::Key, &json!({"id": 12321}))?;
         let value = schema.encode_from_value(
-            MessageType::Value,
+            MessageKind::Value,
             &json!({
                 "name": "alice",
                 "email": "alice@example.com"
@@ -1901,8 +1901,8 @@ mod tests {
             for (delta, (key, value)) in kv.iter().enumerate() {
                 batch = batch.record(
                     Record::builder()
-                        .key(schema.encode_from_value(MessageType::Key, key)?.into())
-                        .value(schema.encode_from_value(MessageType::Value, value)?.into())
+                        .key(schema.encode_from_value(MessageKind::Key, key)?.into())
+                        .value(schema.encode_from_value(MessageKind::Value, value)?.into())
                         .timestamp_delta(delta as i64)
                         .offset_delta(delta as i32),
                 );
@@ -2057,8 +2057,8 @@ mod tests {
             for (delta, (key, value)) in kv.iter().enumerate() {
                 batch = batch.record(
                     Record::builder()
-                        .key(schema.encode_from_value(MessageType::Key, key)?.into())
-                        .value(schema.encode_from_value(MessageType::Value, value)?.into())
+                        .key(schema.encode_from_value(MessageKind::Key, key)?.into())
+                        .value(schema.encode_from_value(MessageKind::Value, value)?.into())
                         .timestamp_delta(delta as i64)
                         .offset_delta(delta as i32),
                 );
@@ -2138,8 +2138,8 @@ mod tests {
             for (delta, (key, value)) in kv.iter().enumerate() {
                 batch = batch.record(
                     Record::builder()
-                        .key(schema.encode_from_value(MessageType::Key, key)?.into())
-                        .value(schema.encode_from_value(MessageType::Value, value)?.into())
+                        .key(schema.encode_from_value(MessageKind::Key, key)?.into())
+                        .value(schema.encode_from_value(MessageKind::Value, value)?.into())
                         .timestamp_delta(delta as i64)
                         .offset_delta(delta as i32),
                 );
@@ -2186,7 +2186,7 @@ mod tests {
         )))?;
 
         let value = schema.encode_from_value(
-            MessageType::Value,
+            MessageKind::Value,
             &json!({
               "vendor_id": 1,
               "trip_id": 1000371,
@@ -2247,7 +2247,7 @@ mod tests {
         let schema = Schema::try_from(proto)?;
 
         let value = schema.encode_from_value(
-            MessageType::Value,
+            MessageKind::Value,
             &json!({
                 "kv": {"a": 31234, "b": 56765, "c": 12321}
             }),
@@ -2307,7 +2307,7 @@ mod tests {
         let schema = Schema::try_from(proto)?;
 
         let value = schema.encode_from_value(
-            MessageType::Value,
+            MessageKind::Value,
             &json!({
                 "kv": {"a": {"name": "xyz", "complete": 0.99}}
             }),
@@ -2365,7 +2365,7 @@ mod tests {
         let schema = Schema::try_from(proto)?;
 
         let value = schema.encode_from_value(
-            MessageType::Value,
+            MessageKind::Value,
             &json!({
                 "project": {"name": "xyz", "complete": 0.99},
                 "title": "abc",
@@ -2424,7 +2424,7 @@ mod tests {
         let schema = Schema::try_from(proto)?;
 
         let value = schema.encode_from_value(
-            MessageType::Value,
+            MessageKind::Value,
             &json!({
                 "url": "https://example.com/a", "title": "a", "snippets": ["p", "q", "r"]
             }),
@@ -2485,7 +2485,7 @@ mod tests {
         let schema = Schema::try_from(proto)?;
 
         let value = schema.encode_from_value(
-            MessageType::Value,
+            MessageKind::Value,
             &json!({
                 "results": [{"url": "https://example.com/abc", "title": "a", "snippets": ["p", "q", "r"]},
                             {"url": "https://example.com/def", "title": "b", "snippets": ["x", "y", "z"]}]
@@ -2600,7 +2600,7 @@ mod tests {
 
         let schema = Schema::try_from(proto)?;
 
-        let key = schema.encode_from_value(MessageType::Key, &json!({"id": 12321}))?;
+        let key = schema.encode_from_value(MessageKind::Key, &json!({"id": 12321}))?;
         let value = Bytes::from_static(b"Consectetur adipiscing elit");
 
         let batch = Batch::builder()
@@ -2680,7 +2680,7 @@ mod tests {
         let key = Bytes::from_static(b"Lorem ipsum dolor sit amet");
 
         let value = schema.encode_from_value(
-            MessageType::Value,
+            MessageKind::Value,
             &json!({
                 "name": "alice",
                 "email": "alice@example.com"
