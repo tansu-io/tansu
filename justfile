@@ -295,7 +295,7 @@ taxi-topic-populate: (cat-produce "taxi" "etc/data/trips.json")
 taxi-topic-consume: (cat-consume "taxi")
 
 # create taxi topic with schema etc/schema/taxi.proto
-taxi-topic-create: (topic-create "taxi" "--partitions" "1" "--config" "tansu.lake.partition=partition" "--config" "tansu.lake.sink=true")
+taxi-topic-create: (topic-create "taxi" "--partitions" "1" "--config" "tansu.lake.generate.date=cast(timestamp as date)" "--config" "tansu.lake.partition=date" "--config" "tansu.lake.sink=true")
 
 # delete taxi topic
 taxi-topic-delete: (topic-delete "taxi")

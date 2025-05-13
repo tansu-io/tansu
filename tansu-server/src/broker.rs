@@ -250,7 +250,7 @@ where
         .await
         .inspect_err(|err| error!(?err, %self.advertised_listener))?;
 
-        let mut interval = time::interval(time::Duration::from_millis(10_000));
+        let mut interval = time::interval(time::Duration::from_millis(600_000));
 
         let mut set = JoinSet::new();
 
