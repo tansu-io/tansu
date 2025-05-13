@@ -22,9 +22,9 @@ use apache_avro::{
 };
 use arrow::{
     array::{
-        ArrayBuilder, BinaryBuilder, BooleanBuilder, Date32Builder, Decimal128Builder,
-        Decimal256Builder, Float32Builder, Float64Builder, Int32Builder, Int64Builder,
-        LargeBinaryBuilder, ListBuilder, MapBuilder, NullBuilder, StringBuilder, StructBuilder,
+        ArrayBuilder, BooleanBuilder, Date32Builder, Decimal128Builder, Decimal256Builder,
+        Float32Builder, Float64Builder, Int32Builder, Int64Builder, LargeBinaryBuilder,
+        ListBuilder, MapBuilder, NullBuilder, StringBuilder, StructBuilder,
         Time32MillisecondBuilder, Time64MicrosecondBuilder, Time64NanosecondBuilder,
         TimestampMicrosecondBuilder, TimestampMillisecondBuilder, TimestampNanosecondBuilder,
         UInt32Builder,
@@ -525,7 +525,7 @@ impl Schema {
                 .map(|(fields, builders)| StructBuilder::new(fields, builders))
                 .map(|builder| Box::new(builder) as Box<dyn ArrayBuilder>),
 
-            AvroSchema::Fixed(_schema) => Ok(Box::new(BinaryBuilder::new())),
+            AvroSchema::Fixed(_schema) => Ok(Box::new(LargeBinaryBuilder::new())),
 
             AvroSchema::Decimal(schema) => u8::try_from(schema.precision)
                 .map(|precision| {
@@ -1097,7 +1097,7 @@ fn append_value(
 
         (Some(AvroSchema::Fixed(_)), Value::Null) => column
             .as_any_mut()
-            .downcast_mut::<BinaryBuilder>()
+            .downcast_mut::<LargeBinaryBuilder>()
             .ok_or(Error::Downcast)
             .map(|builder| builder.append_null()),
 
@@ -1201,7 +1201,7 @@ fn append_value(
 
         (_, Value::Bytes(value)) => column
             .as_any_mut()
-            .downcast_mut::<BinaryBuilder>()
+            .downcast_mut::<LargeBinaryBuilder>()
             .ok_or(Error::Downcast)
             .map(|builder| builder.append_value(value)),
 
@@ -1213,7 +1213,7 @@ fn append_value(
 
         (_, Value::Fixed(_, value)) => column
             .as_any_mut()
-            .downcast_mut::<BinaryBuilder>()
+            .downcast_mut::<LargeBinaryBuilder>()
             .ok_or(Error::Downcast)
             .map(|builder| builder.append_value(value)),
 

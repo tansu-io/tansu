@@ -42,6 +42,8 @@ pub trait LakeHouse: Clone + Debug + Send + Sync + 'static {
         record_batch: RecordBatch,
         config: DescribeConfigsResult,
     ) -> Result<()>;
+
+    async fn maintain(&self) -> Result<()>;
 }
 
 #[async_trait]
@@ -72,6 +74,16 @@ impl LakeHouse for House {
                     .store(topic, partition, offset, record_batch, configs)
                     .await
             }
+        }
+    }
+
+    async fn maintain(&self) -> Result<()> {
+        debug!(?self);
+
+        match self {
+            House::Delta(inner) => inner.maintain().await,
+            House::Iceberg(inner) => inner.maintain().await,
+            House::Parquet(inner) => inner.maintain().await,
         }
     }
 }

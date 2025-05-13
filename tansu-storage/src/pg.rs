@@ -3454,6 +3454,14 @@ impl Storage for Postgres {
 
         Ok(error_code)
     }
+
+    async fn maintain(&self) -> Result<()> {
+        if let Some(ref lake) = self.lake {
+            lake.maintain().await.map_err(Into::into)
+        } else {
+            Ok(())
+        }
+    }
 }
 
 fn default_hash<H>(h: &H) -> Uuid

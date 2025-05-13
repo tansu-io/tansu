@@ -271,4 +271,8 @@ impl LakeHouse for Iceberg {
             .map_err(Into::into)
             .and(Ok(()))
     }
+
+    async fn maintain(&self) -> Result<()> {
+        Ok(())
+    }
 }

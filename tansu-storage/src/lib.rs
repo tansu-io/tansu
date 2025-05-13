@@ -1158,6 +1158,10 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
         producer_epoch: i16,
         committed: bool,
     ) -> Result<ErrorCode>;
+
+    async fn maintain(&self) -> Result<()> {
+        Ok(())
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1731,6 +1735,23 @@ impl Storage for StorageContainer {
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
         })
         .inspect_err(|_| {
+            STORAGE_CONTAINER_ERRORS.add(1, &attributes);
+        })
+    }
+
+    async fn maintain(&self) -> Result<()> {
+        let attributes = [KeyValue::new("method", "maintain")];
+
+        match self {
+            Self::Postgres(pg) => pg.maintain().await,
+            Self::DynoStore(dyn_store) => dyn_store.maintain().await,
+        }
+        .inspect(|maintain| {
+            debug!(?maintain);
+            STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
+        })
+        .inspect_err(|err| {
+            debug!(?err);
             STORAGE_CONTAINER_ERRORS.add(1, &attributes);
         })
     }

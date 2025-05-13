@@ -79,7 +79,7 @@ use tokio::{
     signal::unix::{SignalKind, signal},
     sync::broadcast::{self, Receiver},
     task::JoinSet,
-    time::sleep,
+    time::{self, sleep},
 };
 use tracing::{Instrument, Level, Span, debug, debug_span, error, info, span};
 use txn::{add_offsets::AddOffsets, add_partitions::AddPartitions};
@@ -250,6 +250,8 @@ where
         .await
         .inspect_err(|err| error!(?err, %self.advertised_listener))?;
 
+        let mut interval = time::interval(time::Duration::from_millis(10_000));
+
         let mut set = JoinSet::new();
 
         loop {
@@ -283,6 +285,23 @@ where
                     debug!(?handle);
 
                     continue;
+                }
+
+                _ = interval.tick() => {
+                    let storage = self.storage.clone();
+
+
+                    let handle = set.spawn(async move {
+                        let span = span!(Level::DEBUG, "maintenance");
+
+                        async move {
+                            _ = storage.maintain().await.inspect(|maintain|debug!(?maintain)).inspect_err(|err|debug!(?err)).ok();
+
+                        }.instrument(span).await
+
+                    });
+
+                    debug!(?handle);
                 }
 
                 v = set.join_next(), if !set.is_empty() => {

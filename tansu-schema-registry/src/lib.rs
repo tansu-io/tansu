@@ -52,6 +52,7 @@ mod avro;
 mod json;
 pub mod lake;
 mod proto;
+pub(crate) mod sql;
 
 pub(crate) const ARROW_LIST_FIELD_NAME: &str = "element";
 
@@ -157,6 +158,9 @@ pub enum Error {
 
     #[error("{:?}", self)]
     SerdeJson(#[from] serde_json::Error),
+
+    #[error("{:?}", self)]
+    SqlParser(#[from] datafusion::logical_expr::sqlparser::parser::ParserError),
 
     #[error("{:?}", self)]
     TryFromInt(#[from] TryFromIntError),
@@ -300,12 +304,18 @@ impl Registry {
         partition: i32,
         batch: &Batch,
     ) -> Result<Option<RecordBatch>> {
-        self.schemas.lock().map_err(Into::into).and_then(|guard| {
-            guard
-                .get(topic)
-                .map(|schema| schema.as_arrow(partition, batch))
-                .transpose()
-        })
+        debug!(topic, partition, ?batch);
+        self.schemas
+            .lock()
+            .map_err(Into::into)
+            .and_then(|guard| {
+                guard
+                    .get(topic)
+                    .map(|schema| schema.as_arrow(partition, batch))
+                    .transpose()
+            })
+            .inspect(|record_batch| debug!(?record_batch))
+            .inspect_err(|err| debug!(?err))
     }
 
     pub async fn schema(&self, topic: &str) -> Result<Option<Schema>> {

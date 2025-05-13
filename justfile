@@ -2,11 +2,8 @@ set dotenv-load
 
 default: fmt build test clippy
 
-
-
 cargo-build +args:
     cargo build {{args}}
-
 
 build: (cargo-build "--workspace" "--all-targets")
 
@@ -261,7 +258,7 @@ otel: build docker-compose-down db-up minio-up minio-ready-local minio-local-ali
 otel-up: docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up tansu-up
 
 tansu-broker *args:
-    target/debug/tansu broker {{args}} 2>&1  | tee tansu.log
+    target/debug/tansu broker {{args}} 2>&1 >tansu.log
 
 # run a broker with configuration from .env
 broker *args: (cargo-build "--bin" "tansu") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket iceberg-catalog-up (tansu-broker args)
@@ -298,7 +295,7 @@ taxi-topic-populate: (cat-produce "taxi" "etc/data/trips.json")
 taxi-topic-consume: (cat-consume "taxi")
 
 # create taxi topic with schema etc/schema/taxi.proto
-taxi-topic-create: (topic-create "taxi" "--config" "tansu.lake.partition=partition")
+taxi-topic-create: (topic-create "taxi" "--partitions" "1" "--config" "tansu.lake.partition=partition" "--config" "tansu.lake.sink=true")
 
 # delete taxi topic
 taxi-topic-delete: (topic-delete "taxi")

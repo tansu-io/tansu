@@ -93,6 +93,10 @@ impl LakeHouse for Parquet {
             .and(Ok(()))
             .map_err(Into::into)
     }
+
+    async fn maintain(&self) -> Result<()> {
+        Ok(())
+    }
 }
 
 impl TryFrom<Builder<Url>> for Parquet {
