@@ -66,8 +66,86 @@ impl Builder<Url> {
 #[derive(Clone, Debug)]
 pub struct Delta {
     location: Url,
-    tables: Arc<Mutex<HashMap<String, DeltaTable>>>,
+    tables: Arc<Mutex<HashMap<String, Table>>>,
     database: String,
+}
+
+#[derive(Clone, Debug)]
+struct Table {
+    config: Config,
+    delta_table: DeltaTable,
+}
+
+#[derive(Clone, Debug)]
+struct Config(Vec<(String, String)>);
+
+impl From<DescribeConfigsResult> for Config {
+    fn from(config: DescribeConfigsResult) -> Self {
+        Self(config.configs.map_or(vec![], |configs| {
+            configs
+                .into_iter()
+                .filter_map(|config| config.value.map(|value| (config.name, value)))
+                .collect::<Vec<(String, String)>>()
+        }))
+    }
+}
+
+impl Config {
+    fn as_columns(&self, name: &str) -> Vec<String> {
+        self.0
+            .iter()
+            .flat_map(|(key, value)| {
+                if key == name {
+                    value
+                        .split(",")
+                        .map(str::trim)
+                        .map(String::from)
+                        .collect::<Vec<_>>()
+                        .into_iter()
+                } else {
+                    vec![].into_iter()
+                }
+            })
+            .collect::<Vec<_>>()
+    }
+
+    fn partition(&self) -> Vec<String> {
+        self.as_columns("tansu.lake.partition")
+    }
+
+    fn z_order(&self) -> Vec<String> {
+        self.as_columns("tansu.lake.z_order")
+    }
+
+    fn quote(s: &str) -> String {
+        format!("\"{s}\"")
+    }
+
+    fn generated(&self) -> Vec<StructField> {
+        self.0
+            .iter()
+            .filter_map(|(name, value)| {
+                name.strip_prefix("tansu.lake.generate.")
+                    .and_then(|suffix| {
+                        typeof_sql_expr(value)
+                            .and_then(|data_type| {
+                                StructField::try_from(
+                                    &Field::new(suffix, data_type, true).with_metadata(
+                                        HashMap::from_iter([(
+                                            ColumnMetadataKey::GenerationExpression.as_ref().into(),
+                                            Self::quote(value),
+                                        )]),
+                                    ),
+                                )
+                                .map_err(Into::into)
+                            })
+                            .inspect_err(|err| debug!(?err, %value))
+                            .ok()
+                    })
+            })
+            .inspect(|generated| debug!(?generated))
+            .collect::<Vec<_>>()
+    }
 }
 
 impl Delta {
@@ -75,35 +153,17 @@ impl Delta {
         format!("{}/{}.{name}", self.location, self.database)
     }
 
-    fn quote(s: &str) -> String {
-        format!("\"{s}\"")
-    }
-
     async fn create_initialized_table(
         &self,
         name: &str,
         schema: &ArrowSchema,
-        config: DescribeConfigsResult,
+        config: Config,
     ) -> Result<DeltaTable> {
         debug!(?name, ?schema);
 
         if let Some(table) = self.tables.lock().map(|guard| guard.get(name).cloned())? {
-            return Ok(table);
+            return Ok(table.delta_table);
         }
-
-        let partitions = config
-            .configs
-            .as_ref()
-            .and_then(|configs| {
-                configs.iter().find_map(|config| {
-                    if config.name == "tansu.lake.partition" {
-                        config.value.clone()
-                    } else {
-                        None
-                    }
-                })
-            })
-            .inspect(|partitions| debug!(?partitions));
 
         let columns = schema
             .fields()
@@ -115,53 +175,26 @@ impl Delta {
             .inspect(|columns| debug!(?columns))
             .inspect_err(|err| debug!(?err))?;
 
-        let generated = config.configs.as_ref().map_or(vec![], |configs| {
-            configs
-                .iter()
-                .filter_map(|config| {
-                    config
-                        .name
-                        .strip_prefix("tansu.lake.generate.")
-                        .and_then(|name| {
-                            let expr = config.value.clone().unwrap_or_default();
-
-                            typeof_sql_expr(&expr)
-                                .and_then(|data_type| {
-                                    StructField::try_from(
-                                        &Field::new(name, data_type, true).with_metadata(
-                                            HashMap::from_iter([(
-                                                ColumnMetadataKey::GenerationExpression
-                                                    .as_ref()
-                                                    .into(),
-                                                Self::quote(&expr),
-                                            )]),
-                                        ),
-                                    )
-                                    .map_err(Into::into)
-                                })
-                                .inspect_err(|err| debug!(?err, ?config))
-                                .ok()
-                        })
-                })
-                .inspect(|generated| debug!(?generated))
-                .collect::<Vec<_>>()
-        });
-
         let table = DeltaOps::try_from_uri(&self.table_uri(name))
             .await
             .inspect_err(|err| debug!(?err))?
             .create()
             .with_save_mode(SaveMode::Ignore)
-            .with_columns(columns.into_iter().chain(generated.into_iter()))
-            .with_partition_columns(partitions)
+            .with_columns(columns.into_iter().chain(config.generated().into_iter()))
+            .with_partition_columns(config.partition())
             .await
             .inspect(|table| debug!(?table))
             .inspect_err(|err| debug!(?err))?;
 
-        _ = self
-            .tables
-            .lock()
-            .map(|mut guard| guard.insert(name.to_owned(), table.clone()))?;
+        _ = self.tables.lock().map(|mut guard| {
+            guard.insert(
+                name.to_owned(),
+                Table {
+                    delta_table: table.clone(),
+                    config,
+                },
+            )
+        })?;
 
         Ok(table)
     }
@@ -197,12 +230,29 @@ impl Delta {
             .map_err(Into::into)
     }
 
+    async fn z_order(&self, name: &str) -> Result<()> {
+        debug!(%name);
+
+        let Some(table) = self.tables.lock().map(|guard| guard.get(name).cloned())? else {
+            return Ok(());
+        };
+
+        self.optimize(name, OptimizeType::ZOrder(table.config.z_order()))
+            .await
+    }
+
     async fn compact(&self, name: &str) -> Result<()> {
+        self.optimize(name, OptimizeType::Compact).await
+    }
+
+    async fn optimize(&self, name: &str, optimize_type: OptimizeType) -> Result<()> {
+        debug!(%name, ?optimize_type);
+
         DeltaOps::try_from_uri(&self.table_uri(name))
             .await
             .inspect_err(|err| debug!(?err))?
             .optimize()
-            .with_type(OptimizeType::Compact)
+            .with_type(optimize_type)
             .await
             .inspect(|(table, metrics)| debug!(?table, ?metrics))
             .inspect_err(|err| debug!(?err))
@@ -216,13 +266,15 @@ impl LakeHouse for Delta {
     async fn store(
         &self,
         topic: &str,
-        _partition: i32,
-        _offset: i64,
+        partition: i32,
+        offset: i64,
         record_batch: RecordBatch,
         config: DescribeConfigsResult,
     ) -> Result<()> {
+        debug!(%topic, partition, offset, ?record_batch, ?config);
+
         _ = self
-            .create_initialized_table(topic, record_batch.schema().as_ref(), config)
+            .create_initialized_table(topic, record_batch.schema().as_ref(), Config::from(config))
             .await?;
 
         _ = self
@@ -248,6 +300,7 @@ impl LakeHouse for Delta {
             debug!(name);
 
             self.compact(&name).await?;
+            self.z_order(&name).await?;
         }
 
         Ok(())
