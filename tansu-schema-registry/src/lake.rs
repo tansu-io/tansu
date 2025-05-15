@@ -13,10 +13,11 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use crate::Result;
+use crate::{METER, Result};
 use arrow::array::RecordBatch;
 use async_trait::async_trait;
-use std::{fmt::Debug, marker::PhantomData};
+use opentelemetry::{KeyValue, metrics::Histogram};
+use std::{fmt::Debug, marker::PhantomData, sync::LazyLock, time::SystemTime};
 use tansu_kafka_sans_io::describe_configs_response::DescribeConfigsResult;
 use tracing::debug;
 use url::Url;
@@ -46,6 +47,22 @@ pub trait LakeHouse: Clone + Debug + Send + Sync + 'static {
     async fn maintain(&self) -> Result<()>;
 }
 
+static STORE_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
+    METER
+        .u64_histogram("lakehouse_store_duration")
+        .with_unit("ms")
+        .with_description("The Lake House store latencies in milliseconds")
+        .build()
+});
+
+static MAINTENANCE_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
+    METER
+        .u64_histogram("lakehouse_maintenance_duration")
+        .with_unit("ms")
+        .with_description("The Lake House maintenance latencies in milliseconds")
+        .build()
+});
+
 #[async_trait]
 impl LakeHouse for House {
     async fn store(
@@ -57,6 +74,8 @@ impl LakeHouse for House {
         configs: DescribeConfigsResult,
     ) -> Result<()> {
         debug!(?topic, ?partition, ?offset, ?record_batch);
+
+        let start = SystemTime::now();
 
         match self {
             House::Delta(inner) => {
@@ -75,16 +94,34 @@ impl LakeHouse for House {
                     .await
             }
         }
+        .inspect(|_| {
+            STORE_DURATION.record(
+                start
+                    .elapsed()
+                    .map_or(0, |duration| duration.as_millis() as u64),
+                &[KeyValue::new("topic", topic.to_owned())],
+            )
+        })
     }
 
     async fn maintain(&self) -> Result<()> {
         debug!(?self);
+
+        let start = SystemTime::now();
 
         match self {
             House::Delta(inner) => inner.maintain().await,
             House::Iceberg(inner) => inner.maintain().await,
             House::Parquet(inner) => inner.maintain().await,
         }
+        .inspect(|_| {
+            MAINTENANCE_DURATION.record(
+                start
+                    .elapsed()
+                    .map_or(0, |duration| duration.as_millis() as u64),
+                &[],
+            )
+        })
     }
 }
 

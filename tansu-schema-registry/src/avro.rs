@@ -512,12 +512,12 @@ impl Schema {
                 .fields
                 .iter()
                 .map(|record_field| {
-                    let inside = append(path, &record_field.name);
+                    let inside = &append(path, &record_field.name)[..];
 
-                    self.schema_data_type(&inside[..], &record_field.schema)
+                    self.schema_data_type(inside, &record_field.schema)
                         .map(|data_type| self.new_field(path, &record_field.name, data_type))
                         .and_then(|field| {
-                            self.schema_array_builder(&inside[..], &record_field.schema)
+                            self.schema_array_builder(inside, &record_field.schema)
                                 .map(|builder| (field, builder))
                         })
                 })

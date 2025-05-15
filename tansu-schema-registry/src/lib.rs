@@ -20,7 +20,7 @@ use std::{
     num::TryFromIntError,
     result,
     string::FromUtf8Error,
-    sync::{Arc, Mutex, PoisonError},
+    sync::{Arc, LazyLock, Mutex, PoisonError},
     time::SystemTime,
 };
 
@@ -36,7 +36,7 @@ use object_store::{
 };
 use opentelemetry::{
     InstrumentationScope, KeyValue, global,
-    metrics::{Counter, Histogram},
+    metrics::{Counter, Histogram, Meter},
 };
 use opentelemetry_semantic_conventions::SCHEMA_URL;
 use parquet::errors::ParquetError;
@@ -272,28 +272,36 @@ pub struct Registry {
     schemas: Arc<Mutex<BTreeMap<String, Schema>>>,
     validation_duration: Histogram<u64>,
     validation_error: Counter<u64>,
+    as_arrow_duration: Histogram<u64>,
 }
+
+pub(crate) static METER: LazyLock<Meter> = LazyLock::new(|| {
+    global::meter_with_scope(
+        InstrumentationScope::builder(env!("CARGO_PKG_NAME"))
+            .with_version(env!("CARGO_PKG_VERSION"))
+            .with_schema_url(SCHEMA_URL)
+            .build(),
+    )
+});
 
 impl Registry {
     pub fn new(storage: impl ObjectStore) -> Self {
-        let meter = global::meter_with_scope(
-            InstrumentationScope::builder(env!("CARGO_PKG_NAME"))
-                .with_version(env!("CARGO_PKG_VERSION"))
-                .with_schema_url(SCHEMA_URL)
-                .build(),
-        );
-
         Self {
             object_store: Arc::new(storage),
             schemas: Arc::new(Mutex::new(BTreeMap::new())),
-            validation_duration: meter
+            validation_duration: METER
                 .u64_histogram("registry_validation_duration")
                 .with_unit("ms")
                 .with_description("The registry validation request latencies in milliseconds")
                 .build(),
-            validation_error: meter
+            validation_error: METER
                 .u64_counter("registry_validation_error")
                 .with_description("The registry validation error count")
+                .build(),
+            as_arrow_duration: METER
+                .u64_histogram("registry_as_arrow_duration")
+                .with_unit("ms")
+                .with_description("The registry as Apache Arrow latencies in milliseconds")
                 .build(),
         }
     }
@@ -305,6 +313,9 @@ impl Registry {
         batch: &Batch,
     ) -> Result<Option<RecordBatch>> {
         debug!(topic, partition, ?batch);
+
+        let start = SystemTime::now();
+
         self.schemas
             .lock()
             .map_err(Into::into)
@@ -314,7 +325,16 @@ impl Registry {
                     .map(|schema| schema.as_arrow(partition, batch))
                     .transpose()
             })
-            .inspect(|record_batch| debug!(?record_batch))
+            .inspect(|record_batch| {
+                debug!(?record_batch);
+
+                self.as_arrow_duration.record(
+                    start
+                        .elapsed()
+                        .map_or(0, |duration| duration.as_millis() as u64),
+                    &[KeyValue::new("topic", topic.to_owned())],
+                )
+            })
             .inspect_err(|err| debug!(?err))
     }
 
