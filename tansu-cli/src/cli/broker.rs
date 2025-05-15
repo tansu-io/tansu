@@ -19,7 +19,7 @@ use super::DEFAULT_BROKER;
 use clap::{Parser, Subcommand};
 use tansu_kafka_sans_io::ErrorCode;
 use tansu_schema_registry::lake::{self};
-use tansu_server::{NODE_ID, broker::Broker, coordinator::group::administrator::Controller};
+use tansu_server::{NODE_ID, broker::Broker, coordinator::group::administrator::Controller, otel};
 use tansu_storage::StorageContainer;
 use tracing::debug;
 use url::Url;
@@ -116,6 +116,11 @@ impl TryFrom<Arg> for tansu_server::broker::Broker<Controller<StorageContainer>,
         let prometheus_listener_url = args
             .prometheus_listener_url
             .map(|env_var_exp| env_var_exp.into_inner());
+
+        let prometheus_registry = prometheus_listener_url
+            .as_ref()
+            .and(otel::prom::init().ok());
+
         let storage_engine = args.storage_engine.into_inner();
         let advertised_listener = args.kafka_advertised_listener_url.into_inner();
         let listener = args.kafka_listener_url.into_inner();
@@ -150,7 +155,8 @@ impl TryFrom<Arg> for tansu_server::broker::Broker<Controller<StorageContainer>,
             .cluster_id(cluster_id)
             .incarnation_id(incarnation_id)
             .advertised_listener(advertised_listener)
-            .prometheus(prometheus_listener_url)
+            .prometheus_listener_url(prometheus_listener_url)
+            .prometheus_registry(prometheus_registry)
             .schema_registry(schema)
             .lake_house(lake_house)
             .storage(storage_engine)

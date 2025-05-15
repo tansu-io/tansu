@@ -56,6 +56,7 @@ use opentelemetry::{
     metrics::{Counter, Histogram},
 };
 use produce::ProduceRequest;
+use prometheus::Registry as PromRegistry;
 use std::{
     io::ErrorKind,
     marker::PhantomData,
@@ -96,7 +97,8 @@ pub struct Broker<G, S> {
     storage: S,
     groups: G,
     metron: Metron,
-    prometheus: Option<Url>,
+    prometheus_listener_url: Option<Url>,
+    prometheus_registry: Option<PromRegistry>,
 }
 
 impl<G, S> Broker<G, S>
@@ -123,7 +125,8 @@ where
             storage,
             groups,
             metron: Metron::new(cluster_id, incarnation_id),
-            prometheus: None,
+            prometheus_listener_url: None,
+            prometheus_registry: None,
         }
     }
 
@@ -134,11 +137,18 @@ where
     pub async fn main(mut self) -> Result<ErrorCode> {
         let mut set = JoinSet::new();
 
-        let prometheus = self.prometheus.clone().map(|prometheus| {
-            set.spawn(async move {
-                otel::prom::init(prometheus).await.unwrap();
-            })
-        });
+        let prometheus = self
+            .prometheus_listener_url
+            .clone()
+            .and_then(|prometheus_listener_url| {
+                self.prometheus_registry.clone().map(|prometheus_registry| {
+                    set.spawn(async move {
+                        otel::prom::listener(prometheus_listener_url, prometheus_registry)
+                            .await
+                            .unwrap();
+                    })
+                })
+            });
 
         let (sender, receiver) = broadcast::channel(16);
         debug!(?sender, ?receiver);
@@ -1281,7 +1291,8 @@ pub struct Builder<N, C, I, A, S, L> {
     advertised_listener: A,
     storage: S,
     listener: L,
-    prometheus: Option<Url>,
+    prometheus_listener_url: Option<Url>,
+    prometheus_registry: Option<PromRegistry>,
     schema_registry: Option<Url>,
     lake_house: Option<House>,
 }
@@ -1304,7 +1315,8 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             advertised_listener: self.advertised_listener,
             storage: self.storage,
             listener: self.listener,
-            prometheus: self.prometheus,
+            prometheus_listener_url: self.prometheus_listener_url,
+            prometheus_registry: self.prometheus_registry,
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
         }
@@ -1318,7 +1330,8 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             advertised_listener: self.advertised_listener,
             storage: self.storage,
             listener: self.listener,
-            prometheus: self.prometheus,
+            prometheus_listener_url: self.prometheus_listener_url,
+            prometheus_registry: self.prometheus_registry,
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
         }
@@ -1332,7 +1345,8 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             advertised_listener: self.advertised_listener,
             storage: self.storage,
             listener: self.listener,
-            prometheus: self.prometheus,
+            prometheus_listener_url: self.prometheus_listener_url,
+            prometheus_registry: self.prometheus_registry,
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
         }
@@ -1349,7 +1363,8 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             advertised_listener: advertised_listener.into(),
             storage: self.storage,
             listener: self.listener,
-            prometheus: self.prometheus,
+            prometheus_listener_url: self.prometheus_listener_url,
+            prometheus_registry: self.prometheus_registry,
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
         }
@@ -1365,7 +1380,8 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             advertised_listener: self.advertised_listener,
             storage,
             listener: self.listener,
-            prometheus: self.prometheus,
+            prometheus_listener_url: self.prometheus_listener_url,
+            prometheus_registry: self.prometheus_registry,
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
         }
@@ -1381,7 +1397,8 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             advertised_listener: self.advertised_listener,
             storage: self.storage,
             listener,
-            prometheus: self.prometheus,
+            prometheus_listener_url: self.prometheus_listener_url,
+            prometheus_registry: self.prometheus_registry,
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
         }
@@ -1399,7 +1416,8 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             advertised_listener: self.advertised_listener,
             storage: self.storage,
             listener: self.listener,
-            prometheus: self.prometheus,
+            prometheus_listener_url: self.prometheus_listener_url,
+            prometheus_registry: self.prometheus_registry,
             schema_registry,
             lake_house: self.lake_house,
         }
@@ -1417,13 +1435,17 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             advertised_listener: self.advertised_listener,
             storage: self.storage,
             listener: self.listener,
-            prometheus: self.prometheus,
+            prometheus_listener_url: self.prometheus_listener_url,
+            prometheus_registry: self.prometheus_registry,
             schema_registry: self.schema_registry,
             lake_house,
         }
     }
 
-    pub fn prometheus(self, prometheus: Option<Url>) -> Builder<N, C, I, A, S, L> {
+    pub fn prometheus_listener_url(
+        self,
+        prometheus_listener_url: Option<Url>,
+    ) -> Builder<N, C, I, A, S, L> {
         Builder {
             node_id: self.node_id,
             cluster_id: self.cluster_id,
@@ -1431,7 +1453,26 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             advertised_listener: self.advertised_listener,
             storage: self.storage,
             listener: self.listener,
-            prometheus,
+            prometheus_listener_url,
+            prometheus_registry: self.prometheus_registry,
+            schema_registry: self.schema_registry,
+            lake_house: self.lake_house,
+        }
+    }
+
+    pub fn prometheus_registry(
+        self,
+        prometheus_registry: Option<PromRegistry>,
+    ) -> Builder<N, C, I, A, S, L> {
+        Builder {
+            node_id: self.node_id,
+            cluster_id: self.cluster_id,
+            incarnation_id: self.incarnation_id,
+            advertised_listener: self.advertised_listener,
+            storage: self.storage,
+            listener: self.listener,
+            prometheus_listener_url: self.prometheus_listener_url,
+            prometheus_registry,
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
         }
@@ -1498,7 +1539,8 @@ impl Builder<i32, String, Uuid, Url, Url, Url> {
             storage,
             groups,
             metron,
-            prometheus: self.prometheus,
+            prometheus_listener_url: self.prometheus_listener_url,
+            prometheus_registry: self.prometheus_registry,
         })
     }
 }
