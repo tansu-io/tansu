@@ -301,7 +301,7 @@ taxi-topic-create: (topic-create "taxi" "--partitions" "1" "--config" "'tansu.la
 taxi-topic-create-plain: (topic-create "taxi" "--partitions" "1" "--config" "tansu.lake.sink=true")
 
 # create taxi topic with a flattened schema etc/schema/taxi.proto
-taxi-topic-create-normalize: (topic-create "taxi" "--partitions" "1" "--config" "tansu.lake.sink=true" "--config" "tansu.lake.normalize=true" "--config" "tansu.lake.normalize.separator=_" "--config" "tansu.lake.z_order=value.vendor_id")
+taxi-topic-create-normalize: (topic-create "taxi" "--partitions" "1" "--config" "tansu.lake.sink=true" "--config" "tansu.lake.normalize=true" "--config" "tansu.lake.normalize.separator=_" "--config" "tansu.lake.z_order=value_vendor_id")
 
 # delete taxi topic
 taxi-topic-delete: (topic-delete "taxi")
