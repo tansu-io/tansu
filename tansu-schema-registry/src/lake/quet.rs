@@ -18,7 +18,6 @@ use std::{env, sync::Arc};
 use arrow::array::RecordBatch;
 use async_trait::async_trait;
 use bytes::Bytes;
-use deltalake::ObjectStore;
 use object_store::{
     DynObjectStore, PutMode, PutOptions, PutPayload,
     aws::{AmazonS3Builder, S3ConditionalPut},

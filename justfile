@@ -294,12 +294,14 @@ taxi-topic-populate: (cat-produce "taxi" "etc/data/trips.json")
 # consume taxi topic with schema etc/schema/taxi.proto
 taxi-topic-consume: (cat-consume "taxi")
 
-# create taxi topic with schema etc/schema/taxi.proto
+# create taxi topic with generated fields with schema etc/schema/taxi.proto
 taxi-topic-create: (topic-create "taxi" "--partitions" "1" "--config" "'tansu.lake.generate.date=cast(meta.timestamp as date)'" "--config" "tansu.lake.partition=date" "--config" "tansu.lake.z_order=vendor_id" "--config" "tansu.lake.sink=true")
 
 # create taxi topic with schema etc/schema/taxi.proto
-plain-taxi-topic-create: (topic-create "taxi" "--partitions" "1" "--config" "tansu.lake.sink=true")
+taxi-topic-create-plain: (topic-create "taxi" "--partitions" "1" "--config" "tansu.lake.sink=true")
 
+# create taxi topic with a flattened schema etc/schema/taxi.proto
+taxi-topic-create-normalize: (topic-create "taxi" "--partitions" "1" "--config" "tansu.lake.sink=true" "--config" "tansu.lake.normalize=true" "--config" "tansu.lake.normalize.separator=_" "--config" "tansu.lake.z_order=value.vendor_id")
 
 # delete taxi topic
 taxi-topic-delete: (topic-delete "taxi")

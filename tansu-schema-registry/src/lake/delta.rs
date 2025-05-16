@@ -147,23 +147,20 @@ impl Config {
         format!("\"{s}\"")
     }
 
-    fn generated(&self) -> Vec<StructField> {
+    fn generated_fields(&self) -> Vec<Arc<Field>> {
         self.0
             .iter()
             .filter_map(|(name, value)| {
                 name.strip_prefix("tansu.lake.generate.")
                     .and_then(|suffix| {
                         typeof_sql_expr(value)
-                            .and_then(|data_type| {
-                                StructField::try_from(
-                                    &Field::new(suffix, data_type, true).with_metadata(
-                                        HashMap::from_iter([(
-                                            ColumnMetadataKey::GenerationExpression.as_ref().into(),
-                                            Self::quote(value),
-                                        )]),
-                                    ),
-                                )
-                                .map_err(Into::into)
+                            .map(|data_type| {
+                                Arc::new(Field::new(suffix, data_type, true).with_metadata(
+                                    HashMap::from_iter([(
+                                        ColumnMetadataKey::GenerationExpression.as_ref().into(),
+                                        Self::quote(value),
+                                    )]),
+                                ))
                             })
                             .inspect_err(|err| debug!(?err, %value))
                             .ok()
@@ -171,6 +168,30 @@ impl Config {
             })
             .inspect(|generated| debug!(?generated))
             .collect::<Vec<_>>()
+    }
+
+    fn generated(&self) -> Result<Vec<StructField>> {
+        self.generated_fields()
+            .iter()
+            .map(|field| StructField::try_from(field.as_ref()).map_err(Into::into))
+            .collect::<Result<Vec<_>>>()
+    }
+
+    fn is_normalized(&self) -> bool {
+        self.0
+            .iter()
+            .find_map(|(name, value)| {
+                (name == "tansu.lake.normalize").then(|| value.parse().ok().unwrap_or_default())
+            })
+            .unwrap_or(false)
+    }
+
+    fn normalize_separator(&self) -> &str {
+        self.0
+            .iter()
+            .find(|(name, _)| name == "tansu.lake.normalize.separator")
+            .map(|(_, value)| value.as_str())
+            .unwrap_or(".")
     }
 }
 
@@ -206,7 +227,7 @@ impl Delta {
             .inspect_err(|err| debug!(?err))?
             .create()
             .with_save_mode(SaveMode::Ignore)
-            .with_columns(columns.into_iter().chain(config.generated().into_iter()))
+            .with_columns(columns.into_iter().chain(config.generated()?.into_iter()))
             .with_partition_columns(config.partition())
             .await
             .inspect(|table| debug!(?table))
@@ -334,11 +355,17 @@ impl LakeHouse for Delta {
 
         let config = Config::from(config);
 
+        let record_batch = if config.is_normalized() {
+            record_batch.normalize(config.normalize_separator(), None)?
+        } else {
+            record_batch
+        };
+
         let mut table = self
             .create_initialized_table(topic, record_batch.schema().as_ref(), config.clone())
             .await?;
 
-        if config.generated().is_empty() {
+        if config.generated_fields().is_empty() {
             _ = self.write(topic, &mut table, record_batch).await?;
         } else {
             _ = self
@@ -703,6 +730,332 @@ mod tests {
                 "+----------------------------------------------------+--------------------------------------------------------------------------------------------+",
                 "| {partition: 32123, timestamp: 1973-10-17T18:36:57} | {vendor_id: 1, trip_id: 1000371, trip_distance: 1.8, fare_amount: 15.32, store_and_fwd: 0} |",
                 "+----------------------------------------------------+--------------------------------------------------------------------------------------------+",
+            ];
+
+            assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
+
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn taxi_normalized() -> Result<()> {
+            let _guard = init_tracing()?;
+
+            let schema = Schema::try_from(Bytes::from_static(include_bytes!(
+                "../../../../tansu/etc/schema/taxi.proto"
+            )))?;
+
+            let value = schema.encode_from_value(
+                MessageKind::Value,
+                &json!({
+                  "vendor_id": 1,
+                  "trip_id": 1000371,
+                  "trip_distance": 1.8,
+                  "fare_amount": 15.32,
+                  "store_and_fwd": "N"
+                }),
+            )?;
+
+            let partition = 32123;
+
+            let record_batch = Batch::builder()
+                .record(Record::builder().value(value.into()))
+                .base_timestamp(119_731_017_000)
+                .build()
+                .map_err(Into::into)
+                .and_then(|batch| schema.as_arrow(partition, &batch))?;
+
+            let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
+            let location = format!("file://{}", temp_dir.path().to_str().unwrap());
+            let database = "pqr";
+
+            let lake_house =
+                Url::parse(location.as_ref())
+                    .map_err(Into::into)
+                    .and_then(|location| {
+                        Builder::<PhantomData<Url>>::default()
+                            .location(location)
+                            .database(Some(database.into()))
+                            .build()
+                    })?;
+
+            let topic = "taxi";
+
+            let config = DescribeConfigsResult {
+                error_code: ErrorCode::None.into(),
+                error_message: None,
+                resource_type: ConfigResource::Topic.into(),
+                resource_name: topic.into(),
+                configs: Some(vec![DescribeConfigsResourceResult {
+                    name: String::from("tansu.lake.normalize"),
+                    value: Some(String::from("true")),
+                    read_only: true,
+                    is_default: None,
+                    config_source: None,
+                    is_sensitive: false,
+                    synonyms: None,
+                    config_type: None,
+                    documentation: None,
+                }]),
+            };
+
+            let offset = 543212345;
+
+            lake_house
+                .store(topic, partition, offset, record_batch, config)
+                .await
+                .inspect(|result| debug!(?result))
+                .inspect_err(|err| debug!(?err))?;
+
+            let table = {
+                let mut table =
+                    DeltaTableBuilder::from_uri(format!("{location}/{database}.{topic}"))
+                        .build()?;
+                table.load().await?;
+                table
+            };
+
+            let ctx = SessionContext::new();
+
+            ctx.register_table("t", Arc::new(table))?;
+
+            let df = ctx.sql("select * from t").await?;
+            let results = df.collect().await?;
+
+            let pretty_results = pretty_format_batches(&results)?.to_string();
+
+            let expected = vec![
+                "+----------------+---------------------+-----------------+---------------+---------------------+-------------------+---------------------+",
+                "| meta.partition | meta.timestamp      | value.vendor_id | value.trip_id | value.trip_distance | value.fare_amount | value.store_and_fwd |",
+                "+----------------+---------------------+-----------------+---------------+---------------------+-------------------+---------------------+",
+                "| 32123          | 1973-10-17T18:36:57 | 1               | 1000371       | 1.8                 | 15.32             | 0                   |",
+                "+----------------+---------------------+-----------------+---------------+---------------------+-------------------+---------------------+",
+            ];
+
+            assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
+
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn taxi_normalized_with_separator() -> Result<()> {
+            let _guard = init_tracing()?;
+
+            let schema = Schema::try_from(Bytes::from_static(include_bytes!(
+                "../../../../tansu/etc/schema/taxi.proto"
+            )))?;
+
+            let value = schema.encode_from_value(
+                MessageKind::Value,
+                &json!({
+                  "vendor_id": 1,
+                  "trip_id": 1000371,
+                  "trip_distance": 1.8,
+                  "fare_amount": 15.32,
+                  "store_and_fwd": "N"
+                }),
+            )?;
+
+            let partition = 32123;
+
+            let record_batch = Batch::builder()
+                .record(Record::builder().value(value.into()))
+                .base_timestamp(119_731_017_000)
+                .build()
+                .map_err(Into::into)
+                .and_then(|batch| schema.as_arrow(partition, &batch))?;
+
+            let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
+            let location = format!("file://{}", temp_dir.path().to_str().unwrap());
+            let database = "pqr";
+
+            let lake_house =
+                Url::parse(location.as_ref())
+                    .map_err(Into::into)
+                    .and_then(|location| {
+                        Builder::<PhantomData<Url>>::default()
+                            .location(location)
+                            .database(Some(database.into()))
+                            .build()
+                    })?;
+
+            let topic = "taxi";
+
+            let config = DescribeConfigsResult {
+                error_code: ErrorCode::None.into(),
+                error_message: None,
+                resource_type: ConfigResource::Topic.into(),
+                resource_name: topic.into(),
+                configs: Some(vec![
+                    DescribeConfigsResourceResult {
+                        name: String::from("tansu.lake.normalize"),
+                        value: Some(String::from("true")),
+                        read_only: true,
+                        is_default: None,
+                        config_source: None,
+                        is_sensitive: false,
+                        synonyms: None,
+                        config_type: None,
+                        documentation: None,
+                    },
+                    DescribeConfigsResourceResult {
+                        name: String::from("tansu.lake.normalize.separator"),
+                        value: Some(String::from("_")),
+                        read_only: true,
+                        is_default: None,
+                        config_source: None,
+                        is_sensitive: false,
+                        synonyms: None,
+                        config_type: None,
+                        documentation: None,
+                    },
+                ]),
+            };
+
+            let offset = 543212345;
+
+            lake_house
+                .store(topic, partition, offset, record_batch, config)
+                .await
+                .inspect(|result| debug!(?result))
+                .inspect_err(|err| debug!(?err))?;
+
+            let table = {
+                let mut table =
+                    DeltaTableBuilder::from_uri(format!("{location}/{database}.{topic}"))
+                        .build()?;
+                table.load().await?;
+                table
+            };
+
+            let ctx = SessionContext::new();
+
+            ctx.register_table("t", Arc::new(table))?;
+
+            let df = ctx.sql("select * from t").await?;
+            let results = df.collect().await?;
+
+            let pretty_results = pretty_format_batches(&results)?.to_string();
+
+            let expected = vec![
+                "+----------------+---------------------+-----------------+---------------+---------------------+-------------------+---------------------+",
+                "| meta_partition | meta_timestamp      | value_vendor_id | value_trip_id | value_trip_distance | value_fare_amount | value_store_and_fwd |",
+                "+----------------+---------------------+-----------------+---------------+---------------------+-------------------+---------------------+",
+                "| 32123          | 1973-10-17T18:36:57 | 1               | 1000371       | 1.8                 | 15.32             | 0                   |",
+                "+----------------+---------------------+-----------------+---------------+---------------------+-------------------+---------------------+",
+            ];
+
+            assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
+
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn taxi_normalized_partition_on_value_dot_vendor_id() -> Result<()> {
+            let _guard = init_tracing()?;
+
+            let schema = Schema::try_from(Bytes::from_static(include_bytes!(
+                "../../../../tansu/etc/schema/taxi.proto"
+            )))?;
+
+            let value = schema.encode_from_value(
+                MessageKind::Value,
+                &json!({
+                  "vendor_id": 1,
+                  "trip_id": 1000371,
+                  "trip_distance": 1.8,
+                  "fare_amount": 15.32,
+                  "store_and_fwd": "N"
+                }),
+            )?;
+
+            let partition = 32123;
+
+            let record_batch = Batch::builder()
+                .record(Record::builder().value(value.into()))
+                .base_timestamp(119_731_017_000)
+                .build()
+                .map_err(Into::into)
+                .and_then(|batch| schema.as_arrow(partition, &batch))?;
+
+            let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
+            let location = format!("file://{}", temp_dir.path().to_str().unwrap());
+            let database = "pqr";
+
+            let lake_house =
+                Url::parse(location.as_ref())
+                    .map_err(Into::into)
+                    .and_then(|location| {
+                        Builder::<PhantomData<Url>>::default()
+                            .location(location)
+                            .database(Some(database.into()))
+                            .build()
+                    })?;
+
+            let topic = "taxi";
+
+            let config = DescribeConfigsResult {
+                error_code: ErrorCode::None.into(),
+                error_message: None,
+                resource_type: ConfigResource::Topic.into(),
+                resource_name: topic.into(),
+                configs: Some(vec![
+                    DescribeConfigsResourceResult {
+                        name: String::from("tansu.lake.normalize"),
+                        value: Some(String::from("true")),
+                        read_only: true,
+                        is_default: None,
+                        config_source: None,
+                        is_sensitive: false,
+                        synonyms: None,
+                        config_type: None,
+                        documentation: None,
+                    },
+                    DescribeConfigsResourceResult {
+                        name: String::from("tansu.lake.partition"),
+                        value: Some(String::from("value.vendor_id")),
+                        read_only: true,
+                        is_default: None,
+                        config_source: None,
+                        is_sensitive: false,
+                        synonyms: None,
+                        config_type: None,
+                        documentation: None,
+                    },
+                ]),
+            };
+
+            let offset = 543212345;
+
+            lake_house
+                .store(topic, partition, offset, record_batch, config)
+                .await
+                .inspect(|result| debug!(?result))
+                .inspect_err(|err| debug!(?err))?;
+
+            let table = {
+                let mut table =
+                    DeltaTableBuilder::from_uri(format!("{location}/{database}.{topic}"))
+                        .build()?;
+                table.load().await?;
+                table
+            };
+
+            let ctx = SessionContext::new();
+
+            ctx.register_table("t", Arc::new(table))?;
+
+            let df = ctx.sql("select * from t").await?;
+            let results = df.collect().await?;
+
+            let pretty_results = pretty_format_batches(&results)?.to_string();
+
+            let expected = vec![
+                "+----------------+---------------------+---------------+---------------------+-------------------+---------------------+-----------------+",
+                "| meta.partition | meta.timestamp      | value.trip_id | value.trip_distance | value.fare_amount | value.store_and_fwd | value.vendor_id |",
+                "+----------------+---------------------+---------------+---------------------+-------------------+---------------------+-----------------+",
+                "| 32123          | 1973-10-17T18:36:57 | 1000371       | 1.8                 | 15.32             | 0                   | 1               |",
+                "+----------------+---------------------+---------------+---------------------+-------------------+---------------------+-----------------+",
             ];
 
             assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
