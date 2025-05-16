@@ -13,6 +13,8 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+use std::{collections::HashMap, error::Error, str::FromStr};
+
 use crate::Result;
 use clap::Subcommand;
 use tansu_kafka_sans_io::ErrorCode;
@@ -23,23 +25,31 @@ use super::DEFAULT_BROKER;
 
 #[derive(Clone, Debug, Subcommand)]
 pub(super) enum Command {
-    #[command(about = "Create a topic")]
+    /// Create a topic
     Create {
+        /// Broker URL
         #[arg(long, default_value = DEFAULT_BROKER)]
         broker: Url,
 
+        /// The name of the topic to create
         #[clap(value_parser)]
         name: String,
 
+        /// The number of partitions to create
         #[arg(long, default_value = "3")]
         partitions: i32,
+
+        #[arg(long, value_parser = parse_key_val::<String, String>)]
+        config: Vec<(String, String)>,
     },
 
-    #[command(about = "Delete an existing topic")]
+    /// Delete an existing topic
     Delete {
+        /// Broker URL
         #[arg(long, default_value = DEFAULT_BROKER)]
         broker: Url,
 
+        /// The name of the topic to delete
         #[clap(value_parser)]
         name: String,
     },
@@ -52,10 +62,12 @@ impl From<Command> for Topic {
                 broker,
                 name,
                 partitions,
+                config,
             } => Topic::create()
                 .broker(broker)
                 .name(name)
                 .partitions(partitions)
+                .config(HashMap::from_iter(config))
                 .build(),
 
             Command::Delete { broker, name } => Topic::delete().broker(broker).name(name).build(),
@@ -67,4 +79,18 @@ impl Command {
     pub(super) async fn main(self) -> Result<ErrorCode> {
         Topic::from(self).main().await.map_err(Into::into)
     }
+}
+
+/// Parse a single key-value pair
+fn parse_key_val<T, U>(s: &str) -> Result<(T, U), Box<dyn Error + Send + Sync + 'static>>
+where
+    T: FromStr,
+    T::Err: Error + Send + Sync + 'static,
+    U: FromStr,
+    U::Err: Error + Send + Sync + 'static,
+{
+    let pos = s
+        .find('=')
+        .ok_or_else(|| format!("invalid KEY=value: no `=` found in `{s}`"))?;
+    Ok((s[..pos].parse()?, s[pos + 1..].parse()?))
 }

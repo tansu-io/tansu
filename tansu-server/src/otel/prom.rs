@@ -42,6 +42,8 @@ async fn serve_req(request: Request<Incoming>, state: Registry) -> Result<Respon
             let encoder = TextEncoder::new();
             let metric_families = state.gather();
 
+            debug!(?metric_families);
+
             encoder
                 .encode(&metric_families, &mut buffer)
                 .map_err(Error::from)
@@ -61,17 +63,24 @@ async fn serve_req(request: Request<Incoming>, state: Registry) -> Result<Respon
     }
 }
 
-pub async fn init(listener: Url) -> Result<()> {
-    debug!(%listener);
-
+pub fn init() -> Result<Registry> {
     let registry = Registry::new();
 
-    let exporter = exporter().with_registry(registry.clone()).build()?;
+    let exporter = exporter()
+        .with_registry(registry.clone())
+        .build()
+        .inspect(|exporter| debug!(?exporter))
+        .inspect_err(|err| debug!(?err))?;
 
     let provider = SdkMeterProvider::builder().with_reader(exporter).build();
+    debug!(?provider);
 
     global::set_meter_provider(provider);
 
+    Ok(registry)
+}
+
+pub async fn listener(listener: Url, registry: Registry) -> Result<()> {
     let addr = format!(
         "{}:{}",
         listener.host_str().unwrap_or("0.0.0.0"),

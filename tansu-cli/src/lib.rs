@@ -26,6 +26,7 @@ pub enum Error {
     DotEnv(#[from] dotenv::Error),
     Proxy(#[from] tansu_proxy::Error),
     Regex(#[from] regex::Error),
+    Schema(#[from] tansu_schema_registry::Error),
     Server(#[from] tansu_server::Error),
     Topic(#[from] tansu_topic::Error),
     Url(#[from] url::ParseError),

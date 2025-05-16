@@ -2,11 +2,8 @@ set dotenv-load
 
 default: fmt build test clippy
 
-
-
 cargo-build +args:
     cargo build {{args}}
-
 
 build: (cargo-build "--workspace" "--all-targets")
 
@@ -25,7 +22,7 @@ miri:
     cargo +nightly miri test --no-fail-fast --all-features
 
 docker-build:
-    docker build --tag ghcr.io/tansu-io/tansu --no-cache --progress plain .
+    docker build --tag ghcr.io/tansu-io/tansu --no-cache --progress plain --platform linux/amd64,linux/arm64 --debug .
 
 minio-up:
     docker compose up --detach --wait minio
@@ -135,8 +132,8 @@ consumer-group-list:
 test-reset-offsets-to-earliest:
     kafka-consumer-groups --bootstrap-server ${ADVERTISED_LISTENER} --group test-consumer-group --topic test:0 --reset-offsets --to-earliest --execute
 
-topic-create topic:
-    target/debug/tansu topic create {{topic}}
+topic-create topic *args:
+    target/debug/tansu topic create {{topic}} {{args}}
 
 topic-delete topic:
     target/debug/tansu topic delete {{topic}}
@@ -202,10 +199,6 @@ search-duckdb-parquet: (duckdb-parquet "search")
 tansu-server:
     target/debug/tansu broker --schema-registry file://./etc/schema 2>&1 | tee tansu.log
 
-# run a broker with configuration from .env
-broker:
-    target/debug/tansu broker 2>&1 | tee tansu.log
-
 kafka-proxy:
     docker run -d -p 19092:9092 apache/kafka:3.9.0
 
@@ -264,14 +257,20 @@ otel: build docker-compose-down db-up minio-up minio-ready-local minio-local-ali
 
 otel-up: docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up tansu-up
 
+tansu-broker *args:
+    target/debug/tansu broker {{args}} 2>&1 >tansu.log
+
+# run a broker with configuration from .env
+broker *args: (cargo-build "--bin" "tansu") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket iceberg-catalog-up (tansu-broker args)
+
 # teardown compose, rebuild: minio, db, tansu and lake buckets
-server: (cargo-build "--package" "tansu-cli") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket iceberg-catalog-up
+server: (cargo-build "--bin" "tansu") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket iceberg-catalog-up
 	target/debug/tansu broker 2>&1  | tee tansu.log
 
-gdb: (cargo-build "--package" "tansu-cli") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket
+gdb: (cargo-build "--bin" "tansu") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket
     rust-gdb --args target/debug/tansu broker
 
-lldb: (cargo-build "--package" "tansu-cli") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket iceberg-catalog-up
+lldb: (cargo-build "--bin" "tansu") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket iceberg-catalog-up
     rust-lldb target/debug/tansu broker
 
 # produce etc/data/observations.json with schema etc/schema/observation.avsc
@@ -295,8 +294,14 @@ taxi-topic-populate: (cat-produce "taxi" "etc/data/trips.json")
 # consume taxi topic with schema etc/schema/taxi.proto
 taxi-topic-consume: (cat-consume "taxi")
 
+# create taxi topic with generated fields with schema etc/schema/taxi.proto
+taxi-topic-create: (topic-create "taxi" "--partitions" "1" "--config" "'tansu.lake.generate.date=cast(meta.timestamp as date)'" "--config" "tansu.lake.partition=date" "--config" "tansu.lake.z_order=vendor_id" "--config" "tansu.lake.sink=true")
+
 # create taxi topic with schema etc/schema/taxi.proto
-taxi-topic-create: (topic-create "taxi")
+taxi-topic-create-plain: (topic-create "taxi" "--partitions" "1" "--config" "tansu.lake.sink=true")
+
+# create taxi topic with a flattened schema etc/schema/taxi.proto
+taxi-topic-create-normalize: (topic-create "taxi" "--partitions" "1" "--config" "tansu.lake.sink=true" "--config" "tansu.lake.normalize=true" "--config" "tansu.lake.normalize.separator=_" "--config" "tansu.lake.z_order=value_vendor_id")
 
 # delete taxi topic
 taxi-topic-delete: (topic-delete "taxi")
