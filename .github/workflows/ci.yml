@@ -50,7 +50,7 @@ jobs:
           cache: false
       - run: cargo build
       - run: cargo fmt --all --check
-      - run: cargo clippy --all-targets
+      - run: cargo clippy -- -D warnings
       - run: cargo test
   typos:
     runs-on: ubuntu-latest
