@@ -258,7 +258,7 @@ otel: build docker-compose-down db-up minio-up minio-ready-local minio-local-ali
 otel-up: docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up tansu-up
 
 tansu-broker *args:
-    target/debug/tansu broker {{args}} 2>&1 >tansu.log
+    target/debug/tansu broker {{args}} 2>&1 | tee tansu.log
 
 # run a broker with configuration from .env
 broker *args: (cargo-build "--bin" "tansu") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket iceberg-catalog-up (tansu-broker args)
@@ -287,8 +287,8 @@ observation-topic-create: (topic-create "observation")
 # observation parquet
 observation-duckdb-parquet: (duckdb-k-unnest-v-parquet "observation")
 
-duckdb:
-    duckdb -init duckdb-init.sql
+duckdb *sql:
+    duckdb -init duckdb-init.sql :memory: {{sql}}
 
 # produce etc/data/trips.json with schema etc/schema/taxi.proto
 taxi-topic-populate: (cat-produce "taxi" "etc/data/trips.json")
@@ -310,3 +310,6 @@ taxi-topic-delete: (topic-delete "taxi")
 
 # taxi parquet
 taxi-duckdb-parquet: (duckdb-parquet "taxi")
+
+# taxi duckdb delta lake
+taxi-duckdb-delta: (duckdb "\"select * from delta_scan('s3://lake/tansu.taxi');\"")
