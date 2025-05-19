@@ -24,15 +24,22 @@ jobs:
           - postgres:16
           - postgres:17
     env:
+      ADVERTISED_LISTENER_URL: tcp://localhost:9092
       AWS_ACCESS_KEY_ID: minioadmin
       AWS_ALLOW_HTTP: true
       AWS_DEFAULT_REGION: eu-west-2
       AWS_ENDPOINT: http://localhost:9000
       AWS_SECRET_ACCESS_KEY: minioadmin
+      CLUSTER_ID: tansu-ci
       DATA_LAKE: s3://lake
       ICEBERG_CATALOG: http://localhost:8181/
       POSTGRES_IMAGE: ${{matrix.pg}}
+      PROMETHEUS_LISTENER_URL: tcp://[::]:9100
+      RUST_BACKTRACE: 1
+      RUST_LOG: warn
       SCHEMA_REGISTRY: file://./etc/schema
+      STORAGE_ENGINE: s3://tansu/
+      TANSU_IMAGE: ghcr.io/tansu-io/tansu
     steps:
       - uses: actions/checkout@v4
       - uses: extractions/setup-just@v2
