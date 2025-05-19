@@ -15,7 +15,7 @@
 
 FROM --platform=$BUILDPLATFORM tonistiigi/xx AS xx
 
-FROM --platform=$BUILDPLATFORM rust:1.86-alpine AS builder
+FROM --platform=$BUILDPLATFORM rust:1.87-alpine AS builder
 COPY --from=xx / /
 RUN apk add clang lld
 RUN rustup target add $(xx-cargo --print-target-triple)
