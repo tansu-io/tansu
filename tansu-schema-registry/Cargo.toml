@@ -18,6 +18,7 @@ deltalake.workspace = true
 futures.workspace = true
 iceberg-catalog-memory.workspace = true
 iceberg-catalog-rest.workspace = true
+iceberg-datafusion.workspace = true
 iceberg.workspace = true
 jsonschema.workspace = true
 num-bigint.workspace = true
@@ -35,13 +36,14 @@ tansu-kafka-sans-io = { path = "../tansu-kafka-sans-io" }
 tempfile.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+tracing-subscriber.workspace = true
 tracing.workspace = true
 url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
 pretty_assertions.workspace = true
-tracing-subscriber.workspace = true
+rand.workspace = true
 
 # [lints]
 # workspace = true

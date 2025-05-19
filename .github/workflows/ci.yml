@@ -23,12 +23,20 @@ jobs:
         pg:
           - postgres:16
           - postgres:17
+    env:
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_ALLOW_HTTP: true
+      AWS_DEFAULT_REGION: eu-west-2
+      AWS_ENDPOINT: http://localhost:9000
+      AWS_SECRET_ACCESS_KEY: minioadmin
+      DATA_LAKE: s3://lake
+      ICEBERG_CATALOG: http://localhost:8181/
+      POSTGRES_IMAGE: ${{matrix.pg}}
+      SCHEMA_REGISTRY: file://./etc/schema
     steps:
       - uses: actions/checkout@v4
-      - run: cp example.env .env
-      - run: docker compose up --detach db
-        env:
-          POSTGRES_IMAGE: ${{matrix.pg}}
+      - uses: extractions/setup-just@v2
+      - run: just ci
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: clippy, rustfmt

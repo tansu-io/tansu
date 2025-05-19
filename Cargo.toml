@@ -71,6 +71,7 @@ hyper-util = { version = "0.1", features = ["full"] }
 iceberg = { git = "https://github.com/apache/iceberg-rust.git", rev = "e5215a11b23f9b0343d93dd4a00eb034c2146042" }
 iceberg-catalog-memory = { git = "https://github.com/apache/iceberg-rust.git", rev = "e5215a11b23f9b0343d93dd4a00eb034c2146042" }
 iceberg-catalog-rest = { git = "https://github.com/apache/iceberg-rust.git", rev = "e5215a11b23f9b0343d93dd4a00eb034c2146042" }
+iceberg-datafusion = { git = "https://github.com/apache/iceberg-rust.git", rev = "e5215a11b23f9b0343d93dd4a00eb034c2146042" }
 jsonschema = "0.26.2"
 lazy_static = "1.4.0"
 lz4 = "1.28.1"

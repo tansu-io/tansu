@@ -176,23 +176,6 @@ impl Config {
             .map(|field| StructField::try_from(field.as_ref()).map_err(Into::into))
             .collect::<Result<Vec<_>>>()
     }
-
-    fn is_normalized(&self) -> bool {
-        self.0
-            .iter()
-            .find_map(|(name, value)| {
-                (name == "tansu.lake.normalize").then(|| value.parse().ok().unwrap_or_default())
-            })
-            .unwrap_or(false)
-    }
-
-    fn normalize_separator(&self) -> &str {
-        self.0
-            .iter()
-            .find(|(name, _)| name == "tansu.lake.normalize.separator")
-            .map(|(_, value)| value.as_str())
-            .unwrap_or(".")
-    }
 }
 
 impl Delta {
@@ -354,12 +337,6 @@ impl LakeHouse for Delta {
         debug!(%topic, partition, offset, ?record_batch, ?config);
 
         let config = Config::from(config);
-
-        let record_batch = if config.is_normalized() {
-            record_batch.normalize(config.normalize_separator(), None)?
-        } else {
-            record_batch
-        };
 
         let mut table = self
             .create_initialized_table(topic, record_batch.schema().as_ref(), config.clone())

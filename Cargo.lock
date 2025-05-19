@@ -1000,7 +1000,7 @@ dependencies = [
  "bitflags",
  "cexpr",
  "clang-sys",
- "itertools 0.12.1",
+ "itertools 0.10.5",
  "lazy_static",
  "lazycell",
  "log",
@@ -3314,6 +3314,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "iceberg-datafusion"
+version = "0.4.0"
+source = "git+https://github.com/apache/iceberg-rust.git?rev=e5215a11b23f9b0343d93dd4a00eb034c2146042#e5215a11b23f9b0343d93dd4a00eb034c2146042"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "datafusion",
+ "futures",
+ "iceberg",
+ "tokio",
+]
+
+[[package]]
 name = "icu_collections"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3482,15 +3495,6 @@ name = "itertools"
 version = "0.10.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b0fd2260e829bddf4cb6ea802289de2f86d6a7a690192fbe91b3f46e0f2c8473"
-dependencies = [
- "either",
-]
-
-[[package]]
-name = "itertools"
-version = "0.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba291022dbbd398a455acf126c1e341954079855bc60dfdda641363bd6922569"
 dependencies = [
  "either",
 ]
@@ -4655,7 +4659,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.10.5",
  "proc-macro2",
  "quote",
  "syn 2.0.101",
@@ -5942,6 +5946,7 @@ dependencies = [
  "iceberg",
  "iceberg-catalog-memory",
  "iceberg-catalog-rest",
+ "iceberg-datafusion",
  "jsonschema",
  "num-bigint",
  "object_store 0.11.2",
@@ -5953,6 +5958,7 @@ dependencies = [
  "protobuf 3.7.2",
  "protobuf-json-mapping",
  "protobuf-parse",
+ "rand 0.9.1",
  "serde",
  "serde_json",
  "tansu-kafka-sans-io",

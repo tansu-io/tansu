@@ -13,7 +13,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::{collections::HashMap, io::Write, ops::Deref, sync::LazyLock};
+use std::{collections::BTreeMap, io::Write, ops::Deref, sync::LazyLock};
 
 use crate::{ARROW_LIST_FIELD_NAME, AsArrow, AsJsonValue, AsKafkaRecord, Error, Result, Validator};
 use arrow::{
@@ -50,7 +50,7 @@ const META: &str = "Meta";
 const VALUE: &str = "Value";
 
 #[derive(Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub(crate) enum MessageKind {
+pub enum MessageKind {
     Key,
     Meta,
     Value,
@@ -84,7 +84,7 @@ struct RecordBuilder {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Schema {
     file_descriptors: Vec<FileDescriptor>,
-    ids: HashMap<String, i32>,
+    ids: BTreeMap<String, i32>,
 }
 
 impl Schema {
@@ -173,11 +173,7 @@ impl Schema {
             .map_err(Into::into)
     }
 
-    pub(crate) fn encode_from_value(
-        &self,
-        message_kind: MessageKind,
-        json: &Value,
-    ) -> Result<Bytes> {
+    pub fn encode_from_value(&self, message_kind: MessageKind, json: &Value) -> Result<Bytes> {
         self.value_to_message(message_kind, json)
             .and_then(Self::message_to_bytes)
     }
@@ -836,125 +832,176 @@ fn make_fd(proto: Bytes) -> Result<Vec<FileDescriptor>> {
         .inspect(|fds| debug!(?fds))
 }
 
-fn field_ids(schemas: &[FileDescriptor]) -> HashMap<String, i32> {
+fn field_ids(schemas: &[FileDescriptor]) -> BTreeMap<String, i32> {
     debug!(?schemas);
 
     fn field_ids_with_path(
         path: &[&str],
-        schema: &MessageDescriptor,
+        schemas: &[MessageDescriptor],
         id: &mut i32,
-    ) -> HashMap<String, i32> {
-        debug!(?path, ?schema, ?id);
+    ) -> BTreeMap<String, i32> {
+        debug!(?path, ?schemas, ?id);
 
-        let mut ids = HashMap::new();
-        ids.insert(path.join("."), *id);
-        *id += 1;
+        let mut ids = BTreeMap::new();
 
-        for field in schema.fields() {
-            debug!(?path, field_name = ?field.name());
+        if path.is_empty() {
+            for schema in schemas {
+                ids.insert(schema.name().to_lowercase(), *id);
+                *id += 1;
+            }
+        }
 
-            let mut path = Vec::from(path);
-            path.push(field.name());
-            ids.insert(path.join("."), *id);
-            *id += 1;
+        debug!(?ids);
 
-            match field.runtime_field_type() {
-                RuntimeFieldType::Singular(singular) => {
-                    debug!(?path, ?singular);
+        for schema in schemas {
+            let name = schema.name().to_lowercase();
 
-                    if let RuntimeType::Message(message_descriptor) = singular {
-                        debug!(?path, ?message_descriptor);
+            let path = if path.is_empty() {
+                Vec::from([&name[..]])
+            } else {
+                Vec::from(path)
+            };
 
-                        if message_descriptor.full_name() == GOOGLE_PROTOBUF_TIMESTAMP {
-                            continue;
+            for field in schema.fields() {
+                debug!(path = ?path.join("."), field_name = ?field.name());
+                let name = field.name().to_string();
+
+                let path = {
+                    let mut path = path.clone();
+                    path.push(&name[..]);
+                    path
+                };
+
+                ids.insert(path.join("."), *id);
+                *id += 1;
+            }
+
+            for field in schema.fields() {
+                debug!(path = ?path.join("."), field_name = ?field.name());
+                let name = field.name().to_string();
+
+                let path = {
+                    let mut path = path.clone();
+                    path.push(&name[..]);
+                    path
+                };
+
+                match field.runtime_field_type() {
+                    RuntimeFieldType::Singular(singular) => {
+                        debug!(?path, ?singular);
+
+                        if let RuntimeType::Message(message_descriptor) = singular {
+                            debug!(?path, ?message_descriptor);
+
+                            if message_descriptor.full_name() != GOOGLE_PROTOBUF_TIMESTAMP {
+                                ids.extend(
+                                    field_ids_with_path(&path[..], &[message_descriptor], id)
+                                        .into_iter(),
+                                )
+                            }
                         }
-
-                        ids.extend(
-                            field_ids_with_path(&path[..], &message_descriptor, id).into_iter(),
-                        )
                     }
-                }
 
-                RuntimeFieldType::Repeated(repeated) => {
-                    debug!(?path, ?repeated);
+                    RuntimeFieldType::Repeated(repeated) => {
+                        debug!(?path, ?repeated);
 
-                    path.push(ARROW_LIST_FIELD_NAME);
-                    ids.insert(path.join("."), *id);
-                    *id += 1;
+                        let path = {
+                            let mut path = path.clone();
+                            path.push(ARROW_LIST_FIELD_NAME);
+                            path
+                        };
 
-                    if let RuntimeType::Message(message_descriptor) = repeated {
-                        debug!(?path, ?message_descriptor);
-
-                        ids.extend(
-                            field_ids_with_path(&path[..], &message_descriptor, id).into_iter(),
-                        )
-                    }
-                }
-
-                RuntimeFieldType::Map(keys, values) => {
-                    debug!(?path, ?keys, ?values);
-
-                    path.push("entries");
-                    ids.insert(path.join("."), *id);
-                    *id += 1;
-
-                    {
-                        let mut path = path.clone();
-                        path.push("keys");
                         ids.insert(path.join("."), *id);
                         *id += 1;
 
-                        if let RuntimeType::Message(message_descriptor) = keys {
+                        if let RuntimeType::Message(message_descriptor) = repeated {
                             debug!(?path, ?message_descriptor);
 
                             ids.extend(
-                                field_ids_with_path(&path[..], &message_descriptor, id).into_iter(),
+                                field_ids_with_path(&path[..], &[message_descriptor], id)
+                                    .into_iter(),
                             )
                         }
                     }
 
-                    {
-                        let mut path = path.clone();
-                        path.push("values");
+                    RuntimeFieldType::Map(keys, values) => {
+                        debug!(?path, ?keys, ?values);
+
+                        let path = {
+                            let mut path = path.clone();
+                            path.push("entries");
+                            path
+                        };
+
                         ids.insert(path.join("."), *id);
                         *id += 1;
 
-                        if let RuntimeType::Message(message_descriptor) = values {
-                            debug!(?path, ?message_descriptor);
+                        {
+                            let path = {
+                                let mut path = path.clone();
+                                path.push("keys");
+                                path
+                            };
 
-                            ids.extend(
-                                field_ids_with_path(&path[..], &message_descriptor, id).into_iter(),
-                            )
+                            ids.insert(path.join("."), *id);
+                            *id += 1;
+
+                            if let RuntimeType::Message(message_descriptor) = keys {
+                                debug!(?path, ?message_descriptor);
+
+                                ids.extend(
+                                    field_ids_with_path(&path[..], &[message_descriptor], id)
+                                        .into_iter(),
+                                )
+                            }
+                        }
+
+                        {
+                            let path = {
+                                let mut path = path.clone();
+                                path.push("values");
+                                path
+                            };
+
+                            ids.insert(path.join("."), *id);
+                            *id += 1;
+
+                            if let RuntimeType::Message(message_descriptor) = values {
+                                debug!(?path, ?message_descriptor);
+
+                                ids.extend(
+                                    field_ids_with_path(&path[..], &[message_descriptor], id)
+                                        .into_iter(),
+                                )
+                            }
                         }
                     }
                 }
             }
         }
 
+        debug!(?ids);
         ids
     }
 
-    let mut id = 1;
+    let descriptors = schemas
+        .iter()
+        .find_map(|fd| fd.message_by_package_relative_name(META))
+        .into_iter()
+        .chain(
+            schemas
+                .iter()
+                .find_map(|fd| fd.message_by_package_relative_name(KEY))
+                .into_iter()
+                .chain(
+                    schemas
+                        .iter()
+                        .find_map(|fd| fd.message_by_package_relative_name(VALUE)),
+                ),
+        )
+        .collect::<Vec<_>>();
 
-    let mut fields_by_package = |relative_name: &str| -> HashMap<String, i32> {
-        schemas
-            .iter()
-            .find_map(|fd| fd.message_by_package_relative_name(relative_name))
-            .as_ref()
-            .map(|schema| field_ids_with_path(&[&relative_name.to_lowercase()], schema, &mut id))
-            .inspect(|v| debug!(%relative_name, ?v))
-            .unwrap_or_default()
-    };
-
-    let mut ids = HashMap::new();
-
-    ids.extend(fields_by_package(META));
-    ids.extend(fields_by_package(KEY));
-    ids.extend(fields_by_package(VALUE));
-
-    debug!(?ids);
-
-    ids
+    field_ids_with_path(&[], &descriptors[..], &mut 1)
 }
 
 fn append_struct_builder(message: &dyn MessageDyn, builder: &mut StructBuilder) -> Result<()> {

@@ -43,15 +43,13 @@ use parquet::errors::ParquetError;
 use serde_json::Value;
 use tansu_kafka_sans_io::{ErrorCode, record::inflated::Batch};
 use tracing::{debug, error};
+use tracing_subscriber::filter::ParseError;
 use url::Url;
 
-#[cfg(test)]
-use tracing_subscriber::filter::ParseError;
-
-mod avro;
-mod json;
+pub mod avro;
+pub mod json;
 pub mod lake;
-mod proto;
+pub mod proto;
 pub(crate) mod sql;
 
 pub(crate) const ARROW_LIST_FIELD_NAME: &str = "element";
@@ -131,7 +129,6 @@ pub enum Error {
     #[error("{:?}", self)]
     Parquet(#[from] ParquetError),
 
-    #[cfg(test)]
     #[error("{:?}", self)]
     ParseFilter(#[from] ParseError),
 
@@ -195,11 +192,11 @@ impl From<ValidationError<'_>> for Error {
 
 pub type Result<T, E = Error> = result::Result<T, E>;
 
-trait Validator {
+pub trait Validator {
     fn validate(&self, batch: &Batch) -> Result<()>;
 }
 
-trait AsArrow {
+pub trait AsArrow {
     fn as_arrow(&self, partition: i32, batch: &Batch) -> Result<RecordBatch>;
 }
 

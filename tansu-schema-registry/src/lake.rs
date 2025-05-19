@@ -22,9 +22,9 @@ use tansu_kafka_sans_io::describe_configs_response::DescribeConfigsResult;
 use tracing::debug;
 use url::Url;
 
-mod berg;
-mod delta;
-mod quet;
+pub mod berg;
+pub mod delta;
+pub mod quet;
 
 #[derive(Clone, Debug)]
 pub enum House {
@@ -63,6 +63,39 @@ static MAINTENANCE_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
         .build()
 });
 
+#[derive(Clone, Debug)]
+struct Config(Vec<(String, String)>);
+
+impl From<DescribeConfigsResult> for Config {
+    fn from(config: DescribeConfigsResult) -> Self {
+        Self(config.configs.map_or(vec![], |configs| {
+            configs
+                .into_iter()
+                .filter_map(|config| config.value.map(|value| (config.name, value)))
+                .collect::<Vec<(String, String)>>()
+        }))
+    }
+}
+
+impl Config {
+    fn is_normalized(&self) -> bool {
+        self.0
+            .iter()
+            .find_map(|(name, value)| {
+                (name == "tansu.lake.normalize").then(|| value.parse().ok().unwrap_or_default())
+            })
+            .unwrap_or(false)
+    }
+
+    fn normalize_separator(&self) -> &str {
+        self.0
+            .iter()
+            .find(|(name, _)| name == "tansu.lake.normalize.separator")
+            .map(|(_, value)| value.as_str())
+            .unwrap_or(".")
+    }
+}
+
 #[async_trait]
 impl LakeHouse for House {
     async fn store(
@@ -76,6 +109,14 @@ impl LakeHouse for House {
         debug!(?topic, ?partition, ?offset, ?record_batch);
 
         let start = SystemTime::now();
+
+        let config = Config::from(configs.clone());
+
+        let record_batch = if config.is_normalized() {
+            record_batch.normalize(config.normalize_separator(), None)?
+        } else {
+            record_batch
+        };
 
         match self {
             House::Delta(inner) => {

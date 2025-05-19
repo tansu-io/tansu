@@ -77,6 +77,20 @@ pub struct Schema {
     ids: HashMap<String, i32>,
 }
 
+impl Schema {
+    pub fn key(&self) -> Option<&AvroSchema> {
+        self.key.as_ref()
+    }
+
+    pub fn value(&self) -> Option<&AvroSchema> {
+        self.value.as_ref()
+    }
+
+    pub fn meta(&self) -> Option<&AvroSchema> {
+        self.meta.as_ref()
+    }
+}
+
 impl TryFrom<Bytes> for Schema {
     type Error = Error;
 
@@ -619,7 +633,11 @@ fn field_ids(schema: &AvroSchema) -> HashMap<String, i32> {
 
                     ids.insert(path.join("."), *id);
                     *id += 1;
+                }
 
+                for field in inner.fields.iter() {
+                    let mut path = Vec::from(path);
+                    path.push(field.name.as_str());
                     ids.extend(field_ids_with_path(&path[..], &field.schema, id).into_iter())
                 }
             }
@@ -1470,7 +1488,7 @@ impl Validator for Schema {
     }
 }
 
-pub(crate) fn schema_write(schema: &AvroSchema, value: Value) -> Result<Bytes> {
+pub fn schema_write(schema: &AvroSchema, value: Value) -> Result<Bytes> {
     debug!(?schema, ?value);
     let mut writer = apache_avro::Writer::new(schema, vec![]);
     writer.append(value)?;
@@ -1722,7 +1740,7 @@ impl AsJsonValue for Schema {
     }
 }
 
-pub(crate) fn r<'a>(
+pub fn r<'a>(
     schema: &AvroSchema,
     fields: impl IntoIterator<Item = (&'a str, Value)>,
 ) -> apache_avro::types::Record {
@@ -1795,6 +1813,8 @@ mod tests {
     }
 
     async fn iceberg_write(record_batch: RecordBatch) -> Result<Vec<DataFile>> {
+        debug!(?record_batch);
+        debug!(schema = ?record_batch.schema());
         let iceberg_schema = IcebergSchema::try_from(record_batch.schema().as_ref())
             .map(IcebergSchemaRef::new)
             .inspect(|schema| debug!(?schema))

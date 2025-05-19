@@ -273,6 +273,8 @@ gdb: (cargo-build "--bin" "tansu") docker-compose-down db-up minio-up minio-read
 lldb: (cargo-build "--bin" "tansu") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket iceberg-catalog-up
     rust-lldb target/debug/tansu broker
 
+ci: docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket iceberg-catalog-up
+
 # produce etc/data/observations.json with schema etc/schema/observation.avsc
 observation-produce: (cat-produce "observation" "etc/data/observations.json")
 

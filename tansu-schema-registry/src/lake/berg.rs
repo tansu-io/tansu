@@ -212,14 +212,26 @@ impl LakeHouse for Iceberg {
     ) -> Result<()> {
         let _ = config;
 
+        debug!(?record_batch);
+
+        debug!(schema = ?record_batch.schema());
+
         let schema = Schema::try_from(record_batch.schema().as_ref())
-            .inspect(|schema| debug!(?schema))
+            .inspect(|schema| {
+                for field in schema.as_struct().fields() {
+                    debug!(?field);
+                }
+            })
             .inspect_err(|err| debug!(?err))?;
 
         let table = self
             .load_or_create_table(topic, schema.clone())
             .await
-            .inspect(|table| debug!(?table))
+            .inspect(|table| {
+                for field in table.metadata().current_schema().as_struct().fields() {
+                    debug!(?field);
+                }
+            })
             .inspect_err(|err| debug!(?err))?;
 
         let writer = ParquetWriterBuilder::new(
