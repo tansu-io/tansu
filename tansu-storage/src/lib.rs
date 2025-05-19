@@ -173,7 +173,7 @@ pub enum Error {
     TryFromSlice(#[from] TryFromSliceError),
 
     #[error("body: {0:?}")]
-    UnexpectedBody(Body),
+    UnexpectedBody(Box<Body>),
 
     #[error("url: {0}")]
     Url(#[from] url::ParseError),
@@ -926,7 +926,7 @@ impl TryFrom<Body> for TxnAddPartitionsRequest {
                 v_3_and_below_topics: None,
             } => Ok(Self::VersionFourPlus { transactions }),
 
-            unexpected => Err(Error::UnexpectedBody(unexpected)),
+            unexpected => Err(Error::UnexpectedBody(Box::new(unexpected))),
         }
     }
 }

@@ -26,9 +26,15 @@ pub enum Error {
     DotEnv(#[from] dotenv::Error),
     Proxy(#[from] tansu_proxy::Error),
     Regex(#[from] regex::Error),
-    Server(#[from] tansu_server::Error),
+    Server(Box<tansu_server::Error>),
     Topic(#[from] tansu_topic::Error),
     Url(#[from] url::ParseError),
+}
+
+impl From<tansu_server::Error> for Error {
+    fn from(value: tansu_server::Error) -> Self {
+        Self::Server(Box::new(value))
+    }
 }
 
 impl fmt::Display for Error {
