@@ -31,10 +31,10 @@ use tansu_kafka_model::{CommonStruct, Field, Listener, Message, wv::Wv};
 #[derive(Debug)]
 #[allow(dead_code)]
 enum Error {
-    ExpectingArrayExpr(Expr),
-    ExpectingPathExpr(Expr),
-    ExpectingPathIdentExpr(Expr),
-    ExpectingTupleExpr(Expr),
+    ExpectingArrayExpr(Box<Expr>),
+    ExpectingPathExpr(Box<Expr>),
+    ExpectingPathIdentExpr(Box<Expr>),
+    ExpectingTupleExpr(Box<Expr>),
     Glob(glob::GlobError),
     Io(io::Error),
     Json(serde_json::Error),

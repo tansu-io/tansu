@@ -1505,25 +1505,37 @@ fn from_json(schema: &AvroSchema, json: &JsonValue) -> Result<Value> {
 
         (AvroSchema::Int, JsonValue::Number(value)) => value
             .as_i64()
-            .ok_or(Error::JsonToAvro(schema.to_owned(), json.to_owned()))
+            .ok_or(Error::JsonToAvro(
+                Box::new(schema.to_owned()),
+                Box::new(json.to_owned()),
+            ))
             .and_then(|value| i32::try_from(value).map_err(Into::into))
             .map(Value::Int)
             .inspect_err(|err| debug!(?schema, ?json, ?err)),
 
         (AvroSchema::Long, JsonValue::Number(value)) => value
             .as_i64()
-            .ok_or(Error::JsonToAvro(schema.to_owned(), json.to_owned()))
+            .ok_or(Error::JsonToAvro(
+                Box::new(schema.to_owned()),
+                Box::new(json.to_owned()),
+            ))
             .map(Value::Long),
 
         (AvroSchema::Double, JsonValue::Number(value)) => value
             .as_f64()
-            .ok_or(Error::JsonToAvro(schema.to_owned(), json.to_owned()))
+            .ok_or(Error::JsonToAvro(
+                Box::new(schema.to_owned()),
+                Box::new(json.to_owned()),
+            ))
             .map(Value::Double)
             .inspect_err(|err| debug!(?schema, ?json, ?err)),
 
         (AvroSchema::Float, JsonValue::Number(value)) => value
             .as_f64()
-            .ok_or(Error::JsonToAvro(schema.to_owned(), json.to_owned()))
+            .ok_or(Error::JsonToAvro(
+                Box::new(schema.to_owned()),
+                Box::new(json.to_owned()),
+            ))
             .map(|double| double as f32)
             .map(Value::Float)
             .inspect_err(|err| debug!(?schema, ?json, ?err)),
@@ -1560,7 +1572,10 @@ fn from_json(schema: &AvroSchema, json: &JsonValue) -> Result<Value> {
                     date_time
                         .and_utc()
                         .timestamp_nanos_opt()
-                        .ok_or(Error::JsonToAvro(schema.to_owned(), json.to_owned()))
+                        .ok_or(Error::JsonToAvro(
+                            Box::new(schema.to_owned()),
+                            Box::new(json.to_owned()),
+                        ))
                 })
                 .map(Value::TimestampNanos)
         }
@@ -1570,7 +1585,10 @@ fn from_json(schema: &AvroSchema, json: &JsonValue) -> Result<Value> {
             .iter()
             .enumerate()
             .find(|(_, symbol)| *symbol == value)
-            .ok_or(Error::JsonToAvro(schema.to_owned(), json.to_owned()))
+            .ok_or(Error::JsonToAvro(
+                Box::new(schema.to_owned()),
+                Box::new(json.to_owned()),
+            ))
             .and_then(|(index, symbol)| {
                 u32::try_from(index)
                     .map(|index| (index, symbol))
@@ -1600,8 +1618,8 @@ fn from_json(schema: &AvroSchema, json: &JsonValue) -> Result<Value> {
                 value
                     .get(&field.name)
                     .ok_or(Error::JsonToAvroFieldNotFound {
-                        schema: schema.to_owned(),
-                        value: json.to_owned(),
+                        schema: Box::new(schema.to_owned()),
+                        value: Box::new(json.to_owned()),
                         field: field.name.clone(),
                     })
                     .and_then(|value| from_json(&field.schema, value))
@@ -1612,7 +1630,10 @@ fn from_json(schema: &AvroSchema, json: &JsonValue) -> Result<Value> {
             .map(Value::Record)
             .inspect_err(|err| debug!(%err)),
 
-        (schema, value) => Err(Error::JsonToAvro(schema.to_owned(), value.to_owned())),
+        (schema, value) => Err(Error::JsonToAvro(
+            Box::new(schema.to_owned()),
+            Box::new(value.to_owned()),
+        )),
     }
 }
 

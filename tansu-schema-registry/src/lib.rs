@@ -66,7 +66,7 @@ pub enum Error {
     Arrow(#[from] ArrowError),
 
     #[error("{:?}", self)]
-    Avro(#[from] apache_avro::Error),
+    Avro(Box<apache_avro::Error>),
 
     #[error("{:?}", self)]
     AvroToJson(apache_avro::types::Value),
@@ -105,12 +105,12 @@ pub enum Error {
     Io(#[from] io::Error),
 
     #[error("{:?}", self)]
-    JsonToAvro(apache_avro::Schema, serde_json::Value),
+    JsonToAvro(Box<apache_avro::Schema>, Box<serde_json::Value>),
 
     #[error("field: {field}, not found in: {value} with schema: {schema}")]
     JsonToAvroFieldNotFound {
-        schema: apache_avro::Schema,
-        value: serde_json::Value,
+        schema: Box<apache_avro::Schema>,
+        value: Box<serde_json::Value>,
         field: String,
     },
 
@@ -178,6 +178,12 @@ pub enum Error {
     Uuid(#[from] uuid::Error),
 }
 
+impl From<apache_avro::Error> for Error {
+    fn from(value: apache_avro::Error) -> Self {
+        Self::Avro(Box::new(value))
+    }
+}
+
 impl<T> From<PoisonError<T>> for Error {
     fn from(_value: PoisonError<T>) -> Self {
         Self::Poison
@@ -210,9 +216,9 @@ pub trait AsJsonValue {
 
 #[derive(Clone, Debug)]
 pub enum Schema {
-    Avro(avro::Schema),
+    Avro(Box<avro::Schema>),
     Json(Arc<json::Schema>),
-    Proto(proto::Schema),
+    Proto(Box<proto::Schema>),
 }
 
 impl AsKafkaRecord for Schema {
@@ -356,6 +362,7 @@ impl Registry {
                 .await
                 .map_err(Into::into)
                 .and_then(proto::Schema::try_from)
+                .map(Box::new)
                 .map(Schema::Proto)
                 .and_then(|schema| {
                     self.schemas
@@ -385,6 +392,7 @@ impl Registry {
                 .await
                 .map_err(Into::into)
                 .and_then(avro::Schema::try_from)
+                .map(Box::new)
                 .map(Schema::Avro)
                 .and_then(|schema| {
                     self.schemas

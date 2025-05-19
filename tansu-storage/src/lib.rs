@@ -146,7 +146,7 @@ pub enum Error {
     Regex(#[from] regex::Error),
 
     #[error("schema registry")]
-    SchemaRegistry(tansu_schema_registry::Error),
+    SchemaRegistry(Box<tansu_schema_registry::Error>),
 
     #[error("segment empty: {0:?}")]
     SegmentEmpty(Topition),
@@ -173,7 +173,7 @@ pub enum Error {
     TryFromSlice(#[from] TryFromSliceError),
 
     #[error("body: {0:?}")]
-    UnexpectedBody(Body),
+    UnexpectedBody(Box<Body>),
 
     #[error("url: {0}")]
     Url(#[from] url::ParseError),
@@ -193,7 +193,7 @@ impl From<tansu_schema_registry::Error> for Error {
         if let tansu_schema_registry::Error::Api(error_code) = value {
             Self::Api(error_code)
         } else {
-            Self::SchemaRegistry(value)
+            Self::SchemaRegistry(Box::new(value))
         }
     }
 }
@@ -926,7 +926,7 @@ impl TryFrom<Body> for TxnAddPartitionsRequest {
                 v_3_and_below_topics: None,
             } => Ok(Self::VersionFourPlus { transactions }),
 
-            unexpected => Err(Error::UnexpectedBody(unexpected)),
+            unexpected => Err(Error::UnexpectedBody(Box::new(unexpected))),
         }
     }
 }

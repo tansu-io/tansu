@@ -87,7 +87,7 @@ pub enum Error {
     ParseInt(#[from] std::num::ParseIntError),
     Poison,
     Pool(#[from] deadpool_postgres::PoolError),
-    SchemaRegistry(#[from] tansu_schema_registry::Error),
+    SchemaRegistry(Box<tansu_schema_registry::Error>),
     Storage(#[from] tansu_storage::Error),
     StringUtf8(#[from] FromUtf8Error),
     OpenTelemetryTrace(TraceError),
@@ -102,6 +102,12 @@ pub enum Error {
     Uuid(#[from] uuid::Error),
     SchemaValidation,
     Send(#[from] SendError<CancelKind>),
+}
+
+impl From<tansu_schema_registry::Error> for Error {
+    fn from(value: tansu_schema_registry::Error) -> Self {
+        Self::SchemaRegistry(Box::new(value))
+    }
 }
 
 impl From<io::Error> for Error {
