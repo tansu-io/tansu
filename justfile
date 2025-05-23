@@ -5,7 +5,7 @@ default: fmt build test clippy
 cargo-build +args:
     cargo build {{args}}
 
-build: (cargo-build "--workspace" "--all-targets")
+build: (cargo-build "--bin" "tansu")
 
 release: (cargo-build "--release" "--workspace" "--all-targets")
 
@@ -24,11 +24,9 @@ miri:
 docker-build:
     docker build --tag ghcr.io/tansu-io/tansu --no-cache --progress plain --platform linux/amd64,linux/arm64 --debug .
 
-minio-up:
-    docker compose up --detach --wait minio
+minio-up: (docker-compose-up "minio")
 
-minio-down:
-    docker compose down --volumes minio
+minio-down: (docker-compose-down "minio")
 
 minio-mc +args:
     docker compose exec minio /usr/bin/mc {{args}}
@@ -66,7 +64,7 @@ iceberg-catalog-up: (docker-compose-up "iceberg-catalog")
 iceberg-catalog-down: (docker-compose-down "iceberg-catalog")
 
 docker-compose-up *args:
-    docker compose --ansi never --progress plain up --no-color --quiet-pull --detach {{args}}
+    docker compose --ansi never --progress plain up --no-color --quiet-pull --wait --detach {{args}}
 
 docker-compose-down *args:
     docker compose down --volumes {{args}}
