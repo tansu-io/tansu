@@ -66,7 +66,7 @@ iceberg-catalog-up: (docker-compose-up "iceberg-catalog")
 iceberg-catalog-down: (docker-compose-down "iceberg-catalog")
 
 docker-compose-up *args:
-    docker compose up --detach {{args}}
+    docker compose --ansi never --progress plain up --no-color --quiet-pull --detach {{args}}
 
 docker-compose-down *args:
     docker compose down --volumes {{args}}
