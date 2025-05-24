@@ -21,9 +21,9 @@ use tracing::{debug, error};
 
 #[tokio::main]
 async fn main() -> Result<ErrorCode> {
-    let _guard = otel::init(TracingFormat::Text)?;
-
     dotenv().ok();
+
+    let _guard = otel::init(TracingFormat::Text)?;
 
     Cli::main()
         .await
