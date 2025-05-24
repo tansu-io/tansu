@@ -38,6 +38,7 @@ use url::Url;
 pub mod common;
 
 pub async fn lake_store(
+    topic: &str,
     partition: i32,
     config: DescribeConfigsResult,
     record_batch: RecordBatch,
@@ -51,8 +52,6 @@ pub async fn lake_store(
         .catalog(Url::parse(catalog_uri)?)
         .namespace(Some(namespace.clone()))
         .build()?;
-
-    let topic = &alphanumeric_string(5);
 
     let offset = 543212345;
 
@@ -181,7 +180,7 @@ mod json {
         };
 
         let topic = &alphanumeric_string(5);
-        let results = lake_store(partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
 
         let pretty_results = pretty_format_batches(&results)?.to_string();
 
@@ -245,7 +244,7 @@ mod json {
         };
 
         let topic = &alphanumeric_string(5);
-        let results = lake_store(partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
 
         let pretty_results = pretty_format_batches(&results)?.to_string();
 
@@ -313,7 +312,7 @@ mod json {
         };
 
         let topic = &alphanumeric_string(5);
-        let results = lake_store(partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
 
         let pretty_results = pretty_format_batches(&results)?.to_string();
 
@@ -376,7 +375,7 @@ mod json {
         };
 
         let topic = &alphanumeric_string(5);
-        let results = lake_store(partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
 
         let pretty_results = pretty_format_batches(&results)?.to_string();
 
@@ -441,7 +440,7 @@ mod json {
         };
 
         let topic = &alphanumeric_string(5);
-        let results = lake_store(partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
 
         let pretty_results = pretty_format_batches(&results)?.to_string();
 
@@ -523,7 +522,7 @@ mod json {
         };
 
         let topic = &alphanumeric_string(5);
-        let results = lake_store(partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
 
         let pretty_results = pretty_format_batches(&results)?.to_string();
 
@@ -600,7 +599,7 @@ mod json {
         };
 
         let topic = &alphanumeric_string(5);
-        let results = lake_store(partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
 
         let pretty_results = pretty_format_batches(&results)?.to_string();
 
@@ -696,7 +695,7 @@ mod proto {
         }?;
 
         let topic = &alphanumeric_string(5);
-        let results = lake_store(partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
 
         let pretty_results = pretty_format_batches(&results)?.to_string();
 
@@ -743,7 +742,7 @@ mod proto {
             .inspect(|record_batch| debug!(?record_batch))?;
 
         let topic = &alphanumeric_string(5);
-        let results = lake_store(partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
 
         let pretty_results = pretty_format_batches(&results)?.to_string();
 
@@ -790,7 +789,7 @@ mod proto {
             .and_then(|batch| schema.as_arrow(partition, &batch))?;
 
         let topic = &alphanumeric_string(5);
-        let results = lake_store(partition, normalized_config(topic), record_batch).await?;
+        let results = lake_store(topic, partition, normalized_config(topic), record_batch).await?;
 
         let pretty_results = pretty_format_batches(&results)?.to_string();
 
@@ -847,7 +846,7 @@ mod proto {
             .and_then(|batch| schema.as_arrow(partition, &batch))?;
 
         let topic = &alphanumeric_string(5);
-        let results = lake_store(partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
 
         let pretty_results = pretty_format_batches(&results)?.to_string();
 
@@ -899,7 +898,7 @@ mod proto {
             .and_then(|batch| schema.as_arrow(partition, &batch))?;
 
         let topic = &alphanumeric_string(5);
-        let results = lake_store(partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
 
         let pretty_results = pretty_format_batches(&results)?.to_string();
 
@@ -956,7 +955,7 @@ mod proto {
             .and_then(|batch| schema.as_arrow(partition, &batch))?;
 
         let topic = &alphanumeric_string(5);
-        let results = lake_store(partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
 
         let pretty_results = pretty_format_batches(&results)?.to_string();
 
@@ -1037,7 +1036,7 @@ mod avro {
         };
 
         let topic = &alphanumeric_string(5);
-        let results = lake_store(partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
 
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
@@ -1124,7 +1123,7 @@ mod avro {
         };
 
         let topic = &alphanumeric_string(5);
-        let results = lake_store(partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
 
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
@@ -1176,7 +1175,7 @@ mod avro {
         };
 
         let topic = &alphanumeric_string(5);
-        let results = lake_store(partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
 
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
@@ -1235,7 +1234,7 @@ mod avro {
         };
 
         let topic = &alphanumeric_string(5);
-        let results = lake_store(partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
 
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
@@ -1298,7 +1297,7 @@ mod avro {
         };
 
         let topic = &alphanumeric_string(5);
-        let results = lake_store(partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
 
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
@@ -1349,7 +1348,7 @@ mod avro {
         };
 
         let topic = &alphanumeric_string(5);
-        let results = lake_store(partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
 
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
@@ -1400,7 +1399,7 @@ mod avro {
         };
 
         let topic = &alphanumeric_string(5);
-        let results = lake_store(partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
 
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
@@ -1476,7 +1475,7 @@ mod avro {
         };
 
         let topic = &alphanumeric_string(5);
-        let results = lake_store(partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
 
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
@@ -1536,7 +1535,7 @@ mod avro {
         };
 
         let topic = &alphanumeric_string(5);
-        let results = lake_store(partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
 
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
@@ -1598,7 +1597,7 @@ mod avro {
         };
 
         let topic = &alphanumeric_string(5);
-        let results = lake_store(partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
 
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
@@ -1658,7 +1657,7 @@ mod avro {
         };
 
         let topic = &alphanumeric_string(5);
-        let results = lake_store(partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
 
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
@@ -1721,7 +1720,7 @@ mod avro {
         };
 
         let topic = &alphanumeric_string(5);
-        let results = lake_store(partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
 
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
@@ -1784,7 +1783,7 @@ mod avro {
         };
 
         let topic = &alphanumeric_string(5);
-        let results = lake_store(partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
 
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
@@ -1847,7 +1846,7 @@ mod avro {
         };
 
         let topic = &alphanumeric_string(5);
-        let results = lake_store(partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
 
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
@@ -1931,7 +1930,7 @@ mod avro {
         };
 
         let topic = &alphanumeric_string(5);
-        let results = lake_store(partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
 
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
@@ -1994,7 +1993,7 @@ mod avro {
         };
 
         let topic = &alphanumeric_string(5);
-        let results = lake_store(partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
 
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
@@ -2061,7 +2060,7 @@ mod avro {
         };
 
         let topic = &alphanumeric_string(5);
-        let results = lake_store(partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
 
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
@@ -2122,7 +2121,7 @@ mod avro {
         };
 
         let topic = &alphanumeric_string(5);
-        let results = lake_store(partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
 
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
@@ -2182,7 +2181,7 @@ mod avro {
         };
 
         let topic = &alphanumeric_string(5);
-        let results = lake_store(partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
 
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
@@ -2243,7 +2242,7 @@ mod avro {
         };
 
         let topic = &alphanumeric_string(5);
-        let results = lake_store(partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
 
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
@@ -2303,7 +2302,7 @@ mod avro {
         };
 
         let topic = &alphanumeric_string(5);
-        let results = lake_store(partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
 
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
