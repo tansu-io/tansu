@@ -1,0 +1,8 @@
+{
+  "type": "record",
+  "name": "metadata",
+  "fields": [
+    { "name": "partition", "type": "int" },
+    { "name": "timestamp", "type": "long", "logicalType": "timestamp-micros" }
+  ]
+}

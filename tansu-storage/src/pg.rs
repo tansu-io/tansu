@@ -19,14 +19,13 @@ use std::{
     hash::{DefaultHasher, Hash, Hasher},
     marker::PhantomData,
     str::FromStr,
-    sync::{Arc, LazyLock},
+    sync::LazyLock,
     time::{Duration, SystemTime},
 };
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use deadpool_postgres::{Manager, ManagerConfig, Object, Pool, RecyclingMethod};
-use object_store::ObjectStore;
 use opentelemetry::metrics::Histogram;
 use opentelemetry::{KeyValue, metrics::Counter};
 use rand::{prelude::*, rng};
@@ -54,7 +53,10 @@ use tansu_kafka_sans_io::{
     to_system_time, to_timestamp,
     txn_offset_commit_response::{TxnOffsetCommitResponsePartition, TxnOffsetCommitResponseTopic},
 };
-use tansu_schema_registry::Registry;
+use tansu_schema_registry::{
+    Registry,
+    lake::{House, LakeHouse},
+};
 use tokio_postgres::{Config, NoTls, Row, Transaction, error::SqlState, types::ToSql};
 use tracing::{debug, error};
 use url::Url;
@@ -80,9 +82,7 @@ pub struct Postgres {
     advertised_listener: Url,
     pool: Pool,
     schemas: Option<Registry>,
-    lake: Option<Arc<dyn ObjectStore>>,
-    iceberg_catalog: Option<Url>,
-    iceberg_namespace: Option<String>,
+    lake: Option<House>,
 }
 
 #[derive(Clone, Default, Debug)]
@@ -92,9 +92,7 @@ pub struct Builder<C, N, L, P> {
     advertised_listener: L,
     pool: P,
     schemas: Option<Registry>,
-    lake: Option<Arc<dyn ObjectStore>>,
-    iceberg_catalog: Option<Url>,
-    iceberg_namespace: Option<String>,
+    lake: Option<House>,
 }
 
 impl<C, N, L, P> Builder<C, N, L, P> {
@@ -106,8 +104,6 @@ impl<C, N, L, P> Builder<C, N, L, P> {
             pool: self.pool,
             schemas: self.schemas,
             lake: self.lake,
-            iceberg_catalog: self.iceberg_catalog,
-            iceberg_namespace: self.iceberg_namespace,
         }
     }
 }
@@ -121,8 +117,6 @@ impl<C, N, L, P> Builder<C, N, L, P> {
             pool: self.pool,
             schemas: self.schemas,
             lake: self.lake,
-            iceberg_catalog: self.iceberg_catalog,
-            iceberg_namespace: self.iceberg_namespace,
         }
     }
 }
@@ -136,8 +130,6 @@ impl<C, N, L, P> Builder<C, N, L, P> {
             pool: self.pool,
             schemas: self.schemas,
             lake: self.lake,
-            iceberg_catalog: self.iceberg_catalog,
-            iceberg_namespace: self.iceberg_namespace,
         }
     }
 
@@ -145,23 +137,8 @@ impl<C, N, L, P> Builder<C, N, L, P> {
         Self { schemas, ..self }
     }
 
-    pub fn lake(self, lake: Option<impl ObjectStore>) -> Self {
-        let lake = lake.map(|lake| Arc::new(lake) as Arc<dyn ObjectStore>);
+    pub fn lake(self, lake: Option<House>) -> Self {
         Self { lake, ..self }
-    }
-
-    pub fn iceberg_catalog(self, iceberg_catalog: Option<Url>) -> Self {
-        Self {
-            iceberg_catalog,
-            ..self
-        }
-    }
-
-    pub fn iceberg_namespace(self, iceberg_namespace: Option<String>) -> Self {
-        Self {
-            iceberg_namespace,
-            ..self
-        }
     }
 }
 
@@ -174,8 +151,6 @@ impl Builder<String, i32, Url, Pool> {
             pool: self.pool,
             schemas: self.schemas,
             lake: self.lake,
-            iceberg_catalog: self.iceberg_catalog,
-            iceberg_namespace: self.iceberg_namespace,
         }
     }
 }
@@ -207,8 +182,6 @@ where
                 cluster: C::default(),
                 schemas: None,
                 lake: None,
-                iceberg_catalog: None,
-                iceberg_namespace: None,
             })
             .map_err(Into::into)
     }
@@ -758,11 +731,13 @@ impl Postgres {
 
         let inflated = inflated::Batch::try_from(deflated).inspect_err(|err| error!(?err))?;
 
-        if let Some(ref schemas) = self.schemas {
-            schemas.validate(topition.topic(), &inflated).await?;
-        }
-
         let attributes = BatchAttribute::try_from(inflated.attributes)?;
+
+        if !attributes.control {
+            if let Some(ref schemas) = self.schemas {
+                schemas.validate(topition.topic(), &inflated).await?;
+            }
+        }
 
         let last_offset_delta = i64::from(inflated.last_offset_delta);
 
@@ -882,31 +857,28 @@ impl Postgres {
             .inspect(|n| debug!(?n))
             .inspect_err(|err| error!(?err))?;
 
-        if let Some(ref registry) = self.schemas {
-            if let Some(ref catalog) = self.iceberg_catalog {
-                registry
-                    .store_as_iceberg(
-                        topition.topic(),
-                        topition.partition(),
-                        high.unwrap_or_default(),
-                        &inflated,
-                        catalog,
-                        self.iceberg_namespace.as_deref(),
-                    )
-                    .await?;
-            } else if let Some(ref lake) = self.lake {
-                registry
-                    .store_as_parquet(
-                        topition.topic(),
-                        topition.partition(),
-                        high.unwrap_or_default(),
-                        &inflated,
-                        lake,
-                    )
-                    .await?;
+        if !attributes.control {
+            if let Some(ref registry) = self.schemas {
+                if let Some(ref lake) = self.lake {
+                    if let Some(record_batch) =
+                        registry.as_arrow(topition.topic(), topition.partition(), &inflated)?
+                    {
+                        let config = self
+                            .describe_config(topition.topic(), ConfigResource::Topic, None)
+                            .await?;
+
+                        lake.store(
+                            topition.topic(),
+                            topition.partition(),
+                            high.unwrap_or_default(),
+                            record_batch,
+                            config,
+                        )
+                        .await?;
+                    }
+                }
             }
         }
-
         Ok(high.unwrap_or_default())
     }
 
@@ -2498,7 +2470,7 @@ impl Storage for Postgres {
     }
 
     async fn describe_config(
-        &mut self,
+        &self,
         name: &str,
         resource: ConfigResource,
         keys: Option<&[String]>,
@@ -3481,6 +3453,14 @@ impl Storage for Postgres {
         tx.commit().await?;
 
         Ok(error_code)
+    }
+
+    async fn maintain(&self) -> Result<()> {
+        if let Some(ref lake) = self.lake {
+            lake.maintain().await.map_err(Into::into)
+        } else {
+            Ok(())
+        }
     }
 }
 

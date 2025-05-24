@@ -2,13 +2,10 @@ set dotenv-load
 
 default: fmt build test clippy
 
-
-
 cargo-build +args:
     cargo build {{args}}
 
-
-build: (cargo-build "--workspace" "--all-targets")
+build: (cargo-build "--bin" "tansu")
 
 release: (cargo-build "--release" "--workspace" "--all-targets")
 
@@ -25,13 +22,11 @@ miri:
     cargo +nightly miri test --no-fail-fast --all-features
 
 docker-build:
-    docker build --tag ghcr.io/tansu-io/tansu --no-cache --progress plain .
+    docker build --tag ghcr.io/tansu-io/tansu --no-cache --progress plain --platform linux/amd64,linux/arm64 --debug .
 
-minio-up:
-    docker compose up --detach --wait minio
+minio-up: (docker-compose-up "minio")
 
-minio-down:
-    docker compose down --volumes minio
+minio-down: (docker-compose-down "minio")
 
 minio-mc +args:
     docker compose exec minio /usr/bin/mc {{args}}
@@ -64,15 +59,24 @@ grafana-up: (docker-compose-up "grafana")
 
 grafana-down: (docker-compose-down "grafana")
 
-iceberg-catalog-up: (docker-compose-up "iceberg-catalog")
+lakehouse-catalog-up: (docker-compose-up "lakehouse-catalog")
 
-iceberg-catalog-down: (docker-compose-down "iceberg-catalog")
+lakehouse-catalog-down: (docker-compose-down "lakehouse-catalog")
+
+lakehouse-accept-terms-of-use:
+    curl http://localhost:8181/management/v1/bootstrap -H "Content-Type: application/json" --data '{"accept-terms-of-use": true}'
+
+lakehouse-create-warehouse:
+    curl http://localhost:8181/management/v1/warehouse -H "Content-Type: application/json" --data @etc/lakekeeper/create-default-warehouse.json
+
+lakehouse-migrate:
+    docker compose exec lakehouse-catalog /home/nonroot/iceberg-catalog migrate
 
 docker-compose-up *args:
-    docker compose up --detach {{args}}
+    docker compose --ansi never --progress plain up --no-color --quiet-pull --wait --detach {{args}}
 
 docker-compose-down *args:
-    docker compose down --volumes {{args}}
+    docker compose down --remove-orphans --volumes {{args}}
 
 docker-compose-ps:
     docker compose ps
@@ -135,8 +139,8 @@ consumer-group-list:
 test-reset-offsets-to-earliest:
     kafka-consumer-groups --bootstrap-server ${ADVERTISED_LISTENER} --group test-consumer-group --topic test:0 --reset-offsets --to-earliest --execute
 
-topic-create topic:
-    target/debug/tansu topic create {{topic}}
+topic-create topic *args:
+    target/debug/tansu topic create {{topic}} {{args}}
 
 topic-delete topic:
     target/debug/tansu topic delete {{topic}}
@@ -202,10 +206,6 @@ search-duckdb-parquet: (duckdb-parquet "search")
 tansu-server:
     target/debug/tansu broker --schema-registry file://./etc/schema 2>&1 | tee tansu.log
 
-# run a broker with configuration from .env
-broker:
-    target/debug/tansu broker 2>&1 | tee tansu.log
-
 kafka-proxy:
     docker run -d -p 19092:9092 apache/kafka:3.9.0
 
@@ -264,15 +264,23 @@ otel: build docker-compose-down db-up minio-up minio-ready-local minio-local-ali
 
 otel-up: docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up tansu-up
 
+tansu-broker *args:
+    target/debug/tansu broker {{args}} 2>&1 | tee tansu.log
+
+# run a broker with configuration from .env
+broker *args: (cargo-build "--bin" "tansu") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket lakehouse-catalog-up (tansu-broker args)
+
 # teardown compose, rebuild: minio, db, tansu and lake buckets
-server: (cargo-build "--package" "tansu-cli") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket iceberg-catalog-up
+server: (cargo-build "--bin" "tansu") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket lakehouse-catalog-up
 	target/debug/tansu broker 2>&1  | tee tansu.log
 
-gdb: (cargo-build "--package" "tansu-cli") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket
+gdb: (cargo-build "--bin" "tansu") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket
     rust-gdb --args target/debug/tansu broker
 
-lldb: (cargo-build "--package" "tansu-cli") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket iceberg-catalog-up
+lldb: (cargo-build "--bin" "tansu") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket lakehouse-catalog-up
     rust-lldb target/debug/tansu broker
+
+ci: docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket lakehouse-catalog-up lakehouse-accept-terms-of-use lakehouse-create-warehouse
 
 # produce etc/data/observations.json with schema etc/schema/observation.avsc
 observation-produce: (cat-produce "observation" "etc/data/observations.json")
@@ -286,8 +294,8 @@ observation-topic-create: (topic-create "observation")
 # observation parquet
 observation-duckdb-parquet: (duckdb-k-unnest-v-parquet "observation")
 
-duckdb:
-    duckdb -init duckdb-init.sql
+duckdb *sql:
+    duckdb -init duckdb-init.sql :memory: {{sql}}
 
 # produce etc/data/trips.json with schema etc/schema/taxi.proto
 taxi-topic-populate: (cat-produce "taxi" "etc/data/trips.json")
@@ -295,11 +303,20 @@ taxi-topic-populate: (cat-produce "taxi" "etc/data/trips.json")
 # consume taxi topic with schema etc/schema/taxi.proto
 taxi-topic-consume: (cat-consume "taxi")
 
+# create taxi topic with generated fields with schema etc/schema/taxi.proto
+taxi-topic-create: (topic-create "taxi" "--partitions" "1" "--config" "'tansu.lake.generate.date=cast(meta.timestamp as date)'" "--config" "tansu.lake.partition=date" "--config" "tansu.lake.z_order=vendor_id" "--config" "tansu.lake.sink=true")
+
 # create taxi topic with schema etc/schema/taxi.proto
-taxi-topic-create: (topic-create "taxi")
+taxi-topic-create-plain: (topic-create "taxi" "--partitions" "1" "--config" "tansu.lake.sink=true")
+
+# create taxi topic with a flattened schema etc/schema/taxi.proto
+taxi-topic-create-normalize: (topic-create "taxi" "--partitions" "1" "--config" "tansu.lake.sink=true" "--config" "tansu.lake.normalize=true" "--config" "tansu.lake.normalize.separator=_" "--config" "tansu.lake.z_order=value_vendor_id")
 
 # delete taxi topic
 taxi-topic-delete: (topic-delete "taxi")
 
 # taxi parquet
 taxi-duckdb-parquet: (duckdb-parquet "taxi")
+
+# taxi duckdb delta lake
+taxi-duckdb-delta: (duckdb "\"select * from delta_scan('s3://lake/tansu.taxi');\"")

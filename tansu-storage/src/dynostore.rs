@@ -63,7 +63,10 @@ use tansu_kafka_sans_io::{
     record::{Record, deflated, inflated},
     txn_offset_commit_response::{TxnOffsetCommitResponsePartition, TxnOffsetCommitResponseTopic},
 };
-use tansu_schema_registry::Registry;
+use tansu_schema_registry::{
+    Registry,
+    lake::{House, LakeHouse},
+};
 use tracing::{debug, error, warn};
 use url::Url;
 use uuid::Uuid;
@@ -86,11 +89,7 @@ pub struct DynoStore {
     node: i32,
     advertised_listener: Url,
     schemas: Option<Registry>,
-
-    lake: Option<Arc<dyn ObjectStore>>,
-
-    iceberg_catalog: Option<Url>,
-    iceberg_namespace: Option<String>,
+    lake: Option<House>,
 
     watermarks: Arc<Mutex<BTreeMap<Topition, OptiCon<Watermark>>>>,
     meta: OptiCon<Meta>,
@@ -368,8 +367,6 @@ impl DynoStore {
             advertised_listener: Url::parse("tcp://127.0.0.1/").unwrap(),
             schemas: None,
             lake: None,
-            iceberg_catalog: None,
-            iceberg_namespace: None,
             watermarks: Arc::new(Mutex::new(BTreeMap::new())),
             meta: OptiCon::<Meta>::new(cluster),
             object_store: Arc::new(Cache::new(
@@ -390,23 +387,8 @@ impl DynoStore {
         Self { schemas, ..self }
     }
 
-    pub fn lake(self, lake: Option<impl ObjectStore>) -> Self {
-        let lake = lake.map(|lake| Arc::new(lake) as Arc<dyn ObjectStore>);
+    pub fn lake(self, lake: Option<House>) -> Self {
         Self { lake, ..self }
-    }
-
-    pub fn iceberg_catalog(self, iceberg_catalog: Option<Url>) -> Self {
-        Self {
-            iceberg_catalog,
-            ..self
-        }
-    }
-
-    pub fn iceberg_namespace(self, iceberg_namespace: Option<String>) -> Self {
-        Self {
-            iceberg_namespace,
-            ..self
-        }
     }
 
     async fn topic_metadata(&self, topic: &TopicId) -> Result<Option<TopicMetadata>> {
@@ -751,8 +733,72 @@ impl Storage for DynoStore {
     ) -> Result<i64> {
         debug!(?transaction_id, ?topition, ?deflated);
 
-        if deflated.is_idempotent() {
-            self.meta
+        let config = self
+            .describe_config(topition.topic(), ConfigResource::Topic, None)
+            .await?;
+
+        if self.lake.is_some()
+            && config
+                .configs
+                .as_ref()
+                .map(|configs| {
+                    configs
+                        .iter()
+                        .inspect(|config| debug!(?config))
+                        .any(|config| {
+                            config.name.as_str() == "tansu.lake.sink"
+                                && config
+                                    .value
+                                    .as_deref()
+                                    .and_then(|value| bool::from_str(value).ok())
+                                    .unwrap_or(false)
+                        })
+                })
+                .unwrap_or(false)
+        {
+            let offset = 0;
+
+            if let Some(ref registry) = self.schemas {
+                let batch_attribute = BatchAttribute::try_from(deflated.attributes)
+                    .inspect(|batch_attribute| debug!(?batch_attribute))
+                    .inspect_err(|err| debug!(?err))?;
+
+                if !batch_attribute.control {
+                    let inflated = inflated::Batch::try_from(&deflated)
+                        .inspect(|inflated| debug!(?inflated))
+                        .inspect_err(|err| debug!(?err))?;
+
+                    registry
+                        .validate(topition.topic(), &inflated)
+                        .await
+                        .inspect(|validation| debug!(?validation))
+                        .inspect_err(|err| debug!(?err))?;
+
+                    if let Some(ref lake) = self.lake {
+                        if let Some(record_batch) = registry
+                            .as_arrow(topition.topic(), topition.partition(), &inflated)
+                            .inspect(|record_batch| debug!(?record_batch))
+                            .inspect_err(|err| debug!(?err))?
+                        {
+                            lake.store(
+                                topition.topic(),
+                                topition.partition(),
+                                offset,
+                                record_batch,
+                                config,
+                            )
+                            .await
+                            .inspect(|store| debug!(?store))
+                            .inspect_err(|err| debug!(?err))?;
+                        }
+                    }
+                }
+            }
+
+            Ok(offset)
+        } else {
+            if deflated.is_idempotent() {
+                self.meta
                 .with_mut(&self.object_store, |meta| {
                     let Some(pd) = meta.producers.get_mut(&deflated.producer_id) else {
                         debug!(producer_id = deflated.producer_id, ?meta.producers);
@@ -801,136 +847,136 @@ impl Storage for DynoStore {
                 .await
                 .inspect(|outcome| debug!(transaction_id, ?topition, ?outcome))
                 .inspect_err(|err| error!(?err, transaction_id, ?topition))?;
-        }
-
-        if let Some(ref registry) = self.schemas {
-            let inflated = inflated::Batch::try_from(&deflated)?;
-
-            registry.validate(topition.topic(), &inflated).await?;
-        }
-
-        let watermark = self.watermarks.lock().map(|mut locked| {
-            locked
-                .entry(topition.to_owned())
-                .or_insert(OptiCon::<Watermark>::new(self.cluster.as_str(), topition))
-                .to_owned()
-        })?;
-
-        let offset = watermark
-            .with_mut(&self.object_store, |watermark| {
-                debug!(?watermark);
-
-                let offset = watermark.high.unwrap_or_default();
-                watermark.high = watermark
-                    .high
-                    .map_or(Some(deflated.last_offset_delta as i64 + 1i64), |high| {
-                        Some(high + deflated.last_offset_delta as i64 + 1i64)
-                    });
-
-                debug!(?watermark);
-
-                Ok(offset)
-            })
-            .await
-            .inspect(|offset| debug!(offset, transaction_id, ?topition))
-            .inspect_err(|err| error!(?err, transaction_id, ?topition))?;
-
-        if let Some(ref registry) = self.schemas {
-            let inflated = inflated::Batch::try_from(&deflated)?;
-
-            if let Some(ref catalog) = self.iceberg_catalog {
-                registry
-                    .store_as_iceberg(
-                        topition.topic(),
-                        topition.partition(),
-                        offset,
-                        &inflated,
-                        catalog,
-                        self.iceberg_namespace.as_deref(),
-                    )
-                    .await?;
-            } else if let Some(ref lake) = self.lake {
-                registry
-                    .store_as_parquet(
-                        topition.topic(),
-                        topition.partition(),
-                        offset,
-                        &inflated,
-                        lake,
-                    )
-                    .await?;
             }
-        }
 
-        let attributes = BatchAttribute::try_from(deflated.attributes)?;
+            if let Some(ref registry) = self.schemas {
+                let batch_attribute = BatchAttribute::try_from(deflated.attributes)?;
 
-        if let Some(transaction_id) = transaction_id {
-            if attributes.transaction {
-                self.meta
-                    .with_mut(&self.object_store, |meta| {
-                        if let Some(transaction) = meta.transactions.get_mut(transaction_id) {
-                            debug!(?transaction);
+                if !batch_attribute.control {
+                    let inflated = inflated::Batch::try_from(&deflated)?;
 
-                            if let Some(txn_detail) =
-                                transaction.epochs.get_mut(&deflated.producer_epoch)
-                            {
-                                debug!(?txn_detail);
+                    registry.validate(topition.topic(), &inflated).await?;
+                }
+            }
 
-                                let offset_end = offset + deflated.last_offset_delta as i64;
+            let watermark = self.watermarks.lock().map(|mut locked| {
+                locked
+                    .entry(topition.to_owned())
+                    .or_insert(OptiCon::<Watermark>::new(self.cluster.as_str(), topition))
+                    .to_owned()
+            })?;
 
-                                _ = txn_detail
-                                    .produces
-                                    .entry(topition.topic.clone())
-                                    .or_default()
-                                    .entry(topition.partition)
-                                    .and_modify(|entry| {
-                                        let range = entry.get_or_insert(TxnProduceOffset {
+            let offset = watermark
+                .with_mut(&self.object_store, |watermark| {
+                    debug!(?watermark);
+
+                    let offset = watermark.high.unwrap_or_default();
+                    watermark.high = watermark
+                        .high
+                        .map_or(Some(deflated.last_offset_delta as i64 + 1i64), |high| {
+                            Some(high + deflated.last_offset_delta as i64 + 1i64)
+                        });
+
+                    debug!(?watermark);
+
+                    Ok(offset)
+                })
+                .await
+                .inspect(|offset| debug!(offset, transaction_id, ?topition))
+                .inspect_err(|err| error!(?err, transaction_id, ?topition))?;
+
+            if let Some(ref registry) = self.schemas {
+                let batch_attribute = BatchAttribute::try_from(deflated.attributes)?;
+
+                if !batch_attribute.control {
+                    if let Some(ref lake) = self.lake {
+                        let inflated = inflated::Batch::try_from(&deflated)?;
+                        if let Some(record_batch) =
+                            registry.as_arrow(topition.topic(), topition.partition(), &inflated)?
+                        {
+                            lake.store(
+                                topition.topic(),
+                                topition.partition(),
+                                offset,
+                                record_batch,
+                                config,
+                            )
+                            .await?;
+                        }
+                    }
+                }
+            }
+
+            let attributes = BatchAttribute::try_from(deflated.attributes)?;
+
+            if let Some(transaction_id) = transaction_id {
+                if attributes.transaction {
+                    self.meta
+                        .with_mut(&self.object_store, |meta| {
+                            if let Some(transaction) = meta.transactions.get_mut(transaction_id) {
+                                debug!(?transaction);
+
+                                if let Some(txn_detail) =
+                                    transaction.epochs.get_mut(&deflated.producer_epoch)
+                                {
+                                    debug!(?txn_detail);
+
+                                    let offset_end = offset + deflated.last_offset_delta as i64;
+
+                                    _ = txn_detail
+                                        .produces
+                                        .entry(topition.topic.clone())
+                                        .or_default()
+                                        .entry(topition.partition)
+                                        .and_modify(|entry| {
+                                            let range = entry.get_or_insert(TxnProduceOffset {
+                                                offset_start: offset,
+                                                offset_end,
+                                            });
+
+                                            if offset_end > range.offset_end {
+                                                range.offset_end = offset_end;
+                                            }
+                                        })
+                                        .or_insert(Some(TxnProduceOffset {
                                             offset_start: offset,
                                             offset_end,
-                                        });
-
-                                        if offset_end > range.offset_end {
-                                            range.offset_end = offset_end;
-                                        }
-                                    })
-                                    .or_insert(Some(TxnProduceOffset {
-                                        offset_start: offset,
-                                        offset_end,
-                                    }));
+                                        }));
+                                }
                             }
-                        }
 
-                        Ok(())
-                    })
-                    .await
-                    .inspect(|outcome| debug!(?outcome, transaction_id, ?topition))
-                    .inspect_err(|err| error!(?err, transaction_id, ?topition))?;
+                            Ok(())
+                        })
+                        .await
+                        .inspect(|outcome| debug!(?outcome, transaction_id, ?topition))
+                        .inspect_err(|err| error!(?err, transaction_id, ?topition))?;
+                }
             }
+
+            let location = Path::from(format!(
+                "clusters/{}/topics/{}/partitions/{:0>10}/records/{:0>20}.batch",
+                self.cluster, topition.topic, topition.partition, offset,
+            ));
+
+            let payload = self.encode(deflated)?;
+
+            _ = self
+                .object_store
+                .put_opts(
+                    &location,
+                    payload,
+                    PutOptions {
+                        mode: PutMode::Create,
+                        tags: TagSet::default(),
+                        attributes: Attributes::new(),
+                    },
+                )
+                .await
+                .inspect(|outcome| debug!(?outcome, transaction_id, ?topition))
+                .inspect_err(|error| error!(?error, transaction_id, ?topition))?;
+
+            Ok(offset)
         }
-
-        let location = Path::from(format!(
-            "clusters/{}/topics/{}/partitions/{:0>10}/records/{:0>20}.batch",
-            self.cluster, topition.topic, topition.partition, offset,
-        ));
-
-        let payload = self.encode(deflated)?;
-
-        _ = self
-            .object_store
-            .put_opts(
-                &location,
-                payload,
-                PutOptions {
-                    mode: PutMode::Create,
-                    tags: TagSet::default(),
-                    attributes: Attributes::new(),
-                },
-            )
-            .await
-            .inspect(|outcome| debug!(?outcome, transaction_id, ?topition))
-            .inspect_err(|error| error!(?error, transaction_id, ?topition))?;
-
-        Ok(offset)
     }
 
     async fn fetch(
@@ -1552,7 +1598,7 @@ impl Storage for DynoStore {
     }
 
     async fn describe_config(
-        &mut self,
+        &self,
         name: &str,
         resource: ConfigResource,
         keys: Option<&[String]>,
@@ -1588,7 +1634,14 @@ impl Storage for DynoStore {
                     })
                 }
 
-                Ok(None) => todo!(),
+                Ok(None) => Ok(DescribeConfigsResult {
+                    error_code: ErrorCode::None.into(),
+                    error_message: Some(ErrorCode::None.to_string()),
+                    resource_type: i8::from(resource),
+                    resource_name: name.into(),
+                    configs: Some(vec![]),
+                }),
+
                 Err(_) => todo!(),
             },
 
@@ -2504,6 +2557,18 @@ impl Storage for DynoStore {
         }
 
         Ok(ErrorCode::None)
+    }
+
+    async fn maintain(&self) -> Result<()> {
+        debug!(?self);
+
+        if let Some(ref lake) = self.lake {
+            lake.maintain().await.map_err(Into::into)
+        } else {
+            Ok(())
+        }
+        .inspect(|maintain| debug!(?maintain))
+        .inspect_err(|err| debug!(?err))
     }
 }
 

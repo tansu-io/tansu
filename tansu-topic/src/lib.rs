@@ -45,7 +45,7 @@ impl fmt::Display for Error {
     }
 }
 
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Topic {
     Create(create::Configuration),
     Delete(delete::Configuration),

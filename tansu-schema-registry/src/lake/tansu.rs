@@ -13,27 +13,20 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::env::vars;
+use dotenv::dotenv;
+use tansu_cli::{Cli, Result};
+use tansu_kafka_sans_io::ErrorCode;
+use tansu_server::{TracingFormat, otel};
+use tracing::{debug, error};
 
-use iceberg::io::{S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY};
+#[tokio::main]
+async fn main() -> Result<ErrorCode> {
+    dotenv().ok();
 
-fn env_mapping(k: &str) -> &str {
-    match k {
-        "AWS_ACCESS_KEY_ID" => S3_ACCESS_KEY_ID,
-        "AWS_SECRET_ACCESS_KEY" => S3_SECRET_ACCESS_KEY,
-        "AWS_DEFAULT_REGION" => S3_REGION,
-        "AWS_ENDPOINT" => S3_ENDPOINT,
-        _ => unreachable!("{k}"),
-    }
-}
+    let _guard = otel::init(TracingFormat::Text)?;
 
-pub fn env_s3_props() -> impl Iterator<Item = (String, String)> {
-    vars()
-        .filter(|(k, _)| {
-            k == "AWS_ACCESS_KEY_ID"
-                || k == "AWS_SECRET_ACCESS_KEY"
-                || k == "AWS_DEFAULT_REGION"
-                || k == "AWS_ENDPOINT"
-        })
-        .map(|(k, v)| (env_mapping(k.as_str()).to_owned(), v))
+    Cli::main()
+        .await
+        .inspect(|error_code| debug!(%error_code))
+        .inspect_err(|err| error!(%err))
 }

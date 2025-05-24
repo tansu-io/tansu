@@ -16,23 +16,14 @@
 use dotenv::dotenv;
 use tansu_cli::{Cli, Result};
 use tansu_kafka_sans_io::ErrorCode;
+use tansu_server::{TracingFormat, otel};
 use tracing::{debug, error};
-use tracing_subscriber::{EnvFilter, fmt::format::FmtSpan, prelude::*};
 
 #[tokio::main]
 async fn main() -> Result<ErrorCode> {
     dotenv().ok();
 
-    tracing_subscriber::registry()
-        .with(EnvFilter::from_default_env())
-        .with(
-            tracing_subscriber::fmt::layer()
-                .with_level(true)
-                .with_line_number(true)
-                .with_thread_ids(false)
-                .with_span_events(FmtSpan::NONE),
-        )
-        .init();
+    let _guard = otel::init(TracingFormat::Text)?;
 
     Cli::main()
         .await

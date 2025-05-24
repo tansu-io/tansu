@@ -14,58 +14,43 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::BTreeMap,
     env::{self},
     io,
     num::TryFromIntError,
     result,
     string::FromUtf8Error,
-    sync::{Arc, Mutex, PoisonError},
+    sync::{Arc, LazyLock, Mutex, PoisonError},
     time::SystemTime,
 };
 
 use arrow::{datatypes::DataType, error::ArrowError, record_batch::RecordBatch};
-use berg::env_s3_props;
 use bytes::Bytes;
 use datafusion::error::DataFusionError;
-use iceberg::{
-    Catalog, NamespaceIdent, TableCreation, TableIdent,
-    spec::{DataFileBuilderError, DataFileFormat::Parquet, Schema as IcebergSchema},
-    transaction::Transaction,
-    writer::{
-        IcebergWriter, IcebergWriterBuilder,
-        base_writer::data_file_writer::DataFileWriterBuilder,
-        file_writer::{
-            ParquetWriterBuilder,
-            location_generator::{DefaultFileNameGenerator, DefaultLocationGenerator},
-        },
-    },
-};
-use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
+use deltalake::DeltaTableError;
+use iceberg::spec::DataFileBuilderError;
 use jsonschema::ValidationError;
 use object_store::{
-    DynObjectStore, ObjectStore, PutMode, PutOptions, PutPayload, aws::AmazonS3Builder,
-    local::LocalFileSystem, memory::InMemory, path::Path,
+    DynObjectStore, ObjectStore, aws::AmazonS3Builder, local::LocalFileSystem, memory::InMemory,
+    path::Path,
 };
 use opentelemetry::{
     InstrumentationScope, KeyValue, global,
-    metrics::{Counter, Histogram},
+    metrics::{Counter, Histogram, Meter},
 };
 use opentelemetry_semantic_conventions::SCHEMA_URL;
-use parquet::{arrow::AsyncArrowWriter, errors::ParquetError, file::properties::WriterProperties};
+use parquet::errors::ParquetError;
 use serde_json::Value;
 use tansu_kafka_sans_io::{ErrorCode, record::inflated::Batch};
 use tracing::{debug, error};
+use tracing_subscriber::filter::ParseError;
 use url::Url;
 
-#[cfg(test)]
-use tracing_subscriber::filter::ParseError;
-use uuid::Uuid;
-
-mod avro;
-mod berg;
-mod json;
-mod proto;
+pub mod avro;
+pub mod json;
+pub mod lake;
+pub mod proto;
+pub(crate) mod sql;
 
 pub(crate) const ARROW_LIST_FIELD_NAME: &str = "element";
 
@@ -100,6 +85,9 @@ pub enum Error {
 
     #[error("{:?}", self)]
     DataFusion(#[from] DataFusionError),
+
+    #[error("{:?}", self)]
+    DeltaTable(#[from] DeltaTableError),
 
     #[error("{:?}", self)]
     Downcast,
@@ -141,9 +129,11 @@ pub enum Error {
     #[error("{:?}", self)]
     Parquet(#[from] ParquetError),
 
-    #[cfg(test)]
     #[error("{:?}", self)]
     ParseFilter(#[from] ParseError),
+
+    #[error("{:?}", self)]
+    ParseUrl(#[from] url::ParseError),
 
     #[error("{:?}", self)]
     Poison,
@@ -167,7 +157,16 @@ pub enum Error {
     SerdeJson(#[from] serde_json::Error),
 
     #[error("{:?}", self)]
+    SqlParser(#[from] datafusion::logical_expr::sqlparser::parser::ParserError),
+
+    #[error("{:?}", self)]
     TryFromInt(#[from] TryFromIntError),
+
+    #[error("{:?}", self)]
+    UnsupportedIcebergCatalogUrl(Url),
+
+    #[error("{:?}", self)]
+    UnsupportedLakeHouseUrl(Url),
 
     #[error("{:?}", self)]
     UnsupportedSchemaRegistryUrl(Url),
@@ -199,12 +198,12 @@ impl From<ValidationError<'_>> for Error {
 
 pub type Result<T, E = Error> = result::Result<T, E>;
 
-trait Validator {
+pub trait Validator {
     fn validate(&self, batch: &Batch) -> Result<()>;
 }
 
-trait AsArrow {
-    fn as_arrow(&self, batch: &Batch) -> Result<RecordBatch>;
+pub trait AsArrow {
+    fn as_arrow(&self, partition: i32, batch: &Batch) -> Result<RecordBatch>;
 }
 
 pub trait AsKafkaRecord {
@@ -247,13 +246,13 @@ impl Validator for Schema {
 }
 
 impl AsArrow for Schema {
-    fn as_arrow(&self, batch: &Batch) -> Result<RecordBatch> {
+    fn as_arrow(&self, partition: i32, batch: &Batch) -> Result<RecordBatch> {
         debug!(?batch);
 
         match self {
-            Self::Avro(schema) => schema.as_arrow(batch),
-            Self::Json(schema) => schema.as_arrow(batch),
-            Self::Proto(schema) => schema.as_arrow(batch),
+            Self::Avro(schema) => schema.as_arrow(partition, batch),
+            Self::Json(schema) => schema.as_arrow(partition, batch),
+            Self::Proto(schema) => schema.as_arrow(partition, batch),
         }
     }
 }
@@ -276,222 +275,70 @@ pub struct Registry {
     schemas: Arc<Mutex<BTreeMap<String, Schema>>>,
     validation_duration: Histogram<u64>,
     validation_error: Counter<u64>,
+    as_arrow_duration: Histogram<u64>,
 }
+
+pub(crate) static METER: LazyLock<Meter> = LazyLock::new(|| {
+    global::meter_with_scope(
+        InstrumentationScope::builder(env!("CARGO_PKG_NAME"))
+            .with_version(env!("CARGO_PKG_VERSION"))
+            .with_schema_url(SCHEMA_URL)
+            .build(),
+    )
+});
 
 impl Registry {
     pub fn new(storage: impl ObjectStore) -> Self {
-        let meter = global::meter_with_scope(
-            InstrumentationScope::builder(env!("CARGO_PKG_NAME"))
-                .with_version(env!("CARGO_PKG_VERSION"))
-                .with_schema_url(SCHEMA_URL)
-                .build(),
-        );
-
         Self {
             object_store: Arc::new(storage),
             schemas: Arc::new(Mutex::new(BTreeMap::new())),
-            validation_duration: meter
+            validation_duration: METER
                 .u64_histogram("registry_validation_duration")
                 .with_unit("ms")
                 .with_description("The registry validation request latencies in milliseconds")
                 .build(),
-            validation_error: meter
+            validation_error: METER
                 .u64_counter("registry_validation_error")
                 .with_description("The registry validation error count")
+                .build(),
+            as_arrow_duration: METER
+                .u64_histogram("registry_as_arrow_duration")
+                .with_unit("ms")
+                .with_description("The registry as Apache Arrow latencies in milliseconds")
                 .build(),
         }
     }
 
-    fn iceberg_catalog(&self, catalog: &Url) -> impl Catalog {
-        debug!(?catalog);
-
-        match catalog.scheme() {
-            "http" | "https" => {
-                let uri = format!(
-                    "{}://{}:{}",
-                    catalog.scheme(),
-                    catalog.host_str().unwrap_or("localhost"),
-                    catalog.port().unwrap_or(8181)
-                );
-
-                debug!(%uri);
-
-                let catalog_config = RestCatalogConfig::builder()
-                    .uri(uri)
-                    .props(env_s3_props().collect())
-                    .build();
-
-                RestCatalog::new(catalog_config)
-            }
-
-            scheme => unimplemented!("unsupported iceberg catalog scheme: {scheme}"),
-        }
-    }
-
-    pub async fn store_as_iceberg(
+    pub fn as_arrow(
         &self,
         topic: &str,
         partition: i32,
-        offset: i64,
         batch: &Batch,
-        catalog: &Url,
-        namespace: Option<&str>,
-    ) -> Result<()> {
-        debug!(topic, partition, offset);
+    ) -> Result<Option<RecordBatch>> {
+        debug!(topic, partition, ?batch);
 
-        if let Some(record_batch) = self
-            .schemas
+        let start = SystemTime::now();
+
+        self.schemas
             .lock()
             .map_err(Into::into)
             .and_then(|guard| {
                 guard
                     .get(topic)
-                    .map(|schema| schema.as_arrow(batch))
+                    .map(|schema| schema.as_arrow(partition, batch))
                     .transpose()
             })
-            .inspect(|record_batch| debug!(?record_batch))
-            .inspect_err(|err| debug!(?err))?
-        {
-            let catalog = self.iceberg_catalog(catalog);
-            debug!(?catalog);
+            .inspect(|record_batch| {
+                debug!(?record_batch);
 
-            let namespace = namespace.unwrap_or("tansu");
-            let namespace_ident = NamespaceIdent::new(namespace.into());
-            debug!(%namespace_ident);
-
-            if !catalog
-                .namespace_exists(&namespace_ident)
-                .await
-                .inspect(|namespace| debug!(?namespace))
-                .inspect_err(|err| debug!(?err))?
-            {
-                catalog
-                    .create_namespace(&namespace_ident, HashMap::new())
-                    .await
-                    .inspect(|namespace| debug!(?namespace))
-                    .inspect_err(|err| debug!(?err))?;
-            }
-
-            let iceberg_schema = IcebergSchema::try_from(record_batch.schema().as_ref())
-                .inspect(|schema| debug!(?schema))
-                .inspect_err(|err| debug!(?err))?;
-
-            let table = if catalog
-                .table_exists(&TableIdent::new(namespace_ident.clone(), topic.into()))
-                .await?
-            {
-                catalog
-                    .load_table(&TableIdent::from_strs([namespace, topic])?)
-                    .await
-                    .inspect_err(|err| debug!(?err))
-            } else {
-                catalog
-                    .create_table(
-                        &namespace_ident,
-                        TableCreation::builder()
-                            .name(topic.into())
-                            .schema(iceberg_schema.clone())
-                            .build(),
-                    )
-                    .await
-                    .inspect(|table| debug!(?table))
-                    .inspect_err(|err| debug!(?err))
-            }?;
-
-            let writer = ParquetWriterBuilder::new(
-                WriterProperties::default(),
-                table.metadata().current_schema().clone(),
-                table.file_io().clone(),
-                DefaultLocationGenerator::new(table.metadata().clone())?,
-                DefaultFileNameGenerator::new(
-                    topic.to_owned(),
-                    Some(format!("{partition:0>10}-{offset:0>20}")),
-                    Parquet,
-                ),
-            );
-
-            let mut data_file_writer = DataFileWriterBuilder::new(writer, None, 0)
-                .build()
-                .await
-                .inspect_err(|err| error!(?err))?;
-
-            data_file_writer
-                .write(record_batch)
-                .await
-                .inspect_err(|err| debug!(?err))?;
-
-            let data_files = data_file_writer
-                .close()
-                .await
-                .inspect(|data_files| debug!(?data_files))
-                .inspect_err(|err| debug!(?err))?;
-
-            let commit_uuid = Uuid::now_v7();
-            debug!(%commit_uuid);
-
-            let tx = Transaction::new(&table);
-
-            let mut fast_append = tx
-                .fast_append(Some(commit_uuid), vec![])
-                .inspect_err(|err| debug!(?err))?;
-
-            fast_append
-                .add_data_files(data_files)
-                .inspect_err(|err| debug!(?err))?;
-
-            let tx = fast_append.apply().await.inspect_err(|err| debug!(?err))?;
-            let _table = tx.commit(&catalog).await.inspect_err(|err| debug!(?err))?;
-        }
-
-        Ok(())
-    }
-
-    pub async fn store_as_parquet(
-        &self,
-        topic: &str,
-        partition: i32,
-        offset: i64,
-        batch: &Batch,
-        object_store: &impl ObjectStore,
-    ) -> Result<()> {
-        debug!(%topic, partition, offset, ?object_store);
-        let _ = batch;
-
-        if let Some(record_batch) = self.schemas.lock().map_err(Into::into).and_then(|guard| {
-            guard
-                .get(topic)
-                .map(|schema| schema.as_arrow(batch))
-                .transpose()
-        })? {
-            let payload = {
-                let mut buffer = Vec::new();
-                let mut writer =
-                    AsyncArrowWriter::try_new(&mut buffer, record_batch.schema(), None)?;
-                writer.write(&record_batch).await?;
-                writer.close().await?;
-                PutPayload::from(Bytes::from(buffer))
-            };
-
-            let location = Path::from(format!(
-                "{}/{:0>10}/{:0>20}.parquet",
-                topic, partition, offset,
-            ));
-
-            _ = object_store
-                .put_opts(
-                    &location,
-                    payload,
-                    PutOptions {
-                        mode: PutMode::Create,
-                        ..Default::default()
-                    },
+                self.as_arrow_duration.record(
+                    start
+                        .elapsed()
+                        .map_or(0, |duration| duration.as_millis() as u64),
+                    &[KeyValue::new("topic", topic.to_owned())],
                 )
-                .await
-                .inspect_err(|err| error!(?err, topic, partition, ?batch))
-                .inspect(|result| debug!(%location, ?result))?
-        }
-
-        Ok(())
+            })
+            .inspect_err(|err| debug!(?err))
     }
 
     pub async fn schema(&self, topic: &str) -> Result<Option<Schema>> {

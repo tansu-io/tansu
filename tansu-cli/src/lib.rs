@@ -22,13 +22,26 @@ use regex::{Regex, Replacer};
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
-    Cat(#[from] tansu_cat::Error),
+    Cat(Box<tansu_cat::Error>),
     DotEnv(#[from] dotenv::Error),
     Proxy(#[from] tansu_proxy::Error),
     Regex(#[from] regex::Error),
+    Schema(Box<tansu_schema_registry::Error>),
     Server(Box<tansu_server::Error>),
     Topic(#[from] tansu_topic::Error),
     Url(#[from] url::ParseError),
+}
+
+impl From<tansu_cat::Error> for Error {
+    fn from(value: tansu_cat::Error) -> Self {
+        Self::Cat(Box::new(value))
+    }
+}
+
+impl From<tansu_schema_registry::Error> for Error {
+    fn from(value: tansu_schema_registry::Error) -> Self {
+        Self::Schema(Box::new(value))
+    }
 }
 
 impl From<tansu_server::Error> for Error {
