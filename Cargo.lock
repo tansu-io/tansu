@@ -5954,6 +5954,7 @@ dependencies = [
  "datafusion",
  "delta_kernel",
  "deltalake",
+ "dotenv",
  "futures",
  "iceberg",
  "iceberg-catalog-memory",

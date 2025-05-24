@@ -15,7 +15,7 @@
 
 use std::{
     collections::HashMap,
-    env::vars,
+    env::{var, vars},
     marker::PhantomData,
     sync::{Arc, Mutex},
 };
@@ -117,21 +117,13 @@ impl TryFrom<Builder<Url, Url>> for Iceberg {
 }
 
 fn iceberg_catalog(catalog: &Url) -> Result<Arc<dyn Catalog>> {
-    debug!(?catalog);
+    debug!(%catalog);
 
     match catalog.scheme() {
         "http" | "https" => {
-            let uri = format!(
-                "{}://{}:{}",
-                catalog.scheme(),
-                catalog.host_str().unwrap_or("localhost"),
-                catalog.port().unwrap_or(8181)
-            );
-
-            debug!(%uri);
-
             let catalog_config = RestCatalogConfig::builder()
-                .uri(uri)
+                .uri(catalog.to_string())
+                .warehouse(var("ICEBERG_WAREHOUSE").unwrap_or("lake".into()))
                 .props(env_s3_props().collect())
                 .build();
 
@@ -299,9 +291,10 @@ impl LakeHouse for Iceberg {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dotenv::dotenv;
     use iceberg::spec::{NestedField, PrimitiveType, Type};
     use rand::{distr::Alphanumeric, prelude::*, rng};
-    use std::{fs::File, marker::PhantomData, sync::Arc, thread};
+    use std::{env::var, fs::File, marker::PhantomData, sync::Arc, thread};
     use tracing::subscriber::DefaultGuard;
     use tracing_subscriber::EnvFilter;
 
@@ -339,10 +332,11 @@ mod tests {
 
     #[tokio::test]
     async fn create_namespace() -> Result<()> {
+        dotenv().ok();
         let _guard = init_tracing()?;
 
-        let catalog_uri = "http://localhost:8181";
-        let location_uri = "s3://lake";
+        let catalog_uri = &var("ICEBERG_CATALOG").unwrap_or("http://localhost:8181".into())[..];
+        let location_uri = &var("DATA_LAKE").unwrap_or("s3://lake".into())[..];
         let namespace = alphanumeric_string(5);
 
         let lake = Iceberg::try_from(
@@ -360,10 +354,11 @@ mod tests {
 
     #[tokio::test]
     async fn create_duplicate_namespace() -> Result<()> {
+        dotenv().ok();
         let _guard = init_tracing()?;
 
-        let catalog_uri = "http://localhost:8181";
-        let location_uri = "s3://lake";
+        let catalog_uri = &var("ICEBERG_CATALOG").unwrap_or("http://localhost:8181".into())[..];
+        let location_uri = &var("DATA_LAKE").unwrap_or("s3://lake".into())[..];
         let namespace = alphanumeric_string(5);
 
         {
@@ -395,10 +390,11 @@ mod tests {
 
     #[tokio::test]
     async fn create_table() -> Result<()> {
+        dotenv().ok();
         let _guard = init_tracing()?;
 
-        let catalog_uri = "http://localhost:8181";
-        let location_uri = "s3://lake";
+        let catalog_uri = &var("ICEBERG_CATALOG").unwrap_or("http://localhost:8181".into())[..];
+        let location_uri = &var("DATA_LAKE").unwrap_or("s3://lake".into())[..];
         let namespace = alphanumeric_string(5);
 
         let lake_house = Iceberg::try_from(
@@ -429,10 +425,11 @@ mod tests {
 
     #[tokio::test]
     async fn create_duplicate_table() -> Result<()> {
+        dotenv().ok();
         let _guard = init_tracing()?;
 
-        let catalog_uri = "http://localhost:8181";
-        let location_uri = "s3://lake";
+        let catalog_uri = &var("ICEBERG_CATALOG").unwrap_or("http://localhost:8181".into())[..];
+        let location_uri = &var("DATA_LAKE").unwrap_or("s3://lake".into())[..];
         let namespace = alphanumeric_string(5);
 
         let table_name = alphanumeric_string(5);

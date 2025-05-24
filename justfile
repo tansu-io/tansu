@@ -59,15 +59,24 @@ grafana-up: (docker-compose-up "grafana")
 
 grafana-down: (docker-compose-down "grafana")
 
-iceberg-catalog-up: (docker-compose-up "iceberg-catalog")
+lakehouse-catalog-up: (docker-compose-up "lakehouse-catalog")
 
-iceberg-catalog-down: (docker-compose-down "iceberg-catalog")
+lakehouse-catalog-down: (docker-compose-down "lakehouse-catalog")
+
+lakehouse-accept-terms-of-use:
+    curl http://localhost:8181/management/v1/bootstrap -H "Content-Type: application/json" --data '{"accept-terms-of-use": true}'
+
+lakehouse-create-warehouse:
+    curl http://localhost:8181/management/v1/warehouse -H "Content-Type: application/json" --data @etc/lakekeeper/create-default-warehouse.json
+
+lakehouse-migrate:
+    docker compose exec lakehouse-catalog /home/nonroot/iceberg-catalog migrate
 
 docker-compose-up *args:
     docker compose --ansi never --progress plain up --no-color --quiet-pull --wait --detach {{args}}
 
 docker-compose-down *args:
-    docker compose down --volumes {{args}}
+    docker compose down --remove-orphans --volumes {{args}}
 
 docker-compose-ps:
     docker compose ps
@@ -259,19 +268,19 @@ tansu-broker *args:
     target/debug/tansu broker {{args}} 2>&1 | tee tansu.log
 
 # run a broker with configuration from .env
-broker *args: (cargo-build "--bin" "tansu") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket iceberg-catalog-up (tansu-broker args)
+broker *args: (cargo-build "--bin" "tansu") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket lakehouse-catalog-up (tansu-broker args)
 
 # teardown compose, rebuild: minio, db, tansu and lake buckets
-server: (cargo-build "--bin" "tansu") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket iceberg-catalog-up
+server: (cargo-build "--bin" "tansu") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket lakehouse-catalog-up
 	target/debug/tansu broker 2>&1  | tee tansu.log
 
 gdb: (cargo-build "--bin" "tansu") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket
     rust-gdb --args target/debug/tansu broker
 
-lldb: (cargo-build "--bin" "tansu") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket iceberg-catalog-up
+lldb: (cargo-build "--bin" "tansu") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket lakehouse-catalog-up
     rust-lldb target/debug/tansu broker
 
-ci: docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket iceberg-catalog-up
+ci: docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket lakehouse-catalog-up lakehouse-accept-terms-of-use lakehouse-create-warehouse
 
 # produce etc/data/observations.json with schema etc/schema/observation.avsc
 observation-produce: (cat-produce "observation" "etc/data/observations.json")

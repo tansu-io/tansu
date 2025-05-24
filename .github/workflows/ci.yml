@@ -32,7 +32,9 @@ jobs:
       AWS_SECRET_ACCESS_KEY: minioadmin
       CLUSTER_ID: tansu-ci
       DATA_LAKE: s3://lake
-      ICEBERG_CATALOG: http://localhost:8181/
+      ICEBERG_CATALOG: http://localhost:8181/catalog
+      ICEBERG_WAREHOUSE: lake
+      LAKEKEEPER_IMAGE: quay.io/lakekeeper/catalog:v0.8.5
       POSTGRES_IMAGE: ${{matrix.pg}}
       PROMETHEUS_LISTENER_URL: tcp://[::]:9100
       RUST_BACKTRACE: 1
