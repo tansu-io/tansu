@@ -25,7 +25,7 @@ use arrow::array::RecordBatch;
 use async_trait::async_trait;
 use iceberg::{
     Catalog, NamespaceIdent, TableCreation, TableIdent,
-    io::{S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY},
+    io::{FileIOBuilder, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY},
     spec::{DataFileFormat, Schema},
     table::Table,
     transaction::Transaction,
@@ -38,6 +38,7 @@ use iceberg::{
         },
     },
 };
+use iceberg_catalog_memory::MemoryCatalog;
 use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
 use parquet::file::properties::WriterProperties;
 use tansu_kafka_sans_io::describe_configs_response::DescribeConfigsResult;
@@ -136,6 +137,12 @@ fn iceberg_catalog(catalog: &Url) -> Result<Arc<dyn Catalog>> {
 
             Ok(Arc::new(RestCatalog::new(catalog_config)))
         }
+
+        "memory" => FileIOBuilder::new("memory")
+            .build()
+            .map(|file_io| MemoryCatalog::new(file_io, None))
+            .map(|catalog| Arc::new(catalog) as Arc<dyn Catalog>)
+            .map_err(Into::into),
 
         _otherwise => Err(Error::UnsupportedIcebergCatalogUrl(catalog.to_owned())),
     }
@@ -285,6 +292,189 @@ impl LakeHouse for Iceberg {
     }
 
     async fn maintain(&self) -> Result<()> {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iceberg::spec::{NestedField, PrimitiveType, Type};
+    use rand::{distr::Alphanumeric, prelude::*, rng};
+    use std::{fs::File, marker::PhantomData, sync::Arc, thread};
+    use tracing::subscriber::DefaultGuard;
+    use tracing_subscriber::EnvFilter;
+
+    pub(crate) fn alphanumeric_string(length: usize) -> String {
+        rng()
+            .sample_iter(&Alphanumeric)
+            .take(length)
+            .map(char::from)
+            .collect()
+    }
+
+    fn init_tracing() -> Result<DefaultGuard> {
+        Ok(tracing::subscriber::set_default(
+            tracing_subscriber::fmt()
+                .with_level(true)
+                .with_line_number(true)
+                .with_thread_names(false)
+                .with_env_filter(
+                    EnvFilter::from_default_env()
+                        .add_directive(format!("{}=debug", env!("CARGO_CRATE_NAME")).parse()?),
+                )
+                .with_writer(
+                    thread::current()
+                        .name()
+                        .ok_or(Error::Message(String::from("unnamed thread")))
+                        .and_then(|name| {
+                            File::create(format!("../logs/{}/{name}.log", env!("CARGO_PKG_NAME"),))
+                                .map_err(Into::into)
+                        })
+                        .map(Arc::new)?,
+                )
+                .finish(),
+        ))
+    }
+
+    #[tokio::test]
+    async fn create_namespace() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let catalog_uri = "http://localhost:8181";
+        let location_uri = "s3://lake";
+        let namespace = alphanumeric_string(5);
+
+        let lake = Iceberg::try_from(
+            Builder::<PhantomData<Url>, PhantomData<Url>>::default()
+                .location(Url::parse(location_uri)?)
+                .catalog(Url::parse(catalog_uri)?)
+                .namespace(Some(namespace.clone())),
+        )?;
+
+        let ident = lake.create_namespace().await?;
+        assert_eq!(namespace, ident.to_url_string());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn create_duplicate_namespace() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let catalog_uri = "http://localhost:8181";
+        let location_uri = "s3://lake";
+        let namespace = alphanumeric_string(5);
+
+        {
+            let lake = Iceberg::try_from(
+                Builder::<PhantomData<Url>, PhantomData<Url>>::default()
+                    .location(Url::parse(location_uri)?)
+                    .catalog(Url::parse(catalog_uri)?)
+                    .namespace(Some(namespace.clone())),
+            )?;
+
+            let ident = lake.create_namespace().await?;
+            assert_eq!(namespace, ident.to_url_string());
+        }
+
+        {
+            let lake = Iceberg::try_from(
+                Builder::<PhantomData<Url>, PhantomData<Url>>::default()
+                    .location(Url::parse(location_uri)?)
+                    .catalog(Url::parse(catalog_uri)?)
+                    .namespace(Some(namespace.clone())),
+            )?;
+
+            let ident = lake.create_namespace().await?;
+            assert_eq!(namespace, ident.to_url_string());
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn create_table() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let catalog_uri = "http://localhost:8181";
+        let location_uri = "s3://lake";
+        let namespace = alphanumeric_string(5);
+
+        let lake_house = Iceberg::try_from(
+            Builder::<PhantomData<Url>, PhantomData<Url>>::default()
+                .location(Url::parse(location_uri)?)
+                .catalog(Url::parse(catalog_uri)?)
+                .namespace(Some(namespace.clone())),
+        )?;
+
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(1, "foo", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(3, "baz", Type::Primitive(PrimitiveType::Boolean)).into(),
+            ])
+            .with_schema_id(1)
+            .with_identifier_field_ids(vec![2])
+            .build()?;
+
+        let table_name = alphanumeric_string(5);
+
+        let table = lake_house.load_or_create_table(&table_name, schema).await?;
+        assert_eq!(table_name, table.identifier().name());
+        assert_eq!(namespace, table.identifier().namespace().to_url_string());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn create_duplicate_table() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let catalog_uri = "http://localhost:8181";
+        let location_uri = "s3://lake";
+        let namespace = alphanumeric_string(5);
+
+        let table_name = alphanumeric_string(5);
+
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(1, "foo", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(3, "baz", Type::Primitive(PrimitiveType::Boolean)).into(),
+            ])
+            .with_schema_id(1)
+            .with_identifier_field_ids(vec![2])
+            .build()?;
+
+        {
+            let lake_house = Iceberg::try_from(
+                Builder::<PhantomData<Url>, PhantomData<Url>>::default()
+                    .location(Url::parse(location_uri)?)
+                    .catalog(Url::parse(catalog_uri)?)
+                    .namespace(Some(namespace.clone())),
+            )?;
+
+            let table = lake_house
+                .load_or_create_table(&table_name, schema.clone())
+                .await?;
+            assert_eq!(table_name, table.identifier().name());
+            assert_eq!(namespace, table.identifier().namespace().to_url_string());
+        }
+
+        {
+            let lake_house = Iceberg::try_from(
+                Builder::<PhantomData<Url>, PhantomData<Url>>::default()
+                    .location(Url::parse(location_uri)?)
+                    .catalog(Url::parse(catalog_uri)?)
+                    .namespace(Some(namespace.clone())),
+            )?;
+
+            let table = lake_house.load_or_create_table(&table_name, schema).await?;
+            assert_eq!(table_name, table.identifier().name());
+            assert_eq!(namespace, table.identifier().namespace().to_url_string());
+        }
+
         Ok(())
     }
 }
