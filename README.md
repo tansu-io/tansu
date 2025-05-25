@@ -10,8 +10,9 @@ Features:
 - Apache Kafka API compatible
 - Available with [PostgreSQL](https://www.postgresql.org), [S3](https://en.wikipedia.org/wiki/Amazon_S3) or memory storage engines
 - Topics [validated](docs/schema-registry.md) by [JSON Schema][json-schema-org], [Apache Avro](https://avro.apache.org)
-  or [Protocol buffers](protocol-buffers) can be written as 🆕 [Apache Iceberg tables](https://iceberg.apache.org),
-  see [examples using pyiceberg](https://github.com/tansu-io/example-pyiceberg) or [examples using Apache Spark](https://github.com/tansu-io/example-spark)
+  or [Protocol buffers](protocol-buffers) can be written as 🆕 [Apache Iceberg](https://iceberg.apache.org) or 🆕 [Delta Lake](https://delta.io) tables
+
+See [examples using pyiceberg](https://github.com/tansu-io/example-pyiceberg), [examples using Apache Spark](https://github.com/tansu-io/example-spark) or 🆕 [examples using Delta Lake](https://github.com/tansu-io/example-delta-lake).
 
 For data durability:
 
