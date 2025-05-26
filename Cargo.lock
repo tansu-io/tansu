@@ -996,7 +996,7 @@ dependencies = [
  "bitflags",
  "cexpr",
  "clang-sys",
- "itertools 0.12.1",
+ "itertools 0.10.5",
  "lazy_static",
  "lazycell",
  "log",
@@ -1724,7 +1724,7 @@ dependencies = [
  "futures",
  "itertools 0.14.0",
  "log",
- "object_store 0.12.1",
+ "object_store",
  "parking_lot",
  "parquet",
  "rand 0.8.5",
@@ -1759,7 +1759,7 @@ dependencies = [
  "futures",
  "itertools 0.14.0",
  "log",
- "object_store 0.12.1",
+ "object_store",
  "parking_lot",
  "tokio",
 ]
@@ -1783,7 +1783,7 @@ dependencies = [
  "datafusion-session",
  "futures",
  "log",
- "object_store 0.12.1",
+ "object_store",
  "tokio",
 ]
 
@@ -1802,7 +1802,7 @@ dependencies = [
  "indexmap 2.9.0",
  "libc",
  "log",
- "object_store 0.12.1",
+ "object_store",
  "parquet",
  "paste",
  "recursive",
@@ -1847,7 +1847,7 @@ dependencies = [
  "glob",
  "itertools 0.14.0",
  "log",
- "object_store 0.12.1",
+ "object_store",
  "parquet",
  "rand 0.8.5",
  "tempfile",
@@ -1878,7 +1878,7 @@ dependencies = [
  "datafusion-physical-plan",
  "datafusion-session",
  "futures",
- "object_store 0.12.1",
+ "object_store",
  "regex",
  "tokio",
 ]
@@ -1903,7 +1903,7 @@ dependencies = [
  "datafusion-physical-plan",
  "datafusion-session",
  "futures",
- "object_store 0.12.1",
+ "object_store",
  "serde_json",
  "tokio",
 ]
@@ -1932,7 +1932,7 @@ dependencies = [
  "futures",
  "itertools 0.14.0",
  "log",
- "object_store 0.12.1",
+ "object_store",
  "parking_lot",
  "parquet",
  "rand 0.8.5",
@@ -1957,7 +1957,7 @@ dependencies = [
  "datafusion-expr",
  "futures",
  "log",
- "object_store 0.12.1",
+ "object_store",
  "parking_lot",
  "rand 0.8.5",
  "tempfile",
@@ -2252,7 +2252,7 @@ dependencies = [
  "datafusion-common",
  "datafusion-expr",
  "datafusion-proto-common",
- "object_store 0.12.1",
+ "object_store",
  "prost",
 ]
 
@@ -2286,7 +2286,7 @@ dependencies = [
  "futures",
  "itertools 0.14.0",
  "log",
- "object_store 0.12.1",
+ "object_store",
  "parking_lot",
  "tokio",
 ]
@@ -2355,7 +2355,7 @@ dependencies = [
  "futures",
  "indexmap 2.9.0",
  "itertools 0.14.0",
- "object_store 0.12.1",
+ "object_store",
  "parquet",
  "reqwest",
  "roaring",
@@ -2410,7 +2410,7 @@ dependencies = [
  "deltalake-core",
  "futures",
  "maplit",
- "object_store 0.12.1",
+ "object_store",
  "regex",
  "thiserror 2.0.12",
  "tokio",
@@ -2461,7 +2461,7 @@ dependencies = [
  "num-bigint",
  "num-traits",
  "num_cpus",
- "object_store 0.12.1",
+ "object_store",
  "parking_lot",
  "parquet",
  "percent-encoding",
@@ -3497,15 +3497,6 @@ dependencies = [
 
 [[package]]
 name = "itertools"
-version = "0.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba291022dbbd398a455acf126c1e341954079855bc60dfdda641363bd6922569"
-dependencies = [
- "either",
-]
-
-[[package]]
-name = "itertools"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "413ee7dfc52ee1a4949ceeb7dbc8a33f2d6c088194d9f922fb8318faf1f01186"
@@ -4021,36 +4012,6 @@ dependencies = [
 
 [[package]]
 name = "object_store"
-version = "0.11.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3cfccb68961a56facde1163f9319e0d15743352344e7808a11795fb99698dcaf"
-dependencies = [
- "async-trait",
- "base64 0.22.1",
- "bytes",
- "chrono",
- "futures",
- "humantime",
- "hyper 1.6.0",
- "itertools 0.13.0",
- "md-5",
- "parking_lot",
- "percent-encoding",
- "quick-xml",
- "rand 0.8.5",
- "reqwest",
- "ring",
- "serde",
- "serde_json",
- "snafu",
- "tokio",
- "tracing",
- "url",
- "walkdir",
-]
-
-[[package]]
-name = "object_store"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d94ac16b433c0ccf75326388c893d2835ab7457ea35ab8ba5d745c053ef5fa16"
@@ -4392,7 +4353,7 @@ dependencies = [
  "lz4_flex",
  "num",
  "num-bigint",
- "object_store 0.12.1",
+ "object_store",
  "paste",
  "seq-macro",
  "simdutf8",
@@ -5641,27 +5602,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8917285742e9f3e1683f0a9c4e6b57960b7314d0b08d30d1ecd426713ee2eee9"
 
 [[package]]
-name = "snafu"
-version = "0.8.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "223891c85e2a29c3fe8fb900c1fae5e69c2e42415e3177752e8718475efa5019"
-dependencies = [
- "snafu-derive",
-]
-
-[[package]]
-name = "snafu-derive"
-version = "0.8.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "03c3c6b7927ffe7ecaa769ee0e3994da3b8cafc8f444578982c83ecb161af917"
-dependencies = [
- "heck",
- "proc-macro2",
- "quote",
- "syn 2.0.101",
-]
-
-[[package]]
 name = "snap"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5961,7 +5901,7 @@ dependencies = [
  "iceberg-datafusion",
  "jsonschema",
  "num-bigint",
- "object_store 0.11.2",
+ "object_store",
  "opentelemetry 0.28.0",
  "opentelemetry-semantic-conventions 0.28.0",
  "ordered-float 4.6.0",
@@ -5996,7 +5936,7 @@ dependencies = [
  "hyper 1.6.0",
  "hyper-util",
  "jsonschema",
- "object_store 0.11.2",
+ "object_store",
  "opentelemetry 0.28.0",
  "opentelemetry-jaeger",
  "opentelemetry-otlp",
@@ -6036,7 +5976,7 @@ dependencies = [
  "futures-core",
  "futures-util",
  "glob",
- "object_store 0.11.2",
+ "object_store",
  "opentelemetry 0.28.0",
  "opentelemetry-semantic-conventions 0.28.0",
  "protobuf 3.7.2",
