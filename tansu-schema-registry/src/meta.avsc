@@ -3,6 +3,7 @@
   "name": "metadata",
   "fields": [
     { "name": "partition", "type": "int" },
-    { "name": "timestamp", "type": "long", "logicalType": "timestamp-micros" }
+    { "name": "timestamp", "type": "long", "logicalType": "timestamp-micros" },
+    { "name": "date", "type": "int", "logicalType": "date" }
   ]
 }
