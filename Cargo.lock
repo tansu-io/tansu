@@ -1428,15 +1428,6 @@ checksum = "7c74b8349d32d297c9134b8c88677813a227df8f779daa29bfc29c183fe3dca6"
 
 [[package]]
 name = "convert_case"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec182b0ca2f35d8fc196cf3404988fd8b8c739a4d270ff118a398feb0cbec1ca"
-dependencies = [
- "unicode-segmentation",
-]
-
-[[package]]
-name = "convert_case"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "baaaa0ecca5b51987b9423ccdc971514dd8b0bb7b4060b983d3664dad3f1f89f"
@@ -2488,7 +2479,7 @@ version = "0.26.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6bdd39efa077173455fa69c17437141d14ec6273a371d7d3d25ea7f30f61d4c9"
 dependencies = [
- "convert_case 0.8.0",
+ "convert_case",
  "itertools 0.14.0",
  "proc-macro2",
  "quote",
@@ -5890,7 +5881,7 @@ dependencies = [
 name = "tansu-kafka-model"
 version = "0.1.0"
 dependencies = [
- "convert_case 0.6.0",
+ "convert_case",
  "lazy_static",
  "proc-macro2",
  "quote",
@@ -5906,7 +5897,7 @@ name = "tansu-kafka-sans-io"
 version = "0.1.0"
 dependencies = [
  "bytes",
- "convert_case 0.6.0",
+ "convert_case",
  "crc",
  "criterion",
  "flate2",
