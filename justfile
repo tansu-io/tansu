@@ -320,3 +320,12 @@ taxi-duckdb-parquet: (duckdb-parquet "taxi")
 
 # taxi duckdb delta lake
 taxi-duckdb-delta: (duckdb "\"select * from delta_scan('s3://lake/tansu.taxi');\"")
+
+# create employee topic with etc/schema/employee.proto
+employee-topic-create: (topic-create "employee")
+
+# produce etc/data/persons.json with etc/schema/person.json
+employee-produce: (cat-produce "employee" "etc/data/employees.json")
+
+# employee duckdb delta lake
+employee-duckdb-delta: (duckdb "\"select * from delta_scan('s3://lake/tansu.employee');\"")
