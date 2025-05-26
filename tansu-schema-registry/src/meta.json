@@ -1,0 +1,9 @@
+{
+  "title": "meta",
+  "type": "object",
+
+  "properties": {
+    "partition": { "type": "integer" },
+    "timestamp": { "type": "string", "format": "date-time" }
+  }
+}
