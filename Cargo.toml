@@ -125,7 +125,7 @@ zstd = "0.13.2"
 
 
 [patch.crates-io]
-iceberg = { git = "https://github.com/apache/iceberg-rust.git", tag = "v0.5.0-rc.2" }
-iceberg-catalog-memory = { git = "https://github.com/apache/iceberg-rust.git", tag = "v0.5.0-rc.2" }
-iceberg-catalog-rest = { git = "https://github.com/apache/iceberg-rust.git", tag = "v0.5.0-rc.2" }
-iceberg-datafusion = { git = "https://github.com/apache/iceberg-rust.git", tag = "v0.5.0-rc.2" }
+iceberg = { git = "https://github.com/apache/iceberg-rust.git", tag = "v0.5.0" }
+iceberg-catalog-memory = { git = "https://github.com/apache/iceberg-rust.git", tag = "v0.5.0" }
+iceberg-catalog-rest = { git = "https://github.com/apache/iceberg-rust.git", tag = "v0.5.0" }
+iceberg-datafusion = { git = "https://github.com/apache/iceberg-rust.git", tag = "v0.5.0" }
