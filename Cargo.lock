@@ -3229,7 +3229,7 @@ dependencies = [
 [[package]]
 name = "iceberg"
 version = "0.5.0"
-source = "git+https://github.com/apache/iceberg-rust.git?tag=v0.5.0-rc.2#05969b38451ef13026b71f75693efc72219e7cad"
+source = "git+https://github.com/apache/iceberg-rust.git?tag=v0.5.0#05969b38451ef13026b71f75693efc72219e7cad"
 dependencies = [
  "anyhow",
  "apache-avro",
@@ -3279,7 +3279,7 @@ dependencies = [
 [[package]]
 name = "iceberg-catalog-memory"
 version = "0.5.0"
-source = "git+https://github.com/apache/iceberg-rust.git?tag=v0.5.0-rc.2#05969b38451ef13026b71f75693efc72219e7cad"
+source = "git+https://github.com/apache/iceberg-rust.git?tag=v0.5.0#05969b38451ef13026b71f75693efc72219e7cad"
 dependencies = [
  "async-trait",
  "futures",
@@ -3292,7 +3292,7 @@ dependencies = [
 [[package]]
 name = "iceberg-catalog-rest"
 version = "0.5.0"
-source = "git+https://github.com/apache/iceberg-rust.git?tag=v0.5.0-rc.2#05969b38451ef13026b71f75693efc72219e7cad"
+source = "git+https://github.com/apache/iceberg-rust.git?tag=v0.5.0#05969b38451ef13026b71f75693efc72219e7cad"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3312,7 +3312,7 @@ dependencies = [
 [[package]]
 name = "iceberg-datafusion"
 version = "0.5.0"
-source = "git+https://github.com/apache/iceberg-rust.git?tag=v0.5.0-rc.2#05969b38451ef13026b71f75693efc72219e7cad"
+source = "git+https://github.com/apache/iceberg-rust.git?tag=v0.5.0#05969b38451ef13026b71f75693efc72219e7cad"
 dependencies = [
  "anyhow",
  "async-trait",
