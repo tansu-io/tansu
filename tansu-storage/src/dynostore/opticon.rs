@@ -259,6 +259,7 @@ where
                 mode: PutMode::from(&dv),
                 tags: self.tags.clone(),
                 attributes: self.attributes.clone(),
+                ..Default::default()
             };
 
             match object_store
