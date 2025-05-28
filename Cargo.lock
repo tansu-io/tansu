@@ -1456,9 +1456,9 @@ dependencies = [
 
 [[package]]
 name = "core-foundation"
-version = "0.10.0"
+version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b55271e5c8c478ad3f38ad24ef34923091e0548492a266d19b3c0b4d82574c63"
+checksum = "b2a6cd9ae233e7f62ba4e9353e81a88df7fc8a5987b8d445b4d90c879bd156f6"
 dependencies = [
  "core-foundation-sys",
  "libc",
@@ -3229,7 +3229,7 @@ dependencies = [
 [[package]]
 name = "iceberg"
 version = "0.5.0"
-source = "git+https://github.com/apache/iceberg-rust.git?tag=v0.5.0-rc.2#05969b38451ef13026b71f75693efc72219e7cad"
+source = "git+https://github.com/apache/iceberg-rust.git?tag=v0.5.0#05969b38451ef13026b71f75693efc72219e7cad"
 dependencies = [
  "anyhow",
  "apache-avro",
@@ -3279,7 +3279,7 @@ dependencies = [
 [[package]]
 name = "iceberg-catalog-memory"
 version = "0.5.0"
-source = "git+https://github.com/apache/iceberg-rust.git?tag=v0.5.0-rc.2#05969b38451ef13026b71f75693efc72219e7cad"
+source = "git+https://github.com/apache/iceberg-rust.git?tag=v0.5.0#05969b38451ef13026b71f75693efc72219e7cad"
 dependencies = [
  "async-trait",
  "futures",
@@ -3292,7 +3292,7 @@ dependencies = [
 [[package]]
 name = "iceberg-catalog-rest"
 version = "0.5.0"
-source = "git+https://github.com/apache/iceberg-rust.git?tag=v0.5.0-rc.2#05969b38451ef13026b71f75693efc72219e7cad"
+source = "git+https://github.com/apache/iceberg-rust.git?tag=v0.5.0#05969b38451ef13026b71f75693efc72219e7cad"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3312,7 +3312,7 @@ dependencies = [
 [[package]]
 name = "iceberg-datafusion"
 version = "0.5.0"
-source = "git+https://github.com/apache/iceberg-rust.git?tag=v0.5.0-rc.2#05969b38451ef13026b71f75693efc72219e7cad"
+source = "git+https://github.com/apache/iceberg-rust.git?tag=v0.5.0#05969b38451ef13026b71f75693efc72219e7cad"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5406,7 +5406,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "271720403f46ca04f7ba6f55d438f8bd878d6b8ca0a1046e8228c4145bcbb316"
 dependencies = [
  "bitflags",
- "core-foundation 0.10.0",
+ "core-foundation 0.10.1",
  "core-foundation-sys",
  "libc",
  "security-framework-sys",
@@ -5609,9 +5609,9 @@ checksum = "1b6b67fb9a61334225b5b790716f609cd58395f895b3fe8b328786812a40bc3b"
 
 [[package]]
 name = "socket2"
-version = "0.5.9"
+version = "0.5.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4f5fd57c80058a56cf5c777ab8a126398ece8e442983605d280a44ce79d0edef"
+checksum = "e22376abed350d73dd1cd119b57ffccad95b4e585a7cda43e286245ce23c0678"
 dependencies = [
  "libc",
  "windows-sys 0.52.0",
@@ -7334,18 +7334,18 @@ dependencies = [
 
 [[package]]
 name = "zstd-safe"
-version = "7.2.4"
+version = "7.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8f49c4d5f0abb602a93fb8736af2a4f4dd9512e36f7f570d66e65ff867ed3b9d"
+checksum = "54a3ab4db68cea366acc5c897c7b4d4d1b8994a9cd6e6f841f8964566a419059"
 dependencies = [
  "zstd-sys",
 ]
 
 [[package]]
 name = "zstd-sys"
-version = "2.0.15+zstd.1.5.7"
+version = "2.0.13+zstd.1.5.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eb81183ddd97d0c74cedf1d50d85c8d08c1b8b68ee863bdee9e706eedba1a237"
+checksum = "38ff0f21cfee8f97d94cef41359e0c89aa6113028ab0291aa8ca0038995a95aa"
 dependencies = [
  "cc",
  "pkg-config",
