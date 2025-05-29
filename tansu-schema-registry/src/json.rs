@@ -13,7 +13,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::{any::type_name_of_val, collections::HashMap, sync::Arc};
+use std::{any::type_name_of_val, collections::BTreeMap, sync::Arc};
 
 use crate::{ARROW_LIST_FIELD_NAME, AsArrow, AsJsonValue, AsKafkaRecord, Error, Result, Validator};
 use arrow::{
@@ -25,8 +25,9 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use bytes::Bytes;
+use chrono::DateTime;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 use tansu_kafka_sans_io::{ErrorCode, record::inflated::Batch};
 use tracing::{debug, error, warn};
 
@@ -36,7 +37,24 @@ const NULLABLE: bool = true;
 pub struct Schema {
     key: Option<jsonschema::Validator>,
     value: Option<jsonschema::Validator>,
-    ids: HashMap<String, i32>,
+    ids: BTreeMap<String, i32>,
+}
+
+#[derive(Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub(crate) enum MessageKind {
+    Key,
+    Meta,
+    Value,
+}
+
+impl AsRef<str> for MessageKind {
+    fn as_ref(&self) -> &str {
+        match self {
+            MessageKind::Key => "key",
+            MessageKind::Meta => "meta",
+            MessageKind::Value => "value",
+        }
+    }
 }
 
 fn validate(validator: Option<&jsonschema::Validator>, encoded: Option<Bytes>) -> Result<()> {
@@ -67,28 +85,36 @@ impl TryFrom<Bytes> for Schema {
     type Error = Error;
 
     fn try_from(encoded: Bytes) -> Result<Self, Self::Error> {
-        serde_json::from_slice::<Value>(&encoded[..])
-            .map_err(Into::into)
-            .map(|schema| {
-                schema.get("properties").map_or(
-                    Self {
-                        key: None,
-                        value: None,
-                        ids: HashMap::new(),
-                    },
-                    |properties| Self {
-                        key: properties
-                            .get("key")
-                            .and_then(|schema| jsonschema::validator_for(schema).ok()),
+        const PROPERTIES: &str = "properties";
 
-                        value: properties
-                            .get("value")
-                            .and_then(|schema| jsonschema::validator_for(schema).ok()),
+        let mut schema =
+            serde_json::from_slice::<Value>(&encoded[..]).inspect(|schema| debug!(%schema))?;
 
-                        ids: field_ids(&schema),
-                    },
-                )
-            })
+        let key = schema
+            .get(PROPERTIES)
+            .and_then(|properties| properties.get(MessageKind::Key.as_ref()))
+            .and_then(|key| jsonschema::validator_for(key).ok());
+
+        let value = schema
+            .get(PROPERTIES)
+            .and_then(|properties| properties.get(MessageKind::Value.as_ref()))
+            .and_then(|value| jsonschema::validator_for(value).ok());
+
+        let meta =
+            serde_json::from_slice::<Value>(&Bytes::from_static(include_bytes!("meta.json")))
+                .inspect(|meta| debug!(%meta))?;
+
+        schema
+            .get_mut(PROPERTIES)
+            .and_then(|properties| properties.as_object_mut())
+            .inspect(|properties| debug!(?properties))
+            .and_then(|object| object.insert(MessageKind::Meta.as_ref().to_owned(), meta));
+
+        debug!(%schema);
+        let ids = field_ids(&schema);
+        debug!(?ids);
+
+        Ok(Self { key, value, ids })
     }
 }
 
@@ -114,6 +140,7 @@ fn sort_dedup(mut input: Vec<DataType>) -> Vec<DataType> {
 }
 
 struct Record {
+    meta: Value,
     key: Option<Value>,
     value: Option<Value>,
 }
@@ -135,7 +162,7 @@ impl Schema {
         Field::new(name.to_owned(), data_type, NULLABLE).with_metadata(
             self.ids
                 .get(path.as_str())
-                .inspect(|field_id| debug!(?path, name, field_id))
+                .inspect(|field_id| debug!(?path, field_id))
                 .map(|field_id| (PARQUET_FIELD_ID_META_KEY.to_string(), field_id.to_string()))
                 .into_iter()
                 .collect(),
@@ -206,6 +233,8 @@ impl Schema {
     }
 
     fn data_type_builder(&self, path: &[&str], data_type: &DataType) -> Box<dyn ArrayBuilder> {
+        debug!(path = path.join("."), ?data_type);
+
         match data_type {
             DataType::Null => Box::new(NullBuilder::new()),
             DataType::Boolean => Box::new(BooleanBuilder::new()),
@@ -214,21 +243,34 @@ impl Schema {
             DataType::Float64 => Box::new(Float64Builder::new()),
             DataType::Utf8 => Box::new(StringBuilder::new()),
 
-            DataType::List(element) => Box::new(
-                ListBuilder::new(self.data_type_builder(
-                    &append_path(path, ARROW_LIST_FIELD_NAME)[..],
-                    element.data_type(),
-                ))
-                .with_field(self.new_list_field(path, element.data_type().to_owned())),
-            ) as Box<dyn ArrayBuilder>,
+            DataType::List(element) => {
+                debug!(?element);
 
-            DataType::Struct(fields) => Box::new(StructBuilder::new(
-                fields.to_owned(),
-                fields
-                    .iter()
-                    .map(|field| self.data_type_builder(path, field.data_type()))
-                    .collect::<Vec<_>>(),
-            )),
+                Box::new(
+                    ListBuilder::new(self.data_type_builder(
+                        &append_path(path, ARROW_LIST_FIELD_NAME)[..],
+                        element.data_type(),
+                    ))
+                    .with_field(self.new_list_field(path, element.data_type().to_owned())),
+                ) as Box<dyn ArrayBuilder>
+            }
+
+            DataType::Struct(fields) => {
+                debug!(?fields);
+
+                Box::new(StructBuilder::new(
+                    fields.to_owned(),
+                    fields
+                        .iter()
+                        .map(|field| {
+                            self.data_type_builder(
+                                &append_path(path, field.name())[..],
+                                field.data_type(),
+                            )
+                        })
+                        .collect::<Vec<_>>(),
+                ))
+            }
 
             _ => unimplemented!("unexpected: {}", type_name_of_val(data_type)),
         }
@@ -493,11 +535,25 @@ fn append(field: &Field, value: Value, builder: &mut dyn ArrayBuilder) -> Result
 }
 
 impl AsArrow for Schema {
-    fn as_arrow(&self, _partition: i32, batch: &Batch) -> Result<RecordBatch> {
+    fn as_arrow(&self, partition: i32, batch: &Batch) -> Result<RecordBatch> {
         debug!(?batch);
 
         let mut builders = vec![];
         let mut fields = vec![];
+
+        {
+            let meta = DateTime::from_timestamp_millis(batch.base_timestamp)
+                .as_ref()
+                .map(DateTime::to_rfc3339)
+                .map(|timestamp| json!({"partition": partition, "timestamp": timestamp}))
+                .unwrap_or(json!({"partition": partition}));
+
+            let data_type = self.common_data_type(&[MessageKind::Meta.as_ref()], &[meta][..])?;
+
+            debug!(?data_type);
+            builders.push(self.data_type_builder(&[MessageKind::Meta.as_ref()], &data_type));
+            fields.push(self.new_field(&[], MessageKind::Meta.as_ref(), data_type))
+        }
 
         if let Some(data_type) = batch
             .records
@@ -515,13 +571,14 @@ impl AsArrow for Schema {
                 if values.is_empty() {
                     Ok(None)
                 } else {
-                    self.common_data_type(&["key"], values.as_slice()).map(Some)
+                    self.common_data_type(&[MessageKind::Key.as_ref()], values.as_slice())
+                        .map(Some)
                 }
             })
             .inspect(|data_type| debug!(?data_type))?
         {
-            builders.push(self.data_type_builder(&["key"], &data_type));
-            fields.push(self.new_field(&[], "key", data_type))
+            builders.push(self.data_type_builder(&[MessageKind::Key.as_ref()], &data_type));
+            fields.push(self.new_field(&[], MessageKind::Key.as_ref(), data_type))
         };
 
         if let Some(data_type) = batch
@@ -540,14 +597,14 @@ impl AsArrow for Schema {
                 if values.is_empty() {
                     Ok(None)
                 } else {
-                    self.common_data_type(&["value"], values.as_slice())
+                    self.common_data_type(&[MessageKind::Value.as_ref()], values.as_slice())
                         .map(Some)
                 }
             })
             .inspect(|data_type| debug!(?data_type))?
         {
-            builders.push(self.data_type_builder(&["value"], &data_type));
-            fields.push(self.new_field(&[], "value", data_type))
+            builders.push(self.data_type_builder(&[MessageKind::Value.as_ref()], &data_type));
+            fields.push(self.new_field(&[], MessageKind::Value.as_ref(), data_type))
         };
 
         for kv in batch
@@ -561,31 +618,45 @@ impl AsArrow for Schema {
                     .transpose()
                     .map_err(Into::into)
                     .and_then(|key| {
+                        let meta = DateTime::from_timestamp_millis(
+                            batch.base_timestamp + record.timestamp_delta,
+                        )
+                        .as_ref()
+                        .map(DateTime::to_rfc3339)
+                        .map(|timestamp| json!({"partition": partition, "timestamp": timestamp}))
+                        .unwrap_or(json!({"partition": partition}));
+
                         record
                             .value
                             .as_ref()
                             .map(|encoded| serde_json::from_slice::<Value>(&encoded[..]))
                             .transpose()
                             .map_err(Into::into)
-                            .map(|value| Record { key, value })
+                            .map(|value| Record { meta, key, value })
                     })
             })
             .collect::<Result<Vec<_>>>()?
         {
             let mut i = fields.iter().zip(builders.iter_mut());
 
-            if let Some(value) = kv.key {
+            let (field, builder) = i.next().unwrap();
+            debug!(meta = %kv.meta, ?field);
+            append(field, kv.meta, builder)?;
+
+            if let Some(key) = kv.key {
                 let (field, builder) = i.next().unwrap();
-                debug!(?value, ?field);
-                append(field, value, builder)?;
+                debug!(%key, ?field);
+                append(field, key, builder)?;
             }
 
             if let Some(value) = kv.value {
                 let (field, builder) = i.next().unwrap();
-                debug!(?value, ?field);
+                debug!(%value, ?field);
                 append(field, value, builder)?;
             }
         }
+
+        debug!(len = ?builders.iter().map(|builder|builder.len()).collect::<Vec<_>>());
 
         RecordBatch::try_new(
             Arc::new(ArrowSchema::new(Fields::from(fields))),
@@ -602,7 +673,7 @@ impl AsKafkaRecord for Schema {
     fn as_kafka_record(&self, value: &Value) -> Result<tansu_kafka_sans_io::record::Builder> {
         let mut builder = tansu_kafka_sans_io::record::Record::builder();
 
-        if let Some(value) = value.get("key") {
+        if let Some(value) = value.get(MessageKind::Key.as_ref()) {
             debug!(?value);
 
             if self.key.is_some() {
@@ -610,7 +681,7 @@ impl AsKafkaRecord for Schema {
             }
         }
 
-        if let Some(value) = value.get("value") {
+        if let Some(value) = value.get(MessageKind::Value.as_ref()) {
             debug!(?value);
 
             if self.value.is_some() {
@@ -630,15 +701,17 @@ impl AsJsonValue for Schema {
     }
 }
 
-fn field_ids(schema: &Value) -> HashMap<String, i32> {
-    fn field_ids_with_path(path: &[&str], schema: &Value, id: &mut i32) -> HashMap<String, i32> {
-        debug!(?path, ?schema, id);
+fn field_ids(schema: &Value) -> BTreeMap<String, i32> {
+    debug!(%schema);
 
-        let mut ids = HashMap::new();
+    fn field_ids_with_path(path: &[&str], schema: &Value, id: &mut i32) -> BTreeMap<String, i32> {
+        debug!(?path, %schema, id);
 
-        if let Some(kv) = schema.as_object() {
-            if let Some("object") = kv.get("type").and_then(|r#type| r#type.as_str()) {
-                if let Some(properties) = kv
+        let mut ids = BTreeMap::new();
+
+        match schema.get("type").and_then(|r#type| r#type.as_str()) {
+            Some("object") => {
+                if let Some(properties) = schema
                     .get("properties")
                     .and_then(|properties| properties.as_object())
                 {
@@ -649,36 +722,59 @@ fn field_ids(schema: &Value) -> HashMap<String, i32> {
                         ids.insert(path.join("."), *id);
                         *id += 1;
 
-                        match v.get("type").and_then(|r#type| r#type.as_str()) {
-                            Some("object") => {
-                                ids.extend(field_ids_with_path(&path[..], v, id).into_iter())
-                            }
-
-                            Some("array") => {
-                                path.push(ARROW_LIST_FIELD_NAME);
-                                ids.insert(path.join("."), *id);
-                                *id += 1;
-
-                                if let Some(items) = v.get("items") {
-                                    debug!(?items);
-
-                                    ids.extend(
-                                        field_ids_with_path(&path[..], items, id).into_iter(),
-                                    )
-                                }
-                            }
-
-                            _ => (),
-                        }
+                        ids.extend(field_ids_with_path(&path[..], v, id))
                     }
                 }
             }
+
+            Some("array") => {
+                let mut path = Vec::from(path);
+                path.push(ARROW_LIST_FIELD_NAME);
+                ids.insert(path.join("."), *id);
+                *id += 1;
+
+                if let Some(items) = schema.get("items") {
+                    debug!(?items);
+
+                    ids.extend(field_ids_with_path(&path[..], items, id))
+                }
+            }
+
+            None | Some(_) => (),
         }
 
         ids
     }
 
-    field_ids_with_path(&[], schema, &mut 1)
+    let mut ids = BTreeMap::new();
+    let mut id = 1;
+    let kinds = [MessageKind::Meta, MessageKind::Key, MessageKind::Value];
+
+    for kind in kinds {
+        if schema
+            .get("properties")
+            .and_then(|schema| schema.get(kind.as_ref()))
+            .inspect(|schema| debug!(?kind, ?schema))
+            .is_some()
+        {
+            ids.insert(kind.as_ref().into(), id);
+            id += 1;
+        }
+    }
+
+    for kind in kinds {
+        if let Some(schema) = schema
+            .get("properties")
+            .and_then(|schema| schema.get(kind.as_ref()))
+            .inspect(|schema| debug!(?kind, ?schema))
+        {
+            ids.extend(field_ids_with_path(&[kind.as_ref()], schema, &mut id));
+        }
+    }
+
+    debug!(?ids);
+
+    ids
 }
 
 #[cfg(test)]
@@ -872,6 +968,7 @@ mod tests {
         let key = serde_json::to_vec(&json!(12320)).map(Bytes::from)?;
 
         let batch = Batch::builder()
+            .base_timestamp(1_234_567_890 * 1_000)
             .record(Record::builder().key(key.clone().into()))
             .build()?;
 
@@ -924,6 +1021,7 @@ mod tests {
         .map(Bytes::from)?;
 
         let batch = Batch::builder()
+            .base_timestamp(1_234_567_890 * 1_000)
             .record(Record::builder().value(value.clone().into()))
             .build()?;
 
@@ -978,6 +1076,7 @@ mod tests {
         .map(Bytes::from)?;
 
         let batch = Batch::builder()
+            .base_timestamp(1_234_567_890 * 1_000)
             .record(
                 Record::builder()
                     .key(key.clone().into())
@@ -1000,6 +1099,7 @@ mod tests {
         let value = Bytes::from_static(b"Consectetur adipiscing elit");
 
         let batch = Batch::builder()
+            .base_timestamp(1_234_567_890 * 1_000)
             .record(
                 Record::builder()
                     .key(key.clone().into())
@@ -1030,6 +1130,7 @@ mod tests {
         let value = Bytes::from_static(b"Consectetur adipiscing elit");
 
         let batch = Batch::builder()
+            .base_timestamp(1_234_567_890 * 1_000)
             .record(
                 Record::builder()
                     .key(key.clone().into())
@@ -1068,6 +1169,7 @@ mod tests {
         let value = Bytes::from_static(b"Consectetur adipiscing elit");
 
         let batch = Batch::builder()
+            .base_timestamp(1_234_567_890 * 1_000)
             .record(
                 Record::builder()
                     .key(key.clone().into())
@@ -1104,6 +1206,7 @@ mod tests {
         let key = Bytes::from_static(b"Lorem ipsum dolor sit amet");
 
         let batch = Batch::builder()
+            .base_timestamp(1_234_567_890 * 1_000)
             .record(Record::builder().key(key.clone().into()))
             .build()?;
 
@@ -1155,6 +1258,7 @@ mod tests {
         .map(Bytes::from)?;
 
         let batch = Batch::builder()
+            .base_timestamp(1_234_567_890 * 1_000)
             .record(
                 Record::builder()
                     .key(key.clone().into())
@@ -1200,6 +1304,7 @@ mod tests {
         let value = Bytes::from_static(b"Consectetur adipiscing elit");
 
         let batch = Batch::builder()
+            .base_timestamp(1_234_567_890 * 1_000)
             .record(Record::builder().value(value.clone().into()))
             .build()?;
 
@@ -1446,7 +1551,7 @@ mod tests {
         ];
 
         let batch = {
-            let mut batch = Batch::builder();
+            let mut batch = Batch::builder().base_timestamp(1_234_567_890 * 1_000);
 
             for (ref key, ref value) in kv {
                 batch = batch.record(
@@ -1473,12 +1578,12 @@ mod tests {
         let pretty_results = pretty_format_batches(&results)?.to_string();
 
         let expected = vec![
-            "+-------+-----------------------------------------+",
-            "| key   | value                                   |",
-            "+-------+-----------------------------------------+",
-            "| 12321 | {email: alice@example.com, name: alice} |",
-            "| 32123 | {email: bob@example.com, name: bob}     |",
-            "+-------+-----------------------------------------+",
+            "+------------------------------------------------------+-------+-----------------------------------------+",
+            "| meta                                                 | key   | value                                   |",
+            "+------------------------------------------------------+-------+-----------------------------------------+",
+            "| {partition: 0, timestamp: 2009-02-13T23:31:30+00:00} | 12321 | {email: alice@example.com, name: alice} |",
+            "| {partition: 0, timestamp: 2009-02-13T23:31:30+00:00} | 32123 | {email: bob@example.com, name: bob}     |",
+            "+------------------------------------------------------+-------+-----------------------------------------+",
         ];
 
         assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
@@ -1513,7 +1618,7 @@ mod tests {
         };
 
         let batch = {
-            let mut batch = Batch::builder();
+            let mut batch = Batch::builder().base_timestamp(1_234_567_890 * 1_000);
 
             for (ref key, ref value) in kv {
                 debug!(?key, ?value);
@@ -1542,26 +1647,26 @@ mod tests {
         let pretty_results = pretty_format_batches(&results)?.to_string();
 
         let expected = vec![
-            "+-------------+---------------------------------------------------------------------------------------------------------------+",
-            "| key         | value                                                                                                         |",
-            "+-------------+---------------------------------------------------------------------------------------------------------------+",
-            "| 123-45-6789 | {final: 49.0, first: Aloysius, grade: D-, last: Alfalfa, test1: 40.0, test2: 90.0, test3: 100.0, test4: 83.0} |",
-            "| 123-12-1234 | {final: 48.0, first: University, grade: D+, last: Alfred, test1: 41.0, test2: 97.0, test3: 96.0, test4: 97.0} |",
-            "| 567-89-0123 | {final: 44.0, first: Gramma, grade: C, last: Gerty, test1: 41.0, test2: 80.0, test3: 60.0, test4: 40.0}       |",
-            "| 087-65-4321 | {final: 47.0, first: Electric, grade: B-, last: Android, test1: 42.0, test2: 23.0, test3: 36.0, test4: 45.0}  |",
-            "| 456-78-9012 | {final: 45.0, first: Fred, grade: A-, last: Bumpkin, test1: 43.0, test2: 78.0, test3: 88.0, test4: 77.0}      |",
-            "| 234-56-7890 | {final: 46.0, first: Betty, grade: C-, last: Rubble, test1: 44.0, test2: 90.0, test3: 80.0, test4: 90.0}      |",
-            "| 345-67-8901 | {final: 43.0, first: Cecil, grade: F, last: Noshow, test1: 45.0, test2: 11.0, test3: -1.0, test4: 4.0}        |",
-            "| 632-79-9939 | {final: 50.0, first: Bif, grade: B+, last: Buff, test1: 46.0, test2: 20.0, test3: 30.0, test4: 40.0}          |",
-            "| 223-45-6789 | {final: 83.0, first: Andrew, grade: A, last: Airpump, test1: 49.0, test2: 1.0, test3: 90.0, test4: 100.0}     |",
-            "| 143-12-1234 | {final: 97.0, first: Jim, grade: A+, last: Backus, test1: 48.0, test2: 1.0, test3: 97.0, test4: 96.0}         |",
-            "| 565-89-0123 | {final: 40.0, first: Art, grade: D+, last: Carnivore, test1: 44.0, test2: 1.0, test3: 80.0, test4: 60.0}      |",
-            "| 087-75-4321 | {final: 45.0, first: Jim, grade: C+, last: Dandy, test1: 47.0, test2: 1.0, test3: 23.0, test4: 36.0}          |",
-            "| 456-71-9012 | {final: 77.0, first: Ima, grade: B-, last: Elephant, test1: 45.0, test2: 1.0, test3: 78.0, test4: 88.0}       |",
-            "| 234-56-2890 | {final: 90.0, first: Benny, grade: B-, last: Franklin, test1: 50.0, test2: 1.0, test3: 90.0, test4: 80.0}     |",
-            "| 345-67-3901 | {final: 4.0, first: Boy, grade: B, last: George, test1: 40.0, test2: 1.0, test3: 11.0, test4: -1.0}           |",
-            "| 632-79-9439 | {final: 40.0, first: Harvey, grade: C, last: Heffalump, test1: 30.0, test2: 1.0, test3: 20.0, test4: 30.0}    |",
-            "+-------------+---------------------------------------------------------------------------------------------------------------+",
+            "+------------------------------------------------------+-------------+---------------------------------------------------------------------------------------------------------------+",
+            "| meta                                                 | key         | value                                                                                                         |",
+            "+------------------------------------------------------+-------------+---------------------------------------------------------------------------------------------------------------+",
+            "| {partition: 0, timestamp: 2009-02-13T23:31:30+00:00} | 123-45-6789 | {final: 49.0, first: Aloysius, grade: D-, last: Alfalfa, test1: 40.0, test2: 90.0, test3: 100.0, test4: 83.0} |",
+            "| {partition: 0, timestamp: 2009-02-13T23:31:30+00:00} | 123-12-1234 | {final: 48.0, first: University, grade: D+, last: Alfred, test1: 41.0, test2: 97.0, test3: 96.0, test4: 97.0} |",
+            "| {partition: 0, timestamp: 2009-02-13T23:31:30+00:00} | 567-89-0123 | {final: 44.0, first: Gramma, grade: C, last: Gerty, test1: 41.0, test2: 80.0, test3: 60.0, test4: 40.0}       |",
+            "| {partition: 0, timestamp: 2009-02-13T23:31:30+00:00} | 087-65-4321 | {final: 47.0, first: Electric, grade: B-, last: Android, test1: 42.0, test2: 23.0, test3: 36.0, test4: 45.0}  |",
+            "| {partition: 0, timestamp: 2009-02-13T23:31:30+00:00} | 456-78-9012 | {final: 45.0, first: Fred, grade: A-, last: Bumpkin, test1: 43.0, test2: 78.0, test3: 88.0, test4: 77.0}      |",
+            "| {partition: 0, timestamp: 2009-02-13T23:31:30+00:00} | 234-56-7890 | {final: 46.0, first: Betty, grade: C-, last: Rubble, test1: 44.0, test2: 90.0, test3: 80.0, test4: 90.0}      |",
+            "| {partition: 0, timestamp: 2009-02-13T23:31:30+00:00} | 345-67-8901 | {final: 43.0, first: Cecil, grade: F, last: Noshow, test1: 45.0, test2: 11.0, test3: -1.0, test4: 4.0}        |",
+            "| {partition: 0, timestamp: 2009-02-13T23:31:30+00:00} | 632-79-9939 | {final: 50.0, first: Bif, grade: B+, last: Buff, test1: 46.0, test2: 20.0, test3: 30.0, test4: 40.0}          |",
+            "| {partition: 0, timestamp: 2009-02-13T23:31:30+00:00} | 223-45-6789 | {final: 83.0, first: Andrew, grade: A, last: Airpump, test1: 49.0, test2: 1.0, test3: 90.0, test4: 100.0}     |",
+            "| {partition: 0, timestamp: 2009-02-13T23:31:30+00:00} | 143-12-1234 | {final: 97.0, first: Jim, grade: A+, last: Backus, test1: 48.0, test2: 1.0, test3: 97.0, test4: 96.0}         |",
+            "| {partition: 0, timestamp: 2009-02-13T23:31:30+00:00} | 565-89-0123 | {final: 40.0, first: Art, grade: D+, last: Carnivore, test1: 44.0, test2: 1.0, test3: 80.0, test4: 60.0}      |",
+            "| {partition: 0, timestamp: 2009-02-13T23:31:30+00:00} | 087-75-4321 | {final: 45.0, first: Jim, grade: C+, last: Dandy, test1: 47.0, test2: 1.0, test3: 23.0, test4: 36.0}          |",
+            "| {partition: 0, timestamp: 2009-02-13T23:31:30+00:00} | 456-71-9012 | {final: 77.0, first: Ima, grade: B-, last: Elephant, test1: 45.0, test2: 1.0, test3: 78.0, test4: 88.0}       |",
+            "| {partition: 0, timestamp: 2009-02-13T23:31:30+00:00} | 234-56-2890 | {final: 90.0, first: Benny, grade: B-, last: Franklin, test1: 50.0, test2: 1.0, test3: 90.0, test4: 80.0}     |",
+            "| {partition: 0, timestamp: 2009-02-13T23:31:30+00:00} | 345-67-3901 | {final: 4.0, first: Boy, grade: B, last: George, test1: 40.0, test2: 1.0, test3: 11.0, test4: -1.0}           |",
+            "| {partition: 0, timestamp: 2009-02-13T23:31:30+00:00} | 632-79-9439 | {final: 40.0, first: Harvey, grade: C, last: Heffalump, test1: 30.0, test2: 1.0, test3: 20.0, test4: 30.0}    |",
+            "+------------------------------------------------------+-------------+---------------------------------------------------------------------------------------------------------------+",
         ];
 
         assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
@@ -1590,7 +1695,7 @@ mod tests {
         let keys = [json!(12321), json!(23432), json!(34543)];
 
         let batch = {
-            let mut batch = Batch::builder();
+            let mut batch = Batch::builder().base_timestamp(1_234_567_890 * 1_000);
 
             for ref key in keys {
                 batch = batch.record(
@@ -1616,13 +1721,13 @@ mod tests {
         let pretty_results = pretty_format_batches(&results)?.to_string();
 
         let expected = vec![
-            "+-------+",
-            "| key   |",
-            "+-------+",
-            "| 12321 |",
-            "| 23432 |",
-            "| 34543 |",
-            "+-------+",
+            "+------------------------------------------------------+-------+",
+            "| meta                                                 | key   |",
+            "+------------------------------------------------------+-------+",
+            "| {partition: 0, timestamp: 2009-02-13T23:31:30+00:00} | 12321 |",
+            "| {partition: 0, timestamp: 2009-02-13T23:31:30+00:00} | 23432 |",
+            "| {partition: 0, timestamp: 2009-02-13T23:31:30+00:00} | 34543 |",
+            "+------------------------------------------------------+-------+",
         ];
 
         assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
@@ -1657,7 +1762,7 @@ mod tests {
         ];
 
         let batch = {
-            let mut batch = Batch::builder();
+            let mut batch = Batch::builder().base_timestamp(1_234_567_890 * 1_000);
 
             for (ref key, ref value) in kv {
                 batch = batch.record(
@@ -1684,12 +1789,12 @@ mod tests {
         let pretty_results = pretty_format_batches(&results)?.to_string();
 
         let expected = vec![
-            "+-------+-------------------+",
-            "| key   | value             |",
-            "+-------+-------------------+",
-            "| 12321 | alice@example.com |",
-            "| 32123 | bob@example.com   |",
-            "+-------+-------------------+",
+            "+------------------------------------------------------+-------+-------------------+",
+            "| meta                                                 | key   | value             |",
+            "+------------------------------------------------------+-------+-------------------+",
+            "| {partition: 0, timestamp: 2009-02-13T23:31:30+00:00} | 12321 | alice@example.com |",
+            "| {partition: 0, timestamp: 2009-02-13T23:31:30+00:00} | 32123 | bob@example.com   |",
+            "+------------------------------------------------------+-------+-------------------+",
         ];
 
         assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
@@ -1727,7 +1832,7 @@ mod tests {
         ];
 
         let batch = {
-            let mut batch = Batch::builder();
+            let mut batch = Batch::builder().base_timestamp(1_234_567_890 * 1_000);
 
             for (ref key, ref value) in kv {
                 batch = batch.record(
@@ -1754,12 +1859,12 @@ mod tests {
         let pretty_results = pretty_format_batches(&results)?.to_string();
 
         let expected = vec![
-            "+-------+-----------+",
-            "| key   | value     |",
-            "+-------+-----------+",
-            "| 12321 | [a, b, c] |",
-            "| 32123 | [p, q, r] |",
-            "+-------+-----------+",
+            "+------------------------------------------------------+-------+-----------+",
+            "| meta                                                 | key   | value     |",
+            "+------------------------------------------------------+-------+-----------+",
+            "| {partition: 0, timestamp: 2009-02-13T23:31:30+00:00} | 12321 | [a, b, c] |",
+            "| {partition: 0, timestamp: 2009-02-13T23:31:30+00:00} | 32123 | [p, q, r] |",
+            "+------------------------------------------------------+-------+-----------+",
         ];
 
         assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
@@ -1814,7 +1919,7 @@ mod tests {
         ];
 
         let batch = {
-            let mut batch = Batch::builder();
+            let mut batch = Batch::builder().base_timestamp(1_234_567_890 * 1_000);
 
             for (ref key, ref value) in kv {
                 batch = batch.record(
@@ -1896,7 +2001,7 @@ mod tests {
         ];
 
         let batch = {
-            let mut batch = Batch::builder();
+            let mut batch = Batch::builder().base_timestamp(1_234_567_890 * 1_000);
 
             for (ref key, ref value) in kv {
                 batch = batch.record(

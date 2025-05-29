@@ -392,7 +392,7 @@ where
     fn list(
         &self,
         prefix: Option<&Path>,
-    ) -> BoxStream<'_, Result<ObjectMeta, object_store::Error>> {
+    ) -> BoxStream<'static, Result<ObjectMeta, object_store::Error>> {
         debug!(?prefix);
         REQUESTS.add(1, &[KeyValue::new("method", "list")]);
         self.object_store.list(prefix)
@@ -556,7 +556,7 @@ mod tests {
         fn list(
             &self,
             prefix: Option<&Path>,
-        ) -> BoxStream<'_, Result<ObjectMeta, object_store::Error>> {
+        ) -> BoxStream<'static, Result<ObjectMeta, object_store::Error>> {
             self.object_store.list(prefix)
         }
 
