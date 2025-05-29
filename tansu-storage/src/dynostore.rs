@@ -32,7 +32,7 @@ use metadata::Cache;
 use object_store::{
     Attribute, AttributeValue, Attributes, DynObjectStore, GetOptions, GetResult, ListResult,
     MultipartUpload, ObjectMeta, ObjectStore, PutMode, PutMultipartOpts, PutOptions, PutPayload,
-    PutResult, TagSet, UpdateVersion, path::Path,
+    PutResult, UpdateVersion, path::Path,
 };
 use opentelemetry::{
     KeyValue,
@@ -455,8 +455,8 @@ impl DynoStore {
 
         let options = PutOptions {
             mode: update_version.map_or(PutMode::Create, PutMode::Update),
-            tags: TagSet::default(),
             attributes,
+            ..Default::default()
         };
 
         let payload = serde_json::to_vec(&value)
@@ -967,8 +967,8 @@ impl Storage for DynoStore {
                     payload,
                     PutOptions {
                         mode: PutMode::Create,
-                        tags: TagSet::default(),
                         attributes: Attributes::new(),
+                        ..Default::default()
                     },
                 )
                 .await
@@ -1037,7 +1037,7 @@ impl Storage for DynoStore {
 
         let mut batches = vec![];
 
-        let mut bytes = max_bytes as usize;
+        let mut bytes = max_bytes as u64;
 
         for offset in offsets.split_off(&offset) {
             debug!(?offset);
@@ -1277,8 +1277,8 @@ impl Storage for DynoStore {
 
                 let options = PutOptions {
                     mode: PutMode::Overwrite,
-                    tags: TagSet::default(),
                     attributes: json_content_type(),
+                    ..Default::default()
                 };
 
                 let error_code = self
@@ -2766,7 +2766,7 @@ where
     fn list(
         &self,
         prefix: Option<&Path>,
-    ) -> BoxStream<'_, Result<ObjectMeta, object_store::Error>> {
+    ) -> BoxStream<'static, Result<ObjectMeta, object_store::Error>> {
         debug!(?prefix);
 
         self.object_store.list(prefix)
