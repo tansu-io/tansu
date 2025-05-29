@@ -4,6 +4,8 @@
   "fields": [
     { "name": "partition", "type": "int" },
     { "name": "timestamp", "type": "long", "logicalType": "timestamp-micros" },
-    { "name": "date", "type": "int", "logicalType": "date" }
+    { "name": "year", "type": "int" },
+    { "name": "month", "type": "int" },
+    { "name": "day", "type": "int" }
   ]
 }

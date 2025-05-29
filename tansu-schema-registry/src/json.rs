@@ -25,7 +25,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use bytes::Bytes;
-use chrono::DateTime;
+use chrono::{DateTime, Datelike};
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use serde_json::{Map, Value, json};
 use tansu_kafka_sans_io::{ErrorCode, record::inflated::Batch};
@@ -544,8 +544,14 @@ impl AsArrow for Schema {
         {
             let meta = DateTime::from_timestamp_millis(batch.base_timestamp)
                 .as_ref()
-                .map(DateTime::to_rfc3339)
-                .map(|timestamp| json!({"partition": partition, "timestamp": timestamp}))
+                .map(|date_time| {
+                    json!({
+                    "partition": partition,
+                    "timestamp": date_time.to_rfc3339(),
+                    "year": date_time.date_naive().year(),
+                    "month": date_time.date_naive().month(),
+                    "day": date_time.date_naive().day()})
+                })
                 .unwrap_or(json!({"partition": partition}));
 
             let data_type = self.common_data_type(&[MessageKind::Meta.as_ref()], &[meta][..])?;
@@ -622,8 +628,14 @@ impl AsArrow for Schema {
                             batch.base_timestamp + record.timestamp_delta,
                         )
                         .as_ref()
-                        .map(DateTime::to_rfc3339)
-                        .map(|timestamp| json!({"partition": partition, "timestamp": timestamp}))
+                        .map(|date_time| {
+                            json!({
+                            "partition": partition,
+                            "timestamp": date_time.to_rfc3339(),
+                            "year": date_time.date_naive().year(),
+                            "month": date_time.date_naive().month(),
+                            "day": date_time.date_naive().day()})
+                        })
                         .unwrap_or(json!({"partition": partition}));
 
                         record
@@ -1578,12 +1590,12 @@ mod tests {
         let pretty_results = pretty_format_batches(&results)?.to_string();
 
         let expected = vec![
-            "+------------------------------------------------------+-------+-----------------------------------------+",
-            "| meta                                                 | key   | value                                   |",
-            "+------------------------------------------------------+-------+-----------------------------------------+",
-            "| {partition: 0, timestamp: 2009-02-13T23:31:30+00:00} | 12321 | {email: alice@example.com, name: alice} |",
-            "| {partition: 0, timestamp: 2009-02-13T23:31:30+00:00} | 32123 | {email: bob@example.com, name: bob}     |",
-            "+------------------------------------------------------+-------+-----------------------------------------+",
+            "+-------------------------------------------------------------------------------------+-------+-----------------------------------------+",
+            "| meta                                                                                | key   | value                                   |",
+            "+-------------------------------------------------------------------------------------+-------+-----------------------------------------+",
+            "| {day: 13, month: 2, partition: 0, timestamp: 2009-02-13T23:31:30+00:00, year: 2009} | 12321 | {email: alice@example.com, name: alice} |",
+            "| {day: 13, month: 2, partition: 0, timestamp: 2009-02-13T23:31:30+00:00, year: 2009} | 32123 | {email: bob@example.com, name: bob}     |",
+            "+-------------------------------------------------------------------------------------+-------+-----------------------------------------+",
         ];
 
         assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
@@ -1647,26 +1659,26 @@ mod tests {
         let pretty_results = pretty_format_batches(&results)?.to_string();
 
         let expected = vec![
-            "+------------------------------------------------------+-------------+---------------------------------------------------------------------------------------------------------------+",
-            "| meta                                                 | key         | value                                                                                                         |",
-            "+------------------------------------------------------+-------------+---------------------------------------------------------------------------------------------------------------+",
-            "| {partition: 0, timestamp: 2009-02-13T23:31:30+00:00} | 123-45-6789 | {final: 49.0, first: Aloysius, grade: D-, last: Alfalfa, test1: 40.0, test2: 90.0, test3: 100.0, test4: 83.0} |",
-            "| {partition: 0, timestamp: 2009-02-13T23:31:30+00:00} | 123-12-1234 | {final: 48.0, first: University, grade: D+, last: Alfred, test1: 41.0, test2: 97.0, test3: 96.0, test4: 97.0} |",
-            "| {partition: 0, timestamp: 2009-02-13T23:31:30+00:00} | 567-89-0123 | {final: 44.0, first: Gramma, grade: C, last: Gerty, test1: 41.0, test2: 80.0, test3: 60.0, test4: 40.0}       |",
-            "| {partition: 0, timestamp: 2009-02-13T23:31:30+00:00} | 087-65-4321 | {final: 47.0, first: Electric, grade: B-, last: Android, test1: 42.0, test2: 23.0, test3: 36.0, test4: 45.0}  |",
-            "| {partition: 0, timestamp: 2009-02-13T23:31:30+00:00} | 456-78-9012 | {final: 45.0, first: Fred, grade: A-, last: Bumpkin, test1: 43.0, test2: 78.0, test3: 88.0, test4: 77.0}      |",
-            "| {partition: 0, timestamp: 2009-02-13T23:31:30+00:00} | 234-56-7890 | {final: 46.0, first: Betty, grade: C-, last: Rubble, test1: 44.0, test2: 90.0, test3: 80.0, test4: 90.0}      |",
-            "| {partition: 0, timestamp: 2009-02-13T23:31:30+00:00} | 345-67-8901 | {final: 43.0, first: Cecil, grade: F, last: Noshow, test1: 45.0, test2: 11.0, test3: -1.0, test4: 4.0}        |",
-            "| {partition: 0, timestamp: 2009-02-13T23:31:30+00:00} | 632-79-9939 | {final: 50.0, first: Bif, grade: B+, last: Buff, test1: 46.0, test2: 20.0, test3: 30.0, test4: 40.0}          |",
-            "| {partition: 0, timestamp: 2009-02-13T23:31:30+00:00} | 223-45-6789 | {final: 83.0, first: Andrew, grade: A, last: Airpump, test1: 49.0, test2: 1.0, test3: 90.0, test4: 100.0}     |",
-            "| {partition: 0, timestamp: 2009-02-13T23:31:30+00:00} | 143-12-1234 | {final: 97.0, first: Jim, grade: A+, last: Backus, test1: 48.0, test2: 1.0, test3: 97.0, test4: 96.0}         |",
-            "| {partition: 0, timestamp: 2009-02-13T23:31:30+00:00} | 565-89-0123 | {final: 40.0, first: Art, grade: D+, last: Carnivore, test1: 44.0, test2: 1.0, test3: 80.0, test4: 60.0}      |",
-            "| {partition: 0, timestamp: 2009-02-13T23:31:30+00:00} | 087-75-4321 | {final: 45.0, first: Jim, grade: C+, last: Dandy, test1: 47.0, test2: 1.0, test3: 23.0, test4: 36.0}          |",
-            "| {partition: 0, timestamp: 2009-02-13T23:31:30+00:00} | 456-71-9012 | {final: 77.0, first: Ima, grade: B-, last: Elephant, test1: 45.0, test2: 1.0, test3: 78.0, test4: 88.0}       |",
-            "| {partition: 0, timestamp: 2009-02-13T23:31:30+00:00} | 234-56-2890 | {final: 90.0, first: Benny, grade: B-, last: Franklin, test1: 50.0, test2: 1.0, test3: 90.0, test4: 80.0}     |",
-            "| {partition: 0, timestamp: 2009-02-13T23:31:30+00:00} | 345-67-3901 | {final: 4.0, first: Boy, grade: B, last: George, test1: 40.0, test2: 1.0, test3: 11.0, test4: -1.0}           |",
-            "| {partition: 0, timestamp: 2009-02-13T23:31:30+00:00} | 632-79-9439 | {final: 40.0, first: Harvey, grade: C, last: Heffalump, test1: 30.0, test2: 1.0, test3: 20.0, test4: 30.0}    |",
-            "+------------------------------------------------------+-------------+---------------------------------------------------------------------------------------------------------------+",
+            "+-------------------------------------------------------------------------------------+-------------+---------------------------------------------------------------------------------------------------------------+",
+            "| meta                                                                                | key         | value                                                                                                         |",
+            "+-------------------------------------------------------------------------------------+-------------+---------------------------------------------------------------------------------------------------------------+",
+            "| {day: 13, month: 2, partition: 0, timestamp: 2009-02-13T23:31:30+00:00, year: 2009} | 123-45-6789 | {final: 49.0, first: Aloysius, grade: D-, last: Alfalfa, test1: 40.0, test2: 90.0, test3: 100.0, test4: 83.0} |",
+            "| {day: 13, month: 2, partition: 0, timestamp: 2009-02-13T23:31:30+00:00, year: 2009} | 123-12-1234 | {final: 48.0, first: University, grade: D+, last: Alfred, test1: 41.0, test2: 97.0, test3: 96.0, test4: 97.0} |",
+            "| {day: 13, month: 2, partition: 0, timestamp: 2009-02-13T23:31:30+00:00, year: 2009} | 567-89-0123 | {final: 44.0, first: Gramma, grade: C, last: Gerty, test1: 41.0, test2: 80.0, test3: 60.0, test4: 40.0}       |",
+            "| {day: 13, month: 2, partition: 0, timestamp: 2009-02-13T23:31:30+00:00, year: 2009} | 087-65-4321 | {final: 47.0, first: Electric, grade: B-, last: Android, test1: 42.0, test2: 23.0, test3: 36.0, test4: 45.0}  |",
+            "| {day: 13, month: 2, partition: 0, timestamp: 2009-02-13T23:31:30+00:00, year: 2009} | 456-78-9012 | {final: 45.0, first: Fred, grade: A-, last: Bumpkin, test1: 43.0, test2: 78.0, test3: 88.0, test4: 77.0}      |",
+            "| {day: 13, month: 2, partition: 0, timestamp: 2009-02-13T23:31:30+00:00, year: 2009} | 234-56-7890 | {final: 46.0, first: Betty, grade: C-, last: Rubble, test1: 44.0, test2: 90.0, test3: 80.0, test4: 90.0}      |",
+            "| {day: 13, month: 2, partition: 0, timestamp: 2009-02-13T23:31:30+00:00, year: 2009} | 345-67-8901 | {final: 43.0, first: Cecil, grade: F, last: Noshow, test1: 45.0, test2: 11.0, test3: -1.0, test4: 4.0}        |",
+            "| {day: 13, month: 2, partition: 0, timestamp: 2009-02-13T23:31:30+00:00, year: 2009} | 632-79-9939 | {final: 50.0, first: Bif, grade: B+, last: Buff, test1: 46.0, test2: 20.0, test3: 30.0, test4: 40.0}          |",
+            "| {day: 13, month: 2, partition: 0, timestamp: 2009-02-13T23:31:30+00:00, year: 2009} | 223-45-6789 | {final: 83.0, first: Andrew, grade: A, last: Airpump, test1: 49.0, test2: 1.0, test3: 90.0, test4: 100.0}     |",
+            "| {day: 13, month: 2, partition: 0, timestamp: 2009-02-13T23:31:30+00:00, year: 2009} | 143-12-1234 | {final: 97.0, first: Jim, grade: A+, last: Backus, test1: 48.0, test2: 1.0, test3: 97.0, test4: 96.0}         |",
+            "| {day: 13, month: 2, partition: 0, timestamp: 2009-02-13T23:31:30+00:00, year: 2009} | 565-89-0123 | {final: 40.0, first: Art, grade: D+, last: Carnivore, test1: 44.0, test2: 1.0, test3: 80.0, test4: 60.0}      |",
+            "| {day: 13, month: 2, partition: 0, timestamp: 2009-02-13T23:31:30+00:00, year: 2009} | 087-75-4321 | {final: 45.0, first: Jim, grade: C+, last: Dandy, test1: 47.0, test2: 1.0, test3: 23.0, test4: 36.0}          |",
+            "| {day: 13, month: 2, partition: 0, timestamp: 2009-02-13T23:31:30+00:00, year: 2009} | 456-71-9012 | {final: 77.0, first: Ima, grade: B-, last: Elephant, test1: 45.0, test2: 1.0, test3: 78.0, test4: 88.0}       |",
+            "| {day: 13, month: 2, partition: 0, timestamp: 2009-02-13T23:31:30+00:00, year: 2009} | 234-56-2890 | {final: 90.0, first: Benny, grade: B-, last: Franklin, test1: 50.0, test2: 1.0, test3: 90.0, test4: 80.0}     |",
+            "| {day: 13, month: 2, partition: 0, timestamp: 2009-02-13T23:31:30+00:00, year: 2009} | 345-67-3901 | {final: 4.0, first: Boy, grade: B, last: George, test1: 40.0, test2: 1.0, test3: 11.0, test4: -1.0}           |",
+            "| {day: 13, month: 2, partition: 0, timestamp: 2009-02-13T23:31:30+00:00, year: 2009} | 632-79-9439 | {final: 40.0, first: Harvey, grade: C, last: Heffalump, test1: 30.0, test2: 1.0, test3: 20.0, test4: 30.0}    |",
+            "+-------------------------------------------------------------------------------------+-------------+---------------------------------------------------------------------------------------------------------------+",
         ];
 
         assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
@@ -1721,13 +1733,13 @@ mod tests {
         let pretty_results = pretty_format_batches(&results)?.to_string();
 
         let expected = vec![
-            "+------------------------------------------------------+-------+",
-            "| meta                                                 | key   |",
-            "+------------------------------------------------------+-------+",
-            "| {partition: 0, timestamp: 2009-02-13T23:31:30+00:00} | 12321 |",
-            "| {partition: 0, timestamp: 2009-02-13T23:31:30+00:00} | 23432 |",
-            "| {partition: 0, timestamp: 2009-02-13T23:31:30+00:00} | 34543 |",
-            "+------------------------------------------------------+-------+",
+            "+-------------------------------------------------------------------------------------+-------+",
+            "| meta                                                                                | key   |",
+            "+-------------------------------------------------------------------------------------+-------+",
+            "| {day: 13, month: 2, partition: 0, timestamp: 2009-02-13T23:31:30+00:00, year: 2009} | 12321 |",
+            "| {day: 13, month: 2, partition: 0, timestamp: 2009-02-13T23:31:30+00:00, year: 2009} | 23432 |",
+            "| {day: 13, month: 2, partition: 0, timestamp: 2009-02-13T23:31:30+00:00, year: 2009} | 34543 |",
+            "+-------------------------------------------------------------------------------------+-------+",
         ];
 
         assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
@@ -1789,12 +1801,12 @@ mod tests {
         let pretty_results = pretty_format_batches(&results)?.to_string();
 
         let expected = vec![
-            "+------------------------------------------------------+-------+-------------------+",
-            "| meta                                                 | key   | value             |",
-            "+------------------------------------------------------+-------+-------------------+",
-            "| {partition: 0, timestamp: 2009-02-13T23:31:30+00:00} | 12321 | alice@example.com |",
-            "| {partition: 0, timestamp: 2009-02-13T23:31:30+00:00} | 32123 | bob@example.com   |",
-            "+------------------------------------------------------+-------+-------------------+",
+            "+-------------------------------------------------------------------------------------+-------+-------------------+",
+            "| meta                                                                                | key   | value             |",
+            "+-------------------------------------------------------------------------------------+-------+-------------------+",
+            "| {day: 13, month: 2, partition: 0, timestamp: 2009-02-13T23:31:30+00:00, year: 2009} | 12321 | alice@example.com |",
+            "| {day: 13, month: 2, partition: 0, timestamp: 2009-02-13T23:31:30+00:00, year: 2009} | 32123 | bob@example.com   |",
+            "+-------------------------------------------------------------------------------------+-------+-------------------+",
         ];
 
         assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
@@ -1859,12 +1871,12 @@ mod tests {
         let pretty_results = pretty_format_batches(&results)?.to_string();
 
         let expected = vec![
-            "+------------------------------------------------------+-------+-----------+",
-            "| meta                                                 | key   | value     |",
-            "+------------------------------------------------------+-------+-----------+",
-            "| {partition: 0, timestamp: 2009-02-13T23:31:30+00:00} | 12321 | [a, b, c] |",
-            "| {partition: 0, timestamp: 2009-02-13T23:31:30+00:00} | 32123 | [p, q, r] |",
-            "+------------------------------------------------------+-------+-----------+",
+            "+-------------------------------------------------------------------------------------+-------+-----------+",
+            "| meta                                                                                | key   | value     |",
+            "+-------------------------------------------------------------------------------------+-------+-----------+",
+            "| {day: 13, month: 2, partition: 0, timestamp: 2009-02-13T23:31:30+00:00, year: 2009} | 12321 | [a, b, c] |",
+            "| {day: 13, month: 2, partition: 0, timestamp: 2009-02-13T23:31:30+00:00, year: 2009} | 32123 | [p, q, r] |",
+            "+-------------------------------------------------------------------------------------+-------+-----------+",
         ];
 
         assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
