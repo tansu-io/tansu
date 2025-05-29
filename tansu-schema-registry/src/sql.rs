@@ -38,7 +38,8 @@ pub(crate) fn typeof_sql_expr(expr: &str) -> Result<DataType> {
 fn delta_sql_type(data_type: SqlDataType) -> Result<DataType> {
     match data_type {
         SqlDataType::Date => Ok(DataType::Date32),
-        SqlDataType::Integer(_) => Ok(DataType::Int32),
+        SqlDataType::Int(_) | SqlDataType::Integer(_) => Ok(DataType::Int32),
+
         otherwise => todo!("{otherwise:?}"),
     }
 }

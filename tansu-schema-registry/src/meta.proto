@@ -5,4 +5,7 @@ import "google/protobuf/timestamp.proto";
 message Meta {
   int32 partition = 1;
   google.protobuf.Timestamp timestamp = 2;
+  int32 year = 3;
+  int32 month = 4;
+  int32 day = 5;
 }
