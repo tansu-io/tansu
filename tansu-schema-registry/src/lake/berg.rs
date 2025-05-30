@@ -15,7 +15,7 @@
 
 use std::{
     collections::HashMap,
-    env::{var, vars},
+    env::vars,
     marker::PhantomData,
     sync::{Arc, Mutex},
 };
@@ -67,6 +67,7 @@ pub struct Builder<C = PhantomData<Url>, L = PhantomData<Url>> {
     location: L,
     catalog: C,
     namespace: Option<String>,
+    warehouse: Option<String>,
 }
 
 impl<C, L> Builder<C, L> {
@@ -75,6 +76,7 @@ impl<C, L> Builder<C, L> {
             location,
             catalog: self.catalog,
             namespace: self.namespace,
+            warehouse: self.warehouse,
         }
     }
 
@@ -83,11 +85,16 @@ impl<C, L> Builder<C, L> {
             catalog,
             location: self.location,
             namespace: self.namespace,
+            warehouse: self.warehouse,
         }
     }
 
     pub fn namespace(self, namespace: Option<String>) -> Self {
         Self { namespace, ..self }
+    }
+
+    pub fn warehouse(self, warehouse: Option<String>) -> Self {
+        Self { warehouse, ..self }
     }
 }
 
@@ -108,7 +115,7 @@ impl TryFrom<Builder<Url, Url>> for Iceberg {
     type Error = Error;
 
     fn try_from(value: Builder<Url, Url>) -> Result<Self, Self::Error> {
-        iceberg_catalog(&value.catalog).map(|catalog| Self {
+        iceberg_catalog(&value.catalog, value.warehouse.clone()).map(|catalog| Self {
             catalog,
             namespace: value.namespace.unwrap_or(String::from("tansu")),
             tables: Arc::new(Mutex::new(HashMap::new())),
@@ -116,19 +123,19 @@ impl TryFrom<Builder<Url, Url>> for Iceberg {
     }
 }
 
-fn iceberg_catalog(catalog: &Url) -> Result<Arc<dyn Catalog>> {
-    debug!(%catalog);
+fn iceberg_catalog(catalog: &Url, warehouse: Option<String>) -> Result<Arc<dyn Catalog>> {
+    debug!(%catalog, ?warehouse);
 
     match (catalog.scheme(), catalog.path()) {
         ("http" | "https", "/") => {
             let catalog_config = RestCatalogConfig::builder()
                 .uri(format!(
-                    "{}//{}:{}",
+                    "{}://{}:{}",
                     catalog.scheme(),
                     catalog.host_str().unwrap_or("localhost"),
                     catalog.port().unwrap_or(80)
                 ))
-                .warehouse(var("ICEBERG_WAREHOUSE").unwrap_or("tansu".into()))
+                .warehouse_opt(warehouse)
                 .props(env_s3_props().collect())
                 .build();
 
@@ -138,7 +145,7 @@ fn iceberg_catalog(catalog: &Url) -> Result<Arc<dyn Catalog>> {
         ("http" | "https", _) => {
             let catalog_config = RestCatalogConfig::builder()
                 .uri(catalog.to_string())
-                .warehouse(var("ICEBERG_WAREHOUSE").unwrap_or("tansu".into()))
+                .warehouse_opt(warehouse)
                 .props(env_s3_props().collect())
                 .build();
 

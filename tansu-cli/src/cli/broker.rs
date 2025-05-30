@@ -77,6 +77,10 @@ pub(super) enum Command {
         /// Iceberg namespace
         #[arg(long, env = "ICEBERG_NAMESPACE", default_value = "tansu")]
         namespace: Option<String>,
+
+        /// Iceberg warehouse
+        #[arg(long, env = "ICEBERG_WAREHOUSE")]
+        warehouse: Option<String>,
     },
 
     Delta {
@@ -135,10 +139,12 @@ impl TryFrom<Arg> for tansu_server::broker::Broker<Controller<StorageContainer>,
                     location,
                     catalog,
                     namespace,
+                    warehouse,
                 } => lake::House::iceberg()
                     .location(location.into_inner())
                     .catalog(catalog.into_inner())
                     .namespace(namespace)
+                    .warehouse(warehouse)
                     .build(),
                 Command::Delta { location, database } => lake::House::delta()
                     .location(location.into_inner())

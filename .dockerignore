@@ -2,3 +2,5 @@
 /work-dir
 /logs
 /.git
+perf.data
+*.log
