@@ -119,24 +119,39 @@ impl TryFrom<Builder<Url, Url>> for Iceberg {
 fn iceberg_catalog(catalog: &Url) -> Result<Arc<dyn Catalog>> {
     debug!(%catalog);
 
-    match catalog.scheme() {
-        "http" | "https" => {
+    match (catalog.scheme(), catalog.path()) {
+        ("http" | "https", "/") => {
             let catalog_config = RestCatalogConfig::builder()
-                .uri(catalog.to_string())
-                .warehouse(var("ICEBERG_WAREHOUSE").unwrap_or("lake".into()))
+                .uri(format!(
+                    "{}//{}:{}",
+                    catalog.scheme(),
+                    catalog.host_str().unwrap_or("localhost"),
+                    catalog.port().unwrap_or(80)
+                ))
+                .warehouse(var("ICEBERG_WAREHOUSE").unwrap_or("tansu".into()))
                 .props(env_s3_props().collect())
                 .build();
 
             Ok(Arc::new(RestCatalog::new(catalog_config)))
         }
 
-        "memory" => FileIOBuilder::new("memory")
+        ("http" | "https", _) => {
+            let catalog_config = RestCatalogConfig::builder()
+                .uri(catalog.to_string())
+                .warehouse(var("ICEBERG_WAREHOUSE").unwrap_or("tansu".into()))
+                .props(env_s3_props().collect())
+                .build();
+
+            Ok(Arc::new(RestCatalog::new(catalog_config)))
+        }
+
+        ("memory", _) => FileIOBuilder::new("memory")
             .build()
             .map(|file_io| MemoryCatalog::new(file_io, None))
             .map(|catalog| Arc::new(catalog) as Arc<dyn Catalog>)
             .map_err(Into::into),
 
-        _otherwise => Err(Error::UnsupportedIcebergCatalogUrl(catalog.to_owned())),
+        (_otherwise, _) => Err(Error::UnsupportedIcebergCatalogUrl(catalog.to_owned())),
     }
 }
 
@@ -471,6 +486,27 @@ mod tests {
             assert_eq!(table_name, table.identifier().name());
             assert_eq!(namespace, table.identifier().namespace().to_url_string());
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn url_parse() -> Result<()> {
+        let uri = Url::parse("http://localhost:8181")?;
+        assert_eq!("http://localhost:8181/", uri.as_str());
+        assert_eq!("http", uri.scheme());
+        assert!(uri.has_host());
+        assert_eq!(Some("localhost"), uri.host_str());
+        assert_eq!(Some(8181), uri.port());
+        assert_eq!("/", uri.path());
+
+        let uri = Url::parse("http://localhost:8181/catalog")?;
+        assert_eq!("http://localhost:8181/catalog", uri.as_str());
+        assert_eq!("http", uri.scheme());
+        assert!(uri.has_host());
+        assert_eq!(Some("localhost"), uri.host_str());
+        assert_eq!(Some(8181), uri.port());
+        assert_eq!("/catalog", uri.path());
 
         Ok(())
     }
