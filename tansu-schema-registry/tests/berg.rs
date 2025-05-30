@@ -46,12 +46,16 @@ pub async fn lake_store(
 ) -> Result<Vec<RecordBatch>> {
     let catalog_uri = &var("ICEBERG_CATALOG").unwrap_or("http://localhost:8181".into())[..];
     let location_uri = &var("DATA_LAKE").unwrap_or("s3://lake".into())[..];
+    let warehouse = var("ICEBERG_WAREHOUSE").ok();
     let namespace = alphanumeric_string(5);
+
+    debug!(catalog_uri, location_uri, ?warehouse, namespace);
 
     let lake_house = House::iceberg()
         .location(Url::parse(location_uri)?)
         .catalog(Url::parse(catalog_uri)?)
         .namespace(Some(namespace.clone()))
+        .warehouse(warehouse.clone())
         .build()?;
 
     let offset = 543212345;
@@ -65,7 +69,7 @@ pub async fn lake_store(
     let catalog = Arc::new(RestCatalog::new(
         RestCatalogConfig::builder()
             .uri(catalog_uri.to_string())
-            .warehouse(var("ICEBERG_WAREHOUSE").unwrap_or("lake".into()))
+            .warehouse_opt(warehouse)
             .props(env_s3_props().collect())
             .build(),
     ));

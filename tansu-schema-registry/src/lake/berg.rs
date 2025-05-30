@@ -359,12 +359,15 @@ mod tests {
 
         let catalog_uri = &var("ICEBERG_CATALOG").unwrap_or("http://localhost:8181".into())[..];
         let location_uri = &var("DATA_LAKE").unwrap_or("s3://lake".into())[..];
+        let warehouse = var("ICEBERG_WAREHOUSE").ok();
         let namespace = alphanumeric_string(5);
+        debug!(catalog_uri, location_uri, ?warehouse, namespace);
 
         let lake = Iceberg::try_from(
             Builder::<PhantomData<Url>, PhantomData<Url>>::default()
                 .location(Url::parse(location_uri)?)
                 .catalog(Url::parse(catalog_uri)?)
+                .warehouse(warehouse.clone())
                 .namespace(Some(namespace.clone())),
         )?;
 
@@ -381,13 +384,16 @@ mod tests {
 
         let catalog_uri = &var("ICEBERG_CATALOG").unwrap_or("http://localhost:8181".into())[..];
         let location_uri = &var("DATA_LAKE").unwrap_or("s3://lake".into())[..];
+        let warehouse = var("ICEBERG_WAREHOUSE").ok();
         let namespace = alphanumeric_string(5);
+        debug!(catalog_uri, location_uri, ?warehouse, namespace);
 
         {
             let lake = Iceberg::try_from(
                 Builder::<PhantomData<Url>, PhantomData<Url>>::default()
                     .location(Url::parse(location_uri)?)
                     .catalog(Url::parse(catalog_uri)?)
+                    .warehouse(warehouse.clone())
                     .namespace(Some(namespace.clone())),
             )?;
 
@@ -400,6 +406,7 @@ mod tests {
                 Builder::<PhantomData<Url>, PhantomData<Url>>::default()
                     .location(Url::parse(location_uri)?)
                     .catalog(Url::parse(catalog_uri)?)
+                    .warehouse(warehouse)
                     .namespace(Some(namespace.clone())),
             )?;
 
@@ -417,13 +424,17 @@ mod tests {
 
         let catalog_uri = &var("ICEBERG_CATALOG").unwrap_or("http://localhost:8181".into())[..];
         let location_uri = &var("DATA_LAKE").unwrap_or("s3://lake".into())[..];
+        let warehouse = var("ICEBERG_WAREHOUSE").ok();
         let namespace = alphanumeric_string(5);
+
+        debug!(catalog_uri, location_uri, ?warehouse, namespace);
 
         let lake_house = Iceberg::try_from(
             Builder::<PhantomData<Url>, PhantomData<Url>>::default()
                 .location(Url::parse(location_uri)?)
                 .catalog(Url::parse(catalog_uri)?)
-                .namespace(Some(namespace.clone())),
+                .namespace(Some(namespace.clone()))
+                .warehouse(warehouse.clone()),
         )?;
 
         let schema = Schema::builder()
@@ -452,9 +463,11 @@ mod tests {
 
         let catalog_uri = &var("ICEBERG_CATALOG").unwrap_or("http://localhost:8181".into())[..];
         let location_uri = &var("DATA_LAKE").unwrap_or("s3://lake".into())[..];
+        let warehouse = var("ICEBERG_WAREHOUSE").ok();
         let namespace = alphanumeric_string(5);
-
         let table_name = alphanumeric_string(5);
+
+        debug!(catalog_uri, location_uri, ?warehouse, namespace, table_name);
 
         let schema = Schema::builder()
             .with_fields(vec![
@@ -471,6 +484,7 @@ mod tests {
                 Builder::<PhantomData<Url>, PhantomData<Url>>::default()
                     .location(Url::parse(location_uri)?)
                     .catalog(Url::parse(catalog_uri)?)
+                    .warehouse(warehouse.clone())
                     .namespace(Some(namespace.clone())),
             )?;
 
@@ -486,7 +500,8 @@ mod tests {
                 Builder::<PhantomData<Url>, PhantomData<Url>>::default()
                     .location(Url::parse(location_uri)?)
                     .catalog(Url::parse(catalog_uri)?)
-                    .namespace(Some(namespace.clone())),
+                    .namespace(Some(namespace.clone()))
+                    .warehouse(warehouse),
             )?;
 
             let table = lake_house.load_or_create_table(&table_name, schema).await?;
