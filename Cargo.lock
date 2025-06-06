@@ -3223,8 +3223,9 @@ dependencies = [
 
 [[package]]
 name = "iceberg"
-version = "0.5.0"
-source = "git+https://github.com/apache/iceberg-rust.git?tag=v0.5.0#05969b38451ef13026b71f75693efc72219e7cad"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2ad4b76a13ef469b09493330c4360630499949f4984478b77d6a70d252caf8b4"
 dependencies = [
  "anyhow",
  "apache-avro",
@@ -3273,8 +3274,9 @@ dependencies = [
 
 [[package]]
 name = "iceberg-catalog-memory"
-version = "0.5.0"
-source = "git+https://github.com/apache/iceberg-rust.git?tag=v0.5.0#05969b38451ef13026b71f75693efc72219e7cad"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "64da7963b3b06b0780b26867e8992eb0b911cc3f9b59f48715792a19b73fc3b6"
 dependencies = [
  "async-trait",
  "futures",
@@ -3286,8 +3288,9 @@ dependencies = [
 
 [[package]]
 name = "iceberg-catalog-rest"
-version = "0.5.0"
-source = "git+https://github.com/apache/iceberg-rust.git?tag=v0.5.0#05969b38451ef13026b71f75693efc72219e7cad"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d744269adcd9a89cea578b6e8443186cb9d5e7d41a47679f3b1d5b71842820e"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3306,8 +3309,9 @@ dependencies = [
 
 [[package]]
 name = "iceberg-datafusion"
-version = "0.5.0"
-source = "git+https://github.com/apache/iceberg-rust.git?tag=v0.5.0#05969b38451ef13026b71f75693efc72219e7cad"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "13dea53f0cb6348ef65d4be41b3401ec21f558071a47ff42906df371b500f012"
 dependencies = [
  "anyhow",
  "async-trait",
