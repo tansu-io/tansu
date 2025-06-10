@@ -76,7 +76,7 @@ jsonschema = "0.26.2"
 lazy_static = "1.4.0"
 lz4 = "1.28.1"
 num-bigint = "0.4"
-object_store = { version = "0.12.1", features = ["aws"] }
+object_store = { version = "0.12.2", features = ["aws"] }
 opentelemetry = { version = "0.28.0", default-features = false, features = [
     "metrics",
 ] }
