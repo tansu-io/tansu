@@ -100,6 +100,7 @@ protobuf-json-mapping = "3.7.1"
 protobuf-parse = "3.7.1"
 protobuf = { version = "3.7.1", features = ["with-bytes"] }
 quote = "1.0"
+rama = { version = "0.2.0", features = ["full"] }
 rand = "0.9"
 regex = "1.11.1"
 serde = { version = "1.0", features = ["derive"] }
