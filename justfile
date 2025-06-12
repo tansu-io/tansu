@@ -209,10 +209,6 @@ tansu-server:
 kafka-proxy:
     docker run -d -p 19092:9092 apache/kafka:3.9.0
 
-# run a proxy with configuration from .env
-tansu-proxy:
-    target/debug/tansu proxy 2>&1 | tee proxy.log
-
 codespace-create:
     gh codespace create \
         --repo $(gh repo view --json nameWithOwner --jq .nameWithOwner) \
@@ -269,6 +265,12 @@ tansu-broker *args:
 
 # run a broker with configuration from .env
 broker *args: (cargo-build "--bin" "tansu") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket lakehouse-catalog-up (tansu-broker args)
+
+
+# run a proxy with configuration from .env
+proxy *args:
+    target/debug/tansu proxy {{args}} 2>&1 | tee proxy.log
+
 
 # teardown compose, rebuild: minio, db, tansu and lake buckets
 server: (cargo-build "--bin" "tansu") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket lakehouse-catalog-up

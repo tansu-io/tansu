@@ -100,7 +100,7 @@ protobuf-json-mapping = "3.7.1"
 protobuf-parse = "3.7.1"
 protobuf = { version = "3.7.1", features = ["with-bytes"] }
 quote = "1.0"
-rama = { version = "0.2.0", features = ["full"] }
+rama = { version = "0.2.0", features = ["tcp"] }
 rand = "0.9"
 regex = "1.11.1"
 serde = { version = "1.0", features = ["derive"] }
@@ -110,7 +110,7 @@ syn = { version = "2.0", features = ["full"] }
 tempfile = "3"
 thiserror = "2.0"
 time = { version = "0.3.37", features = ["formatting", "macros"] }
-tokio-util = { version = "0.7", features = ["full"] }
+tokio-util = { version = "0.7", features = ["full, test-util"] }
 tokio = { version = "1", features = ["full"] }
 tokio-postgres = { version = "0.7.13", features = [
     "with-serde_json-1",

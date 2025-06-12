@@ -13,34 +13,77 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::{collections::BTreeMap, fmt::Debug, sync::Arc};
+use std::{collections::BTreeMap, fmt::Debug, sync::Arc, time::Duration};
 
 use crate::{
-    ApiKey, ApiRequest, ApiResponse, Error, ProduceRequest, ProduceResponse, read_api_request,
-    read_api_response, read_frame,
+    Error,
+    api::{
+        ApiKey, ApiRequest, ApiResponse,
+        metadata::{MetadataLayer, MetadataResponse},
+        produce::ProduceLayer,
+        read_api_request, read_api_response, read_frame,
+    },
+    batch::BatchProduceLayer,
 };
 use bytes::Bytes;
 use rama::{
     Context, Layer, Service,
+    layer::{HijackLayer, MapResponseLayer},
     net::{
         address::{Authority, Host},
         client::{ConnectorService, EstablishedClientConnection},
         stream::{Socket, Stream},
     },
-    service::{BoxService, service_fn},
+    service::BoxService,
     tcp::{TcpStream, client::default_tcp_connect, server::TcpListener},
 };
-use tansu_kafka_sans_io::Body;
+use tansu_kafka_sans_io::metadata_response::MetadataResponseBroker;
 use tokio::io::AsyncWriteExt;
-use tracing::debug;
+use tracing::{Instrument, Level, debug, span};
 
 const ADDR: &str = "127.0.0.1:9092";
+
+const PRODUCE_API_KEY: ApiKey = ApiKey(0);
+const METADATA_API_KEY: ApiKey = ApiKey(3);
+const NODE_ID: i32 = 111;
 
 #[allow(dead_code)]
 pub async fn listener() -> Result<(), Error> {
     let listener = TcpListener::bind(ADDR).await?;
 
-    let q = (TcpStreamLayer, ByteLayer, ApiRequestLayer).into_layer(service_fn(api_request_handle));
+    let origin = ApiClient::new(Authority::from(([127, 0, 0, 1], 9092)));
+
+    let produce = HijackLayer::new(
+        PRODUCE_API_KEY,
+        (
+            ProduceLayer,
+            BatchProduceLayer::new(Duration::from_millis(5_000)),
+            origin.clone(),
+        ),
+    );
+
+    let metadata = HijackLayer::new(
+        METADATA_API_KEY,
+        (
+            MetadataLayer,
+            MapResponseLayer::new(|response: MetadataResponse| MetadataResponse {
+                brokers: Some(vec![MetadataResponseBroker {
+                    node_id: NODE_ID,
+                    host: "localhost".into(),
+                    port: 9092,
+                    rack: None,
+                }]),
+                ..response
+            }),
+            origin.clone(),
+        ),
+    );
+
+    let _stack = (produce, metadata).into_layer(origin.clone());
+
+    let _sub = ProduceLayer.into_layer(BatchProduceLayer::new(Duration::from_millis(5_000)));
+
+    let q = (TcpStreamLayer, ByteLayer, ApiRequestLayer).into_layer(origin.clone());
 
     listener.serve(q).await;
 
@@ -84,7 +127,7 @@ async fn client() -> Result<(), Error> {
 }
 
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-struct TcpStreamService<S> {
+pub struct TcpStreamService<S> {
     inner: S,
 }
 
@@ -102,16 +145,23 @@ where
         ctx: Context<State>,
         mut req: TcpStream,
     ) -> Result<Self::Response, Self::Error> {
-        loop {
-            let buffer = read_frame(&mut req).await?;
-            let buffer = self.inner.serve(ctx.clone(), buffer).await?;
-            req.write_all(&buffer[..]).await.expect("write_all");
+        let peer = req.peer_addr().expect("peer");
+
+        let span = span!(Level::DEBUG, "peer", addr = %peer);
+        async move {
+            loop {
+                let buffer = read_frame(&mut req).await?;
+                let buffer = self.inner.serve(ctx.clone(), buffer).await?;
+                req.write_all(&buffer[..]).await.expect("write_all");
+            }
         }
+        .instrument(span)
+        .await
     }
 }
 
 #[derive(Copy, Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-struct TcpStreamLayer;
+pub struct TcpStreamLayer;
 
 impl<S> Layer<S> for TcpStreamLayer {
     type Service = TcpStreamService<S>;
@@ -122,7 +172,7 @@ impl<S> Layer<S> for TcpStreamLayer {
 }
 
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-struct ByteService<S> {
+pub struct ByteService<S> {
     inner: S,
 }
 
@@ -148,7 +198,7 @@ where
 }
 
 #[derive(Copy, Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-struct ByteLayer;
+pub struct ByteLayer;
 
 impl<S> Layer<S> for ByteLayer {
     type Service = ByteService<S>;
@@ -159,7 +209,7 @@ impl<S> Layer<S> for ByteLayer {
 }
 
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-struct ApiRequestService<S> {
+pub struct ApiRequestService<S> {
     inner: S,
 }
 
@@ -182,7 +232,7 @@ where
 }
 
 #[derive(Copy, Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-struct ApiRequestLayer;
+pub struct ApiRequestLayer;
 
 impl<S> Layer<S> for ApiRequestLayer {
     type Service = ApiRequestService<S>;
@@ -239,48 +289,18 @@ impl<State, Request, Response, Error> ApiRouteLayer<State, Request, Response, Er
     }
 }
 
-#[allow(dead_code)]
-#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-struct ProduceService<S> {
-    inner: S,
-}
-
-impl<S, State> Service<State, ApiRequest> for ProduceService<S>
-where
-    S: Service<State, ProduceRequest, Response = ProduceResponse>,
-    S::Error: From<Error> + Send + Debug + 'static,
-    State: Send + Sync + 'static,
-{
-    type Response = ApiResponse;
-
-    type Error = S::Error;
-
-    async fn serve(
-        &self,
-        ctx: Context<State>,
-        req: ApiRequest,
-    ) -> Result<Self::Response, Self::Error> {
-        let produce_request = ProduceRequest::try_from(req.body)?;
-
-        self.inner
-            .serve(ctx, produce_request)
-            .await
-            .map(|produce_response| ApiResponse {
-                api_key: req.api_key,
-                api_version: req.api_version,
-                correlation_id: req.correlation_id,
-                body: Body::from(produce_response),
-            })
-    }
-}
-
-#[allow(dead_code)]
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-struct TansuClient {
+pub struct ApiClient {
     authority: Authority,
 }
 
-impl<State> Service<State, ApiRequest> for TansuClient
+impl ApiClient {
+    pub fn new(authority: Authority) -> Self {
+        Self { authority }
+    }
+}
+
+impl<State> Service<State, ApiRequest> for ApiClient
 where
     State: Clone + Send + Sync + 'static,
 {
@@ -293,7 +313,14 @@ where
         req: ApiRequest,
     ) -> Result<Self::Response, Self::Error> {
         let (mut stream, address) = default_tcp_connect(&ctx, self.authority.clone()).await?;
-        debug!(?address);
+
+        debug!(
+            ?address,
+            api_key = req.api_key.0,
+            api_version = req.api_version,
+            correlation_id = req.correlation_id,
+            body = ?req.body
+        );
 
         let api_key = req.api_key;
         let api_version = req.api_version;
@@ -301,6 +328,7 @@ where
         stream.write_all(&buffer[..]).await?;
         let buffer = read_frame(&mut stream).await?;
         read_api_response(buffer, api_key, api_version)
+            .inspect(|api_response| debug!(?api_response))
     }
 }
 
@@ -341,9 +369,10 @@ where
 mod tests {
     use std::{fs::File, sync::Arc, thread};
 
-    use crate::{ProduceRequest, ProduceResponse};
+    use crate::api::produce::{ProduceRequest, ProduceResponse};
 
     use super::*;
+    use rama::service::service_fn;
     use tansu_kafka_sans_io::{
         Body, ErrorCode, Frame, Header, MESSAGE_META,
         produce_request::{PartitionProduceData, TopicProduceData},
@@ -425,10 +454,10 @@ mod tests {
 
         let service =
             (ByteLayer, ApiRequestLayer).into_layer(service_fn(async |req: ApiRequest| {
-                ProduceRequest::try_from(req.body).map(|produce_request| ApiResponse {
-                    api_key: req.api_key,
-                    api_version: req.api_version,
-                    correlation_id: req.correlation_id,
+                ProduceRequest::try_from(req).map(|produce_request| ApiResponse {
+                    api_key: produce_request.api_key,
+                    api_version: produce_request.api_version,
+                    correlation_id: produce_request.correlation_id,
                     body: Body::ProduceResponse {
                         responses: produce_request.topic_data.map(|topic_data| {
                             topic_data
@@ -465,9 +494,10 @@ mod tests {
                 })
             }));
 
-        let response = service.serve(Context::default(), frame).await?;
-        let produce_response = Frame::response_from_bytes(&response[..], api_key, api_version)
-            .map_err(Into::into)
+        let produce_response = service
+            .serve(Context::default(), frame)
+            .await
+            .and_then(|response| read_api_response(response, ApiKey(api_key), api_version))
             .and_then(ProduceResponse::try_from)?;
 
         assert!(produce_response.responses.is_some());
