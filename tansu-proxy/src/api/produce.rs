@@ -14,9 +14,9 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use rama::{Context, Layer, Service};
-use std::fmt::Debug;
+use std::{fmt::Debug, sync::LazyLock};
 use tansu_kafka_sans_io::{
-    Body,
+    Body, MESSAGE_META,
     produce_request::TopicProduceData,
     produce_response::{NodeEndpoint, TopicProduceResponse},
 };
@@ -25,6 +25,15 @@ use crate::{
     Error,
     api::{ApiKey, ApiRequest, ApiResponse, ApiVersion, ClientId, CorrelationId},
 };
+
+pub static API_KEY_VERSION: LazyLock<(ApiKey, ApiVersion)> = LazyLock::new(|| {
+    MESSAGE_META
+        .iter()
+        .find(|(name, _)| *name == "ProduceRequest")
+        .map_or((ApiKey(-1), 0), |(_, meta)| {
+            (ApiKey(meta.api_key), meta.version.valid.end)
+        })
+});
 
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ProduceRequest {
@@ -37,6 +46,22 @@ pub struct ProduceRequest {
     pub acks: i16,
     pub timeout_ms: i32,
     pub topic_data: Option<Vec<TopicProduceData>>,
+}
+
+impl ProduceRequest {
+    pub fn topic_names(&self) -> Vec<String> {
+        let mut topics = self
+            .topic_data
+            .clone()
+            .unwrap_or_default()
+            .iter()
+            .map(|topic| topic.name.clone())
+            .collect::<Vec<_>>();
+
+        topics.sort();
+        topics.dedup();
+        topics
+    }
 }
 
 impl TryFrom<ApiRequest> for ProduceRequest {
@@ -71,6 +96,20 @@ impl TryFrom<ApiRequest> for ProduceRequest {
         } else {
             Err(Error::UnexpectedApiRequest(Box::new(api_request)))
         }
+    }
+}
+
+impl TryFrom<&ApiRequest> for ProduceRequest {
+    type Error = Error;
+
+    fn try_from(api_request: &ApiRequest) -> Result<Self, Self::Error> {
+        Self::try_from(api_request.to_owned())
+    }
+}
+
+impl From<ApiRequest> for Option<ProduceRequest> {
+    fn from(api_request: ApiRequest) -> Self {
+        ProduceRequest::try_from(api_request).ok()
     }
 }
 

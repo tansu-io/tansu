@@ -6213,6 +6213,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "clap",
+ "dashmap",
  "rama",
  "tansu-kafka-sans-io",
  "thiserror 2.0.12",

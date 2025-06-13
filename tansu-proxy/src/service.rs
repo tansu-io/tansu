@@ -13,106 +13,25 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::{collections::BTreeMap, fmt::Debug, sync::Arc, time::Duration};
+use std::{collections::BTreeMap, fmt::Debug, sync::Arc};
 
 use crate::{
     Error,
-    api::{
-        ApiKey, ApiRequest, ApiResponse,
-        metadata::{MetadataLayer, MetadataResponse},
-        produce::ProduceLayer,
-        read_api_request, read_api_response, read_frame,
-    },
-    batch::BatchProduceLayer,
+    api::{ApiKey, ApiRequest, ApiResponse, read_api_request, read_api_response, read_frame},
 };
 use bytes::Bytes;
 use rama::{
     Context, Layer, Service,
-    layer::{HijackLayer, MapResponseLayer},
     net::{
         address::{Authority, Host},
         client::{ConnectorService, EstablishedClientConnection},
-        stream::{Socket, Stream},
+        stream::Stream,
     },
     service::BoxService,
-    tcp::{TcpStream, client::default_tcp_connect, server::TcpListener},
+    tcp::{TcpStream, client::default_tcp_connect},
 };
-use tansu_kafka_sans_io::metadata_response::MetadataResponseBroker;
 use tokio::io::AsyncWriteExt;
 use tracing::{Instrument, Level, debug, span};
-
-const ADDR: &str = "127.0.0.1:9092";
-
-const PRODUCE_API_KEY: ApiKey = ApiKey(0);
-const METADATA_API_KEY: ApiKey = ApiKey(3);
-const NODE_ID: i32 = 111;
-
-#[allow(dead_code)]
-pub async fn listener() -> Result<(), Error> {
-    let listener = TcpListener::bind(ADDR).await?;
-
-    let origin = ApiClient::new(Authority::from(([127, 0, 0, 1], 9092)));
-
-    let produce = HijackLayer::new(
-        PRODUCE_API_KEY,
-        (
-            ProduceLayer,
-            BatchProduceLayer::new(Duration::from_millis(5_000)),
-            origin.clone(),
-        ),
-    );
-
-    let metadata = HijackLayer::new(
-        METADATA_API_KEY,
-        (
-            MetadataLayer,
-            MapResponseLayer::new(|response: MetadataResponse| MetadataResponse {
-                brokers: Some(vec![MetadataResponseBroker {
-                    node_id: NODE_ID,
-                    host: "localhost".into(),
-                    port: 9092,
-                    rack: None,
-                }]),
-                ..response
-            }),
-            origin.clone(),
-        ),
-    );
-
-    let _stack = (produce, metadata).into_layer(origin.clone());
-
-    let _sub = ProduceLayer.into_layer(BatchProduceLayer::new(Duration::from_millis(5_000)));
-
-    let q = (TcpStreamLayer, ByteLayer, ApiRequestLayer).into_layer(origin.clone());
-
-    listener.serve(q).await;
-
-    Ok(())
-}
-
-#[allow(dead_code)]
-async fn api_request_handle(request: ApiRequest) -> Result<ApiResponse, Error> {
-    debug!(?request);
-    todo!()
-}
-
-#[allow(dead_code)]
-async fn handle(stream: impl Socket + Stream + Unpin) -> Result<(), Error> {
-    println!(
-        "Incoming connection from: {}",
-        stream
-            .peer_addr()
-            .map(|a| a.to_string())
-            .unwrap_or_else(|_| "???".to_owned())
-    );
-
-    // stream
-    //     .write_all(resp.as_bytes())
-    //     .await
-    //     .expect("write to stream");
-
-    Ok(())
-}
 
 #[allow(dead_code)]
 async fn client() -> Result<(), Error> {

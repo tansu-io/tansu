@@ -39,6 +39,7 @@ use crate::{
     Error,
     api::{
         ApiKey, ApiVersion, CorrelationId,
+        describe_config::ResourceConfig,
         produce::{ProduceRequest, ProduceResponse},
     },
 };
@@ -66,7 +67,7 @@ pub struct BatchProduceService<S: Clone + Debug> {
     service: S,
     requests: Arc<Mutex<Vec<BatchRequest>>>,
     responses: Arc<Mutex<BTreeMap<Uuid, BatchResponse>>>,
-    duration: Duration,
+    resource_config: ResourceConfig,
 }
 
 impl<S> BatchProduceService<S>
@@ -155,6 +156,19 @@ where
         ctx: rama::Context<State>,
         request: ProduceRequest,
     ) -> Result<Self::Response, Self::Error> {
+        let batch_timeout_ms = Duration::from_millis(
+            request
+                .topic_names()
+                .iter()
+                .filter_map(|topic_name| {
+                    self.resource_config
+                        .get(topic_name, "tansu.batch.timeout_ms")
+                        .and_then(|value| value.as_u64())
+                })
+                .min()
+                .unwrap_or(10_000),
+        );
+
         let ticket = self
             .requests
             .lock()
@@ -170,7 +184,8 @@ where
             .inspect(|ticket| debug!(?ticket))?;
 
         loop {
-            let patience = sleep(self.duration);
+            let patience = sleep(batch_timeout_ms);
+
             let ticket = ticket.clone();
             let id = ticket.id;
             let ctx = ctx.clone();
@@ -201,26 +216,26 @@ impl<S> BatchProduceService<S>
 where
     S: Service<(), ProduceRequest, Response = ProduceResponse> + Clone + Debug,
 {
-    fn new(duration: Duration, service: S) -> Self {
+    fn new(resource_config: ResourceConfig, service: S) -> Self {
         Self {
             service,
             requests: Arc::new(Mutex::new(Vec::new())),
             responses: Arc::new(Mutex::new(BTreeMap::new())),
-            duration,
+            resource_config,
         }
     }
 }
 
 #[allow(dead_code)]
-#[derive(Copy, Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Default)]
 pub struct BatchProduceLayer {
-    duration: Duration,
+    resource_config: ResourceConfig,
 }
 
 #[allow(dead_code)]
 impl BatchProduceLayer {
-    pub fn new(duration: Duration) -> Self {
-        Self { duration }
+    pub fn new(resource_config: ResourceConfig) -> Self {
+        Self { resource_config }
     }
 }
 
@@ -235,7 +250,7 @@ where
             service: inner,
             requests: Arc::new(Mutex::new(Vec::new())),
             responses: Arc::new(Mutex::new(BTreeMap::new())),
-            duration: self.duration,
+            resource_config: self.resource_config.clone(),
         }
     }
 }
@@ -389,6 +404,15 @@ impl IntoIterator for BatchPartitionProduceResponse {
 
 impl From<Vec<BatchRequest>> for ProduceRequest {
     fn from(requests: Vec<BatchRequest>) -> Self {
+        let (api_key, api_version) = requests
+            .first()
+            .map(|request| (request.request.api_key, request.request.api_version))
+            .unwrap_or_default();
+
+        let client_id = requests
+            .first()
+            .and_then(|request| request.request.client_id.clone());
+
         let mut run = TopicPartitionBatch::default();
         for request in requests {
             debug!(?request);
@@ -413,6 +437,9 @@ impl From<Vec<BatchRequest>> for ProduceRequest {
         }
 
         Self {
+            api_key,
+            api_version,
+            client_id,
             topic_data: Some(run.into_iter().collect::<Vec<_>>()),
             ..Default::default()
         }
@@ -710,7 +737,13 @@ mod tests {
 
         let mock = MockProduceService::default();
 
-        let bp = (BatchProduceLayer::new(Duration::from_secs(5))).into_layer(mock.clone());
+        let configuration = ResourceConfig::default();
+
+        let topic_a = "a";
+        configuration.put(topic_a, "tansu.batch", "true");
+        configuration.put(topic_a, "tansu.batch.timeout_ms", "5000");
+
+        let bp = (BatchProduceLayer::new(configuration)).into_layer(mock.clone());
 
         let correlation_id_a = 67876;
 
@@ -719,12 +752,12 @@ mod tests {
             debug!(?bp);
 
             tokio::spawn(async move {
-                let span = span!(Level::DEBUG, "batch", "a");
+                let span = span!(Level::DEBUG, "batch", topic_a);
 
                 async move {
                     bp.serve(
                         rama::Context::default(),
-                        produce_request("a", correlation_id_a, b"foo"),
+                        produce_request(topic_a, correlation_id_a, b"foo"),
                     )
                     .await
                 }
@@ -832,7 +865,14 @@ mod tests {
 
         let mock = MockProduceService::default();
 
-        let bp = (BatchProduceLayer::new(Duration::from_secs(5))).into_layer(mock.clone());
+        let configuration = ResourceConfig::default();
+
+        let topic_a = "a";
+        let topic_b = "b";
+        configuration.put(topic_a, "tansu.batch", "true");
+        configuration.put(topic_a, "tansu.batch.timeout_ms", "5000");
+
+        let bp = (BatchProduceLayer::new(configuration)).into_layer(mock.clone());
 
         let correlation_id_a = 67876;
 
@@ -864,11 +904,14 @@ mod tests {
             debug!(?bp);
 
             tokio::spawn(async move {
-                let span = span!(Level::DEBUG, "batch", "a");
+                let span = span!(Level::DEBUG, "batch", topic_a);
 
                 async move {
-                    bp.serve(rama::Context::default(), pr("a", correlation_id_a, b"foo"))
-                        .await
+                    bp.serve(
+                        rama::Context::default(),
+                        pr(topic_a, correlation_id_a, b"foo"),
+                    )
+                    .await
                 }
                 .instrument(span)
                 .await
@@ -891,11 +934,14 @@ mod tests {
             debug!(?bp);
 
             tokio::spawn(async move {
-                let span = span!(Level::DEBUG, "batch", "b");
+                let span = span!(Level::DEBUG, "batch", topic_b);
 
                 async move {
-                    bp.serve(rama::Context::default(), pr("b", correlation_id_b, b"bar"))
-                        .await
+                    bp.serve(
+                        rama::Context::default(),
+                        pr(topic_b, correlation_id_b, b"bar"),
+                    )
+                    .await
                 }
                 .instrument(span)
                 .await

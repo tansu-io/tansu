@@ -23,9 +23,9 @@ use std::{
     error,
     fmt::{self, Debug},
     io::{self},
+    ops::Deref,
     result,
     sync::{Arc, PoisonError},
-    time::Duration,
 };
 use tansu_kafka_sans_io::{Body, ErrorCode, Frame, metadata_response::MetadataResponseBroker};
 use thiserror::Error;
@@ -36,9 +36,10 @@ use url::Url;
 
 use crate::{
     api::{
-        ApiKey, ApiRequest, ApiResponse,
+        ApiKey, ApiKeyVersionLayer, ApiRequest, ApiResponse,
+        describe_config::{ResourceConfig, ResourceConfigValueMatcher, TopicConfigLayer},
         metadata::{MetadataIntoApiLayer, MetadataLayer, MetadataResponse},
-        produce::{ProduceIntoApiLayer, ProduceLayer},
+        produce::{self, ProduceIntoApiLayer, ProduceLayer},
     },
     batch::BatchProduceLayer,
     service::{ApiClient, ApiRequestLayer, ByteLayer, TcpStreamLayer},
@@ -95,7 +96,6 @@ fn host_port(url: &Url) -> String {
 }
 
 impl Proxy {
-    const PRODUCE_API_KEY: ApiKey = ApiKey(0);
     const METADATA_API_KEY: ApiKey = ApiKey(3);
 
     const NODE_ID: i32 = 111;
@@ -106,6 +106,8 @@ impl Proxy {
 
     pub async fn listen(&self) -> Result<()> {
         debug!(%self.listener);
+
+        let configuration = ResourceConfig::default();
 
         let listener = TcpListener::bind(host_port(&self.listener)).await?;
 
@@ -133,10 +135,19 @@ impl Proxy {
         );
 
         let produce = HijackLayer::new(
-            Self::PRODUCE_API_KEY,
+            produce::API_KEY_VERSION.deref().0,
             (
+                ApiKeyVersionLayer,
                 ProduceLayer,
-                BatchProduceLayer::new(Duration::from_millis(5_000)),
+                TopicConfigLayer::new(configuration.clone(), origin.clone()),
+                HijackLayer::new(
+                    ResourceConfigValueMatcher::new(configuration.clone(), "tansu.batch", "true"),
+                    (
+                        BatchProduceLayer::new(configuration.clone()),
+                        ProduceIntoApiLayer,
+                    )
+                        .into_layer(origin.clone()),
+                ),
                 ProduceIntoApiLayer,
             )
                 .into_layer(origin.clone()),

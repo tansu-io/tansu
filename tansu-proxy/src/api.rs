@@ -14,14 +14,16 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use bytes::Bytes;
-use rama::{Context, context::Extensions, matcher::Matcher, tcp::TcpStream};
-use std::fmt::Debug;
+use dashmap::DashMap;
+use rama::{Context, Layer, Service, context::Extensions, matcher::Matcher, tcp::TcpStream};
+use std::{fmt::Debug, sync::Arc};
 use tansu_kafka_sans_io::{Body, Frame, Header};
 use tokio::io::AsyncReadExt;
 use tracing::debug;
 
 use crate::Error;
 
+pub mod describe_config;
 pub mod metadata;
 pub mod produce;
 
@@ -161,5 +163,47 @@ pub fn read_api_response(
         }),
 
         frame => Err(Error::UnexpectedType(Box::new(frame))),
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ApiKeyVersionService<S> {
+    inner: Arc<DashMap<(ApiKey, ApiVersion), S>>,
+    model: S,
+}
+
+impl<S, State> Service<State, ApiRequest> for ApiKeyVersionService<S>
+where
+    S: Service<State, ApiRequest, Response = ApiResponse> + Clone,
+    S::Error: From<Error> + Send + Debug + 'static,
+    State: Send + Sync + 'static,
+{
+    type Response = ApiResponse;
+    type Error = S::Error;
+
+    async fn serve(
+        &self,
+        ctx: Context<State>,
+        req: ApiRequest,
+    ) -> Result<Self::Response, Self::Error> {
+        self.inner
+            .entry((req.api_key, req.api_version))
+            .or_insert(self.model.clone())
+            .serve(ctx, req)
+            .await
+    }
+}
+
+#[derive(Copy, Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ApiKeyVersionLayer;
+
+impl<S> Layer<S> for ApiKeyVersionLayer {
+    type Service = ApiKeyVersionService<S>;
+
+    fn layer(&self, model: S) -> Self::Service {
+        ApiKeyVersionService {
+            inner: Arc::new(DashMap::new()),
+            model,
+        }
     }
 }

@@ -26,6 +26,7 @@ use crate::{
     api::{ApiKey, ApiRequest, ApiResponse, ApiVersion, ClientId, CorrelationId},
 };
 
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct MetadataRequest {
     pub api_key: ApiKey,
     pub api_version: ApiVersion,
@@ -90,6 +91,7 @@ impl From<MetadataRequest> for ApiRequest {
     }
 }
 
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct MetadataResponse {
     pub api_key: ApiKey,
     pub api_version: ApiVersion,

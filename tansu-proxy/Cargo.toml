@@ -12,6 +12,7 @@ publish = false
 async-trait.workspace = true
 bytes.workspace = true
 clap.workspace = true
+dashmap.workspace = true
 rama.workspace = true
 tansu-kafka-sans-io = { path = "../tansu-kafka-sans-io" }
 thiserror.workspace = true
