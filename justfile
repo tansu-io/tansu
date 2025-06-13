@@ -209,10 +209,6 @@ tansu-server:
 kafka-proxy:
     docker run -d -p 19092:9092 apache/kafka:3.9.0
 
-# run a proxy with configuration from .env
-tansu-proxy:
-    target/debug/tansu proxy 2>&1 | tee proxy.log
-
 codespace-create:
     gh codespace create \
         --repo $(gh repo view --json nameWithOwner --jq .nameWithOwner) \
@@ -270,6 +266,12 @@ tansu-broker *args:
 # run a broker with configuration from .env
 broker *args: (cargo-build "--bin" "tansu") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket lakehouse-catalog-up (tansu-broker args)
 
+
+# run a proxy with configuration from .env
+proxy *args:
+    target/debug/tansu proxy {{args}} 2>&1 | tee proxy.log
+
+
 # teardown compose, rebuild: minio, db, tansu and lake buckets
 server: (cargo-build "--bin" "tansu") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket lakehouse-catalog-up
 	target/debug/tansu broker 2>&1  | tee tansu.log
@@ -304,7 +306,7 @@ taxi-topic-populate: (cat-produce "taxi" "etc/data/trips.json")
 taxi-topic-consume: (cat-consume "taxi")
 
 # create taxi topic with generated fields with schema etc/schema/taxi.proto
-taxi-topic-create: (topic-create "taxi" "--partitions" "1" "--config" "'tansu.lake.generate.date=cast(meta.timestamp as date)'" "--config" "tansu.lake.partition=date" "--config" "tansu.lake.z_order=vendor_id" "--config" "tansu.lake.sink=true")
+taxi-topic-create: (topic-create "taxi" "--partitions" "1" "--config" "'tansu.lake.generate.date=cast(meta.timestamp as date)'" "--config" "tansu.lake.partition=date" "--config" "tansu.lake.z_order=vendor_id" "--config" "tansu.lake.sink=true" "--config" "tansu.batch=true")
 
 # create taxi topic with schema etc/schema/taxi.proto
 taxi-topic-create-plain: (topic-create "taxi" "--partitions" "1" "--config" "tansu.lake.sink=true")
