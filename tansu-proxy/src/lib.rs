@@ -15,75 +15,30 @@
 
 use rama::{
     Layer,
-    error::OpaqueError,
+    error::BoxError,
     layer::{HijackLayer, MapResponseLayer},
     tcp::server::TcpListener,
 };
-use std::{
-    error,
-    fmt::{self, Debug},
-    io::{self},
-    ops::Deref,
-    result,
-    sync::{Arc, PoisonError},
-};
-use tansu_kafka_sans_io::{Body, ErrorCode, Frame, metadata_response::MetadataResponseBroker};
-use thiserror::Error;
-use tokio::task::{JoinError, JoinSet};
-use tracing::debug;
-use tracing_subscriber::filter::ParseError;
-use url::Url;
-
-use crate::{
+use std::{fmt::Debug, ops::Deref, result};
+use tansu_kafka_sans_io::{ErrorCode, metadata_response::MetadataResponseBroker};
+use tansu_service::{
     api::{
-        ApiKey, ApiKeyVersionLayer, ApiRequest, ApiResponse,
+        ApiKey, ApiKeyVersionLayer,
         describe_config::{ResourceConfig, ResourceConfigValueMatcher, TopicConfigLayer},
         metadata::{MetadataIntoApiLayer, MetadataLayer, MetadataResponse},
         produce::{self, ProduceIntoApiLayer, ProduceLayer},
     },
-    batch::BatchProduceLayer,
     service::{ApiClient, ApiRequestLayer, ByteLayer, TcpStreamLayer},
 };
+use tokio::task::JoinSet;
+use tracing::debug;
+use url::Url;
 
-mod api;
+use crate::batch::BatchProduceLayer;
+
 mod batch;
-mod service;
 
-pub type Result<T, E = Error> = result::Result<T, E>;
-
-#[derive(Error, Debug)]
-pub enum Error {
-    Boxed(#[from] Box<dyn error::Error + Send + Sync>),
-    Io(Arc<io::Error>),
-    Join(#[from] JoinError),
-    Message(String),
-    Opaque(#[from] OpaqueError),
-    ParseFilter(#[from] ParseError),
-    Poison,
-    Protocol(#[from] tansu_kafka_sans_io::Error),
-    UnexpectedApiRequest(Box<ApiRequest>),
-    UnexpectedApiResponse(Box<ApiResponse>),
-    UnexpectedBody(Box<Body>),
-    UnexpectedType(Box<Frame>),
-}
-
-impl<T> From<PoisonError<T>> for Error {
-    fn from(_value: PoisonError<T>) -> Self {
-        Self::Poison
-    }
-}
-
-impl From<io::Error> for Error {
-    fn from(value: io::Error) -> Self {
-        Self::Io(Arc::new(value))
-    }
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?}", self)
-    }
-}
+pub type Result<T, E = BoxError> = result::Result<T, E>;
 
 #[derive(Clone, Debug)]
 pub struct Proxy {

@@ -61,11 +61,16 @@ where
         name: &str,
         partition: PartitionProduceData,
     ) -> PartitionProduceResponse {
-        match partition.records {
-            Some(mut records) if records.batches.len() == 1 => {
-                let batch = records.batches.remove(0);
+        if let Some(records) = partition.records {
+            let mut base_offset = None;
 
+            for batch in records.batches {
                 let tp = Topition::new(name, partition.index);
+                debug!(
+                    record_count = batch.record_count,
+                    record_bytes = batch.record_data.len(),
+                    ?tp
+                );
 
                 match self
                     .storage
@@ -78,27 +83,33 @@ where
                         }
                         otherwise => error!(?otherwise),
                     }) {
-                    Ok(base_offset) => PartitionProduceResponse {
-                        index: partition.index,
-                        error_code: ErrorCode::None.into(),
-                        base_offset,
-                        log_append_time_ms: Some(-1),
-                        log_start_offset: Some(0),
-                        record_errors: Some([].into()),
-                        error_message: None,
-                        current_leader: None,
-                    },
+                    Ok(offset) => _ = base_offset.get_or_insert(offset),
 
                     Err(Error::Storage(tansu_storage::Error::Api(error_code))) => {
                         debug!(?self, ?error_code);
-                        self.error(partition.index, error_code)
+                        return self.error(partition.index, error_code);
                     }
 
-                    Err(_) => self.error(partition.index, ErrorCode::UnknownServerError),
+                    Err(_) => return self.error(partition.index, ErrorCode::UnknownServerError),
                 }
             }
 
-            _otherwise => self.error(partition.index, ErrorCode::UnknownServerError),
+            if let Some(base_offset) = base_offset {
+                PartitionProduceResponse {
+                    index: partition.index,
+                    error_code: ErrorCode::None.into(),
+                    base_offset,
+                    log_append_time_ms: Some(-1),
+                    log_start_offset: Some(0),
+                    record_errors: Some([].into()),
+                    error_message: None,
+                    current_leader: None,
+                }
+            } else {
+                self.error(partition.index, ErrorCode::UnknownServerError)
+            }
+        } else {
+            self.error(partition.index, ErrorCode::UnknownServerError)
         }
     }
 

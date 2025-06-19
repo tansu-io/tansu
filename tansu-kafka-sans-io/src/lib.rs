@@ -1169,7 +1169,7 @@ impl From<&IsolationLevel> for i8 {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-enum Ack {
+pub enum Ack {
     None,
     Leader,
     FullIsr,

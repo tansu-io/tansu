@@ -40,6 +40,7 @@ use opentelemetry::{
 };
 use opentelemetry_semantic_conventions::SCHEMA_URL;
 use parquet::errors::ParquetError;
+use rhai::EvalAltResult;
 use serde_json::Value;
 use tansu_kafka_sans_io::{ErrorCode, record::inflated::Batch};
 use tracing::{debug, error};
@@ -73,6 +74,9 @@ pub enum Error {
 
     #[error("{:?}", self)]
     BadDowncast { field: String },
+
+    #[error("{:?}", self)]
+    EvalAlt(#[from] Box<EvalAltResult>),
 
     #[error("{:?}", self)]
     BuilderExhausted,
@@ -214,6 +218,10 @@ pub trait AsJsonValue {
     fn as_json_value(&self, batch: &Batch) -> Result<Value>;
 }
 
+pub trait Generator {
+    fn generate(&self) -> Result<tansu_kafka_sans_io::record::Builder>;
+}
+
 #[derive(Clone, Debug)]
 pub enum Schema {
     Avro(Box<avro::Schema>),
@@ -265,6 +273,16 @@ impl AsJsonValue for Schema {
             Self::Avro(schema) => schema.as_json_value(batch),
             Self::Json(schema) => schema.as_json_value(batch),
             Self::Proto(schema) => schema.as_json_value(batch),
+        }
+    }
+}
+
+impl Generator for Schema {
+    fn generate(&self) -> Result<tansu_kafka_sans_io::record::Builder> {
+        match self {
+            Schema::Avro(schema) => schema.generate(),
+            Schema::Json(schema) => schema.generate(),
+            Schema::Proto(schema) => schema.generate(),
         }
     }
 }

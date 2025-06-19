@@ -16,12 +16,14 @@
 use std::{collections::BTreeMap, fmt::Debug, sync::Arc};
 
 use crate::{
-    Error,
-    api::{ApiKey, ApiRequest, ApiResponse, read_api_request, read_api_response, read_frame},
+    Result,
+    api::{ApiKey, ApiRequest, ApiResponse, read_api_request, read_api_response},
+    read_frame,
 };
 use bytes::Bytes;
 use rama::{
     Context, Layer, Service,
+    error::BoxError,
     net::{
         address::{Authority, Host},
         client::{ConnectorService, EstablishedClientConnection},
@@ -34,7 +36,7 @@ use tokio::io::AsyncWriteExt;
 use tracing::{Instrument, Level, debug, span};
 
 #[allow(dead_code)]
-async fn client() -> Result<(), Error> {
+async fn client() -> Result<()> {
     let context = Context::default();
 
     let (mut stream, _address) =
@@ -53,11 +55,11 @@ pub struct TcpStreamService<S> {
 impl<S, State> Service<State, TcpStream> for TcpStreamService<S>
 where
     S: Service<State, Bytes, Response = Bytes>,
-    S::Error: From<Error> + Send + Debug + 'static,
+    S::Error: Into<BoxError> + Send + Debug + 'static,
     State: Clone + Send + Sync + 'static,
 {
     type Response = ();
-    type Error = S::Error;
+    type Error = BoxError;
 
     async fn serve(
         &self,
@@ -70,9 +72,22 @@ where
         async move {
             loop {
                 let buffer = read_frame(&mut req).await?;
-                let buffer = self.inner.serve(ctx.clone(), buffer).await?;
-                req.write_all(&buffer[..]).await.expect("write_all");
+                let buffer = self
+                    .inner
+                    .serve(ctx.clone(), buffer)
+                    .await
+                    .map_err(Into::into)?;
+                if req
+                    .write_all(&buffer[..])
+                    .await
+                    .inspect_err(|err| debug!(?err))
+                    .is_err()
+                {
+                    break;
+                }
             }
+
+            Ok(())
         }
         .instrument(span)
         .await
@@ -98,11 +113,11 @@ pub struct ByteService<S> {
 impl<S, State> Service<State, Bytes> for ByteService<S>
 where
     S: Service<State, ApiRequest, Response = ApiResponse>,
-    S::Error: From<Error> + Send + Debug + 'static,
+    S::Error: Into<BoxError> + Send + Debug + 'static,
     State: Clone + Send + Sync + 'static,
 {
     type Response = Bytes;
-    type Error = S::Error;
+    type Error = BoxError;
 
     async fn serve(&self, ctx: Context<State>, req: Bytes) -> Result<Self::Response, Self::Error> {
         let request = read_api_request(req).inspect(|api_request| debug!(?api_request))?;
@@ -110,9 +125,10 @@ where
             .inner
             .serve(ctx.clone(), request)
             .await
-            .inspect(|api_response| debug!(?api_response))?;
+            .inspect(|api_response| debug!(?api_response))
+            .map_err(Into::into)?;
 
-        Bytes::try_from(response).map_err(Into::into)
+        Bytes::try_from(response)
     }
 }
 
@@ -135,18 +151,18 @@ pub struct ApiRequestService<S> {
 impl<S, State> Service<State, ApiRequest> for ApiRequestService<S>
 where
     S: Service<State, ApiRequest, Response = ApiResponse>,
-    S::Error: From<Error> + Send + Debug + 'static,
+    S::Error: Into<BoxError> + Send + Debug + 'static,
     State: Send + Sync + 'static,
 {
     type Response = ApiResponse;
-    type Error = S::Error;
+    type Error = BoxError;
 
     async fn serve(
         &self,
         ctx: Context<State>,
         req: ApiRequest,
     ) -> Result<Self::Response, Self::Error> {
-        self.inner.serve(ctx, req).await
+        self.inner.serve(ctx, req).await.map_err(Into::into)
     }
 }
 
@@ -161,19 +177,18 @@ impl<S> Layer<S> for ApiRequestLayer {
     }
 }
 
-#[allow(dead_code)]
 #[derive(Debug)]
-struct ApiRouteService<State, Request, Response, Error> {
+pub struct ApiRouteService<State, Request, Response, Error> {
     routes: Arc<BTreeMap<ApiKey, BoxService<State, Request, Response, Error>>>,
     otherwise: Arc<BoxService<State, Request, Response, Error>>,
 }
 
-impl<State> Service<State, ApiRequest> for ApiRouteService<State, ApiRequest, ApiResponse, Error>
+impl<State> Service<State, ApiRequest> for ApiRouteService<State, ApiRequest, ApiResponse, BoxError>
 where
     State: Send + Sync + 'static,
 {
     type Response = ApiResponse;
-    type Error = Error;
+    type Error = BoxError;
 
     async fn serve(
         &self,
@@ -184,26 +199,6 @@ where
             service.serve(ctx, req).await
         } else {
             self.otherwise.serve(ctx, req).await
-        }
-    }
-}
-
-#[allow(dead_code)]
-#[derive(Clone, Debug)]
-struct ApiRouteLayer<State, Request, Response, Error> {
-    routes: Arc<BTreeMap<ApiKey, BoxService<State, Request, Response, Error>>>,
-    otherwise: Arc<BoxService<State, Request, Response, Error>>,
-}
-
-#[allow(dead_code)]
-impl<State, Request, Response, Error> ApiRouteLayer<State, Request, Response, Error> {
-    fn new(
-        routes: impl Into<BTreeMap<ApiKey, BoxService<State, Request, Response, Error>>>,
-        otherwise: impl Into<BoxService<State, Request, Response, Error>>,
-    ) -> Self {
-        Self {
-            routes: Arc::new(routes.into()),
-            otherwise: Arc::new(otherwise.into()),
         }
     }
 }
@@ -224,7 +219,7 @@ where
     State: Clone + Send + Sync + 'static,
 {
     type Response = ApiResponse;
-    type Error = Error;
+    type Error = BoxError;
 
     async fn serve(
         &self,
@@ -233,21 +228,28 @@ where
     ) -> Result<Self::Response, Self::Error> {
         let (mut stream, address) = default_tcp_connect(&ctx, self.authority.clone()).await?;
 
-        debug!(
-            ?address,
-            api_key = req.api_key.0,
-            api_version = req.api_version,
-            correlation_id = req.correlation_id,
-            body = ?req.body
-        );
+        let local = stream.local_addr()?;
 
-        let api_key = req.api_key;
-        let api_version = req.api_version;
-        let buffer = Bytes::try_from(req)?;
-        stream.write_all(&buffer[..]).await?;
-        let buffer = read_frame(&mut stream).await?;
-        read_api_response(buffer, api_key, api_version)
-            .inspect(|api_response| debug!(?api_response))
+        let span = span!(Level::DEBUG, "client", local = %local, remote = %address);
+
+        async move {
+            debug!(
+                api_key = req.api_key.0,
+                api_version = req.api_version,
+                correlation_id = req.correlation_id,
+                body = ?req.body
+            );
+
+            let api_key = req.api_key;
+            let api_version = req.api_version;
+            let buffer = Bytes::try_from(req)?;
+            stream.write_all(&buffer[..]).await?;
+            let buffer = read_frame(&mut stream).await?;
+            read_api_response(buffer, api_key, api_version)
+                .inspect(|api_response| debug!(?api_response))
+        }
+        .instrument(span)
+        .await
     }
 }
 
@@ -264,11 +266,11 @@ struct TansuConnector<S> {
 
 impl<S, State> Service<State, ApiRequest> for TansuConnector<S>
 where
-    S: ConnectorService<State, ApiRequest, Connection: Stream + Unpin, Error: Into<Error>>,
+    S: ConnectorService<State, ApiRequest, Connection: Stream + Unpin, Error: Into<BoxError>>,
     State: Clone + Send + Sync + 'static,
 {
     type Response = EstablishedClientConnection<TansuClientService<ApiResponse>, State, ApiRequest>;
-    type Error = Error;
+    type Error = BoxError;
 
     async fn serve(
         &self,
@@ -291,7 +293,7 @@ mod tests {
     use crate::api::produce::{ProduceRequest, ProduceResponse};
 
     use super::*;
-    use rama::service::service_fn;
+    use rama::{error::OpaqueError, service::service_fn};
     use tansu_kafka_sans_io::{
         Body, ErrorCode, Frame, Header, MESSAGE_META,
         produce_request::{PartitionProduceData, TopicProduceData},
@@ -303,7 +305,7 @@ mod tests {
 
     const PRODUCE_REQUEST: &str = "ProduceRequest";
 
-    fn init_tracing() -> Result<DefaultGuard, Error> {
+    fn init_tracing() -> Result<DefaultGuard> {
         Ok(tracing::subscriber::set_default(
             tracing_subscriber::fmt()
                 .with_level(true)
@@ -316,7 +318,7 @@ mod tests {
                 .with_writer(
                     thread::current()
                         .name()
-                        .ok_or(Error::Message(String::from("unnamed thread")))
+                        .ok_or(OpaqueError::from_display("unnamed thread").into_boxed())
                         .and_then(|name| {
                             File::create(format!("../logs/{}/{name}.log", env!("CARGO_PKG_NAME"),))
                                 .map_err(Into::into)
@@ -328,7 +330,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn simple_proxy() -> Result<(), Error> {
+    async fn simple_proxy() -> Result<()> {
         let _guard = init_tracing()?;
 
         let (api_key, api_version) = MESSAGE_META
@@ -416,8 +418,10 @@ mod tests {
         let produce_response = service
             .serve(Context::default(), frame)
             .await
-            .and_then(|response| read_api_response(response, ApiKey(api_key), api_version))
-            .and_then(ProduceResponse::try_from)?;
+            .and_then(|response| {
+                read_api_response(response, ApiKey(api_key), api_version).map_err(Into::into)
+            })
+            .and_then(|response| ProduceResponse::try_from(response).map_err(Into::into))?;
 
         assert!(produce_response.responses.is_some());
 
@@ -429,7 +433,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn simple_router() -> Result<(), Error> {
+    async fn simple_router() -> Result<()> {
         let _guard = init_tracing()?;
 
         Ok(())

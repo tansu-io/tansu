@@ -13,17 +13,21 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use rama::{Context, Layer, Service};
+use rama::{Context, Layer, Service, error::BoxError};
 use std::{fmt::Debug, sync::LazyLock};
 use tansu_kafka_sans_io::{
     Body, MESSAGE_META,
     produce_request::TopicProduceData,
     produce_response::{NodeEndpoint, TopicProduceResponse},
+    record::deflated::Batch,
 };
 
 use crate::{
-    Error,
-    api::{ApiKey, ApiRequest, ApiResponse, ApiVersion, ClientId, CorrelationId},
+    Result,
+    api::{
+        ApiKey, ApiRequest, ApiResponse, ApiVersion, ClientId, CorrelationId,
+        UnexpectedApiBodyError,
+    },
 };
 
 pub static API_KEY_VERSION: LazyLock<(ApiKey, ApiVersion)> = LazyLock::new(|| {
@@ -35,7 +39,7 @@ pub static API_KEY_VERSION: LazyLock<(ApiKey, ApiVersion)> = LazyLock::new(|| {
         })
 });
 
-#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ProduceRequest {
     pub api_key: ApiKey,
     pub api_version: ApiVersion,
@@ -48,24 +52,67 @@ pub struct ProduceRequest {
     pub topic_data: Option<Vec<TopicProduceData>>,
 }
 
+impl Default for ProduceRequest {
+    fn default() -> Self {
+        Self {
+            api_key: API_KEY_VERSION.0,
+            api_version: API_KEY_VERSION.1,
+            correlation_id: 0,
+            client_id: Some("tansu".into()),
+            transactional_id: None,
+            acks: 0,
+            timeout_ms: 5_000,
+            topic_data: None,
+        }
+    }
+}
+
 impl ProduceRequest {
     pub fn topic_names(&self) -> Vec<String> {
-        let mut topics = self
-            .topic_data
-            .clone()
-            .unwrap_or_default()
-            .iter()
-            .map(|topic| topic.name.clone())
-            .collect::<Vec<_>>();
+        let mut topics = self.topic_data.as_ref().map_or(vec![], |topics| {
+            topics
+                .iter()
+                .map(|topic| topic.name.clone())
+                .collect::<Vec<_>>()
+        });
 
         topics.sort();
         topics.dedup();
         topics
     }
+
+    fn size_of(&self, unit: fn(&Batch) -> usize) -> usize {
+        self.topic_data.as_ref().map_or(0, |topics| {
+            topics
+                .iter()
+                .map(|topic| {
+                    topic.partition_data.as_ref().map_or(0, |partitions| {
+                        partitions
+                            .iter()
+                            .map(|partition| {
+                                partition
+                                    .records
+                                    .as_ref()
+                                    .map_or(0, |frame| frame.batches.iter().map(unit).sum())
+                            })
+                            .sum()
+                    })
+                })
+                .sum()
+        })
+    }
+
+    pub fn number_of_records(&self) -> usize {
+        self.size_of(|batch| batch.record_count as usize)
+    }
+
+    pub fn number_of_bytes(&self) -> usize {
+        self.size_of(|batch| batch.record_data.len())
+    }
 }
 
 impl TryFrom<ApiRequest> for ProduceRequest {
-    type Error = Error;
+    type Error = UnexpectedApiBodyError;
 
     fn try_from(api_request: ApiRequest) -> Result<Self, Self::Error> {
         if let ApiRequest {
@@ -94,13 +141,13 @@ impl TryFrom<ApiRequest> for ProduceRequest {
                 topic_data,
             })
         } else {
-            Err(Error::UnexpectedApiRequest(Box::new(api_request)))
+            Err(UnexpectedApiBodyError::Request(Box::new(api_request)))
         }
     }
 }
 
 impl TryFrom<&ApiRequest> for ProduceRequest {
-    type Error = Error;
+    type Error = UnexpectedApiBodyError;
 
     fn try_from(api_request: &ApiRequest) -> Result<Self, Self::Error> {
         Self::try_from(api_request.to_owned())
@@ -158,7 +205,7 @@ impl From<ProduceResponse> for ApiResponse {
 }
 
 impl TryFrom<ApiResponse> for ProduceResponse {
-    type Error = Error;
+    type Error = UnexpectedApiBodyError;
 
     fn try_from(api_response: ApiResponse) -> Result<Self, Self::Error> {
         if let ApiResponse {
@@ -182,7 +229,7 @@ impl TryFrom<ApiResponse> for ProduceResponse {
                 node_endpoints,
             })
         } else {
-            Err(Error::UnexpectedApiResponse(Box::new(api_response)))
+            Err(UnexpectedApiBodyError::Response(Box::new(api_response)))
         }
     }
 }
@@ -195,12 +242,12 @@ pub struct ProduceService<S> {
 impl<S, State> Service<State, ApiRequest> for ProduceService<S>
 where
     S: Service<State, ProduceRequest, Response = ProduceResponse>,
-    S::Error: From<Error> + Send + Debug + 'static,
+    S::Error: Into<BoxError> + Send + Debug + 'static,
     State: Send + Sync + 'static,
 {
     type Response = ApiResponse;
 
-    type Error = S::Error;
+    type Error = BoxError;
 
     async fn serve(
         &self,
@@ -212,6 +259,7 @@ where
         self.inner
             .serve(ctx, produce_request)
             .await
+            .map_err(Into::into)
             .map(ProduceResponse::into)
     }
 }
@@ -235,11 +283,11 @@ pub struct ProduceIntoApiService<S> {
 impl<S, State> Service<State, ProduceRequest> for ProduceIntoApiService<S>
 where
     S: Service<State, ApiRequest, Response = ApiResponse>,
-    S::Error: From<Error> + Send + Debug + 'static,
+    S::Error: Into<BoxError> + Send + Debug + 'static,
     State: Send + Sync + 'static,
 {
     type Response = ProduceResponse;
-    type Error = S::Error;
+    type Error = BoxError;
 
     async fn serve(
         &self,
@@ -249,6 +297,7 @@ where
         self.inner
             .serve(ctx, ApiRequest::from(req))
             .await
+            .map_err(Into::into)
             .and_then(|response| TryInto::try_into(response).map_err(Into::into))
     }
 }

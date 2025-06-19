@@ -18,31 +18,32 @@ use std::{
     fmt::Debug,
     ops::DerefMut,
     pin::Pin,
-    result::Result,
     sync::{Arc, Mutex},
     task::{Context, Poll, Waker},
     time::Duration,
     vec::IntoIter,
 };
 
-use rama::{Layer, Service};
+use rama::{Layer, Service, error::BoxError};
 use tansu_kafka_sans_io::{
     produce_request::{PartitionProduceData, TopicProduceData},
     produce_response::{PartitionProduceResponse, TopicProduceResponse},
-    record::deflated::{Batch, Frame},
+    record::{
+        Record,
+        deflated::{self, Frame},
+        inflated,
+    },
+};
+use tansu_service::api::{
+    ApiKey, ApiVersion, CorrelationId,
+    describe_config::ResourceConfig,
+    produce::{ProduceRequest, ProduceResponse},
 };
 use tokio::time::sleep;
 use tracing::debug;
 use uuid::Uuid;
 
-use crate::{
-    Error,
-    api::{
-        ApiKey, ApiVersion, CorrelationId,
-        describe_config::ResourceConfig,
-        produce::{ProduceRequest, ProduceResponse},
-    },
-};
+use crate::Result;
 
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 struct Topition {
@@ -54,6 +55,11 @@ struct Topition {
 struct BatchRequest {
     id: Uuid,
     request: ProduceRequest,
+}
+impl BatchRequest {
+    fn number_of_records(&self) -> usize {
+        self.request.number_of_records()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -78,35 +84,45 @@ where
         &self,
         id: &Uuid,
         ctx: rama::Context<State>,
-    ) -> Result<Option<ProduceResponse>, Error>
+    ) -> Result<Option<ProduceResponse>>
     where
         S: Service<State, ProduceRequest, Response = ProduceResponse> + Clone + Debug,
-        S::Error: From<Error> + Send + Debug + 'static,
+        S::Error: Into<BoxError> + Send + Debug + 'static,
         State: Send + Sync + 'static,
     {
+        debug!(%id);
+
         let requests = self
             .requests
             .lock()
-            .inspect_err(|err| debug!(?err))
             .map(|mut guard| std::mem::take(guard.deref_mut()))
-            .inspect(|request| debug!(?request))?;
+            .inspect(|request| debug!(?request))
+            .inspect_err(|err| debug!(?err))
+            .expect("poison");
 
         if requests.is_empty() {
             return Ok(None);
         }
 
         let owners = Owner::from(&requests[..]);
-        let produce_request = ProduceRequest::from(requests);
+        let produce_request = produce_request(requests);
 
         let produce_response = self
             .service
             .serve(ctx, produce_request)
             .await
-            .expect("produce_request");
+            .inspect(|response| debug!(?response))
+            .inspect_err(|err| debug!(?err))
+            .map_err(Into::into)?;
 
-        let mut responses = self.responses.lock().inspect_err(|err| debug!(?err))?;
+        let mut responses = self
+            .responses
+            .lock()
+            .inspect_err(|err| debug!(?err))
+            .expect("poison");
 
         let mut owners = owners.split(produce_response);
+        debug!(?owners);
 
         if let Some(produce_response) = owners
             .remove(id)
@@ -118,6 +134,7 @@ where
 
             for (owner, response) in owners {
                 debug!(?owner, ?response);
+
                 if let Some(BatchResponse::Waker(waker)) =
                     responses.insert(owner, BatchResponse::Response(response))
                 {
@@ -144,18 +161,20 @@ where
 impl<S, State> Service<State, ProduceRequest> for BatchProduceService<S>
 where
     S: Service<State, ProduceRequest, Response = ProduceResponse> + Clone + Debug,
-    S::Error: From<Error> + Send + Debug + 'static,
+    S::Error: Into<BoxError> + Send + Debug + 'static,
     State: Clone + Send + Sync + 'static,
 {
     type Response = ProduceResponse;
 
-    type Error = S::Error;
+    type Error = BoxError;
 
     async fn serve(
         &self,
         ctx: rama::Context<State>,
         request: ProduceRequest,
     ) -> Result<Self::Response, Self::Error> {
+        debug!(?request);
+
         let batch_timeout_ms = Duration::from_millis(
             request
                 .topic_names()
@@ -166,13 +185,25 @@ where
                         .and_then(|value| value.as_u64())
                 })
                 .min()
+                .inspect(|batch_timeout_ms| debug!(?batch_timeout_ms))
                 .unwrap_or(10_000),
         );
+
+        let max_records = request
+            .topic_names()
+            .iter()
+            .filter_map(|topic_name| {
+                self.resource_config
+                    .get(topic_name, "tansu.batch.max_records")
+                    .and_then(|value| value.as_usize())
+            })
+            .min()
+            .inspect(|max_records| debug!(?max_records))
+            .unwrap_or(1_000);
 
         let ticket = self
             .requests
             .lock()
-            .map_err(Into::into)
             .map(|mut requests| {
                 let ticket = Ticket::new(self.clone());
                 requests.push(BatchRequest {
@@ -181,14 +212,37 @@ where
                 });
                 ticket
             })
-            .inspect(|ticket| debug!(?ticket))?;
+            .inspect(|ticket| debug!(?ticket))
+            .expect("poison");
 
         loop {
-            let patience = sleep(batch_timeout_ms);
-
-            let ticket = ticket.clone();
             let id = ticket.id;
             let ctx = ctx.clone();
+
+            if self
+                .requests
+                .lock()
+                .map(|requests| {
+                    requests
+                        .iter()
+                        .map(|batch_request| batch_request.number_of_records())
+                        .sum::<usize>()
+                })
+                .inspect(|num_records| debug!(num_records, max_records))
+                .expect("poison")
+                >= max_records
+            {
+                if let Ok(Some(produce_response)) = self
+                    .send_pending_batch(&id, ctx.clone())
+                    .await
+                    .inspect(|r| debug!(?r))
+                {
+                    return Ok(produce_response);
+                }
+            }
+
+            let patience = sleep(batch_timeout_ms);
+            let ticket = ticket.clone();
             debug!(?patience);
 
             tokio::select! {
@@ -196,7 +250,6 @@ where
                     return response
                     .inspect(|response|debug!(?response))
                     .inspect_err(|err|debug!(?err))
-                    .map_err(Into::into)
                 }
 
                 expired = patience => {
@@ -281,6 +334,8 @@ struct Owner {
 
 impl From<&[BatchRequest]> for Owner {
     fn from(requests: &[BatchRequest]) -> Self {
+        debug!(?requests);
+
         let mut topition = BTreeMap::<Topition, BTreeSet<Uuid>>::new();
         let mut meta = BTreeMap::new();
 
@@ -319,13 +374,19 @@ impl Owner {
         let mut responses = BTreeMap::<Uuid, BatchTopicProduceResponse>::new();
 
         for topic in produce_response.responses.unwrap_or_default() {
+            debug!(?topic);
+
             for partition in topic.partition_responses.unwrap_or_default() {
                 let topition = Topition {
                     topic: topic.name.clone(),
                     partition: partition.index,
                 };
 
+                debug!(?topition);
+
                 for owner in self.topition.get(&topition).cloned().unwrap_or_default() {
+                    debug!(?owner);
+
                     _ = responses
                         .entry(owner)
                         .or_default()
@@ -333,13 +394,17 @@ impl Owner {
                         .entry(topic.name.clone())
                         .or_default()
                         .0
-                        .insert(partition.index, partition.clone());
+                        .insert(partition.index, partition.clone())
+                        .inspect(|partition_produce_response| debug!(?partition_produce_response));
                 }
             }
         }
 
         responses
             .into_iter()
+            .inspect(|(owner, batch_topic_produce_response)| {
+                debug!(?owner, ?batch_topic_produce_response)
+            })
             .map(|(owner, batch_topic_produce_response)| {
                 let meta = self.meta.get(&owner).copied().unwrap_or_default();
 
@@ -355,6 +420,7 @@ impl Owner {
                     },
                 )
             })
+            .inspect(|(owner, produce_response)| debug!(?owner, ?produce_response))
             .collect()
     }
 }
@@ -402,52 +468,54 @@ impl IntoIterator for BatchPartitionProduceResponse {
     }
 }
 
-impl From<Vec<BatchRequest>> for ProduceRequest {
-    fn from(requests: Vec<BatchRequest>) -> Self {
-        let (api_key, api_version) = requests
-            .first()
-            .map(|request| (request.request.api_key, request.request.api_version))
-            .unwrap_or_default();
+fn produce_request(requests: Vec<BatchRequest>) -> ProduceRequest {
+    debug!(?requests);
 
-        let client_id = requests
-            .first()
-            .and_then(|request| request.request.client_id.clone());
+    let (api_key, api_version) = requests
+        .first()
+        .map(|request| (request.request.api_key, request.request.api_version))
+        .unwrap_or_default();
 
-        let mut run = TopicPartitionBatch::default();
-        for request in requests {
-            debug!(?request);
+    let client_id = requests
+        .first()
+        .and_then(|request| request.request.client_id.clone());
 
-            for topic in request.request.topic_data.unwrap_or_default() {
-                debug!(?topic);
+    let mut run = TopicPartitionBatch::default();
+    for request in requests {
+        debug!(?request);
 
-                for partition in topic.partition_data.unwrap_or_default() {
-                    debug!(?partition);
+        for topic in request.request.topic_data.unwrap_or_default() {
+            debug!(?topic);
 
-                    if let Some(mut records) = partition.records {
-                        run.topics
-                            .entry(topic.name.clone())
-                            .or_default()
-                            .partitions
-                            .entry(partition.index)
-                            .or_default()
-                            .append(&mut records.batches);
-                    }
+            for partition in topic.partition_data.unwrap_or_default() {
+                debug!(?partition);
+
+                if let Some(mut records) = partition.records {
+                    run.topics
+                        .entry(topic.name.clone())
+                        .or_default()
+                        .partitions
+                        .entry(partition.index)
+                        .or_default()
+                        .append(&mut records.batches);
                 }
             }
         }
+    }
 
-        Self {
-            api_key,
-            api_version,
-            client_id,
-            topic_data: Some(run.into_iter().collect::<Vec<_>>()),
-            ..Default::default()
-        }
+    ProduceRequest {
+        api_key,
+        api_version,
+        client_id,
+        topic_data: Some(run.into_iter().collect::<Vec<_>>()),
+        ..Default::default()
     }
 }
 
 impl From<Vec<BatchRequest>> for BatchProduction {
     fn from(requests: Vec<BatchRequest>) -> Self {
+        debug!(?requests);
+
         let mut run = TopicPartitionBatch::default();
         let mut owners = BTreeMap::<Uuid, BTreeSet<Topition>>::new();
 
@@ -523,7 +591,7 @@ impl IntoIterator for TopicPartitionBatch {
 
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 struct PartitionBatch {
-    partitions: BTreeMap<Partition, Vec<Batch>>,
+    partitions: BTreeMap<Partition, Vec<deflated::Batch>>,
 }
 
 impl IntoIterator for PartitionBatch {
@@ -535,10 +603,52 @@ impl IntoIterator for PartitionBatch {
             .into_iter()
             .map(|(index, batches)| PartitionProduceData {
                 index,
-                records: Some(Frame { batches }),
+                records: Some(Frame {
+                    batches: combine(batches).unwrap(),
+                }),
             })
             .collect::<Vec<_>>()
             .into_iter()
+    }
+}
+
+fn combine(batches: Vec<deflated::Batch>) -> Result<Vec<deflated::Batch>> {
+    debug!(len = ?batches.len());
+
+    if batches.len() >= 2 {
+        let mut i = batches.into_iter();
+
+        if let Some(first) = i.next() {
+            let mut sink = inflated::Batch::try_from(first)?;
+
+            for batch in i {
+                let batch = inflated::Batch::try_from(batch)?;
+
+                sink.records.append(
+                    &mut batch
+                        .records
+                        .into_iter()
+                        .map(|record| Record {
+                            offset_delta: record.offset_delta + sink.last_offset_delta,
+                            timestamp_delta: record.timestamp_delta
+                                + (sink.base_timestamp - batch.base_timestamp),
+                            ..record
+                        })
+                        .collect::<Vec<_>>(),
+                );
+
+                sink.last_offset_delta += batch.last_offset_delta;
+                sink.max_timestamp = sink.max_timestamp.max(batch.max_timestamp);
+            }
+
+            deflated::Batch::try_from(sink)
+                .map(|batch| vec![batch])
+                .map_err(Into::into)
+        } else {
+            unreachable!()
+        }
+    } else {
+        Ok(batches)
     }
 }
 
@@ -573,7 +683,7 @@ impl<S> Future for Ticket<S>
 where
     S: Clone + Debug,
 {
-    type Output = Result<ProduceResponse, Error>;
+    type Output = Result<ProduceResponse, BoxError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         match self
@@ -594,7 +704,7 @@ where
                 }
             },
 
-            Err(error) => Poll::Ready(Err(error.into())),
+            Err(error) => panic!("{error:?}"),
         }
     }
 }
@@ -604,9 +714,11 @@ mod tests {
     use std::{fs::File, thread};
 
     use bytes::Bytes;
+    use rama::error::OpaqueError;
     use tansu_kafka_sans_io::{
         ErrorCode,
         produce_response::{LeaderIdAndEpoch, PartitionProduceResponse, TopicProduceResponse},
+        record,
     };
     use tokio::{task::yield_now, time::advance};
     use tracing::{Instrument, Level, debug, span, subscriber::DefaultGuard};
@@ -624,7 +736,7 @@ mod tests {
         State: Send + Sync + 'static,
     {
         type Response = ProduceResponse;
-        type Error = Error;
+        type Error = BoxError;
 
         async fn serve(
             &self,
@@ -670,14 +782,14 @@ mod tests {
                 node_endpoints: Some([].into()),
             };
 
-            let mut guard = self.reqs.lock()?;
+            let mut guard = self.reqs.lock().expect("poison");
             guard.push(req);
 
             Ok(produce_response)
         }
     }
 
-    fn init_tracing() -> Result<DefaultGuard, Error> {
+    fn init_tracing() -> Result<DefaultGuard> {
         Ok(tracing::subscriber::set_default(
             tracing_subscriber::fmt()
                 .with_level(true)
@@ -691,7 +803,7 @@ mod tests {
                 .with_writer(
                     thread::current()
                         .name()
-                        .ok_or(Error::Message(String::from("unnamed thread")))
+                        .ok_or(OpaqueError::from_display("unnamed thread").into_boxed())
                         .and_then(|name| {
                             File::create(format!("../logs/{}/{name}.log", env!("CARGO_PKG_NAME"),))
                                 .map_err(Into::into)
@@ -702,12 +814,22 @@ mod tests {
         ))
     }
 
+    fn record_data_batch(value: &'static [u8]) -> Result<deflated::Batch> {
+        inflated::Batch::builder()
+            .base_timestamp(1_234_567_890 * 1_000)
+            .max_timestamp(1_234_567_890 * 1_000)
+            .record(record::Record::builder().value(Bytes::from_static(value).into()))
+            .build()
+            .and_then(deflated::Batch::try_from)
+            .map_err(Into::into)
+    }
+
     fn produce_request(
         topic: &str,
         correlation_id: CorrelationId,
         record_data: &'static [u8],
-    ) -> ProduceRequest {
-        ProduceRequest {
+    ) -> Result<ProduceRequest> {
+        record_data_batch(record_data).map(|batch| ProduceRequest {
             correlation_id,
             topic_data: Some(
                 [TopicProduceData {
@@ -716,10 +838,7 @@ mod tests {
                         [PartitionProduceData {
                             index: 0,
                             records: Some(Frame {
-                                batches: vec![Batch {
-                                    record_data: Bytes::from_static(record_data),
-                                    ..Batch::default()
-                                }],
+                                batches: vec![batch],
                             }),
                         }]
                         .into(),
@@ -728,11 +847,11 @@ mod tests {
                 .into(),
             ),
             ..Default::default()
-        }
+        })
     }
 
     #[tokio::test(start_paused = true)]
-    async fn single_request_in_batch() -> Result<(), Error> {
+    async fn single_request_in_batch() -> Result<()> {
         let _guard = init_tracing()?;
 
         let mock = MockProduceService::default();
@@ -740,8 +859,8 @@ mod tests {
         let configuration = ResourceConfig::default();
 
         let topic_a = "a";
-        configuration.put(topic_a, "tansu.batch", "true");
-        configuration.put(topic_a, "tansu.batch.timeout_ms", "5000");
+        configuration.put(topic_a, "tansu.batch", "true")?;
+        configuration.put(topic_a, "tansu.batch.timeout_ms", "5000")?;
 
         let bp = (BatchProduceLayer::new(configuration)).into_layer(mock.clone());
 
@@ -757,7 +876,7 @@ mod tests {
                 async move {
                     bp.serve(
                         rama::Context::default(),
-                        produce_request(topic_a, correlation_id_a, b"foo"),
+                        produce_request(topic_a, correlation_id_a, b"foo")?,
                     )
                     .await
                 }
@@ -770,19 +889,26 @@ mod tests {
         advance(Duration::from_secs(1)).await;
         yield_now().await;
 
-        let len = bp.requests.lock().map(|guard| guard.len())?;
+        let len = bp.requests.lock().map(|guard| guard.len()).expect("poison");
         assert_eq!(1, len);
 
-        let len = mock.reqs.lock().map(|guard| guard.len())?;
+        let len = mock.reqs.lock().map(|guard| guard.len()).expect("poison");
         assert_eq!(0, len);
 
         yield_now().await;
         advance(Duration::from_secs(5)).await;
         yield_now().await;
 
-        let requests = mock.reqs.lock().map(|guard| guard.clone())?;
+        let requests = mock.reqs.lock().map(|guard| guard.clone()).expect("poison");
         assert_eq!(
             vec![ProduceRequest {
+                api_key: ApiKey(0),
+                api_version: 11,
+                correlation_id: 0,
+                client_id: Some("tansu".into()),
+                transactional_id: None,
+                acks: 0,
+                timeout_ms: 5000,
                 topic_data: Some(
                     [TopicProduceData {
                         name: "a".into(),
@@ -790,21 +916,21 @@ mod tests {
                             [PartitionProduceData {
                                 index: 0,
                                 records: Some(Frame {
-                                    batches: [Batch {
+                                    batches: [deflated::Batch {
                                         base_offset: 0,
-                                        batch_length: 0,
-                                        partition_leader_epoch: 0,
-                                        magic: 0,
-                                        crc: 0,
+                                        batch_length: 59,
+                                        partition_leader_epoch: -1,
+                                        magic: 2,
+                                        crc: 1920191007,
                                         attributes: 0,
                                         last_offset_delta: 0,
-                                        base_timestamp: 0,
-                                        max_timestamp: 0,
-                                        producer_id: 0,
+                                        base_timestamp: 1234567890000,
+                                        max_timestamp: 1234567890000,
+                                        producer_id: -1,
                                         producer_epoch: 0,
                                         base_sequence: 0,
-                                        record_count: 0,
-                                        record_data: Bytes::from_static(b"foo")
+                                        record_count: 1,
+                                        record_data: Bytes::from_static(b"\x12\0\0\0\x01\x06foo\0")
                                     }]
                                     .into()
                                 })
@@ -813,8 +939,7 @@ mod tests {
                         )
                     }]
                     .into()
-                ),
-                ..Default::default()
+                )
             }],
             requests
         );
@@ -826,6 +951,8 @@ mod tests {
 
         assert_eq!(
             ProduceResponse {
+                api_key: ApiKey(0),
+                api_version: 11,
                 correlation_id: correlation_id_a,
                 throttle_time_ms: Some(5_000),
                 node_endpoints: Some([].into()),
@@ -860,7 +987,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn two_requests_in_batch() -> Result<(), Error> {
+    async fn two_requests_in_batch() -> Result<()> {
         let _guard = init_tracing()?;
 
         let mock = MockProduceService::default();
@@ -869,35 +996,12 @@ mod tests {
 
         let topic_a = "a";
         let topic_b = "b";
-        configuration.put(topic_a, "tansu.batch", "true");
-        configuration.put(topic_a, "tansu.batch.timeout_ms", "5000");
+        configuration.put(topic_a, "tansu.batch", "true")?;
+        configuration.put(topic_a, "tansu.batch.timeout_ms", "5000")?;
 
         let bp = (BatchProduceLayer::new(configuration)).into_layer(mock.clone());
 
         let correlation_id_a = 67876;
-
-        let pr = |name, correlation_id, record_data| ProduceRequest {
-            correlation_id,
-            topic_data: Some(
-                [TopicProduceData {
-                    name: String::from(name),
-                    partition_data: Some(
-                        [PartitionProduceData {
-                            index: 0,
-                            records: Some(Frame {
-                                batches: vec![Batch {
-                                    record_data: Bytes::from_static(record_data),
-                                    ..Batch::default()
-                                }],
-                            }),
-                        }]
-                        .into(),
-                    ),
-                }]
-                .into(),
-            ),
-            ..Default::default()
-        };
 
         let batch_a = {
             let bp = bp.clone();
@@ -909,7 +1013,7 @@ mod tests {
                 async move {
                     bp.serve(
                         rama::Context::default(),
-                        pr(topic_a, correlation_id_a, b"foo"),
+                        produce_request(topic_a, correlation_id_a, b"foo")?,
                     )
                     .await
                 }
@@ -921,10 +1025,10 @@ mod tests {
         advance(Duration::from_secs(1)).await;
         yield_now().await;
 
-        let len = bp.requests.lock().map(|guard| guard.len())?;
+        let len = bp.requests.lock().map(|guard| guard.len()).expect("poison");
         assert_eq!(1, len);
 
-        let len = mock.reqs.lock().map(|guard| guard.len())?;
+        let len = mock.reqs.lock().map(|guard| guard.len()).expect("poison");
         assert_eq!(0, len);
 
         let correlation_id_b = 78987;
@@ -939,7 +1043,7 @@ mod tests {
                 async move {
                     bp.serve(
                         rama::Context::default(),
-                        pr(topic_b, correlation_id_b, b"bar"),
+                        produce_request(topic_b, correlation_id_b, b"bar")?,
                     )
                     .await
                 }
@@ -951,18 +1055,25 @@ mod tests {
         advance(Duration::from_secs(1)).await;
         yield_now().await;
 
-        let len = bp.requests.lock().map(|guard| guard.len())?;
+        let len = bp.requests.lock().map(|guard| guard.len()).expect("poison");
         assert_eq!(2, len);
 
-        let len = mock.reqs.lock().map(|guard| guard.len())?;
+        let len = mock.reqs.lock().map(|guard| guard.len()).expect("poison");
         assert_eq!(0, len);
 
         advance(Duration::from_secs(5)).await;
         yield_now().await;
 
-        let requests = mock.reqs.lock().map(|guard| guard.clone())?;
+        let requests = mock.reqs.lock().map(|guard| guard.clone()).expect("poison");
         assert_eq!(
             vec![ProduceRequest {
+                api_key: ApiKey(0),
+                api_version: 11,
+                correlation_id: 0,
+                client_id: Some("tansu".into()),
+                transactional_id: None,
+                acks: 0,
+                timeout_ms: 5000,
                 topic_data: Some(
                     [
                         TopicProduceData {
@@ -971,21 +1082,23 @@ mod tests {
                                 [PartitionProduceData {
                                     index: 0,
                                     records: Some(Frame {
-                                        batches: [Batch {
+                                        batches: [deflated::Batch {
                                             base_offset: 0,
-                                            batch_length: 0,
-                                            partition_leader_epoch: 0,
-                                            magic: 0,
-                                            crc: 0,
+                                            batch_length: 59,
+                                            partition_leader_epoch: -1,
+                                            magic: 2,
+                                            crc: 1920191007,
                                             attributes: 0,
                                             last_offset_delta: 0,
-                                            base_timestamp: 0,
-                                            max_timestamp: 0,
-                                            producer_id: 0,
+                                            base_timestamp: 1234567890000,
+                                            max_timestamp: 1234567890000,
+                                            producer_id: -1,
                                             producer_epoch: 0,
                                             base_sequence: 0,
-                                            record_count: 0,
-                                            record_data: Bytes::from_static(b"foo")
+                                            record_count: 1,
+                                            record_data: Bytes::from_static(
+                                                b"\x12\0\0\0\x01\x06foo\0"
+                                            )
                                         }]
                                         .into()
                                     })
@@ -999,21 +1112,23 @@ mod tests {
                                 [PartitionProduceData {
                                     index: 0,
                                     records: Some(Frame {
-                                        batches: [Batch {
+                                        batches: [deflated::Batch {
                                             base_offset: 0,
-                                            batch_length: 0,
-                                            partition_leader_epoch: 0,
-                                            magic: 0,
-                                            crc: 0,
+                                            batch_length: 59,
+                                            partition_leader_epoch: -1,
+                                            magic: 2,
+                                            crc: 524875948,
                                             attributes: 0,
                                             last_offset_delta: 0,
-                                            base_timestamp: 0,
-                                            max_timestamp: 0,
-                                            producer_id: 0,
+                                            base_timestamp: 1234567890000,
+                                            max_timestamp: 1234567890000,
+                                            producer_id: -1,
                                             producer_epoch: 0,
                                             base_sequence: 0,
-                                            record_count: 0,
-                                            record_data: Bytes::from_static(b"bar")
+                                            record_count: 1,
+                                            record_data: Bytes::from_static(
+                                                b"\x12\0\0\0\x01\x06bar\0"
+                                            )
                                         }]
                                         .into()
                                     })
@@ -1023,8 +1138,7 @@ mod tests {
                         }
                     ]
                     .into()
-                ),
-                ..Default::default()
+                )
             }],
             requests
         );
@@ -1035,6 +1149,221 @@ mod tests {
 
         assert_eq!(
             ProduceResponse {
+                correlation_id: correlation_id_a,
+                throttle_time_ms: Some(5_000),
+                node_endpoints: Some([].into()),
+                responses: Some(
+                    [TopicProduceResponse {
+                        name: "a".into(),
+                        partition_responses: Some(
+                            [PartitionProduceResponse {
+                                index: 0,
+                                error_code: 0,
+                                base_offset: 65456,
+                                log_append_time_ms: Some(0),
+                                log_start_offset: Some(0),
+                                record_errors: Some([].into()),
+                                error_message: Some("none".into()),
+                                current_leader: Some(LeaderIdAndEpoch {
+                                    leader_id: 12321,
+                                    leader_epoch: 23432
+                                })
+                            }]
+                            .into()
+                        )
+                    }]
+                    .into()
+                ),
+                api_version: 11,
+                ..Default::default()
+            },
+            response_a
+        );
+
+        let response_b = batch_b
+            .await?
+            .inspect(|produce_response| debug!(?produce_response))?;
+
+        assert_eq!(
+            ProduceResponse {
+                api_key: ApiKey(0),
+                api_version: 11,
+                correlation_id: correlation_id_b,
+                throttle_time_ms: Some(5_000),
+                node_endpoints: Some([].into()),
+                responses: Some(
+                    [TopicProduceResponse {
+                        name: "b".into(),
+                        partition_responses: Some(
+                            [PartitionProduceResponse {
+                                index: 0,
+                                error_code: 0,
+                                base_offset: 65456,
+                                log_append_time_ms: Some(0),
+                                log_start_offset: Some(0),
+                                record_errors: Some([].into()),
+                                error_message: Some("none".into()),
+                                current_leader: Some(LeaderIdAndEpoch {
+                                    leader_id: 12321,
+                                    leader_epoch: 23432
+                                })
+                            }]
+                            .into()
+                        )
+                    }]
+                    .into()
+                ),
+                ..Default::default()
+            },
+            response_b
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn two_requests_into_single_topition() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let produce_service = MockProduceService::default();
+
+        let configuration = ResourceConfig::default();
+
+        let topic_a = "a";
+        configuration.put(topic_a, "tansu.batch", "true")?;
+        configuration.put(topic_a, "tansu.batch.timeout_ms", "5000")?;
+
+        let bp = (BatchProduceLayer::new(configuration)).into_layer(produce_service.clone());
+
+        let correlation_id_a = 67876;
+
+        let batch_a = {
+            let bp = bp.clone();
+            debug!(?bp);
+
+            tokio::spawn(async move {
+                let span = span!(Level::DEBUG, "batch", topic_a);
+
+                async move {
+                    bp.serve(
+                        rama::Context::default(),
+                        produce_request(topic_a, correlation_id_a, b"foo")?,
+                    )
+                    .await
+                }
+                .instrument(span)
+                .await
+            })
+        };
+
+        advance(Duration::from_secs(1)).await;
+        yield_now().await;
+
+        let len = bp.requests.lock().map(|guard| guard.len()).expect("poison");
+        assert_eq!(1, len);
+
+        let len = produce_service
+            .reqs
+            .lock()
+            .map(|guard| guard.len())
+            .expect("poison");
+        assert_eq!(0, len);
+
+        let correlation_id_b = 78987;
+
+        let batch_b = {
+            let bp = bp.clone();
+            debug!(?bp);
+
+            tokio::spawn(async move {
+                let span = span!(Level::DEBUG, "batch", topic_a);
+
+                async move {
+                    bp.serve(
+                        rama::Context::default(),
+                        produce_request(topic_a, correlation_id_b, b"bar")?,
+                    )
+                    .await
+                }
+                .instrument(span)
+                .await
+            })
+        };
+
+        advance(Duration::from_secs(1)).await;
+        yield_now().await;
+
+        let len = bp.requests.lock().map(|guard| guard.len()).expect("poison");
+        assert_eq!(2, len);
+
+        let len = produce_service
+            .reqs
+            .lock()
+            .map(|guard| guard.len())
+            .expect("poison");
+        assert_eq!(0, len);
+
+        advance(Duration::from_secs(5)).await;
+        yield_now().await;
+
+        let requests = produce_service
+            .reqs
+            .lock()
+            .map(|guard| guard.clone())
+            .expect("poison");
+        assert_eq!(
+            vec![ProduceRequest {
+                api_key: ApiKey(0),
+                api_version: 11,
+                correlation_id: 0,
+                client_id: Some("tansu".into()),
+                transactional_id: None,
+                acks: 0,
+                timeout_ms: 5000,
+                topic_data: Some(
+                    [TopicProduceData {
+                        name: "a".into(),
+                        partition_data: Some(
+                            [PartitionProduceData {
+                                index: 0,
+                                records: Some(Frame {
+                                    batches: [deflated::Batch {
+                                        base_offset: 0,
+                                        batch_length: 69,
+                                        partition_leader_epoch: -1,
+                                        magic: 2,
+                                        crc: 2619797409,
+                                        attributes: 0,
+                                        last_offset_delta: 0,
+                                        base_timestamp: 1234567890000,
+                                        max_timestamp: 1234567890000,
+                                        producer_id: -1,
+                                        producer_epoch: 0,
+                                        base_sequence: 0,
+                                        record_count: 2,
+                                        record_data: Bytes::from_static(
+                                            b"\x12\0\0\0\x01\x06foo\0\x12\0\0\0\x01\x06bar\0"
+                                        )
+                                    }]
+                                    .into()
+                                })
+                            }]
+                            .into()
+                        )
+                    }]
+                    .into()
+                )
+            }],
+            requests
+        );
+
+        let response_a = batch_a
+            .await?
+            .inspect(|produce_response| debug!(?produce_response))?;
+
+        assert_eq!(
+            ProduceResponse {
+                api_version: 11,
                 correlation_id: correlation_id_a,
                 throttle_time_ms: Some(5_000),
                 node_endpoints: Some([].into()),
@@ -1071,12 +1400,13 @@ mod tests {
 
         assert_eq!(
             ProduceResponse {
+                api_version: 11,
                 correlation_id: correlation_id_b,
                 throttle_time_ms: Some(5_000),
                 node_endpoints: Some([].into()),
                 responses: Some(
                     [TopicProduceResponse {
-                        name: "b".into(),
+                        name: "a".into(),
                         partition_responses: Some(
                             [PartitionProduceResponse {
                                 index: 0,

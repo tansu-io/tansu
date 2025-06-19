@@ -1,23 +1,24 @@
 [package]
-name = "tansu-proxy"
+name = "tansu-generator"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
 publish = false
 
-# [lints]
-# workspace = true
-
 [dependencies]
-async-trait.workspace = true
-bytes.workspace = true
-clap.workspace = true
+futures-core.workspace = true
+futures-util.workspace = true
+futures.workspace = true
+governor.workspace = true
+nonzero_ext.workspace = true
 rama.workspace = true
+serde_json.workspace = true
 tansu-kafka-sans-io = { path = "../tansu-kafka-sans-io" }
+tansu-schema-registry = { path = "../tansu-schema-registry" }
 tansu-service = { path = "../tansu-service" }
 thiserror.workspace = true
+tokio-util.workspace = true
 tokio.workspace = true
 tracing-subscriber.workspace = true
 tracing.workspace = true
 url.workspace = true
-uuid.workspace = true

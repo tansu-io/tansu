@@ -15,7 +15,9 @@
 
 use std::{collections::BTreeMap, io::Write, ops::Deref, sync::LazyLock};
 
-use crate::{ARROW_LIST_FIELD_NAME, AsArrow, AsJsonValue, AsKafkaRecord, Error, Result, Validator};
+use crate::{
+    ARROW_LIST_FIELD_NAME, AsArrow, AsJsonValue, AsKafkaRecord, Error, Generator, Result, Validator,
+};
 use arrow::{
     array::{
         ArrayBuilder, BooleanBuilder, Float32Builder, Float64Builder, Int32Builder, Int64Builder,
@@ -29,14 +31,16 @@ use bytes::{BufMut, Bytes, BytesMut};
 use chrono::{DateTime, Datelike};
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use protobuf::{
-    CodedInputStream, MessageDyn, descriptor,
+    CodedInputStream, Message, MessageDyn, UnknownValueRef, descriptor,
     reflect::{
-        FieldDescriptor, FileDescriptor, MessageDescriptor, ReflectValueRef, RuntimeFieldType,
-        RuntimeType,
+        FieldDescriptor, FileDescriptor, MessageDescriptor, ReflectValueBox, ReflectValueRef,
+        RuntimeFieldType, RuntimeType,
     },
     well_known_types,
 };
 use protobuf_json_mapping::{parse_dyn_from_str, print_to_string};
+use rhai::{Engine, packages::Package};
+use rhai_rand::RandomPackage;
 use serde_json::{Map, Value, json};
 use tansu_kafka_sans_io::{ErrorCode, record::inflated::Batch};
 use tempfile::{NamedTempFile, tempdir};
@@ -165,17 +169,210 @@ impl Schema {
             })
     }
 
-    fn message_to_bytes(message: Box<dyn MessageDyn>) -> Result<Bytes> {
-        let mut w = BytesMut::new().writer();
-        message
-            .write_to_writer_dyn(&mut w)
-            .and(Ok(Bytes::from(w.into_inner())))
-            .map_err(Into::into)
-    }
-
     pub fn encode_from_value(&self, message_kind: MessageKind, json: &Value) -> Result<Bytes> {
         self.value_to_message(message_kind, json)
-            .and_then(Self::message_to_bytes)
+            .and_then(message_to_bytes)
+    }
+
+    fn generate_message_kind(&self, message_kind: MessageKind) -> Result<Option<Bytes>> {
+        debug!(?message_kind);
+
+        let engine = {
+            let mut engine = Engine::new();
+            let random = RandomPackage::new();
+            random.register_into_engine(&mut engine);
+            engine
+        };
+
+        let Some(message_descriptor) = self.message_by_package_relative_name(message_kind) else {
+            return Ok(None);
+        };
+
+        debug!(name = %message_descriptor.full_name());
+
+        let mut message_dyn = message_descriptor.new_instance();
+
+        for (field_proto, field) in message_descriptor
+            .proto()
+            .field
+            .iter()
+            .zip(message_dyn.descriptor_dyn().fields())
+        {
+            for (_id, unknown) in field_proto.options.special_fields().unknown_fields().iter() {
+                let UnknownValueRef::LengthDelimited(items) = unknown else {
+                    continue;
+                };
+
+                let Some(generator) = self
+                    .file_descriptors
+                    .iter()
+                    .find_map(|fd| fd.message_by_package_relative_name("Generator"))
+                else {
+                    continue;
+                };
+
+                let mut generator_message_dyn = generator.new_instance();
+
+                if generator_message_dyn
+                    .merge_from_bytes_dyn(items)
+                    .inspect_err(|err| debug!(?err))
+                    .is_ok()
+                {
+                    for generator_field in generator_message_dyn.descriptor_dyn().fields() {
+                        match field.runtime_field_type() {
+                            RuntimeFieldType::Singular(singular) => {
+                                if let Some(value) =
+                                    generator_field.get_singular(generator_message_dyn.as_ref())
+                                {
+                                    debug!(name = %field_proto.name(), generator = %generator_field.name(), ?value, ?singular);
+
+                                    if let ReflectValueRef::String(script) = value {
+                                        match singular {
+                                            RuntimeType::I32 => engine
+                                                .eval::<i32>(script)
+                                                .inspect(|result| debug!(script, ?result))
+                                                .inspect_err(|err| debug!(script, ?err))
+                                                .map(ReflectValueBox::from)
+                                                .map(|value| {
+                                                    field.set_singular_field(
+                                                        message_dyn.as_mut(),
+                                                        value,
+                                                    )
+                                                })?,
+
+                                            RuntimeType::I64 => engine
+                                                .eval::<i64>(script)
+                                                .inspect(|result| debug!(script, ?result))
+                                                .inspect_err(|err| debug!(script, ?err))
+                                                .map(ReflectValueBox::from)
+                                                .map(|value| {
+                                                    field.set_singular_field(
+                                                        message_dyn.as_mut(),
+                                                        value,
+                                                    )
+                                                })?,
+
+                                            RuntimeType::U32 => engine
+                                                .eval::<u32>(script)
+                                                .inspect(|result| debug!(script, ?result))
+                                                .inspect_err(|err| debug!(script, ?err))
+                                                .map(ReflectValueBox::from)
+                                                .map(|value| {
+                                                    field.set_singular_field(
+                                                        message_dyn.as_mut(),
+                                                        value,
+                                                    )
+                                                })?,
+
+                                            RuntimeType::U64 => engine
+                                                .eval::<u64>(script)
+                                                .inspect(|result| debug!(script, ?result))
+                                                .inspect_err(|err| debug!(script, ?err))
+                                                .map(ReflectValueBox::from)
+                                                .map(|value| {
+                                                    field.set_singular_field(
+                                                        message_dyn.as_mut(),
+                                                        value,
+                                                    )
+                                                })?,
+
+                                            RuntimeType::F32 => engine
+                                                .eval::<f32>(script)
+                                                .inspect(|result| debug!(script, ?result))
+                                                .inspect_err(|err| debug!(script, ?err))
+                                                .map(ReflectValueBox::from)
+                                                .map(|value| {
+                                                    field.set_singular_field(
+                                                        message_dyn.as_mut(),
+                                                        value,
+                                                    )
+                                                })?,
+
+                                            RuntimeType::F64 => engine
+                                                .eval::<f64>(script)
+                                                .inspect(|result| debug!(script, ?result))
+                                                .inspect_err(|err| debug!(script, ?err))
+                                                .map(ReflectValueBox::from)
+                                                .map(|value| {
+                                                    field.set_singular_field(
+                                                        message_dyn.as_mut(),
+                                                        value,
+                                                    )
+                                                })?,
+
+                                            RuntimeType::Bool => engine
+                                                .eval::<bool>(script)
+                                                .inspect(|result| debug!(script, ?result))
+                                                .inspect_err(|err| debug!(script, ?err))
+                                                .map(ReflectValueBox::from)
+                                                .map(|value| {
+                                                    field.set_singular_field(
+                                                        message_dyn.as_mut(),
+                                                        value,
+                                                    )
+                                                })?,
+
+                                            RuntimeType::String => engine
+                                                .eval::<String>(script)
+                                                .inspect(|result| debug!(script, ?result))
+                                                .inspect_err(|err| debug!(script, ?err))
+                                                .map(ReflectValueBox::from)
+                                                .map(|value| {
+                                                    field.set_singular_field(
+                                                        message_dyn.as_mut(),
+                                                        value,
+                                                    )
+                                                })?,
+
+                                            ref message @ RuntimeType::VecU8 => {
+                                                todo!("{message:?}")
+                                            }
+
+                                            RuntimeType::Enum(descriptor) => engine
+                                                .eval::<String>(script)
+                                                .inspect(|result| debug!(script, ?result))
+                                                .inspect_err(|err| debug!(script, ?err))
+                                                .map(|name| {
+                                                    descriptor
+                                                        .value_by_name(&name[..])
+                                                        .map(|value_descriptor| {
+                                                            ReflectValueBox::Enum(
+                                                                descriptor,
+                                                                value_descriptor.value(),
+                                                            )
+                                                        })
+                                                        .inspect(|value| debug!(?value))
+                                                        .unwrap()
+                                                })
+                                                .map(|value| {
+                                                    field.set_singular_field(
+                                                        message_dyn.as_mut(),
+                                                        value,
+                                                    )
+                                                })?,
+
+                                            ref message @ RuntimeType::Message(_) => {
+                                                todo!("{message:?}")
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            RuntimeFieldType::Repeated(repeated) => {
+                                debug!(?repeated);
+                            }
+
+                            RuntimeFieldType::Map(key, value) => {
+                                debug!(?key, ?value);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        message_to_bytes(message_dyn).map(Some)
     }
 
     fn message_value_as_bytes(
@@ -600,6 +797,14 @@ impl Schema {
     }
 }
 
+fn message_to_bytes(message: Box<dyn MessageDyn>) -> Result<Bytes> {
+    let mut w = BytesMut::new().writer();
+    message
+        .write_to_writer_dyn(&mut w)
+        .and(Ok(Bytes::from(w.into_inner())))
+        .map_err(Into::into)
+}
+
 impl AsKafkaRecord for Schema {
     fn as_kafka_record(&self, value: &Value) -> Result<tansu_kafka_sans_io::record::Builder> {
         debug!(?value);
@@ -621,6 +826,22 @@ impl AsKafkaRecord for Schema {
                 builder = builder.value(encoded.into());
             }
         };
+
+        Ok(builder)
+    }
+}
+
+impl Generator for Schema {
+    fn generate(&self) -> Result<tansu_kafka_sans_io::record::Builder> {
+        let mut builder = tansu_kafka_sans_io::record::Record::builder();
+
+        if let Some(generated) = self.generate_message_kind(MessageKind::Key)? {
+            builder = builder.key(generated.into());
+        }
+
+        if let Some(generated) = self.generate_message_kind(MessageKind::Value)? {
+            builder = builder.value(generated.into());
+        }
 
         Ok(builder)
     }
@@ -795,41 +1016,36 @@ static META_FILE_DESCRIPTOR: LazyLock<Option<Vec<FileDescriptor>>> =
     LazyLock::new(|| make_fd(Bytes::from_static(include_bytes!("meta.proto"))).ok());
 
 fn make_fd(proto: Bytes) -> Result<Vec<FileDescriptor>> {
-    tempdir()
-        .map_err(Into::into)
-        .and_then(|temp_dir| {
-            NamedTempFile::new_in(&temp_dir)
-                .inspect(|temp_dir| debug!(?temp_dir))
-                .map_err(Into::into)
-                .and_then(|mut temp_file| {
-                    temp_file.write_all(&proto).map_err(Into::into).and(
-                        protobuf_parse::Parser::new()
-                            .pure()
-                            .input(&temp_file)
-                            .include(&temp_dir)
-                            .parse_and_typecheck()
-                            .inspect_err(|err| debug!(?err))
-                            .map_err(Into::into)
-                            .and_then(|parsed| {
-                                parsed
-                                    .file_descriptors
-                                    .into_iter()
-                                    .inspect(|parsed| debug!(?parsed))
-                                    .map(|file_descriptor_proto| {
-                                        FileDescriptor::new_dynamic(
-                                            file_descriptor_proto,
-                                            &WELL_KNOWN_TYPES[..],
-                                        )
-                                        .inspect(|fd| debug!(?fd))
-                                        .inspect_err(|err| debug!(?err))
-                                        .map_err(Into::into)
-                                    })
-                                    .collect::<Result<Vec<_>>>()
-                            }),
-                    )
-                })
-        })
-        .inspect(|fds| debug!(?fds))
+    tempdir().map_err(Into::into).and_then(|temp_dir| {
+        NamedTempFile::new_in(&temp_dir)
+            .inspect(|temp_dir| debug!(?temp_dir))
+            .map_err(Into::into)
+            .and_then(|mut temp_file| {
+                temp_file.write_all(&proto).map_err(Into::into).and(
+                    protobuf_parse::Parser::new()
+                        .pure()
+                        .input(&temp_file)
+                        .include(&temp_dir)
+                        .parse_and_typecheck()
+                        .inspect_err(|err| debug!(?err))
+                        .map_err(Into::into)
+                        .and_then(|parsed| {
+                            parsed
+                                .file_descriptors
+                                .into_iter()
+                                .map(|file_descriptor_proto| {
+                                    FileDescriptor::new_dynamic(
+                                        file_descriptor_proto,
+                                        &WELL_KNOWN_TYPES[..],
+                                    )
+                                    .inspect_err(|err| debug!(?err))
+                                    .map_err(Into::into)
+                                })
+                                .collect::<Result<Vec<_>>>()
+                        }),
+                )
+            })
+    })
 }
 
 fn field_ids(schemas: &[FileDescriptor]) -> BTreeMap<String, i32> {

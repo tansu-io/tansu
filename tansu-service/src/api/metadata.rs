@@ -13,7 +13,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use rama::{Context, Layer, Service};
+use rama::{Context, Layer, Service, error::BoxError};
 use std::fmt::Debug;
 use tansu_kafka_sans_io::{
     Body,
@@ -22,8 +22,11 @@ use tansu_kafka_sans_io::{
 };
 
 use crate::{
-    Error,
-    api::{ApiKey, ApiRequest, ApiResponse, ApiVersion, ClientId, CorrelationId},
+    Result,
+    api::{
+        ApiKey, ApiRequest, ApiResponse, ApiVersion, ClientId, CorrelationId,
+        UnexpectedApiBodyError,
+    },
 };
 
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -40,7 +43,7 @@ pub struct MetadataRequest {
 }
 
 impl TryFrom<ApiRequest> for MetadataRequest {
-    type Error = Error;
+    type Error = UnexpectedApiBodyError;
 
     fn try_from(api_request: ApiRequest) -> Result<Self, Self::Error> {
         if let ApiRequest {
@@ -68,7 +71,7 @@ impl TryFrom<ApiRequest> for MetadataRequest {
                 include_topic_authorized_operations,
             })
         } else {
-            Err(Error::UnexpectedApiRequest(Box::new(api_request)))
+            Err(UnexpectedApiBodyError::Request(Box::new(api_request)))
         }
     }
 }
@@ -124,7 +127,7 @@ impl From<MetadataResponse> for ApiResponse {
 }
 
 impl TryFrom<ApiResponse> for MetadataResponse {
-    type Error = Error;
+    type Error = UnexpectedApiBodyError;
 
     fn try_from(api_response: ApiResponse) -> Result<Self, Self::Error> {
         if let ApiResponse {
@@ -154,7 +157,7 @@ impl TryFrom<ApiResponse> for MetadataResponse {
                 cluster_authorized_operations,
             })
         } else {
-            Err(Error::UnexpectedApiResponse(Box::new(api_response)))
+            Err(UnexpectedApiBodyError::Response(Box::new(api_response)))
         }
     }
 }
@@ -167,11 +170,11 @@ pub struct MetadataService<S> {
 impl<S, State> Service<State, ApiRequest> for MetadataService<S>
 where
     S: Service<State, MetadataRequest, Response = MetadataResponse>,
-    S::Error: From<Error> + Send + Debug + 'static,
+    S::Error: Into<BoxError> + Send + Debug + 'static,
     State: Send + Sync + 'static,
 {
     type Response = ApiResponse;
-    type Error = S::Error;
+    type Error = BoxError;
 
     async fn serve(
         &self,
@@ -184,6 +187,7 @@ where
             .serve(ctx, metadata_request)
             .await
             .map(MetadataResponse::into)
+            .map_err(Into::into)
     }
 }
 
@@ -206,11 +210,11 @@ pub struct MetadataIntoApiService<S> {
 impl<S, State> Service<State, MetadataRequest> for MetadataIntoApiService<S>
 where
     S: Service<State, ApiRequest, Response = ApiResponse>,
-    S::Error: From<Error> + Send + Debug + 'static,
+    S::Error: Into<BoxError> + Send + Debug + 'static,
     State: Send + Sync + 'static,
 {
     type Response = MetadataResponse;
-    type Error = S::Error;
+    type Error = BoxError;
 
     async fn serve(
         &self,
@@ -220,6 +224,7 @@ where
         self.inner
             .serve(ctx, ApiRequest::from(req))
             .await
+            .map_err(Into::into)
             .and_then(|response| TryInto::try_into(response).map_err(Into::into))
     }
 }

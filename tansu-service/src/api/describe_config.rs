@@ -14,24 +14,26 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use std::{
-    fmt::Debug,
+    collections::BTreeMap,
+    error,
+    fmt::{self, Debug, Display},
     ops::Deref,
-    sync::{Arc, LazyLock},
+    sync::{Arc, LazyLock, Mutex},
 };
 
-use dashmap::DashMap;
-use rama::{Context, Layer, Service, context::Extensions, matcher::Matcher};
+use rama::{Context, Layer, Service, context::Extensions, error::BoxError, matcher::Matcher};
 use tansu_kafka_sans_io::{
     Body, ConfigResource, ConfigType, ErrorCode, MESSAGE_META,
     describe_configs_request::DescribeConfigsResource,
     describe_configs_response::DescribeConfigsResult,
 };
-use tracing::debug;
+use tracing::{debug, error};
 
 use crate::{
-    Error,
+    Result,
     api::{
         ApiKey, ApiRequest, ApiResponse, ApiVersion, ClientId, CorrelationId,
+        UnexpectedApiBodyError,
         produce::{ProduceRequest, ProduceResponse},
     },
 };
@@ -128,7 +130,7 @@ pub struct DescribeConfigResponse {
 }
 
 impl TryFrom<ApiResponse> for DescribeConfigResponse {
-    type Error = Error;
+    type Error = UnexpectedApiBodyError;
 
     fn try_from(api_response: ApiResponse) -> Result<Self, Self::Error> {
         if let ApiResponse {
@@ -150,7 +152,7 @@ impl TryFrom<ApiResponse> for DescribeConfigResponse {
                 results,
             })
         } else {
-            Err(Error::UnexpectedApiResponse(Box::new(api_response)))
+            Err(UnexpectedApiBodyError::Response(Box::new(api_response)))
         }
     }
 }
@@ -291,6 +293,16 @@ impl ResourceConfigValue {
         }
     }
 
+    pub fn as_usize(&self) -> Option<usize> {
+        match self {
+            Self::Short(value) if !value.is_negative() => Some(*value as usize),
+            Self::Int(value) if !value.is_negative() => Some(*value as usize),
+            Self::Long(value) if !value.is_negative() => Some(*value as usize),
+            Self::String(value) => value.parse().ok(),
+            _ => None,
+        }
+    }
+
     #[allow(dead_code)]
     pub fn as_i16(&self) -> Option<i16> {
         match self {
@@ -319,18 +331,38 @@ impl ResourceConfigValue {
     }
 }
 
+#[derive(Clone, Debug, Default, PartialEq, PartialOrd)]
+struct LockError {
+    resource_name: String,
+    key: String,
+    value: Option<ResourceConfigValue>,
+}
+
+impl Display for LockError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "resource: {}, key: {}", self.resource_name, self.key)
+    }
+}
+
+impl error::Error for LockError {}
+
 #[derive(Clone, Debug, Default)]
 pub struct ResourceConfig {
-    configuration: Arc<DashMap<String, DashMap<String, ResourceConfigValue>>>,
+    configuration: Arc<Mutex<BTreeMap<String, BTreeMap<String, ResourceConfigValue>>>>,
 }
 
 impl ResourceConfig {
     pub fn get(&self, resource_name: &str, key: &str) -> Option<ResourceConfigValue> {
         self.configuration
-            .get(resource_name)
-            .and_then(|resource_configuration| {
-                resource_configuration.get(key).map(|kv| kv.value().clone())
+            .lock()
+            .map(|guard| {
+                guard
+                    .get(resource_name)
+                    .and_then(|resource_configuration| resource_configuration.get(key).cloned())
             })
+            .inspect_err(|err| error!(resource_name, key, ?err))
+            .ok()
+            .flatten()
     }
 
     pub fn put(
@@ -338,13 +370,29 @@ impl ResourceConfig {
         resource_name: impl Into<String>,
         key: impl Into<String>,
         value: impl Into<ResourceConfigValue>,
-    ) {
-        _ = self
-            .configuration
-            .entry(resource_name.into())
-            .or_default()
-            .entry(key.into())
-            .insert(value.into());
+    ) -> Result<()> {
+        let resource_name = resource_name.into();
+        let key = key.into();
+        let value = value.into();
+
+        self.configuration
+            .lock()
+            .map(|mut guard| {
+                guard
+                    .entry(resource_name.clone())
+                    .or_default()
+                    .entry(key.clone())
+                    .or_insert(value.clone());
+            })
+            .inspect_err(|err| error!(resource_name, key, ?value, ?err))
+            .map_err(|_| {
+                LockError {
+                    resource_name,
+                    key,
+                    value: Some(value),
+                }
+                .into()
+            })
     }
 }
 
@@ -356,7 +404,7 @@ pub struct TopicConfigService<I, O> {
 }
 
 impl<I, O> TopicConfigService<I, O> {
-    fn add_topic_configuration(&self, response: DescribeConfigResponse) {
+    fn add_topic_configuration(&self, response: DescribeConfigResponse) -> Result<()> {
         debug!(?response);
         for result in response.results.unwrap_or_default() {
             debug!(?result);
@@ -387,25 +435,25 @@ impl<I, O> TopicConfigService<I, O> {
                         result.resource_name.clone(),
                         resource_result.name.clone(),
                         config_value,
-                    );
+                    )?;
                 }
             }
         }
+
+        Ok(())
     }
 }
 
 impl<I, O, State> Service<State, ProduceRequest> for TopicConfigService<I, O>
 where
     I: Service<State, ProduceRequest, Response = ProduceResponse>,
-    I::Error: From<Error> + Send + Debug + 'static,
+    I::Error: Into<BoxError> + Send + Debug + 'static,
     O: Service<State, ApiRequest, Response = ApiResponse>,
-    O::Error: From<Error> + Send + Debug + 'static,
-    Error: From<<O as Service<State, ApiRequest>>::Error>,
-    Error: From<<I as Service<State, ProduceRequest>>::Error>,
+    O::Error: Into<BoxError> + Send + Debug + 'static,
     State: Clone + Send + Sync + 'static,
 {
     type Response = ProduceResponse;
-    type Error = Error;
+    type Error = BoxError;
 
     async fn serve(
         &self,
@@ -420,11 +468,12 @@ where
                 ApiRequest::from(DescribeConfigRequest::default().with_topics(req.topic_names())),
             )
             .await
+            .inspect_err(|err| debug!(?err))
             .map_err(Into::into)
-            .and_then(DescribeConfigResponse::try_from)
+            .and_then(|response| DescribeConfigResponse::try_from(response).map_err(Into::into))
             .inspect(|response| debug!(?response))?;
 
-        self.add_topic_configuration(config_response);
+        self.add_topic_configuration(config_response)?;
 
         self.inner.serve(ctx, req).await.map_err(Into::into)
     }

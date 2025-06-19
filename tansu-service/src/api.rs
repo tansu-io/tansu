@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -13,16 +13,21 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+use std::{
+    collections::BTreeMap,
+    error::Error,
+    fmt::{self, Debug, Display},
+    sync::{Arc, Mutex},
+};
+
 use bytes::Bytes;
-use dashmap::DashMap;
-use rama::{Context, Layer, Service, context::Extensions, matcher::Matcher, tcp::TcpStream};
-use std::{fmt::Debug, sync::Arc};
+use rama::{Context, Layer, Service, context::Extensions, error::BoxError, matcher::Matcher};
 use tansu_kafka_sans_io::{Body, Frame, Header};
-use tokio::io::AsyncReadExt;
 use tracing::debug;
 
-use crate::Error;
+use crate::Result;
 
+pub mod api_version;
 pub mod describe_config;
 pub mod metadata;
 pub mod produce;
@@ -50,7 +55,7 @@ pub struct ApiRequest {
 }
 
 impl TryFrom<ApiRequest> for Bytes {
-    type Error = Error;
+    type Error = BoxError;
 
     fn try_from(api_request: ApiRequest) -> Result<Self, Self::Error> {
         Frame::request(
@@ -77,7 +82,8 @@ where
         ctx: &Context<State>,
         req: &ApiRequest,
     ) -> bool {
-        debug!(?ext, ?ctx, api_key = self.0, ?req);
+        let _ = (ext, ctx);
+        debug!(api_key = self.0, ?req);
         self.0 == req.api_key.0
     }
 }
@@ -91,7 +97,7 @@ pub struct ApiResponse {
 }
 
 impl TryFrom<ApiResponse> for Bytes {
-    type Error = Error;
+    type Error = BoxError;
 
     fn try_from(api_response: ApiResponse) -> Result<Self, Self::Error> {
         Frame::response(
@@ -107,21 +113,19 @@ impl TryFrom<ApiResponse> for Bytes {
     }
 }
 
-fn frame_length(encoded: [u8; 4]) -> usize {
-    i32::from_be_bytes(encoded) as usize + encoded.len()
+#[derive(Clone, Debug, PartialEq, PartialOrd)]
+struct FrameTypeError {
+    frame: Box<Frame>,
 }
 
-pub async fn read_frame(tcp_stream: &mut TcpStream) -> Result<Bytes, Error> {
-    let mut size = [0u8; 4];
-    tcp_stream.read_exact(&mut size).await?;
-
-    let mut buffer: Vec<u8> = vec![0u8; frame_length(size)];
-    buffer[0..size.len()].copy_from_slice(&size[..]);
-    _ = tcp_stream.read_exact(&mut buffer[4..]).await?;
-    Ok(Bytes::from(buffer))
+impl Display for FrameTypeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "unexpected frame type")
+    }
 }
+impl Error for FrameTypeError {}
 
-pub fn read_api_request(buffer: Bytes) -> Result<ApiRequest, Error> {
+pub fn read_api_request(buffer: Bytes) -> Result<ApiRequest> {
     match Frame::request_from_bytes(&buffer[..])? {
         Frame {
             header:
@@ -141,7 +145,10 @@ pub fn read_api_request(buffer: Bytes) -> Result<ApiRequest, Error> {
             body,
         }),
 
-        frame => Err(Error::UnexpectedType(Box::new(frame))),
+        frame => Err(FrameTypeError {
+            frame: Box::new(frame),
+        }
+        .into()),
     }
 }
 
@@ -149,7 +156,7 @@ pub fn read_api_response(
     buffer: Bytes,
     api_key: ApiKey,
     api_version: ApiVersion,
-) -> Result<ApiResponse, Error> {
+) -> Result<ApiResponse> {
     match Frame::response_from_bytes(&buffer[..], api_key.0, api_version)? {
         Frame {
             header: Header::Response { correlation_id },
@@ -162,35 +169,56 @@ pub fn read_api_response(
             body,
         }),
 
-        frame => Err(Error::UnexpectedType(Box::new(frame))),
+        frame => Err(FrameTypeError {
+            frame: Box::new(frame),
+        }
+        .into()),
     }
 }
 
+type KeyVersionService<S> = Arc<Mutex<BTreeMap<(ApiKey, ApiVersion), Arc<S>>>>;
+
 #[derive(Clone, Debug, Default)]
 pub struct ApiKeyVersionService<S> {
-    inner: Arc<DashMap<(ApiKey, ApiVersion), S>>,
+    inner: KeyVersionService<S>,
     model: S,
 }
 
 impl<S, State> Service<State, ApiRequest> for ApiKeyVersionService<S>
 where
     S: Service<State, ApiRequest, Response = ApiResponse> + Clone,
-    S::Error: From<Error> + Send + Debug + 'static,
+    S::Error: Into<BoxError> + Send + Debug + 'static,
     State: Send + Sync + 'static,
 {
     type Response = ApiResponse;
-    type Error = S::Error;
+    type Error = BoxError;
 
     async fn serve(
         &self,
         ctx: Context<State>,
         req: ApiRequest,
     ) -> Result<Self::Response, Self::Error> {
-        self.inner
-            .entry((req.api_key, req.api_version))
-            .or_insert(self.model.clone())
+        debug!(?req);
+
+        let service = self
+            .inner
+            .lock()
+            .map(|mut guard| {
+                let key = (req.api_key, req.api_version);
+
+                guard
+                    .entry(key)
+                    .or_insert(Arc::new(self.model.clone()))
+                    .to_owned()
+            })
+            .expect("poison");
+
+        service
             .serve(ctx, req)
             .await
+            .inspect(|response| debug!(?response))
+            .inspect_err(|err| debug!(?err))
+            .map_err(Into::into)
     }
 }
 
@@ -202,8 +230,22 @@ impl<S> Layer<S> for ApiKeyVersionLayer {
 
     fn layer(&self, model: S) -> Self::Service {
         ApiKeyVersionService {
-            inner: Arc::new(DashMap::new()),
+            inner: Arc::new(Mutex::new(BTreeMap::new())),
             model,
         }
     }
 }
+
+#[derive(Clone, Debug, PartialEq, PartialOrd)]
+pub enum UnexpectedApiBodyError {
+    Request(Box<ApiRequest>),
+    Response(Box<ApiResponse>),
+}
+
+impl Display for UnexpectedApiBodyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "unexpected response")
+    }
+}
+
+impl Error for UnexpectedApiBodyError {}

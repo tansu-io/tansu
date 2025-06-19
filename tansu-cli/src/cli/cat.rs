@@ -22,87 +22,65 @@ use url::Url;
 
 #[derive(Clone, Debug, Subcommand)]
 pub(super) enum Command {
-    #[command(about = "Produce Avro/JSON/Protobuf messages to a topic")]
+    /// Produce Avro/JSON/Protobuf messages to a topic
     Produce {
-        #[arg(long, default_value = DEFAULT_BROKER, env = "ADVERTISED_LISTENER_URL", help = "The URL of the broker to produce messages into")]
+        /// The URL of the broker to produce messages into
+        #[arg(long, default_value = DEFAULT_BROKER, env = "ADVERTISED_LISTENER_URL")]
         broker: Url,
 
-        #[clap(value_parser, help = "The topic to produce messages into")]
+        /// The topic to produce messages into
+        #[clap(value_parser)]
         topic: String,
 
-        #[clap(
-            value_parser,
-            default_value = "-",
-            help = "Input filename or '-' for stdin"
-        )]
+        /// Input filename or '-' for stdin
+        #[clap(value_parser, default_value = "-")]
         file: String,
 
-        #[arg(
-            long,
-            default_value = "0",
-            help = "The partition to produce messages into"
-        )]
+        /// The partition to produce messages into
+        #[arg(long, default_value = "0")]
         partition: i32,
 
-        #[arg(
-            long,
-            env = "SCHEMA_REGISTRY",
-            help = "Schema registry examples are: file://./etc/schema or s3://tansu/, containing: topic.json, topic.proto or topic.avsc"
-        )]
+        /// Schema registry examples are: file://./etc/schema or s3://tansu/, containing: topic.json, topic.proto or topic.avsc
+        #[arg(long, env = "SCHEMA_REGISTRY")]
         schema_registry: Option<Url>,
     },
 
-    #[command(about = "Consume Avro/JSON/Protobuf messages from a topic")]
+    /// Consume Avro/JSON/Protobuf messages from a topic
     Consume {
-        #[arg(long, default_value = DEFAULT_BROKER, env = "ADVERTISED_LISTENER_URL", help = "The URL of the broker to consume messages from")]
+        /// The URL of the broker to consume messages from
+        #[arg(long, default_value = DEFAULT_BROKER, env = "ADVERTISED_LISTENER_URL")]
         broker: Url,
 
-        #[clap(value_parser, help = "The topic to consume messages from")]
+        /// The topic to consume messages from
+        #[clap(value_parser)]
         topic: String,
 
-        #[arg(
-            long,
-            default_value = "0",
-            help = "The partition to consume messages from"
-        )]
+        /// The partition to consume messages from
+        #[arg(long, default_value = "0")]
         partition: i32,
 
-        #[arg(
-            long,
-            env = "SCHEMA_REGISTRY",
-            help = "Schema registry examples are: file://./etc/schema or s3://tansu/, containing: topic.json, topic.proto or topic.avsc"
-        )]
+        /// Schema registry examples are: file://./etc/schema or s3://tansu/, containing: topic.json, topic.proto or topic.avsc
+        #[arg(long, env = "SCHEMA_REGISTRY")]
         schema_registry: Option<Url>,
 
-        #[arg(
-            long,
-            default_value = "5000",
-            help = "The maximum time in milliseconds to wait for a message"
-        )]
+        /// The maximum time in milliseconds to wait for a message
+        #[arg(long, default_value = "5000")]
         max_wait_time_ms: i32,
 
-        #[arg(
-            long,
-            default_value = "1",
-            help = "The minimum number of bytes to wait for"
-        )]
+        /// The minimum number of bytes to wait for
+        #[arg(long, default_value = "1")]
         min_bytes: i32,
 
-        #[arg(
-            long,
-            default_value = "52428800",
-            help = "The maximum bytes to wait for"
-        )]
+        /// The maximum bytes to wait for
+        #[arg(long, default_value = "52428800")]
         max_bytes: Option<i32>,
 
-        #[arg(long, default_value = "0", help = "The fetch offset to start from")]
+        /// The fetch offset to start from
+        #[arg(long, default_value = "0")]
         fetch_offset: i64,
 
-        #[arg(
-            long,
-            default_value = "1048576",
-            help = "The partition to consume from"
-        )]
+        /// The partition to consume from
+        #[arg(long, default_value = "1048576")]
         partition_max_bytes: i32,
     },
 }
