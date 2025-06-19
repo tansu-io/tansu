@@ -106,7 +106,13 @@ impl LakeHouse for House {
         record_batch: RecordBatch,
         configs: DescribeConfigsResult,
     ) -> Result<()> {
-        debug!(?topic, ?partition, ?offset, ?record_batch);
+        debug!(
+            ?topic,
+            ?partition,
+            ?offset,
+            rows = record_batch.num_rows(),
+            columns = record_batch.num_columns()
+        );
 
         let start = SystemTime::now();
 

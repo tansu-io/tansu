@@ -152,7 +152,7 @@ cat-consume topic:
     target/debug/tansu cat consume {{topic}} --max-wait-time-ms=5000
 
 generator topic *args:
-    target/debug/tansu generator {{args}} {{topic}} 2>&1 | tee generator.log
+    target/debug/tansu generator {{args}} {{topic}} 2>&1 >generator.log
 
 duckdb-k-unnest-v-parquet topic:
     duckdb -init duckdb-init.sql :memory: "SELECT key,unnest(value) FROM '{{replace(env("DATA_LAKE"), "file://./", "")}}/{{topic}}/*/*.parquet'"
@@ -272,7 +272,7 @@ broker *args: (cargo-build "--bin" "tansu") docker-compose-down db-up minio-up m
 
 # run a proxy with configuration from .env
 proxy *args:
-    target/debug/tansu proxy {{args}} 2>&1 | tee proxy.log
+    target/debug/tansu proxy {{args}} 2>&1 >proxy.log
 
 
 # teardown compose, rebuild: minio, db, tansu and lake buckets
@@ -309,7 +309,7 @@ taxi-topic-populate: (cat-produce "taxi" "etc/data/trips.json")
 taxi-topic-consume: (cat-consume "taxi")
 
 # create taxi topic with generated fields with schema etc/schema/taxi.proto
-taxi-topic-create: (topic-create "taxi" "--partitions" "1"  "--config" "tansu.lake.normalize=true" "--config" "tansu.lake.partition=meta.day" "--config" "tansu.lake.z_order=vendor_id" "--config" "tansu.lake.sink=true" "--config" "tansu.batch=true" "--config" "tansu.batch.max_records=50")
+taxi-topic-create: (topic-create "taxi" "--partitions=1"  "--config=tansu.lake.normalize=true" "--config=tansu.lake.partition=meta.day" "--config=tansu.lake.z_order=vendor_id" "--config=tansu.lake.sink=true" "--config=tansu.batch=true" "--config=tansu.batch.max_records=200" "--config=tansu.batch.timeout_ms=1000")
 
 # create taxi topic with schema etc/schema/taxi.proto
 taxi-topic-create-plain: (topic-create "taxi" "--partitions" "1" "--config" "tansu.lake.sink=true")
@@ -317,7 +317,7 @@ taxi-topic-create-plain: (topic-create "taxi" "--partitions" "1" "--config" "tan
 # create taxi topic with a flattened schema etc/schema/taxi.proto
 taxi-topic-create-normalize: (topic-create "taxi" "--partitions" "1" "--config" "tansu.lake.sink=true" "--config" "tansu.lake.normalize=true" "--config" "tansu.lake.normalize.separator=_" "--config" "tansu.lake.z_order=value_vendor_id")
 
-taxi-topic-generator: (generator "taxi" "--broker" "tcp://localhost:9092" "--per-second" "60" "--producers" "8" "--batch-size" "10")
+taxi-topic-generator: (generator "taxi" "--broker=tcp://localhost:9092" "--per-second=1" "--producers=16" "--batch-size=1" "--duration-seconds=60")
 
 # delete taxi topic
 taxi-topic-delete: (topic-delete "taxi")

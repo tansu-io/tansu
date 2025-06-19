@@ -347,8 +347,11 @@ impl Registry {
                     .transpose()
             })
             .inspect(|record_batch| {
-                debug!(?record_batch);
-
+                debug!(
+                    rows = record_batch
+                        .as_ref()
+                        .map(|record_batch| record_batch.num_rows())
+                );
                 self.as_arrow_duration.record(
                     start
                         .elapsed()

@@ -198,7 +198,11 @@ impl Schema {
             .iter()
             .zip(message_dyn.descriptor_dyn().fields())
         {
-            for (_id, unknown) in field_proto.options.special_fields().unknown_fields().iter() {
+            for (id, unknown) in field_proto.options.special_fields().unknown_fields().iter() {
+                if id != 51215 {
+                    continue;
+                }
+
                 let UnknownValueRef::LengthDelimited(items) = unknown else {
                     continue;
                 };
@@ -219,6 +223,10 @@ impl Schema {
                     .is_ok()
                 {
                     for generator_field in generator_message_dyn.descriptor_dyn().fields() {
+                        if generator_field.name() != "script" {
+                            continue;
+                        }
+
                         match field.runtime_field_type() {
                             RuntimeFieldType::Singular(singular) => {
                                 if let Some(value) =
@@ -875,8 +883,6 @@ impl From<&Schema> for Vec<Box<dyn ArrayBuilder>> {
 
 impl From<&Schema> for RecordBuilder {
     fn from(schema: &Schema) -> Self {
-        debug!(?schema);
-
         Self {
             meta: schema.message_by_package_relative_name_array_builder(MessageKind::Meta),
             key: schema.message_by_package_relative_name_array_builder(MessageKind::Key),
@@ -887,8 +893,6 @@ impl From<&Schema> for RecordBuilder {
 
 impl From<&Schema> for Fields {
     fn from(schema: &Schema) -> Self {
-        debug!(?schema);
-
         let mut fields = vec![];
 
         if let Some(field) = schema.field(MessageKind::Meta) {
@@ -909,7 +913,6 @@ impl From<&Schema> for Fields {
 
 impl From<&Schema> for ArrowSchema {
     fn from(schema: &Schema) -> Self {
-        debug!(?schema);
         ArrowSchema::new(Fields::from(schema))
     }
 }
@@ -1049,8 +1052,6 @@ fn make_fd(proto: Bytes) -> Result<Vec<FileDescriptor>> {
 }
 
 fn field_ids(schemas: &[FileDescriptor]) -> BTreeMap<String, i32> {
-    debug!(?schemas);
-
     fn field_ids_with_path(
         path: &[&str],
         schemas: &[MessageDescriptor],
@@ -1632,8 +1633,6 @@ impl AsArrow for Schema {
         debug!(?batch);
 
         let schema = ArrowSchema::from(self);
-        debug!(?schema);
-
         let mut record_builder = RecordBuilder::from(self);
 
         for record in batch.records.iter() {

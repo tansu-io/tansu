@@ -17,6 +17,7 @@ use std::{
     fmt, io,
     marker::PhantomData,
     num::NonZeroU32,
+    pin::Pin,
     result,
     sync::Arc,
     time::{Duration, SystemTime},
@@ -77,6 +78,13 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{:?}", self)
     }
+}
+
+#[derive(Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum CancelKind {
+    Interrupt,
+    Terminate,
+    Timeout,
 }
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -177,21 +185,16 @@ pub async fn produce(
 
 impl Generate {
     pub async fn main(self) -> Result<ErrorCode> {
-        let Some(schema) = self
-            .registry
-            .schema(&self.configuration.topic)
-            .await
-            .inspect(|schema| debug!(?schema))?
-        else {
+        let Some(schema) = self.registry.schema(&self.configuration.topic).await? else {
             return Err(Error::SchemaNotFoundForTopic(
                 self.configuration.topic.clone(),
             ));
         };
 
-        let interrupt_signal = signal(SignalKind::interrupt()).unwrap();
+        let mut interrupt_signal = signal(SignalKind::interrupt()).unwrap();
         debug!(?interrupt_signal);
 
-        let terminate_signal = signal(SignalKind::terminate()).unwrap();
+        let mut terminate_signal = signal(SignalKind::terminate()).unwrap();
         debug!(?terminate_signal);
 
         let rate_limiter = self
@@ -224,11 +227,16 @@ impl Generate {
 
                     async move {
                         loop {
+                            debug!(%broker, %topic, partition);
+
                             if let Some(ref rate_limiter) = rate_limiter {
                                 let rate_limit_start = SystemTime::now();
 
                                 tokio::select! {
-                                    _ = token.cancelled() => break,
+                                    cancelled = token.cancelled() => {
+                                        debug!(?cancelled);
+                                        break
+                                    },
 
                                     Ok(_) = rate_limiter.until_n_ready(batch_size) => {
                                         info!(rate_limit_duration_ms = rate_limit_start
@@ -242,7 +250,10 @@ impl Generate {
                             let produce_start = SystemTime::now();
 
                             tokio::select! {
-                                _ = token.cancelled() => break,
+                                cancelled = token.cancelled() => {
+                                    debug!(?cancelled);
+                                    break
+                                },
 
                                 Ok(_) = produce(broker.clone(), topic.clone(), partition, schema.clone(), batch_size.get() as i32) => {
                                     info!(produce_duration_ms = produce_start
@@ -257,14 +268,58 @@ impl Generate {
                 });
         }
 
-        if let Some(duration) = self.configuration.duration {
-            set.spawn(async move {
-                sleep(duration).await;
-                token.cancel()
-            });
+        let join_all = async {
+            while !set.is_empty() {
+                debug!(len = set.len());
+                set.join_next().await;
+            }
+        };
+
+        let duration = self
+            .configuration
+            .duration
+            .map(sleep)
+            .map(Box::pin)
+            .map(|pinned| pinned as Pin<Box<dyn Future<Output = ()>>>)
+            .unwrap_or(Box::pin(std::future::pending()) as Pin<Box<dyn Future<Output = ()>>>);
+
+        let cancellation = tokio::select! {
+
+            timeout = duration => {
+                debug!(?timeout);
+                token.cancel();
+                Some(CancelKind::Timeout)
+            }
+
+            completed = join_all => {
+                debug!(?completed);
+                None
+            }
+
+            interrupt = interrupt_signal.recv() => {
+                debug!(?interrupt);
+                Some(CancelKind::Interrupt)
+            }
+
+            terminate = terminate_signal.recv() => {
+                debug!(?terminate);
+                Some(CancelKind::Terminate)
+            }
+
+        };
+
+        debug!(?cancellation);
+
+        if let Some(CancelKind::Timeout) = cancellation {
+            sleep(Duration::from_secs(5)).await;
         }
 
-        _ = set.join_all().await;
+        debug!(abort = set.len());
+        set.abort_all();
+
+        while !set.is_empty() {
+            set.join_next().await;
+        }
 
         Ok(ErrorCode::None)
     }

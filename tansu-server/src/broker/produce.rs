@@ -139,7 +139,7 @@ where
         timeout_ms: i32,
         topic_data: Option<Vec<TopicProduceData>>,
     ) -> Result<ProduceResponse> {
-        debug!(?self, ?transaction_id, ?acks, timeout_ms, ?topic_data);
+        debug!(?transaction_id, ?acks, timeout_ms, ?topic_data);
 
         let mut responses =
             Vec::with_capacity(topic_data.as_ref().map_or(0, |topic_data| topic_data.len()));
