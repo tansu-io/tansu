@@ -151,6 +151,9 @@ cat-produce topic file:
 cat-consume topic:
     target/debug/tansu cat consume {{topic}} --max-wait-time-ms=5000
 
+generator topic *args:
+    target/debug/tansu generator {{args}} {{topic}} 2>&1 >generator.log
+
 duckdb-k-unnest-v-parquet topic:
     duckdb -init duckdb-init.sql :memory: "SELECT key,unnest(value) FROM '{{replace(env("DATA_LAKE"), "file://./", "")}}/{{topic}}/*/*.parquet'"
 
@@ -209,10 +212,6 @@ tansu-server:
 kafka-proxy:
     docker run -d -p 19092:9092 apache/kafka:3.9.0
 
-# run a proxy with configuration from .env
-tansu-proxy:
-    target/debug/tansu proxy 2>&1 | tee proxy.log
-
 codespace-create:
     gh codespace create \
         --repo $(gh repo view --json nameWithOwner --jq .nameWithOwner) \
@@ -265,10 +264,16 @@ otel: build docker-compose-down db-up minio-up minio-ready-local minio-local-ali
 otel-up: docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up tansu-up
 
 tansu-broker *args:
-    target/debug/tansu broker {{args}} 2>&1 | tee tansu.log
+    target/debug/tansu broker {{args}} 2>&1 >tansu.log
 
 # run a broker with configuration from .env
 broker *args: (cargo-build "--bin" "tansu") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket lakehouse-catalog-up (tansu-broker args)
+
+
+# run a proxy with configuration from .env
+proxy *args:
+    target/debug/tansu proxy {{args}} 2>&1 >proxy.log
+
 
 # teardown compose, rebuild: minio, db, tansu and lake buckets
 server: (cargo-build "--bin" "tansu") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket lakehouse-catalog-up
@@ -304,13 +309,15 @@ taxi-topic-populate: (cat-produce "taxi" "etc/data/trips.json")
 taxi-topic-consume: (cat-consume "taxi")
 
 # create taxi topic with generated fields with schema etc/schema/taxi.proto
-taxi-topic-create: (topic-create "taxi" "--partitions" "1" "--config" "'tansu.lake.generate.date=cast(meta.timestamp as date)'" "--config" "tansu.lake.partition=date" "--config" "tansu.lake.z_order=vendor_id" "--config" "tansu.lake.sink=true")
+taxi-topic-create: (topic-create "taxi" "--partitions=1"  "--config=tansu.lake.normalize=true" "--config=tansu.lake.partition=meta.day" "--config=tansu.lake.z_order=vendor_id" "--config=tansu.lake.sink=true" "--config=tansu.batch=true" "--config=tansu.batch.max_records=200" "--config=tansu.batch.timeout_ms=1000")
 
 # create taxi topic with schema etc/schema/taxi.proto
 taxi-topic-create-plain: (topic-create "taxi" "--partitions" "1" "--config" "tansu.lake.sink=true")
 
 # create taxi topic with a flattened schema etc/schema/taxi.proto
 taxi-topic-create-normalize: (topic-create "taxi" "--partitions" "1" "--config" "tansu.lake.sink=true" "--config" "tansu.lake.normalize=true" "--config" "tansu.lake.normalize.separator=_" "--config" "tansu.lake.z_order=value_vendor_id")
+
+taxi-topic-generator: (generator "taxi" "--broker=tcp://localhost:9092" "--per-second=1" "--producers=16" "--batch-size=1" "--duration-seconds=60")
 
 # delete taxi topic
 taxi-topic-delete: (topic-delete "taxi")

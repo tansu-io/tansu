@@ -334,7 +334,7 @@ impl LakeHouse for Delta {
         record_batch: RecordBatch,
         config: DescribeConfigsResult,
     ) -> Result<()> {
-        debug!(%topic, partition, offset, ?record_batch, ?config);
+        debug!(%topic, partition, offset, rows = record_batch.num_rows(), columns = record_batch.num_columns(), ?config);
 
         let config = Config::from(config);
 

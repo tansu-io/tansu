@@ -22,9 +22,10 @@ use regex::{Regex, Replacer};
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
+    Box(#[from] Box<dyn std::error::Error + Send + Sync>),
     Cat(Box<tansu_cat::Error>),
     DotEnv(#[from] dotenv::Error),
-    Proxy(#[from] tansu_proxy::Error),
+    Generate(#[from] tansu_generator::Error),
     Regex(#[from] regex::Error),
     Schema(Box<tansu_schema_registry::Error>),
     Server(Box<tansu_server::Error>),

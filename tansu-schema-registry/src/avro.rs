@@ -43,7 +43,9 @@ use tansu_kafka_sans_io::{ErrorCode, record::inflated::Batch};
 use tracing::{debug, error, info};
 use uuid::Uuid;
 
-use crate::{ARROW_LIST_FIELD_NAME, AsArrow, AsJsonValue, AsKafkaRecord, Error, Result, Validator};
+use crate::{
+    ARROW_LIST_FIELD_NAME, AsArrow, AsJsonValue, AsKafkaRecord, Error, Generator, Result, Validator,
+};
 
 const NULLABLE: bool = true;
 const SORTED_MAP_KEYS: bool = false;
@@ -1696,6 +1698,12 @@ impl AsKafkaRecord for Schema {
         }
 
         Ok(builder)
+    }
+}
+
+impl Generator for Schema {
+    fn generate(&self) -> Result<tansu_kafka_sans_io::record::Builder> {
+        todo!()
     }
 }
 

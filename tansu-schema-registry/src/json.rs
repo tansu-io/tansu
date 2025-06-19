@@ -15,7 +15,9 @@
 
 use std::{any::type_name_of_val, collections::BTreeMap, sync::Arc};
 
-use crate::{ARROW_LIST_FIELD_NAME, AsArrow, AsJsonValue, AsKafkaRecord, Error, Result, Validator};
+use crate::{
+    ARROW_LIST_FIELD_NAME, AsArrow, AsJsonValue, AsKafkaRecord, Error, Generator, Result, Validator,
+};
 use arrow::{
     array::{
         ArrayBuilder, BooleanBuilder, Float64Builder, Int64Builder, ListBuilder, NullBuilder,
@@ -703,6 +705,12 @@ impl AsKafkaRecord for Schema {
         }
 
         Ok(builder)
+    }
+}
+
+impl Generator for Schema {
+    fn generate(&self) -> Result<tansu_kafka_sans_io::record::Builder> {
+        todo!()
     }
 }
 

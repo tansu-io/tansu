@@ -1,12 +1,8 @@
 [package]
-name = "tansu-proxy"
+name = "tansu-service"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
-publish = false
-
-# [lints]
-# workspace = true
 
 [dependencies]
 async-trait.workspace = true
@@ -14,7 +10,6 @@ bytes.workspace = true
 clap.workspace = true
 rama.workspace = true
 tansu-kafka-sans-io = { path = "../tansu-kafka-sans-io" }
-tansu-service = { path = "../tansu-service" }
 thiserror.workspace = true
 tokio.workspace = true
 tracing-subscriber.workspace = true
