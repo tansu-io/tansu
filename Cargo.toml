@@ -130,10 +130,3 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 url = { version = "2.5.4", features = ["serde"] }
 uuid = { version = "1.13.2", features = ["serde", "v4", "v7"] }
 zstd = "0.13.2"
-
-
-[patch.crates-io]
-iceberg = { git = "https://github.com/apache/iceberg-rust.git", tag = "v0.5.0" }
-iceberg-catalog-memory = { git = "https://github.com/apache/iceberg-rust.git", tag = "v0.5.0" }
-iceberg-catalog-rest = { git = "https://github.com/apache/iceberg-rust.git", tag = "v0.5.0" }
-iceberg-datafusion = { git = "https://github.com/apache/iceberg-rust.git", tag = "v0.5.0" }
