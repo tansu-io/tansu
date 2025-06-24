@@ -1,0 +1,44 @@
+syntax = 'proto3';
+
+import "google/protobuf/descriptor.proto";
+
+extend google.protobuf.FieldOptions {
+  Generator generate = 51215;
+}
+
+message Generator {
+    oneof apply {
+        bool skip = 1;
+        string script = 2;
+        Repeated repeated = 3;
+    }
+}
+
+message Repeated {
+    oneof size {
+        uint32 len = 1;
+        Range range = 2;
+    }
+    string script = 3;
+}
+
+message Range {
+    uint32 min = 1;
+    uint32 max = 2;
+}
+
+message Address {
+    string building_number = 1 [(generate).script = "\"dolor\""];
+    string street_name = 2 [(generate).script = "\"sit\""];
+    string city = 3 [(generate).script = "\"amet\""];
+    string post_code = 4 [(generate).script = "\"consectetur\""];
+    string country_name = 5 [(generate).script = "\"adipiscing\""];
+}
+
+message Value {
+    fixed64 user_id = 1 [(generate).skip = true];
+    string email_address = 2 [(generate).script = "\"lorem\""];
+    string full_name = 3 [(generate).script = "\"ipsum\""];
+    Address home = 4;
+    repeated string industry = 5 [(generate).repeated = {script: "\"elit\"", range: {min: 1, max: 3}}];
+}

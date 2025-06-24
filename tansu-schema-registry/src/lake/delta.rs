@@ -1479,6 +1479,94 @@ mod tests {
 
             Ok(())
         }
+
+        #[ignore]
+        #[tokio::test]
+        async fn repeated_string() -> Result<()> {
+            let _guard = init_tracing()?;
+
+            let schema = Schema::try_from(Bytes::from_static(include_bytes!(
+                "../../tests/repeated-string.proto"
+            )))?;
+
+            let value = schema.encode_from_value(
+                MessageKind::Value,
+                &json!({
+                  "id": 12321,
+                  "industry": ["abc", "def", "pqr"],
+                }),
+            )?;
+
+            let partition = 32123;
+
+            let record_batch = Batch::builder()
+                .record(Record::builder().value(value.into()))
+                .base_timestamp(119_731_017_000)
+                .build()
+                .map_err(Into::into)
+                .and_then(|batch| schema.as_arrow(partition, &batch))?;
+
+            let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
+            let location = format!("file://{}", temp_dir.path().to_str().unwrap());
+            let database = "pqr";
+
+            let lake_house =
+                Url::parse(location.as_ref())
+                    .map_err(Into::into)
+                    .and_then(|location| {
+                        Builder::<PhantomData<Url>>::default()
+                            .location(location)
+                            .database(Some(database.into()))
+                            .build()
+                    })?;
+
+            let topic = "t";
+
+            let config = DescribeConfigsResult {
+                error_code: ErrorCode::None.into(),
+                error_message: None,
+                resource_type: ConfigResource::Topic.into(),
+                resource_name: topic.into(),
+                configs: Some(vec![]),
+            };
+
+            let offset = 543212345;
+
+            lake_house
+                .store(topic, partition, offset, record_batch, config)
+                .await
+                .inspect(|result| debug!(?result))
+                .inspect_err(|err| debug!(?err))?;
+
+            let table = {
+                let mut table =
+                    DeltaTableBuilder::from_uri(format!("{location}/{database}.{topic}"))
+                        .build()?;
+                table.load().await?;
+                table
+            };
+
+            let ctx = SessionContext::new();
+
+            ctx.register_table("t", Arc::new(table))?;
+
+            let df = ctx.sql("select * from t").await?;
+            let results = df.collect().await?;
+
+            let pretty_results = pretty_format_batches(&results)?.to_string();
+
+            let expected = vec![
+                "+------------------------------------------------------------------------------------+--------------------------------------------------------------------------------------------+------+-------+-----+-----------+",
+                "| meta                                                                               | value                                                                                      | year | month | day | vendor_id |",
+                "+------------------------------------------------------------------------------------+--------------------------------------------------------------------------------------------+------+-------+-----+-----------+",
+                "| {partition: 32123, timestamp: 1973-10-17T18:36:57, year: 1973, month: 10, day: 17} | {vendor_id: 1, trip_id: 1000371, trip_distance: 1.8, fare_amount: 15.32, store_and_fwd: 0} | 1973 | 10    | 17  | 1         |",
+                "+------------------------------------------------------------------------------------+--------------------------------------------------------------------------------------------+------+-------+-----+-----------+",
+            ];
+
+            assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
+
+            Ok(())
+        }
     }
 
     mod avro {

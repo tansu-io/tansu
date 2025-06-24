@@ -23,5 +23,5 @@ message Value {
   int64 trip_id = 2 [(generate).script = "rand(18..=38)"];
   double trip_distance = 3 [(generate).script = "rand_float(123.456, 789.678)"];
   double fare_amount = 4 [(generate).script = "rand_float(123.456, 789.678)"];
-  Flag store_and_fwd = 5 [(generate).script = "if rand_bool(0.8) { \"Y\" } else { \"N\" }"];
+  Flag store_and_fwd = 5 [(generate).script = "if rand_bool(0.8) { 'Y' } else { 'N' }"];
 }

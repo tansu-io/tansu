@@ -152,7 +152,7 @@ cat-consume topic:
     target/debug/tansu cat consume {{topic}} --max-wait-time-ms=5000
 
 generator topic *args:
-    target/debug/tansu generator {{args}} {{topic}} 2>&1 >generator.log
+    target/debug/tansu generator {{args}} {{topic}} 2>&1 | tee generator.log
 
 duckdb-k-unnest-v-parquet topic:
     duckdb -init duckdb-init.sql :memory: "SELECT key,unnest(value) FROM '{{replace(env("DATA_LAKE"), "file://./", "")}}/{{topic}}/*/*.parquet'"
@@ -264,7 +264,7 @@ otel: build docker-compose-down db-up minio-up minio-ready-local minio-local-ali
 otel-up: docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up tansu-up
 
 tansu-broker *args:
-    target/debug/tansu broker {{args}} 2>&1 >tansu.log
+    target/debug/tansu broker {{args}} 2>&1 | tee tansu.log
 
 # run a broker with configuration from .env
 broker *args: (cargo-build "--bin" "tansu") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket lakehouse-catalog-up (tansu-broker args)
@@ -300,7 +300,7 @@ observation-topic-create: (topic-create "observation")
 observation-duckdb-parquet: (duckdb-k-unnest-v-parquet "observation")
 
 duckdb *sql:
-    duckdb -init duckdb-init.sql :memory: {{sql}}
+    duckdb -init duckdb-init.sql -markdown :memory: {{sql}}
 
 # produce etc/data/trips.json with schema etc/schema/taxi.proto
 taxi-topic-populate: (cat-produce "taxi" "etc/data/trips.json")
@@ -336,3 +336,11 @@ employee-produce: (cat-produce "employee" "etc/data/employees.json")
 
 # employee duckdb delta lake
 employee-duckdb-delta: (duckdb "\"select * from delta_scan('s3://lake/tansu.employee');\"")
+
+
+# create customer topic with schema etc/schema/customer.proto
+customer-topic-create: (topic-create "customer" "--partitions=1"  "--config=tansu.lake.normalize=true" "--config=tansu.lake.partition=meta.day" "--config=tansu.lake.sink=true" "--config=tansu.batch=true" "--config=tansu.batch.max_records=200" "--config=tansu.batch.timeout_ms=1000")
+
+customer-topic-generator: (generator "customer" "--broker=tcp://localhost:9092" "--per-second=1" "--producers=16" "--batch-size=1" "--duration-seconds=60")
+
+customer-duckdb-delta: (duckdb "\"select * from delta_scan('s3://lake/tansu.customer');\"")

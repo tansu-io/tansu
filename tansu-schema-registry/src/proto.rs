@@ -13,7 +13,12 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::{collections::BTreeMap, io::Write, ops::Deref, sync::LazyLock};
+use std::{
+    collections::BTreeMap,
+    io::Write,
+    ops::{Deref, RangeInclusive},
+    sync::LazyLock,
+};
 
 use crate::{
     ARROW_LIST_FIELD_NAME, AsArrow, AsJsonValue, AsKafkaRecord, Error, Generator, Result, Validator,
@@ -29,16 +34,19 @@ use arrow::{
 };
 use bytes::{BufMut, Bytes, BytesMut};
 use chrono::{DateTime, Datelike};
+use fake::Fake;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use protobuf::{
-    CodedInputStream, Message, MessageDyn, UnknownValueRef, descriptor,
+    CodedInputStream, MessageDyn, UnknownValueRef,
+    descriptor::{self, FieldDescriptorProto},
     reflect::{
-        FieldDescriptor, FileDescriptor, MessageDescriptor, ReflectValueBox, ReflectValueRef,
-        RuntimeFieldType, RuntimeType,
+        EnumDescriptor, FieldDescriptor, FileDescriptor, MessageDescriptor, ReflectValueBox,
+        ReflectValueRef, RuntimeFieldType, RuntimeType,
     },
     well_known_types,
 };
 use protobuf_json_mapping::{parse_dyn_from_str, print_to_string};
+use rand::prelude::*;
 use rhai::{Engine, packages::Package};
 use rhai_rand::RandomPackage;
 use serde_json::{Map, Value, json};
@@ -174,213 +182,72 @@ impl Schema {
             .and_then(message_to_bytes)
     }
 
+    fn message_generator(&self) -> Option<MessageGenerator> {
+        self.file_descriptors
+            .iter()
+            .find_map(|fd| fd.message_by_package_relative_name("Generator"))
+            .map(|generator_descriptor| MessageGenerator {
+                generator_descriptor,
+            })
+    }
+
     fn generate_message_kind(&self, message_kind: MessageKind) -> Result<Option<Bytes>> {
         debug!(?message_kind);
 
         let engine = {
             let mut engine = Engine::new();
+
+            engine.register_fn("first_name", || {
+                fake::faker::name::raw::FirstName(fake::locales::EN).fake::<String>()
+            });
+
+            engine.register_fn("last_name", || {
+                fake::faker::name::raw::LastName(fake::locales::EN).fake::<String>()
+            });
+
+            engine.register_fn("safe_email", || {
+                fake::faker::internet::raw::SafeEmail(fake::locales::EN).fake::<String>()
+            });
+
+            engine.register_fn("building_number", || {
+                fake::faker::address::raw::BuildingNumber(fake::locales::EN).fake::<String>()
+            });
+
+            engine.register_fn("street_name", || {
+                fake::faker::address::raw::StreetName(fake::locales::EN).fake::<String>()
+            });
+
+            engine.register_fn("city_name", || {
+                fake::faker::address::raw::CityName(fake::locales::EN).fake::<String>()
+            });
+
+            engine.register_fn("post_code", || {
+                fake::faker::address::raw::PostCode(fake::locales::EN).fake::<String>()
+            });
+
+            engine.register_fn("country_name", || {
+                fake::faker::address::raw::CountryName(fake::locales::EN).fake::<String>()
+            });
+
+            engine.register_fn("industry", || {
+                fake::faker::company::raw::Industry(fake::locales::EN).fake::<String>()
+            });
+
             let random = RandomPackage::new();
             random.register_into_engine(&mut engine);
             engine
         };
 
-        let Some(message_descriptor) = self.message_by_package_relative_name(message_kind) else {
-            return Ok(None);
-        };
-
-        debug!(name = %message_descriptor.full_name());
-
-        let mut message_dyn = message_descriptor.new_instance();
-
-        for (field_proto, field) in message_descriptor
-            .proto()
-            .field
-            .iter()
-            .zip(message_dyn.descriptor_dyn().fields())
-        {
-            for (id, unknown) in field_proto.options.special_fields().unknown_fields().iter() {
-                if id != 51215 {
-                    continue;
-                }
-
-                let UnknownValueRef::LengthDelimited(items) = unknown else {
-                    continue;
-                };
-
-                let Some(generator) = self
-                    .file_descriptors
-                    .iter()
-                    .find_map(|fd| fd.message_by_package_relative_name("Generator"))
-                else {
-                    continue;
-                };
-
-                let mut generator_message_dyn = generator.new_instance();
-
-                if generator_message_dyn
-                    .merge_from_bytes_dyn(items)
-                    .inspect_err(|err| debug!(?err))
-                    .is_ok()
-                {
-                    for generator_field in generator_message_dyn.descriptor_dyn().fields() {
-                        if generator_field.name() != "script" {
-                            continue;
-                        }
-
-                        match field.runtime_field_type() {
-                            RuntimeFieldType::Singular(singular) => {
-                                if let Some(value) =
-                                    generator_field.get_singular(generator_message_dyn.as_ref())
-                                {
-                                    debug!(name = %field_proto.name(), generator = %generator_field.name(), ?value, ?singular);
-
-                                    if let ReflectValueRef::String(script) = value {
-                                        match singular {
-                                            RuntimeType::I32 => engine
-                                                .eval::<i32>(script)
-                                                .inspect(|result| debug!(script, ?result))
-                                                .inspect_err(|err| debug!(script, ?err))
-                                                .map(ReflectValueBox::from)
-                                                .map(|value| {
-                                                    field.set_singular_field(
-                                                        message_dyn.as_mut(),
-                                                        value,
-                                                    )
-                                                })?,
-
-                                            RuntimeType::I64 => engine
-                                                .eval::<i64>(script)
-                                                .inspect(|result| debug!(script, ?result))
-                                                .inspect_err(|err| debug!(script, ?err))
-                                                .map(ReflectValueBox::from)
-                                                .map(|value| {
-                                                    field.set_singular_field(
-                                                        message_dyn.as_mut(),
-                                                        value,
-                                                    )
-                                                })?,
-
-                                            RuntimeType::U32 => engine
-                                                .eval::<u32>(script)
-                                                .inspect(|result| debug!(script, ?result))
-                                                .inspect_err(|err| debug!(script, ?err))
-                                                .map(ReflectValueBox::from)
-                                                .map(|value| {
-                                                    field.set_singular_field(
-                                                        message_dyn.as_mut(),
-                                                        value,
-                                                    )
-                                                })?,
-
-                                            RuntimeType::U64 => engine
-                                                .eval::<u64>(script)
-                                                .inspect(|result| debug!(script, ?result))
-                                                .inspect_err(|err| debug!(script, ?err))
-                                                .map(ReflectValueBox::from)
-                                                .map(|value| {
-                                                    field.set_singular_field(
-                                                        message_dyn.as_mut(),
-                                                        value,
-                                                    )
-                                                })?,
-
-                                            RuntimeType::F32 => engine
-                                                .eval::<f32>(script)
-                                                .inspect(|result| debug!(script, ?result))
-                                                .inspect_err(|err| debug!(script, ?err))
-                                                .map(ReflectValueBox::from)
-                                                .map(|value| {
-                                                    field.set_singular_field(
-                                                        message_dyn.as_mut(),
-                                                        value,
-                                                    )
-                                                })?,
-
-                                            RuntimeType::F64 => engine
-                                                .eval::<f64>(script)
-                                                .inspect(|result| debug!(script, ?result))
-                                                .inspect_err(|err| debug!(script, ?err))
-                                                .map(ReflectValueBox::from)
-                                                .map(|value| {
-                                                    field.set_singular_field(
-                                                        message_dyn.as_mut(),
-                                                        value,
-                                                    )
-                                                })?,
-
-                                            RuntimeType::Bool => engine
-                                                .eval::<bool>(script)
-                                                .inspect(|result| debug!(script, ?result))
-                                                .inspect_err(|err| debug!(script, ?err))
-                                                .map(ReflectValueBox::from)
-                                                .map(|value| {
-                                                    field.set_singular_field(
-                                                        message_dyn.as_mut(),
-                                                        value,
-                                                    )
-                                                })?,
-
-                                            RuntimeType::String => engine
-                                                .eval::<String>(script)
-                                                .inspect(|result| debug!(script, ?result))
-                                                .inspect_err(|err| debug!(script, ?err))
-                                                .map(ReflectValueBox::from)
-                                                .map(|value| {
-                                                    field.set_singular_field(
-                                                        message_dyn.as_mut(),
-                                                        value,
-                                                    )
-                                                })?,
-
-                                            ref message @ RuntimeType::VecU8 => {
-                                                todo!("{message:?}")
-                                            }
-
-                                            RuntimeType::Enum(descriptor) => engine
-                                                .eval::<String>(script)
-                                                .inspect(|result| debug!(script, ?result))
-                                                .inspect_err(|err| debug!(script, ?err))
-                                                .map(|name| {
-                                                    descriptor
-                                                        .value_by_name(&name[..])
-                                                        .map(|value_descriptor| {
-                                                            ReflectValueBox::Enum(
-                                                                descriptor,
-                                                                value_descriptor.value(),
-                                                            )
-                                                        })
-                                                        .inspect(|value| debug!(?value))
-                                                        .unwrap()
-                                                })
-                                                .map(|value| {
-                                                    field.set_singular_field(
-                                                        message_dyn.as_mut(),
-                                                        value,
-                                                    )
-                                                })?,
-
-                                            ref message @ RuntimeType::Message(_) => {
-                                                todo!("{message:?}")
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            RuntimeFieldType::Repeated(repeated) => {
-                                debug!(?repeated);
-                            }
-
-                            RuntimeFieldType::Map(key, value) => {
-                                debug!(?key, ?value);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        message_to_bytes(message_dyn).map(Some)
+        self.message_by_package_relative_name(message_kind)
+            .map_or(Ok(None), |message_descriptor| {
+                self.message_generator()
+                    .map_or(Ok(None), |message_generator| {
+                        message_generator
+                            .generate(&engine, &message_descriptor)
+                            .and_then(message_to_bytes)
+                            .map(Some)
+                    })
+            })
     }
 
     fn message_value_as_bytes(
@@ -396,7 +263,7 @@ impl Schema {
                     .and_then(|json| {
                         parse_dyn_from_str(&message_descriptor, json.as_str()).map_err(Into::into)
                     })
-                    .inspect(|message| debug!(?message))
+                    .inspect(|message| debug!(%message))
                     .and_then(|message| {
                         let mut w = BytesMut::new().writer();
                         message
@@ -802,6 +669,431 @@ impl Schema {
                 }
             })
             .collect::<Vec<_>>()
+    }
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct MessageGenerator {
+    generator_descriptor: MessageDescriptor,
+}
+
+impl MessageGenerator {
+    fn generate(
+        &self,
+        engine: &Engine,
+        message_descriptor: &MessageDescriptor,
+    ) -> Result<Box<dyn MessageDyn>> {
+        debug!(message_descriptor = message_descriptor.full_name());
+
+        let mut message_dyn = message_descriptor.new_instance();
+
+        for (field_proto, field) in message_descriptor
+            .proto()
+            .field
+            .iter()
+            .zip(message_dyn.descriptor_dyn().fields())
+        {
+            let field_generator = FieldGenerator {
+                generator_descriptor: &self.generator_descriptor,
+                configuration: FieldGeneratorConfiguration::with_field_generator(
+                    field_proto,
+                    &self.generator_descriptor,
+                ),
+            };
+
+            if field_generator.configuration.skip() {
+                continue;
+            }
+
+            match field.runtime_field_type() {
+                RuntimeFieldType::Singular(ref singular) => field_generator
+                    .singular_value(engine, singular)
+                    .map(|value| field.set_singular_field(message_dyn.as_mut(), value))?,
+
+                RuntimeFieldType::Repeated(ref repeated) => {
+                    let mut r = field.mut_repeated(message_dyn.as_mut());
+                    for element in field_generator.repeated_value(engine, repeated)? {
+                        r.push(element);
+                    }
+                }
+
+                RuntimeFieldType::Map(key, value) => todo!("key={key:?} value={value:?}"),
+            }
+        }
+
+        Ok(message_dyn)
+    }
+}
+
+struct FieldGenerator<'a> {
+    generator_descriptor: &'a MessageDescriptor,
+    configuration: FieldGeneratorConfiguration,
+}
+
+impl<'a> FieldGenerator<'a> {
+    fn singular_value(
+        &self,
+        engine: &Engine,
+        runtime_type: &RuntimeType,
+    ) -> Result<ReflectValueBox> {
+        let mut rng = rand::rng();
+        match runtime_type {
+            RuntimeType::I32 => self
+                .configuration
+                .script()
+                .inspect(|script| debug!(script))
+                .map_or(Ok(rng.random()), |script| {
+                    engine
+                        .eval::<i32>(script)
+                        .inspect_err(|err| debug!(script, ?err))
+                })
+                .inspect(|result| debug!(?result))
+                .map(ReflectValueBox::from)
+                .map_err(Into::into),
+
+            RuntimeType::I64 => self
+                .configuration
+                .script()
+                .inspect(|script| debug!(script))
+                .map_or(Ok(rng.random()), |script| {
+                    engine
+                        .eval::<i64>(script)
+                        .inspect_err(|err| debug!(script, ?err))
+                })
+                .inspect(|result| debug!(?result))
+                .map(ReflectValueBox::from)
+                .map_err(Into::into),
+
+            RuntimeType::U32 => self
+                .configuration
+                .script()
+                .inspect(|script| debug!(script))
+                .map_or(Ok(rng.random()), |script| {
+                    engine
+                        .eval::<u32>(script)
+                        .inspect_err(|err| debug!(script, ?err))
+                })
+                .inspect(|result| debug!(?result))
+                .map(ReflectValueBox::from)
+                .map_err(Into::into),
+
+            RuntimeType::U64 => self
+                .configuration
+                .script()
+                .inspect(|script| debug!(script))
+                .map_or(Ok(rng.random()), |script| {
+                    engine
+                        .eval::<u64>(script)
+                        .inspect_err(|err| debug!(script, ?err))
+                })
+                .inspect(|result| debug!(?result))
+                .map(ReflectValueBox::from)
+                .map_err(Into::into),
+
+            RuntimeType::F32 => self
+                .configuration
+                .script()
+                .inspect(|script| debug!(script))
+                .map_or(Ok(rng.random()), |script| {
+                    engine
+                        .eval::<f32>(script)
+                        .inspect_err(|err| debug!(script, ?err))
+                })
+                .inspect(|result| debug!(?result))
+                .map(ReflectValueBox::from)
+                .map_err(Into::into),
+
+            RuntimeType::F64 => self
+                .configuration
+                .script()
+                .inspect(|script| debug!(script))
+                .map_or(Ok(rng.random()), |script| {
+                    engine
+                        .eval::<f64>(script)
+                        .inspect_err(|err| debug!(script, ?err))
+                })
+                .inspect(|result| debug!(?result))
+                .map(ReflectValueBox::from)
+                .map_err(Into::into),
+
+            RuntimeType::Bool => self
+                .configuration
+                .script()
+                .inspect(|script| debug!(script))
+                .map_or(Ok(rng.random()), |script| {
+                    engine
+                        .eval::<bool>(script)
+                        .inspect_err(|err| debug!(script, ?err))
+                })
+                .inspect(|result| debug!(?result))
+                .map(ReflectValueBox::from)
+                .map_err(Into::into),
+
+            RuntimeType::String => self
+                .configuration
+                .script()
+                .inspect(|script| debug!(script))
+                .map_or(Ok(String::from("abc")), |script| {
+                    engine
+                        .eval::<String>(script)
+                        .inspect_err(|err| debug!(script, ?err))
+                })
+                .inspect(|result| debug!(?result))
+                .map(ReflectValueBox::from)
+                .map_err(Into::into),
+
+            RuntimeType::VecU8 => todo!(),
+
+            RuntimeType::Enum(descriptor) => self
+                .configuration
+                .script()
+                .inspect(|script| debug!(script))
+                .map_or(Ok(ReflectValueBox::Enum(descriptor.clone(), 1)), |script| {
+                    engine
+                        .eval::<String>(script)
+                        .map(|name| {
+                            descriptor
+                                .value_by_name(&name[..])
+                                .map(|value_descriptor| {
+                                    ReflectValueBox::Enum(
+                                        descriptor.clone(),
+                                        value_descriptor.value(),
+                                    )
+                                })
+                                .inspect(|value| debug!(?value))
+                                .unwrap()
+                        })
+                        .inspect_err(|err| debug!(script, ?err))
+                })
+                .inspect(|result| debug!(?result))
+                .map_err(Into::into),
+
+            RuntimeType::Message(message_descriptor) => {
+                let generator = MessageGenerator {
+                    generator_descriptor: self.generator_descriptor.to_owned(),
+                };
+
+                generator
+                    .generate(engine, message_descriptor)
+                    .map(ReflectValueBox::Message)
+            }
+        }
+    }
+
+    fn repeated_value(
+        &self,
+        engine: &Engine,
+        runtime_type: &RuntimeType,
+    ) -> Result<Vec<ReflectValueBox>> {
+        let upper = self.configuration.repeated_len().unwrap_or_else(|| {
+            rand::rng().random_range(self.configuration.repeated_range().unwrap_or(0..=1))
+        });
+
+        (0..upper)
+            .inspect(|i| debug!(i))
+            .map(|_| self.singular_value(engine, runtime_type))
+            .collect::<Result<Vec<_>>>()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, PartialOrd)]
+enum FieldGeneratorConfiguration {
+    Bool(bool),
+    Bytes(Bytes),
+    F32(f32),
+    F64(f64),
+    I32(i32),
+    I64(i64),
+    List(Vec<FieldGeneratorConfiguration>),
+    Message(BTreeMap<String, FieldGeneratorConfiguration>),
+    String(String),
+    U32(u32),
+    U64(u64),
+}
+
+impl Default for FieldGeneratorConfiguration {
+    fn default() -> Self {
+        Self::Message(Default::default())
+    }
+}
+
+impl FieldGeneratorConfiguration {
+    fn with_field_generator(
+        field: &FieldDescriptorProto,
+        generator: &MessageDescriptor,
+    ) -> FieldGeneratorConfiguration {
+        debug!(field = field.name(), generator = generator.full_name(),);
+
+        field
+            .options
+            .special_fields
+            .unknown_fields()
+            .iter()
+            .find_map(|(id, unknown)| {
+                if id != 51215 {
+                    None
+                } else if let UnknownValueRef::LengthDelimited(items) = unknown {
+                    let mut message = generator.new_instance();
+
+                    message
+                        .merge_from_bytes_dyn(items)
+                        .inspect_err(|err| debug!(?err))
+                        .ok();
+
+                    Some(Self::from(message.as_ref()))
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default()
+    }
+
+    fn skip(&self) -> bool {
+        self.get("skip")
+            .cloned()
+            .and_then(|value| value.as_bool())
+            .inspect(|skip| debug!(?skip))
+            .unwrap_or_default()
+    }
+
+    fn script(&self) -> Option<&str> {
+        self.get("script")
+            .inspect(|script| debug!(?script))
+            .and_then(|value| value.as_str())
+            .inspect(|script| debug!(?script))
+            .or(self.repeated_script())
+    }
+
+    fn repeated_range(&self) -> Option<RangeInclusive<u32>> {
+        self.get("repeated")
+            .inspect(|repeated| debug!(?repeated))
+            .and_then(|repeated| {
+                repeated
+                    .get("range")
+                    .inspect(|range| debug!(?range))
+                    .and_then(|range| {
+                        range
+                            .get("min")
+                            .inspect(|min| debug!(?min))
+                            .and_then(|min| min.as_u32())
+                            .and_then(|min| {
+                                range
+                                    .get("max")
+                                    .inspect(|max| debug!(?max))
+                                    .and_then(|max| max.as_u32())
+                                    .map(|max| min..=max)
+                            })
+                    })
+            })
+    }
+
+    fn repeated_len(&self) -> Option<u32> {
+        self.get("repeated")
+            .and_then(|repeated| repeated.get("len"))
+            .and_then(|len| len.as_u32())
+    }
+
+    fn repeated_script(&self) -> Option<&str> {
+        self.get("repeated")
+            .and_then(|repeated| repeated.get("script"))
+            .and_then(|script| script.as_str())
+    }
+
+    fn get(&self, key: &str) -> Option<&FieldGeneratorConfiguration> {
+        if let Self::Message(message) = self {
+            message.get(key)
+        } else {
+            None
+        }
+    }
+
+    fn as_bool(&self) -> Option<bool> {
+        if let Self::Bool(flag) = self {
+            Some(*flag)
+        } else {
+            None
+        }
+    }
+
+    fn as_str(&self) -> Option<&str> {
+        if let Self::String(value) = self {
+            Some(value)
+        } else {
+            None
+        }
+    }
+
+    fn as_u32(&self) -> Option<u32> {
+        if let Self::U32(value) = self {
+            Some(*value)
+        } else {
+            None
+        }
+    }
+}
+
+impl From<EnumDescriptor> for FieldGeneratorConfiguration {
+    fn from(_value: EnumDescriptor) -> Self {
+        todo!()
+    }
+}
+
+impl<'a> From<ReflectValueRef<'a>> for FieldGeneratorConfiguration {
+    fn from(value: ReflectValueRef<'a>) -> Self {
+        match value {
+            ReflectValueRef::U32(value) => Self::U32(value),
+            ReflectValueRef::U64(value) => Self::U64(value),
+            ReflectValueRef::I32(value) => Self::I32(value),
+            ReflectValueRef::I64(value) => Self::I64(value),
+            ReflectValueRef::F32(value) => Self::F32(value),
+            ReflectValueRef::F64(value) => Self::F64(value),
+            ReflectValueRef::Bool(value) => Self::Bool(value),
+            ReflectValueRef::String(value) => Self::String(value.to_owned()),
+            ReflectValueRef::Bytes(items) => Self::Bytes(Bytes::copy_from_slice(items)),
+            ReflectValueRef::Enum(enum_descriptor, _) => Self::from(enum_descriptor),
+            ReflectValueRef::Message(message_ref) => Self::from(message_ref.deref()),
+        }
+    }
+}
+
+impl From<&dyn MessageDyn> for FieldGeneratorConfiguration {
+    fn from(message: &dyn MessageDyn) -> Self {
+        debug!(%message);
+
+        Self::Message(
+            message
+                .descriptor_dyn()
+                .fields()
+                .inspect(|field| debug!(field = field.name()))
+                .filter_map(|field| match field.runtime_field_type() {
+                    RuntimeFieldType::Singular(singular) => {
+                        debug!(?singular);
+                        field
+                            .get_singular(message)
+                            .inspect(|value| debug!(field = field.name(), ?value))
+                            .map(|value| (field.name().to_owned(), Self::from(value)))
+                    }
+
+                    RuntimeFieldType::Repeated(repeated) => {
+                        debug!(?repeated);
+                        Some((
+                            field.name().to_owned(),
+                            Self::List(
+                                field
+                                    .get_repeated(message)
+                                    .into_iter()
+                                    .map(Self::from)
+                                    .inspect(|configuration| debug!(?configuration))
+                                    .collect::<Vec<_>>(),
+                            ),
+                        ))
+                    }
+
+                    RuntimeFieldType::Map(key, value) => todo!("key={key:?} value={value:?}"),
+                })
+                .inspect(|(field, value)| debug!(field, ?value))
+                .collect::<BTreeMap<String, FieldGeneratorConfiguration>>(),
+        )
     }
 }
 
@@ -1222,7 +1514,7 @@ fn field_ids(schemas: &[FileDescriptor]) -> BTreeMap<String, i32> {
 }
 
 fn append_struct_builder(message: &dyn MessageDyn, builder: &mut StructBuilder) -> Result<()> {
-    debug!(?message, ?builder);
+    debug!(%message, ?builder);
     for (index, ref field) in message.descriptor_dyn().fields().enumerate() {
         debug!(field_name = field.name());
 
@@ -1561,7 +1853,7 @@ fn decode_value(value: ReflectValueRef, builder: &mut dyn ArrayBuilder) -> Resul
             .map(|builder| builder.append_value(value)),
 
         ReflectValueRef::Message(message_ref) => {
-            if message_ref.deref().descriptor_dyn().full_name() == GOOGLE_PROTOBUF_TIMESTAMP {
+            if message_ref.descriptor_dyn().full_name() == GOOGLE_PROTOBUF_TIMESTAMP {
                 let message = print_to_string(message_ref.deref())?;
                 debug!(message = message.trim_matches('"'));
 
@@ -2844,6 +3136,193 @@ mod tests {
         );
 
         let _file_descriptor = make_fd(proto).inspect(|fds| debug!(?fds))?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn customer_001() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let schema = Schema::try_from(Bytes::from_static(include_bytes!(
+            "../tests/customer-001.proto"
+        )))?;
+
+        let topic = "t";
+        let ctx = SessionContext::new();
+
+        schema
+            .generate()
+            .and_then(|record| {
+                Batch::builder()
+                    .record(record)
+                    .base_timestamp(119_731_017_000)
+                    .build()
+                    .map_err(Into::into)
+            })
+            .and_then(|batch| schema.as_arrow(0, &batch))
+            .and_then(|record_batch| ctx.register_batch(topic, record_batch).map_err(Into::into))?;
+
+        let df = ctx.sql(format!("select * from {topic}").as_str()).await?;
+        let results = df.collect().await?;
+
+        let pretty_results = pretty_format_batches(&results)?.to_string();
+
+        let expected = vec![
+            "+--------------------------------------------------------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------+",
+            "| meta                                                                           | value                                                                                                                                                    |",
+            "+--------------------------------------------------------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------+",
+            "| {partition: 0, timestamp: 1973-10-17T18:36:57, year: 1973, month: 10, day: 17} | {email_address: lorem, full_name: ipsum, home: {building_number: dolor, street_name: sit, city: amet, post_code: consectetur, country_name: adipiscing}} |",
+            "+--------------------------------------------------------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------+",
+        ];
+
+        assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn customer_002_user_id() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let schema = Schema::try_from(Bytes::from_static(include_bytes!(
+            "../tests/customer-002.proto"
+        )))?;
+
+        let message_generator = schema.message_generator().unwrap();
+
+        let user_id = schema
+            .message_by_package_relative_name(MessageKind::Value)
+            .and_then(|message_descriptor| message_descriptor.field_by_name("user_id"))
+            .unwrap();
+
+        let configuration = FieldGeneratorConfiguration::with_field_generator(
+            user_id.proto(),
+            &message_generator.generator_descriptor,
+        );
+
+        assert!(configuration.skip());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn customer_002_email_address() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let schema = Schema::try_from(Bytes::from_static(include_bytes!(
+            "../tests/customer-002.proto"
+        )))?;
+
+        let message_generator = schema.message_generator().unwrap();
+
+        let user_id = schema
+            .message_by_package_relative_name(MessageKind::Value)
+            .and_then(|message_descriptor| message_descriptor.field_by_name("email_address"))
+            .unwrap();
+
+        let configuration = FieldGeneratorConfiguration::with_field_generator(
+            user_id.proto(),
+            &message_generator.generator_descriptor,
+        );
+
+        assert!(!configuration.skip());
+        assert_eq!(Some("\"lorem\""), configuration.script());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn customer_002_industry() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let schema = Schema::try_from(Bytes::from_static(include_bytes!(
+            "../tests/customer-002.proto"
+        )))?;
+
+        let message_generator = schema.message_generator().unwrap();
+
+        let user_id = schema
+            .message_by_package_relative_name(MessageKind::Value)
+            .and_then(|message_descriptor| message_descriptor.field_by_name("industry"))
+            .unwrap();
+
+        let configuration = FieldGeneratorConfiguration::with_field_generator(
+            user_id.proto(),
+            &message_generator.generator_descriptor,
+        );
+
+        assert!(!configuration.skip());
+        assert_eq!(Some(3), configuration.repeated_len());
+        assert_eq!(Some("\"elit\""), configuration.repeated_script());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn customer_002() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let schema = Schema::try_from(Bytes::from_static(include_bytes!(
+            "../tests/customer-002.proto"
+        )))?;
+
+        let topic = "t";
+        let ctx = SessionContext::new();
+
+        schema
+            .generate()
+            .and_then(|record| {
+                Batch::builder()
+                    .record(record)
+                    .base_timestamp(119_731_017_000)
+                    .build()
+                    .map_err(Into::into)
+            })
+            .and_then(|batch| schema.as_arrow(0, &batch))
+            .and_then(|record_batch| ctx.register_batch(topic, record_batch).map_err(Into::into))?;
+
+        let df = ctx.sql(format!("select * from {topic}").as_str()).await?;
+        let results = df.collect().await?;
+
+        let pretty_results = pretty_format_batches(&results)?.to_string();
+
+        let expected = vec![
+            "+--------------------------------------------------------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+",
+            "| meta                                                                           | value                                                                                                                                                                                              |",
+            "+--------------------------------------------------------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+",
+            "| {partition: 0, timestamp: 1973-10-17T18:36:57, year: 1973, month: 10, day: 17} | {user_id: 0, email_address: lorem, full_name: ipsum, home: {building_number: dolor, street_name: sit, city: amet, post_code: consectetur, country_name: adipiscing}, industry: [elit, elit, elit]} |",
+            "+--------------------------------------------------------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+",
+        ];
+
+        assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn customer_003_industry() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let schema = Schema::try_from(Bytes::from_static(include_bytes!(
+            "../tests/customer-003.proto"
+        )))?;
+
+        let message_generator = schema.message_generator().unwrap();
+
+        let user_id = schema
+            .message_by_package_relative_name(MessageKind::Value)
+            .and_then(|message_descriptor| message_descriptor.field_by_name("industry"))
+            .unwrap();
+
+        let configuration = FieldGeneratorConfiguration::with_field_generator(
+            user_id.proto(),
+            &message_generator.generator_descriptor,
+        );
+
+        assert!(!configuration.skip());
+        assert_eq!(Some(1..=3), configuration.repeated_range());
+        assert_eq!(Some("\"elit\""), configuration.repeated_script());
 
         Ok(())
     }
