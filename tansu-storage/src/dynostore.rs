@@ -775,8 +775,10 @@ impl Storage for DynoStore {
                         .inspect_err(|err| debug!(?err))?;
 
                     if let Some(ref lake) = self.lake {
+                        let lake_type = lake.lake_type().await?;
+
                         if let Some(record_batch) = registry
-                            .as_arrow(topition.topic(), topition.partition(), &inflated)
+                            .as_arrow(topition.topic(), topition.partition(), &inflated, lake_type)
                             .inspect(|record_batch| debug!(?record_batch))
                             .inspect_err(|err| debug!(?err))?
                         {
@@ -890,10 +892,14 @@ impl Storage for DynoStore {
 
                 if !batch_attribute.control {
                     if let Some(ref lake) = self.lake {
+                        let lake_type = lake.lake_type().await?;
                         let inflated = inflated::Batch::try_from(&deflated)?;
-                        if let Some(record_batch) =
-                            registry.as_arrow(topition.topic(), topition.partition(), &inflated)?
-                        {
+                        if let Some(record_batch) = registry.as_arrow(
+                            topition.topic(),
+                            topition.partition(),
+                            &inflated,
+                            lake_type,
+                        )? {
                             lake.store(
                                 topition.topic(),
                                 topition.partition(),

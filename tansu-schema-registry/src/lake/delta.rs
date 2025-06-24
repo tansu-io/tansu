@@ -19,7 +19,7 @@ use std::{
     time::SystemTime,
 };
 
-use crate::{Error, METER, Result, sql::typeof_sql_expr};
+use crate::{Error, METER, Result, lake::LakeHouseType, sql::typeof_sql_expr};
 use arrow::{
     array::RecordBatch,
     datatypes::{Field, Schema as ArrowSchema},
@@ -374,6 +374,10 @@ impl LakeHouse for Delta {
 
         Ok(())
     }
+
+    async fn lake_type(&self) -> Result<LakeHouseType> {
+        Ok(LakeHouseType::Delta)
+    }
 }
 
 impl TryFrom<Builder<Url>> for Delta {
@@ -549,7 +553,7 @@ mod tests {
                 batch
                     .build()
                     .map_err(Into::into)
-                    .and_then(|batch| schema.as_arrow(partition, &batch))
+                    .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))
             }?;
 
             let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
@@ -650,7 +654,7 @@ mod tests {
                 .base_timestamp(119_731_017_000)
                 .build()
                 .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch))?;
+                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))?;
 
             let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
             let location = format!("file://{}", temp_dir.path().to_str().unwrap());
@@ -740,7 +744,7 @@ mod tests {
                 .base_timestamp(119_731_017_000)
                 .build()
                 .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch))?;
+                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))?;
 
             let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
             let location = format!("file://{}", temp_dir.path().to_str().unwrap());
@@ -840,7 +844,7 @@ mod tests {
                 .base_timestamp(119_731_017_000)
                 .build()
                 .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch))?;
+                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))?;
 
             let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
             let location = format!("file://{}", temp_dir.path().to_str().unwrap());
@@ -953,7 +957,7 @@ mod tests {
                 .base_timestamp(119_731_017_000)
                 .build()
                 .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch))?;
+                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))?;
 
             let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
             let location = format!("file://{}", temp_dir.path().to_str().unwrap());
@@ -1066,7 +1070,7 @@ mod tests {
                 .base_timestamp(119_731_017_000)
                 .build()
                 .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch))?;
+                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))?;
 
             let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
             let location = format!("file://{}", temp_dir.path().to_str().unwrap());
@@ -1166,7 +1170,7 @@ mod tests {
                 .base_timestamp(119_731_017_000)
                 .build()
                 .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch))?;
+                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))?;
 
             let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
             let location = format!("file://{}", temp_dir.path().to_str().unwrap());
@@ -1279,7 +1283,7 @@ mod tests {
                 .base_timestamp(119_731_017_000)
                 .build()
                 .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch))?;
+                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))?;
 
             let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
             let location = format!("file://{}", temp_dir.path().to_str().unwrap());
@@ -1360,7 +1364,7 @@ mod tests {
                 .base_timestamp(119_731_017_000)
                 .build()
                 .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch))?;
+                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))?;
 
             let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
             let location = format!("file://{}", temp_dir.path().to_str().unwrap());
@@ -1480,7 +1484,6 @@ mod tests {
             Ok(())
         }
 
-        #[ignore]
         #[tokio::test]
         async fn repeated_string() -> Result<()> {
             let _guard = init_tracing()?;
@@ -1504,7 +1507,7 @@ mod tests {
                 .base_timestamp(119_731_017_000)
                 .build()
                 .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch))?;
+                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))?;
 
             let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
             let location = format!("file://{}", temp_dir.path().to_str().unwrap());
@@ -1619,7 +1622,7 @@ mod tests {
                 batch
                     .build()
                     .map_err(Into::into)
-                    .and_then(|batch| schema.as_arrow(partition, &batch))
+                    .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))
             }?;
 
             let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
@@ -1743,7 +1746,7 @@ mod tests {
                 batch
                     .build()
                     .map_err(Into::into)
-                    .and_then(|batch| schema.as_arrow(partition, &batch))
+                    .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))
             }?;
 
             let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;

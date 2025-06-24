@@ -47,6 +47,8 @@ use tracing::{debug, error};
 use tracing_subscriber::filter::ParseError;
 use url::Url;
 
+use crate::lake::LakeHouseType;
+
 pub mod avro;
 pub mod json;
 pub mod lake;
@@ -207,7 +209,12 @@ pub trait Validator {
 }
 
 pub trait AsArrow {
-    fn as_arrow(&self, partition: i32, batch: &Batch) -> Result<RecordBatch>;
+    fn as_arrow(
+        &self,
+        partition: i32,
+        batch: &Batch,
+        lake_type: LakeHouseType,
+    ) -> Result<RecordBatch>;
 }
 
 pub trait AsKafkaRecord {
@@ -254,13 +261,18 @@ impl Validator for Schema {
 }
 
 impl AsArrow for Schema {
-    fn as_arrow(&self, partition: i32, batch: &Batch) -> Result<RecordBatch> {
+    fn as_arrow(
+        &self,
+        partition: i32,
+        batch: &Batch,
+        lake_type: LakeHouseType,
+    ) -> Result<RecordBatch> {
         debug!(?batch);
 
         match self {
-            Self::Avro(schema) => schema.as_arrow(partition, batch),
-            Self::Json(schema) => schema.as_arrow(partition, batch),
-            Self::Proto(schema) => schema.as_arrow(partition, batch),
+            Self::Avro(schema) => schema.as_arrow(partition, batch, lake_type),
+            Self::Json(schema) => schema.as_arrow(partition, batch, lake_type),
+            Self::Proto(schema) => schema.as_arrow(partition, batch, lake_type),
         }
     }
 }
@@ -332,6 +344,7 @@ impl Registry {
         topic: &str,
         partition: i32,
         batch: &Batch,
+        lake_type: LakeHouseType,
     ) -> Result<Option<RecordBatch>> {
         debug!(topic, partition, ?batch);
 
@@ -343,7 +356,7 @@ impl Registry {
             .and_then(|guard| {
                 guard
                     .get(topic)
-                    .map(|schema| schema.as_arrow(partition, batch))
+                    .map(|schema| schema.as_arrow(partition, batch, lake_type))
                     .transpose()
             })
             .inspect(|record_batch| {

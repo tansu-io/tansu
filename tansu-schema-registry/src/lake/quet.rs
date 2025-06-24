@@ -29,7 +29,10 @@ use tansu_kafka_sans_io::describe_configs_response::DescribeConfigsResult;
 use tracing::debug;
 use url::Url;
 
-use crate::{Error, Result, lake::LakeHouse};
+use crate::{
+    Error, Result,
+    lake::{LakeHouse, LakeHouseType},
+};
 
 use super::House;
 
@@ -95,6 +98,10 @@ impl LakeHouse for Parquet {
 
     async fn maintain(&self) -> Result<()> {
         Ok(())
+    }
+
+    async fn lake_type(&self) -> Result<LakeHouseType> {
+        Ok(LakeHouseType::Parquet)
     }
 }
 

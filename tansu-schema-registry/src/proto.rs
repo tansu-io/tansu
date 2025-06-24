@@ -21,7 +21,8 @@ use std::{
 };
 
 use crate::{
-    ARROW_LIST_FIELD_NAME, AsArrow, AsJsonValue, AsKafkaRecord, Error, Generator, Result, Validator,
+    ARROW_LIST_FIELD_NAME, AsArrow, AsJsonValue, AsKafkaRecord, Error, Generator, Result,
+    Validator, lake::LakeHouseType,
 };
 use arrow::{
     array::{
@@ -93,35 +94,55 @@ struct RecordBuilder {
     value: Option<Box<dyn ArrayBuilder>>,
 }
 
+impl RecordBuilder {
+    fn new(ids: &BTreeMap<String, i32>, schema: &Schema) -> RecordBuilder {
+        Self {
+            meta: schema.message_by_package_relative_name_array_builder(ids, MessageKind::Meta),
+            key: schema.message_by_package_relative_name_array_builder(ids, MessageKind::Key),
+            value: schema.message_by_package_relative_name_array_builder(ids, MessageKind::Value),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Schema {
     file_descriptors: Vec<FileDescriptor>,
-    ids: BTreeMap<String, i32>,
 }
 
 impl Schema {
-    fn new_list_field(&self, path: &[&str], data_type: DataType) -> Field {
-        self.new_field(path, ARROW_LIST_FIELD_NAME, data_type)
+    fn new_list_field(
+        &self,
+        ids: &BTreeMap<String, i32>,
+        path: &[&str],
+        data_type: DataType,
+    ) -> Field {
+        self.new_field(ids, path, ARROW_LIST_FIELD_NAME, data_type)
     }
 
-    fn new_field(&self, path: &[&str], name: &str, data_type: DataType) -> Field {
-        self.new_nullable_field(path, name, data_type, NULLABLE)
+    fn new_field(
+        &self,
+        ids: &BTreeMap<String, i32>,
+        path: &[&str],
+        name: &str,
+        data_type: DataType,
+    ) -> Field {
+        self.new_nullable_field(ids, path, name, data_type, NULLABLE)
     }
 
     fn new_nullable_field(
         &self,
+        ids: &BTreeMap<String, i32>,
         path: &[&str],
         name: &str,
         data_type: DataType,
         nullable: bool,
     ) -> Field {
-        debug!(?path, name, ?data_type, ?nullable, ids = ?self.ids);
+        debug!(?path, name, ?data_type, ?nullable, ids = ?ids);
 
         let path = append(path, name).join(".");
 
         Field::new(name.to_owned(), data_type, nullable).with_metadata(
-            self.ids
-                .get(path.as_str())
+            ids.get(path.as_str())
                 .inspect(|field_id| debug!(?path, field_id))
                 .map(|field_id| (PARQUET_FIELD_ID_META_KEY.to_string(), field_id.to_string()))
                 .into_iter()
@@ -129,7 +150,7 @@ impl Schema {
         )
     }
 
-    fn field(&self, message_kind: MessageKind) -> Option<Field> {
+    fn field(&self, ids: &BTreeMap<String, i32>, message_kind: MessageKind) -> Option<Field> {
         debug!(?message_kind);
 
         self.message_by_package_relative_name(message_kind)
@@ -138,11 +159,14 @@ impl Schema {
                 let name = message_kind.as_ref().to_lowercase();
 
                 self.new_nullable_field(
+                    ids,
                     &[],
                     &name,
-                    DataType::Struct(Fields::from(
-                        self.message_descriptor_to_fields(&[&name], &descriptor),
-                    )),
+                    DataType::Struct(Fields::from(self.message_descriptor_to_fields(
+                        ids,
+                        &[&name],
+                        &descriptor,
+                    ))),
                     NULLABLE,
                 )
             })
@@ -276,7 +300,12 @@ impl Schema {
             .transpose()
     }
 
-    fn runtime_type_to_data_type(&self, path: &[&str], runtime_type: &RuntimeType) -> DataType {
+    fn runtime_type_to_data_type(
+        &self,
+        ids: &BTreeMap<String, i32>,
+        path: &[&str],
+        runtime_type: &RuntimeType,
+    ) -> DataType {
         debug!(?path, ?runtime_type);
 
         match runtime_type {
@@ -292,7 +321,7 @@ impl Schema {
                     DataType::Timestamp(TimeUnit::Microsecond, None)
                 } else {
                     DataType::Struct(Fields::from(
-                        self.message_descriptor_to_fields(path, descriptor),
+                        self.message_descriptor_to_fields(ids, path, descriptor),
                     ))
                 }
             }
@@ -301,6 +330,7 @@ impl Schema {
 
     fn message_descriptor_to_fields(
         &self,
+        ids: &BTreeMap<String, i32>,
         path: &[&str],
         descriptor: &MessageDescriptor,
     ) -> Vec<Field> {
@@ -324,9 +354,14 @@ impl Schema {
                     );
 
                     self.new_nullable_field(
+                        ids,
                         path,
                         field.name(),
-                        self.runtime_type_to_data_type(&append(path, field.name())[..], singular),
+                        self.runtime_type_to_data_type(
+                            ids,
+                            &append(path, field.name())[..],
+                            singular,
+                        ),
                         !field.is_required(),
                     )
                 }
@@ -339,14 +374,17 @@ impl Schema {
                     );
 
                     self.new_nullable_field(
+                        ids,
                         path,
                         field.name(),
                         {
                             let path = &append(path, field.name())[..];
 
                             DataType::List(FieldRef::new(self.new_list_field(
+                                ids,
                                 path,
                                 self.runtime_type_to_data_type(
+                                    ids,
                                     &append(path, ARROW_LIST_FIELD_NAME)[..],
                                     repeated,
                                 ),
@@ -365,6 +403,7 @@ impl Schema {
                     );
 
                     self.new_nullable_field(
+                        ids,
                         path,
                         field.name(),
                         {
@@ -372,6 +411,7 @@ impl Schema {
 
                             DataType::Map(
                                 FieldRef::new(self.new_nullable_field(
+                                    ids,
                                     path,
                                     "entries",
                                     DataType::Struct({
@@ -379,18 +419,22 @@ impl Schema {
 
                                         Fields::from_iter([
                                             self.new_nullable_field(
+                                                ids,
                                                 path,
                                                 "keys",
                                                 self.runtime_type_to_data_type(
+                                                    ids,
                                                     append(path, "keys").as_slice(),
                                                     key,
                                                 ),
                                                 !NULLABLE,
                                             ),
                                             self.new_field(
+                                                ids,
                                                 path,
                                                 "values",
                                                 self.runtime_type_to_data_type(
+                                                    ids,
                                                     append(path, "values").as_slice(),
                                                     value,
                                                 ),
@@ -411,12 +455,14 @@ impl Schema {
 
     fn message_by_package_relative_name_array_builder(
         &self,
+        ids: &BTreeMap<String, i32>,
         message_kind: MessageKind,
     ) -> Option<Box<dyn ArrayBuilder>> {
         debug!(?message_kind);
         self.message_by_package_relative_name(message_kind)
             .map(|descriptor| {
                 self.message_descriptor_to_array_builder(
+                    ids,
                     &[&message_kind.as_ref().to_lowercase()],
                     &descriptor,
                 )
@@ -425,18 +471,20 @@ impl Schema {
 
     fn message_descriptor_to_array_builder(
         &self,
+        ids: &BTreeMap<String, i32>,
         path: &[&str],
         descriptor: &MessageDescriptor,
     ) -> Box<dyn ArrayBuilder> {
         debug!(?path, descriptor = descriptor.name());
-        let fields = self.message_descriptor_to_fields(path, descriptor);
-        let builders = self.message_descriptor_array_builders(path, descriptor);
+        let fields = self.message_descriptor_to_fields(ids, path, descriptor);
+        let builders = self.message_descriptor_array_builders(ids, path, descriptor);
 
         Box::new(StructBuilder::new(fields, builders)) as Box<dyn ArrayBuilder>
     }
 
     fn runtime_type_to_array_builder(
         &self,
+        ids: &BTreeMap<String, i32>,
         path: &[&str],
         runtime_type: &RuntimeType,
     ) -> Box<dyn ArrayBuilder> {
@@ -469,15 +517,17 @@ impl Schema {
 
                                 (
                                     self.new_nullable_field(
+                                        ids,
                                         path,
                                         field.name(),
                                         self.runtime_type_to_data_type(
+                                            ids,
                                             &append(path, field.name())[..],
                                             singular,
                                         ),
                                         !field.is_required(),
                                     ),
-                                    self.runtime_type_to_array_builder(path, singular),
+                                    self.runtime_type_to_array_builder(ids, path, singular),
                                 )
                             }
 
@@ -490,14 +540,17 @@ impl Schema {
 
                                 (
                                     self.new_nullable_field(
+                                        ids,
                                         path,
                                         field.name(),
                                         {
                                             let path = &append(path, field.name())[..];
 
                                             DataType::List(FieldRef::new(self.new_list_field(
+                                                ids,
                                                 path,
                                                 self.runtime_type_to_data_type(
+                                                    ids,
                                                     &append(path, ARROW_LIST_FIELD_NAME)[..],
                                                     repeated,
                                                 ),
@@ -510,12 +563,15 @@ impl Schema {
 
                                         Box::new(
                                             ListBuilder::new(self.runtime_type_to_array_builder(
+                                                ids,
                                                 &append(path, ARROW_LIST_FIELD_NAME)[..],
                                                 repeated,
                                             ))
                                             .with_field(self.new_list_field(
+                                                ids,
                                                 path,
                                                 self.runtime_type_to_data_type(
+                                                    ids,
                                                     &append(path, ARROW_LIST_FIELD_NAME)[..],
                                                     repeated,
                                                 ),
@@ -536,6 +592,7 @@ impl Schema {
 
                                 (
                                     self.new_nullable_field(
+                                        ids,
                                         path,
                                         field.name(),
                                         {
@@ -543,6 +600,7 @@ impl Schema {
 
                                             DataType::Map(
                                                 FieldRef::new(self.new_nullable_field(
+                                                    ids,
                                                     path,
                                                     "entries",
                                                     DataType::Struct({
@@ -550,18 +608,22 @@ impl Schema {
 
                                                         Fields::from_iter([
                                                             self.new_nullable_field(
+                                                                ids,
                                                                 path,
                                                                 "keys",
                                                                 self.runtime_type_to_data_type(
+                                                                    ids,
                                                                     &append(path, "keys")[..],
                                                                     key,
                                                                 ),
                                                                 !NULLABLE,
                                                             ),
                                                             self.new_field(
+                                                                ids,
                                                                 path,
                                                                 "values",
                                                                 self.runtime_type_to_data_type(
+                                                                    ids,
                                                                     &append(path, "values")[..],
                                                                     value,
                                                                 ),
@@ -577,8 +639,8 @@ impl Schema {
                                     ),
                                     Box::new(MapBuilder::new(
                                         None,
-                                        self.runtime_type_to_array_builder(path, key),
-                                        self.runtime_type_to_array_builder(path, value),
+                                        self.runtime_type_to_array_builder(ids, path, key),
+                                        self.runtime_type_to_array_builder(ids, path, value),
                                     )) as Box<dyn ArrayBuilder>,
                                 )
                             }
@@ -593,6 +655,7 @@ impl Schema {
 
     fn message_descriptor_array_builders(
         &self,
+        ids: &BTreeMap<String, i32>,
         path: &[&str],
         descriptor: &MessageDescriptor,
     ) -> Vec<Box<dyn ArrayBuilder>> {
@@ -611,7 +674,7 @@ impl Schema {
                             ?singular,
                             ?inside
                         );
-                        self.runtime_type_to_array_builder(inside, singular)
+                        self.runtime_type_to_array_builder(ids, inside, singular)
                     }
 
                     RuntimeFieldType::Repeated(ref repeated) => {
@@ -623,12 +686,15 @@ impl Schema {
                         );
                         Box::new(
                             ListBuilder::new(self.runtime_type_to_array_builder(
+                                ids,
                                 &append(inside, ARROW_LIST_FIELD_NAME)[..],
                                 repeated,
                             ))
                             .with_field(self.new_list_field(
+                                ids,
                                 inside,
                                 self.runtime_type_to_data_type(
+                                    ids,
                                     &append(inside, ARROW_LIST_FIELD_NAME)[..],
                                     repeated,
                                 ),
@@ -650,19 +716,25 @@ impl Schema {
                         Box::new(
                             MapBuilder::new(
                                 None,
-                                self.runtime_type_to_array_builder(path, key),
-                                self.runtime_type_to_array_builder(path, value),
+                                self.runtime_type_to_array_builder(ids, path, key),
+                                self.runtime_type_to_array_builder(ids, path, value),
                             )
                             .with_keys_field(self.new_nullable_field(
+                                ids,
                                 &path[..],
                                 "keys",
-                                self.runtime_type_to_data_type(&append(path, "keys")[..], key),
+                                self.runtime_type_to_data_type(ids, &append(path, "keys")[..], key),
                                 !NULLABLE,
                             ))
                             .with_values_field(self.new_field(
+                                ids,
                                 &path[..],
                                 "values",
-                                self.runtime_type_to_data_type(&append(path, "values")[..], value),
+                                self.runtime_type_to_data_type(
+                                    ids,
+                                    &append(path, "values")[..],
+                                    value,
+                                ),
                             )),
                         )
                     }
@@ -1147,66 +1219,26 @@ impl Generator for Schema {
     }
 }
 
-impl From<&Schema> for Vec<Box<dyn ArrayBuilder>> {
-    fn from(schema: &Schema) -> Self {
-        debug!(?schema);
+fn fields(ids: &BTreeMap<String, i32>, schema: &Schema) -> Fields {
+    let mut fields = vec![];
 
-        let mut builders = vec![];
-
-        if let Some(ref descriptor) = schema.message_by_package_relative_name(MessageKind::Key) {
-            debug!(?descriptor);
-            builders.append(&mut schema.message_descriptor_array_builders(
-                &[&MessageKind::Key.as_ref().to_lowercase()],
-                descriptor,
-            ));
-        }
-
-        if let Some(ref descriptor) = schema.message_by_package_relative_name(MessageKind::Value) {
-            debug!(?descriptor);
-            builders.append(&mut schema.message_descriptor_array_builders(
-                &[&MessageKind::Value.as_ref().to_lowercase()],
-                descriptor,
-            ));
-        }
-
-        builders
+    if let Some(field) = schema.field(ids, MessageKind::Meta) {
+        fields.push(field);
     }
+
+    if let Some(field) = schema.field(ids, MessageKind::Key) {
+        fields.push(field);
+    }
+
+    if let Some(field) = schema.field(ids, MessageKind::Value) {
+        fields.push(field);
+    }
+
+    fields.into()
 }
 
-impl From<&Schema> for RecordBuilder {
-    fn from(schema: &Schema) -> Self {
-        Self {
-            meta: schema.message_by_package_relative_name_array_builder(MessageKind::Meta),
-            key: schema.message_by_package_relative_name_array_builder(MessageKind::Key),
-            value: schema.message_by_package_relative_name_array_builder(MessageKind::Value),
-        }
-    }
-}
-
-impl From<&Schema> for Fields {
-    fn from(schema: &Schema) -> Self {
-        let mut fields = vec![];
-
-        if let Some(field) = schema.field(MessageKind::Meta) {
-            fields.push(field);
-        }
-
-        if let Some(field) = schema.field(MessageKind::Key) {
-            fields.push(field);
-        }
-
-        if let Some(field) = schema.field(MessageKind::Value) {
-            fields.push(field);
-        }
-
-        fields.into()
-    }
-}
-
-impl From<&Schema> for ArrowSchema {
-    fn from(schema: &Schema) -> Self {
-        ArrowSchema::new(Fields::from(schema))
-    }
+fn arrow_schema(ids: &BTreeMap<String, i32>, schema: &Schema) -> ArrowSchema {
+    ArrowSchema::new(fields(ids, schema))
 }
 
 fn decode(
@@ -1289,10 +1321,7 @@ impl TryFrom<Bytes> for Schema {
 
                 protos
             })
-            .map(|file_descriptors| Self {
-                ids: field_ids(&file_descriptors),
-                file_descriptors,
-            })
+            .map(|file_descriptors| Self { file_descriptors })
     }
 }
 
@@ -1921,11 +1950,22 @@ where
 }
 
 impl AsArrow for Schema {
-    fn as_arrow(&self, partition: i32, batch: &Batch) -> Result<RecordBatch> {
-        debug!(?batch);
+    fn as_arrow(
+        &self,
+        partition: i32,
+        batch: &Batch,
+        lake_type: LakeHouseType,
+    ) -> Result<RecordBatch> {
+        debug!(?batch, ?lake_type);
 
-        let schema = ArrowSchema::from(self);
-        let mut record_builder = RecordBuilder::from(self);
+        let ids = if lake_type.is_iceberg() {
+            field_ids(&self.file_descriptors)
+        } else {
+            BTreeMap::new()
+        };
+
+        let schema = arrow_schema(&ids, self);
+        let mut record_builder = RecordBuilder::new(&ids, self);
 
         for record in batch.records.iter() {
             debug!(?record);
@@ -2295,7 +2335,7 @@ mod tests {
             batch.build()?
         };
 
-        let record_batch = schema.as_arrow(0, &batch)?;
+        let record_batch = schema.as_arrow(0, &batch, LakeHouseType::Iceberg)?;
 
         let data_files = iceberg_write(record_batch.clone()).await?;
         assert_eq!(1, data_files.len());
@@ -2451,7 +2491,7 @@ mod tests {
             batch.build()?
         };
 
-        let record_batch = schema.as_arrow(0, &batch)?;
+        let record_batch = schema.as_arrow(0, &batch, LakeHouseType::Iceberg)?;
 
         let data_files = iceberg_write(record_batch.clone()).await?;
         assert_eq!(1, data_files.len());
@@ -2532,7 +2572,7 @@ mod tests {
             batch.build()?
         };
 
-        let record_batch = schema.as_arrow(0, &batch)?;
+        let record_batch = schema.as_arrow(0, &batch, LakeHouseType::Iceberg)?;
 
         let data_files = iceberg_write(record_batch.clone()).await?;
         assert_eq!(1, data_files.len());
@@ -2585,7 +2625,7 @@ mod tests {
             .base_timestamp(119_731_017_000)
             .build()?;
 
-        let record_batch = schema.as_arrow(0, &batch)?;
+        let record_batch = schema.as_arrow(0, &batch, LakeHouseType::Iceberg)?;
 
         let data_files = iceberg_write(record_batch.clone()).await?;
         assert_eq!(1, data_files.len());
@@ -2641,7 +2681,7 @@ mod tests {
             .record(Record::builder().value(value.into()))
             .build()?;
 
-        let record_batch = schema.as_arrow(0, &batch)?;
+        let record_batch = schema.as_arrow(0, &batch, LakeHouseType::Parquet)?;
 
         let ctx = SessionContext::new();
 
@@ -2702,7 +2742,7 @@ mod tests {
             .base_timestamp(119_731_017_000)
             .build()?;
 
-        let record_batch = schema.as_arrow(0, &batch)?;
+        let record_batch = schema.as_arrow(0, &batch, LakeHouseType::Parquet)?;
 
         let ctx = SessionContext::new();
 
@@ -2761,7 +2801,7 @@ mod tests {
             .record(Record::builder().value(value.into()))
             .build()?;
 
-        let record_batch = schema.as_arrow(0, &batch)?;
+        let record_batch = schema.as_arrow(0, &batch, LakeHouseType::Iceberg)?;
 
         let data_files = iceberg_write(record_batch.clone()).await?;
         assert_eq!(1, data_files.len());
@@ -2819,7 +2859,7 @@ mod tests {
             .record(Record::builder().value(value.into()))
             .build()?;
 
-        let record_batch = schema.as_arrow(0, &batch)?;
+        let record_batch = schema.as_arrow(0, &batch, LakeHouseType::Iceberg)?;
         let data_files = iceberg_write(record_batch.clone()).await?;
         assert_eq!(1, data_files.len());
         assert_eq!(1, data_files[0].record_count());
@@ -2881,7 +2921,7 @@ mod tests {
             .base_timestamp(119_731_017_000)
             .build()?;
 
-        let record_batch = schema.as_arrow(0, &batch)?;
+        let record_batch = schema.as_arrow(0, &batch, LakeHouseType::Iceberg)?;
         let data_files = iceberg_write(record_batch.clone()).await?;
         assert_eq!(1, data_files.len());
         assert_eq!(1, data_files[0].record_count());
@@ -3160,7 +3200,7 @@ mod tests {
                     .build()
                     .map_err(Into::into)
             })
-            .and_then(|batch| schema.as_arrow(0, &batch))
+            .and_then(|batch| schema.as_arrow(0, &batch, LakeHouseType::Parquet))
             .and_then(|record_batch| ctx.register_batch(topic, record_batch).map_err(Into::into))?;
 
         let df = ctx.sql(format!("select * from {topic}").as_str()).await?;
@@ -3279,7 +3319,7 @@ mod tests {
                     .build()
                     .map_err(Into::into)
             })
-            .and_then(|batch| schema.as_arrow(0, &batch))
+            .and_then(|batch| schema.as_arrow(0, &batch, LakeHouseType::Parquet))
             .and_then(|record_batch| ctx.register_batch(topic, record_batch).map_err(Into::into))?;
 
         let df = ctx.sql(format!("select * from {topic}").as_str()).await?;
