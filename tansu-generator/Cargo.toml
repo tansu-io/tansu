@@ -11,6 +11,9 @@ futures-util.workspace = true
 futures.workspace = true
 governor.workspace = true
 nonzero_ext.workspace = true
+opentelemetry-semantic-conventions.workspace = true
+opentelemetry.workspace = true
+opentelemetry_sdk.workspace = true
 rama.workspace = true
 serde_json.workspace = true
 tansu-kafka-sans-io = { path = "../tansu-kafka-sans-io" }

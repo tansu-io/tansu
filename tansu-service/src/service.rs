@@ -13,14 +13,24 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::{collections::BTreeMap, fmt::Debug, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    fmt::Debug,
+    ops::Deref,
+    sync::{Arc, LazyLock},
+    time::SystemTime,
+};
 
 use crate::{
-    Result,
+    METER, Result,
     api::{ApiKey, ApiRequest, ApiResponse, read_api_request, read_api_response},
     read_frame,
 };
 use bytes::Bytes;
+use opentelemetry::{
+    KeyValue,
+    metrics::{Counter, Histogram},
+};
 use rama::{
     Context, Layer, Service,
     error::BoxError,
@@ -34,18 +44,6 @@ use rama::{
 };
 use tokio::io::AsyncWriteExt;
 use tracing::{Instrument, Level, debug, span};
-
-#[allow(dead_code)]
-async fn client() -> Result<()> {
-    let context = Context::default();
-
-    let (mut stream, _address) =
-        default_tcp_connect(&context, Authority::new(Host::LOCALHOST_IPV4, 9092)).await?;
-
-    let (_reader, _writer) = stream.split();
-
-    Ok(())
-}
 
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct TcpStreamService<S> {
@@ -214,6 +212,65 @@ impl ApiClient {
     }
 }
 
+static TCP_CONNECT_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
+    METER
+        .u64_histogram("tcp_connect_duration")
+        .with_unit("ms")
+        .with_description("The TCP connect latencies in milliseconds")
+        .build()
+});
+
+static TCP_CONNECT_ERRORS: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    METER
+        .u64_counter("tcp_connect_errors")
+        .with_description("TCP connect errors")
+        .build()
+});
+
+static TCP_SEND_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
+    METER
+        .u64_histogram("tcp_send_duration")
+        .with_unit("ms")
+        .with_description("The TCP send latencies in milliseconds")
+        .build()
+});
+
+static TCP_SEND_ERRORS: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    METER
+        .u64_counter("tcp_send_errors")
+        .with_description("TCP send errors")
+        .build()
+});
+
+static TCP_RECEIVE_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
+    METER
+        .u64_histogram("tcp_receive_duration")
+        .with_unit("ms")
+        .with_description("The TCP receive latencies in milliseconds")
+        .build()
+});
+
+static TCP_RECEIVE_ERRORS: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    METER
+        .u64_counter("tcp_receive_errors")
+        .with_description("TCP receive errors")
+        .build()
+});
+
+static TCP_BYTES_SENT: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    METER
+        .u64_counter("tcp_bytes_sent")
+        .with_description("TCP bytes sent")
+        .build()
+});
+
+static TCP_BYTES_RECEIVED: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    METER
+        .u64_counter("tcp_bytes_received")
+        .with_description("TCP bytes received")
+        .build()
+});
+
 impl<State> Service<State, ApiRequest> for ApiClient
 where
     State: Clone + Send + Sync + 'static,
@@ -226,7 +283,25 @@ where
         ctx: Context<State>,
         req: ApiRequest,
     ) -> Result<Self::Response, Self::Error> {
-        let (mut stream, address) = default_tcp_connect(&ctx, self.authority.clone()).await?;
+        let attributes = [KeyValue::new("api_key", req.api_key.0.to_string())];
+
+        let (mut stream, address) = {
+            let start = SystemTime::now();
+
+            default_tcp_connect(&ctx, self.authority.clone())
+                .await
+                .inspect(|_| {
+                    TCP_CONNECT_DURATION.record(
+                        start
+                            .elapsed()
+                            .map_or(0, |duration| duration.as_millis() as u64),
+                        &attributes,
+                    )
+                })
+                .inspect_err(|_| {
+                    TCP_CONNECT_ERRORS.add(1, &attributes);
+                })?
+        };
 
         let local = stream.local_addr()?;
 
@@ -243,8 +318,48 @@ where
             let api_key = req.api_key;
             let api_version = req.api_version;
             let buffer = Bytes::try_from(req)?;
-            stream.write_all(&buffer[..]).await?;
-            let buffer = read_frame(&mut stream).await?;
+
+            {
+                let start = SystemTime::now();
+
+                stream
+                    .write_all(&buffer[..])
+                    .await
+                    .inspect(|_| {
+                        TCP_SEND_DURATION.record(
+                            start
+                                .elapsed()
+                                .map_or(0, |duration| duration.as_millis() as u64),
+                            &attributes,
+                        )
+                    })
+                    .inspect_err(|_| {
+                        TCP_SEND_ERRORS.add(1, &attributes);
+                    })?;
+
+                TCP_BYTES_SENT.add(buffer.len() as u64, &attributes);
+            }
+
+            let buffer = {
+                let start = SystemTime::now();
+
+                read_frame(&mut stream)
+                    .await
+                    .inspect(|_| {
+                        TCP_RECEIVE_DURATION.record(
+                            start
+                                .elapsed()
+                                .map_or(0, |duration| duration.as_millis() as u64),
+                            &attributes,
+                        )
+                    })
+                    .inspect_err(|_| {
+                        TCP_RECEIVE_ERRORS.add(1, &attributes);
+                    })?
+            };
+
+            TCP_BYTES_RECEIVED.add(buffer.len() as u64, &attributes);
+
             read_api_response(buffer, api_key, api_version)
                 .inspect(|api_response| debug!(?api_response))
         }

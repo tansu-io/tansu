@@ -19,12 +19,24 @@ use std::{
     num::NonZeroU32,
     pin::Pin,
     result,
-    sync::Arc,
+    sync::{
+        Arc, LazyLock,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, SystemTime},
 };
 
 use governor::{InsufficientCapacity, Quota, RateLimiter};
 use nonzero_ext::nonzero;
+use opentelemetry::{InstrumentationScope, global, metrics::Meter};
+use opentelemetry_sdk::{
+    error::OTelSdkResult,
+    metrics::{
+        PeriodicReaderBuilder, SdkMeterProvider, Temporality, data::ResourceMetrics,
+        exporter::PushMetricExporter,
+    },
+};
+use opentelemetry_semantic_conventions::SCHEMA_URL;
 use rama::{
     Context, Service,
     error::{BoxError, OpaqueError},
@@ -47,6 +59,15 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, Level, debug, info, span};
 use url::Url;
+
+pub(crate) static METER: LazyLock<Meter> = LazyLock::new(|| {
+    global::meter_with_scope(
+        InstrumentationScope::builder(env!("CARGO_PKG_NAME"))
+            .with_version(env!("CARGO_PKG_VERSION"))
+            .with_schema_url(SCHEMA_URL)
+            .build(),
+    )
+});
 
 pub type Result<T, E = Error> = result::Result<T, E>;
 
@@ -174,22 +195,42 @@ pub async fn produce(
         .map(ApiClient::new)
         .inspect(|client| debug!(?client))?;
 
-    origin
+    let response = origin
         .serve(Context::default(), request.into())
         .await
         .and_then(|response| ProduceResponse::try_from(response).map_err(Into::into))
         .inspect(|response| debug!(?response))?;
+
+    assert!(
+        response
+            .responses
+            .unwrap_or_default()
+            .into_iter()
+            .all(|topic| {
+                topic
+                    .partition_responses
+                    .unwrap_or_default()
+                    .iter()
+                    .inspect(|partition| debug!(topic = %topic.name, ?partition))
+                    .all(|partition| partition.error_code == i16::from(ErrorCode::None))
+            })
+    );
 
     Ok(())
 }
 
 impl Generate {
     pub async fn main(self) -> Result<ErrorCode> {
+        global::set_meter_provider(SdkMeterProvider::default());
+
         let Some(schema) = self.registry.schema(&self.configuration.topic).await? else {
             return Err(Error::SchemaNotFoundForTopic(
                 self.configuration.topic.clone(),
             ));
         };
+
+        let response_count = Arc::new(AtomicU64::new(0));
+        let records_sent = Arc::new(AtomicU64::new(0));
 
         let mut interrupt_signal = signal(SignalKind::interrupt()).unwrap();
         debug!(?interrupt_signal);
@@ -214,7 +255,10 @@ impl Generate {
 
         let token = CancellationToken::new();
 
+        let generator_start = SystemTime::now();
+
         for producer in 0..self.configuration.producers {
+            let records_sent = records_sent.clone();
             let rate_limiter = rate_limiter.clone();
             let schema = schema.clone();
             let broker = self.configuration.broker.clone();
@@ -249,6 +293,7 @@ impl Generate {
 
                             let produce_start = SystemTime::now();
 
+
                             tokio::select! {
                                 cancelled = token.cancelled() => {
                                     debug!(?cancelled);
@@ -256,6 +301,8 @@ impl Generate {
                                 },
 
                                 Ok(_) = produce(broker.clone(), topic.clone(), partition, schema.clone(), batch_size.get() as i32) => {
+                                    records_sent.fetch_add(batch_size.get() as u64, Ordering::Relaxed);
+
                                     info!(produce_duration_ms = produce_start
                                     .elapsed()
                                     .map_or(0, |duration| duration.as_millis() as u64));
@@ -274,6 +321,10 @@ impl Generate {
                 set.join_next().await;
             }
         };
+
+        let generator_duration_ms = generator_start
+            .elapsed()
+            .map_or(0, |duration| duration.as_millis() as u64);
 
         let duration = self
             .configuration

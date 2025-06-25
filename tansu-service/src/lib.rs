@@ -13,9 +13,11 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::result;
+use std::{result, sync::LazyLock};
 
 use bytes::Bytes;
+use opentelemetry::{InstrumentationScope, global, metrics::Meter};
+use opentelemetry_semantic_conventions::SCHEMA_URL;
 use rama::{error::BoxError, tcp::TcpStream};
 use tokio::io::AsyncReadExt as _;
 
@@ -37,3 +39,12 @@ pub async fn read_frame(tcp_stream: &mut TcpStream) -> Result<Bytes> {
     _ = tcp_stream.read_exact(&mut buffer[4..]).await?;
     Ok(Bytes::from(buffer))
 }
+
+pub(crate) static METER: LazyLock<Meter> = LazyLock::new(|| {
+    global::meter_with_scope(
+        InstrumentationScope::builder(env!("CARGO_PKG_NAME"))
+            .with_version(env!("CARGO_PKG_VERSION"))
+            .with_schema_url(SCHEMA_URL)
+            .build(),
+    )
+});
