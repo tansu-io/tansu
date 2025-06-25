@@ -19,7 +19,7 @@ use super::DEFAULT_BROKER;
 use clap::{Parser, Subcommand};
 use tansu_kafka_sans_io::ErrorCode;
 use tansu_schema_registry::lake::{self};
-use tansu_server::{NODE_ID, broker::Broker, coordinator::group::administrator::Controller, otel};
+use tansu_server::{NODE_ID, broker::Broker, coordinator::group::administrator::Controller};
 use tansu_storage::StorageContainer;
 use tracing::debug;
 use url::Url;
@@ -54,13 +54,9 @@ pub(super) struct Arg {
     #[arg(long, env = "SCHEMA_REGISTRY")]
     schema_registry: Option<EnvVarExp<Url>>,
 
-    /// Broker metrics can be scraped by Prometheus from this URL
-    #[arg(
-        long,
-        env = "PROMETHEUS_LISTENER_URL",
-        default_value = "tcp://[::]:9100"
-    )]
-    prometheus_listener_url: Option<EnvVarExp<Url>>,
+    /// OTEL Exporter OTLP endpoint
+    #[arg(long, env = "OTEL_EXPORTER_OTLP_ENDPOINT")]
+    otlp_endpoint_url: Option<EnvVarExp<Url>>,
 }
 
 #[derive(Clone, Debug, Subcommand)]
@@ -118,12 +114,8 @@ impl TryFrom<Arg> for tansu_server::broker::Broker<Controller<StorageContainer>,
         let cluster_id = args.kafka_cluster_id;
         let incarnation_id = Uuid::now_v7();
         let prometheus_listener_url = args
-            .prometheus_listener_url
+            .otlp_endpoint_url
             .map(|env_var_exp| env_var_exp.into_inner());
-
-        let prometheus_registry = prometheus_listener_url
-            .as_ref()
-            .and(otel::prom::init().ok());
 
         let storage_engine = args.storage_engine.into_inner();
         let advertised_listener = args.kafka_advertised_listener_url.into_inner();
@@ -161,8 +153,7 @@ impl TryFrom<Arg> for tansu_server::broker::Broker<Controller<StorageContainer>,
             .cluster_id(cluster_id)
             .incarnation_id(incarnation_id)
             .advertised_listener(advertised_listener)
-            .prometheus_listener_url(prometheus_listener_url)
-            .prometheus_registry(prometheus_registry)
+            .otlp_endpoint_url(prometheus_listener_url)
             .schema_registry(schema)
             .lake_house(lake_house)
             .storage(storage_engine)

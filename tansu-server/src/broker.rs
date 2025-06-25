@@ -56,7 +56,6 @@ use opentelemetry::{
     metrics::{Counter, Histogram},
 };
 use produce::ProduceRequest;
-use prometheus::Registry as PromRegistry;
 use std::{
     io::ErrorKind,
     marker::PhantomData,
@@ -97,8 +96,9 @@ pub struct Broker<G, S> {
     storage: S,
     groups: G,
     metron: Metron,
-    prometheus_listener_url: Option<Url>,
-    prometheus_registry: Option<PromRegistry>,
+
+    #[allow(dead_code)]
+    otlp_endpoint_url: Option<Url>,
 }
 
 impl<G, S> Broker<G, S>
@@ -125,8 +125,7 @@ where
             storage,
             groups,
             metron: Metron::new(cluster_id, incarnation_id),
-            prometheus_listener_url: None,
-            prometheus_registry: None,
+            otlp_endpoint_url: None,
         }
     }
 
@@ -136,19 +135,6 @@ where
 
     pub async fn main(mut self) -> Result<ErrorCode> {
         let mut set = JoinSet::new();
-
-        let prometheus = self
-            .prometheus_listener_url
-            .clone()
-            .and_then(|prometheus_listener_url| {
-                self.prometheus_registry.clone().map(|prometheus_registry| {
-                    set.spawn(async move {
-                        otel::prom::listener(prometheus_listener_url, prometheus_registry)
-                            .await
-                            .unwrap();
-                    })
-                })
-            });
 
         let (sender, receiver) = broadcast::channel(16);
         debug!(?sender, ?receiver);
@@ -182,10 +168,6 @@ where
                 Some(CancelKind::Terminate)
             }
         };
-
-        if let Some(prometheus) = prometheus {
-            prometheus.abort();
-        }
 
         if let Some(cancellation) = cancellation {
             sender.send(cancellation).inspect_err(|err| debug!(?err))?;
@@ -1291,8 +1273,7 @@ pub struct Builder<N, C, I, A, S, L> {
     advertised_listener: A,
     storage: S,
     listener: L,
-    prometheus_listener_url: Option<Url>,
-    prometheus_registry: Option<PromRegistry>,
+    otlp_endpoint_url: Option<Url>,
     schema_registry: Option<Url>,
     lake_house: Option<House>,
 }
@@ -1315,8 +1296,7 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             advertised_listener: self.advertised_listener,
             storage: self.storage,
             listener: self.listener,
-            prometheus_listener_url: self.prometheus_listener_url,
-            prometheus_registry: self.prometheus_registry,
+            otlp_endpoint_url: self.otlp_endpoint_url,
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
         }
@@ -1330,8 +1310,7 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             advertised_listener: self.advertised_listener,
             storage: self.storage,
             listener: self.listener,
-            prometheus_listener_url: self.prometheus_listener_url,
-            prometheus_registry: self.prometheus_registry,
+            otlp_endpoint_url: self.otlp_endpoint_url,
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
         }
@@ -1345,8 +1324,7 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             advertised_listener: self.advertised_listener,
             storage: self.storage,
             listener: self.listener,
-            prometheus_listener_url: self.prometheus_listener_url,
-            prometheus_registry: self.prometheus_registry,
+            otlp_endpoint_url: self.otlp_endpoint_url,
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
         }
@@ -1363,8 +1341,7 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             advertised_listener: advertised_listener.into(),
             storage: self.storage,
             listener: self.listener,
-            prometheus_listener_url: self.prometheus_listener_url,
-            prometheus_registry: self.prometheus_registry,
+            otlp_endpoint_url: self.otlp_endpoint_url,
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
         }
@@ -1380,8 +1357,7 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             advertised_listener: self.advertised_listener,
             storage,
             listener: self.listener,
-            prometheus_listener_url: self.prometheus_listener_url,
-            prometheus_registry: self.prometheus_registry,
+            otlp_endpoint_url: self.otlp_endpoint_url,
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
         }
@@ -1397,8 +1373,7 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             advertised_listener: self.advertised_listener,
             storage: self.storage,
             listener,
-            prometheus_listener_url: self.prometheus_listener_url,
-            prometheus_registry: self.prometheus_registry,
+            otlp_endpoint_url: self.otlp_endpoint_url,
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
         }
@@ -1416,8 +1391,7 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             advertised_listener: self.advertised_listener,
             storage: self.storage,
             listener: self.listener,
-            prometheus_listener_url: self.prometheus_listener_url,
-            prometheus_registry: self.prometheus_registry,
+            otlp_endpoint_url: self.otlp_endpoint_url,
             schema_registry,
             lake_house: self.lake_house,
         }
@@ -1435,17 +1409,13 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             advertised_listener: self.advertised_listener,
             storage: self.storage,
             listener: self.listener,
-            prometheus_listener_url: self.prometheus_listener_url,
-            prometheus_registry: self.prometheus_registry,
+            otlp_endpoint_url: self.otlp_endpoint_url,
             schema_registry: self.schema_registry,
             lake_house,
         }
     }
 
-    pub fn prometheus_listener_url(
-        self,
-        prometheus_listener_url: Option<Url>,
-    ) -> Builder<N, C, I, A, S, L> {
+    pub fn otlp_endpoint_url(self, otlp_endpoint_url: Option<Url>) -> Builder<N, C, I, A, S, L> {
         Builder {
             node_id: self.node_id,
             cluster_id: self.cluster_id,
@@ -1453,26 +1423,7 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             advertised_listener: self.advertised_listener,
             storage: self.storage,
             listener: self.listener,
-            prometheus_listener_url,
-            prometheus_registry: self.prometheus_registry,
-            schema_registry: self.schema_registry,
-            lake_house: self.lake_house,
-        }
-    }
-
-    pub fn prometheus_registry(
-        self,
-        prometheus_registry: Option<PromRegistry>,
-    ) -> Builder<N, C, I, A, S, L> {
-        Builder {
-            node_id: self.node_id,
-            cluster_id: self.cluster_id,
-            incarnation_id: self.incarnation_id,
-            advertised_listener: self.advertised_listener,
-            storage: self.storage,
-            listener: self.listener,
-            prometheus_listener_url: self.prometheus_listener_url,
-            prometheus_registry,
+            otlp_endpoint_url,
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
         }
@@ -1526,6 +1477,10 @@ impl Builder<i32, String, Uuid, Url, Url, Url> {
     }
 
     pub fn build(self) -> Result<Broker<Controller<StorageContainer>, StorageContainer>> {
+        if let Some(otlp_endpoint_url) = self.otlp_endpoint_url.clone() {
+            otel::metric_exporter(otlp_endpoint_url)?;
+        }
+
         let storage = self.storage_engine()?;
         let groups = Controller::with_storage(storage.clone())?;
         let metron = Metron::new(self.cluster_id.as_str(), self.incarnation_id);
@@ -1539,8 +1494,7 @@ impl Builder<i32, String, Uuid, Url, Url, Url> {
             storage,
             groups,
             metron,
-            prometheus_listener_url: self.prometheus_listener_url,
-            prometheus_registry: self.prometheus_registry,
+            otlp_endpoint_url: self.otlp_endpoint_url,
         })
     }
 }

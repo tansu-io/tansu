@@ -69,7 +69,6 @@ services:
       --kafka-listener-url tcp://0.0.0.0:9092/
       --kafka-advertised-listener-url ${ADVERTISED_LISTENER_URL}
       --storage-engine ${STORAGE_ENGINE}
-      --prometheus-listener-url ${PROMETHEUS_LISTENER_URL}
       --schema-registry file:///schema
     ports:
       - 9092:9092
