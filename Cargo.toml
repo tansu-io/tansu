@@ -82,16 +82,14 @@ lz4 = "1.28.1"
 nonzero_ext = "0.3.0"
 num-bigint = "0.4"
 object_store = { version = "0.12.1", features = ["aws"] }
-opentelemetry = { version = "0.28.0", default-features = false, features = [
+opentelemetry = { version = "0.30.0", default-features = false, features = [
     "metrics",
 ] }
-opentelemetry-jaeger = { version = "0.22.0", features = ["rt-tokio"] }
-opentelemetry-otlp = { version = "0.28.0", features = ["grpc-tonic"] }
-opentelemetry-prometheus = "0.28.0"
-opentelemetry-semantic-conventions = { version = "0.28.0", features = [
+opentelemetry-otlp = { version = "0.30.0", features = ["grpc-tonic"] }
+opentelemetry-semantic-conventions = { version = "0.30.0", features = [
     "semconv_experimental",
 ] }
-opentelemetry_sdk = { version = "0.28.0", default-features = false, features = [
+opentelemetry_sdk = { version = "0.30.0", default-features = false, features = [
     "rt-tokio",
     "metrics",
 ] }
@@ -100,7 +98,6 @@ parquet = "55"
 pretty_assertions = "1"
 prettyplease = "0.2.29"
 proc-macro2 = "1.0.93"
-prometheus = "0.13.4"
 protobuf-json-mapping = "3.7.1"
 protobuf-parse = "3.7.1"
 protobuf = { version = "3.7.1", features = ["with-bytes"] }
