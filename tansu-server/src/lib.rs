@@ -27,7 +27,8 @@ use std::{
 };
 
 use jsonschema::ValidationError;
-use opentelemetry::{InstrumentationScope, global, metrics::Meter, trace::TraceError};
+use opentelemetry::{InstrumentationScope, global, metrics::Meter};
+use opentelemetry_otlp::ExporterBuildError;
 use opentelemetry_semantic_conventions::SCHEMA_URL;
 use regex::{Regex, Replacer};
 use tansu_kafka_sans_io::ErrorCode;
@@ -74,13 +75,13 @@ pub enum Error {
     EmptyCoordinatorWrapper,
     EmptyJoinGroupRequestProtocol,
     ExpectedJoinGroupRequestProtocol(&'static str),
+    ExporterBuild(#[from] ExporterBuildError),
     Hyper(#[from] hyper::http::Error),
     Io(Arc<io::Error>),
     Join(#[from] JoinError),
     Json(#[from] serde_json::Error),
     KafkaProtocol(#[from] tansu_kafka_sans_io::Error),
     Message(String),
-    Metric(#[from] opentelemetry_sdk::metrics::MetricError),
     Model(#[from] tansu_kafka_model::Error),
     ObjectStore(#[from] object_store::Error),
     ParseFilter(#[from] ParseError),
@@ -90,8 +91,6 @@ pub enum Error {
     SchemaRegistry(Box<tansu_schema_registry::Error>),
     Storage(#[from] tansu_storage::Error),
     StringUtf8(#[from] FromUtf8Error),
-    OpenTelemetryTrace(TraceError),
-    Prometheus(#[from] prometheus::Error),
     Regex(#[from] regex::Error),
     TokioPostgres(#[from] tokio_postgres::error::Error),
     TryFromInt(#[from] TryFromIntError),
@@ -125,12 +124,6 @@ impl<T> From<PoisonError<T>> for Error {
 impl From<ValidationError<'_>> for Error {
     fn from(_value: ValidationError<'_>) -> Self {
         Self::SchemaValidation
-    }
-}
-
-impl From<TraceError> for Error {
-    fn from(value: TraceError) -> Self {
-        Self::OpenTelemetryTrace(value)
     }
 }
 

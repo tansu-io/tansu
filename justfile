@@ -268,7 +268,7 @@ tansu-broker *args:
     target/debug/tansu broker {{args}} 2>&1 | tee tansu.log
 
 # run a broker with configuration from .env
-broker *args: (cargo-build "--bin" "tansu") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket lakehouse-catalog-up (tansu-broker args)
+broker *args: (cargo-build "--bin" "tansu") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket prometheus-up lakehouse-catalog-up (tansu-broker args)
 
 # teardown compose, rebuild: minio, db, tansu and lake buckets
 server: (cargo-build "--bin" "tansu") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket lakehouse-catalog-up
