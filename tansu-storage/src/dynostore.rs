@@ -114,7 +114,7 @@ struct Meta {
 
 impl OptiCon<Meta> {
     fn new(cluster: &str) -> Self {
-        Self::path(format!("clusters/{}/meta.json", cluster))
+        Self::path(format!("clusters/{cluster}/meta.json"))
     }
 }
 
