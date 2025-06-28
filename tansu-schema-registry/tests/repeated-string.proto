@@ -1,0 +1,6 @@
+syntax = 'proto3';
+
+message Value {
+    fixed64 id = 1;
+    repeated string industry = 2;
+}

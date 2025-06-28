@@ -31,20 +31,31 @@ pub(super) struct Arg {
     command: Option<Command>,
 
     /// All members of the same cluster should use the same id
-    #[arg(long, env = "CLUSTER_ID", default_value = "tansu_cluster")]
-    kafka_cluster_id: String,
+    #[arg(
+        long,
+        env = "CLUSTER_ID",
+        default_value = "tansu_cluster",
+        visible_alias = "kafka-cluster-id"
+    )]
+    cluster_id: String,
 
     /// The broker will listen on this address
-    #[arg(long, env = "LISTENER_URL", default_value = "tcp://[::]:9092")]
-    kafka_listener_url: EnvVarExp<Url>,
+    #[arg(
+        long,
+        env = "LISTENER_URL",
+        default_value = "tcp://[::]:9092",
+        visible_alias = "kafka-listener-url"
+    )]
+    listener_url: EnvVarExp<Url>,
 
     /// This location is advertised to clients in metadata
     #[arg(
         long,
         env = "ADVERTISED_LISTENER_URL",
         default_value = DEFAULT_BROKER,
+        visible_alias = "kafka-advertised-listener-url"
     )]
-    kafka_advertised_listener_url: EnvVarExp<Url>,
+    advertised_listener_url: EnvVarExp<Url>,
 
     /// Storage engine examples are: postgres://postgres:postgres@localhost, memory://tansu/ or s3://tansu/
     #[arg(long, env = "STORAGE_ENGINE", default_value = "memory://tansu/")]
@@ -61,6 +72,7 @@ pub(super) struct Arg {
 
 #[derive(Clone, Debug, Subcommand)]
 pub(super) enum Command {
+    /// Schema topics are written as Apache Iceberg tables
     Iceberg {
         /// Apache Parquet files are written to this location, examples are: file://./lake or s3://lake/
         #[arg(long, env = "DATA_LAKE")]
@@ -79,6 +91,7 @@ pub(super) enum Command {
         warehouse: Option<String>,
     },
 
+    /// Schema topics are written as Delta Lake tables
     Delta {
         /// Apache Parquet files are written to this location, examples are: file://./lake or s3://lake/
         #[arg(long, env = "DATA_LAKE")]
@@ -89,6 +102,7 @@ pub(super) enum Command {
         database: Option<String>,
     },
 
+    /// Schema topics are written in Parquet format
     Parquet {
         /// Apache Parquet files are written to this location, examples are: file://./lake or s3://lake/
         #[arg(long, env = "DATA_LAKE")]
@@ -111,15 +125,15 @@ impl TryFrom<Arg> for tansu_server::broker::Broker<Controller<StorageContainer>,
     type Error = Error;
 
     fn try_from(args: Arg) -> Result<Self, Self::Error> {
-        let cluster_id = args.kafka_cluster_id;
+        let cluster_id = args.cluster_id;
         let incarnation_id = Uuid::now_v7();
         let prometheus_listener_url = args
             .otlp_endpoint_url
             .map(|env_var_exp| env_var_exp.into_inner());
 
         let storage_engine = args.storage_engine.into_inner();
-        let advertised_listener = args.kafka_advertised_listener_url.into_inner();
-        let listener = args.kafka_listener_url.into_inner();
+        let advertised_listener = args.advertised_listener_url.into_inner();
+        let listener = args.listener_url.into_inner();
         let schema = args
             .schema_registry
             .map(|env_var_exp| env_var_exp.into_inner());

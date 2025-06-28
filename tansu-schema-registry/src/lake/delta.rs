@@ -19,7 +19,7 @@ use std::{
     time::SystemTime,
 };
 
-use crate::{Error, METER, Result, sql::typeof_sql_expr};
+use crate::{Error, METER, Result, lake::LakeHouseType, sql::typeof_sql_expr};
 use arrow::{
     array::RecordBatch,
     datatypes::{Field, Schema as ArrowSchema},
@@ -334,7 +334,7 @@ impl LakeHouse for Delta {
         record_batch: RecordBatch,
         config: DescribeConfigsResult,
     ) -> Result<()> {
-        debug!(%topic, partition, offset, ?record_batch, ?config);
+        debug!(%topic, partition, offset, rows = record_batch.num_rows(), columns = record_batch.num_columns(), ?config);
 
         let config = Config::from(config);
 
@@ -373,6 +373,10 @@ impl LakeHouse for Delta {
         }
 
         Ok(())
+    }
+
+    async fn lake_type(&self) -> Result<LakeHouseType> {
+        Ok(LakeHouseType::Delta)
     }
 }
 
@@ -549,7 +553,7 @@ mod tests {
                 batch
                     .build()
                     .map_err(Into::into)
-                    .and_then(|batch| schema.as_arrow(partition, &batch))
+                    .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))
             }?;
 
             let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
@@ -650,7 +654,7 @@ mod tests {
                 .base_timestamp(119_731_017_000)
                 .build()
                 .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch))?;
+                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))?;
 
             let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
             let location = format!("file://{}", temp_dir.path().to_str().unwrap());
@@ -740,7 +744,7 @@ mod tests {
                 .base_timestamp(119_731_017_000)
                 .build()
                 .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch))?;
+                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))?;
 
             let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
             let location = format!("file://{}", temp_dir.path().to_str().unwrap());
@@ -840,7 +844,7 @@ mod tests {
                 .base_timestamp(119_731_017_000)
                 .build()
                 .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch))?;
+                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))?;
 
             let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
             let location = format!("file://{}", temp_dir.path().to_str().unwrap());
@@ -953,7 +957,7 @@ mod tests {
                 .base_timestamp(119_731_017_000)
                 .build()
                 .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch))?;
+                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))?;
 
             let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
             let location = format!("file://{}", temp_dir.path().to_str().unwrap());
@@ -1066,7 +1070,7 @@ mod tests {
                 .base_timestamp(119_731_017_000)
                 .build()
                 .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch))?;
+                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))?;
 
             let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
             let location = format!("file://{}", temp_dir.path().to_str().unwrap());
@@ -1166,7 +1170,7 @@ mod tests {
                 .base_timestamp(119_731_017_000)
                 .build()
                 .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch))?;
+                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))?;
 
             let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
             let location = format!("file://{}", temp_dir.path().to_str().unwrap());
@@ -1279,7 +1283,7 @@ mod tests {
                 .base_timestamp(119_731_017_000)
                 .build()
                 .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch))?;
+                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))?;
 
             let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
             let location = format!("file://{}", temp_dir.path().to_str().unwrap());
@@ -1360,7 +1364,7 @@ mod tests {
                 .base_timestamp(119_731_017_000)
                 .build()
                 .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch))?;
+                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))?;
 
             let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
             let location = format!("file://{}", temp_dir.path().to_str().unwrap());
@@ -1479,6 +1483,93 @@ mod tests {
 
             Ok(())
         }
+
+        #[tokio::test]
+        async fn repeated_string() -> Result<()> {
+            let _guard = init_tracing()?;
+
+            let schema = Schema::try_from(Bytes::from_static(include_bytes!(
+                "../../tests/repeated-string.proto"
+            )))?;
+
+            let value = schema.encode_from_value(
+                MessageKind::Value,
+                &json!({
+                  "id": 12321,
+                  "industry": ["abc", "def", "pqr"],
+                }),
+            )?;
+
+            let partition = 32123;
+
+            let record_batch = Batch::builder()
+                .record(Record::builder().value(value.into()))
+                .base_timestamp(119_731_017_000)
+                .build()
+                .map_err(Into::into)
+                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))?;
+
+            let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
+            let location = format!("file://{}", temp_dir.path().to_str().unwrap());
+            let database = "pqr";
+
+            let lake_house =
+                Url::parse(location.as_ref())
+                    .map_err(Into::into)
+                    .and_then(|location| {
+                        Builder::<PhantomData<Url>>::default()
+                            .location(location)
+                            .database(Some(database.into()))
+                            .build()
+                    })?;
+
+            let topic = "t";
+
+            let config = DescribeConfigsResult {
+                error_code: ErrorCode::None.into(),
+                error_message: None,
+                resource_type: ConfigResource::Topic.into(),
+                resource_name: topic.into(),
+                configs: Some(vec![]),
+            };
+
+            let offset = 543212345;
+
+            lake_house
+                .store(topic, partition, offset, record_batch, config)
+                .await
+                .inspect(|result| debug!(?result))
+                .inspect_err(|err| debug!(?err))?;
+
+            let table = {
+                let mut table =
+                    DeltaTableBuilder::from_uri(format!("{location}/{database}.{topic}"))
+                        .build()?;
+                table.load().await?;
+                table
+            };
+
+            let ctx = SessionContext::new();
+
+            ctx.register_table("t", Arc::new(table))?;
+
+            let df = ctx.sql("select * from t").await?;
+            let results = df.collect().await?;
+
+            let pretty_results = pretty_format_batches(&results)?.to_string();
+
+            let expected = vec![
+                "+------------------------------------------------------------------------------------+----------------------------------------+",
+                "| meta                                                                               | value                                  |",
+                "+------------------------------------------------------------------------------------+----------------------------------------+",
+                "| {partition: 32123, timestamp: 1973-10-17T18:36:57, year: 1973, month: 10, day: 17} | {id: 12321, industry: [abc, def, pqr]} |",
+                "+------------------------------------------------------------------------------------+----------------------------------------+",
+            ];
+
+            assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
+
+            Ok(())
+        }
     }
 
     mod avro {
@@ -1531,7 +1622,7 @@ mod tests {
                 batch
                     .build()
                     .map_err(Into::into)
-                    .and_then(|batch| schema.as_arrow(partition, &batch))
+                    .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))
             }?;
 
             let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
@@ -1655,7 +1746,7 @@ mod tests {
                 batch
                     .build()
                     .map_err(Into::into)
-                    .and_then(|batch| schema.as_arrow(partition, &batch))
+                    .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))
             }?;
 
             let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;

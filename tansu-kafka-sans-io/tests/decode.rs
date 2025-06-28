@@ -5863,9 +5863,6 @@ fn produce_request_v10_001() -> Result<()> {
         0, 0,
     ];
 
-    let mut c = Cursor::new(v);
-    let mut deserializer = Decoder::request(&mut c);
-
     assert_eq!(
         Frame {
             size: 340,
@@ -6114,7 +6111,7 @@ fn produce_request_v10_001() -> Result<()> {
                 )
             }
         },
-        Frame::deserialize(&mut deserializer)?
+        Frame::request_from_bytes(&v[..])?
     );
 
     Ok(())

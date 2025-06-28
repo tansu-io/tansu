@@ -40,11 +40,14 @@ use opentelemetry::{
 };
 use opentelemetry_semantic_conventions::SCHEMA_URL;
 use parquet::errors::ParquetError;
+use rhai::EvalAltResult;
 use serde_json::Value;
 use tansu_kafka_sans_io::{ErrorCode, record::inflated::Batch};
 use tracing::{debug, error};
 use tracing_subscriber::filter::ParseError;
 use url::Url;
+
+use crate::lake::LakeHouseType;
 
 pub mod avro;
 pub mod json;
@@ -73,6 +76,9 @@ pub enum Error {
 
     #[error("{:?}", self)]
     BadDowncast { field: String },
+
+    #[error("{:?}", self)]
+    EvalAlt(#[from] Box<EvalAltResult>),
 
     #[error("{:?}", self)]
     BuilderExhausted,
@@ -203,7 +209,12 @@ pub trait Validator {
 }
 
 pub trait AsArrow {
-    fn as_arrow(&self, partition: i32, batch: &Batch) -> Result<RecordBatch>;
+    fn as_arrow(
+        &self,
+        partition: i32,
+        batch: &Batch,
+        lake_type: LakeHouseType,
+    ) -> Result<RecordBatch>;
 }
 
 pub trait AsKafkaRecord {
@@ -212,6 +223,10 @@ pub trait AsKafkaRecord {
 
 pub trait AsJsonValue {
     fn as_json_value(&self, batch: &Batch) -> Result<Value>;
+}
+
+pub trait Generator {
+    fn generate(&self) -> Result<tansu_kafka_sans_io::record::Builder>;
 }
 
 #[derive(Clone, Debug)]
@@ -246,13 +261,18 @@ impl Validator for Schema {
 }
 
 impl AsArrow for Schema {
-    fn as_arrow(&self, partition: i32, batch: &Batch) -> Result<RecordBatch> {
+    fn as_arrow(
+        &self,
+        partition: i32,
+        batch: &Batch,
+        lake_type: LakeHouseType,
+    ) -> Result<RecordBatch> {
         debug!(?batch);
 
         match self {
-            Self::Avro(schema) => schema.as_arrow(partition, batch),
-            Self::Json(schema) => schema.as_arrow(partition, batch),
-            Self::Proto(schema) => schema.as_arrow(partition, batch),
+            Self::Avro(schema) => schema.as_arrow(partition, batch, lake_type),
+            Self::Json(schema) => schema.as_arrow(partition, batch, lake_type),
+            Self::Proto(schema) => schema.as_arrow(partition, batch, lake_type),
         }
     }
 }
@@ -265,6 +285,16 @@ impl AsJsonValue for Schema {
             Self::Avro(schema) => schema.as_json_value(batch),
             Self::Json(schema) => schema.as_json_value(batch),
             Self::Proto(schema) => schema.as_json_value(batch),
+        }
+    }
+}
+
+impl Generator for Schema {
+    fn generate(&self) -> Result<tansu_kafka_sans_io::record::Builder> {
+        match self {
+            Schema::Avro(schema) => schema.generate(),
+            Schema::Json(schema) => schema.generate(),
+            Schema::Proto(schema) => schema.generate(),
         }
     }
 }
@@ -314,6 +344,7 @@ impl Registry {
         topic: &str,
         partition: i32,
         batch: &Batch,
+        lake_type: LakeHouseType,
     ) -> Result<Option<RecordBatch>> {
         debug!(topic, partition, ?batch);
 
@@ -325,12 +356,15 @@ impl Registry {
             .and_then(|guard| {
                 guard
                     .get(topic)
-                    .map(|schema| schema.as_arrow(partition, batch))
+                    .map(|schema| schema.as_arrow(partition, batch, lake_type))
                     .transpose()
             })
             .inspect(|record_batch| {
-                debug!(?record_batch);
-
+                debug!(
+                    rows = record_batch
+                        .as_ref()
+                        .map(|record_batch| record_batch.num_rows())
+                );
                 self.as_arrow_duration.record(
                     start
                         .elapsed()

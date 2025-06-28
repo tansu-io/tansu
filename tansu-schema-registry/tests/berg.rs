@@ -125,7 +125,7 @@ fn normalized_config(topic: &str) -> DescribeConfigsResult {
 
 mod json {
     use super::*;
-    use tansu_schema_registry::json::Schema;
+    use tansu_schema_registry::{json::Schema, lake::LakeHouseType};
 
     #[tokio::test]
     async fn key_and_value() -> Result<()> {
@@ -183,7 +183,7 @@ mod json {
             batch
                 .build()
                 .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch))?
+                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
         let topic = &alphanumeric_string(5);
@@ -249,7 +249,7 @@ mod json {
             batch
                 .build()
                 .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch))?
+                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
         let topic = &alphanumeric_string(5);
@@ -318,7 +318,7 @@ mod json {
             batch
                 .build()
                 .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch))?
+                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
         let topic = &alphanumeric_string(5);
@@ -382,7 +382,7 @@ mod json {
             batch
                 .build()
                 .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch))?
+                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
         let topic = &alphanumeric_string(5);
@@ -448,7 +448,7 @@ mod json {
             batch
                 .build()
                 .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch))?
+                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
         let topic = &alphanumeric_string(5);
@@ -531,7 +531,7 @@ mod json {
             batch
                 .build()
                 .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch))?
+                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
         let topic = &alphanumeric_string(5);
@@ -609,7 +609,7 @@ mod json {
             batch
                 .build()
                 .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch))?
+                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
         let topic = &alphanumeric_string(5);
@@ -634,7 +634,10 @@ mod json {
 
 mod proto {
     use super::*;
-    use tansu_schema_registry::proto::{MessageKind, Schema};
+    use tansu_schema_registry::{
+        lake::LakeHouseType,
+        proto::{MessageKind, Schema},
+    };
 
     #[tokio::test]
     async fn message_descriptor_singular_to_field() -> Result<()> {
@@ -706,7 +709,7 @@ mod proto {
             batch
                 .build()
                 .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch))
+                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))
         }?;
 
         let topic = &alphanumeric_string(5);
@@ -754,7 +757,7 @@ mod proto {
             .base_timestamp(119_731_017_000)
             .build()
             .map_err(Into::into)
-            .and_then(|batch| schema.as_arrow(partition, &batch))
+            .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))
             .inspect(|record_batch| debug!(?record_batch))?;
 
         let topic = &alphanumeric_string(5);
@@ -803,7 +806,7 @@ mod proto {
             .base_timestamp(119_731_017_000)
             .build()
             .map_err(Into::into)
-            .and_then(|batch| schema.as_arrow(partition, &batch))?;
+            .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?;
 
         let topic = &alphanumeric_string(5);
         let results = lake_store(topic, partition, normalized_config(topic), record_batch).await?;
@@ -861,7 +864,7 @@ mod proto {
             .record(Record::builder().value(value.into()))
             .build()
             .map_err(Into::into)
-            .and_then(|batch| schema.as_arrow(partition, &batch))?;
+            .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?;
 
         let topic = &alphanumeric_string(5);
         let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
@@ -914,7 +917,7 @@ mod proto {
             .record(Record::builder().value(value.into()))
             .build()
             .map_err(Into::into)
-            .and_then(|batch| schema.as_arrow(partition, &batch))?;
+            .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?;
 
         let topic = &alphanumeric_string(5);
         let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
@@ -972,7 +975,7 @@ mod proto {
             .base_timestamp(119_731_017_000)
             .build()
             .map_err(Into::into)
-            .and_then(|batch| schema.as_arrow(partition, &batch))?;
+            .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?;
 
         let topic = &alphanumeric_string(5);
         let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
@@ -999,6 +1002,7 @@ mod avro {
     use tansu_schema_registry::{
         AsKafkaRecord,
         avro::{Schema, r, schema_write},
+        lake::LakeHouseType,
     };
     use uuid::Uuid;
 
@@ -1053,7 +1057,7 @@ mod avro {
             batch
                 .build()
                 .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch))?
+                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
         let topic = &alphanumeric_string(5);
@@ -1141,7 +1145,7 @@ mod avro {
             batch
                 .build()
                 .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch))?
+                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
         let topic = &alphanumeric_string(5);
@@ -1194,7 +1198,7 @@ mod avro {
             batch
                 .build()
                 .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch))?
+                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
         let topic = &alphanumeric_string(5);
@@ -1254,7 +1258,7 @@ mod avro {
             batch
                 .build()
                 .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch))?
+                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
         let topic = &alphanumeric_string(5);
@@ -1318,7 +1322,7 @@ mod avro {
             batch
                 .build()
                 .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch))?
+                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
         let topic = &alphanumeric_string(5);
@@ -1370,7 +1374,7 @@ mod avro {
             batch
                 .build()
                 .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch))?
+                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
         let topic = &alphanumeric_string(5);
@@ -1422,7 +1426,7 @@ mod avro {
             batch
                 .build()
                 .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch))?
+                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
         let topic = &alphanumeric_string(5);
@@ -1499,7 +1503,7 @@ mod avro {
             batch
                 .build()
                 .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch))?
+                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
         let topic = &alphanumeric_string(5);
@@ -1560,7 +1564,7 @@ mod avro {
             batch
                 .build()
                 .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch))?
+                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
         let topic = &alphanumeric_string(5);
@@ -1623,7 +1627,7 @@ mod avro {
             batch
                 .build()
                 .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch))?
+                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
         let topic = &alphanumeric_string(5);
@@ -1684,7 +1688,7 @@ mod avro {
             batch
                 .build()
                 .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch))?
+                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
         let topic = &alphanumeric_string(5);
@@ -1748,7 +1752,7 @@ mod avro {
             batch
                 .build()
                 .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch))?
+                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
         let topic = &alphanumeric_string(5);
@@ -1812,7 +1816,7 @@ mod avro {
             batch
                 .build()
                 .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch))?
+                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
         let topic = &alphanumeric_string(5);
@@ -1876,7 +1880,7 @@ mod avro {
             batch
                 .build()
                 .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch))?
+                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
         let topic = &alphanumeric_string(5);
@@ -1961,7 +1965,7 @@ mod avro {
             batch
                 .build()
                 .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch))?
+                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
         let topic = &alphanumeric_string(5);
@@ -2025,7 +2029,7 @@ mod avro {
             batch
                 .build()
                 .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch))?
+                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
         let topic = &alphanumeric_string(5);
@@ -2093,7 +2097,7 @@ mod avro {
             batch
                 .build()
                 .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch))?
+                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
         let topic = &alphanumeric_string(5);
@@ -2155,7 +2159,7 @@ mod avro {
             batch
                 .build()
                 .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch))?
+                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
         let topic = &alphanumeric_string(5);
@@ -2216,7 +2220,7 @@ mod avro {
             batch
                 .build()
                 .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch))?
+                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
         let topic = &alphanumeric_string(5);
@@ -2278,7 +2282,7 @@ mod avro {
             batch
                 .build()
                 .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch))?
+                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
         let topic = &alphanumeric_string(5);
@@ -2339,7 +2343,7 @@ mod avro {
             batch
                 .build()
                 .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch))?
+                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
         let topic = &alphanumeric_string(5);

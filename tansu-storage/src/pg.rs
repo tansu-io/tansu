@@ -860,9 +860,14 @@ impl Postgres {
         if !attributes.control {
             if let Some(ref registry) = self.schemas {
                 if let Some(ref lake) = self.lake {
-                    if let Some(record_batch) =
-                        registry.as_arrow(topition.topic(), topition.partition(), &inflated)?
-                    {
+                    let lake_type = lake.lake_type().await?;
+
+                    if let Some(record_batch) = registry.as_arrow(
+                        topition.topic(),
+                        topition.partition(),
+                        &inflated,
+                        lake_type,
+                    )? {
                         let config = self
                             .describe_config(topition.topic(), ConfigResource::Topic, None)
                             .await?;

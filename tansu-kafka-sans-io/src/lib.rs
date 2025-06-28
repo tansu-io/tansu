@@ -1169,7 +1169,7 @@ impl From<&IsolationLevel> for i8 {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-enum Ack {
+pub enum Ack {
     None,
     Leader,
     FullIsr,
@@ -1568,8 +1568,9 @@ impl From<ConfigResource> for i32 {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ConfigType {
+    #[default]
     Unknown,
     Boolean,
     String,
