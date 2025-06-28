@@ -76,10 +76,7 @@ impl LakeHouse for Parquet {
             PutPayload::from(Bytes::from(buffer))
         };
 
-        let location = Path::from(format!(
-            "{}/{:0>10}/{:0>20}.parquet",
-            topic, partition, offset,
-        ));
+        let location = Path::from(format!("{topic}/{partition:0>10}/{offset:0>20}.parquet"));
 
         self.object_store
             .put_opts(
