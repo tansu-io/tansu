@@ -16,7 +16,7 @@
 use std::time::Duration;
 
 use super::DEFAULT_BROKER;
-use crate::Result;
+use crate::{EnvVarExp, Result};
 use clap::Args;
 use tansu_generator::Generate;
 use tansu_kafka_sans_io::ErrorCode;
@@ -26,7 +26,7 @@ use url::Url;
 pub(super) struct Arg {
     /// The URL of the broker to produce messages into
     #[arg(long, default_value = DEFAULT_BROKER, env = "ADVERTISED_LISTENER_URL")]
-    broker: Url,
+    broker: EnvVarExp<Url>,
 
     /// The topic to generate messages into
     #[clap(value_parser)]
@@ -38,7 +38,7 @@ pub(super) struct Arg {
 
     /// Schema registry examples are: file://./etc/schema or s3://tansu/, containing: topic.json, topic.proto or topic.avsc
     #[arg(long, env = "SCHEMA_REGISTRY")]
-    schema_registry: Url,
+    schema_registry: EnvVarExp<Url>,
 
     /// Message batch size used by every producer
     #[arg(long, default_value = "1")]
@@ -55,19 +55,27 @@ pub(super) struct Arg {
     /// Stop sending messages after this time
     #[arg(long)]
     duration_seconds: Option<u64>,
+
+    /// OTEL Exporter OTLP endpoint
+    #[arg(long, env = "OTEL_EXPORTER_OTLP_ENDPOINT")]
+    otlp_endpoint_url: Option<EnvVarExp<Url>>,
 }
 
 impl Arg {
     pub(super) async fn main(self) -> Result<ErrorCode> {
         let generate = Generate::builder()
-            .broker(self.broker)
+            .broker(self.broker.into_inner())
             .topic(self.topic)
             .partition(self.partition)
-            .schema_registry(self.schema_registry)
+            .schema_registry(self.schema_registry.into_inner())
             .batch_size(self.batch_size)
             .per_second(self.per_second)
             .producers(self.producers)
             .duration(self.duration_seconds.map(Duration::from_secs))
+            .otlp_endpoint_url(
+                self.otlp_endpoint_url
+                    .map(|expression| expression.into_inner()),
+            )
             .build()?;
 
         generate.main().await.map_err(Into::into)

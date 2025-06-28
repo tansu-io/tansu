@@ -17,15 +17,17 @@ use std::{
     collections::BTreeMap,
     error::Error,
     fmt::{self, Debug, Display},
-    sync::{Arc, Mutex},
+    sync::{Arc, LazyLock, Mutex},
+    time::SystemTime,
 };
 
 use bytes::Bytes;
+use opentelemetry::{KeyValue, metrics::Histogram};
 use rama::{Context, Layer, Service, context::Extensions, error::BoxError, matcher::Matcher};
 use tansu_kafka_sans_io::{Body, Frame, Header};
 use tracing::debug;
 
-use crate::Result;
+use crate::{METER, Result};
 
 pub mod api_version;
 pub mod describe_config;
@@ -152,12 +154,30 @@ pub fn read_api_request(buffer: Bytes) -> Result<ApiRequest> {
     }
 }
 
+static API_RESPONSE_FROM_BYTES_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
+    METER
+        .u64_histogram("api_response_from_bytes_duration")
+        .with_unit("ms")
+        .with_description("Latency of converting bytes into an API response in milliseconds")
+        .build()
+});
+
 pub fn read_api_response(
     buffer: Bytes,
     api_key: ApiKey,
     api_version: ApiVersion,
 ) -> Result<ApiResponse> {
-    match Frame::response_from_bytes(&buffer[..], api_key.0, api_version)? {
+    let attributes = [KeyValue::new("api_key", api_key.0.to_string())];
+    let start = SystemTime::now();
+
+    match Frame::response_from_bytes(&buffer[..], api_key.0, api_version).inspect(|_| {
+        API_RESPONSE_FROM_BYTES_DURATION.record(
+            start
+                .elapsed()
+                .map_or(0, |duration| duration.as_millis() as u64),
+            &attributes,
+        )
+    })? {
         Frame {
             header: Header::Response { correlation_id },
             body,

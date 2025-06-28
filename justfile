@@ -267,7 +267,7 @@ tansu-broker *args:
     target/debug/tansu broker {{args}} 2>&1 | tee tansu.log
 
 # run a broker with configuration from .env
-broker *args: (cargo-build "--bin" "tansu") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket prometheus-up lakehouse-catalog-up (tansu-broker args)
+broker *args: (cargo-build "--bin" "tansu") docker-compose-down prometheus-up grafana-up db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket lakehouse-catalog-up (tansu-broker args)
 
 
 # run a proxy with configuration from .env
@@ -341,6 +341,6 @@ employee-duckdb-delta: (duckdb "\"select * from delta_scan('s3://lake/tansu.empl
 # create customer topic with schema etc/schema/customer.proto
 customer-topic-create: (topic-create "customer" "--partitions=1"  "--config=tansu.lake.normalize=true" "--config=tansu.lake.partition=meta.day" "--config=tansu.lake.sink=true" "--config=tansu.batch=true" "--config=tansu.batch.max_records=200" "--config=tansu.batch.timeout_ms=1000")
 
-customer-topic-generator: (generator "customer" "--broker=tcp://localhost:9092" "--per-second=1" "--producers=16" "--batch-size=1" "--duration-seconds=60")
+customer-topic-generator *args: (generator "customer" "--broker=tcp://localhost:9092" args)
 
 customer-duckdb-delta: (duckdb "\"select * from delta_scan('s3://lake/tansu.customer');\"")

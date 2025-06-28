@@ -16,7 +16,6 @@
 use std::{
     collections::BTreeMap,
     fmt::Debug,
-    ops::Deref,
     sync::{Arc, LazyLock},
     time::SystemTime,
 };
@@ -35,7 +34,7 @@ use rama::{
     Context, Layer, Service,
     error::BoxError,
     net::{
-        address::{Authority, Host},
+        address::Authority,
         client::{ConnectorService, EstablishedClientConnection},
         stream::Stream,
     },

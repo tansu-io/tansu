@@ -19,23 +19,18 @@ use std::{
     num::NonZeroU32,
     pin::Pin,
     result,
-    sync::{
-        Arc, LazyLock,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::{Arc, LazyLock, PoisonError},
     time::{Duration, SystemTime},
 };
 
-use governor::{InsufficientCapacity, Quota, RateLimiter};
+use governor::{InsufficientCapacity, Jitter, Quota, RateLimiter};
 use nonzero_ext::nonzero;
-use opentelemetry::{InstrumentationScope, global, metrics::Meter};
-use opentelemetry_sdk::{
-    error::OTelSdkResult,
-    metrics::{
-        PeriodicReaderBuilder, SdkMeterProvider, Temporality, data::ResourceMetrics,
-        exporter::PushMetricExporter,
-    },
+use opentelemetry::{
+    InstrumentationScope, KeyValue, global,
+    metrics::{Counter, Histogram, Meter},
 };
+use opentelemetry_otlp::{ExporterBuildError, Protocol, WithExportConfig as _};
+use opentelemetry_sdk::{Resource, error::OTelSdkError, metrics::SdkMeterProvider};
 use opentelemetry_semantic_conventions::SCHEMA_URL;
 use rama::{
     Context, Service,
@@ -57,7 +52,7 @@ use tokio::{
     time::sleep,
 };
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, Level, debug, info, span};
+use tracing::{Instrument, Level, debug, span};
 use url::Url;
 
 pub(crate) static METER: LazyLock<Meter> = LazyLock::new(|| {
@@ -75,12 +70,22 @@ pub type Result<T, E = Error> = result::Result<T, E>;
 pub enum Error {
     Api(ErrorCode),
     Box(#[from] BoxError),
+    ExporterBuild(#[from] ExporterBuildError),
     InsufficientCapacity(#[from] InsufficientCapacity),
     Io(Arc<io::Error>),
     Opaque(#[from] OpaqueError),
+    OtelSdk(#[from] OTelSdkError),
+    Poison,
     Protocol(#[from] tansu_kafka_sans_io::Error),
     Schema(Box<tansu_schema_registry::Error>),
     SchemaNotFoundForTopic(String),
+    Url(#[from] url::ParseError),
+}
+
+impl<T> From<PoisonError<T>> for Error {
+    fn from(_value: PoisonError<T>) -> Self {
+        Self::Poison
+    }
 }
 
 impl From<tansu_schema_registry::Error> for Error {
@@ -118,6 +123,7 @@ pub struct Configuration {
     per_second: Option<u32>,
     producers: u32,
     duration: Option<Duration>,
+    otlp_endpoint_url: Option<Url>,
 }
 
 #[derive(Clone, Debug)]
@@ -143,6 +149,22 @@ fn host_port(url: &Url) -> String {
     format!("{}:{}", url.host_str().unwrap(), url.port().unwrap())
 }
 
+static GENERATE_PRODUCE_BATCH_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
+    METER
+        .u64_histogram("generate_produce_batch_duration")
+        .with_unit("ms")
+        .with_description("Generate a produce batch in milliseconds")
+        .build()
+});
+
+static PRODUCE_REQUEST_RESPONSE_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
+    METER
+        .u64_histogram("produce_request_response_duration")
+        .with_unit("ms")
+        .with_description("Latency of receiving an produce response in milliseconds")
+        .build()
+});
+
 pub async fn produce(
     broker: Url,
     name: String,
@@ -152,16 +174,23 @@ pub async fn produce(
 ) -> Result<()> {
     debug!(%broker, %name, index, batch_size);
 
+    let attributes = [
+        KeyValue::new("topic", name.clone()),
+        KeyValue::new("partition", index.to_string()),
+        KeyValue::new("batch_size", batch_size.to_string()),
+    ];
+
     let frame = {
+        let start = SystemTime::now();
+
         let mut batch = inflated::Batch::builder();
         let offset_deltas = 0..batch_size;
 
         for offset_delta in offset_deltas {
-            batch = batch.record(
-                schema
-                    .generate()
-                    .map(|record| record.offset_delta(offset_delta))?,
-            );
+            batch = schema
+                .generate()
+                .map(|record| record.offset_delta(offset_delta))
+                .map(|record| batch.record(record))?;
         }
 
         batch
@@ -170,7 +199,15 @@ pub async fn produce(
             .map(|batch| inflated::Frame {
                 batches: vec![batch],
             })
-            .and_then(deflated::Frame::try_from)?
+            .and_then(deflated::Frame::try_from)
+            .inspect(|_| {
+                GENERATE_PRODUCE_BATCH_DURATION.record(
+                    start
+                        .elapsed()
+                        .map_or(0, |duration| duration.as_millis() as u64),
+                    &attributes,
+                )
+            })?
     };
 
     let request = ProduceRequest {
@@ -195,11 +232,25 @@ pub async fn produce(
         .map(ApiClient::new)
         .inspect(|client| debug!(?client))?;
 
-    let response = origin
-        .serve(Context::default(), request.into())
-        .await
-        .and_then(|response| ProduceResponse::try_from(response).map_err(Into::into))
-        .inspect(|response| debug!(?response))?;
+    let response = {
+        let start = SystemTime::now();
+
+        let attributes = [];
+
+        origin
+            .serve(Context::default(), request.into())
+            .await
+            .and_then(|response| ProduceResponse::try_from(response).map_err(Into::into))
+            .inspect(|response| debug!(?response))
+            .inspect(|_| {
+                PRODUCE_REQUEST_RESPONSE_DURATION.record(
+                    start
+                        .elapsed()
+                        .map_or(0, |duration| duration.as_millis() as u64),
+                    &attributes,
+                )
+            })
+    }?;
 
     assert!(
         response
@@ -219,18 +270,67 @@ pub async fn produce(
     Ok(())
 }
 
+static RATE_LIMIT_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
+    METER
+        .u64_histogram("rate_limit_duration")
+        .with_unit("ms")
+        .with_description("Rate limit latencies in milliseconds")
+        .build()
+});
+
+static PRODUCE_RECORD_COUNT: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    METER
+        .u64_counter("produce_record_count")
+        .with_description("Produced record count")
+        .build()
+});
+
+static PRODUCE_API_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
+    METER
+        .u64_histogram("produce_duration")
+        .with_unit("ms")
+        .with_description("Produce API latencies in milliseconds")
+        .build()
+});
+
 impl Generate {
     pub async fn main(self) -> Result<ErrorCode> {
-        global::set_meter_provider(SdkMeterProvider::default());
+        let meter_provider = self.configuration.otlp_endpoint_url.map_or(
+            Ok::<Option<SdkMeterProvider>, Error>(None),
+            |otlp_endpoint_url| {
+                let endpoint = otlp_endpoint_url
+                    .join("v1/metrics")
+                    .inspect(|endpoint| debug!(%endpoint))?;
+
+                let exporter = opentelemetry_otlp::MetricExporter::builder()
+                    .with_http()
+                    .with_protocol(Protocol::HttpBinary)
+                    .with_endpoint(endpoint.to_string())
+                    .build()?;
+
+                let meter_provider = opentelemetry_sdk::metrics::SdkMeterProvider::builder()
+                    .with_periodic_exporter(exporter)
+                    .with_resource(
+                        Resource::builder_empty()
+                            .with_attributes([KeyValue::new(
+                                "service.name",
+                                env!("CARGO_PKG_NAME"),
+                            )])
+                            .build(),
+                    )
+                    .build();
+
+                global::set_meter_provider(meter_provider.clone());
+
+                Ok(Some(meter_provider))
+            },
+        )?;
 
         let Some(schema) = self.registry.schema(&self.configuration.topic).await? else {
             return Err(Error::SchemaNotFoundForTopic(
                 self.configuration.topic.clone(),
             ));
         };
-
-        let response_count = Arc::new(AtomicU64::new(0));
-        let records_sent = Arc::new(AtomicU64::new(0));
 
         let mut interrupt_signal = signal(SignalKind::interrupt()).unwrap();
         debug!(?interrupt_signal);
@@ -255,10 +355,7 @@ impl Generate {
 
         let token = CancellationToken::new();
 
-        let generator_start = SystemTime::now();
-
         for producer in 0..self.configuration.producers {
-            let records_sent = records_sent.clone();
             let rate_limiter = rate_limiter.clone();
             let schema = schema.clone();
             let broker = self.configuration.broker.clone();
@@ -269,12 +366,19 @@ impl Generate {
             _ = set.spawn(async move {
                     let span = span!(Level::DEBUG, "producer", producer);
 
+
                     async move {
+                        let attributes = [KeyValue::new("producer", producer.to_string())];
+
                         loop {
                             debug!(%broker, %topic, partition);
 
                             if let Some(ref rate_limiter) = rate_limiter {
                                 let rate_limit_start = SystemTime::now();
+
+
+
+
 
                                 tokio::select! {
                                     cancelled = token.cancelled() => {
@@ -282,17 +386,18 @@ impl Generate {
                                         break
                                     },
 
-                                    Ok(_) = rate_limiter.until_n_ready(batch_size) => {
-                                        info!(rate_limit_duration_ms = rate_limit_start
+                                    Ok(_) = rate_limiter.until_n_ready_with_jitter(batch_size, Jitter::up_to(Duration::from_millis(50))) => {
+                                        RATE_LIMIT_DURATION.record(
+                                        rate_limit_start
                                             .elapsed()
-                                            .map_or(0, |duration| duration.as_millis() as u64));
+                                            .map_or(0, |duration| duration.as_millis() as u64),
+                                            &attributes)
 
                                     },
                                 }
                             }
 
                             let produce_start = SystemTime::now();
-
 
                             tokio::select! {
                                 cancelled = token.cancelled() => {
@@ -301,11 +406,8 @@ impl Generate {
                                 },
 
                                 Ok(_) = produce(broker.clone(), topic.clone(), partition, schema.clone(), batch_size.get() as i32) => {
-                                    records_sent.fetch_add(batch_size.get() as u64, Ordering::Relaxed);
-
-                                    info!(produce_duration_ms = produce_start
-                                    .elapsed()
-                                    .map_or(0, |duration| duration.as_millis() as u64));
+                                    PRODUCE_RECORD_COUNT.add(batch_size.get() as u64, &attributes);
+                                    PRODUCE_API_DURATION.record(produce_start.elapsed().map_or(0, |duration| duration.as_millis() as u64), &attributes);
                                 },
                             }
                         }
@@ -321,10 +423,6 @@ impl Generate {
                 set.join_next().await;
             }
         };
-
-        let generator_duration_ms = generator_start
-            .elapsed()
-            .map_or(0, |duration| duration.as_millis() as u64);
 
         let duration = self
             .configuration
@@ -361,6 +459,16 @@ impl Generate {
 
         debug!(?cancellation);
 
+        if let Some(meter_provider) = meter_provider {
+            meter_provider
+                .force_flush()
+                .inspect(|force_flush| debug!(?force_flush))?;
+
+            meter_provider
+                .shutdown()
+                .inspect(|shutdown| debug!(?shutdown))?;
+        }
+
         if let Some(CancelKind::Timeout) = cancellation {
             sleep(Duration::from_secs(5)).await;
         }
@@ -391,6 +499,7 @@ pub struct Builder<B, T, P, S> {
     per_second: Option<u32>,
     producers: u32,
     duration: Option<Duration>,
+    otlp_endpoint_url: Option<Url>,
 }
 
 impl Default
@@ -406,6 +515,7 @@ impl Default
             per_second: None,
             producers: 1,
             duration: None,
+            otlp_endpoint_url: None,
         }
     }
 }
@@ -421,6 +531,7 @@ impl<B, T, P, S> Builder<B, T, P, S> {
             per_second: self.per_second,
             producers: self.producers,
             duration: self.duration,
+            otlp_endpoint_url: self.otlp_endpoint_url,
         }
     }
 
@@ -434,6 +545,7 @@ impl<B, T, P, S> Builder<B, T, P, S> {
             per_second: self.per_second,
             producers: self.producers,
             duration: self.duration,
+            otlp_endpoint_url: self.otlp_endpoint_url,
         }
     }
 
@@ -447,6 +559,7 @@ impl<B, T, P, S> Builder<B, T, P, S> {
             per_second: self.per_second,
             producers: self.producers,
             duration: self.duration,
+            otlp_endpoint_url: self.otlp_endpoint_url,
         }
     }
 
@@ -460,6 +573,7 @@ impl<B, T, P, S> Builder<B, T, P, S> {
             per_second: self.per_second,
             producers: self.producers,
             duration: self.duration,
+            otlp_endpoint_url: self.otlp_endpoint_url,
         }
     }
 
@@ -473,6 +587,7 @@ impl<B, T, P, S> Builder<B, T, P, S> {
             per_second: self.per_second,
             producers: self.producers,
             duration: self.duration,
+            otlp_endpoint_url: self.otlp_endpoint_url,
         }
     }
 
@@ -486,6 +601,7 @@ impl<B, T, P, S> Builder<B, T, P, S> {
             per_second,
             producers: self.producers,
             duration: self.duration,
+            otlp_endpoint_url: self.otlp_endpoint_url,
         }
     }
 
@@ -499,6 +615,7 @@ impl<B, T, P, S> Builder<B, T, P, S> {
             per_second: self.per_second,
             producers,
             duration: self.duration,
+            otlp_endpoint_url: self.otlp_endpoint_url,
         }
     }
 
@@ -512,6 +629,21 @@ impl<B, T, P, S> Builder<B, T, P, S> {
             per_second: self.per_second,
             producers: self.producers,
             duration,
+            otlp_endpoint_url: self.otlp_endpoint_url,
+        }
+    }
+
+    pub fn otlp_endpoint_url(self, otlp_endpoint_url: Option<Url>) -> Builder<B, T, P, S> {
+        Builder {
+            broker: self.broker,
+            topic: self.topic,
+            partition: self.partition,
+            schema_registry: self.schema_registry,
+            batch_size: self.batch_size,
+            per_second: self.per_second,
+            producers: self.producers,
+            duration: self.duration,
+            otlp_endpoint_url,
         }
     }
 }
@@ -527,6 +659,7 @@ impl Builder<Url, String, i32, Url> {
             per_second: self.per_second,
             producers: self.producers,
             duration: self.duration,
+            otlp_endpoint_url: self.otlp_endpoint_url,
         })
     }
 }
