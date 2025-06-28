@@ -6239,6 +6239,7 @@ name = "tansu-kafka-sans-io"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "clap",
  "convert_case",
  "crc",
  "criterion",

@@ -252,6 +252,9 @@ codespace-ssh:
 
 all: test miri
 
+flamegraph *args:
+    cargo flamegraph {{args}}
+
 benchmark-flamegraph: build docker-compose-down minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up
 	flamegraph -- target/debug/tansu broker 2>&1  | tee tansu.log
 

@@ -10,7 +10,7 @@ Cargo.lock
 *.log
 .env
 flamegraph.svg
-perf.data
+perf.data*
 .vscode
 license.html
 *.duckdb
