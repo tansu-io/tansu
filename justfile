@@ -152,7 +152,7 @@ cat-consume topic:
     target/debug/tansu cat consume {{topic}} --max-wait-time-ms=5000
 
 generator topic *args:
-    target/debug/tansu generator {{args}} {{topic}} 2>&1 | tee generator.log
+    target/debug/tansu generator {{args}} {{topic}} 2>&1 >generator.log
 
 duckdb-k-unnest-v-parquet topic:
     duckdb -init duckdb-init.sql :memory: "SELECT key,unnest(value) FROM '{{replace(env("DATA_LAKE"), "file://./", "")}}/{{topic}}/*/*.parquet'"
@@ -267,7 +267,7 @@ otel: build docker-compose-down db-up minio-up minio-ready-local minio-local-ali
 otel-up: docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up tansu-up
 
 tansu-broker *args:
-    target/debug/tansu broker {{args}} 2>&1 | tee tansu.log
+    target/debug/tansu broker {{args}} 2>&1 >broker.log
 
 # run a broker with configuration from .env
 broker *args: (cargo-build "--bin" "tansu") docker-compose-down prometheus-up grafana-up db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket lakehouse-catalog-up (tansu-broker args)

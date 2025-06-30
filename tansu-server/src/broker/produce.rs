@@ -90,7 +90,11 @@ where
                         return self.error(partition.index, error_code);
                     }
 
-                    Err(_) => return self.error(partition.index, ErrorCode::UnknownServerError),
+                    Err(otherwise) => {
+                        warn!(?otherwise);
+                        let error = self.error(partition.index, ErrorCode::UnknownServerError);
+                        return error;
+                    }
                 }
             }
 

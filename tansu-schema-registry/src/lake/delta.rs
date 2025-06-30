@@ -15,7 +15,7 @@
 
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{Arc, LazyLock, Mutex},
     time::SystemTime,
 };
 
@@ -26,7 +26,7 @@ use arrow::{
 };
 use async_trait::async_trait;
 use deltalake::{
-    DeltaOps, DeltaTable, aws,
+    DeltaOps, DeltaTable, DeltaTableBuilder, aws,
     kernel::{ColumnMetadataKey, StructField},
     operations::optimize::OptimizeType,
     protocol::SaveMode,
@@ -65,35 +65,27 @@ impl Builder<Url> {
     }
 }
 
-#[derive(Debug, Clone)]
-struct Metron {
-    write_duration: Histogram<u64>,
-    write_with_datafusion_duration: Histogram<u64>,
-}
+static WRITE_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
+    METER
+        .u64_histogram("deltalake_write_duration")
+        .with_unit("ms")
+        .with_description("The Delta Lake write latencies in milliseconds")
+        .build()
+});
 
-impl Default for Metron {
-    fn default() -> Self {
-        Self {
-            write_duration: METER
-                .u64_histogram("deltalake_write_duration")
-                .with_unit("ms")
-                .with_description("The Delta Lake write latencies in milliseconds")
-                .build(),
-            write_with_datafusion_duration: METER
-                .u64_histogram("deltalake_write_with_datafusion_duration")
-                .with_unit("ms")
-                .with_description("The Delta Lake write with datafusion latencies in milliseconds")
-                .build(),
-        }
-    }
-}
+static WRITE_WITH_DATAFUSION_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
+    METER
+        .u64_histogram("deltalake_write_with_datafusion_duration")
+        .with_unit("ms")
+        .with_description("The Delta Lake write with datafusion latencies in milliseconds")
+        .build()
+});
 
 #[derive(Clone, Debug)]
 pub struct Delta {
     location: Url,
     tables: Arc<Mutex<HashMap<String, Table>>>,
     database: String,
-    metron: Metron,
 }
 
 #[derive(Clone, Debug)]
@@ -205,7 +197,7 @@ impl Delta {
             .inspect(|columns| debug!(?columns))
             .inspect_err(|err| debug!(?err))?;
 
-        let table = DeltaOps::try_from_uri(&self.table_uri(name))
+        let table = match DeltaOps::try_from_uri(&self.table_uri(name))
             .await
             .inspect_err(|err| debug!(?err))?
             .create()
@@ -214,7 +206,20 @@ impl Delta {
             .with_partition_columns(config.partition())
             .await
             .inspect(|table| debug!(?table))
-            .inspect_err(|err| debug!(?err))?;
+            .inspect_err(|err| debug!(?err))
+        {
+            Err(deltalake::DeltaTableError::VersionAlreadyExists(_)) => {
+                let mut table = DeltaTableBuilder::from_uri(&self.table_uri(name)).build()?;
+                table
+                    .load()
+                    .await
+                    .inspect(|table| debug!(?table))
+                    .inspect_err(|err| debug!(?err))
+                    .and(Ok(table))
+            }
+
+            otherwise => otherwise,
+        }?;
 
         _ = self.tables.lock().map(|mut guard| {
             guard.insert(
@@ -243,7 +248,7 @@ impl Delta {
             .await
             .inspect_err(|err| debug!(?err))
             .inspect(|table| {
-                self.metron.write_with_datafusion_duration.record(
+                WRITE_WITH_DATAFUSION_DURATION.record(
                     start
                         .elapsed()
                         .map_or(0, |duration| duration.as_millis() as u64),
@@ -276,7 +281,7 @@ impl Delta {
             .await
             .inspect_err(|err| debug!(?err))
             .inspect(|_| {
-                self.metron.write_duration.record(
+                WRITE_DURATION.record(
                     start
                         .elapsed()
                         .map_or(0, |duration| duration.as_millis() as u64),
@@ -390,7 +395,6 @@ impl TryFrom<Builder<Url>> for Delta {
             location: value.location,
             database: value.database.unwrap_or(String::from("tansu")),
             tables: Arc::new(Mutex::new(HashMap::new())),
-            metron: Metron::default(),
         })
     }
 }
