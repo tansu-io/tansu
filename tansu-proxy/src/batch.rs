@@ -18,12 +18,13 @@ use std::{
     fmt::Debug,
     ops::DerefMut,
     pin::Pin,
-    sync::{Arc, Mutex},
+    sync::{Arc, LazyLock, Mutex},
     task::{Context, Poll, Waker},
-    time::Duration,
+    time::{Duration, SystemTime},
     vec::IntoIter,
 };
 
+use opentelemetry::metrics::{Counter, Histogram};
 use rama::{Layer, Service, error::BoxError};
 use tansu_kafka_sans_io::{
     produce_request::{PartitionProduceData, TopicProduceData},
@@ -43,7 +44,7 @@ use tokio::time::sleep;
 use tracing::debug;
 use uuid::Uuid;
 
-use crate::Result;
+use crate::{METER, Result};
 
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 struct Topition {
@@ -76,6 +77,44 @@ pub struct BatchProduceService<S: Clone + Debug> {
     resource_config: ResourceConfig,
 }
 
+static SEND_PENDING_BATCH_COUNTER: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    METER
+        .u64_counter("send_pending_batch")
+        .with_description("The number times we send a pending batch")
+        .build()
+});
+
+static SEND_PENDING_EMPTY_BATCH_COUNTER: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    METER
+        .u64_counter("send_pending_empty_batch")
+        .with_description("The number times we tried to send an empty pending batch")
+        .build()
+});
+
+static SEND_PENDING_PRODUCE_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
+    METER
+        .u64_histogram("send_pending_produce_duration")
+        .with_unit("ms")
+        .with_description("The send pending produce latency in milliseconds")
+        .build()
+});
+
+static SEND_PENDING_FOUND_OWNER_COUNTER: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    METER
+        .u64_counter("send_pending_found_owner")
+        .with_description("The number of owners found after sending a pending batch")
+        .build()
+});
+
+static SEND_PENDING_OWNER_WAKE_COUNTER: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    METER
+        .u64_counter("send_pending_owner_wake")
+        .with_description(
+            "The number of owners we have called wake on after sending a pending batch",
+        )
+        .build()
+});
+
 impl<S> BatchProduceService<S>
 where
     S: Clone + Debug,
@@ -92,6 +131,8 @@ where
     {
         debug!(%id);
 
+        SEND_PENDING_BATCH_COUNTER.add(1, &[]);
+
         let requests = self
             .requests
             .lock()
@@ -101,19 +142,31 @@ where
             .expect("poison");
 
         if requests.is_empty() {
+            SEND_PENDING_EMPTY_BATCH_COUNTER.add(1, &[]);
             return Ok(None);
         }
 
         let owners = Owner::from(&requests[..]);
         let produce_request = produce_request(requests);
 
-        let produce_response = self
-            .service
-            .serve(ctx, produce_request)
-            .await
-            .inspect(|response| debug!(?response))
-            .inspect_err(|err| debug!(?err))
-            .map_err(Into::into)?;
+        let produce_response = {
+            let start = SystemTime::now();
+
+            self.service
+                .serve(ctx, produce_request)
+                .await
+                .inspect(|response| debug!(?response))
+                .inspect_err(|err| debug!(?err))
+                .map_err(Into::into)
+                .inspect(|_| {
+                    SEND_PENDING_PRODUCE_DURATION.record(
+                        start
+                            .elapsed()
+                            .map_or(0, |duration| duration.as_millis() as u64),
+                        &[],
+                    )
+                })?
+        };
 
         let mut responses = self
             .responses
@@ -123,6 +176,7 @@ where
 
         let mut owners = owners.split(produce_response);
         debug!(?owners);
+        SEND_PENDING_FOUND_OWNER_COUNTER.add(owners.len() as u64, &[]);
 
         if let Some(produce_response) = owners
             .remove(id)
@@ -138,6 +192,7 @@ where
                 if let Some(BatchResponse::Waker(waker)) =
                     responses.insert(owner, BatchResponse::Response(response))
                 {
+                    SEND_PENDING_OWNER_WAKE_COUNTER.add(1, &[]);
                     waker.wake();
                 }
             }
@@ -149,6 +204,7 @@ where
                 if let Some(BatchResponse::Waker(waker)) =
                     responses.insert(owner, BatchResponse::Response(response))
                 {
+                    SEND_PENDING_OWNER_WAKE_COUNTER.add(1, &[]);
                     waker.wake();
                 }
             }
@@ -157,6 +213,27 @@ where
         }
     }
 }
+
+static BATCH_OVERFLOW_COUNTER: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    METER
+        .u64_counter("batch_record_overflow")
+        .with_description("The number of overflows while producing a batch")
+        .build()
+});
+
+static TIMEOUT_EXPIRED_COUNTER: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    METER
+        .u64_counter("batch_timeout_expired")
+        .with_description("The timeouts while preparing a batch")
+        .build()
+});
+
+static TICKET_READY_COUNTER: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    METER
+        .u64_counter("batch_ticket_ready")
+        .with_description("The ticket was ready")
+        .build()
+});
 
 impl<S, State> Service<State, ProduceRequest> for BatchProduceService<S>
 where
@@ -232,6 +309,8 @@ where
                 .expect("poison")
                 >= max_records
             {
+                BATCH_OVERFLOW_COUNTER.add(1, &[]);
+
                 if let Ok(Some(produce_response)) = self
                     .send_pending_batch(&id, ctx.clone())
                     .await
@@ -247,6 +326,8 @@ where
 
             tokio::select! {
                 response = ticket  => {
+                    TICKET_READY_COUNTER.add(1, &[]);
+
                     return response
                     .inspect(|response|debug!(?response))
                     .inspect_err(|err|debug!(?err))
@@ -254,6 +335,9 @@ where
 
                 expired = patience => {
                     debug!(?expired);
+
+                    TIMEOUT_EXPIRED_COUNTER.add(1, &[]);
+
                     if let Ok(Some(produce_response)) = self.send_pending_batch(&id, ctx).await.inspect(|r|debug!(?r)) {
                         return Ok(produce_response)
                     }

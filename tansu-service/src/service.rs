@@ -289,7 +289,9 @@ where
 
             default_tcp_connect(&ctx, self.authority.clone())
                 .await
-                .inspect(|_| {
+                .inspect(|(_, socket_addr)| {
+                    debug!(?socket_addr);
+
                     TCP_CONNECT_DURATION.record(
                         start
                             .elapsed()
@@ -297,12 +299,13 @@ where
                         &attributes,
                     )
                 })
-                .inspect_err(|_| {
+                .inspect_err(|err| {
+                    debug!(?err);
                     TCP_CONNECT_ERRORS.add(1, &attributes);
                 })?
         };
 
-        let local = stream.local_addr()?;
+        let local = stream.local_addr().inspect(|local| debug!(?local))?;
 
         let span = span!(Level::DEBUG, "client", local = %local, remote = %address);
 

@@ -43,7 +43,7 @@ pub(super) struct Arg {
     #[arg(
         long,
         env = "LISTENER_URL",
-        default_value = "tcp://[::]:9092",
+        default_value = "tcp://0.0.0.0:9092",
         visible_alias = "kafka-listener-url"
     )]
     listener_url: EnvVarExp<Url>,
@@ -127,7 +127,7 @@ impl TryFrom<Arg> for tansu_server::broker::Broker<Controller<StorageContainer>,
     fn try_from(args: Arg) -> Result<Self, Self::Error> {
         let cluster_id = args.cluster_id;
         let incarnation_id = Uuid::now_v7();
-        let prometheus_listener_url = args
+        let otlp_endpoint_url = args
             .otlp_endpoint_url
             .map(|env_var_exp| env_var_exp.into_inner());
 
@@ -167,7 +167,7 @@ impl TryFrom<Arg> for tansu_server::broker::Broker<Controller<StorageContainer>,
             .cluster_id(cluster_id)
             .incarnation_id(incarnation_id)
             .advertised_listener(advertised_listener)
-            .otlp_endpoint_url(prometheus_listener_url)
+            .otlp_endpoint_url(otlp_endpoint_url)
             .schema_registry(schema)
             .lake_house(lake_house)
             .storage(storage_engine)

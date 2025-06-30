@@ -12,8 +12,13 @@ publish = false
 async-trait.workspace = true
 bytes.workspace = true
 clap.workspace = true
+opentelemetry-otlp.workspace = true
+opentelemetry-semantic-conventions.workspace = true
+opentelemetry.workspace = true
+opentelemetry_sdk.workspace = true
 rama.workspace = true
 tansu-kafka-sans-io = { path = "../tansu-kafka-sans-io" }
+tansu-otel = { path = "../tansu-otel" }
 tansu-service = { path = "../tansu-service" }
 thiserror.workspace = true
 tokio.workspace = true

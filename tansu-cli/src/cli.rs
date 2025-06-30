@@ -83,11 +83,14 @@ impl Cli {
                 .inspect(|result| debug!(?result))
                 .inspect_err(|err| debug!(?err)),
 
-            Command::Proxy(arg) => {
-                tansu_proxy::Proxy::main(arg.listener_url.into_inner(), arg.origin_url.into_inner())
-                    .await
-                    .map_err(Into::into)
-            }
+            Command::Proxy(arg) => tansu_proxy::Proxy::main(
+                arg.listener_url.into_inner(),
+                arg.origin_url.into_inner(),
+                arg.otlp_endpoint_url
+                    .map(|otlp_endpoint_url| otlp_endpoint_url.into_inner()),
+            )
+            .await
+            .map_err(Into::into),
 
             Command::Topic { command } => command.main().await,
         }

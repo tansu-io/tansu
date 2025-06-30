@@ -16,6 +16,7 @@
 use std::{
     fmt, io,
     marker::PhantomData,
+    net::SocketAddr,
     num::NonZeroU32,
     pin::Pin,
     result,
@@ -29,8 +30,8 @@ use opentelemetry::{
     InstrumentationScope, KeyValue, global,
     metrics::{Counter, Histogram, Meter},
 };
-use opentelemetry_otlp::{ExporterBuildError, Protocol, WithExportConfig as _};
-use opentelemetry_sdk::{Resource, error::OTelSdkError, metrics::SdkMeterProvider};
+use opentelemetry_otlp::ExporterBuildError;
+use opentelemetry_sdk::error::OTelSdkError;
 use opentelemetry_semantic_conventions::SCHEMA_URL;
 use rama::{
     Context, Service,
@@ -41,12 +42,14 @@ use tansu_kafka_sans_io::{
     produce_request::{PartitionProduceData, TopicProduceData},
     record::{deflated, inflated},
 };
+use tansu_otel::meter_provider;
 use tansu_schema_registry::{Generator as _, Registry, Schema};
 use tansu_service::{
     api::produce::{ProduceRequest, ProduceResponse},
     service::ApiClient,
 };
 use tokio::{
+    net::lookup_host,
     signal::unix::{SignalKind, signal},
     task::JoinSet,
     time::sleep,
@@ -74,11 +77,13 @@ pub enum Error {
     InsufficientCapacity(#[from] InsufficientCapacity),
     Io(Arc<io::Error>),
     Opaque(#[from] OpaqueError),
+    Otel(#[from] tansu_otel::Error),
     OtelSdk(#[from] OTelSdkError),
     Poison,
     Protocol(#[from] tansu_kafka_sans_io::Error),
     Schema(Box<tansu_schema_registry::Error>),
     SchemaNotFoundForTopic(String),
+    UnknownHost(String),
     Url(#[from] url::ParseError),
 }
 
@@ -145,8 +150,39 @@ impl TryFrom<Configuration> for Generate {
     }
 }
 
-fn host_port(url: &Url) -> String {
-    format!("{}:{}", url.host_str().unwrap(), url.port().unwrap())
+static DNS_LOOKUP_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
+    METER
+        .u64_histogram("dns_lookup_duration")
+        .with_unit("ms")
+        .with_description("DNS lookup latencies")
+        .build()
+});
+
+async fn host_port(url: &Url) -> Result<SocketAddr> {
+    if let Some(host) = url.host_str()
+        && let Some(port) = url.port()
+    {
+        let attributes = [KeyValue::new("url", url.to_string())];
+        let start = SystemTime::now();
+
+        let mut addresses = lookup_host(format!("{host}:{port}"))
+            .await
+            .inspect(|_| {
+                DNS_LOOKUP_DURATION.record(
+                    start
+                        .elapsed()
+                        .map_or(0, |duration| duration.as_millis() as u64),
+                    &attributes,
+                )
+            })?
+            .filter(|socket_addr| matches!(socket_addr, SocketAddr::V4(_)));
+
+        if let Some(socket_addr) = addresses.next().inspect(|socket_addr| debug!(?socket_addr)) {
+            return Ok(socket_addr);
+        }
+    }
+
+    Err(Error::UnknownHost(url.to_string()))
 }
 
 static GENERATE_PRODUCE_BATCH_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
@@ -228,7 +264,8 @@ pub async fn produce(
     };
 
     let origin = host_port(&broker)
-        .parse()
+        .await
+        .map(Into::into)
         .map(ApiClient::new)
         .inspect(|client| debug!(?client))?;
 
@@ -295,36 +332,12 @@ static PRODUCE_API_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
 
 impl Generate {
     pub async fn main(self) -> Result<ErrorCode> {
-        let meter_provider = self.configuration.otlp_endpoint_url.map_or(
-            Ok::<Option<SdkMeterProvider>, Error>(None),
-            |otlp_endpoint_url| {
-                let endpoint = otlp_endpoint_url
-                    .join("v1/metrics")
-                    .inspect(|endpoint| debug!(%endpoint))?;
-
-                let exporter = opentelemetry_otlp::MetricExporter::builder()
-                    .with_http()
-                    .with_protocol(Protocol::HttpBinary)
-                    .with_endpoint(endpoint.to_string())
-                    .build()?;
-
-                let meter_provider = opentelemetry_sdk::metrics::SdkMeterProvider::builder()
-                    .with_periodic_exporter(exporter)
-                    .with_resource(
-                        Resource::builder_empty()
-                            .with_attributes([KeyValue::new(
-                                "service.name",
-                                env!("CARGO_PKG_NAME"),
-                            )])
-                            .build(),
-                    )
-                    .build();
-
-                global::set_meter_provider(meter_provider.clone());
-
-                Ok(Some(meter_provider))
-            },
-        )?;
+        let meter_provider = self
+            .configuration
+            .otlp_endpoint_url
+            .map_or(Ok(None), |otlp_endpoint_url| {
+                meter_provider(otlp_endpoint_url, env!("CARGO_PKG_NAME")).map(Some)
+            })?;
 
         let Some(schema) = self.registry.schema(&self.configuration.topic).await? else {
             return Err(Error::SchemaNotFoundForTopic(

@@ -13,14 +13,17 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+use opentelemetry::{InstrumentationScope, global, metrics::Meter};
+use opentelemetry_semantic_conventions::SCHEMA_URL;
 use rama::{
     Layer,
-    error::BoxError,
+    error::{BoxError, OpaqueError},
     layer::{HijackLayer, MapResponseLayer},
     tcp::server::TcpListener,
 };
-use std::{fmt::Debug, ops::Deref, result};
+use std::{fmt::Debug, net::SocketAddr, ops::Deref, result, sync::LazyLock};
 use tansu_kafka_sans_io::{ErrorCode, metadata_response::MetadataResponseBroker};
+use tansu_otel::meter_provider;
 use tansu_service::{
     api::{
         ApiKey, ApiKeyVersionLayer,
@@ -30,7 +33,7 @@ use tansu_service::{
     },
     service::{ApiClient, ApiRequestLayer, ByteLayer, TcpStreamLayer},
 };
-use tokio::task::JoinSet;
+use tokio::{net::lookup_host, task::JoinSet};
 use tracing::debug;
 use url::Url;
 
@@ -40,14 +43,35 @@ mod batch;
 
 pub type Result<T, E = BoxError> = result::Result<T, E>;
 
+pub(crate) static METER: LazyLock<Meter> = LazyLock::new(|| {
+    global::meter_with_scope(
+        InstrumentationScope::builder(env!("CARGO_PKG_NAME"))
+            .with_version(env!("CARGO_PKG_VERSION"))
+            .with_schema_url(SCHEMA_URL)
+            .build(),
+    )
+});
+
 #[derive(Clone, Debug)]
 pub struct Proxy {
     listener: Url,
     origin: Url,
 }
 
-fn host_port(url: &Url) -> String {
-    format!("{}:{}", url.host_str().unwrap(), url.port().unwrap())
+async fn host_port(url: &Url) -> Result<SocketAddr> {
+    if let Some(host) = url.host_str()
+        && let Some(port) = url.port()
+    {
+        let mut addresses = lookup_host(format!("{host}:{port}"))
+            .await?
+            .filter(|socket_addr| matches!(socket_addr, SocketAddr::V4(_)));
+
+        if let Some(socket_addr) = addresses.next().inspect(|socket_addr| debug!(?socket_addr)) {
+            return Ok(socket_addr);
+        }
+    }
+
+    Err(OpaqueError::from_display(format!("unknown host: {url}")).into_boxed())
 }
 
 impl Proxy {
@@ -64,9 +88,12 @@ impl Proxy {
 
         let configuration = ResourceConfig::default();
 
-        let listener = TcpListener::bind(host_port(&self.listener)).await?;
+        let listener = TcpListener::bind(host_port(&self.listener).await?).await?;
 
-        let origin = host_port(&self.origin).parse().map(ApiClient::new)?;
+        let origin = host_port(&self.origin)
+            .await
+            .map(Into::into)
+            .map(ApiClient::new)?;
 
         let host = String::from(self.listener.host_str().unwrap_or("localhost"));
         let port = i32::from(self.listener.port().unwrap_or(9092));
@@ -115,8 +142,16 @@ impl Proxy {
         Ok(())
     }
 
-    pub async fn main(listener_url: Url, origin_url: Url) -> Result<ErrorCode> {
+    pub async fn main(
+        listener_url: Url,
+        origin_url: Url,
+        otlp_endpoint_url: Option<Url>,
+    ) -> Result<ErrorCode> {
         let mut set = JoinSet::new();
+
+        let meter_provider = otlp_endpoint_url.map_or(Ok(None), |otlp_endpoint_url| {
+            meter_provider(otlp_endpoint_url, env!("CARGO_PKG_NAME")).map(Some)
+        })?;
 
         {
             let proxy = Proxy::new(listener_url, origin_url);
@@ -127,6 +162,16 @@ impl Proxy {
             if set.join_next().await.is_none() {
                 break;
             }
+        }
+
+        if let Some(meter_provider) = meter_provider {
+            meter_provider
+                .force_flush()
+                .inspect(|force_flush| debug!(?force_flush))?;
+
+            meter_provider
+                .shutdown()
+                .inspect(|shutdown| debug!(?shutdown))?;
         }
 
         Ok(ErrorCode::None)

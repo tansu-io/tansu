@@ -6209,6 +6209,7 @@ dependencies = [
  "rama",
  "serde_json",
  "tansu-kafka-sans-io",
+ "tansu-otel",
  "tansu-schema-registry",
  "tansu-service",
  "thiserror 2.0.12",
@@ -6262,14 +6263,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "tansu-otel"
+version = "0.1.0"
+dependencies = [
+ "opentelemetry 0.30.0",
+ "opentelemetry-otlp",
+ "opentelemetry-semantic-conventions",
+ "opentelemetry_sdk 0.30.0",
+ "thiserror 2.0.12",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "tansu-proxy"
 version = "0.1.0"
 dependencies = [
  "async-trait",
  "bytes",
  "clap",
+ "opentelemetry 0.30.0",
+ "opentelemetry-otlp",
+ "opentelemetry-semantic-conventions",
+ "opentelemetry_sdk 0.30.0",
  "rama",
  "tansu-kafka-sans-io",
+ "tansu-otel",
  "tansu-service",
  "thiserror 2.0.12",
  "tokio",
