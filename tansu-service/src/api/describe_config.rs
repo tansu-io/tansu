@@ -334,13 +334,13 @@ impl ResourceConfigValue {
 #[derive(Clone, Debug, Default, PartialEq, PartialOrd)]
 struct LockError {
     resource_name: String,
-    key: String,
+    key: Option<String>,
     value: Option<ResourceConfigValue>,
 }
 
 impl Display for LockError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "resource: {}, key: {}", self.resource_name, self.key)
+        write!(f, "resource: {}, key: {:?}", self.resource_name, self.key)
     }
 }
 
@@ -352,6 +352,14 @@ pub struct ResourceConfig {
 }
 
 impl ResourceConfig {
+    pub fn has_resource(&self, resource_name: &str) -> bool {
+        self.configuration
+            .lock()
+            .map(|guard| guard.contains_key(resource_name))
+            .ok()
+            .unwrap_or_default()
+    }
+
     pub fn get(&self, resource_name: &str, key: &str) -> Option<ResourceConfigValue> {
         self.configuration
             .lock()
@@ -388,7 +396,7 @@ impl ResourceConfig {
             .map_err(|_| {
                 LockError {
                     resource_name,
-                    key,
+                    key: Some(key),
                     value: Some(value),
                 }
                 .into()
@@ -461,19 +469,28 @@ where
         req: ProduceRequest,
     ) -> Result<Self::Response, Self::Error> {
         debug!(?req);
-        let config_response = self
-            .outer
-            .serve(
-                ctx.clone(),
-                ApiRequest::from(DescribeConfigRequest::default().with_topics(req.topic_names())),
-            )
-            .await
-            .inspect_err(|err| debug!(?err))
-            .map_err(Into::into)
-            .and_then(|response| DescribeConfigResponse::try_from(response).map_err(Into::into))
-            .inspect(|response| debug!(?response))?;
 
-        self.add_topic_configuration(config_response)?;
+        if !req
+            .topic_names()
+            .iter()
+            .all(|topic| self.resource_config.has_resource(topic))
+        {
+            let config_response = self
+                .outer
+                .serve(
+                    ctx.clone(),
+                    ApiRequest::from(
+                        DescribeConfigRequest::default().with_topics(req.topic_names()),
+                    ),
+                )
+                .await
+                .inspect_err(|err| debug!(?err))
+                .map_err(Into::into)
+                .and_then(|response| DescribeConfigResponse::try_from(response).map_err(Into::into))
+                .inspect(|response| debug!(?response))?;
+
+            self.add_topic_configuration(config_response)?;
+        }
 
         self.inner.serve(ctx, req).await.map_err(Into::into)
     }
