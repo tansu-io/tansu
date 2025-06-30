@@ -209,7 +209,7 @@ impl Delta {
             .inspect_err(|err| debug!(?err))
         {
             Err(deltalake::DeltaTableError::VersionAlreadyExists(_)) => {
-                let mut table = DeltaTableBuilder::from_uri(&self.table_uri(name)).build()?;
+                let mut table = DeltaTableBuilder::from_uri(self.table_uri(name)).build()?;
                 table
                     .load()
                     .await
