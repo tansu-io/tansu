@@ -17,9 +17,9 @@ use crate::{EnvVarExp, Error, Result};
 
 use super::DEFAULT_BROKER;
 use clap::{Parser, Subcommand};
+use tansu_broker::{NODE_ID, broker::Broker, coordinator::group::administrator::Controller};
 use tansu_sans_io::ErrorCode;
 use tansu_schema::lake::{self};
-use tansu_server::{NODE_ID, broker::Broker, coordinator::group::administrator::Controller};
 use tansu_storage::StorageContainer;
 use tracing::debug;
 use url::Url;
@@ -125,7 +125,7 @@ impl Arg {
     }
 }
 
-impl TryFrom<Arg> for tansu_server::broker::Broker<Controller<StorageContainer>, StorageContainer> {
+impl TryFrom<Arg> for tansu_broker::broker::Broker<Controller<StorageContainer>, StorageContainer> {
     type Error = Error;
 
     fn try_from(args: Arg) -> Result<Self, Self::Error> {

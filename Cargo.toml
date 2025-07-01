@@ -9,7 +9,7 @@ members = [
     "tansu-otel",
     "tansu-proxy",
     "tansu-schema",
-    "tansu-server",
+    "tansu-broker",
     "tansu-service",
     "tansu-storage",
     "tansu-topic",

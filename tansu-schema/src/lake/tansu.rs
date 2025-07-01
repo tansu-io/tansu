@@ -14,9 +14,9 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use dotenv::dotenv;
+use tansu_broker::{TracingFormat, otel};
 use tansu_cli::{Cli, Result};
 use tansu_sans_io::ErrorCode;
-use tansu_server::{TracingFormat, otel};
 use tracing::{debug, error};
 
 #[tokio::main]

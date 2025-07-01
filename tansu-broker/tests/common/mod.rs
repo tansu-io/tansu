@@ -21,6 +21,10 @@ use rand::{
     prelude::*,
     rng,
 };
+use tansu_broker::{
+    Error, Result,
+    coordinator::group::{Coordinator, administrator::Controller},
+};
 use tansu_sans_io::{
     Body, ErrorCode,
     fetch_response::{FetchableTopicResponse, NodeEndpoint},
@@ -33,10 +37,6 @@ use tansu_sans_io::{
     sync_group_request::SyncGroupRequestAssignment,
 };
 use tansu_schema::Registry;
-use tansu_server::{
-    Error, Result,
-    coordinator::group::{Coordinator, administrator::Controller},
-};
 use tansu_storage::{
     BrokerRegistrationRequest, Storage, StorageContainer, dynostore::DynoStore, pg::Postgres,
 };

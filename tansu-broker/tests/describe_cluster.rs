@@ -14,8 +14,8 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use common::register_broker;
+use tansu_broker::{Result, broker::describe_cluster::DescribeClusterRequest};
 use tansu_sans_io::{Body, ErrorCode, describe_cluster_response::DescribeClusterBroker};
-use tansu_server::{Result, broker::describe_cluster::DescribeClusterRequest};
 use tansu_storage::StorageContainer;
 use tracing::debug;
 use url::Url;

@@ -18,13 +18,13 @@ use std::collections::BTreeMap;
 use bytes::Bytes;
 use common::{FetchResponse, StorageType, alphanumeric_string, init_tracing, register_broker};
 use rand::{prelude::*, rng};
+use tansu_broker::{Result, broker::fetch::FetchRequest};
 use tansu_sans_io::{
     ErrorCode, IsolationLevel, NULL_TOPIC_ID,
     create_topics_request::CreatableTopic,
     fetch_request::{FetchPartition, FetchTopic},
     record::{Record, inflated},
 };
-use tansu_server::{Result, broker::fetch::FetchRequest};
 use tansu_storage::{ListOffsetRequest, ListOffsetResponse, Storage, StorageContainer, Topition};
 use tracing::{debug, error};
 use url::Url;

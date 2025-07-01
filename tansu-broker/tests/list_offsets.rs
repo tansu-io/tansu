@@ -16,12 +16,12 @@
 use bytes::Bytes;
 use common::{StorageType, alphanumeric_string, init_tracing, register_broker};
 use rand::{prelude::*, rng};
+use tansu_broker::Result;
 use tansu_sans_io::{
     IsolationLevel,
     create_topics_request::CreatableTopic,
     record::{Record, inflated},
 };
-use tansu_server::Result;
 use tansu_storage::{ListOffsetRequest, Storage, StorageContainer, Topition};
 use tracing::debug;
 use url::Url;

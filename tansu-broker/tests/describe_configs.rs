@@ -15,6 +15,7 @@
 
 use common::{alphanumeric_string, register_broker};
 use rand::{prelude::*, rng};
+use tansu_broker::{Result, broker::describe_configs::DescribeConfigsRequest};
 use tansu_sans_io::{
     ConfigResource, ConfigSource, ErrorCode, OpType,
     create_topics_request::{CreatableTopic, CreatableTopicConfig},
@@ -22,7 +23,6 @@ use tansu_sans_io::{
     describe_configs_response::{DescribeConfigsResourceResult, DescribeConfigsResult},
     incremental_alter_configs_request::{AlterConfigsResource, AlterableConfig},
 };
-use tansu_server::{Result, broker::describe_configs::DescribeConfigsRequest};
 use tansu_storage::{Storage, StorageContainer};
 use tracing::debug;
 use uuid::Uuid;

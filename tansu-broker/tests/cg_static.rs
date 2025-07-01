@@ -16,8 +16,8 @@
 use bytes::Bytes;
 use common::{CLIENT_ID, COOPERATIVE_STICKY, PROTOCOL_TYPE, RANGE, StorageType, register_broker};
 use rand::{prelude::*, rng};
+use tansu_broker::{Result, coordinator::group::administrator::Controller};
 use tansu_sans_io::{ErrorCode, join_group_request::JoinGroupRequestProtocol};
-use tansu_server::{Result, coordinator::group::administrator::Controller};
 use tansu_storage::StorageContainer;
 use tracing::debug;
 use url::Url;

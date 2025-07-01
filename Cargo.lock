@@ -6153,6 +6153,43 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7b2093cf4c8eb1e67749a6762251bc9cd836b6fc171623bd0a9d324d37af2417"
 
 [[package]]
+name = "tansu-broker"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "clap",
+ "deadpool-postgres",
+ "futures",
+ "http-body-util",
+ "hyper 1.6.0",
+ "hyper-util",
+ "jsonschema",
+ "object_store",
+ "opentelemetry 0.30.0",
+ "opentelemetry-otlp",
+ "opentelemetry-semantic-conventions",
+ "opentelemetry_sdk 0.30.0",
+ "pretty_assertions",
+ "rand 0.9.1",
+ "regex",
+ "serde",
+ "serde_json",
+ "tansu-model",
+ "tansu-sans-io",
+ "tansu-schema",
+ "tansu-storage",
+ "thiserror 2.0.12",
+ "tokio",
+ "tokio-postgres",
+ "tracing",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "tansu-cat"
 version = "0.1.0"
 dependencies = [
@@ -6177,12 +6214,12 @@ dependencies = [
  "clap",
  "dotenv",
  "regex",
+ "tansu-broker",
  "tansu-cat",
  "tansu-generator",
  "tansu-proxy",
  "tansu-sans-io",
  "tansu-schema",
- "tansu-server",
  "tansu-storage",
  "tansu-topic",
  "thiserror 2.0.12",
@@ -6340,43 +6377,6 @@ dependencies = [
  "thiserror 2.0.12",
  "tokio",
  "tracing",
- "tracing-subscriber",
- "url",
- "uuid",
-]
-
-[[package]]
-name = "tansu-server"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "bytes",
- "clap",
- "deadpool-postgres",
- "futures",
- "http-body-util",
- "hyper 1.6.0",
- "hyper-util",
- "jsonschema",
- "object_store",
- "opentelemetry 0.30.0",
- "opentelemetry-otlp",
- "opentelemetry-semantic-conventions",
- "opentelemetry_sdk 0.30.0",
- "pretty_assertions",
- "rand 0.9.1",
- "regex",
- "serde",
- "serde_json",
- "tansu-model",
- "tansu-sans-io",
- "tansu-schema",
- "tansu-storage",
- "thiserror 2.0.12",
- "tokio",
- "tokio-postgres",
- "tracing",
- "tracing-opentelemetry",
  "tracing-subscriber",
  "url",
  "uuid",

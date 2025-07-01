@@ -149,7 +149,7 @@ This example uses JSON schema as it is simpler to use with the Apache Kafka comm
 
 The person schema can be found in the `etc/schema` directory of the Tansu GitHub
 repository. This directory is also used when starting Tansu using
-the `just tansu-server` recipe or Docker compose.
+the `just tansu-broker` recipe or Docker compose.
 
 Starting Tansu with schema validation enabled:
 
@@ -184,7 +184,7 @@ The server log contains the reason for the message being rejected:
 2024-12-19T11:51:28.407589Z DEBUG peer{addr=127.0.0.1:60095}:produce{api_key=0 api_version=11 correlation_id=5}: tansu_schema::json: 47: instance=Object {"age": Number(-1), "firstName": String("John"), "lastName": String("Doe")}
 2024-12-19T11:51:28.407626Z  WARN peer{addr=127.0.0.1:60095}:produce{api_key=0 api_version=11 correlation_id=5}: tansu_schema::json: 51: err=ValidationError { instance: Number(-1), kind: Minimum { limit: Number(0) }, instance_path: Location("/age"), schema_path: Location("/properties/age/minimum") }
 2024-12-19T11:51:28.407652Z  WARN peer{addr=127.0.0.1:60095}:produce{api_key=0 api_version=11 correlation_id=5}: tansu_schema::json: 57: err=Api(InvalidRecord)
-2024-12-19T11:51:28.407724Z  WARN peer{addr=127.0.0.1:60095}:produce{api_key=0 api_version=11 correlation_id=5}: tansu_server::broker::produce: 75: err=Storage(Api(InvalidRecord))
+2024-12-19T11:51:28.407724Z  WARN peer{addr=127.0.0.1:60095}:produce{api_key=0 api_version=11 correlation_id=5}: tansu_broker::broker::produce: 75: err=Storage(Api(InvalidRecord))
 ```
 
 [json-schema-org]: https://json-schema.org/

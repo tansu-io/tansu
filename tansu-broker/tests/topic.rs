@@ -14,11 +14,11 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use common::{alphanumeric_string, register_broker};
+use tansu_broker::Result;
 use tansu_sans_io::{
     ErrorCode, NULL_TOPIC_ID,
     create_topics_request::{CreatableTopic, CreatableTopicConfig},
 };
-use tansu_server::Result;
 use tansu_storage::{Storage, StorageContainer, TopicId};
 use tracing::debug;
 use uuid::Uuid;

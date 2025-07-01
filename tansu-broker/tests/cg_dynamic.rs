@@ -19,11 +19,11 @@ use common::{
     alphanumeric_string, heartbeat, join, join_group, register_broker, sync_group,
 };
 use rand::{prelude::*, rng};
+use tansu_broker::{Result, coordinator::group::administrator::Controller};
 use tansu_sans_io::{
     ErrorCode, join_group_request::JoinGroupRequestProtocol,
     sync_group_request::SyncGroupRequestAssignment,
 };
-use tansu_server::{Result, coordinator::group::administrator::Controller};
 use tansu_storage::StorageContainer;
 use tracing::debug;
 use url::Url;

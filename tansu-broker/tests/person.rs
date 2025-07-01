@@ -17,12 +17,12 @@ use bytes::Bytes;
 use common::register_broker;
 use rand::{prelude::*, rng};
 use serde_json::json;
+use tansu_broker::Result;
 use tansu_sans_io::{
     ErrorCode,
     create_topics_request::CreatableTopic,
     record::{Record, inflated::Batch},
 };
-use tansu_server::Result;
 use tansu_storage::{Error, Storage, StorageContainer, Topition};
 use tracing::{debug, error};
 use uuid::Uuid;
@@ -154,8 +154,8 @@ mod pg {
     use std::env;
 
     use common::{StorageType, init_tracing};
+    use tansu_broker::Error;
     use tansu_schema::Registry;
-    use tansu_server::Error;
     use url::Url;
 
     use super::*;
@@ -217,8 +217,8 @@ mod in_memory {
     use std::env;
 
     use common::{StorageType, init_tracing};
+    use tansu_broker::Error;
     use tansu_schema::Registry;
-    use tansu_server::Error;
     use url::Url;
 
     use super::*;

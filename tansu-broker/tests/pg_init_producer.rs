@@ -15,7 +15,7 @@
 
 use common::{StorageType, alphanumeric_string, init_tracing, register_broker, storage_container};
 use rand::{prelude::*, rng};
-use tansu_server::Result;
+use tansu_broker::Result;
 use tansu_storage::Storage;
 use tracing::debug;
 use url::Url;

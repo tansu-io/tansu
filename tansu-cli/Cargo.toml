@@ -14,7 +14,7 @@ tansu-generator = { path = "../tansu-generator" }
 tansu-sans-io = { path = "../tansu-sans-io" }
 tansu-proxy = { path = "../tansu-proxy" }
 tansu-schema = { path = "../tansu-schema" }
-tansu-server = { path = "../tansu-server" }
+tansu-broker = { path = "../tansu-broker" }
 tansu-storage = { path = "../tansu-storage" }
 tansu-topic = { path = "../tansu-topic" }
 thiserror.workspace = true

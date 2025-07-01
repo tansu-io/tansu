@@ -20,6 +20,7 @@ use common::{
     register_broker, storage_container, sync_group,
 };
 use rand::{prelude::*, rng};
+use tansu_broker::{Result, coordinator::group::administrator::Controller};
 use tansu_sans_io::{
     BatchAttribute, ErrorCode, IsolationLevel,
     add_partitions_to_txn_request::AddPartitionsToTxnTopic,
@@ -33,7 +34,6 @@ use tansu_sans_io::{
     txn_offset_commit_request::{TxnOffsetCommitRequestPartition, TxnOffsetCommitRequestTopic},
     txn_offset_commit_response::{TxnOffsetCommitResponsePartition, TxnOffsetCommitResponseTopic},
 };
-use tansu_server::{Result, coordinator::group::administrator::Controller};
 use tansu_storage::{
     ListOffsetRequest, Storage, Topition, TxnAddPartitionsRequest, TxnOffsetCommitRequest,
 };

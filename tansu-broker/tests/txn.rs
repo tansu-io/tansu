@@ -18,6 +18,7 @@ use std::collections::BTreeMap;
 use bytes::Bytes;
 use common::{StorageType, alphanumeric_string, init_tracing, register_broker};
 use rand::{prelude::*, rng};
+use tansu_broker::Result;
 use tansu_sans_io::{
     BatchAttribute, ControlBatch, EndTransactionMarker, ErrorCode, IsolationLevel,
     add_partitions_to_txn_request::AddPartitionsToTxnTopic,
@@ -28,7 +29,6 @@ use tansu_sans_io::{
     record::{Record, inflated},
     txn_offset_commit_request::{TxnOffsetCommitRequestPartition, TxnOffsetCommitRequestTopic},
 };
-use tansu_server::Result;
 use tansu_storage::{
     ListOffsetRequest, Storage, StorageContainer, TopicId, Topition, TxnAddPartitionsRequest,
     TxnOffsetCommitRequest,

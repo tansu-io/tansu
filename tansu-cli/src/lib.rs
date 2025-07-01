@@ -28,7 +28,7 @@ pub enum Error {
     Generate(#[from] tansu_generator::Error),
     Regex(#[from] regex::Error),
     Schema(Box<tansu_schema::Error>),
-    Server(Box<tansu_server::Error>),
+    Server(Box<tansu_broker::Error>),
     Topic(#[from] tansu_topic::Error),
     Url(#[from] url::ParseError),
 }
@@ -45,8 +45,8 @@ impl From<tansu_schema::Error> for Error {
     }
 }
 
-impl From<tansu_server::Error> for Error {
-    fn from(value: tansu_server::Error) -> Self {
+impl From<tansu_broker::Error> for Error {
+    fn from(value: tansu_broker::Error) -> Self {
         Self::Server(Box::new(value))
     }
 }
