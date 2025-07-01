@@ -15,8 +15,8 @@
 
 use common::init_tracing;
 use std::collections::BTreeMap;
-use tansu_kafka_model::MessageKind;
 use tansu_kafka_sans_io::MESSAGE_META;
+use tansu_model::MessageKind;
 
 pub mod common;
 

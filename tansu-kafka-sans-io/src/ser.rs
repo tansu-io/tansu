@@ -27,7 +27,7 @@ use serde::{
         SerializeTupleStruct, SerializeTupleVariant,
     },
 };
-use tansu_kafka_model::{FieldMeta, MessageMeta};
+use tansu_model::{FieldMeta, MessageMeta};
 use tracing::debug;
 
 use crate::{Error, Result, RootMessageMeta};

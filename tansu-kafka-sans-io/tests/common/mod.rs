@@ -30,7 +30,7 @@ pub(crate) fn init_tracing() -> Result<DefaultGuard> {
             .with_target(true)
             .with_env_filter(
                 EnvFilter::from_default_env()
-                    .add_directive("tansu_kafka_model=debug".parse()?)
+                    .add_directive("tansu_model=debug".parse()?)
                     .add_directive(
                         format!("{}=debug", env!("CARGO_PKG_NAME").replace("-", "_")).parse()?,
                     ),

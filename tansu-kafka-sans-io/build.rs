@@ -26,7 +26,7 @@ use std::{
     path::Path,
 };
 use syn::{Expr, Type};
-use tansu_kafka_model::{CommonStruct, Field, Listener, Message, wv::Wv};
+use tansu_model::{CommonStruct, Field, Listener, Message, wv::Wv};
 
 #[derive(Debug)]
 #[allow(dead_code)]
@@ -38,7 +38,7 @@ enum Error {
     Glob(glob::GlobError),
     Io(io::Error),
     Json(serde_json::Error),
-    KafkaModel(tansu_kafka_model::Error),
+    KafkaModel(tansu_model::Error),
     Pattern(glob::PatternError),
     Syn(syn::Error),
 }
@@ -79,8 +79,8 @@ impl From<serde_json::Error> for Error {
     }
 }
 
-impl From<tansu_kafka_model::Error> for Error {
-    fn from(value: tansu_kafka_model::Error) -> Self {
+impl From<tansu_model::Error> for Error {
+    fn from(value: tansu_model::Error) -> Self {
         Error::KafkaModel(value)
     }
 }
@@ -1170,10 +1170,10 @@ fn each_field_meta(
 
     quote! {
         (#name,
-        &tansu_kafka_model::FieldMeta {
+        &tansu_model::FieldMeta {
             version: #version,
             nullable: #nullable,
-            kind: tansu_kafka_model::KindMeta(#kind),
+            kind: tansu_model::KindMeta(#kind),
             tag: #tag,
             tagged: #tagged,
             fields: &[#(#children),*],
@@ -1200,7 +1200,7 @@ fn each_message_meta(message: &Message) -> TokenStream {
 
     quote! {
         (#name,
-        &tansu_kafka_model::MessageMeta {
+        &tansu_model::MessageMeta {
             name: #name,
             api_key: #api_key,
             version: #version,
@@ -1216,7 +1216,7 @@ fn message_meta(messages: &[Message]) -> TokenStream {
     let meta = messages.iter().map(each_message_meta);
 
     quote! {
-        pub static MESSAGE_META : [(&str, &tansu_kafka_model::MessageMeta); #len] = [#(#meta, )*];
+        pub static MESSAGE_META : [(&str, &tansu_model::MessageMeta); #len] = [#(#meta, )*];
     }
 }
 

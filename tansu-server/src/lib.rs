@@ -82,7 +82,7 @@ pub enum Error {
     Json(#[from] serde_json::Error),
     KafkaProtocol(#[from] tansu_kafka_sans_io::Error),
     Message(String),
-    Model(#[from] tansu_kafka_model::Error),
+    Model(#[from] tansu_model::Error),
     ObjectStore(#[from] object_store::Error),
     ParseFilter(#[from] ParseError),
     ParseInt(#[from] std::num::ParseIntError),

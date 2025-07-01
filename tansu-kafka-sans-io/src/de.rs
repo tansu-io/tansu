@@ -25,7 +25,7 @@ use std::{
     io::{self, Read},
     str::from_utf8,
 };
-use tansu_kafka_model::{FieldMeta, MessageMeta};
+use tansu_model::{FieldMeta, MessageMeta};
 use tracing::{debug, warn};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]

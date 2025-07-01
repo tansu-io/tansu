@@ -1,5 +1,5 @@
 [package]
-name = "tansu-kafka-model"
+name = "tansu-model"
 edition.workspace = true
 version.workspace = true
 license.workspace = true

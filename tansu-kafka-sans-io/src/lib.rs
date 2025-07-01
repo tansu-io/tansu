@@ -36,7 +36,7 @@ use std::{
     sync::OnceLock,
     time::{Duration, SystemTime, SystemTimeError},
 };
-use tansu_kafka_model::{MessageKind, MessageMeta};
+use tansu_model::{MessageKind, MessageMeta};
 use tracing::{debug, error, warn};
 use tracing_subscriber::filter::ParseError;
 
@@ -108,7 +108,7 @@ pub enum Error {
     StringWithoutApiVersion,
     StringWithoutLength,
     SystemTime(SystemTimeError),
-    TansuKafkaModel(tansu_kafka_model::Error),
+    TansuModel(tansu_model::Error),
     TryFromInt(#[from] num::TryFromIntError),
     UnexpectedTaggedHeader(HeaderMezzanine),
     UnknownApiErrorCode(i16),
@@ -157,9 +157,9 @@ impl From<string::FromUtf8Error> for Error {
     }
 }
 
-impl From<tansu_kafka_model::Error> for Error {
-    fn from(value: tansu_kafka_model::Error) -> Self {
-        Self::TansuKafkaModel(value)
+impl From<tansu_model::Error> for Error {
+    fn from(value: tansu_model::Error) -> Self {
+        Self::TansuModel(value)
     }
 }
 
