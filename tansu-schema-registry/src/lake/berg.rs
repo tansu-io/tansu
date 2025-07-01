@@ -20,7 +20,10 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use crate::{Error, Result, lake::LakeHouse};
+use crate::{
+    Error, Result,
+    lake::{LakeHouse, LakeHouseType},
+};
 use arrow::array::RecordBatch;
 use async_trait::async_trait;
 use iceberg::{
@@ -307,6 +310,10 @@ impl LakeHouse for Iceberg {
 
     async fn maintain(&self) -> Result<()> {
         Ok(())
+    }
+
+    async fn lake_type(&self) -> Result<LakeHouseType> {
+        Ok(LakeHouseType::Iceberg)
     }
 }
 

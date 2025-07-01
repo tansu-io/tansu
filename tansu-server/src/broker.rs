@@ -61,6 +61,7 @@ use std::{
     marker::PhantomData,
     net::{IpAddr, Ipv6Addr, SocketAddr},
     str::FromStr,
+    sync::LazyLock,
     time::{Duration, SystemTime},
 };
 use tansu_kafka_sans_io::{
@@ -95,7 +96,6 @@ pub struct Broker<G, S> {
     advertised_listener: Url,
     storage: S,
     groups: G,
-    metron: Metron,
 
     #[allow(dead_code)]
     otlp_endpoint_url: Option<Url>,
@@ -124,7 +124,6 @@ where
             advertised_listener,
             storage,
             groups,
-            metron: Metron::new(cluster_id, incarnation_id),
             otlp_endpoint_url: None,
         }
     }
@@ -349,9 +348,7 @@ where
 
             let attributes = [KeyValue::new("cluster_id", self.cluster_id.clone())];
 
-            self.metron
-                .request_size
-                .record(request.len() as u64, &attributes);
+            REQUEST_SIZE.record(request.len() as u64, &attributes);
 
             let response = self
                 .process_request(peer, &request)
@@ -359,10 +356,8 @@ where
                 .inspect_err(|error| error!(?request, ?error))?;
             debug!(?response);
 
-            self.metron
-                .response_size
-                .record(response.len() as u64, &attributes);
-            self.metron.request_duration.record(
+            RESPONSE_SIZE.record(response.len() as u64, &attributes);
+            REQUEST_DURATION.record(
                 request_start
                     .elapsed()
                     .map_or(0, |duration| duration.as_millis() as u64),
@@ -395,7 +390,7 @@ where
                 {
                     let mut attributes = attributes(api_key, api_version, correlation_id, &body);
                     attributes.push(KeyValue::new("cluster_id", self.cluster_id.clone()));
-                    self.metron.api_requests.add(1, &attributes);
+                    API_REQUESTS.add(1, &attributes);
                 }
 
                 async move {
@@ -1231,39 +1226,36 @@ fn request_span(api_key: i16, api_version: i16, correlation_id: i32, body: &Body
     }
 }
 
-#[derive(Debug, Clone)]
-struct Metron {
-    api_requests: Counter<u64>,
-    request_size: Histogram<u64>,
-    response_size: Histogram<u64>,
-    request_duration: Histogram<u64>,
-}
+static API_REQUESTS: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    METER
+        .u64_counter("tansu_api_requests")
+        .with_description("The number of API requests made")
+        .build()
+});
 
-impl Metron {
-    fn new(_namespace: &str, _instance_id: Uuid) -> Self {
-        Self {
-            api_requests: METER
-                .u64_counter("tansu_api_requests")
-                .with_description("The number of API requests made")
-                .build(),
-            request_size: METER
-                .u64_histogram("tansu_request_size")
-                .with_unit("By")
-                .with_description("The API request size in bytes")
-                .build(),
-            response_size: METER
-                .u64_histogram("tansu_response_size")
-                .with_unit("By")
-                .with_description("The API response size in bytes")
-                .build(),
-            request_duration: METER
-                .u64_histogram("tansu_request_duration")
-                .with_unit("ms")
-                .with_description("The API request latencies in milliseconds")
-                .build(),
-        }
-    }
-}
+static REQUEST_SIZE: LazyLock<Histogram<u64>> = LazyLock::new(|| {
+    METER
+        .u64_histogram("tansu_request_size")
+        .with_unit("By")
+        .with_description("The API request size in bytes")
+        .build()
+});
+
+static RESPONSE_SIZE: LazyLock<Histogram<u64>> = LazyLock::new(|| {
+    METER
+        .u64_histogram("tansu_response_size")
+        .with_unit("By")
+        .with_description("The API response size in bytes")
+        .build()
+});
+
+static REQUEST_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
+    METER
+        .u64_histogram("tansu_request_duration")
+        .with_unit("ms")
+        .with_description("The API request latencies in milliseconds")
+        .build()
+});
 
 #[derive(Clone, Default)]
 pub struct Builder<N, C, I, A, S, L> {
@@ -1477,13 +1469,16 @@ impl Builder<i32, String, Uuid, Url, Url, Url> {
     }
 
     pub fn build(self) -> Result<Broker<Controller<StorageContainer>, StorageContainer>> {
-        if let Some(otlp_endpoint_url) = self.otlp_endpoint_url.clone() {
+        if let Some(otlp_endpoint_url) = self
+            .otlp_endpoint_url
+            .clone()
+            .inspect(|otlp_endpoint_url| debug!(%otlp_endpoint_url))
+        {
             otel::metric_exporter(otlp_endpoint_url)?;
         }
 
         let storage = self.storage_engine()?;
         let groups = Controller::with_storage(storage.clone())?;
-        let metron = Metron::new(self.cluster_id.as_str(), self.incarnation_id);
 
         Ok(Broker {
             node_id: self.node_id,
@@ -1493,7 +1488,6 @@ impl Builder<i32, String, Uuid, Url, Url, Url> {
             advertised_listener: self.advertised_listener,
             storage,
             groups,
-            metron,
             otlp_endpoint_url: self.otlp_endpoint_url,
         })
     }

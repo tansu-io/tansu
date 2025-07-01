@@ -14,64 +14,28 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use crate::{Result, TracingFormat};
-use opentelemetry::KeyValue;
-use opentelemetry_otlp::SpanExporter;
-use opentelemetry_sdk::{
-    Resource,
-    trace::{RandomIdGenerator, Sampler, SdkTracerProvider},
-};
-use opentelemetry_semantic_conventions::{
-    SCHEMA_URL,
-    resource::{SERVICE_NAME, SERVICE_VERSION},
-};
+use opentelemetry_sdk::trace::SdkTracerProvider;
 use tracing_subscriber::{
     EnvFilter, fmt::format::FmtSpan, layer::SubscriberExt, util::SubscriberInitExt,
 };
 
-fn resource() -> Resource {
-    Resource::builder()
-        .with_schema_url(
-            [
-                KeyValue::new(SERVICE_NAME, env!("CARGO_PKG_NAME")),
-                KeyValue::new(SERVICE_VERSION, env!("CARGO_PKG_VERSION")),
-            ],
-            SCHEMA_URL,
-        )
-        .build()
-}
-
-fn init_tracer_provider() -> Result<SdkTracerProvider> {
-    SpanExporter::builder()
-        .with_tonic()
-        .build()
-        .map_err(Into::into)
-        .map(|exporter| {
-            SdkTracerProvider::builder()
-                .with_sampler(Sampler::ParentBased(Box::new(Sampler::TraceIdRatioBased(
-                    1.0,
-                ))))
-                .with_resource(resource())
-                .with_batch_exporter(exporter)
-                .with_id_generator(RandomIdGenerator::default())
-                .build()
-        })
-}
-
 #[derive(Debug)]
 pub struct Guard {
-    tracer: SdkTracerProvider,
+    tracer: Option<SdkTracerProvider>,
 }
 
 impl Drop for Guard {
     fn drop(&mut self) {
-        if let Err(err) = self.tracer.shutdown() {
-            eprintln!("{err:?}")
+        if let Some(tracer) = self.tracer.as_ref() {
+            if let Err(err) = tracer.shutdown() {
+                eprintln!("{err:?}")
+            }
         }
     }
 }
 
 pub fn init_tracing_subscriber(tracing_format: TracingFormat) -> Result<Guard> {
-    let provider = init_tracer_provider()?;
+    // let provider = init_tracer_provider()?;
 
     // let tracer = provider.tracer(format!("{}-otel-subscriber", env!("CARGO_PKG_NAME")));
 
@@ -95,5 +59,5 @@ pub fn init_tracing_subscriber(tracing_format: TracingFormat) -> Result<Guard> {
             .init(),
     }
 
-    Ok(Guard { tracer: provider })
+    Ok(Guard { tracer: None })
 }

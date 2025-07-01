@@ -735,7 +735,8 @@ impl Storage for DynoStore {
 
         let config = self
             .describe_config(topition.topic(), ConfigResource::Topic, None)
-            .await?;
+            .await
+            .inspect_err(|err| debug!(?err))?;
 
         if self.lake.is_some()
             && config
@@ -775,8 +776,10 @@ impl Storage for DynoStore {
                         .inspect_err(|err| debug!(?err))?;
 
                     if let Some(ref lake) = self.lake {
+                        let lake_type = lake.lake_type().await?;
+
                         if let Some(record_batch) = registry
-                            .as_arrow(topition.topic(), topition.partition(), &inflated)
+                            .as_arrow(topition.topic(), topition.partition(), &inflated, lake_type)
                             .inspect(|record_batch| debug!(?record_batch))
                             .inspect_err(|err| debug!(?err))?
                         {
@@ -850,12 +853,17 @@ impl Storage for DynoStore {
             }
 
             if let Some(ref registry) = self.schemas {
-                let batch_attribute = BatchAttribute::try_from(deflated.attributes)?;
+                let batch_attribute = BatchAttribute::try_from(deflated.attributes)
+                    .inspect_err(|err| debug!(?err))?;
 
                 if !batch_attribute.control {
-                    let inflated = inflated::Batch::try_from(&deflated)?;
+                    let inflated =
+                        inflated::Batch::try_from(&deflated).inspect_err(|err| debug!(?err))?;
 
-                    registry.validate(topition.topic(), &inflated).await?;
+                    registry
+                        .validate(topition.topic(), &inflated)
+                        .await
+                        .inspect_err(|err| debug!(?err))?;
                 }
             }
 
@@ -886,14 +894,20 @@ impl Storage for DynoStore {
                 .inspect_err(|err| error!(?err, transaction_id, ?topition))?;
 
             if let Some(ref registry) = self.schemas {
-                let batch_attribute = BatchAttribute::try_from(deflated.attributes)?;
+                let batch_attribute = BatchAttribute::try_from(deflated.attributes)
+                    .inspect_err(|err| debug!(?err))?;
 
                 if !batch_attribute.control {
                     if let Some(ref lake) = self.lake {
-                        let inflated = inflated::Batch::try_from(&deflated)?;
-                        if let Some(record_batch) =
-                            registry.as_arrow(topition.topic(), topition.partition(), &inflated)?
-                        {
+                        let lake_type = lake.lake_type().await.inspect_err(|err| debug!(?err))?;
+                        let inflated =
+                            inflated::Batch::try_from(&deflated).inspect_err(|err| debug!(?err))?;
+                        if let Some(record_batch) = registry.as_arrow(
+                            topition.topic(),
+                            topition.partition(),
+                            &inflated,
+                            lake_type,
+                        )? {
                             lake.store(
                                 topition.topic(),
                                 topition.partition(),
@@ -901,13 +915,15 @@ impl Storage for DynoStore {
                                 record_batch,
                                 config,
                             )
-                            .await?;
+                            .await
+                            .inspect_err(|err| debug!(?err))?;
                         }
                     }
                 }
             }
 
-            let attributes = BatchAttribute::try_from(deflated.attributes)?;
+            let attributes =
+                BatchAttribute::try_from(deflated.attributes).inspect_err(|err| debug!(?err))?;
 
             if let Some(transaction_id) = transaction_id {
                 if attributes.transaction {
@@ -958,7 +974,7 @@ impl Storage for DynoStore {
                 self.cluster, topition.topic, topition.partition, offset,
             ));
 
-            let payload = self.encode(deflated)?;
+            let payload = self.encode(deflated).inspect_err(|err| debug!(?err))?;
 
             _ = self
                 .object_store

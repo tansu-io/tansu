@@ -22,6 +22,7 @@ use tracing::debug;
 
 mod broker;
 mod cat;
+mod generator;
 mod proxy;
 mod topic;
 
@@ -39,25 +40,26 @@ pub struct Cli {
 
 #[derive(Clone, Debug, Subcommand)]
 enum Command {
-    #[command(
-        about = "Apache Kafka compatible broker with Avro, JSON, Protobuf schema validation [default if no command supplied]"
-    )]
+    /// Apache Kafka compatible broker with Avro, JSON, Protobuf schema validation [default if no command supplied]
     Broker(Box<broker::Arg>),
 
-    #[command(about = "Easily consume or produce Avro, JSON or Protobuf messages to a topic")]
+    /// Easily consume or produce Avro, JSON or Protobuf messages to a topic
     Cat {
         #[command(subcommand)]
         command: cat::Command,
     },
 
-    #[command(about = "Create or delete topics managed by the broker")]
+    /// Traffic Generator for schema backed topics
+    Generator(Box<generator::Arg>),
+
+    /// Apache Kafka compatible proxy
+    Proxy(Box<proxy::Arg>),
+
+    /// Create or delete topics managed by the broker
     Topic {
         #[command(subcommand)]
         command: topic::Command,
     },
-
-    #[command(about = "Apache Kafka compatible proxy")]
-    Proxy(Box<proxy::Arg>),
 }
 
 impl Cli {
@@ -75,11 +77,20 @@ impl Cli {
 
             Command::Cat { command } => command.main().await,
 
-            Command::Proxy(arg) => {
-                tansu_proxy::Proxy::main(arg.listener_url.into_inner(), arg.origin_url.into_inner())
-                    .await
-                    .map_err(Into::into)
-            }
+            Command::Generator(arg) => arg
+                .main()
+                .await
+                .inspect(|result| debug!(?result))
+                .inspect_err(|err| debug!(?err)),
+
+            Command::Proxy(arg) => tansu_proxy::Proxy::main(
+                arg.listener_url.into_inner(),
+                arg.origin_url.into_inner(),
+                arg.otlp_endpoint_url
+                    .map(|otlp_endpoint_url| otlp_endpoint_url.into_inner()),
+            )
+            .await
+            .map_err(Into::into),
 
             Command::Topic { command } => command.main().await,
         }

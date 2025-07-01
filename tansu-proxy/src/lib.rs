@@ -13,41 +13,44 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::{
-    fmt,
-    io::{self, ErrorKind},
-    result,
-    sync::Arc,
+use opentelemetry::{InstrumentationScope, global, metrics::Meter};
+use opentelemetry_semantic_conventions::SCHEMA_URL;
+use rama::{
+    Layer,
+    error::{BoxError, OpaqueError},
+    layer::{HijackLayer, MapResponseLayer},
+    tcp::server::TcpListener,
 };
-use tansu_kafka_sans_io::{ErrorCode, Frame, Header};
-use thiserror::Error;
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::{TcpListener, TcpStream},
-    task::JoinSet,
+use std::{fmt::Debug, net::SocketAddr, ops::Deref, result, sync::LazyLock};
+use tansu_kafka_sans_io::{ErrorCode, metadata_response::MetadataResponseBroker};
+use tansu_otel::meter_provider;
+use tansu_service::{
+    api::{
+        ApiKey, ApiKeyVersionLayer,
+        describe_config::{ResourceConfig, ResourceConfigValueMatcher, TopicConfigLayer},
+        metadata::{MetadataIntoApiLayer, MetadataLayer, MetadataResponse},
+        produce::{self, ProduceIntoApiLayer, ProduceLayer},
+    },
+    service::{ApiClient, ApiRequestLayer, ByteLayer, TcpStreamLayer},
 };
-use tracing::{Instrument, Level, debug, error, info, span};
+use tokio::{net::lookup_host, task::JoinSet};
+use tracing::debug;
 use url::Url;
 
-pub type Result<T, E = Error> = result::Result<T, E>;
+use crate::batch::BatchProduceLayer;
 
-#[derive(Error, Debug)]
-pub enum Error {
-    Io(Arc<io::Error>),
-    Protocol(#[from] tansu_kafka_sans_io::Error),
-}
+mod batch;
 
-impl From<io::Error> for Error {
-    fn from(value: io::Error) -> Self {
-        Self::Io(Arc::new(value))
-    }
-}
+pub type Result<T, E = BoxError> = result::Result<T, E>;
 
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{self:?}")
-    }
-}
+pub(crate) static METER: LazyLock<Meter> = LazyLock::new(|| {
+    global::meter_with_scope(
+        InstrumentationScope::builder(env!("CARGO_PKG_NAME"))
+            .with_version(env!("CARGO_PKG_VERSION"))
+            .with_schema_url(SCHEMA_URL)
+            .build(),
+    )
+});
 
 #[derive(Clone, Debug)]
 pub struct Proxy {
@@ -55,7 +58,27 @@ pub struct Proxy {
     origin: Url,
 }
 
+async fn host_port(url: &Url) -> Result<SocketAddr> {
+    if let Some(host) = url.host_str()
+        && let Some(port) = url.port()
+    {
+        let mut addresses = lookup_host(format!("{host}:{port}"))
+            .await?
+            .filter(|socket_addr| matches!(socket_addr, SocketAddr::V4(_)));
+
+        if let Some(socket_addr) = addresses.next().inspect(|socket_addr| debug!(?socket_addr)) {
+            return Ok(socket_addr);
+        }
+    }
+
+    Err(OpaqueError::from_display(format!("unknown host: {url}")).into_boxed())
+}
+
 impl Proxy {
+    const METADATA_API_KEY: ApiKey = ApiKey(3);
+
+    const NODE_ID: i32 = 111;
+
     pub fn new(listener: Url, origin: Url) -> Self {
         Self { listener, origin }
     }
@@ -63,44 +86,72 @@ impl Proxy {
     pub async fn listen(&self) -> Result<()> {
         debug!(%self.listener);
 
-        let listener = TcpListener::bind(format!(
-            "{}:{}",
-            self.listener.host_str().unwrap(),
-            self.listener.port().unwrap()
-        ))
-        .await?;
+        let configuration = ResourceConfig::default();
 
-        loop {
-            let (stream, addr) = listener.accept().await?;
+        let listener = TcpListener::bind(host_port(&self.listener).await?).await?;
 
-            let mut connection = Connection::open(&self.origin, stream).await?;
+        let origin = host_port(&self.origin)
+            .await
+            .map(Into::into)
+            .map(ApiClient::new)?;
 
-            _ = tokio::spawn(async move {
-                let span = span!(Level::DEBUG, "peer", addr = %addr);
+        let host = String::from(self.listener.host_str().unwrap_or("localhost"));
+        let port = i32::from(self.listener.port().unwrap_or(9092));
 
-                async move {
-                    match connection.stream_handler().await {
-                        Err(ref error @ Error::Io(ref io))
-                            if io.kind() == ErrorKind::UnexpectedEof =>
-                        {
-                            info!(?error);
-                        }
+        let meta = HijackLayer::new(
+            Self::METADATA_API_KEY,
+            (
+                MetadataLayer,
+                MapResponseLayer::new(move |response: MetadataResponse| MetadataResponse {
+                    brokers: Some(vec![MetadataResponseBroker {
+                        node_id: Self::NODE_ID,
+                        host,
+                        port,
+                        rack: None,
+                    }]),
+                    ..response
+                }),
+                MetadataIntoApiLayer,
+            )
+                .into_layer(origin.clone()),
+        );
 
-                        Err(error) => {
-                            error!(?error);
-                        }
+        let produce = HijackLayer::new(
+            produce::API_KEY_VERSION.deref().0,
+            (
+                ApiKeyVersionLayer,
+                ProduceLayer,
+                TopicConfigLayer::new(configuration.clone(), origin.clone()),
+                HijackLayer::new(
+                    ResourceConfigValueMatcher::new(configuration.clone(), "tansu.batch", "true"),
+                    (
+                        BatchProduceLayer::new(configuration.clone()),
+                        ProduceIntoApiLayer,
+                    )
+                        .into_layer(origin.clone()),
+                ),
+                ProduceIntoApiLayer,
+            )
+                .into_layer(origin.clone()),
+        );
 
-                        Ok(_) => {}
-                    }
-                }
-                .instrument(span)
-                .await
-            });
-        }
+        let stack = (TcpStreamLayer, ByteLayer, ApiRequestLayer, meta, produce).into_layer(origin);
+
+        listener.serve(stack).await;
+
+        Ok(())
     }
 
-    pub async fn main(listener_url: Url, origin_url: Url) -> Result<ErrorCode> {
+    pub async fn main(
+        listener_url: Url,
+        origin_url: Url,
+        otlp_endpoint_url: Option<Url>,
+    ) -> Result<ErrorCode> {
         let mut set = JoinSet::new();
+
+        let meter_provider = otlp_endpoint_url.map_or(Ok(None), |otlp_endpoint_url| {
+            meter_provider(otlp_endpoint_url, env!("CARGO_PKG_NAME")).map(Some)
+        })?;
 
         {
             let proxy = Proxy::new(listener_url, origin_url);
@@ -113,81 +164,16 @@ impl Proxy {
             }
         }
 
-        Ok(ErrorCode::None)
-    }
-}
+        if let Some(meter_provider) = meter_provider {
+            meter_provider
+                .force_flush()
+                .inspect(|force_flush| debug!(?force_flush))?;
 
-struct Connection {
-    proxy: TcpStream,
-    origin: TcpStream,
-}
-
-impl Connection {
-    async fn open(origin: &Url, proxy: TcpStream) -> Result<Self> {
-        debug!(%origin, ?proxy);
-
-        TcpStream::connect(format!(
-            "{}:{}",
-            origin.host_str().unwrap(),
-            origin.port().unwrap()
-        ))
-        .await
-        .map(|origin| Self { proxy, origin })
-        .map_err(Into::into)
-    }
-
-    fn frame_length(encoded: [u8; 4]) -> usize {
-        i32::from_be_bytes(encoded) as usize + encoded.len()
-    }
-
-    async fn stream_handler(&mut self) -> Result<()> {
-        let mut size = [0u8; 4];
-
-        loop {
-            _ = self.proxy.read_exact(&mut size).await?;
-
-            let mut request_buffer: Vec<u8> = vec![0u8; Self::frame_length(size)];
-            request_buffer[0..size.len()].copy_from_slice(&size[..]);
-            _ = self.proxy.read_exact(&mut request_buffer[4..]).await?;
-
-            debug!(?request_buffer);
-
-            let Ok(
-                request @ Frame {
-                    header:
-                        Header::Request {
-                            api_key,
-                            api_version,
-                            ..
-                        },
-                    ..
-                },
-            ) = Frame::request_from_bytes(&request_buffer)
-            else {
-                continue;
-            };
-
-            debug!(?request);
-            debug!(body = ?request.body);
-
-            self.origin.write_all(&request_buffer).await?;
-
-            _ = self.origin.read_exact(&mut size).await?;
-
-            let mut response_buffer: Vec<u8> = vec![0u8; Self::frame_length(size)];
-            response_buffer[0..size.len()].copy_from_slice(&size[..]);
-            _ = self
-                .origin
-                .read_exact(&mut response_buffer[size.len()..])
-                .await?;
-
-            let response = Frame::response_from_bytes(&response_buffer, api_key, api_version)?;
-            debug!(?response);
-            debug!(body = ?response.body);
-
-            debug!(?response_buffer);
-
-            self.proxy.write_all(&response_buffer).await?;
+            meter_provider
+                .shutdown()
+                .inspect(|shutdown| debug!(?shutdown))?;
         }
+
+        Ok(ErrorCode::None)
     }
 }

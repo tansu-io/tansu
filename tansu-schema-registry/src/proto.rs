@@ -13,9 +13,17 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::{collections::BTreeMap, io::Write, ops::Deref, sync::LazyLock};
+use std::{
+    collections::BTreeMap,
+    io::Write,
+    ops::{Deref, RangeInclusive},
+    sync::LazyLock,
+};
 
-use crate::{ARROW_LIST_FIELD_NAME, AsArrow, AsJsonValue, AsKafkaRecord, Error, Result, Validator};
+use crate::{
+    ARROW_LIST_FIELD_NAME, AsArrow, AsJsonValue, AsKafkaRecord, Error, Generator, Result,
+    Validator, lake::LakeHouseType,
+};
 use arrow::{
     array::{
         ArrayBuilder, BooleanBuilder, Float32Builder, Float64Builder, Int32Builder, Int64Builder,
@@ -27,16 +35,21 @@ use arrow::{
 };
 use bytes::{BufMut, Bytes, BytesMut};
 use chrono::{DateTime, Datelike};
+use fake::Fake;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use protobuf::{
-    CodedInputStream, MessageDyn, descriptor,
+    CodedInputStream, MessageDyn, UnknownValueRef,
+    descriptor::{self, FieldDescriptorProto},
     reflect::{
-        FieldDescriptor, FileDescriptor, MessageDescriptor, ReflectValueRef, RuntimeFieldType,
-        RuntimeType,
+        EnumDescriptor, FieldDescriptor, FileDescriptor, MessageDescriptor, ReflectValueBox,
+        ReflectValueRef, RuntimeFieldType, RuntimeType,
     },
     well_known_types,
 };
 use protobuf_json_mapping::{parse_dyn_from_str, print_to_string};
+use rand::prelude::*;
+use rhai::{Engine, packages::Package};
+use rhai_rand::RandomPackage;
 use serde_json::{Map, Value, json};
 use tansu_kafka_sans_io::{ErrorCode, record::inflated::Batch};
 use tempfile::{NamedTempFile, tempdir};
@@ -81,35 +94,55 @@ struct RecordBuilder {
     value: Option<Box<dyn ArrayBuilder>>,
 }
 
+impl RecordBuilder {
+    fn new(ids: &BTreeMap<String, i32>, schema: &Schema) -> RecordBuilder {
+        Self {
+            meta: schema.message_by_package_relative_name_array_builder(ids, MessageKind::Meta),
+            key: schema.message_by_package_relative_name_array_builder(ids, MessageKind::Key),
+            value: schema.message_by_package_relative_name_array_builder(ids, MessageKind::Value),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Schema {
     file_descriptors: Vec<FileDescriptor>,
-    ids: BTreeMap<String, i32>,
 }
 
 impl Schema {
-    fn new_list_field(&self, path: &[&str], data_type: DataType) -> Field {
-        self.new_field(path, ARROW_LIST_FIELD_NAME, data_type)
+    fn new_list_field(
+        &self,
+        ids: &BTreeMap<String, i32>,
+        path: &[&str],
+        data_type: DataType,
+    ) -> Field {
+        self.new_field(ids, path, ARROW_LIST_FIELD_NAME, data_type)
     }
 
-    fn new_field(&self, path: &[&str], name: &str, data_type: DataType) -> Field {
-        self.new_nullable_field(path, name, data_type, NULLABLE)
+    fn new_field(
+        &self,
+        ids: &BTreeMap<String, i32>,
+        path: &[&str],
+        name: &str,
+        data_type: DataType,
+    ) -> Field {
+        self.new_nullable_field(ids, path, name, data_type, NULLABLE)
     }
 
     fn new_nullable_field(
         &self,
+        ids: &BTreeMap<String, i32>,
         path: &[&str],
         name: &str,
         data_type: DataType,
         nullable: bool,
     ) -> Field {
-        debug!(?path, name, ?data_type, ?nullable, ids = ?self.ids);
+        debug!(?path, name, ?data_type, ?nullable, ids = ?ids);
 
         let path = append(path, name).join(".");
 
         Field::new(name.to_owned(), data_type, nullable).with_metadata(
-            self.ids
-                .get(path.as_str())
+            ids.get(path.as_str())
                 .inspect(|field_id| debug!(?path, field_id))
                 .map(|field_id| (PARQUET_FIELD_ID_META_KEY.to_string(), field_id.to_string()))
                 .into_iter()
@@ -117,7 +150,7 @@ impl Schema {
         )
     }
 
-    fn field(&self, message_kind: MessageKind) -> Option<Field> {
+    fn field(&self, ids: &BTreeMap<String, i32>, message_kind: MessageKind) -> Option<Field> {
         debug!(?message_kind);
 
         self.message_by_package_relative_name(message_kind)
@@ -126,11 +159,14 @@ impl Schema {
                 let name = message_kind.as_ref().to_lowercase();
 
                 self.new_nullable_field(
+                    ids,
                     &[],
                     &name,
-                    DataType::Struct(Fields::from(
-                        self.message_descriptor_to_fields(&[&name], &descriptor),
-                    )),
+                    DataType::Struct(Fields::from(self.message_descriptor_to_fields(
+                        ids,
+                        &[&name],
+                        &descriptor,
+                    ))),
                     NULLABLE,
                 )
             })
@@ -165,17 +201,77 @@ impl Schema {
             })
     }
 
-    fn message_to_bytes(message: Box<dyn MessageDyn>) -> Result<Bytes> {
-        let mut w = BytesMut::new().writer();
-        message
-            .write_to_writer_dyn(&mut w)
-            .and(Ok(Bytes::from(w.into_inner())))
-            .map_err(Into::into)
-    }
-
     pub fn encode_from_value(&self, message_kind: MessageKind, json: &Value) -> Result<Bytes> {
         self.value_to_message(message_kind, json)
-            .and_then(Self::message_to_bytes)
+            .and_then(message_to_bytes)
+    }
+
+    fn message_generator(&self) -> Option<MessageGenerator> {
+        self.file_descriptors
+            .iter()
+            .find_map(|fd| fd.message_by_package_relative_name("Generator"))
+            .map(|generator_descriptor| MessageGenerator {
+                generator_descriptor,
+            })
+    }
+
+    fn generate_message_kind(&self, message_kind: MessageKind) -> Result<Option<Bytes>> {
+        debug!(?message_kind);
+
+        let engine = {
+            let mut engine = Engine::new();
+
+            engine.register_fn("first_name", || {
+                fake::faker::name::raw::FirstName(fake::locales::EN).fake::<String>()
+            });
+
+            engine.register_fn("last_name", || {
+                fake::faker::name::raw::LastName(fake::locales::EN).fake::<String>()
+            });
+
+            engine.register_fn("safe_email", || {
+                fake::faker::internet::raw::SafeEmail(fake::locales::EN).fake::<String>()
+            });
+
+            engine.register_fn("building_number", || {
+                fake::faker::address::raw::BuildingNumber(fake::locales::EN).fake::<String>()
+            });
+
+            engine.register_fn("street_name", || {
+                fake::faker::address::raw::StreetName(fake::locales::EN).fake::<String>()
+            });
+
+            engine.register_fn("city_name", || {
+                fake::faker::address::raw::CityName(fake::locales::EN).fake::<String>()
+            });
+
+            engine.register_fn("post_code", || {
+                fake::faker::address::raw::PostCode(fake::locales::EN).fake::<String>()
+            });
+
+            engine.register_fn("country_name", || {
+                fake::faker::address::raw::CountryName(fake::locales::EN).fake::<String>()
+            });
+
+            engine.register_fn("industry", || {
+                fake::faker::company::raw::Industry(fake::locales::EN).fake::<String>()
+            });
+
+            let random = RandomPackage::new();
+            random.register_into_engine(&mut engine);
+            engine
+        };
+
+        self.message_by_package_relative_name(message_kind)
+            .map_or(Ok(None), |message_descriptor| {
+                self.message_generator()
+                    .map_or(Ok(None), |message_generator| {
+                        message_generator
+                            .generate(&engine, &message_descriptor)
+                            .and_then(message_to_bytes)
+                            .map(Some)
+                    })
+            })
     }
 
     fn message_value_as_bytes(
@@ -191,7 +287,7 @@ impl Schema {
                     .and_then(|json| {
                         parse_dyn_from_str(&message_descriptor, json.as_str()).map_err(Into::into)
                     })
-                    .inspect(|message| debug!(?message))
+                    .inspect(|message| debug!(%message))
                     .and_then(|message| {
                         let mut w = BytesMut::new().writer();
                         message
@@ -204,7 +300,12 @@ impl Schema {
             .transpose()
     }
 
-    fn runtime_type_to_data_type(&self, path: &[&str], runtime_type: &RuntimeType) -> DataType {
+    fn runtime_type_to_data_type(
+        &self,
+        ids: &BTreeMap<String, i32>,
+        path: &[&str],
+        runtime_type: &RuntimeType,
+    ) -> DataType {
         debug!(?path, ?runtime_type);
 
         match runtime_type {
@@ -220,7 +321,7 @@ impl Schema {
                     DataType::Timestamp(TimeUnit::Microsecond, None)
                 } else {
                     DataType::Struct(Fields::from(
-                        self.message_descriptor_to_fields(path, descriptor),
+                        self.message_descriptor_to_fields(ids, path, descriptor),
                     ))
                 }
             }
@@ -229,6 +330,7 @@ impl Schema {
 
     fn message_descriptor_to_fields(
         &self,
+        ids: &BTreeMap<String, i32>,
         path: &[&str],
         descriptor: &MessageDescriptor,
     ) -> Vec<Field> {
@@ -252,9 +354,14 @@ impl Schema {
                     );
 
                     self.new_nullable_field(
+                        ids,
                         path,
                         field.name(),
-                        self.runtime_type_to_data_type(&append(path, field.name())[..], singular),
+                        self.runtime_type_to_data_type(
+                            ids,
+                            &append(path, field.name())[..],
+                            singular,
+                        ),
                         !field.is_required(),
                     )
                 }
@@ -267,14 +374,17 @@ impl Schema {
                     );
 
                     self.new_nullable_field(
+                        ids,
                         path,
                         field.name(),
                         {
                             let path = &append(path, field.name())[..];
 
                             DataType::List(FieldRef::new(self.new_list_field(
+                                ids,
                                 path,
                                 self.runtime_type_to_data_type(
+                                    ids,
                                     &append(path, ARROW_LIST_FIELD_NAME)[..],
                                     repeated,
                                 ),
@@ -293,6 +403,7 @@ impl Schema {
                     );
 
                     self.new_nullable_field(
+                        ids,
                         path,
                         field.name(),
                         {
@@ -300,6 +411,7 @@ impl Schema {
 
                             DataType::Map(
                                 FieldRef::new(self.new_nullable_field(
+                                    ids,
                                     path,
                                     "entries",
                                     DataType::Struct({
@@ -307,18 +419,22 @@ impl Schema {
 
                                         Fields::from_iter([
                                             self.new_nullable_field(
+                                                ids,
                                                 path,
                                                 "keys",
                                                 self.runtime_type_to_data_type(
+                                                    ids,
                                                     append(path, "keys").as_slice(),
                                                     key,
                                                 ),
                                                 !NULLABLE,
                                             ),
                                             self.new_field(
+                                                ids,
                                                 path,
                                                 "values",
                                                 self.runtime_type_to_data_type(
+                                                    ids,
                                                     append(path, "values").as_slice(),
                                                     value,
                                                 ),
@@ -339,12 +455,14 @@ impl Schema {
 
     fn message_by_package_relative_name_array_builder(
         &self,
+        ids: &BTreeMap<String, i32>,
         message_kind: MessageKind,
     ) -> Option<Box<dyn ArrayBuilder>> {
         debug!(?message_kind);
         self.message_by_package_relative_name(message_kind)
             .map(|descriptor| {
                 self.message_descriptor_to_array_builder(
+                    ids,
                     &[&message_kind.as_ref().to_lowercase()],
                     &descriptor,
                 )
@@ -353,18 +471,20 @@ impl Schema {
 
     fn message_descriptor_to_array_builder(
         &self,
+        ids: &BTreeMap<String, i32>,
         path: &[&str],
         descriptor: &MessageDescriptor,
     ) -> Box<dyn ArrayBuilder> {
         debug!(?path, descriptor = descriptor.name());
-        let fields = self.message_descriptor_to_fields(path, descriptor);
-        let builders = self.message_descriptor_array_builders(path, descriptor);
+        let fields = self.message_descriptor_to_fields(ids, path, descriptor);
+        let builders = self.message_descriptor_array_builders(ids, path, descriptor);
 
         Box::new(StructBuilder::new(fields, builders)) as Box<dyn ArrayBuilder>
     }
 
     fn runtime_type_to_array_builder(
         &self,
+        ids: &BTreeMap<String, i32>,
         path: &[&str],
         runtime_type: &RuntimeType,
     ) -> Box<dyn ArrayBuilder> {
@@ -397,15 +517,17 @@ impl Schema {
 
                                 (
                                     self.new_nullable_field(
+                                        ids,
                                         path,
                                         field.name(),
                                         self.runtime_type_to_data_type(
+                                            ids,
                                             &append(path, field.name())[..],
                                             singular,
                                         ),
                                         !field.is_required(),
                                     ),
-                                    self.runtime_type_to_array_builder(path, singular),
+                                    self.runtime_type_to_array_builder(ids, path, singular),
                                 )
                             }
 
@@ -418,14 +540,17 @@ impl Schema {
 
                                 (
                                     self.new_nullable_field(
+                                        ids,
                                         path,
                                         field.name(),
                                         {
                                             let path = &append(path, field.name())[..];
 
                                             DataType::List(FieldRef::new(self.new_list_field(
+                                                ids,
                                                 path,
                                                 self.runtime_type_to_data_type(
+                                                    ids,
                                                     &append(path, ARROW_LIST_FIELD_NAME)[..],
                                                     repeated,
                                                 ),
@@ -438,12 +563,15 @@ impl Schema {
 
                                         Box::new(
                                             ListBuilder::new(self.runtime_type_to_array_builder(
+                                                ids,
                                                 &append(path, ARROW_LIST_FIELD_NAME)[..],
                                                 repeated,
                                             ))
                                             .with_field(self.new_list_field(
+                                                ids,
                                                 path,
                                                 self.runtime_type_to_data_type(
+                                                    ids,
                                                     &append(path, ARROW_LIST_FIELD_NAME)[..],
                                                     repeated,
                                                 ),
@@ -464,6 +592,7 @@ impl Schema {
 
                                 (
                                     self.new_nullable_field(
+                                        ids,
                                         path,
                                         field.name(),
                                         {
@@ -471,6 +600,7 @@ impl Schema {
 
                                             DataType::Map(
                                                 FieldRef::new(self.new_nullable_field(
+                                                    ids,
                                                     path,
                                                     "entries",
                                                     DataType::Struct({
@@ -478,18 +608,22 @@ impl Schema {
 
                                                         Fields::from_iter([
                                                             self.new_nullable_field(
+                                                                ids,
                                                                 path,
                                                                 "keys",
                                                                 self.runtime_type_to_data_type(
+                                                                    ids,
                                                                     &append(path, "keys")[..],
                                                                     key,
                                                                 ),
                                                                 !NULLABLE,
                                                             ),
                                                             self.new_field(
+                                                                ids,
                                                                 path,
                                                                 "values",
                                                                 self.runtime_type_to_data_type(
+                                                                    ids,
                                                                     &append(path, "values")[..],
                                                                     value,
                                                                 ),
@@ -505,8 +639,8 @@ impl Schema {
                                     ),
                                     Box::new(MapBuilder::new(
                                         None,
-                                        self.runtime_type_to_array_builder(path, key),
-                                        self.runtime_type_to_array_builder(path, value),
+                                        self.runtime_type_to_array_builder(ids, path, key),
+                                        self.runtime_type_to_array_builder(ids, path, value),
                                     )) as Box<dyn ArrayBuilder>,
                                 )
                             }
@@ -521,6 +655,7 @@ impl Schema {
 
     fn message_descriptor_array_builders(
         &self,
+        ids: &BTreeMap<String, i32>,
         path: &[&str],
         descriptor: &MessageDescriptor,
     ) -> Vec<Box<dyn ArrayBuilder>> {
@@ -539,7 +674,7 @@ impl Schema {
                             ?singular,
                             ?inside
                         );
-                        self.runtime_type_to_array_builder(inside, singular)
+                        self.runtime_type_to_array_builder(ids, inside, singular)
                     }
 
                     RuntimeFieldType::Repeated(ref repeated) => {
@@ -551,12 +686,15 @@ impl Schema {
                         );
                         Box::new(
                             ListBuilder::new(self.runtime_type_to_array_builder(
+                                ids,
                                 &append(inside, ARROW_LIST_FIELD_NAME)[..],
                                 repeated,
                             ))
                             .with_field(self.new_list_field(
+                                ids,
                                 inside,
                                 self.runtime_type_to_data_type(
+                                    ids,
                                     &append(inside, ARROW_LIST_FIELD_NAME)[..],
                                     repeated,
                                 ),
@@ -578,19 +716,25 @@ impl Schema {
                         Box::new(
                             MapBuilder::new(
                                 None,
-                                self.runtime_type_to_array_builder(path, key),
-                                self.runtime_type_to_array_builder(path, value),
+                                self.runtime_type_to_array_builder(ids, path, key),
+                                self.runtime_type_to_array_builder(ids, path, value),
                             )
                             .with_keys_field(self.new_nullable_field(
+                                ids,
                                 &path[..],
                                 "keys",
-                                self.runtime_type_to_data_type(&append(path, "keys")[..], key),
+                                self.runtime_type_to_data_type(ids, &append(path, "keys")[..], key),
                                 !NULLABLE,
                             ))
                             .with_values_field(self.new_field(
+                                ids,
                                 &path[..],
                                 "values",
-                                self.runtime_type_to_data_type(&append(path, "values")[..], value),
+                                self.runtime_type_to_data_type(
+                                    ids,
+                                    &append(path, "values")[..],
+                                    value,
+                                ),
                             )),
                         )
                     }
@@ -598,6 +742,439 @@ impl Schema {
             })
             .collect::<Vec<_>>()
     }
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct MessageGenerator {
+    generator_descriptor: MessageDescriptor,
+}
+
+impl MessageGenerator {
+    fn generate(
+        &self,
+        engine: &Engine,
+        message_descriptor: &MessageDescriptor,
+    ) -> Result<Box<dyn MessageDyn>> {
+        debug!(message_descriptor = message_descriptor.full_name());
+
+        let mut message_dyn = message_descriptor.new_instance();
+
+        for (field_proto, field) in message_descriptor
+            .proto()
+            .field
+            .iter()
+            .zip(message_dyn.descriptor_dyn().fields())
+        {
+            let field_generator = FieldGenerator {
+                generator_descriptor: &self.generator_descriptor,
+                configuration: FieldGeneratorConfiguration::with_field_generator(
+                    field_proto,
+                    &self.generator_descriptor,
+                ),
+            };
+
+            if field_generator.configuration.skip() {
+                continue;
+            }
+
+            match field.runtime_field_type() {
+                RuntimeFieldType::Singular(ref singular) => field_generator
+                    .singular_value(engine, singular)
+                    .map(|value| field.set_singular_field(message_dyn.as_mut(), value))?,
+
+                RuntimeFieldType::Repeated(ref repeated) => {
+                    let mut r = field.mut_repeated(message_dyn.as_mut());
+                    for element in field_generator.repeated_value(engine, repeated)? {
+                        r.push(element);
+                    }
+                }
+
+                RuntimeFieldType::Map(key, value) => todo!("key={key:?} value={value:?}"),
+            }
+        }
+
+        Ok(message_dyn)
+    }
+}
+
+struct FieldGenerator<'a> {
+    generator_descriptor: &'a MessageDescriptor,
+    configuration: FieldGeneratorConfiguration,
+}
+
+impl<'a> FieldGenerator<'a> {
+    fn singular_value(
+        &self,
+        engine: &Engine,
+        runtime_type: &RuntimeType,
+    ) -> Result<ReflectValueBox> {
+        let mut rng = rand::rng();
+        match runtime_type {
+            RuntimeType::I32 => self
+                .configuration
+                .script()
+                .inspect(|script| debug!(script))
+                .map_or(Ok(rng.random()), |script| {
+                    engine
+                        .eval::<i32>(script)
+                        .inspect_err(|err| debug!(script, ?err))
+                })
+                .inspect(|result| debug!(?result))
+                .map(ReflectValueBox::from)
+                .map_err(Into::into),
+
+            RuntimeType::I64 => self
+                .configuration
+                .script()
+                .inspect(|script| debug!(script))
+                .map_or(Ok(rng.random()), |script| {
+                    engine
+                        .eval::<i64>(script)
+                        .inspect_err(|err| debug!(script, ?err))
+                })
+                .inspect(|result| debug!(?result))
+                .map(ReflectValueBox::from)
+                .map_err(Into::into),
+
+            RuntimeType::U32 => self
+                .configuration
+                .script()
+                .inspect(|script| debug!(script))
+                .map_or(Ok(rng.random()), |script| {
+                    engine
+                        .eval::<u32>(script)
+                        .inspect_err(|err| debug!(script, ?err))
+                })
+                .inspect(|result| debug!(?result))
+                .map(ReflectValueBox::from)
+                .map_err(Into::into),
+
+            RuntimeType::U64 => self
+                .configuration
+                .script()
+                .inspect(|script| debug!(script))
+                .map_or(Ok(rng.random()), |script| {
+                    engine
+                        .eval::<u64>(script)
+                        .inspect_err(|err| debug!(script, ?err))
+                })
+                .inspect(|result| debug!(?result))
+                .map(ReflectValueBox::from)
+                .map_err(Into::into),
+
+            RuntimeType::F32 => self
+                .configuration
+                .script()
+                .inspect(|script| debug!(script))
+                .map_or(Ok(rng.random()), |script| {
+                    engine
+                        .eval::<f32>(script)
+                        .inspect_err(|err| debug!(script, ?err))
+                })
+                .inspect(|result| debug!(?result))
+                .map(ReflectValueBox::from)
+                .map_err(Into::into),
+
+            RuntimeType::F64 => self
+                .configuration
+                .script()
+                .inspect(|script| debug!(script))
+                .map_or(Ok(rng.random()), |script| {
+                    engine
+                        .eval::<f64>(script)
+                        .inspect_err(|err| debug!(script, ?err))
+                })
+                .inspect(|result| debug!(?result))
+                .map(ReflectValueBox::from)
+                .map_err(Into::into),
+
+            RuntimeType::Bool => self
+                .configuration
+                .script()
+                .inspect(|script| debug!(script))
+                .map_or(Ok(rng.random()), |script| {
+                    engine
+                        .eval::<bool>(script)
+                        .inspect_err(|err| debug!(script, ?err))
+                })
+                .inspect(|result| debug!(?result))
+                .map(ReflectValueBox::from)
+                .map_err(Into::into),
+
+            RuntimeType::String => self
+                .configuration
+                .script()
+                .inspect(|script| debug!(script))
+                .map_or(Ok(String::from("abc")), |script| {
+                    engine
+                        .eval::<String>(script)
+                        .inspect_err(|err| debug!(script, ?err))
+                })
+                .inspect(|result| debug!(?result))
+                .map(ReflectValueBox::from)
+                .map_err(Into::into),
+
+            RuntimeType::VecU8 => todo!(),
+
+            RuntimeType::Enum(descriptor) => self
+                .configuration
+                .script()
+                .inspect(|script| debug!(script))
+                .map_or(Ok(ReflectValueBox::Enum(descriptor.clone(), 1)), |script| {
+                    engine
+                        .eval::<String>(script)
+                        .map(|name| {
+                            descriptor
+                                .value_by_name(&name[..])
+                                .map(|value_descriptor| {
+                                    ReflectValueBox::Enum(
+                                        descriptor.clone(),
+                                        value_descriptor.value(),
+                                    )
+                                })
+                                .inspect(|value| debug!(?value))
+                                .unwrap()
+                        })
+                        .inspect_err(|err| debug!(script, ?err))
+                })
+                .inspect(|result| debug!(?result))
+                .map_err(Into::into),
+
+            RuntimeType::Message(message_descriptor) => {
+                let generator = MessageGenerator {
+                    generator_descriptor: self.generator_descriptor.to_owned(),
+                };
+
+                generator
+                    .generate(engine, message_descriptor)
+                    .map(ReflectValueBox::Message)
+            }
+        }
+    }
+
+    fn repeated_value(
+        &self,
+        engine: &Engine,
+        runtime_type: &RuntimeType,
+    ) -> Result<Vec<ReflectValueBox>> {
+        let upper = self.configuration.repeated_len().unwrap_or_else(|| {
+            rand::rng().random_range(self.configuration.repeated_range().unwrap_or(0..=1))
+        });
+
+        (0..upper)
+            .inspect(|i| debug!(i))
+            .map(|_| self.singular_value(engine, runtime_type))
+            .collect::<Result<Vec<_>>>()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, PartialOrd)]
+enum FieldGeneratorConfiguration {
+    Bool(bool),
+    Bytes(Bytes),
+    F32(f32),
+    F64(f64),
+    I32(i32),
+    I64(i64),
+    List(Vec<FieldGeneratorConfiguration>),
+    Message(BTreeMap<String, FieldGeneratorConfiguration>),
+    String(String),
+    U32(u32),
+    U64(u64),
+}
+
+impl Default for FieldGeneratorConfiguration {
+    fn default() -> Self {
+        Self::Message(Default::default())
+    }
+}
+
+impl FieldGeneratorConfiguration {
+    fn with_field_generator(
+        field: &FieldDescriptorProto,
+        generator: &MessageDescriptor,
+    ) -> FieldGeneratorConfiguration {
+        debug!(field = field.name(), generator = generator.full_name(),);
+
+        field
+            .options
+            .special_fields
+            .unknown_fields()
+            .iter()
+            .find_map(|(id, unknown)| {
+                if id != 51215 {
+                    None
+                } else if let UnknownValueRef::LengthDelimited(items) = unknown {
+                    let mut message = generator.new_instance();
+
+                    message
+                        .merge_from_bytes_dyn(items)
+                        .inspect_err(|err| debug!(?err))
+                        .ok();
+
+                    Some(Self::from(message.as_ref()))
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default()
+    }
+
+    fn skip(&self) -> bool {
+        self.get("skip")
+            .cloned()
+            .and_then(|value| value.as_bool())
+            .inspect(|skip| debug!(?skip))
+            .unwrap_or_default()
+    }
+
+    fn script(&self) -> Option<&str> {
+        self.get("script")
+            .inspect(|script| debug!(?script))
+            .and_then(|value| value.as_str())
+            .inspect(|script| debug!(?script))
+            .or(self.repeated_script())
+    }
+
+    fn repeated_range(&self) -> Option<RangeInclusive<u32>> {
+        self.get("repeated")
+            .inspect(|repeated| debug!(?repeated))
+            .and_then(|repeated| {
+                repeated
+                    .get("range")
+                    .inspect(|range| debug!(?range))
+                    .and_then(|range| {
+                        range
+                            .get("min")
+                            .inspect(|min| debug!(?min))
+                            .and_then(|min| min.as_u32())
+                            .and_then(|min| {
+                                range
+                                    .get("max")
+                                    .inspect(|max| debug!(?max))
+                                    .and_then(|max| max.as_u32())
+                                    .map(|max| min..=max)
+                            })
+                    })
+            })
+    }
+
+    fn repeated_len(&self) -> Option<u32> {
+        self.get("repeated")
+            .and_then(|repeated| repeated.get("len"))
+            .and_then(|len| len.as_u32())
+    }
+
+    fn repeated_script(&self) -> Option<&str> {
+        self.get("repeated")
+            .and_then(|repeated| repeated.get("script"))
+            .and_then(|script| script.as_str())
+    }
+
+    fn get(&self, key: &str) -> Option<&FieldGeneratorConfiguration> {
+        if let Self::Message(message) = self {
+            message.get(key)
+        } else {
+            None
+        }
+    }
+
+    fn as_bool(&self) -> Option<bool> {
+        if let Self::Bool(flag) = self {
+            Some(*flag)
+        } else {
+            None
+        }
+    }
+
+    fn as_str(&self) -> Option<&str> {
+        if let Self::String(value) = self {
+            Some(value)
+        } else {
+            None
+        }
+    }
+
+    fn as_u32(&self) -> Option<u32> {
+        if let Self::U32(value) = self {
+            Some(*value)
+        } else {
+            None
+        }
+    }
+}
+
+impl From<EnumDescriptor> for FieldGeneratorConfiguration {
+    fn from(_value: EnumDescriptor) -> Self {
+        todo!()
+    }
+}
+
+impl<'a> From<ReflectValueRef<'a>> for FieldGeneratorConfiguration {
+    fn from(value: ReflectValueRef<'a>) -> Self {
+        match value {
+            ReflectValueRef::U32(value) => Self::U32(value),
+            ReflectValueRef::U64(value) => Self::U64(value),
+            ReflectValueRef::I32(value) => Self::I32(value),
+            ReflectValueRef::I64(value) => Self::I64(value),
+            ReflectValueRef::F32(value) => Self::F32(value),
+            ReflectValueRef::F64(value) => Self::F64(value),
+            ReflectValueRef::Bool(value) => Self::Bool(value),
+            ReflectValueRef::String(value) => Self::String(value.to_owned()),
+            ReflectValueRef::Bytes(items) => Self::Bytes(Bytes::copy_from_slice(items)),
+            ReflectValueRef::Enum(enum_descriptor, _) => Self::from(enum_descriptor),
+            ReflectValueRef::Message(message_ref) => Self::from(message_ref.deref()),
+        }
+    }
+}
+
+impl From<&dyn MessageDyn> for FieldGeneratorConfiguration {
+    fn from(message: &dyn MessageDyn) -> Self {
+        debug!(%message);
+
+        Self::Message(
+            message
+                .descriptor_dyn()
+                .fields()
+                .inspect(|field| debug!(field = field.name()))
+                .filter_map(|field| match field.runtime_field_type() {
+                    RuntimeFieldType::Singular(singular) => {
+                        debug!(?singular);
+                        field
+                            .get_singular(message)
+                            .inspect(|value| debug!(field = field.name(), ?value))
+                            .map(|value| (field.name().to_owned(), Self::from(value)))
+                    }
+
+                    RuntimeFieldType::Repeated(repeated) => {
+                        debug!(?repeated);
+                        Some((
+                            field.name().to_owned(),
+                            Self::List(
+                                field
+                                    .get_repeated(message)
+                                    .into_iter()
+                                    .map(Self::from)
+                                    .inspect(|configuration| debug!(?configuration))
+                                    .collect::<Vec<_>>(),
+                            ),
+                        ))
+                    }
+
+                    RuntimeFieldType::Map(key, value) => todo!("key={key:?} value={value:?}"),
+                })
+                .inspect(|(field, value)| debug!(field, ?value))
+                .collect::<BTreeMap<String, FieldGeneratorConfiguration>>(),
+        )
+    }
+}
+
+fn message_to_bytes(message: Box<dyn MessageDyn>) -> Result<Bytes> {
+    let mut w = BytesMut::new().writer();
+    message
+        .write_to_writer_dyn(&mut w)
+        .and(Ok(Bytes::from(w.into_inner())))
+        .map_err(Into::into)
 }
 
 impl AsKafkaRecord for Schema {
@@ -626,71 +1203,42 @@ impl AsKafkaRecord for Schema {
     }
 }
 
-impl From<&Schema> for Vec<Box<dyn ArrayBuilder>> {
-    fn from(schema: &Schema) -> Self {
-        debug!(?schema);
+impl Generator for Schema {
+    fn generate(&self) -> Result<tansu_kafka_sans_io::record::Builder> {
+        let mut builder = tansu_kafka_sans_io::record::Record::builder();
 
-        let mut builders = vec![];
-
-        if let Some(ref descriptor) = schema.message_by_package_relative_name(MessageKind::Key) {
-            debug!(?descriptor);
-            builders.append(&mut schema.message_descriptor_array_builders(
-                &[&MessageKind::Key.as_ref().to_lowercase()],
-                descriptor,
-            ));
+        if let Some(generated) = self.generate_message_kind(MessageKind::Key)? {
+            builder = builder.key(generated.into());
         }
 
-        if let Some(ref descriptor) = schema.message_by_package_relative_name(MessageKind::Value) {
-            debug!(?descriptor);
-            builders.append(&mut schema.message_descriptor_array_builders(
-                &[&MessageKind::Value.as_ref().to_lowercase()],
-                descriptor,
-            ));
+        if let Some(generated) = self.generate_message_kind(MessageKind::Value)? {
+            builder = builder.value(generated.into());
         }
 
-        builders
+        Ok(builder)
     }
 }
 
-impl From<&Schema> for RecordBuilder {
-    fn from(schema: &Schema) -> Self {
-        debug!(?schema);
+fn fields(ids: &BTreeMap<String, i32>, schema: &Schema) -> Fields {
+    let mut fields = vec![];
 
-        Self {
-            meta: schema.message_by_package_relative_name_array_builder(MessageKind::Meta),
-            key: schema.message_by_package_relative_name_array_builder(MessageKind::Key),
-            value: schema.message_by_package_relative_name_array_builder(MessageKind::Value),
-        }
+    if let Some(field) = schema.field(ids, MessageKind::Meta) {
+        fields.push(field);
     }
+
+    if let Some(field) = schema.field(ids, MessageKind::Key) {
+        fields.push(field);
+    }
+
+    if let Some(field) = schema.field(ids, MessageKind::Value) {
+        fields.push(field);
+    }
+
+    fields.into()
 }
 
-impl From<&Schema> for Fields {
-    fn from(schema: &Schema) -> Self {
-        debug!(?schema);
-
-        let mut fields = vec![];
-
-        if let Some(field) = schema.field(MessageKind::Meta) {
-            fields.push(field);
-        }
-
-        if let Some(field) = schema.field(MessageKind::Key) {
-            fields.push(field);
-        }
-
-        if let Some(field) = schema.field(MessageKind::Value) {
-            fields.push(field);
-        }
-
-        fields.into()
-    }
-}
-
-impl From<&Schema> for ArrowSchema {
-    fn from(schema: &Schema) -> Self {
-        debug!(?schema);
-        ArrowSchema::new(Fields::from(schema))
-    }
+fn arrow_schema(ids: &BTreeMap<String, i32>, schema: &Schema) -> ArrowSchema {
+    ArrowSchema::new(fields(ids, schema))
 }
 
 fn decode(
@@ -773,10 +1321,7 @@ impl TryFrom<Bytes> for Schema {
 
                 protos
             })
-            .map(|file_descriptors| Self {
-                ids: field_ids(&file_descriptors),
-                file_descriptors,
-            })
+            .map(|file_descriptors| Self { file_descriptors })
     }
 }
 
@@ -795,46 +1340,39 @@ static META_FILE_DESCRIPTOR: LazyLock<Option<Vec<FileDescriptor>>> =
     LazyLock::new(|| make_fd(Bytes::from_static(include_bytes!("meta.proto"))).ok());
 
 fn make_fd(proto: Bytes) -> Result<Vec<FileDescriptor>> {
-    tempdir()
-        .map_err(Into::into)
-        .and_then(|temp_dir| {
-            NamedTempFile::new_in(&temp_dir)
-                .inspect(|temp_dir| debug!(?temp_dir))
-                .map_err(Into::into)
-                .and_then(|mut temp_file| {
-                    temp_file.write_all(&proto).map_err(Into::into).and(
-                        protobuf_parse::Parser::new()
-                            .pure()
-                            .input(&temp_file)
-                            .include(&temp_dir)
-                            .parse_and_typecheck()
-                            .inspect_err(|err| debug!(?err))
-                            .map_err(Into::into)
-                            .and_then(|parsed| {
-                                parsed
-                                    .file_descriptors
-                                    .into_iter()
-                                    .inspect(|parsed| debug!(?parsed))
-                                    .map(|file_descriptor_proto| {
-                                        FileDescriptor::new_dynamic(
-                                            file_descriptor_proto,
-                                            &WELL_KNOWN_TYPES[..],
-                                        )
-                                        .inspect(|fd| debug!(?fd))
-                                        .inspect_err(|err| debug!(?err))
-                                        .map_err(Into::into)
-                                    })
-                                    .collect::<Result<Vec<_>>>()
-                            }),
-                    )
-                })
-        })
-        .inspect(|fds| debug!(?fds))
+    tempdir().map_err(Into::into).and_then(|temp_dir| {
+        NamedTempFile::new_in(&temp_dir)
+            .inspect(|temp_dir| debug!(?temp_dir))
+            .map_err(Into::into)
+            .and_then(|mut temp_file| {
+                temp_file.write_all(&proto).map_err(Into::into).and(
+                    protobuf_parse::Parser::new()
+                        .pure()
+                        .input(&temp_file)
+                        .include(&temp_dir)
+                        .parse_and_typecheck()
+                        .inspect_err(|err| debug!(?err))
+                        .map_err(Into::into)
+                        .and_then(|parsed| {
+                            parsed
+                                .file_descriptors
+                                .into_iter()
+                                .map(|file_descriptor_proto| {
+                                    FileDescriptor::new_dynamic(
+                                        file_descriptor_proto,
+                                        &WELL_KNOWN_TYPES[..],
+                                    )
+                                    .inspect_err(|err| debug!(?err))
+                                    .map_err(Into::into)
+                                })
+                                .collect::<Result<Vec<_>>>()
+                        }),
+                )
+            })
+    })
 }
 
 fn field_ids(schemas: &[FileDescriptor]) -> BTreeMap<String, i32> {
-    debug!(?schemas);
-
     fn field_ids_with_path(
         path: &[&str],
         schemas: &[MessageDescriptor],
@@ -1005,7 +1543,7 @@ fn field_ids(schemas: &[FileDescriptor]) -> BTreeMap<String, i32> {
 }
 
 fn append_struct_builder(message: &dyn MessageDyn, builder: &mut StructBuilder) -> Result<()> {
-    debug!(?message, ?builder);
+    debug!(%message, ?builder);
     for (index, ref field) in message.descriptor_dyn().fields().enumerate() {
         debug!(field_name = field.name());
 
@@ -1344,7 +1882,7 @@ fn decode_value(value: ReflectValueRef, builder: &mut dyn ArrayBuilder) -> Resul
             .map(|builder| builder.append_value(value)),
 
         ReflectValueRef::Message(message_ref) => {
-            if message_ref.deref().descriptor_dyn().full_name() == GOOGLE_PROTOBUF_TIMESTAMP {
+            if message_ref.descriptor_dyn().full_name() == GOOGLE_PROTOBUF_TIMESTAMP {
                 let message = print_to_string(message_ref.deref())?;
                 debug!(message = message.trim_matches('"'));
 
@@ -1412,13 +1950,22 @@ where
 }
 
 impl AsArrow for Schema {
-    fn as_arrow(&self, partition: i32, batch: &Batch) -> Result<RecordBatch> {
-        debug!(?batch);
+    fn as_arrow(
+        &self,
+        partition: i32,
+        batch: &Batch,
+        lake_type: LakeHouseType,
+    ) -> Result<RecordBatch> {
+        debug!(?batch, ?lake_type);
 
-        let schema = ArrowSchema::from(self);
-        debug!(?schema);
+        let ids = if lake_type.is_iceberg() {
+            field_ids(&self.file_descriptors)
+        } else {
+            BTreeMap::new()
+        };
 
-        let mut record_builder = RecordBuilder::from(self);
+        let schema = arrow_schema(&ids, self);
+        let mut record_builder = RecordBuilder::new(&ids, self);
 
         for record in batch.records.iter() {
             debug!(?record);
@@ -1788,7 +2335,7 @@ mod tests {
             batch.build()?
         };
 
-        let record_batch = schema.as_arrow(0, &batch)?;
+        let record_batch = schema.as_arrow(0, &batch, LakeHouseType::Iceberg)?;
 
         let data_files = iceberg_write(record_batch.clone()).await?;
         assert_eq!(1, data_files.len());
@@ -1944,7 +2491,7 @@ mod tests {
             batch.build()?
         };
 
-        let record_batch = schema.as_arrow(0, &batch)?;
+        let record_batch = schema.as_arrow(0, &batch, LakeHouseType::Iceberg)?;
 
         let data_files = iceberg_write(record_batch.clone()).await?;
         assert_eq!(1, data_files.len());
@@ -2025,7 +2572,7 @@ mod tests {
             batch.build()?
         };
 
-        let record_batch = schema.as_arrow(0, &batch)?;
+        let record_batch = schema.as_arrow(0, &batch, LakeHouseType::Iceberg)?;
 
         let data_files = iceberg_write(record_batch.clone()).await?;
         assert_eq!(1, data_files.len());
@@ -2078,7 +2625,7 @@ mod tests {
             .base_timestamp(119_731_017_000)
             .build()?;
 
-        let record_batch = schema.as_arrow(0, &batch)?;
+        let record_batch = schema.as_arrow(0, &batch, LakeHouseType::Iceberg)?;
 
         let data_files = iceberg_write(record_batch.clone()).await?;
         assert_eq!(1, data_files.len());
@@ -2134,7 +2681,7 @@ mod tests {
             .record(Record::builder().value(value.into()))
             .build()?;
 
-        let record_batch = schema.as_arrow(0, &batch)?;
+        let record_batch = schema.as_arrow(0, &batch, LakeHouseType::Parquet)?;
 
         let ctx = SessionContext::new();
 
@@ -2195,7 +2742,7 @@ mod tests {
             .base_timestamp(119_731_017_000)
             .build()?;
 
-        let record_batch = schema.as_arrow(0, &batch)?;
+        let record_batch = schema.as_arrow(0, &batch, LakeHouseType::Parquet)?;
 
         let ctx = SessionContext::new();
 
@@ -2254,7 +2801,7 @@ mod tests {
             .record(Record::builder().value(value.into()))
             .build()?;
 
-        let record_batch = schema.as_arrow(0, &batch)?;
+        let record_batch = schema.as_arrow(0, &batch, LakeHouseType::Iceberg)?;
 
         let data_files = iceberg_write(record_batch.clone()).await?;
         assert_eq!(1, data_files.len());
@@ -2312,7 +2859,7 @@ mod tests {
             .record(Record::builder().value(value.into()))
             .build()?;
 
-        let record_batch = schema.as_arrow(0, &batch)?;
+        let record_batch = schema.as_arrow(0, &batch, LakeHouseType::Iceberg)?;
         let data_files = iceberg_write(record_batch.clone()).await?;
         assert_eq!(1, data_files.len());
         assert_eq!(1, data_files[0].record_count());
@@ -2374,7 +2921,7 @@ mod tests {
             .base_timestamp(119_731_017_000)
             .build()?;
 
-        let record_batch = schema.as_arrow(0, &batch)?;
+        let record_batch = schema.as_arrow(0, &batch, LakeHouseType::Iceberg)?;
         let data_files = iceberg_write(record_batch.clone()).await?;
         assert_eq!(1, data_files.len());
         assert_eq!(1, data_files[0].record_count());
@@ -2629,6 +3176,193 @@ mod tests {
         );
 
         let _file_descriptor = make_fd(proto).inspect(|fds| debug!(?fds))?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn customer_001() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let schema = Schema::try_from(Bytes::from_static(include_bytes!(
+            "../tests/customer-001.proto"
+        )))?;
+
+        let topic = "t";
+        let ctx = SessionContext::new();
+
+        schema
+            .generate()
+            .and_then(|record| {
+                Batch::builder()
+                    .record(record)
+                    .base_timestamp(119_731_017_000)
+                    .build()
+                    .map_err(Into::into)
+            })
+            .and_then(|batch| schema.as_arrow(0, &batch, LakeHouseType::Parquet))
+            .and_then(|record_batch| ctx.register_batch(topic, record_batch).map_err(Into::into))?;
+
+        let df = ctx.sql(format!("select * from {topic}").as_str()).await?;
+        let results = df.collect().await?;
+
+        let pretty_results = pretty_format_batches(&results)?.to_string();
+
+        let expected = vec![
+            "+--------------------------------------------------------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------+",
+            "| meta                                                                           | value                                                                                                                                                    |",
+            "+--------------------------------------------------------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------+",
+            "| {partition: 0, timestamp: 1973-10-17T18:36:57, year: 1973, month: 10, day: 17} | {email_address: lorem, full_name: ipsum, home: {building_number: dolor, street_name: sit, city: amet, post_code: consectetur, country_name: adipiscing}} |",
+            "+--------------------------------------------------------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------+",
+        ];
+
+        assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn customer_002_user_id() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let schema = Schema::try_from(Bytes::from_static(include_bytes!(
+            "../tests/customer-002.proto"
+        )))?;
+
+        let message_generator = schema.message_generator().unwrap();
+
+        let user_id = schema
+            .message_by_package_relative_name(MessageKind::Value)
+            .and_then(|message_descriptor| message_descriptor.field_by_name("user_id"))
+            .unwrap();
+
+        let configuration = FieldGeneratorConfiguration::with_field_generator(
+            user_id.proto(),
+            &message_generator.generator_descriptor,
+        );
+
+        assert!(configuration.skip());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn customer_002_email_address() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let schema = Schema::try_from(Bytes::from_static(include_bytes!(
+            "../tests/customer-002.proto"
+        )))?;
+
+        let message_generator = schema.message_generator().unwrap();
+
+        let user_id = schema
+            .message_by_package_relative_name(MessageKind::Value)
+            .and_then(|message_descriptor| message_descriptor.field_by_name("email_address"))
+            .unwrap();
+
+        let configuration = FieldGeneratorConfiguration::with_field_generator(
+            user_id.proto(),
+            &message_generator.generator_descriptor,
+        );
+
+        assert!(!configuration.skip());
+        assert_eq!(Some("\"lorem\""), configuration.script());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn customer_002_industry() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let schema = Schema::try_from(Bytes::from_static(include_bytes!(
+            "../tests/customer-002.proto"
+        )))?;
+
+        let message_generator = schema.message_generator().unwrap();
+
+        let user_id = schema
+            .message_by_package_relative_name(MessageKind::Value)
+            .and_then(|message_descriptor| message_descriptor.field_by_name("industry"))
+            .unwrap();
+
+        let configuration = FieldGeneratorConfiguration::with_field_generator(
+            user_id.proto(),
+            &message_generator.generator_descriptor,
+        );
+
+        assert!(!configuration.skip());
+        assert_eq!(Some(3), configuration.repeated_len());
+        assert_eq!(Some("\"elit\""), configuration.repeated_script());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn customer_002() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let schema = Schema::try_from(Bytes::from_static(include_bytes!(
+            "../tests/customer-002.proto"
+        )))?;
+
+        let topic = "t";
+        let ctx = SessionContext::new();
+
+        schema
+            .generate()
+            .and_then(|record| {
+                Batch::builder()
+                    .record(record)
+                    .base_timestamp(119_731_017_000)
+                    .build()
+                    .map_err(Into::into)
+            })
+            .and_then(|batch| schema.as_arrow(0, &batch, LakeHouseType::Parquet))
+            .and_then(|record_batch| ctx.register_batch(topic, record_batch).map_err(Into::into))?;
+
+        let df = ctx.sql(format!("select * from {topic}").as_str()).await?;
+        let results = df.collect().await?;
+
+        let pretty_results = pretty_format_batches(&results)?.to_string();
+
+        let expected = vec![
+            "+--------------------------------------------------------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+",
+            "| meta                                                                           | value                                                                                                                                                                                              |",
+            "+--------------------------------------------------------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+",
+            "| {partition: 0, timestamp: 1973-10-17T18:36:57, year: 1973, month: 10, day: 17} | {user_id: 0, email_address: lorem, full_name: ipsum, home: {building_number: dolor, street_name: sit, city: amet, post_code: consectetur, country_name: adipiscing}, industry: [elit, elit, elit]} |",
+            "+--------------------------------------------------------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+",
+        ];
+
+        assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn customer_003_industry() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let schema = Schema::try_from(Bytes::from_static(include_bytes!(
+            "../tests/customer-003.proto"
+        )))?;
+
+        let message_generator = schema.message_generator().unwrap();
+
+        let user_id = schema
+            .message_by_package_relative_name(MessageKind::Value)
+            .and_then(|message_descriptor| message_descriptor.field_by_name("industry"))
+            .unwrap();
+
+        let configuration = FieldGeneratorConfiguration::with_field_generator(
+            user_id.proto(),
+            &message_generator.generator_descriptor,
+        );
+
+        assert!(!configuration.skip());
+        assert_eq!(Some(1..=3), configuration.repeated_range());
+        assert_eq!(Some("\"elit\""), configuration.repeated_script());
 
         Ok(())
     }

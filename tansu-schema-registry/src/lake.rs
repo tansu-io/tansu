@@ -33,6 +33,37 @@ pub enum House {
     Parquet(quet::Parquet),
 }
 
+#[derive(Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum LakeHouseType {
+    Delta,
+    Iceberg,
+    Parquet,
+}
+
+impl From<&House> for LakeHouseType {
+    fn from(house: &House) -> Self {
+        match house {
+            House::Delta(_) => Self::Delta,
+            House::Iceberg(_) => Self::Iceberg,
+            House::Parquet(_) => Self::Parquet,
+        }
+    }
+}
+
+impl LakeHouseType {
+    pub fn is_delta(&self) -> bool {
+        matches!(self, Self::Delta)
+    }
+
+    pub fn is_iceberg(&self) -> bool {
+        matches!(self, Self::Iceberg)
+    }
+
+    pub fn is_parquet(&self) -> bool {
+        matches!(self, Self::Parquet)
+    }
+}
+
 #[async_trait]
 pub trait LakeHouse: Clone + Debug + Send + Sync + 'static {
     async fn store(
@@ -45,6 +76,8 @@ pub trait LakeHouse: Clone + Debug + Send + Sync + 'static {
     ) -> Result<()>;
 
     async fn maintain(&self) -> Result<()>;
+
+    async fn lake_type(&self) -> Result<LakeHouseType>;
 }
 
 static STORE_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
@@ -106,7 +139,13 @@ impl LakeHouse for House {
         record_batch: RecordBatch,
         configs: DescribeConfigsResult,
     ) -> Result<()> {
-        debug!(?topic, ?partition, ?offset, ?record_batch);
+        debug!(
+            ?topic,
+            ?partition,
+            ?offset,
+            rows = record_batch.num_rows(),
+            columns = record_batch.num_columns()
+        );
 
         let start = SystemTime::now();
 
@@ -163,6 +202,10 @@ impl LakeHouse for House {
                 &[],
             )
         })
+    }
+
+    async fn lake_type(&self) -> Result<LakeHouseType> {
+        Ok(LakeHouseType::from(self))
     }
 }
 

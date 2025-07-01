@@ -31,6 +31,7 @@ publish = false
 
 [dependencies]
 bytes.workspace = true
+clap.workspace = true
 crc.workspace = true
 flate2.workspace = true
 lz4.workspace = true

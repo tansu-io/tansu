@@ -1,0 +1,20 @@
+[package]
+name = "tansu-service"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+bytes.workspace = true
+clap.workspace = true
+opentelemetry-semantic-conventions.workspace = true
+opentelemetry.workspace = true
+rama.workspace = true
+tansu-kafka-sans-io = { path = "../tansu-kafka-sans-io" }
+thiserror.workspace = true
+tokio.workspace = true
+tracing-subscriber.workspace = true
+tracing.workspace = true
+url.workspace = true
+uuid.workspace = true

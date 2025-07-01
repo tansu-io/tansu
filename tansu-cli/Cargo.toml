@@ -10,6 +10,7 @@ clap.workspace = true
 dotenv.workspace = true
 regex.workspace = true
 tansu-cat = { path = "../tansu-cat" }
+tansu-generator = { path = "../tansu-generator" }
 tansu-kafka-sans-io = { path = "../tansu-kafka-sans-io" }
 tansu-proxy = { path = "../tansu-proxy" }
 tansu-schema-registry = { path = "../tansu-schema-registry" }

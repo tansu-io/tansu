@@ -21,9 +21,15 @@ use url::Url;
 
 #[derive(Args, Clone, Debug)]
 pub(super) struct Arg {
-    #[arg(long, env = "LISTENER_URL", default_value = "tcp://[::]:9092")]
+    /// The proxy will listen on this address
+    #[arg(long, env = "LISTENER_URL", default_value = "tcp://0.0.0.0:9092")]
     pub(super) listener_url: EnvVarExp<Url>,
 
+    /// The proxy will forward traffic to this origin broker
     #[arg(long, default_value = DEFAULT_BROKER)]
     pub(super) origin_url: EnvVarExp<Url>,
+
+    /// OTEL Exporter OTLP endpoint
+    #[arg(long, env = "OTEL_EXPORTER_OTLP_ENDPOINT")]
+    pub(super) otlp_endpoint_url: Option<EnvVarExp<Url>>,
 }
