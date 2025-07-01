@@ -18,6 +18,7 @@ deltalake.workspace = true
 dotenv.workspace = true
 fake.workspace = true
 futures.workspace = true
+governor.workspace = true
 iceberg-catalog-memory.workspace = true
 iceberg-catalog-rest.workspace = true
 iceberg-datafusion.workspace = true

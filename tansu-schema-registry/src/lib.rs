@@ -28,6 +28,7 @@ use arrow::{datatypes::DataType, error::ArrowError, record_batch::RecordBatch};
 use bytes::Bytes;
 use datafusion::error::DataFusionError;
 use deltalake::DeltaTableError;
+use governor::InsufficientCapacity;
 use iceberg::spec::DataFileBuilderError;
 use jsonschema::ValidationError;
 use object_store::{
@@ -106,6 +107,9 @@ pub enum Error {
 
     #[error("{:?}", self)]
     InvalidValue(apache_avro::types::Value),
+
+    #[error("{:?}", self)]
+    InsufficientCapacity(#[from] InsufficientCapacity),
 
     #[error("{:?}", self)]
     Io(#[from] io::Error),

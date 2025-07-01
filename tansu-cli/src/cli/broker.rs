@@ -100,6 +100,10 @@ pub(super) enum Command {
         /// Delta database
         #[arg(long, env = "DELTA_DATABASE", default_value = "tansu")]
         database: Option<String>,
+
+        /// Throttle the maximum number of records per second
+        #[clap(long)]
+        records_per_second: Option<u32>,
     },
 
     /// Schema topics are written in Parquet format
@@ -152,9 +156,14 @@ impl TryFrom<Arg> for tansu_server::broker::Broker<Controller<StorageContainer>,
                     .namespace(namespace)
                     .warehouse(warehouse)
                     .build(),
-                Command::Delta { location, database } => lake::House::delta()
+                Command::Delta {
+                    location,
+                    database,
+                    records_per_second,
+                } => lake::House::delta()
                     .location(location.into_inner())
                     .database(database)
+                    .records_per_second(records_per_second)
                     .build(),
                 Command::Parquet { location } => lake::House::parquet()
                     .location(location.into_inner())

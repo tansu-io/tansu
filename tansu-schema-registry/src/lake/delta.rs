@@ -15,8 +15,9 @@
 
 use std::{
     collections::HashMap,
+    num::NonZeroU32,
     sync::{Arc, LazyLock, Mutex},
-    time::SystemTime,
+    time::{Duration, SystemTime},
 };
 
 use crate::{Error, METER, Result, lake::LakeHouseType, sql::typeof_sql_expr};
@@ -32,10 +33,17 @@ use deltalake::{
     protocol::SaveMode,
     writer::{DeltaWriter, RecordBatchWriter},
 };
-use opentelemetry::{KeyValue, metrics::Histogram};
+use governor::{
+    DefaultDirectRateLimiter, Jitter, Quota, RateLimiter, clock::QuantaInstant,
+    middleware::NoOpMiddleware,
+};
+use opentelemetry::{
+    KeyValue,
+    metrics::{Counter, Histogram},
+};
 use parquet::file::properties::WriterProperties;
 use tansu_kafka_sans_io::describe_configs_response::DescribeConfigsResult;
-use tracing::debug;
+use tracing::{debug, warn};
 use url::Url;
 
 use super::{House, LakeHouse};
@@ -44,6 +52,7 @@ use super::{House, LakeHouse};
 pub struct Builder<L> {
     location: L,
     database: Option<String>,
+    records_per_second: Option<u32>,
 }
 
 impl<L> Builder<L> {
@@ -51,11 +60,19 @@ impl<L> Builder<L> {
         Builder {
             location,
             database: self.database,
+            records_per_second: self.records_per_second,
         }
     }
 
     pub fn database(self, database: Option<String>) -> Self {
         Self { database, ..self }
+    }
+
+    pub fn records_per_second(self, records_per_second: Option<u32>) -> Self {
+        Self {
+            records_per_second,
+            ..self
+        }
     }
 }
 
@@ -65,11 +82,26 @@ impl Builder<Url> {
     }
 }
 
+static RECORD_BATCH_ROWS: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    METER
+        .u64_counter("deltalake_record_batch_rows")
+        .with_description("The row count of records written in a batch")
+        .build()
+});
+
 static WRITE_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
     METER
         .u64_histogram("deltalake_write_duration")
         .with_unit("ms")
         .with_description("The Delta Lake write latencies in milliseconds")
+        .build()
+});
+
+static FLUSH_AND_COMMIT_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
+    METER
+        .u64_histogram("deltalake_flush_and_commit_duration")
+        .with_unit("ms")
+        .with_description("Delta Lake record batch flush and commit latency in milliseconds")
         .build()
 });
 
@@ -81,11 +113,20 @@ static WRITE_WITH_DATAFUSION_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(
         .build()
 });
 
+static RATE_LIMIT_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
+    METER
+        .u64_histogram("deltalake_rate_limit_duration")
+        .with_unit("ms")
+        .with_description("Delta Lake Rate limit latencies in milliseconds")
+        .build()
+});
+
 #[derive(Clone, Debug)]
 pub struct Delta {
     location: Url,
     tables: Arc<Mutex<HashMap<String, Table>>>,
     database: String,
+    rate_limiter: Option<Arc<DefaultDirectRateLimiter<NoOpMiddleware<QuantaInstant>>>>,
 }
 
 #[derive(Clone, Debug)]
@@ -183,10 +224,6 @@ impl Delta {
     ) -> Result<DeltaTable> {
         debug!(?name, ?schema);
 
-        if let Some(table) = self.tables.lock().map(|guard| guard.get(name).cloned())? {
-            return Ok(table.delta_table);
-        }
-
         let columns = schema
             .fields()
             .iter()
@@ -209,6 +246,10 @@ impl Delta {
             .inspect_err(|err| debug!(?err))
         {
             Err(deltalake::DeltaTableError::VersionAlreadyExists(_)) => {
+                if let Some(table) = self.tables.lock().map(|guard| guard.get(name).cloned())? {
+                    return Ok(table.delta_table);
+                }
+
                 let mut table = DeltaTableBuilder::from_uri(self.table_uri(name)).build()?;
                 table
                     .load()
@@ -221,14 +262,24 @@ impl Delta {
             otherwise => otherwise,
         }?;
 
-        _ = self.tables.lock().map(|mut guard| {
-            guard.insert(
-                name.to_owned(),
-                Table {
+        self.tables.lock().map(|mut guard| {
+            guard
+                .entry(name.to_owned())
+                .and_modify(|existing| {
+                    if table.version() > existing.delta_table.version() {
+                        existing.delta_table = table.to_owned()
+                    } else {
+                        warn!(
+                            name,
+                            existing = existing.delta_table.version(),
+                            current = table.version()
+                        );
+                    }
+                })
+                .or_insert(Table {
                     delta_table: table.clone(),
                     config,
-                },
-            )
+                });
         })?;
 
         Ok(table)
@@ -241,7 +292,7 @@ impl Delta {
     ) -> Result<()> {
         let start = SystemTime::now();
 
-        let delta_table = DeltaOps::try_from_uri(&self.table_uri(name))
+        let table = DeltaOps::try_from_uri(&self.table_uri(name))
             .await
             .inspect_err(|err| debug!(?err))?
             .write(batches)
@@ -252,47 +303,111 @@ impl Delta {
                     start
                         .elapsed()
                         .map_or(0, |duration| duration.as_millis() as u64),
-                    &[KeyValue::new("table", table.table_uri())],
+                    &[KeyValue::new("table_uri", table.table_uri())],
                 )
             })?;
 
         self.tables.lock().map(|mut guard| {
-            guard
-                .entry(name.to_string())
-                .and_modify(|existing| existing.delta_table = delta_table);
+            guard.entry(name.to_string()).and_modify(|existing| {
+                if table.version() > existing.delta_table.version() {
+                    existing.delta_table = table.to_owned()
+                } else {
+                    warn!(
+                        name,
+                        existing = existing.delta_table.version(),
+                        current = table.version()
+                    );
+                }
+            });
         })?;
 
         Ok(())
     }
 
-    async fn write(&self, name: &str, table: &mut DeltaTable, batch: RecordBatch) -> Result<()> {
-        let start = SystemTime::now();
+    async fn rate_limit(&self, table_uri: String, n_ready: NonZeroU32) -> Result<()> {
+        if let Some(ref rate_limiter) = self.rate_limiter {
+            let start = SystemTime::now();
 
-        let writer_properties = WriterProperties::default();
+            let attributes = [KeyValue::new("table_uri", table_uri)];
+
+            rate_limiter
+                .until_n_ready_with_jitter(n_ready, Jitter::up_to(Duration::from_millis(50)))
+                .await
+                .inspect(|_| {
+                    RATE_LIMIT_DURATION.record(
+                        start
+                            .elapsed()
+                            .map_or(0, |duration| duration.as_millis() as u64),
+                        &attributes,
+                    )
+                })
+                .map_err(Into::into)
+        } else {
+            Ok(())
+        }
+    }
+
+    async fn write(&self, name: &str, table: &mut DeltaTable, batch: RecordBatch) -> Result<()> {
+        let properties = [KeyValue::new("table_uri", table.table_uri())];
+
+        if let Some(num_rows) = NonZeroU32::new(batch.num_rows() as u32) {
+            self.rate_limit(table.table_uri(), num_rows).await?;
+        }
+
+        let num_rows = batch.num_rows() as u64;
 
         let mut writer = RecordBatchWriter::for_table(table)
-            .map(|batch_writer| batch_writer.with_writer_properties(writer_properties))
+            .map(|batch_writer| batch_writer.with_writer_properties(WriterProperties::default()))
             .inspect_err(|err| debug!(?err))?;
 
-        writer.write(batch).await.inspect_err(|err| debug!(?err))?;
+        {
+            let start = SystemTime::now();
 
-        writer
-            .flush_and_commit(table)
-            .await
-            .inspect_err(|err| debug!(?err))
-            .inspect(|_| {
-                WRITE_DURATION.record(
-                    start
-                        .elapsed()
-                        .map_or(0, |duration| duration.as_millis() as u64),
-                    &[KeyValue::new("table", table.table_uri())],
-                )
-            })?;
+            writer
+                .write(batch)
+                .await
+                .inspect_err(|err| debug!(?err))
+                .inspect(|_| {
+                    RECORD_BATCH_ROWS.add(num_rows, &properties);
+
+                    WRITE_DURATION.record(
+                        start
+                            .elapsed()
+                            .map_or(0, |duration| duration.as_millis() as u64),
+                        &properties,
+                    )
+                })?;
+        }
+
+        {
+            let start = SystemTime::now();
+
+            writer
+                .flush_and_commit(table)
+                .await
+                .inspect_err(|err| debug!(?err))
+                .inspect(|_| {
+                    FLUSH_AND_COMMIT_DURATION.record(
+                        start
+                            .elapsed()
+                            .map_or(0, |duration| duration.as_millis() as u64),
+                        &[KeyValue::new("table", table.table_uri())],
+                    )
+                })?;
+        }
 
         self.tables.lock().map(|mut guard| {
-            guard
-                .entry(name.to_string())
-                .and_modify(|existing| existing.delta_table = table.to_owned());
+            guard.entry(name.to_string()).and_modify(|existing| {
+                if table.version() > existing.delta_table.version() {
+                    existing.delta_table = table.to_owned()
+                } else {
+                    warn!(
+                        name,
+                        existing = existing.delta_table.version(),
+                        current = table.version()
+                    );
+                }
+            });
         })?;
 
         Ok(())
@@ -343,9 +458,13 @@ impl LakeHouse for Delta {
 
         let config = Config::from(config);
 
-        let mut table = self
-            .create_initialized_table(topic, record_batch.schema().as_ref(), config.clone())
-            .await?;
+        let mut table =
+            if let Some(table) = self.tables.lock().map(|guard| guard.get(topic).cloned())? {
+                table.delta_table
+            } else {
+                self.create_initialized_table(topic, record_batch.schema().as_ref(), config.clone())
+                    .await?
+            };
 
         if config.generated_fields().is_empty() {
             _ = self.write(topic, &mut table, record_batch).await?;
@@ -395,6 +514,13 @@ impl TryFrom<Builder<Url>> for Delta {
             location: value.location,
             database: value.database.unwrap_or(String::from("tansu")),
             tables: Arc::new(Mutex::new(HashMap::new())),
+            rate_limiter: value
+                .records_per_second
+                .and_then(NonZeroU32::new)
+                .map(Quota::per_second)
+                .map(RateLimiter::direct)
+                .map(Arc::new)
+                .inspect(|rate_limiter| debug!(?rate_limiter)),
         })
     }
 }

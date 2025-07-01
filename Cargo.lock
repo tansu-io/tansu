@@ -6314,6 +6314,7 @@ dependencies = [
  "dotenv",
  "fake",
  "futures",
+ "governor",
  "iceberg",
  "iceberg-catalog-memory",
  "iceberg-catalog-rest",
