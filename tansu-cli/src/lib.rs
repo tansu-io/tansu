@@ -27,7 +27,7 @@ pub enum Error {
     DotEnv(#[from] dotenv::Error),
     Generate(#[from] tansu_generator::Error),
     Regex(#[from] regex::Error),
-    Schema(Box<tansu_schema_registry::Error>),
+    Schema(Box<tansu_schema::Error>),
     Server(Box<tansu_server::Error>),
     Topic(#[from] tansu_topic::Error),
     Url(#[from] url::ParseError),
@@ -39,8 +39,8 @@ impl From<tansu_cat::Error> for Error {
     }
 }
 
-impl From<tansu_schema_registry::Error> for Error {
-    fn from(value: tansu_schema_registry::Error) -> Self {
+impl From<tansu_schema::Error> for Error {
+    fn from(value: tansu_schema::Error) -> Self {
         Self::Schema(Box::new(value))
     }
 }

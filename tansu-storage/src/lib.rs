@@ -145,8 +145,8 @@ pub enum Error {
     #[error("regex")]
     Regex(#[from] regex::Error),
 
-    #[error("schema registry")]
-    SchemaRegistry(Box<tansu_schema_registry::Error>),
+    #[error("schema")]
+    Schema(Box<tansu_schema::Error>),
 
     #[error("segment empty: {0:?}")]
     SegmentEmpty(Topition),
@@ -188,12 +188,12 @@ impl<T> From<PoisonError<T>> for Error {
     }
 }
 
-impl From<tansu_schema_registry::Error> for Error {
-    fn from(value: tansu_schema_registry::Error) -> Self {
-        if let tansu_schema_registry::Error::Api(error_code) = value {
+impl From<tansu_schema::Error> for Error {
+    fn from(value: tansu_schema::Error) -> Self {
+        if let tansu_schema::Error::Api(error_code) = value {
             Self::Api(error_code)
         } else {
-            Self::SchemaRegistry(Box::new(value))
+            Self::Schema(Box::new(value))
         }
     }
 }

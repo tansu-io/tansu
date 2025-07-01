@@ -88,7 +88,7 @@ pub enum Error {
     ParseInt(#[from] std::num::ParseIntError),
     Poison,
     Pool(#[from] deadpool_postgres::PoolError),
-    SchemaRegistry(Box<tansu_schema_registry::Error>),
+    SchemaRegistry(Box<tansu_schema::Error>),
     Storage(#[from] tansu_storage::Error),
     StringUtf8(#[from] FromUtf8Error),
     Regex(#[from] regex::Error),
@@ -103,8 +103,8 @@ pub enum Error {
     Send(#[from] SendError<CancelKind>),
 }
 
-impl From<tansu_schema_registry::Error> for Error {
-    fn from(value: tansu_schema_registry::Error) -> Self {
+impl From<tansu_schema::Error> for Error {
+    fn from(value: tansu_schema::Error) -> Self {
         Self::SchemaRegistry(Box::new(value))
     }
 }

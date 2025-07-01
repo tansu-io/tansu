@@ -1,5 +1,5 @@
 [package]
-name = "tansu-schema-registry"
+name = "tansu-schema"
 edition.workspace = true
 version.workspace = true
 license.workspace = true

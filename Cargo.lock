@@ -6161,7 +6161,7 @@ dependencies = [
  "futures-util",
  "serde_json",
  "tansu-sans-io",
- "tansu-schema-registry",
+ "tansu-schema",
  "thiserror 2.0.12",
  "tokio",
  "tokio-util",
@@ -6181,7 +6181,7 @@ dependencies = [
  "tansu-generator",
  "tansu-proxy",
  "tansu-sans-io",
- "tansu-schema-registry",
+ "tansu-schema",
  "tansu-server",
  "tansu-storage",
  "tansu-topic",
@@ -6210,7 +6210,7 @@ dependencies = [
  "serde_json",
  "tansu-otel",
  "tansu-sans-io",
- "tansu-schema-registry",
+ "tansu-schema",
  "tansu-service",
  "thiserror 2.0.12",
  "tokio",
@@ -6299,7 +6299,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "tansu-schema-registry"
+name = "tansu-schema"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -6370,7 +6370,7 @@ dependencies = [
  "serde_json",
  "tansu-model",
  "tansu-sans-io",
- "tansu-schema-registry",
+ "tansu-schema",
  "tansu-storage",
  "thiserror 2.0.12",
  "tokio",
@@ -6423,7 +6423,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tansu-sans-io",
- "tansu-schema-registry",
+ "tansu-schema",
  "tempfile",
  "thiserror 2.0.12",
  "time",

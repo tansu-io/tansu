@@ -24,7 +24,7 @@ use tansu_sans_io::{
     fetch_response::FetchableTopicResponse,
     record::inflated,
 };
-use tansu_schema_registry::{AsJsonValue, Registry};
+use tansu_schema::{AsJsonValue, Registry};
 use tokio::{
     io::{self, AsyncReadExt, AsyncWriteExt},
     net::TcpStream,

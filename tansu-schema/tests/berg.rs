@@ -29,7 +29,7 @@ use tansu_sans_io::{
     describe_configs_response::{DescribeConfigsResourceResult, DescribeConfigsResult},
     record::{Record, inflated::Batch},
 };
-use tansu_schema_registry::{
+use tansu_schema::{
     AsArrow, Result,
     lake::{House, LakeHouse, berg::env_s3_props},
 };
@@ -125,7 +125,7 @@ fn normalized_config(topic: &str) -> DescribeConfigsResult {
 
 mod json {
     use super::*;
-    use tansu_schema_registry::{json::Schema, lake::LakeHouseType};
+    use tansu_schema::{json::Schema, lake::LakeHouseType};
 
     #[tokio::test]
     async fn key_and_value() -> Result<()> {
@@ -634,7 +634,7 @@ mod json {
 
 mod proto {
     use super::*;
-    use tansu_schema_registry::{
+    use tansu_schema::{
         lake::LakeHouseType,
         proto::{MessageKind, Schema},
     };
@@ -999,7 +999,7 @@ mod proto {
 mod avro {
     use super::*;
     use apache_avro::types::Value as AvroValue;
-    use tansu_schema_registry::{
+    use tansu_schema::{
         AsKafkaRecord,
         avro::{Schema, r, schema_write},
         lake::LakeHouseType,

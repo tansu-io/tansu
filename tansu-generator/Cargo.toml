@@ -19,7 +19,7 @@ rama.workspace = true
 serde_json.workspace = true
 tansu-otel = { path = "../tansu-otel" }
 tansu-sans-io = { path = "../tansu-sans-io" }
-tansu-schema-registry = { path = "../tansu-schema-registry" }
+tansu-schema = { path = "../tansu-schema" }
 tansu-service = { path = "../tansu-service" }
 thiserror.workspace = true
 tokio-util.workspace = true

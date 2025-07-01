@@ -53,7 +53,7 @@ use tansu_sans_io::{
     to_system_time, to_timestamp,
     txn_offset_commit_response::{TxnOffsetCommitResponsePartition, TxnOffsetCommitResponseTopic},
 };
-use tansu_schema_registry::{
+use tansu_schema::{
     Registry,
     lake::{House, LakeHouse},
 };

@@ -154,7 +154,7 @@ mod pg {
     use std::env;
 
     use common::{StorageType, init_tracing};
-    use tansu_schema_registry::Registry;
+    use tansu_schema::Registry;
     use tansu_server::Error;
     use url::Url;
 
@@ -217,7 +217,7 @@ mod in_memory {
     use std::env;
 
     use common::{StorageType, init_tracing};
-    use tansu_schema_registry::Registry;
+    use tansu_schema::Registry;
     use tansu_server::Error;
     use url::Url;
 

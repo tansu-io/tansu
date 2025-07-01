@@ -24,7 +24,7 @@ use tansu_sans_io::{
     produce_request::{PartitionProduceData, TopicProduceData},
     record::{deflated, inflated},
 };
-use tansu_schema_registry::{AsKafkaRecord, Registry};
+use tansu_schema::{AsKafkaRecord, Registry};
 use tokio::{
     fs::File,
     io::{self, AsyncReadExt, AsyncWriteExt},

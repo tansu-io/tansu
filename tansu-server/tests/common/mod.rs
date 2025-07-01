@@ -32,7 +32,7 @@ use tansu_sans_io::{
     offset_fetch_response::OffsetFetchResponseTopic,
     sync_group_request::SyncGroupRequestAssignment,
 };
-use tansu_schema_registry::Registry;
+use tansu_schema::Registry;
 use tansu_server::{
     Error, Result,
     coordinator::group::{Coordinator, administrator::Controller},

@@ -18,7 +18,7 @@ use crate::{EnvVarExp, Error, Result};
 use super::DEFAULT_BROKER;
 use clap::{Parser, Subcommand};
 use tansu_sans_io::ErrorCode;
-use tansu_schema_registry::lake::{self};
+use tansu_schema::lake::{self};
 use tansu_server::{NODE_ID, broker::Broker, coordinator::group::administrator::Controller};
 use tansu_storage::StorageContainer;
 use tracing::debug;

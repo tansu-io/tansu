@@ -31,7 +31,7 @@ pub enum Error {
     Io(Arc<io::Error>),
     LinesCodec(#[from] LinesCodecError),
     Protocol(#[from] tansu_sans_io::Error),
-    Schema(#[from] tansu_schema_registry::Error),
+    Schema(#[from] tansu_schema::Error),
     SerdeJson(#[from] serde_json::Error),
 }
 

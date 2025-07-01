@@ -11,7 +11,7 @@ futures-util.workspace = true
 futures.workspace = true
 serde_json.workspace = true
 tansu-sans-io = { path = "../tansu-sans-io" }
-tansu-schema-registry = { path = "../tansu-schema-registry" }
+tansu-schema = { path = "../tansu-schema" }
 thiserror.workspace = true
 tokio-util.workspace = true
 tokio.workspace = true

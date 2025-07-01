@@ -14,7 +14,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use rand::{distr::Alphanumeric, prelude::*, rng};
-use tansu_schema_registry::{Error, Result};
+use tansu_schema::{Error, Result};
 use tracing::subscriber::DefaultGuard;
 use tracing_subscriber::EnvFilter;
 

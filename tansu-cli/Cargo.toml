@@ -13,7 +13,7 @@ tansu-cat = { path = "../tansu-cat" }
 tansu-generator = { path = "../tansu-generator" }
 tansu-sans-io = { path = "../tansu-sans-io" }
 tansu-proxy = { path = "../tansu-proxy" }
-tansu-schema-registry = { path = "../tansu-schema-registry" }
+tansu-schema = { path = "../tansu-schema" }
 tansu-server = { path = "../tansu-server" }
 tansu-storage = { path = "../tansu-storage" }
 tansu-topic = { path = "../tansu-topic" }

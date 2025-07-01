@@ -63,7 +63,7 @@ use tansu_sans_io::{
     record::{Record, deflated, inflated},
     txn_offset_commit_response::{TxnOffsetCommitResponsePartition, TxnOffsetCommitResponseTopic},
 };
-use tansu_schema_registry::{
+use tansu_schema::{
     Registry,
     lake::{House, LakeHouse},
 };

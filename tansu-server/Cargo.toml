@@ -29,7 +29,7 @@ serde.workspace = true
 serde_json.workspace = true
 tansu-model = { path = "../tansu-model" }
 tansu-sans-io = { path = "../tansu-sans-io" }
-tansu-schema-registry = { path = "../tansu-schema-registry" }
+tansu-schema = { path = "../tansu-schema" }
 tansu-storage = { path = "../tansu-storage" }
 thiserror.workspace = true
 tokio-postgres.workspace = true

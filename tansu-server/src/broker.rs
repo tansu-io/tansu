@@ -68,7 +68,7 @@ use tansu_sans_io::{
     Body, ErrorCode, Frame, Header, IsolationLevel, consumer_group_describe_response,
     describe_groups_response,
 };
-use tansu_schema_registry::{Registry, lake::House};
+use tansu_schema::{Registry, lake::House};
 use tansu_storage::{
     BrokerRegistrationRequest, Storage, StorageContainer, TopicId, dynostore::DynoStore,
     pg::Postgres,

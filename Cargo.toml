@@ -8,7 +8,7 @@ members = [
     "tansu-sans-io",
     "tansu-otel",
     "tansu-proxy",
-    "tansu-schema-registry",
+    "tansu-schema",
     "tansu-server",
     "tansu-service",
     "tansu-storage",
