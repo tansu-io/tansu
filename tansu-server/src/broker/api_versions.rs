@@ -15,7 +15,7 @@
 
 use std::sync::LazyLock;
 
-use tansu_kafka_sans_io::{Body, ErrorCode, RootMessageMeta, api_versions_response::ApiVersion};
+use tansu_sans_io::{Body, ErrorCode, RootMessageMeta, api_versions_response::ApiVersion};
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ApiVersionsRequest;

@@ -43,7 +43,7 @@ use opentelemetry_semantic_conventions::SCHEMA_URL;
 use parquet::errors::ParquetError;
 use rhai::EvalAltResult;
 use serde_json::Value;
-use tansu_kafka_sans_io::{ErrorCode, record::inflated::Batch};
+use tansu_sans_io::{ErrorCode, record::inflated::Batch};
 use tracing::{debug, error};
 use tracing_subscriber::filter::ParseError;
 use url::Url;
@@ -125,7 +125,7 @@ pub enum Error {
     },
 
     #[error("{:?}", self)]
-    KafkaSansIo(#[from] tansu_kafka_sans_io::Error),
+    KafkaSansIo(#[from] tansu_sans_io::Error),
 
     #[error("{:?}", self)]
     Message(String),
@@ -222,7 +222,7 @@ pub trait AsArrow {
 }
 
 pub trait AsKafkaRecord {
-    fn as_kafka_record(&self, value: &Value) -> Result<tansu_kafka_sans_io::record::Builder>;
+    fn as_kafka_record(&self, value: &Value) -> Result<tansu_sans_io::record::Builder>;
 }
 
 pub trait AsJsonValue {
@@ -230,7 +230,7 @@ pub trait AsJsonValue {
 }
 
 pub trait Generator {
-    fn generate(&self) -> Result<tansu_kafka_sans_io::record::Builder>;
+    fn generate(&self) -> Result<tansu_sans_io::record::Builder>;
 }
 
 #[derive(Clone, Debug)]
@@ -241,7 +241,7 @@ pub enum Schema {
 }
 
 impl AsKafkaRecord for Schema {
-    fn as_kafka_record(&self, value: &Value) -> Result<tansu_kafka_sans_io::record::Builder> {
+    fn as_kafka_record(&self, value: &Value) -> Result<tansu_sans_io::record::Builder> {
         debug!(?value);
 
         match self {
@@ -294,7 +294,7 @@ impl AsJsonValue for Schema {
 }
 
 impl Generator for Schema {
-    fn generate(&self) -> Result<tansu_kafka_sans_io::record::Builder> {
+    fn generate(&self) -> Result<tansu_sans_io::record::Builder> {
         match self {
             Schema::Avro(schema) => schema.generate(),
             Schema::Json(schema) => schema.generate(),
@@ -536,7 +536,7 @@ mod tests {
     use object_store::PutPayload;
     use serde_json::json;
     use std::{fs::File, sync::Arc, thread};
-    use tansu_kafka_sans_io::record::Record;
+    use tansu_sans_io::record::Record;
     use tracing::{error, subscriber::DefaultGuard};
     use tracing_subscriber::EnvFilter;
 

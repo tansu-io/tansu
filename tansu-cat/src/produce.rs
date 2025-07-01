@@ -19,7 +19,7 @@ use crate::{Error, Result};
 
 use futures::StreamExt;
 use serde_json::Value;
-use tansu_kafka_sans_io::{
+use tansu_sans_io::{
     Body, ErrorCode, Frame, Header,
     produce_request::{PartitionProduceData, TopicProduceData},
     record::{deflated, inflated},

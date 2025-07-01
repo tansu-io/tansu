@@ -42,7 +42,7 @@ use opentelemetry::{
     metrics::{Counter, Histogram},
 };
 use parquet::file::properties::WriterProperties;
-use tansu_kafka_sans_io::describe_configs_response::DescribeConfigsResult;
+use tansu_sans_io::describe_configs_response::DescribeConfigsResult;
 use tracing::{debug, warn};
 use url::Url;
 
@@ -534,7 +534,7 @@ mod tests {
     use datafusion::execution::context::SessionContext;
     use deltalake::DeltaTableBuilder;
     use serde_json::json;
-    use tansu_kafka_sans_io::{
+    use tansu_sans_io::{
         ConfigResource, ErrorCode,
         describe_configs_response::DescribeConfigsResourceResult,
         record::{Record, inflated::Batch},

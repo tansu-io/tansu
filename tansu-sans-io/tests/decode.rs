@@ -17,7 +17,7 @@ use bytes::Bytes;
 use common::init_tracing;
 use serde::Deserialize;
 use std::io::Cursor;
-use tansu_kafka_sans_io::{
+use tansu_sans_io::{
     Body, ErrorCode, Frame, Header, Result,
     de::Decoder,
     describe_configs_response::{
@@ -73,7 +73,7 @@ fn api_versions_request_v3_000() -> Result<()> {
 
 #[test]
 fn api_versions_response_v1_000() -> Result<()> {
-    use tansu_kafka_sans_io::api_versions_response::ApiVersion;
+    use tansu_sans_io::api_versions_response::ApiVersion;
 
     let _guard = init_tracing()?;
 
@@ -308,7 +308,7 @@ fn api_versions_response_v1_000() -> Result<()> {
 
 #[test]
 fn api_versions_response_v3_000() -> Result<()> {
-    use tansu_kafka_sans_io::api_versions_response::{
+    use tansu_sans_io::api_versions_response::{
         ApiVersion, FinalizedFeatureKey, SupportedFeatureKey,
     };
 
@@ -646,7 +646,7 @@ fn api_versions_response_v3_000() -> Result<()> {
 
 #[test]
 fn create_topics_request_v7_000() -> Result<()> {
-    use tansu_kafka_sans_io::create_topics_request::{CreatableTopic, CreatableTopicConfig};
+    use tansu_sans_io::create_topics_request::{CreatableTopic, CreatableTopicConfig};
 
     let _guard = init_tracing()?;
 
@@ -701,9 +701,7 @@ fn create_topics_request_v7_000() -> Result<()> {
 
 #[test]
 fn create_topics_response_v7_000() -> Result<()> {
-    use tansu_kafka_sans_io::create_topics_response::{
-        CreatableTopicConfigs, CreatableTopicResult,
-    };
+    use tansu_sans_io::create_topics_response::{CreatableTopicConfigs, CreatableTopicResult};
     let _guard = init_tracing()?;
 
     let encoded = vec![
@@ -1023,7 +1021,7 @@ fn create_topics_response_v7_000() -> Result<()> {
 
 #[test]
 fn delete_topics_request_v6_000() -> Result<()> {
-    use tansu_kafka_sans_io::delete_topics_request::DeleteTopicState;
+    use tansu_sans_io::delete_topics_request::DeleteTopicState;
 
     let _guard = init_tracing()?;
 
@@ -1091,7 +1089,7 @@ fn describe_cluster_request_v1_000() -> Result<()> {
 
 #[test]
 fn describe_configs_request_v4_000() -> Result<()> {
-    use tansu_kafka_sans_io::describe_configs_request::DescribeConfigsResource;
+    use tansu_sans_io::describe_configs_request::DescribeConfigsResource;
 
     let _guard = init_tracing()?;
 
@@ -1130,7 +1128,7 @@ fn describe_configs_request_v4_000() -> Result<()> {
 
 #[test]
 fn describe_configs_request_v4_001() -> Result<()> {
-    use tansu_kafka_sans_io::describe_configs_request::DescribeConfigsResource;
+    use tansu_sans_io::describe_configs_request::DescribeConfigsResource;
 
     let _guard = init_tracing()?;
 
@@ -1169,7 +1167,7 @@ fn describe_configs_request_v4_001() -> Result<()> {
 
 #[test]
 fn describe_configs_request_v4_002() -> Result<()> {
-    use tansu_kafka_sans_io::describe_configs_request::DescribeConfigsResource;
+    use tansu_sans_io::describe_configs_request::DescribeConfigsResource;
 
     let _guard = init_tracing()?;
 
@@ -2511,7 +2509,7 @@ fn describe_groups_response_v1_000() -> Result<()> {
 
 #[test]
 fn fetch_request_v6_000() -> Result<()> {
-    use tansu_kafka_sans_io::fetch_request::{FetchPartition, FetchTopic};
+    use tansu_sans_io::fetch_request::{FetchPartition, FetchTopic};
 
     let _guard = init_tracing()?;
 
@@ -2574,7 +2572,7 @@ fn fetch_request_v6_000() -> Result<()> {
 
 #[test]
 fn fetch_request_v12_000() -> Result<()> {
-    use tansu_kafka_sans_io::fetch_request::{FetchPartition, FetchTopic};
+    use tansu_sans_io::fetch_request::{FetchPartition, FetchTopic};
 
     let _guard = init_tracing()?;
 
@@ -2662,7 +2660,7 @@ fn fetch_request_v12_000() -> Result<()> {
 
 #[test]
 fn fetch_request_v15_000() -> Result<()> {
-    use tansu_kafka_sans_io::fetch_request::{FetchPartition, FetchTopic};
+    use tansu_sans_io::fetch_request::{FetchPartition, FetchTopic};
 
     let _guard = init_tracing()?;
 
@@ -2930,7 +2928,7 @@ fn fetch_request_v16_000() -> Result<()> {
 
 #[test]
 fn fetch_request_v16_001() -> Result<()> {
-    use tansu_kafka_sans_io::fetch_request::{FetchPartition, FetchTopic};
+    use tansu_sans_io::fetch_request::{FetchPartition, FetchTopic};
     let _guard = init_tracing()?;
 
     let encoded = vec![
@@ -2993,7 +2991,7 @@ fn fetch_request_v16_001() -> Result<()> {
 
 #[test]
 fn fetch_response_v12_000() -> Result<()> {
-    use tansu_kafka_sans_io::fetch_response::{FetchableTopicResponse, PartitionData};
+    use tansu_sans_io::fetch_response::{FetchableTopicResponse, PartitionData};
 
     let _guard = init_tracing()?;
 
@@ -3867,7 +3865,7 @@ fn init_producer_id_request_v4_000() -> Result<()> {
 
 #[test]
 fn join_group_request_v5_000() -> Result<()> {
-    use tansu_kafka_sans_io::join_group_request::JoinGroupRequestProtocol;
+    use tansu_sans_io::join_group_request::JoinGroupRequestProtocol;
 
     let _guard = init_tracing()?;
 
@@ -3979,7 +3977,7 @@ fn join_group_response_v5_000() -> Result<()> {
 
 #[test]
 fn join_group_request_v9_000() -> Result<()> {
-    use tansu_kafka_sans_io::join_group_request::JoinGroupRequestProtocol;
+    use tansu_sans_io::join_group_request::JoinGroupRequestProtocol;
 
     let _guard = init_tracing()?;
 
@@ -4031,7 +4029,7 @@ fn join_group_request_v9_000() -> Result<()> {
 
 #[test]
 fn leave_group_request_v5_000() -> Result<()> {
-    use tansu_kafka_sans_io::leave_group_request::MemberIdentity;
+    use tansu_sans_io::leave_group_request::MemberIdentity;
 
     let _guard = init_tracing()?;
 
@@ -4108,7 +4106,7 @@ fn list_groups_request_v4_000() -> Result<()> {
 
 #[test]
 fn list_offsets_response_v0_000() -> Result<()> {
-    use tansu_kafka_sans_io::list_offsets_response::{
+    use tansu_sans_io::list_offsets_response::{
         ListOffsetsPartitionResponse, ListOffsetsTopicResponse,
     };
 
@@ -4156,7 +4154,7 @@ fn list_offsets_response_v0_000() -> Result<()> {
 
 #[test]
 fn list_partition_reassignments_request_v0_000() -> Result<()> {
-    use tansu_kafka_sans_io::list_partition_reassignments_request::ListPartitionReassignmentsTopics;
+    use tansu_sans_io::list_partition_reassignments_request::ListPartitionReassignmentsTopics;
 
     let _guard = init_tracing()?;
 
@@ -4269,7 +4267,7 @@ fn list_transactions_response_v1_000() -> Result<()> {
 
 #[test]
 fn metadata_request_v1_000() -> Result<()> {
-    use tansu_kafka_sans_io::metadata_request::MetadataRequestTopic;
+    use tansu_sans_io::metadata_request::MetadataRequestTopic;
 
     let _guard = init_tracing()?;
 
@@ -4462,7 +4460,7 @@ fn metadata_request_v7_000() -> Result<()> {
 #[test]
 fn metadata_response_v7_000() -> Result<()> {
     // response captured by proxy
-    use tansu_kafka_sans_io::metadata_response::{MetadataResponseBroker, MetadataResponseTopic};
+    use tansu_sans_io::metadata_response::{MetadataResponseBroker, MetadataResponseTopic};
 
     let _guard = init_tracing()?;
 
@@ -4552,7 +4550,7 @@ fn metadata_response_v7_000() -> Result<()> {
 
 #[test]
 fn metadata_request_v12_000() -> Result<()> {
-    use tansu_kafka_sans_io::metadata_request::MetadataRequestTopic;
+    use tansu_sans_io::metadata_request::MetadataRequestTopic;
 
     let _guard = init_tracing()?;
 
@@ -4592,7 +4590,7 @@ fn metadata_request_v12_000() -> Result<()> {
 
 #[test]
 fn metadata_response_v12_000() -> Result<()> {
-    use tansu_kafka_sans_io::metadata_response::{MetadataResponseBroker, MetadataResponseTopic};
+    use tansu_sans_io::metadata_response::{MetadataResponseBroker, MetadataResponseTopic};
 
     let _guard = init_tracing()?;
 
@@ -4839,7 +4837,7 @@ fn metadata_response_v12_002() -> Result<()> {
 
 #[test]
 fn offset_fetch_request_v3_000() -> Result<()> {
-    use tansu_kafka_sans_io::offset_fetch_request::OffsetFetchRequestTopic;
+    use tansu_sans_io::offset_fetch_request::OffsetFetchRequestTopic;
 
     let _guard = init_tracing()?;
 
@@ -4888,7 +4886,7 @@ fn offset_fetch_request_v3_000() -> Result<()> {
 
 #[test]
 fn offset_fetch_request_v7_000() -> Result<()> {
-    use tansu_kafka_sans_io::offset_fetch_request::OffsetFetchRequestTopic;
+    use tansu_sans_io::offset_fetch_request::OffsetFetchRequestTopic;
 
     let _guard = init_tracing()?;
 
@@ -4983,9 +4981,7 @@ fn offset_fetch_response_v7_000() -> Result<()> {
 
 #[test]
 fn offset_fetch_request_v9_000() -> Result<()> {
-    use tansu_kafka_sans_io::offset_fetch_request::{
-        OffsetFetchRequestGroup, OffsetFetchRequestTopics,
-    };
+    use tansu_sans_io::offset_fetch_request::{OffsetFetchRequestGroup, OffsetFetchRequestTopics};
 
     let _guard = init_tracing()?;
 
@@ -5037,7 +5033,7 @@ fn offset_fetch_request_v9_000() -> Result<()> {
 
 #[test]
 fn offset_commit_request_v9_000() -> Result<()> {
-    use tansu_kafka_sans_io::offset_commit_request::{
+    use tansu_sans_io::offset_commit_request::{
         OffsetCommitRequestPartition, OffsetCommitRequestTopic,
     };
 
@@ -5112,7 +5108,7 @@ fn offset_commit_request_v9_000() -> Result<()> {
 
 #[test]
 fn offset_for_leader_request_v0_000() -> Result<()> {
-    use tansu_kafka_sans_io::offset_for_leader_epoch_request::OffsetForLeaderTopic;
+    use tansu_sans_io::offset_for_leader_epoch_request::OffsetForLeaderTopic;
 
     let _guard = init_tracing()?;
 
@@ -5153,7 +5149,7 @@ fn offset_for_leader_request_v0_000() -> Result<()> {
 #[ignore]
 #[test]
 fn produce_request_v0_000() -> Result<()> {
-    use tansu_kafka_sans_io::produce_request::{PartitionProduceData, TopicProduceData};
+    use tansu_sans_io::produce_request::{PartitionProduceData, TopicProduceData};
 
     let _guard = init_tracing()?;
 
@@ -5270,7 +5266,7 @@ fn produce_request_v0_000() -> Result<()> {
 
 #[test]
 fn produce_request_v3_000() -> Result<()> {
-    use tansu_kafka_sans_io::produce_request::{PartitionProduceData, TopicProduceData};
+    use tansu_sans_io::produce_request::{PartitionProduceData, TopicProduceData};
 
     let _guard = init_tracing()?;
 
@@ -5389,7 +5385,7 @@ fn produce_request_v3_000() -> Result<()> {
 
 #[test]
 fn produce_request_v7_000() -> Result<()> {
-    use tansu_kafka_sans_io::produce_request::{PartitionProduceData, TopicProduceData};
+    use tansu_sans_io::produce_request::{PartitionProduceData, TopicProduceData};
 
     let _guard = init_tracing()?;
 
@@ -5475,7 +5471,7 @@ fn produce_request_v7_000() -> Result<()> {
 
 #[test]
 fn produce_request_v9_000() -> Result<()> {
-    use tansu_kafka_sans_io::produce_request::{PartitionProduceData, TopicProduceData};
+    use tansu_sans_io::produce_request::{PartitionProduceData, TopicProduceData};
 
     let _guard = init_tracing()?;
 
@@ -5556,7 +5552,7 @@ fn produce_request_v9_000() -> Result<()> {
 
 #[test]
 fn produce_request_v9_001() -> Result<()> {
-    use tansu_kafka_sans_io::produce_request::{PartitionProduceData, TopicProduceData};
+    use tansu_sans_io::produce_request::{PartitionProduceData, TopicProduceData};
 
     let _guard = init_tracing()?;
 
@@ -5733,7 +5729,7 @@ fn produce_request_v9_001() -> Result<()> {
 
 #[test]
 fn produce_request_v10_000() -> Result<()> {
-    use tansu_kafka_sans_io::produce_request::{PartitionProduceData, TopicProduceData};
+    use tansu_sans_io::produce_request::{PartitionProduceData, TopicProduceData};
 
     let _guard = init_tracing()?;
 
@@ -5839,7 +5835,7 @@ fn produce_request_v10_000() -> Result<()> {
 
 #[test]
 fn produce_request_v10_001() -> Result<()> {
-    use tansu_kafka_sans_io::produce_request::{PartitionProduceData, TopicProduceData};
+    use tansu_sans_io::produce_request::{PartitionProduceData, TopicProduceData};
 
     let _guard = init_tracing()?;
 
@@ -6129,7 +6125,7 @@ culpa qui officia deserunt mollit anim id est laborum.",
 
 #[test]
 fn produce_request_v10_002() -> Result<()> {
-    use tansu_kafka_sans_io::produce_request::{PartitionProduceData, TopicProduceData};
+    use tansu_sans_io::produce_request::{PartitionProduceData, TopicProduceData};
 
     let _guard = init_tracing()?;
 
@@ -6257,7 +6253,7 @@ sunt\x01uXculpa qui officia deser\x01\x1e\x1cmollit a!!<id est laborum.\0");
 
 #[test]
 fn produce_request_v10_003() -> Result<()> {
-    use tansu_kafka_sans_io::produce_request::{PartitionProduceData, TopicProduceData};
+    use tansu_sans_io::produce_request::{PartitionProduceData, TopicProduceData};
 
     let _guard = init_tracing()?;
 
@@ -6389,7 +6385,7 @@ sun\x05uXculpa qui officia deser\x01\x1e\x0cmoll!\x93!!<id est laborum.\0",
 
 #[test]
 fn produce_response_v9_000() -> Result<()> {
-    use tansu_kafka_sans_io::produce_response::{PartitionProduceResponse, TopicProduceResponse};
+    use tansu_sans_io::produce_response::{PartitionProduceResponse, TopicProduceResponse};
 
     let _guard = init_tracing()?;
 
@@ -6438,7 +6434,7 @@ fn produce_response_v9_000() -> Result<()> {
 
 #[test]
 pub fn sync_group_request_v5_000() -> Result<()> {
-    use tansu_kafka_sans_io::sync_group_request::SyncGroupRequestAssignment;
+    use tansu_sans_io::sync_group_request::SyncGroupRequestAssignment;
 
     let _guard = init_tracing()?;
 
@@ -6487,7 +6483,7 @@ pub fn sync_group_request_v5_000() -> Result<()> {
 
 #[test]
 fn describe_topic_partitions_request_v0_000() -> Result<()> {
-    use tansu_kafka_sans_io::describe_topic_partitions_request::TopicRequest;
+    use tansu_sans_io::describe_topic_partitions_request::TopicRequest;
 
     let _guard = init_tracing()?;
 
@@ -6524,7 +6520,7 @@ fn describe_topic_partitions_request_v0_000() -> Result<()> {
 
 #[test]
 fn describe_topic_partitions_response_v0_000() -> Result<()> {
-    use tansu_kafka_sans_io::describe_topic_partitions_response::{
+    use tansu_sans_io::describe_topic_partitions_response::{
         DescribeTopicPartitionsResponsePartition, DescribeTopicPartitionsResponseTopic,
     };
 

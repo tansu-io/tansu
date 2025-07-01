@@ -15,7 +15,7 @@
 
 use common::{StorageType, alphanumeric_string, init_tracing, register_broker};
 use rand::{prelude::*, rng};
-use tansu_kafka_sans_io::{ErrorCode, create_topics_request::CreatableTopic};
+use tansu_sans_io::{ErrorCode, create_topics_request::CreatableTopic};
 use tansu_server::Result;
 use tansu_storage::{OffsetCommitRequest, Storage, StorageContainer, Topition};
 use tracing::debug;

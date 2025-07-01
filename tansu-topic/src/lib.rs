@@ -18,7 +18,7 @@ use std::{fmt, io, result};
 use create::Create;
 use delete::Delete;
 use std::{marker::PhantomData, sync::Arc};
-use tansu_kafka_sans_io::ErrorCode;
+use tansu_sans_io::ErrorCode;
 use url::Url;
 
 mod create;
@@ -30,7 +30,7 @@ pub type Result<T, E = Error> = result::Result<T, E>;
 pub enum Error {
     Api(ErrorCode),
     Io(Arc<io::Error>),
-    Protocol(#[from] tansu_kafka_sans_io::Error),
+    Protocol(#[from] tansu_sans_io::Error),
 }
 
 impl From<io::Error> for Error {

@@ -17,7 +17,7 @@ use std::{collections::HashMap, error::Error, str::FromStr};
 
 use crate::Result;
 use clap::Subcommand;
-use tansu_kafka_sans_io::ErrorCode;
+use tansu_sans_io::ErrorCode;
 use tansu_topic::Topic;
 use url::Url;
 

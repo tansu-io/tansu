@@ -61,7 +61,7 @@ mod tests {
     use super::*;
     use crate::Error;
     use object_store::memory::InMemory;
-    use tansu_kafka_sans_io::ErrorCode;
+    use tansu_sans_io::ErrorCode;
     use tansu_storage::dynostore::DynoStore;
     use tracing::subscriber::DefaultGuard;
 

@@ -24,7 +24,7 @@ use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
 use iceberg_datafusion::IcebergTableProvider;
 use serde_json::{Value as JsonValue, json};
 use std::{env::var, sync::Arc};
-use tansu_kafka_sans_io::{
+use tansu_sans_io::{
     ConfigResource, ErrorCode,
     describe_configs_response::{DescribeConfigsResourceResult, DescribeConfigsResult},
     record::{Record, inflated::Batch},

@@ -14,7 +14,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use crate::Result;
-use tansu_kafka_sans_io::{
+use tansu_sans_io::{
     ConfigResource, describe_configs_request::DescribeConfigsResource,
     describe_configs_response::DescribeConfigsResult,
 };

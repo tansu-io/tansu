@@ -25,7 +25,7 @@ rand.workspace = true
 regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-tansu-kafka-sans-io = { path = "../tansu-kafka-sans-io" }
+tansu-sans-io = { path = "../tansu-sans-io" }
 tansu-schema-registry = { path = "../tansu-schema-registry" }
 thiserror.workspace = true
 tokio-postgres.workspace = true

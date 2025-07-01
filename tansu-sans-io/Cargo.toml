@@ -1,5 +1,5 @@
 [package]
-name = "tansu-kafka-sans-io"
+name = "tansu-sans-io"
 edition.workspace = true
 version.workspace = true
 license.workspace = true

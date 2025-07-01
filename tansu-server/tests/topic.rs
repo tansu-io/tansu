@@ -14,7 +14,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use common::{alphanumeric_string, register_broker};
-use tansu_kafka_sans_io::{
+use tansu_sans_io::{
     ErrorCode, NULL_TOPIC_ID,
     create_topics_request::{CreatableTopic, CreatableTopicConfig},
 };

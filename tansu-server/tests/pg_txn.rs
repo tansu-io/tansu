@@ -20,7 +20,7 @@ use common::{
     register_broker, storage_container, sync_group,
 };
 use rand::{prelude::*, rng};
-use tansu_kafka_sans_io::{
+use tansu_sans_io::{
     BatchAttribute, ErrorCode, IsolationLevel,
     add_partitions_to_txn_request::AddPartitionsToTxnTopic,
     create_topics_request::CreatableTopic,

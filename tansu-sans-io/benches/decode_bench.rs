@@ -14,7 +14,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
-use tansu_kafka_sans_io::Frame;
+use tansu_sans_io::Frame;
 
 fn api_versions_request_v3_000(c: &mut Criterion) {
     _ = c.bench_function("api_versions_request_v3_000", |b| {

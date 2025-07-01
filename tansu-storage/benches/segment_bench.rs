@@ -15,7 +15,7 @@
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use std::iter;
-use tansu_kafka_sans_io::record::{Record, deflated, inflated};
+use tansu_sans_io::record::{Record, deflated, inflated};
 use tansu_storage::{
     Topition, TopitionOffset,
     index::offset::OffsetIndex,

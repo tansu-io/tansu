@@ -17,7 +17,7 @@ use bytes::Bytes;
 use common::register_broker;
 use rand::{prelude::*, rng};
 use serde_json::json;
-use tansu_kafka_sans_io::{
+use tansu_sans_io::{
     ErrorCode,
     create_topics_request::CreatableTopic,
     record::{Record, inflated::Batch},

@@ -64,7 +64,7 @@ use std::{
     sync::LazyLock,
     time::{Duration, SystemTime},
 };
-use tansu_kafka_sans_io::{
+use tansu_sans_io::{
     Body, ErrorCode, Frame, Header, IsolationLevel, consumer_group_describe_response,
     describe_groups_response,
 };

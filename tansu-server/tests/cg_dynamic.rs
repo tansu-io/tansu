@@ -19,7 +19,7 @@ use common::{
     alphanumeric_string, heartbeat, join, join_group, register_broker, sync_group,
 };
 use rand::{prelude::*, rng};
-use tansu_kafka_sans_io::{
+use tansu_sans_io::{
     ErrorCode, join_group_request::JoinGroupRequestProtocol,
     sync_group_request::SyncGroupRequestAssignment,
 };

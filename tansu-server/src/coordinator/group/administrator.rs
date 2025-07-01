@@ -26,7 +26,7 @@ use std::{
 use async_trait::async_trait;
 use bytes::Bytes;
 use opentelemetry::{KeyValue, metrics::Counter};
-use tansu_kafka_sans_io::{
+use tansu_sans_io::{
     Body, ErrorCode,
     join_group_request::JoinGroupRequestProtocol,
     join_group_response::JoinGroupResponseMember,
@@ -2840,7 +2840,7 @@ mod tests {
     use super::*;
     use object_store::memory::InMemory;
     use pretty_assertions::assert_eq;
-    use tansu_kafka_sans_io::offset_commit_request::{
+    use tansu_sans_io::offset_commit_request::{
         OffsetCommitRequestPartition, OffsetCommitRequestTopic,
     };
     use tansu_storage::dynostore::DynoStore;

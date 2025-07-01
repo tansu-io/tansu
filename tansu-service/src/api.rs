@@ -24,7 +24,7 @@ use std::{
 use bytes::Bytes;
 use opentelemetry::{KeyValue, metrics::Histogram};
 use rama::{Context, Layer, Service, context::Extensions, error::BoxError, matcher::Matcher};
-use tansu_kafka_sans_io::{Body, Frame, Header};
+use tansu_sans_io::{Body, Frame, Header};
 use tracing::debug;
 
 use crate::{METER, Result};

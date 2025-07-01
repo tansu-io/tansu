@@ -19,7 +19,7 @@ pub mod consumer;
 use crate::Result;
 use async_trait::async_trait;
 use std::fmt::Debug;
-use tansu_kafka_sans_io::{
+use tansu_sans_io::{
     Body,
     join_group_request::JoinGroupRequestProtocol,
     leave_group_request::MemberIdentity,

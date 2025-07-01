@@ -15,7 +15,7 @@
 
 use rama::{Context, Layer, Service, error::BoxError};
 use std::fmt::Debug;
-use tansu_kafka_sans_io::{
+use tansu_sans_io::{
     Body,
     metadata_request::MetadataRequestTopic,
     metadata_response::{MetadataResponseBroker, MetadataResponseTopic},

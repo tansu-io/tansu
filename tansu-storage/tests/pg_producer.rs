@@ -15,7 +15,7 @@
 
 use bytes::Bytes;
 use rand::{distr::Alphanumeric, prelude::*, rng};
-use tansu_kafka_sans_io::{
+use tansu_sans_io::{
     ErrorCode, IsolationLevel,
     create_topics_request::CreatableTopic,
     record::{Record, inflated},

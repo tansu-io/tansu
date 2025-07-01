@@ -44,7 +44,7 @@ use iceberg::{
 use iceberg_catalog_memory::MemoryCatalog;
 use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
 use parquet::file::properties::WriterProperties;
-use tansu_kafka_sans_io::describe_configs_response::DescribeConfigsResult;
+use tansu_sans_io::describe_configs_response::DescribeConfigsResult;
 use tracing::{debug, error};
 use url::Url;
 use uuid::Uuid;

@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 use bytes::Bytes;
 use common::{FetchResponse, StorageType, alphanumeric_string, init_tracing, register_broker};
 use rand::{prelude::*, rng};
-use tansu_kafka_sans_io::{
+use tansu_sans_io::{
     ErrorCode, IsolationLevel, NULL_TOPIC_ID,
     create_topics_request::CreatableTopic,
     fetch_request::{FetchPartition, FetchTopic},

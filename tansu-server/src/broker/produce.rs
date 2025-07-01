@@ -14,7 +14,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use crate::{Error, Result};
-use tansu_kafka_sans_io::{
+use tansu_sans_io::{
     ErrorCode,
     produce_request::{PartitionProduceData, TopicProduceData},
     produce_response::{NodeEndpoint, PartitionProduceResponse, TopicProduceResponse},
@@ -170,7 +170,7 @@ mod tests {
     use crate::{Error, broker::init_producer_id::InitProducerIdRequest};
     use bytes::Bytes;
     use object_store::memory::InMemory;
-    use tansu_kafka_sans_io::{
+    use tansu_sans_io::{
         ErrorCode,
         record::{
             Record,

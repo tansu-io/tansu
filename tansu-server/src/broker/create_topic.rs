@@ -14,7 +14,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use crate::Result;
-use tansu_kafka_sans_io::{
+use tansu_sans_io::{
     ErrorCode, create_topics_request::CreatableTopic, create_topics_response::CreatableTopicResult,
 };
 use tansu_storage::Storage;
@@ -119,7 +119,7 @@ where
 #[cfg(test)]
 mod tests {
     use object_store::memory::InMemory;
-    use tansu_kafka_sans_io::NULL_TOPIC_ID;
+    use tansu_sans_io::NULL_TOPIC_ID;
     use tansu_storage::dynostore::DynoStore;
 
     use super::*;

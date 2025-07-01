@@ -39,7 +39,7 @@ use std::{
     sync::{LazyLock, PoisonError},
     time::{Duration, SystemTime, SystemTimeError},
 };
-use tansu_kafka_sans_io::{
+use tansu_sans_io::{
     Body, ConfigResource, ErrorCode, IsolationLevel, NULL_TOPIC_ID,
     add_partitions_to_txn_request::{AddPartitionsToTxnTopic, AddPartitionsToTxnTransaction},
     add_partitions_to_txn_response::{AddPartitionsToTxnResult, AddPartitionsToTxnTopicResult},
@@ -92,7 +92,7 @@ pub enum Error {
     Io(#[from] io::Error),
 
     #[error("kafka sans io")]
-    KafkaSansIo(#[from] tansu_kafka_sans_io::Error),
+    KafkaSansIo(#[from] tansu_sans_io::Error),
 
     #[error("offset: {offset}, is less than base offset: {base_offset}")]
     LessThanBaseOffset { offset: i64, base_offset: i64 },

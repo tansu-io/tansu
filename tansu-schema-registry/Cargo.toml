@@ -38,7 +38,7 @@ rhai-rand.workspace = true
 rhai.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-tansu-kafka-sans-io = { path = "../tansu-kafka-sans-io" }
+tansu-sans-io = { path = "../tansu-sans-io" }
 tempfile.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

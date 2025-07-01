@@ -31,7 +31,7 @@ use opentelemetry::{InstrumentationScope, global, metrics::Meter};
 use opentelemetry_otlp::ExporterBuildError;
 use opentelemetry_semantic_conventions::SCHEMA_URL;
 use regex::{Regex, Replacer};
-use tansu_kafka_sans_io::ErrorCode;
+use tansu_sans_io::ErrorCode;
 use thiserror::Error;
 use tokio::{sync::broadcast::error::SendError, task::JoinError};
 use tracing_subscriber::filter::ParseError;
@@ -80,7 +80,7 @@ pub enum Error {
     Io(Arc<io::Error>),
     Join(#[from] JoinError),
     Json(#[from] serde_json::Error),
-    KafkaProtocol(#[from] tansu_kafka_sans_io::Error),
+    KafkaProtocol(#[from] tansu_sans_io::Error),
     Message(String),
     Model(#[from] tansu_model::Error),
     ObjectStore(#[from] object_store::Error),

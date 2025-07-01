@@ -18,7 +18,7 @@ use std::marker::PhantomData;
 use crate::{Error, Result};
 
 use futures::SinkExt;
-use tansu_kafka_sans_io::{
+use tansu_sans_io::{
     Body, ErrorCode, Frame, Header,
     fetch_request::{FetchPartition, FetchTopic},
     fetch_response::FetchableTopicResponse,

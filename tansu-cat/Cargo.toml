@@ -10,7 +10,7 @@ futures-core.workspace = true
 futures-util.workspace = true
 futures.workspace = true
 serde_json.workspace = true
-tansu-kafka-sans-io = { path = "../tansu-kafka-sans-io" }
+tansu-sans-io = { path = "../tansu-sans-io" }
 tansu-schema-registry = { path = "../tansu-schema-registry" }
 thiserror.workspace = true
 tokio-util.workspace = true

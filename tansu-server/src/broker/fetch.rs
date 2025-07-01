@@ -15,7 +15,7 @@
 
 use std::time::{Duration, Instant};
 
-use tansu_kafka_sans_io::{
+use tansu_sans_io::{
     Body, ErrorCode, IsolationLevel,
     fetch_request::{FetchPartition, FetchTopic},
     fetch_response::{

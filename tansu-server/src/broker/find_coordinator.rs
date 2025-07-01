@@ -13,7 +13,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use tansu_kafka_sans_io::{Body, ErrorCode, find_coordinator_response::Coordinator};
+use tansu_sans_io::{Body, ErrorCode, find_coordinator_response::Coordinator};
 use url::Url;
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]

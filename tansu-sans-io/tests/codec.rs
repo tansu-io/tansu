@@ -14,7 +14,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use common::init_tracing;
-use tansu_kafka_sans_io::{Frame, Result};
+use tansu_sans_io::{Frame, Result};
 
 pub mod common;
 

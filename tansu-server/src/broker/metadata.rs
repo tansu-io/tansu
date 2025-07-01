@@ -13,7 +13,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use tansu_kafka_sans_io::{Body, metadata_request::MetadataRequestTopic};
+use tansu_sans_io::{Body, metadata_request::MetadataRequestTopic};
 use tansu_storage::{Storage, TopicId};
 use tracing::error;
 

@@ -5,7 +5,7 @@ members = [
     "tansu-cli",
     "tansu-generator",
     "tansu-model",
-    "tansu-kafka-sans-io",
+    "tansu-sans-io",
     "tansu-otel",
     "tansu-proxy",
     "tansu-schema-registry",

@@ -15,7 +15,7 @@
 
 #![allow(dead_code)]
 
-use tansu_kafka_sans_io::{Error, Result};
+use tansu_sans_io::{Error, Result};
 use tracing::subscriber::DefaultGuard;
 use tracing_subscriber::EnvFilter;
 

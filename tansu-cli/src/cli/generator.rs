@@ -19,7 +19,7 @@ use super::DEFAULT_BROKER;
 use crate::{EnvVarExp, Result};
 use clap::Args;
 use tansu_generator::Generate;
-use tansu_kafka_sans_io::ErrorCode;
+use tansu_sans_io::ErrorCode;
 use url::Url;
 
 #[derive(Args, Clone, Debug)]

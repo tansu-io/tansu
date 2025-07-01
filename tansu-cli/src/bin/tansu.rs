@@ -15,7 +15,7 @@
 
 use dotenv::dotenv;
 use tansu_cli::{Cli, Result};
-use tansu_kafka_sans_io::ErrorCode;
+use tansu_sans_io::ErrorCode;
 use tansu_server::{TracingFormat, otel};
 use tracing::{debug, error};
 

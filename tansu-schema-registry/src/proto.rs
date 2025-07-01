@@ -51,7 +51,7 @@ use rand::prelude::*;
 use rhai::{Engine, packages::Package};
 use rhai_rand::RandomPackage;
 use serde_json::{Map, Value, json};
-use tansu_kafka_sans_io::{ErrorCode, record::inflated::Batch};
+use tansu_sans_io::{ErrorCode, record::inflated::Batch};
 use tempfile::{NamedTempFile, tempdir};
 use tracing::{debug, error};
 
@@ -1178,10 +1178,10 @@ fn message_to_bytes(message: Box<dyn MessageDyn>) -> Result<Bytes> {
 }
 
 impl AsKafkaRecord for Schema {
-    fn as_kafka_record(&self, value: &Value) -> Result<tansu_kafka_sans_io::record::Builder> {
+    fn as_kafka_record(&self, value: &Value) -> Result<tansu_sans_io::record::Builder> {
         debug!(?value);
 
-        let mut builder = tansu_kafka_sans_io::record::Record::builder();
+        let mut builder = tansu_sans_io::record::Record::builder();
 
         if let Some(value) = value.get("key") {
             debug!(?value);
@@ -1204,8 +1204,8 @@ impl AsKafkaRecord for Schema {
 }
 
 impl Generator for Schema {
-    fn generate(&self) -> Result<tansu_kafka_sans_io::record::Builder> {
-        let mut builder = tansu_kafka_sans_io::record::Record::builder();
+    fn generate(&self) -> Result<tansu_sans_io::record::Builder> {
+        let mut builder = tansu_sans_io::record::Record::builder();
 
         if let Some(generated) = self.generate_message_kind(MessageKind::Key)? {
             builder = builder.key(generated.into());
@@ -2104,7 +2104,7 @@ mod tests {
     use parquet::file::properties::WriterProperties;
     use serde_json::json;
     use std::{fs::File, sync::Arc, thread};
-    use tansu_kafka_sans_io::record::Record;
+    use tansu_sans_io::record::Record;
     use tracing::subscriber::DefaultGuard;
     use tracing_subscriber::EnvFilter;
 

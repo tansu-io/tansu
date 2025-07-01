@@ -31,7 +31,7 @@ use bytes::Bytes;
 use chrono::{DateTime, Datelike};
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use serde_json::{Map, Value, json};
-use tansu_kafka_sans_io::{ErrorCode, record::inflated::Batch};
+use tansu_sans_io::{ErrorCode, record::inflated::Batch};
 use tracing::{debug, error, warn};
 
 const NULLABLE: bool = true;
@@ -690,8 +690,8 @@ impl AsArrow for Schema {
 }
 
 impl AsKafkaRecord for Schema {
-    fn as_kafka_record(&self, value: &Value) -> Result<tansu_kafka_sans_io::record::Builder> {
-        let mut builder = tansu_kafka_sans_io::record::Record::builder();
+    fn as_kafka_record(&self, value: &Value) -> Result<tansu_sans_io::record::Builder> {
+        let mut builder = tansu_sans_io::record::Record::builder();
 
         if let Some(value) = value.get(MessageKind::Key.as_ref()) {
             debug!(?value);
@@ -715,7 +715,7 @@ impl AsKafkaRecord for Schema {
 }
 
 impl Generator for Schema {
-    fn generate(&self) -> Result<tansu_kafka_sans_io::record::Builder> {
+    fn generate(&self) -> Result<tansu_sans_io::record::Builder> {
         todo!()
     }
 }
@@ -830,7 +830,7 @@ mod tests {
     use parquet::file::properties::WriterProperties;
     use serde_json::json;
     use std::{collections::VecDeque, fs::File, ops::Deref, sync::Arc, thread};
-    use tansu_kafka_sans_io::record::Record;
+    use tansu_sans_io::record::Record;
     use tracing::subscriber::DefaultGuard;
     use tracing_subscriber::EnvFilter;
 

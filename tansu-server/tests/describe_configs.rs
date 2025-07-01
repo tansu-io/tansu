@@ -15,7 +15,7 @@
 
 use common::{alphanumeric_string, register_broker};
 use rand::{prelude::*, rng};
-use tansu_kafka_sans_io::{
+use tansu_sans_io::{
     ConfigResource, ConfigSource, ErrorCode, OpType,
     create_topics_request::{CreatableTopic, CreatableTopicConfig},
     describe_configs_request::DescribeConfigsResource,

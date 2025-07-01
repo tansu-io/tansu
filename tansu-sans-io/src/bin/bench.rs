@@ -1,4 +1,4 @@
-use tansu_kafka_sans_io::{Frame, Header, Result};
+use tansu_sans_io::{Frame, Header, Result};
 
 fn produce_request_v10_001() -> Result<Header> {
     let v = vec![

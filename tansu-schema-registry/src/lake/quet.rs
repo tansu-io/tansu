@@ -25,7 +25,7 @@ use object_store::{
     path::Path,
 };
 use parquet::arrow::AsyncArrowWriter;
-use tansu_kafka_sans_io::describe_configs_response::DescribeConfigsResult;
+use tansu_sans_io::describe_configs_response::DescribeConfigsResult;
 use tracing::debug;
 use url::Url;
 

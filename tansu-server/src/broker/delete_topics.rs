@@ -14,7 +14,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use crate::Result;
-use tansu_kafka_sans_io::{
+use tansu_sans_io::{
     delete_topics_request::DeleteTopicState, delete_topics_response::DeletableTopicResult,
 };
 use tansu_storage::Storage;
@@ -79,7 +79,7 @@ mod tests {
 
     use super::*;
     use object_store::memory::InMemory;
-    use tansu_kafka_sans_io::{ErrorCode, NULL_TOPIC_ID, create_topics_request::CreatableTopic};
+    use tansu_sans_io::{ErrorCode, NULL_TOPIC_ID, create_topics_request::CreatableTopic};
     use tansu_storage::dynostore::DynoStore;
     use uuid::Uuid;
 

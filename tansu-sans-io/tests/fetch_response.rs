@@ -15,8 +15,8 @@
 
 use common::init_tracing;
 use std::collections::BTreeMap;
-use tansu_kafka_sans_io::MESSAGE_META;
 use tansu_model::{MessageKind, VersionRange};
+use tansu_sans_io::MESSAGE_META;
 
 const FETCH_RESPONSE: &str = "FetchResponse";
 

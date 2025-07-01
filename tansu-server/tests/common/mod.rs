@@ -21,7 +21,7 @@ use rand::{
     prelude::*,
     rng,
 };
-use tansu_kafka_sans_io::{
+use tansu_sans_io::{
     Body, ErrorCode,
     fetch_response::{FetchableTopicResponse, NodeEndpoint},
     join_group_request::JoinGroupRequestProtocol,

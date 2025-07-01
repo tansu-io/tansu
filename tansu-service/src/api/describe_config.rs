@@ -22,7 +22,7 @@ use std::{
 };
 
 use rama::{Context, Layer, Service, context::Extensions, error::BoxError, matcher::Matcher};
-use tansu_kafka_sans_io::{
+use tansu_sans_io::{
     Body, ConfigResource, ConfigType, ErrorCode, MESSAGE_META,
     describe_configs_request::DescribeConfigsResource,
     describe_configs_response::DescribeConfigsResult,

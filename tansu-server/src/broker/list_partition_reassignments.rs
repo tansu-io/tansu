@@ -14,7 +14,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use crate::Result;
-use tansu_kafka_sans_io::{
+use tansu_sans_io::{
     Body, ErrorCode,
     list_partition_reassignments_request::ListPartitionReassignmentsTopics,
     list_partition_reassignments_response::{

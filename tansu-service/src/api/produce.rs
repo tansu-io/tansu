@@ -15,7 +15,7 @@
 
 use rama::{Context, Layer, Service, error::BoxError};
 use std::{fmt::Debug, sync::LazyLock};
-use tansu_kafka_sans_io::{
+use tansu_sans_io::{
     Body, MESSAGE_META,
     produce_request::TopicProduceData,
     produce_response::{NodeEndpoint, TopicProduceResponse},

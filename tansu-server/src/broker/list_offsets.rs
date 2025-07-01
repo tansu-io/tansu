@@ -15,7 +15,7 @@
 
 use std::{collections::BTreeSet, ops::Deref};
 
-use tansu_kafka_sans_io::{
+use tansu_sans_io::{
     Body, IsolationLevel,
     list_offsets_request::ListOffsetsTopic,
     list_offsets_response::{ListOffsetsPartitionResponse, ListOffsetsTopicResponse},

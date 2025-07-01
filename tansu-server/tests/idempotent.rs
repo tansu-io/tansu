@@ -16,7 +16,7 @@
 use bytes::Bytes;
 use common::{StorageType, alphanumeric_string, register_broker};
 use rand::{prelude::*, rng};
-use tansu_kafka_sans_io::{
+use tansu_sans_io::{
     ErrorCode,
     create_topics_request::CreatableTopic,
     produce_request::{PartitionProduceData, TopicProduceData},
