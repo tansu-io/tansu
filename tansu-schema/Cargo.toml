@@ -1,0 +1,55 @@
+[package]
+name = "tansu-schema"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+apache-avro.workspace = true
+arrow.workspace = true
+async-trait.workspace = true
+bytes.workspace = true
+chrono.workspace = true
+datafusion.workspace = true
+delta_kernel.workspace = true
+deltalake.workspace = true
+dotenv.workspace = true
+fake.workspace = true
+futures.workspace = true
+governor.workspace = true
+iceberg-catalog-memory.workspace = true
+iceberg-catalog-rest.workspace = true
+iceberg-datafusion.workspace = true
+iceberg.workspace = true
+jsonschema.workspace = true
+num-bigint.workspace = true
+object_store.workspace = true
+opentelemetry-semantic-conventions.workspace = true
+opentelemetry.workspace = true
+ordered-float.workspace = true
+parquet.workspace = true
+protobuf-json-mapping.workspace = true
+protobuf-parse.workspace = true
+protobuf.workspace = true
+rand.workspace = true
+rhai-rand.workspace = true
+rhai.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tansu-sans-io = { path = "../tansu-sans-io" }
+tempfile.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing-subscriber.workspace = true
+tracing.workspace = true
+url.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+rand.workspace = true
+
+# [lints]
+# workspace = true

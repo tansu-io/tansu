@@ -22,8 +22,8 @@ use rama::{
     tcp::server::TcpListener,
 };
 use std::{fmt::Debug, net::SocketAddr, ops::Deref, result, sync::LazyLock};
-use tansu_kafka_sans_io::{ErrorCode, metadata_response::MetadataResponseBroker};
 use tansu_otel::meter_provider;
+use tansu_sans_io::{ErrorCode, metadata_response::MetadataResponseBroker};
 use tansu_service::{
     api::{
         ApiKey, ApiKeyVersionLayer,

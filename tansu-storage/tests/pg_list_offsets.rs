@@ -14,7 +14,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use rand::{distr::Alphanumeric, prelude::*, rng};
-use tansu_kafka_sans_io::{ErrorCode, IsolationLevel};
+use tansu_sans_io::{ErrorCode, IsolationLevel};
 use tansu_storage::{
     BrokerRegistrationRequest, Error, ListOffsetRequest, Result, Storage, StorageContainer,
     Topition, pg::Postgres,

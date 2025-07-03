@@ -15,7 +15,7 @@
 
 use std::sync::LazyLock;
 
-use tansu_kafka_sans_io::{Body, MESSAGE_META, api_versions_response};
+use tansu_sans_io::{Body, MESSAGE_META, api_versions_response};
 
 use crate::api::{
     ApiKey, ApiRequest, ApiResponse, ApiVersion, ClientId, CorrelationId, UnexpectedApiBodyError,

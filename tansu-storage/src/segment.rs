@@ -37,7 +37,7 @@ use std::{
     task::{Context, Poll, Waker},
     time::Instant,
 };
-use tansu_kafka_sans_io::{
+use tansu_sans_io::{
     Decoder, Encoder,
     record::{deflated::Batch, inflated},
 };
@@ -929,7 +929,7 @@ mod tests {
     use crate::{Error, Topition};
     use bytes::Bytes;
     use std::{fs::write, sync::Arc, thread};
-    use tansu_kafka_sans_io::record::{Record, inflated};
+    use tansu_sans_io::record::{Record, inflated};
     use tempfile::tempdir;
     use tracing::{Level, subscriber::DefaultGuard};
     use tracing_subscriber::{filter::Targets, fmt, prelude::*, registry};
@@ -945,7 +945,7 @@ mod tests {
             .with(
                 Targets::new()
                     .with_target("tansu_storage", Level::DEBUG)
-                    .with_target("tansu_kafka_sans_io::record::batch", Level::DEBUG),
+                    .with_target("tansu_sans_io::record::batch", Level::DEBUG),
             )
             .with(
                 thread::current()

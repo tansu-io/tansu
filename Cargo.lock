@@ -6153,6 +6153,43 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7b2093cf4c8eb1e67749a6762251bc9cd836b6fc171623bd0a9d324d37af2417"
 
 [[package]]
+name = "tansu-broker"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "clap",
+ "deadpool-postgres",
+ "futures",
+ "http-body-util",
+ "hyper 1.6.0",
+ "hyper-util",
+ "jsonschema",
+ "object_store",
+ "opentelemetry 0.30.0",
+ "opentelemetry-otlp",
+ "opentelemetry-semantic-conventions",
+ "opentelemetry_sdk 0.30.0",
+ "pretty_assertions",
+ "rand 0.9.1",
+ "regex",
+ "serde",
+ "serde_json",
+ "tansu-model",
+ "tansu-sans-io",
+ "tansu-schema",
+ "tansu-storage",
+ "thiserror 2.0.12",
+ "tokio",
+ "tokio-postgres",
+ "tracing",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "tansu-cat"
 version = "0.1.0"
 dependencies = [
@@ -6160,8 +6197,8 @@ dependencies = [
  "futures-core",
  "futures-util",
  "serde_json",
- "tansu-kafka-sans-io",
- "tansu-schema-registry",
+ "tansu-sans-io",
+ "tansu-schema",
  "thiserror 2.0.12",
  "tokio",
  "tokio-util",
@@ -6177,12 +6214,12 @@ dependencies = [
  "clap",
  "dotenv",
  "regex",
+ "tansu-broker",
  "tansu-cat",
  "tansu-generator",
- "tansu-kafka-sans-io",
  "tansu-proxy",
- "tansu-schema-registry",
- "tansu-server",
+ "tansu-sans-io",
+ "tansu-schema",
  "tansu-storage",
  "tansu-topic",
  "thiserror 2.0.12",
@@ -6208,9 +6245,9 @@ dependencies = [
  "opentelemetry_sdk 0.30.0",
  "rama",
  "serde_json",
- "tansu-kafka-sans-io",
  "tansu-otel",
- "tansu-schema-registry",
+ "tansu-sans-io",
+ "tansu-schema",
  "tansu-service",
  "thiserror 2.0.12",
  "tokio",
@@ -6221,7 +6258,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "tansu-kafka-model"
+name = "tansu-model"
 version = "0.1.0"
 dependencies = [
  "convert_case",
@@ -6233,33 +6270,6 @@ dependencies = [
  "serde_json",
  "syn 2.0.104",
  "tracing",
-]
-
-[[package]]
-name = "tansu-kafka-sans-io"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "clap",
- "convert_case",
- "crc",
- "criterion",
- "flate2",
- "glob",
- "lz4",
- "pretty_assertions",
- "prettyplease",
- "proc-macro2",
- "quote",
- "serde",
- "serde_json",
- "snap",
- "syn 2.0.104",
- "tansu-kafka-model",
- "thiserror 2.0.12",
- "tracing",
- "tracing-subscriber",
- "zstd",
 ]
 
 [[package]]
@@ -6287,8 +6297,8 @@ dependencies = [
  "opentelemetry-semantic-conventions",
  "opentelemetry_sdk 0.30.0",
  "rama",
- "tansu-kafka-sans-io",
  "tansu-otel",
+ "tansu-sans-io",
  "tansu-service",
  "thiserror 2.0.12",
  "tokio",
@@ -6299,7 +6309,34 @@ dependencies = [
 ]
 
 [[package]]
-name = "tansu-schema-registry"
+name = "tansu-sans-io"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "clap",
+ "convert_case",
+ "crc",
+ "criterion",
+ "flate2",
+ "glob",
+ "lz4",
+ "pretty_assertions",
+ "prettyplease",
+ "proc-macro2",
+ "quote",
+ "serde",
+ "serde_json",
+ "snap",
+ "syn 2.0.104",
+ "tansu-model",
+ "thiserror 2.0.12",
+ "tracing",
+ "tracing-subscriber",
+ "zstd",
+]
+
+[[package]]
+name = "tansu-schema"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -6335,48 +6372,11 @@ dependencies = [
  "rhai-rand",
  "serde",
  "serde_json",
- "tansu-kafka-sans-io",
+ "tansu-sans-io",
  "tempfile",
  "thiserror 2.0.12",
  "tokio",
  "tracing",
- "tracing-subscriber",
- "url",
- "uuid",
-]
-
-[[package]]
-name = "tansu-server"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "bytes",
- "clap",
- "deadpool-postgres",
- "futures",
- "http-body-util",
- "hyper 1.6.0",
- "hyper-util",
- "jsonschema",
- "object_store",
- "opentelemetry 0.30.0",
- "opentelemetry-otlp",
- "opentelemetry-semantic-conventions",
- "opentelemetry_sdk 0.30.0",
- "pretty_assertions",
- "rand 0.9.1",
- "regex",
- "serde",
- "serde_json",
- "tansu-kafka-model",
- "tansu-kafka-sans-io",
- "tansu-schema-registry",
- "tansu-storage",
- "thiserror 2.0.12",
- "tokio",
- "tokio-postgres",
- "tracing",
- "tracing-opentelemetry",
  "tracing-subscriber",
  "url",
  "uuid",
@@ -6392,7 +6392,7 @@ dependencies = [
  "opentelemetry 0.30.0",
  "opentelemetry-semantic-conventions",
  "rama",
- "tansu-kafka-sans-io",
+ "tansu-sans-io",
  "thiserror 2.0.12",
  "tokio",
  "tracing",
@@ -6422,8 +6422,8 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
- "tansu-kafka-sans-io",
- "tansu-schema-registry",
+ "tansu-sans-io",
+ "tansu-schema",
  "tempfile",
  "thiserror 2.0.12",
  "time",
@@ -6442,7 +6442,7 @@ dependencies = [
  "futures",
  "futures-core",
  "futures-util",
- "tansu-kafka-sans-io",
+ "tansu-sans-io",
  "thiserror 2.0.12",
  "tokio",
  "tokio-util",

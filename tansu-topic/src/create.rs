@@ -15,7 +15,7 @@
 
 use std::collections::HashMap;
 
-use tansu_kafka_sans_io::{
+use tansu_sans_io::{
     Body, ErrorCode, Frame, Header,
     create_topics_request::{CreatableTopic, CreatableTopicConfig},
     create_topics_response::CreatableTopicResult,

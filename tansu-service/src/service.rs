@@ -411,7 +411,7 @@ mod tests {
 
     use super::*;
     use rama::{error::OpaqueError, service::service_fn};
-    use tansu_kafka_sans_io::{
+    use tansu_sans_io::{
         Body, ErrorCode, Frame, Header, MESSAGE_META,
         produce_request::{PartitionProduceData, TopicProduceData},
         produce_response::{LeaderIdAndEpoch, PartitionProduceResponse, TopicProduceResponse},

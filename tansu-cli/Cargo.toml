@@ -11,10 +11,10 @@ dotenv.workspace = true
 regex.workspace = true
 tansu-cat = { path = "../tansu-cat" }
 tansu-generator = { path = "../tansu-generator" }
-tansu-kafka-sans-io = { path = "../tansu-kafka-sans-io" }
+tansu-sans-io = { path = "../tansu-sans-io" }
 tansu-proxy = { path = "../tansu-proxy" }
-tansu-schema-registry = { path = "../tansu-schema-registry" }
-tansu-server = { path = "../tansu-server" }
+tansu-schema = { path = "../tansu-schema" }
+tansu-broker = { path = "../tansu-broker" }
 tansu-storage = { path = "../tansu-storage" }
 tansu-topic = { path = "../tansu-topic" }
 thiserror.workspace = true

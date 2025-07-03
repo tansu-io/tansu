@@ -17,7 +17,7 @@ use super::DEFAULT_BROKER;
 use crate::Result;
 use clap::Subcommand;
 use tansu_cat::Cat;
-use tansu_kafka_sans_io::ErrorCode;
+use tansu_sans_io::ErrorCode;
 use url::Url;
 
 #[derive(Clone, Debug, Subcommand)]

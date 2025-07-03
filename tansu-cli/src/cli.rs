@@ -17,7 +17,7 @@ use std::process;
 
 use crate::Result;
 use clap::{Parser, Subcommand};
-use tansu_kafka_sans_io::ErrorCode;
+use tansu_sans_io::ErrorCode;
 use tracing::debug;
 
 mod broker;

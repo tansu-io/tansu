@@ -17,7 +17,7 @@ use std::{fmt, io, result, sync::Arc};
 
 use consume::Consume;
 use produce::Produce;
-use tansu_kafka_sans_io::ErrorCode;
+use tansu_sans_io::ErrorCode;
 use tokio_util::codec::LinesCodecError;
 
 mod consume;
@@ -30,8 +30,8 @@ pub enum Error {
     Api(ErrorCode),
     Io(Arc<io::Error>),
     LinesCodec(#[from] LinesCodecError),
-    Protocol(#[from] tansu_kafka_sans_io::Error),
-    Schema(#[from] tansu_schema_registry::Error),
+    Protocol(#[from] tansu_sans_io::Error),
+    Schema(#[from] tansu_schema::Error),
     SerdeJson(#[from] serde_json::Error),
 }
 

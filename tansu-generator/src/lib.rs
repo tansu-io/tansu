@@ -37,13 +37,13 @@ use rama::{
     Context, Service,
     error::{BoxError, OpaqueError},
 };
-use tansu_kafka_sans_io::{
+use tansu_otel::meter_provider;
+use tansu_sans_io::{
     ErrorCode,
     produce_request::{PartitionProduceData, TopicProduceData},
     record::{deflated, inflated},
 };
-use tansu_otel::meter_provider;
-use tansu_schema_registry::{Generator as _, Registry, Schema};
+use tansu_schema::{Generator as _, Registry, Schema};
 use tansu_service::{
     api::produce::{ProduceRequest, ProduceResponse},
     service::ApiClient,
@@ -80,8 +80,8 @@ pub enum Error {
     Otel(#[from] tansu_otel::Error),
     OtelSdk(#[from] OTelSdkError),
     Poison,
-    Protocol(#[from] tansu_kafka_sans_io::Error),
-    Schema(Box<tansu_schema_registry::Error>),
+    Protocol(#[from] tansu_sans_io::Error),
+    Schema(Box<tansu_schema::Error>),
     SchemaNotFoundForTopic(String),
     UnknownHost(String),
     Url(#[from] url::ParseError),
@@ -93,8 +93,8 @@ impl<T> From<PoisonError<T>> for Error {
     }
 }
 
-impl From<tansu_schema_registry::Error> for Error {
-    fn from(error: tansu_schema_registry::Error) -> Self {
+impl From<tansu_schema::Error> for Error {
+    fn from(error: tansu_schema::Error) -> Self {
         Self::Schema(Box::new(error))
     }
 }

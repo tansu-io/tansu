@@ -41,7 +41,7 @@ use opentelemetry::{
 use opticon::OptiCon;
 use rand::{prelude::*, rng};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use tansu_kafka_sans_io::{
+use tansu_sans_io::{
     BatchAttribute, ConfigResource, ConfigSource, ConfigType, ControlBatch, Decoder, Encoder,
     EndTransactionMarker, ErrorCode, IsolationLevel, NULL_TOPIC_ID, OpType,
     add_partitions_to_txn_response::{
@@ -63,7 +63,7 @@ use tansu_kafka_sans_io::{
     record::{Record, deflated, inflated},
     txn_offset_commit_response::{TxnOffsetCommitResponsePartition, TxnOffsetCommitResponseTopic},
 };
-use tansu_schema_registry::{
+use tansu_schema::{
     Registry,
     lake::{House, LakeHouse},
 };

@@ -9,7 +9,7 @@ publish = false
 futures-core.workspace = true
 futures-util.workspace = true
 futures.workspace = true
-tansu-kafka-sans-io = { path = "../tansu-kafka-sans-io" }
+tansu-sans-io = { path = "../tansu-sans-io" }
 thiserror.workspace = true
 tokio-util.workspace = true
 tokio.workspace = true

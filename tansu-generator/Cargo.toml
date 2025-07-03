@@ -17,9 +17,9 @@ opentelemetry.workspace = true
 opentelemetry_sdk.workspace = true
 rama.workspace = true
 serde_json.workspace = true
-tansu-kafka-sans-io = { path = "../tansu-kafka-sans-io" }
 tansu-otel = { path = "../tansu-otel" }
-tansu-schema-registry = { path = "../tansu-schema-registry" }
+tansu-sans-io = { path = "../tansu-sans-io" }
+tansu-schema = { path = "../tansu-schema" }
 tansu-service = { path = "../tansu-service" }
 thiserror.workspace = true
 tokio-util.workspace = true

@@ -26,7 +26,7 @@ use std::{
 
 use opentelemetry::metrics::{Counter, Histogram};
 use rama::{Layer, Service, error::BoxError};
-use tansu_kafka_sans_io::{
+use tansu_sans_io::{
     produce_request::{PartitionProduceData, TopicProduceData},
     produce_response::{PartitionProduceResponse, TopicProduceResponse},
     record::{
@@ -799,7 +799,7 @@ mod tests {
 
     use bytes::Bytes;
     use rama::error::OpaqueError;
-    use tansu_kafka_sans_io::{
+    use tansu_sans_io::{
         ErrorCode,
         produce_response::{LeaderIdAndEpoch, PartitionProduceResponse, TopicProduceResponse},
         record,

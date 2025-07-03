@@ -150,7 +150,7 @@ jobs:
       KAFKA_IMAGE: ${{matrix.kafka}}
       PROMETHEUS_LISTENER_URL: tcp://localhost:9100
       RUST_BACKTRACE: 1
-      RUST_LOG: warn,tansu_server=debug,tansu_storage=debug,tansu_schema_registry=debug
+      RUST_LOG: warn,tansu_broker=debug,tansu_storage=debug,tansu_schema=debug
       STORAGE_ENGINE: ${{matrix.storage}}
     steps:
       - uses: docker/metadata-action@v5
