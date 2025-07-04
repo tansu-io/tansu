@@ -579,6 +579,7 @@ fn pfk(
         .map(|field| {
             let f = field.ident();
             let k = kind(parent, module, field, dependencies);
+
             quote! {
                 #visibility #f: #k
             }
