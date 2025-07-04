@@ -5,8 +5,8 @@ version.workspace = true
 license.workspace = true
 publish = false
 
-# [lints]
-# workspace = true
+[lints]
+workspace = true
 
 [dependencies]
 convert_case.workspace = true
