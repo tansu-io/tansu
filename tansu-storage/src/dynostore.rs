@@ -126,15 +126,24 @@ impl Meta {
         producer_epoch: ProducerEpoch,
     ) -> Result<BTreeMap<Topition, TxnProduceOffset>> {
         let Some(txn) = self.transactions.get(transaction_id) else {
-            return Err(Error::Api(ErrorCode::TransactionalIdNotFound));
+            return Err(Error::Api {
+                error_code: ErrorCode::TransactionalIdNotFound,
+                message: None,
+            });
         };
 
         if txn.producer != producer_id {
-            return Err(Error::Api(ErrorCode::UnknownProducerId));
+            return Err(Error::Api {
+                error_code: ErrorCode::UnknownProducerId,
+                message: None,
+            });
         }
 
         let Some(txn_detail) = txn.epochs.get(&producer_epoch) else {
-            return Err(Error::Api(ErrorCode::ProducerFenced));
+            return Err(Error::Api {
+                error_code: ErrorCode::ProducerFenced,
+                message: None,
+            });
         };
 
         let mut produced = BTreeMap::new();
@@ -587,7 +596,10 @@ impl Storage for DynoStore {
             .meta
             .with_mut(&self.object_store, |meta| {
                 if meta.topics.contains_key(topic.name.as_str()) {
-                    return Err(Error::Api(ErrorCode::TopicAlreadyExists));
+                    return Err(Error::Api {
+                        error_code: ErrorCode::TopicAlreadyExists,
+                        message: None,
+                    });
                 }
 
                 let id = Uuid::now_v7();
@@ -600,6 +612,7 @@ impl Storage for DynoStore {
                 Ok(id)
             })
             .await
+            .inspect_err(|err| debug!(?err, display = %err))
         {
             Ok(id) => {
                 for partition in 0..topic.num_partitions {
@@ -624,6 +637,11 @@ impl Storage for DynoStore {
 
                 Ok(id)
             }
+
+            Err(Error::ObjectStore(error)) => Err(Error::Api {
+                error_code: ErrorCode::KafkaStorageError,
+                message: Some(error.to_string()),
+            }),
 
             error @ Err(_) => error,
         }
@@ -805,17 +823,26 @@ impl Storage for DynoStore {
                 .with_mut(&self.object_store, |meta| {
                     let Some(pd) = meta.producers.get_mut(&deflated.producer_id) else {
                         debug!(producer_id = deflated.producer_id, ?meta.producers);
-                        return Err(Error::Api(ErrorCode::UnknownProducerId));
+                        return Err(Error::Api {
+                            error_code: ErrorCode::UnknownProducerId,
+                            message: None,
+                        });
                     };
 
                     let Some(mut current) = pd.sequences.last_entry() else {
                         debug!(last_entry = ?pd.sequences.last_entry());
-                        return Err(Error::Api(ErrorCode::UnknownServerError));
+                        return Err(Error::Api {
+                            error_code: ErrorCode::UnknownServerError,
+                            message: None,
+                        });
                     };
 
                     if current.key() != &deflated.producer_epoch {
                         debug!(current = ?current.key(), producer_epoch = deflated.producer_epoch);
-                        return Err(Error::Api(ErrorCode::ProducerFenced));
+                        return Err(Error::Api {
+                            error_code: ErrorCode::ProducerFenced,
+                            message: None,
+                        });
                     }
 
                     let sequences = current.get_mut();
@@ -830,13 +857,19 @@ impl Storage for DynoStore {
                         sequence if *sequence < deflated.base_sequence => {
                             debug!(?sequence, base_sequence = deflated.base_sequence);
 
-                            Err(Error::Api(ErrorCode::OutOfOrderSequenceNumber))
+                            Err(Error::Api {
+                                error_code: ErrorCode::OutOfOrderSequenceNumber,
+                                message: None,
+                            })
                         }
 
                         sequence if *sequence > deflated.base_sequence => {
                             debug!(?sequence, base_sequence = deflated.base_sequence);
 
-                            Err(Error::Api(ErrorCode::DuplicateSequenceNumber))
+                            Err(Error::Api {
+                                error_code: ErrorCode::DuplicateSequenceNumber,
+                                message: None,
+                            })
                         }
 
                         sequence => {
@@ -1036,7 +1069,10 @@ impl Storage for DynoStore {
                 .inspect(|meta| debug!(?meta))
                 .transpose()
                 .inspect_err(|error| error!(?error, ?topition, ?offset, ?min_bytes, ?max_bytes))
-                .map_err(|_| Error::Api(ErrorCode::UnknownServerError))?
+                .map_err(|_| Error::Api {
+                    error_code: ErrorCode::UnknownServerError,
+                    message: None,
+                })?
             {
                 let Some(offset) = meta.location.parts().last() else {
                     continue;
@@ -1068,7 +1104,10 @@ impl Storage for DynoStore {
                 .get(&location)
                 .await
                 .inspect_err(|error| error!(?error, ?topition, ?offset, ?min_bytes, ?max_bytes))
-                .map_err(|_| Error::Api(ErrorCode::UnknownServerError))?;
+                .map_err(|_| Error::Api {
+                    error_code: ErrorCode::UnknownServerError,
+                    message: None,
+                })?;
 
             if get_result.meta.size > bytes {
                 break;
@@ -1080,7 +1119,10 @@ impl Storage for DynoStore {
                 .bytes()
                 .await
                 .inspect_err(|error| error!(?error, %location))
-                .map_err(|_| Error::Api(ErrorCode::UnknownServerError))
+                .map_err(|_| Error::Api {
+                    error_code: ErrorCode::UnknownServerError,
+                    message: None,
+                })
                 .and_then(|encoded| self.decode(encoded))?;
             batch.base_offset = offset;
             batches.push(batch);
@@ -1336,7 +1378,10 @@ impl Storage for DynoStore {
                 .inspect(|meta| debug!(?meta))
                 .transpose()
                 .inspect_err(|error| error!(?error))
-                .map_err(|_| Error::Api(ErrorCode::UnknownServerError))?
+                .map_err(|_| Error::Api {
+                    error_code: ErrorCode::UnknownServerError,
+                    message: None,
+                })?
             {
                 debug!(?meta);
                 let Some(topic): Option<String> = meta
@@ -1397,13 +1442,19 @@ impl Storage for DynoStore {
                         })
                         .map(|commit| commit.offset)
                         .inspect_err(|error| error!(?error, ?group_id, ?topition))
-                        .map_err(|_| Error::Api(ErrorCode::UnknownServerError)),
+                        .map_err(|_| Error::Api {
+                            error_code: ErrorCode::UnknownServerError,
+                            message: None,
+                        }),
 
                     Err(object_store::Error::NotFound { .. }) => Ok(-1),
 
                     Err(error) => {
                         error!(?error, ?group_id, ?topition);
-                        Err(Error::Api(ErrorCode::UnknownServerError))
+                        Err(Error::Api {
+                            error_code: ErrorCode::UnknownServerError,
+                            message: None,
+                        })
                     }
                 }?;
 
@@ -2343,19 +2394,31 @@ impl Storage for DynoStore {
                 debug!(transactions = ?meta.transactions);
 
                 let Some(transaction) = meta.transactions.get_mut(transaction_id) else {
-                    return Err(Error::Api(ErrorCode::TransactionalIdNotFound));
+                    return Err(Error::Api {
+                        error_code: ErrorCode::TransactionalIdNotFound,
+                        message: None,
+                    });
                 };
 
                 if transaction.producer != producer_id {
-                    return Err(Error::Api(ErrorCode::UnknownProducerId));
+                    return Err(Error::Api {
+                        error_code: ErrorCode::UnknownProducerId,
+                        message: None,
+                    });
                 }
 
                 let Some(mut current_epoch) = transaction.epochs.last_entry() else {
-                    return Err(Error::Api(ErrorCode::ProducerFenced));
+                    return Err(Error::Api {
+                        error_code: ErrorCode::ProducerFenced,
+                        message: None,
+                    });
                 };
 
                 if &producer_epoch != current_epoch.key() {
-                    return Err(Error::Api(ErrorCode::ProducerFenced));
+                    return Err(Error::Api {
+                        error_code: ErrorCode::ProducerFenced,
+                        message: None,
+                    });
                 }
 
                 let txn_detail = current_epoch.get_mut();
@@ -2450,19 +2513,31 @@ impl Storage for DynoStore {
                 debug!(transactions = ?meta.transactions);
 
                 let Some(transaction) = meta.transactions.get_mut(transaction_id) else {
-                    return Err(Error::Api(ErrorCode::TransactionalIdNotFound));
+                    return Err(Error::Api {
+                        error_code: ErrorCode::TransactionalIdNotFound,
+                        message: None,
+                    });
                 };
 
                 if transaction.producer != producer_id {
-                    return Err(Error::Api(ErrorCode::UnknownProducerId));
+                    return Err(Error::Api {
+                        error_code: ErrorCode::UnknownProducerId,
+                        message: None,
+                    });
                 }
 
                 let Some(current_epoch) = transaction.epochs.last_entry() else {
-                    return Err(Error::Api(ErrorCode::ProducerFenced));
+                    return Err(Error::Api {
+                        error_code: ErrorCode::ProducerFenced,
+                        message: None,
+                    });
                 };
 
                 if &producer_epoch != current_epoch.key() {
-                    return Err(Error::Api(ErrorCode::ProducerFenced));
+                    return Err(Error::Api {
+                        error_code: ErrorCode::ProducerFenced,
+                        message: None,
+                    });
                 }
 
                 let mut overlaps =

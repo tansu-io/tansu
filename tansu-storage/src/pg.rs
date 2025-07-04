@@ -244,18 +244,30 @@ impl Postgres {
 
                 Ordering::Greater => {
                     debug!(?sequence, ?deflated.base_sequence);
-                    Err(Error::Api(ErrorCode::DuplicateSequenceNumber))
+                    Err(Error::Api {
+                        error_code: ErrorCode::DuplicateSequenceNumber,
+                        message: None,
+                    })
                 }
 
                 Ordering::Less => {
                     debug!(?sequence, ?deflated.base_sequence);
-                    Err(Error::Api(ErrorCode::OutOfOrderSequenceNumber))
+                    Err(Error::Api {
+                        error_code: ErrorCode::OutOfOrderSequenceNumber,
+                        message: None,
+                    })
                 }
             },
 
-            Ordering::Greater => Err(Error::Api(ErrorCode::ProducerFenced)),
+            Ordering::Greater => Err(Error::Api {
+                error_code: ErrorCode::ProducerFenced,
+                message: None,
+            }),
 
-            Ordering::Less => Err(Error::Api(ErrorCode::InvalidProducerEpoch)),
+            Ordering::Less => Err(Error::Api {
+                error_code: ErrorCode::InvalidProducerEpoch,
+                message: None,
+            }),
         }
     }
 
@@ -340,7 +352,10 @@ impl Postgres {
 
             Ok(())
         } else {
-            Err(Error::Api(ErrorCode::UnknownProducerId))
+            Err(Error::Api {
+                error_code: ErrorCode::UnknownProducerId,
+                message: None,
+            })
         }
     }
 
@@ -366,7 +381,10 @@ impl Postgres {
                     .inspect_err(|err| error!(?err))?,
             ))
         } else {
-            Err(Error::Api(ErrorCode::UnknownTopicOrPartition))
+            Err(Error::Api {
+                error_code: ErrorCode::UnknownTopicOrPartition,
+                message: None,
+            })
         }
     }
 
@@ -790,7 +808,10 @@ impl Postgres {
                         .code()
                         .is_some_and(|code| *code == SqlState::UNIQUE_VIOLATION)
                     {
-                        Error::Api(ErrorCode::UnknownServerError)
+                        Error::Api {
+                            error_code: ErrorCode::UnknownServerError,
+                            message: None,
+                        }
                     } else {
                         error.into()
                     }
@@ -1232,7 +1253,10 @@ impl Storage for Postgres {
                     .code()
                     .is_some_and(|code| *code == SqlState::UNIQUE_VIOLATION)
                 {
-                    Error::Api(ErrorCode::TopicAlreadyExists)
+                    Error::Api {
+                        error_code: ErrorCode::TopicAlreadyExists,
+                        message: None,
+                    }
                 } else {
                     error.into()
                 }

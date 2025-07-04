@@ -138,7 +138,10 @@ async fn topic_lifecycle() -> Result<()> {
     //
     assert!(matches!(
         storage_container.create_topic(creatable, false).await,
-        Err(Error::Api(ErrorCode::TopicAlreadyExists))
+        Err(Error::Api {
+            error_code: ErrorCode::TopicAlreadyExists,
+            ..
+        })
     ));
 
     assert!(matches!(

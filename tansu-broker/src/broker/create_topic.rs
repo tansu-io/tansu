@@ -68,11 +68,14 @@ where
                 }
             }
 
-            Err(tansu_storage::Error::Api(error_code)) => CreatableTopicResult {
+            Err(tansu_storage::Error::Api {
+                error_code,
+                message,
+            }) => CreatableTopicResult {
                 name,
                 topic_id: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
                 error_code: error_code.into(),
-                error_message: Some(error_code.to_string()),
+                error_message: Some(message.unwrap_or(error_code.to_string())),
                 topic_config_error_code: None,
                 num_partitions,
                 replication_factor,

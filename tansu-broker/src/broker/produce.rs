@@ -78,14 +78,14 @@ where
                     .await
                     .map_err(Into::into)
                     .inspect_err(|err| match err {
-                        storage_api @ Error::Storage(tansu_storage::Error::Api(_)) => {
+                        storage_api @ Error::Storage(tansu_storage::Error::Api { .. }) => {
                             warn!(?storage_api)
                         }
                         otherwise => error!(?otherwise),
                     }) {
                     Ok(offset) => _ = base_offset.get_or_insert(offset),
 
-                    Err(Error::Storage(tansu_storage::Error::Api(error_code))) => {
+                    Err(Error::Storage(tansu_storage::Error::Api { error_code, .. })) => {
                         debug!(?self, ?error_code);
                         return self.error(partition.index, error_code);
                     }

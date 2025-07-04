@@ -80,7 +80,10 @@ pub mod segment;
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
     #[error("api")]
-    Api(ErrorCode),
+    Api {
+        error_code: ErrorCode,
+        message: Option<String>,
+    },
 
     #[error("build")]
     DeadPoolBuild(#[from] deadpool::managed::BuildError),
@@ -191,7 +194,10 @@ impl<T> From<PoisonError<T>> for Error {
 impl From<tansu_schema::Error> for Error {
     fn from(value: tansu_schema::Error) -> Self {
         if let tansu_schema::Error::Api(error_code) = value {
-            Self::Api(error_code)
+            Self::Api {
+                error_code,
+                message: None,
+            }
         } else {
             Self::Schema(Box::new(value))
         }

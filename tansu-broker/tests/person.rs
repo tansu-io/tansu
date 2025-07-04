@@ -144,7 +144,10 @@ pub async fn person_invalid(
             .await
             .inspect(|offset| debug!(?offset))
             .inspect_err(|err| error!(?err)),
-        Err(Error::Api(ErrorCode::InvalidRecord))
+        Err(Error::Api {
+            error_code: ErrorCode::InvalidRecord,
+            ..
+        })
     ));
 
     Ok(())
