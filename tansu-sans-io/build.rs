@@ -577,17 +577,19 @@ fn visibility_field_kind(
         .iter()
         .filter(|field| include_tag || field.tag().is_none())
         .map(|field| {
-            let f = field.ident();
-            let k = kind(parent, module, field, dependencies);
+            let ident = field.ident();
+            let kind = kind(parent, module, field, dependencies);
 
             field.about().map_or(
                 quote! {
-                    #visibility #f: #k
+                    #visibility #ident: #kind
                 },
                 |about| {
+                    let about = about.replace("[", "\\[").replace("]", "\\]");
+
                     quote! {
                         #[doc = #about]
-                        #visibility #f: #k
+                        #visibility #ident: #kind
                     }
                 },
             )
