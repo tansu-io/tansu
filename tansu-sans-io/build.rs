@@ -637,20 +637,18 @@ fn message_struct(
 
     let token_streams: Vec<TokenStream> = fields
         .iter()
-        .fold(Vec::new(), |mut acc, f| {
-            if let Some(children) = f.fields().as_ref() {
-                acc.push(message_struct(
+        .filter_map(|f| {
+            f.fields().as_ref().map(|children| {
+                message_struct(
                     module,
                     Some(f),
                     &f.kind().type_name(),
                     children,
                     None,
                     include_tag,
-                ));
-            }
-            acc
+                )
+            })
         })
-        .into_iter()
         .chain(
             common_structs
                 .unwrap_or(&[][..])
