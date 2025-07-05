@@ -110,7 +110,6 @@ pub enum Error {
     SystemTime(SystemTimeError),
     TansuModel(tansu_model::Error),
     TryFromInt(#[from] num::TryFromIntError),
-    UnexpectedTaggedHeader(HeaderMezzanine),
     UnknownApiErrorCode(i16),
     UnknownCompressionType(i16),
     Utf8(str::Utf8Error),
@@ -259,7 +258,7 @@ pub enum Header {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, PartialOrd, Serialize)]
-pub enum HeaderMezzanine {
+pub(crate) enum HeaderMezzanine {
     Request {
         api_key: i16,
         api_version: i16,
@@ -285,7 +284,7 @@ impl TryFrom<HeaderMezzanine> for Header {
                 api_version,
                 correlation_id,
                 client_id,
-                tag_buffer: None,
+                ..
             } => Ok(Self::Request {
                 api_key,
                 api_version,
@@ -293,47 +292,9 @@ impl TryFrom<HeaderMezzanine> for Header {
                 client_id,
             }),
 
-            HeaderMezzanine::Request {
-                api_key,
-                api_version,
-                correlation_id,
-                client_id,
-                tag_buffer,
-            } if tag_buffer
-                .as_ref()
-                .is_some_and(|tagged| tagged == &TagBuffer(vec![])) =>
-            {
-                Ok(Self::Request {
-                    api_key,
-                    api_version,
-                    correlation_id,
-                    client_id,
-                })
-            }
-
-            HeaderMezzanine::Response {
-                correlation_id,
-                tag_buffer: None,
-            } => Ok(Self::Response { correlation_id }),
-
-            HeaderMezzanine::Response {
-                correlation_id,
-                tag_buffer,
-            } if tag_buffer
-                .as_ref()
-                .is_some_and(|tagged| tagged == &TagBuffer(vec![])) =>
-            {
+            HeaderMezzanine::Response { correlation_id, .. } => {
                 Ok(Self::Response { correlation_id })
             }
-
-            HeaderMezzanine::Request {
-                tag_buffer: Some(..),
-                ..
-            }
-            | HeaderMezzanine::Response {
-                tag_buffer: Some(..),
-                ..
-            } => Err(Error::UnexpectedTaggedHeader(value)),
         }
     }
 }
@@ -1694,12 +1655,14 @@ impl From<OpType> for i8 {
     }
 }
 
+/// convert a Kafka timestamp into system time
 pub fn to_system_time(timestamp: i64) -> Result<SystemTime> {
     u64::try_from(timestamp)
         .map(|timestamp| SystemTime::UNIX_EPOCH + Duration::from_millis(timestamp))
         .map_err(Into::into)
 }
 
+/// convert system time into a kafka timestamp
 pub fn to_timestamp(system_time: SystemTime) -> Result<i64> {
     system_time
         .duration_since(SystemTime::UNIX_EPOCH)

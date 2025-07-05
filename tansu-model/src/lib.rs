@@ -411,8 +411,8 @@ impl Field {
     }
 
     #[must_use]
-    pub fn about(&self) -> &Option<String> {
-        &self.about
+    pub fn about(&self) -> Option<&str> {
+        self.about.as_deref()
     }
 
     #[must_use]
@@ -1655,7 +1655,7 @@ mod tests {
         assert_eq!("Key", m.fields()[0].name());
         assert_eq!(Kind::new("string"), m.fields()[0].kind);
         assert_eq!(VersionRange { start: 0, end: 3 }, m.fields()[0].versions());
-        assert_eq!(&Some("The coordinator key.".into()), m.fields()[0].about());
+        assert_eq!(Some("The coordinator key.".into()), m.fields()[0].about());
 
         Ok(())
     }

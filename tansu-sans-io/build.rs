@@ -262,7 +262,7 @@ fn body_enum(messages: &[Message], include_tag: bool) -> TokenStream {
                 )
                 .collect();
 
-            let pfk = pfk(
+            let vfk = visibility_field_kind(
                 None,
                 None,
                 message.fields(),
@@ -274,13 +274,13 @@ fn body_enum(messages: &[Message], include_tag: bool) -> TokenStream {
             if include_tag {
                 quote! {
                     #name {
-                        #(#pfk,)*
+                        #(#vfk,)*
                     }
                 }
             } else {
                 quote! {
                     #name {
-                        #(#pfk,)*
+                        #(#vfk,)*
                         tag_buffer: Option<crate::primitive::tagged::TagBuffer>,
                     }
                 }
@@ -565,7 +565,7 @@ fn body_enum(messages: &[Message], include_tag: bool) -> TokenStream {
     }
 }
 
-fn pfk(
+fn visibility_field_kind(
     parent: Option<&Field>,
     visibility: Option<&TokenStream>,
     fields: &[Field],
@@ -577,11 +577,22 @@ fn pfk(
         .iter()
         .filter(|field| include_tag || field.tag().is_none())
         .map(|field| {
-            let f = field.ident();
-            let k = kind(parent, module, field, dependencies);
-            quote! {
-                #visibility #f: #k
-            }
+            let ident = field.ident();
+            let kind = kind(parent, module, field, dependencies);
+
+            field.about().map_or(
+                quote! {
+                    #visibility #ident: #kind
+                },
+                |about| {
+                    let about = about.replace("[", "\\[").replace("]", "\\]");
+
+                    quote! {
+                        #[doc = #about]
+                        #visibility #ident: #kind
+                    }
+                },
+            )
         })
         .collect()
 }
@@ -650,7 +661,7 @@ fn message_struct(
 
     let vis = quote!(pub);
 
-    let pfk = pfk(
+    let vfk = visibility_field_kind(
         parent,
         Some(&vis),
         fields,
@@ -752,7 +763,7 @@ fn message_struct(
         quote! {
             #derived
             pub struct #name {
-                #(#pfk,)*
+                #(#vfk,)*
             }
 
             impl From<#from> for #name {
@@ -875,7 +886,7 @@ fn message_struct(
         quote! {
             #derived
             pub(crate) struct #name {
-                #(#pfk,)*
+                #(#vfk,)*
                 pub tag_buffer: Option<crate::primitive::tagged::TagBuffer>,
             }
 
@@ -907,7 +918,7 @@ fn common_struct(
     include_tag: bool,
 ) -> TokenStream {
     let vis = quote!(pub);
-    let pfk = pfk(parent, Some(&vis), fields, module, &[], include_tag);
+    let vfk = visibility_field_kind(parent, Some(&vis), fields, module, &[], include_tag);
 
     if include_tag {
         let assignments: Vec<TokenStream> = fields
@@ -952,7 +963,7 @@ fn common_struct(
         quote! {
             #derived
             pub struct #name {
-                #(#pfk,)*
+                #(#vfk,)*
             }
 
             impl From<#from> for #name {
@@ -1064,7 +1075,7 @@ fn common_struct(
         quote! {
             #derived
             pub(crate) struct #name {
-                #(#pfk,)*
+                #(#vfk,)*
                 pub tag_buffer: Option<crate::primitive::tagged::TagBuffer>,
             }
 
