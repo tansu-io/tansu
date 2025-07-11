@@ -248,16 +248,12 @@ pub async fn produce(
 
     let request = ProduceRequest {
         topic_data: Some(
-            [TopicProduceData {
-                name,
-                partition_data: Some(
-                    [PartitionProduceData {
-                        index,
-                        records: Some(frame),
-                    }]
-                    .into(),
-                ),
-            }]
+            [TopicProduceData::default().name(name).partition_data(Some(
+                [PartitionProduceData::default()
+                    .index(index)
+                    .records(Some(frame))]
+                .into(),
+            ))]
             .into(),
         ),
         ..Default::default()

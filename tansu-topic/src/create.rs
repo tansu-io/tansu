@@ -16,7 +16,7 @@
 use std::collections::HashMap;
 
 use tansu_sans_io::{
-    Body, ErrorCode, Frame, Header,
+    ApiKey as _, Body, CreateTopicsRequest, CreateTopicsResponse, ErrorCode, Frame, Header,
     create_topics_request::{CreatableTopic, CreatableTopicConfig},
     create_topics_response::CreatableTopicResult,
 };
@@ -149,7 +149,7 @@ impl Connection {
     ) -> Result<ErrorCode> {
         debug!(%topic, partitions);
 
-        let api_key = 19;
+        let api_key = CreateTopicsRequest::KEY;
         let api_version = 7;
 
         let header = Header::Request {
@@ -162,30 +162,29 @@ impl Connection {
         let timeout_ms = 30_000;
         let validate_only = Some(false);
 
-        let body = Body::CreateTopicsRequest {
-            topics: Some(
-                [CreatableTopic {
-                    name: topic.into(),
-                    num_partitions: partitions,
-                    replication_factor: -1,
-                    assignments: Some([].into()),
-                    configs: Some(
+        let create_topics_request = CreateTopicsRequest::default()
+            .topics(Some(
+                [CreatableTopic::default()
+                    .name(topic.into())
+                    .num_partitions(partitions)
+                    .replication_factor(-1)
+                    .assignments(Some([].into()))
+                    .configs(Some(
                         configs
                             .into_iter()
-                            .map(|(name, value)| CreatableTopicConfig {
-                                name,
-                                value: Some(value),
+                            .map(|(name, value)| {
+                                CreatableTopicConfig::default()
+                                    .name(name)
+                                    .value(Some(value))
                             })
                             .collect(),
-                    ),
-                }]
+                    ))]
                 .into(),
-            ),
-            timeout_ms,
-            validate_only,
-        };
+            ))
+            .timeout_ms(timeout_ms)
+            .validate_only(validate_only);
 
-        let encoded = Frame::request(header, body)?;
+        let encoded = Frame::request(header, create_topics_request.into())?;
 
         self.broker
             .write_all(&encoded[..])
@@ -209,10 +208,10 @@ impl Connection {
         {
             Frame {
                 body:
-                    Body::CreateTopicsResponse {
+                    Body::CreateTopicsResponse(CreateTopicsResponse {
                         topics: Some(topics),
                         ..
-                    },
+                    }),
                 ..
             } => match topics.as_slice() {
                 [CreatableTopicResult { error_code, .. }] => {

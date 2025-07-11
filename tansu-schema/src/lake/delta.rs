@@ -702,23 +702,23 @@ mod tests {
 
             let topic = "abc";
 
-            let config = DescribeConfigsResult {
-                error_code: ErrorCode::None.into(),
-                error_message: None,
-                resource_type: ConfigResource::Topic.into(),
-                resource_name: topic.into(),
-                configs: Some(vec![DescribeConfigsResourceResult {
-                    name: String::from("tansu.lake.generate.date"),
-                    value: Some(String::from("cast(meta.timestamp as date)")),
-                    read_only: true,
-                    is_default: None,
-                    config_source: None,
-                    is_sensitive: false,
-                    synonyms: None,
-                    config_type: None,
-                    documentation: None,
-                }]),
-            };
+            let config = DescribeConfigsResult::default()
+                .error_code(ErrorCode::None.into())
+                .error_message(None)
+                .resource_type(ConfigResource::Topic.into())
+                .resource_name(topic.into())
+                .configs(Some(vec![
+                    DescribeConfigsResourceResult::default()
+                        .name(String::from("tansu.lake.generate.date"))
+                        .value(Some(String::from("cast(meta.timestamp as date)")))
+                        .read_only(true)
+                        .is_default(None)
+                        .config_source(None)
+                        .is_sensitive(false)
+                        .synonyms(None)
+                        .config_type(None)
+                        .documentation(None),
+                ]));
 
             let offset = 543212345;
 
@@ -802,13 +802,12 @@ mod tests {
 
             let topic = "taxi";
 
-            let config = DescribeConfigsResult {
-                error_code: ErrorCode::None.into(),
-                error_message: None,
-                resource_type: ConfigResource::Topic.into(),
-                resource_name: topic.into(),
-                configs: Some(vec![]),
-            };
+            let config = DescribeConfigsResult::default()
+                .error_code(ErrorCode::None.into())
+                .error_message(None)
+                .resource_type(ConfigResource::Topic.into())
+                .resource_name(topic.into())
+                .configs(Some(vec![]));
 
             let offset = 543212345;
 
@@ -892,23 +891,23 @@ mod tests {
 
             let topic = "taxi";
 
-            let config = DescribeConfigsResult {
-                error_code: ErrorCode::None.into(),
-                error_message: None,
-                resource_type: ConfigResource::Topic.into(),
-                resource_name: topic.into(),
-                configs: Some(vec![DescribeConfigsResourceResult {
-                    name: String::from("tansu.lake.normalize"),
-                    value: Some(String::from("true")),
-                    read_only: true,
-                    is_default: None,
-                    config_source: None,
-                    is_sensitive: false,
-                    synonyms: None,
-                    config_type: None,
-                    documentation: None,
-                }]),
-            };
+            let config = DescribeConfigsResult::default()
+                .error_code(ErrorCode::None.into())
+                .error_message(None)
+                .resource_type(ConfigResource::Topic.into())
+                .resource_name(topic.into())
+                .configs(Some(vec![
+                    DescribeConfigsResourceResult::default()
+                        .name(String::from("tansu.lake.normalize"))
+                        .value(Some(String::from("true")))
+                        .read_only(true)
+                        .is_default(None)
+                        .config_source(None)
+                        .is_sensitive(false)
+                        .synonyms(None)
+                        .config_type(None)
+                        .documentation(None),
+                ]));
 
             let offset = 543212345;
 
@@ -992,36 +991,33 @@ mod tests {
 
             let topic = "taxi";
 
-            let config = DescribeConfigsResult {
-                error_code: ErrorCode::None.into(),
-                error_message: None,
-                resource_type: ConfigResource::Topic.into(),
-                resource_name: topic.into(),
-                configs: Some(vec![
-                    DescribeConfigsResourceResult {
-                        name: String::from("tansu.lake.normalize"),
-                        value: Some(String::from("true")),
-                        read_only: true,
-                        is_default: None,
-                        config_source: None,
-                        is_sensitive: false,
-                        synonyms: None,
-                        config_type: None,
-                        documentation: None,
-                    },
-                    DescribeConfigsResourceResult {
-                        name: String::from("tansu.lake.normalize.separator"),
-                        value: Some(String::from("_")),
-                        read_only: true,
-                        is_default: None,
-                        config_source: None,
-                        is_sensitive: false,
-                        synonyms: None,
-                        config_type: None,
-                        documentation: None,
-                    },
-                ]),
-            };
+            let config = DescribeConfigsResult::default()
+                .error_code(ErrorCode::None.into())
+                .error_message(None)
+                .resource_type(ConfigResource::Topic.into())
+                .resource_name(topic.into())
+                .configs(Some(vec![
+                    DescribeConfigsResourceResult::default()
+                        .name(String::from("tansu.lake.normalize"))
+                        .value(Some(String::from("true")))
+                        .read_only(true)
+                        .is_default(None)
+                        .config_source(None)
+                        .is_sensitive(false)
+                        .synonyms(None)
+                        .config_type(None)
+                        .documentation(None),
+                    DescribeConfigsResourceResult::default()
+                        .name(String::from("tansu.lake.normalize.separator"))
+                        .value(Some(String::from("_")))
+                        .read_only(true)
+                        .is_default(None)
+                        .config_source(None)
+                        .is_sensitive(false)
+                        .synonyms(None)
+                        .config_type(None)
+                        .documentation(None),
+                ]));
 
             let offset = 543212345;
 
@@ -1105,36 +1101,33 @@ mod tests {
 
             let topic = "taxi";
 
-            let config = DescribeConfigsResult {
-                error_code: ErrorCode::None.into(),
-                error_message: None,
-                resource_type: ConfigResource::Topic.into(),
-                resource_name: topic.into(),
-                configs: Some(vec![
-                    DescribeConfigsResourceResult {
-                        name: String::from("tansu.lake.normalize"),
-                        value: Some(String::from("true")),
-                        read_only: true,
-                        is_default: None,
-                        config_source: None,
-                        is_sensitive: false,
-                        synonyms: None,
-                        config_type: None,
-                        documentation: None,
-                    },
-                    DescribeConfigsResourceResult {
-                        name: String::from("tansu.lake.partition"),
-                        value: Some(String::from("value.vendor_id")),
-                        read_only: true,
-                        is_default: None,
-                        config_source: None,
-                        is_sensitive: false,
-                        synonyms: None,
-                        config_type: None,
-                        documentation: None,
-                    },
-                ]),
-            };
+            let config = DescribeConfigsResult::default()
+                .error_code(ErrorCode::None.into())
+                .error_message(None)
+                .resource_type(ConfigResource::Topic.into())
+                .resource_name(topic.into())
+                .configs(Some(vec![
+                    DescribeConfigsResourceResult::default()
+                        .name(String::from("tansu.lake.normalize"))
+                        .value(Some(String::from("true")))
+                        .read_only(true)
+                        .is_default(None)
+                        .config_source(None)
+                        .is_sensitive(false)
+                        .synonyms(None)
+                        .config_type(None)
+                        .documentation(None),
+                    DescribeConfigsResourceResult::default()
+                        .name(String::from("tansu.lake.partition"))
+                        .value(Some(String::from("value.vendor_id")))
+                        .read_only(true)
+                        .is_default(None)
+                        .config_source(None)
+                        .is_sensitive(false)
+                        .synonyms(None)
+                        .config_type(None)
+                        .documentation(None),
+                ]));
 
             let offset = 543212345;
 
@@ -1218,23 +1211,23 @@ mod tests {
 
             let topic = "taxi";
 
-            let config = DescribeConfigsResult {
-                error_code: ErrorCode::None.into(),
-                error_message: None,
-                resource_type: ConfigResource::Topic.into(),
-                resource_name: topic.into(),
-                configs: Some(vec![DescribeConfigsResourceResult {
-                    name: String::from("tansu.lake.generate.date"),
-                    value: Some(String::from("cast(meta.timestamp as date)")),
-                    read_only: true,
-                    is_default: None,
-                    config_source: None,
-                    is_sensitive: false,
-                    synonyms: None,
-                    config_type: None,
-                    documentation: None,
-                }]),
-            };
+            let config = DescribeConfigsResult::default()
+                .error_code(ErrorCode::None.into())
+                .error_message(None)
+                .resource_type(ConfigResource::Topic.into())
+                .resource_name(topic.into())
+                .configs(Some(vec![
+                    DescribeConfigsResourceResult::default()
+                        .name(String::from("tansu.lake.generate.date"))
+                        .value(Some(String::from("cast(meta.timestamp as date)")))
+                        .read_only(true)
+                        .is_default(None)
+                        .config_source(None)
+                        .is_sensitive(false)
+                        .synonyms(None)
+                        .config_type(None)
+                        .documentation(None),
+                ]));
 
             let offset = 543212345;
 
@@ -1318,36 +1311,33 @@ mod tests {
 
             let topic = "taxi";
 
-            let config = DescribeConfigsResult {
-                error_code: ErrorCode::None.into(),
-                error_message: None,
-                resource_type: ConfigResource::Topic.into(),
-                resource_name: topic.into(),
-                configs: Some(vec![
-                    DescribeConfigsResourceResult {
-                        name: String::from("tansu.lake.generate.date"),
-                        value: Some(String::from("cast(meta.timestamp as date)")),
-                        read_only: true,
-                        is_default: None,
-                        config_source: None,
-                        is_sensitive: false,
-                        synonyms: None,
-                        config_type: None,
-                        documentation: None,
-                    },
-                    DescribeConfigsResourceResult {
-                        name: String::from("tansu.lake.partition"),
-                        value: Some(String::from("date")),
-                        read_only: true,
-                        is_default: None,
-                        config_source: None,
-                        is_sensitive: false,
-                        synonyms: None,
-                        config_type: None,
-                        documentation: None,
-                    },
-                ]),
-            };
+            let config = DescribeConfigsResult::default()
+                .error_code(ErrorCode::None.into())
+                .error_message(None)
+                .resource_type(ConfigResource::Topic.into())
+                .resource_name(topic.into())
+                .configs(Some(vec![
+                    DescribeConfigsResourceResult::default()
+                        .name(String::from("tansu.lake.generate.date"))
+                        .value(Some(String::from("cast(meta.timestamp as date)")))
+                        .read_only(true)
+                        .is_default(None)
+                        .config_source(None)
+                        .is_sensitive(false)
+                        .synonyms(None)
+                        .config_type(None)
+                        .documentation(None),
+                    DescribeConfigsResourceResult::default()
+                        .name(String::from("tansu.lake.partition"))
+                        .value(Some(String::from("date")))
+                        .read_only(true)
+                        .is_default(None)
+                        .config_source(None)
+                        .is_sensitive(false)
+                        .synonyms(None)
+                        .config_type(None)
+                        .documentation(None),
+                ]));
 
             let offset = 543212345;
 
@@ -1431,23 +1421,23 @@ mod tests {
 
             let topic = "taxi";
 
-            let config = DescribeConfigsResult {
-                error_code: ErrorCode::None.into(),
-                error_message: None,
-                resource_type: ConfigResource::Topic.into(),
-                resource_name: topic.into(),
-                configs: Some(vec![DescribeConfigsResourceResult {
-                    name: String::from("tansu.lake.partition"),
-                    value: Some(String::from("value.vendor_id")),
-                    read_only: true,
-                    is_default: None,
-                    config_source: None,
-                    is_sensitive: false,
-                    synonyms: None,
-                    config_type: None,
-                    documentation: None,
-                }]),
-            };
+            let config = DescribeConfigsResult::default()
+                .error_code(ErrorCode::None.into())
+                .error_message(None)
+                .resource_type(ConfigResource::Topic.into())
+                .resource_name(topic.into())
+                .configs(Some(vec![
+                    DescribeConfigsResourceResult::default()
+                        .name(String::from("tansu.lake.partition"))
+                        .value(Some(String::from("value.vendor_id")))
+                        .read_only(true)
+                        .is_default(None)
+                        .config_source(None)
+                        .is_sensitive(false)
+                        .synonyms(None)
+                        .config_type(None)
+                        .documentation(None),
+                ]));
 
             let offset = 543212345;
 
@@ -1512,69 +1502,62 @@ mod tests {
 
             let topic = "taxi";
 
-            let config = DescribeConfigsResult {
-                error_code: ErrorCode::None.into(),
-                error_message: None,
-                resource_type: ConfigResource::Topic.into(),
-                resource_name: topic.into(),
-                configs: Some(vec![
-                    DescribeConfigsResourceResult {
-                        name: String::from("tansu.lake.generate.year"),
-                        value: Some(String::from("cast(meta.year as integer)")),
-                        read_only: true,
-                        is_default: None,
-                        config_source: None,
-                        is_sensitive: false,
-                        synonyms: None,
-                        config_type: None,
-                        documentation: None,
-                    },
-                    DescribeConfigsResourceResult {
-                        name: String::from("tansu.lake.generate.month"),
-                        value: Some(String::from("cast(meta.month as integer)")),
-                        read_only: true,
-                        is_default: None,
-                        config_source: None,
-                        is_sensitive: false,
-                        synonyms: None,
-                        config_type: None,
-                        documentation: None,
-                    },
-                    DescribeConfigsResourceResult {
-                        name: String::from("tansu.lake.generate.day"),
-                        value: Some(String::from("cast(meta.day as integer)")),
-                        read_only: true,
-                        is_default: None,
-                        config_source: None,
-                        is_sensitive: false,
-                        synonyms: None,
-                        config_type: None,
-                        documentation: None,
-                    },
-                    DescribeConfigsResourceResult {
-                        name: String::from("tansu.lake.generate.vendor_id"),
-                        value: Some(String::from("cast(value.vendor_id as integer)")),
-                        read_only: true,
-                        is_default: None,
-                        config_source: None,
-                        is_sensitive: false,
-                        synonyms: None,
-                        config_type: None,
-                        documentation: None,
-                    },
-                    DescribeConfigsResourceResult {
-                        name: String::from("tansu.lake.partition"),
-                        value: Some(String::from("year,month,day,vendor_id")),
-                        read_only: true,
-                        is_default: None,
-                        config_source: None,
-                        is_sensitive: false,
-                        synonyms: None,
-                        config_type: None,
-                        documentation: None,
-                    },
-                ]),
-            };
+            let config = DescribeConfigsResult::default()
+                .error_message(None)
+                .resource_type(ConfigResource::Topic.into())
+                .resource_name(topic.into())
+                .configs(Some(vec![
+                    DescribeConfigsResourceResult::default()
+                        .name(String::from("tansu.lake.generate.year"))
+                        .value(Some(String::from("cast(meta.year as integer)")))
+                        .read_only(true)
+                        .is_default(None)
+                        .config_source(None)
+                        .is_sensitive(false)
+                        .synonyms(None)
+                        .config_type(None)
+                        .documentation(None),
+                    DescribeConfigsResourceResult::default()
+                        .name(String::from("tansu.lake.generate.month"))
+                        .value(Some(String::from("cast(meta.month as integer)")))
+                        .read_only(true)
+                        .is_default(None)
+                        .config_source(None)
+                        .is_sensitive(false)
+                        .synonyms(None)
+                        .config_type(None)
+                        .documentation(None),
+                    DescribeConfigsResourceResult::default()
+                        .name(String::from("tansu.lake.generate.day"))
+                        .value(Some(String::from("cast(meta.day as integer)")))
+                        .read_only(true)
+                        .is_default(None)
+                        .config_source(None)
+                        .is_sensitive(false)
+                        .synonyms(None)
+                        .config_type(None)
+                        .documentation(None),
+                    DescribeConfigsResourceResult::default()
+                        .name(String::from("tansu.lake.generate.vendor_id"))
+                        .value(Some(String::from("cast(value.vendor_id as integer)")))
+                        .read_only(true)
+                        .is_default(None)
+                        .config_source(None)
+                        .is_sensitive(false)
+                        .synonyms(None)
+                        .config_type(None)
+                        .documentation(None),
+                    DescribeConfigsResourceResult::default()
+                        .name(String::from("tansu.lake.partition"))
+                        .value(Some(String::from("year,month,day,vendor_id")))
+                        .read_only(true)
+                        .is_default(None)
+                        .config_source(None)
+                        .is_sensitive(false)
+                        .synonyms(None)
+                        .config_type(None)
+                        .documentation(None),
+                ]));
 
             let offset = 543212345;
 
@@ -1655,13 +1638,12 @@ mod tests {
 
             let topic = "t";
 
-            let config = DescribeConfigsResult {
-                error_code: ErrorCode::None.into(),
-                error_message: None,
-                resource_type: ConfigResource::Topic.into(),
-                resource_name: topic.into(),
-                configs: Some(vec![]),
-            };
+            let config = DescribeConfigsResult::default()
+                .error_code(ErrorCode::None.into())
+                .error_message(None)
+                .resource_type(ConfigResource::Topic.into())
+                .resource_name(topic.into())
+                .configs(Some(vec![]));
 
             let offset = 543212345;
 
@@ -1771,23 +1753,23 @@ mod tests {
 
             let topic = "abc";
 
-            let config = DescribeConfigsResult {
-                error_code: ErrorCode::None.into(),
-                error_message: None,
-                resource_type: ConfigResource::Topic.into(),
-                resource_name: topic.into(),
-                configs: Some(vec![DescribeConfigsResourceResult {
-                    name: String::from("tansu.lake.generate.date"),
-                    value: Some(String::from("cast(meta.timestamp as date)")),
-                    read_only: true,
-                    is_default: None,
-                    config_source: None,
-                    is_sensitive: false,
-                    synonyms: None,
-                    config_type: None,
-                    documentation: None,
-                }]),
-            };
+            let config = DescribeConfigsResult::default()
+                .error_code(ErrorCode::None.into())
+                .error_message(None)
+                .resource_type(ConfigResource::Topic.into())
+                .resource_name(topic.into())
+                .configs(Some(vec![
+                    DescribeConfigsResourceResult::default()
+                        .name(String::from("tansu.lake.generate.date"))
+                        .value(Some(String::from("cast(meta.timestamp as date)")))
+                        .read_only(true)
+                        .is_default(None)
+                        .config_source(None)
+                        .is_sensitive(false)
+                        .synonyms(None)
+                        .config_type(None)
+                        .documentation(None),
+                ]));
 
             let offset = 543212345;
 
@@ -1895,13 +1877,12 @@ mod tests {
 
             let topic = "abc";
 
-            let config = DescribeConfigsResult {
-                error_code: ErrorCode::None.into(),
-                error_message: None,
-                resource_type: ConfigResource::Topic.into(),
-                resource_name: topic.into(),
-                configs: Some(vec![]),
-            };
+            let config = DescribeConfigsResult::default()
+                .error_code(ErrorCode::None.into())
+                .error_message(None)
+                .resource_type(ConfigResource::Topic.into())
+                .resource_name(topic.into())
+                .configs(Some(vec![]));
 
             let offset = 543212345;
 

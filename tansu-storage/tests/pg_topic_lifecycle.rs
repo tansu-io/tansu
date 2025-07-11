@@ -88,13 +88,12 @@ async fn topic_lifecycle() -> Result<()> {
     let assignments = Some([].into());
     let configs = Some([].into());
 
-    let creatable = CreatableTopic {
-        name: name.clone(),
-        num_partitions,
-        replication_factor,
-        assignments,
-        configs,
-    };
+    let creatable = CreatableTopic::default()
+        .name(name.clone())
+        .num_partitions(num_partitions)
+        .replication_factor(replication_factor)
+        .assignments(assignments)
+        .configs(configs);
 
     let id = storage_container
         .create_topic(creatable.clone(), false)

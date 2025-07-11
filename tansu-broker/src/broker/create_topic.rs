@@ -56,42 +56,39 @@ where
             Ok(topic_id) => {
                 debug!(?topic_id);
 
-                CreatableTopicResult {
-                    name,
-                    topic_id: Some(topic_id.into_bytes()),
-                    error_code: ErrorCode::None.into(),
-                    error_message: None,
-                    topic_config_error_code: Some(ErrorCode::None.into()),
-                    num_partitions,
-                    replication_factor,
-                    configs: Some([].into()),
-                }
+                CreatableTopicResult::default()
+                    .name(name)
+                    .topic_id(Some(topic_id.into_bytes()))
+                    .error_code(ErrorCode::None.into())
+                    .error_message(None)
+                    .topic_config_error_code(Some(ErrorCode::None.into()))
+                    .num_partitions(num_partitions)
+                    .replication_factor(replication_factor)
+                    .configs(Some([].into()))
             }
 
-            Err(tansu_storage::Error::Api(error_code)) => CreatableTopicResult {
-                name,
-                topic_id: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
-                error_code: error_code.into(),
-                error_message: Some(error_code.to_string()),
-                topic_config_error_code: None,
-                num_partitions,
-                replication_factor,
-                configs: Some([].into()),
-            },
+            Err(tansu_storage::Error::Api(error_code)) => CreatableTopicResult::default()
+                .name(name)
+                .topic_id(Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]))
+                .error_code(error_code.into())
+                .error_message(Some(error_code.to_string()))
+                .topic_config_error_code(None)
+                .num_partitions(num_partitions)
+                .replication_factor(replication_factor)
+                .configs(Some([].into())),
 
             Err(error) => {
                 debug!(?error);
 
-                CreatableTopicResult {
-                    name,
-                    topic_id: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
-                    error_code: ErrorCode::UnknownServerError.into(),
-                    error_message: None,
-                    topic_config_error_code: None,
-                    num_partitions: None,
-                    replication_factor: None,
-                    configs: Some([].into()),
-                }
+                CreatableTopicResult::default()
+                    .name(name)
+                    .topic_id(Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]))
+                    .error_code(ErrorCode::UnknownServerError.into())
+                    .error_message(None)
+                    .topic_config_error_code(None)
+                    .num_partitions(None)
+                    .replication_factor(None)
+                    .configs(Some([].into()))
             }
         }
     }
@@ -142,13 +139,14 @@ mod tests {
 
         let r = create_topic
             .response(
-                Some(vec![CreatableTopic {
-                    name: name.into(),
-                    num_partitions,
-                    replication_factor,
-                    assignments,
-                    configs,
-                }]),
+                Some(vec![
+                    CreatableTopic::default()
+                        .name(name.into())
+                        .num_partitions(num_partitions)
+                        .replication_factor(replication_factor)
+                        .assignments(assignments)
+                        .configs(configs),
+                ]),
                 validate_only,
             )
             .await?;
@@ -181,13 +179,14 @@ mod tests {
 
         let r = create_topic
             .response(
-                Some(vec![CreatableTopic {
-                    name: name.into(),
-                    num_partitions,
-                    replication_factor,
-                    assignments,
-                    configs,
-                }]),
+                Some(vec![
+                    CreatableTopic::default()
+                        .name(name.into())
+                        .num_partitions(num_partitions)
+                        .replication_factor(replication_factor)
+                        .assignments(assignments)
+                        .configs(configs),
+                ]),
                 validate_only,
             )
             .await?;
@@ -220,13 +219,14 @@ mod tests {
 
         let r = create_topic
             .response(
-                Some(vec![CreatableTopic {
-                    name: name.into(),
-                    num_partitions,
-                    replication_factor,
-                    assignments: assignments.clone(),
-                    configs: configs.clone(),
-                }]),
+                Some(vec![
+                    CreatableTopic::default()
+                        .name(name.into())
+                        .num_partitions(num_partitions)
+                        .replication_factor(replication_factor)
+                        .assignments(assignments.clone())
+                        .configs(configs.clone()),
+                ]),
                 validate_only,
             )
             .await?;
@@ -240,13 +240,14 @@ mod tests {
 
         let r = create_topic
             .response(
-                Some(vec![CreatableTopic {
-                    name: name.into(),
-                    num_partitions,
-                    replication_factor,
-                    assignments,
-                    configs,
-                }]),
+                Some(vec![
+                    CreatableTopic::default()
+                        .name(name.into())
+                        .num_partitions(num_partitions)
+                        .replication_factor(replication_factor)
+                        .assignments(assignments)
+                        .configs(configs),
+                ]),
                 validate_only,
             )
             .await?;

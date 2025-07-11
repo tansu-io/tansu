@@ -103,12 +103,13 @@ impl Proxy {
             (
                 MetadataLayer,
                 MapResponseLayer::new(move |response: MetadataResponse| MetadataResponse {
-                    brokers: Some(vec![MetadataResponseBroker {
-                        node_id: Self::NODE_ID,
-                        host,
-                        port,
-                        rack: None,
-                    }]),
+                    brokers: Some(vec![
+                        MetadataResponseBroker::default()
+                            .node_id(Self::NODE_ID)
+                            .host(host)
+                            .port(port)
+                            .rack(None),
+                    ]),
                     ..response
                 }),
                 MetadataIntoApiLayer,

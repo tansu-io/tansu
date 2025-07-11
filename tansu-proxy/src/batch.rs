@@ -525,9 +525,10 @@ impl IntoIterator for BatchTopicProduceResponse {
     fn into_iter(self) -> Self::IntoIter {
         self.0
             .into_iter()
-            .map(|(name, partitions)| TopicProduceResponse {
-                name,
-                partition_responses: Some(partitions.into_iter().collect()),
+            .map(|(name, partitions)| {
+                TopicProduceResponse::default()
+                    .name(name)
+                    .partition_responses(Some(partitions.into_iter().collect()))
             })
             .collect::<Vec<_>>()
             .into_iter()
@@ -664,9 +665,10 @@ impl IntoIterator for TopicPartitionBatch {
     fn into_iter(self) -> Self::IntoIter {
         self.topics
             .into_iter()
-            .map(|(name, partitions)| TopicProduceData {
-                name,
-                partition_data: Some(partitions.into_iter().collect()),
+            .map(|(name, partitions)| {
+                TopicProduceData::default()
+                    .name(name)
+                    .partition_data(Some(partitions.into_iter().collect()))
             })
             .collect::<Vec<_>>()
             .into_iter()
@@ -685,11 +687,12 @@ impl IntoIterator for PartitionBatch {
     fn into_iter(self) -> Self::IntoIter {
         self.partitions
             .into_iter()
-            .map(|(index, batches)| PartitionProduceData {
-                index,
-                records: Some(Frame {
-                    batches: combine(batches).unwrap(),
-                }),
+            .map(|(index, batches)| {
+                PartitionProduceData::default()
+                    .index(index)
+                    .records(Some(Frame {
+                        batches: combine(batches).unwrap(),
+                    }))
             })
             .collect::<Vec<_>>()
             .into_iter()
@@ -837,28 +840,33 @@ mod tests {
                 responses: req.topic_data.as_ref().map(|topic_data| {
                     topic_data
                         .iter()
-                        .map(|topic_produce_data| TopicProduceResponse {
-                            name: topic_produce_data.name.clone(),
-                            partition_responses: topic_produce_data.partition_data.as_ref().map(
-                                |partition_produce_data| {
-                                    partition_produce_data
-                                        .iter()
-                                        .map(|partition_produce| PartitionProduceResponse {
-                                            index: partition_produce.index,
-                                            error_code: ErrorCode::None.into(),
-                                            base_offset: 65456,
-                                            log_append_time_ms: Some(0),
-                                            log_start_offset: Some(0),
-                                            record_errors: Some([].into()),
-                                            error_message: Some("none".into()),
-                                            current_leader: Some(LeaderIdAndEpoch {
-                                                leader_id: 12321,
-                                                leader_epoch: 23432,
-                                            }),
-                                        })
-                                        .collect()
-                                },
-                            ),
+                        .map(|topic_produce_data| {
+                            TopicProduceResponse::default()
+                                .name(topic_produce_data.name.clone())
+                                .partition_responses(
+                                    topic_produce_data.partition_data.as_ref().map(
+                                        |partition_produce_data| {
+                                            partition_produce_data
+                                                .iter()
+                                                .map(|partition_produce| {
+                                                    PartitionProduceResponse::default()
+                                                        .index(partition_produce.index)
+                                                        .error_code(ErrorCode::None.into())
+                                                        .base_offset(65456)
+                                                        .log_append_time_ms(Some(0))
+                                                        .log_start_offset(Some(0))
+                                                        .record_errors(Some([].into()))
+                                                        .error_message(Some("none".into()))
+                                                        .current_leader(Some(
+                                                            LeaderIdAndEpoch::default()
+                                                                .leader_id(12321)
+                                                                .leader_epoch(23432),
+                                                        ))
+                                                })
+                                                .collect()
+                                        },
+                                    ),
+                                )
                         })
                         .collect()
                 }),
@@ -916,18 +924,16 @@ mod tests {
         record_data_batch(record_data).map(|batch| ProduceRequest {
             correlation_id,
             topic_data: Some(
-                [TopicProduceData {
-                    name: String::from(topic),
-                    partition_data: Some(
-                        [PartitionProduceData {
-                            index: 0,
-                            records: Some(Frame {
+                [TopicProduceData::default()
+                    .name(String::from(topic))
+                    .partition_data(Some(
+                        [PartitionProduceData::default()
+                            .index(0)
+                            .records(Some(Frame {
                                 batches: vec![batch],
-                            }),
-                        }]
+                            }))]
                         .into(),
-                    ),
-                }]
+                    ))]
                 .into(),
             ),
             ..Default::default()
@@ -994,12 +1000,12 @@ mod tests {
                 acks: 0,
                 timeout_ms: 5000,
                 topic_data: Some(
-                    [TopicProduceData {
-                        name: "a".into(),
-                        partition_data: Some(
-                            [PartitionProduceData {
-                                index: 0,
-                                records: Some(Frame {
+                    [TopicProduceData::default()
+                        .name("a".into())
+                        .partition_data(Some(
+                            [PartitionProduceData::default()
+                                .index(0)
+                                .records(Some(Frame {
                                     batches: [deflated::Batch {
                                         base_offset: 0,
                                         batch_length: 59,
@@ -1017,11 +1023,9 @@ mod tests {
                                         record_data: Bytes::from_static(b"\x12\0\0\0\x01\x06foo\0")
                                     }]
                                     .into()
-                                })
-                            }]
+                                }))]
                             .into()
-                        )
-                    }]
+                        ))]
                     .into()
                 )
             }],
@@ -1041,25 +1045,24 @@ mod tests {
                 throttle_time_ms: Some(5_000),
                 node_endpoints: Some([].into()),
                 responses: Some(
-                    [TopicProduceResponse {
-                        name: "a".into(),
-                        partition_responses: Some(
-                            [PartitionProduceResponse {
-                                index: 0,
-                                error_code: 0,
-                                base_offset: 65456,
-                                log_append_time_ms: Some(0),
-                                log_start_offset: Some(0),
-                                record_errors: Some([].into()),
-                                error_message: Some("none".into()),
-                                current_leader: Some(LeaderIdAndEpoch {
-                                    leader_id: 12321,
-                                    leader_epoch: 23432
-                                })
-                            }]
+                    [TopicProduceResponse::default()
+                        .name("a".into())
+                        .partition_responses(Some(
+                            [PartitionProduceResponse::default()
+                                .index(0)
+                                .error_code(0)
+                                .base_offset(65456)
+                                .log_append_time_ms(Some(0))
+                                .log_start_offset(Some(0))
+                                .record_errors(Some([].into()))
+                                .error_message(Some("none".into()))
+                                .current_leader(Some(
+                                    LeaderIdAndEpoch::default()
+                                        .leader_id(12321)
+                                        .leader_epoch(23432)
+                                ))]
                             .into()
-                        )
-                    }]
+                        ))]
                     .into()
                 ),
                 ..Default::default()
@@ -1160,12 +1163,12 @@ mod tests {
                 timeout_ms: 5000,
                 topic_data: Some(
                     [
-                        TopicProduceData {
-                            name: "a".into(),
-                            partition_data: Some(
-                                [PartitionProduceData {
-                                    index: 0,
-                                    records: Some(Frame {
+                        TopicProduceData::default()
+                            .name("a".into())
+                            .partition_data(Some(
+                                [PartitionProduceData::default()
+                                    .index(0)
+                                    .records(Some(Frame {
                                         batches: [deflated::Batch {
                                             base_offset: 0,
                                             batch_length: 59,
@@ -1185,17 +1188,15 @@ mod tests {
                                             )
                                         }]
                                         .into()
-                                    })
-                                }]
+                                    }))]
                                 .into()
-                            )
-                        },
-                        TopicProduceData {
-                            name: "b".into(),
-                            partition_data: Some(
-                                [PartitionProduceData {
-                                    index: 0,
-                                    records: Some(Frame {
+                            )),
+                        TopicProduceData::default()
+                            .name("b".into())
+                            .partition_data(Some(
+                                [PartitionProduceData::default()
+                                    .index(0)
+                                    .records(Some(Frame {
                                         batches: [deflated::Batch {
                                             base_offset: 0,
                                             batch_length: 59,
@@ -1215,11 +1216,9 @@ mod tests {
                                             )
                                         }]
                                         .into()
-                                    })
-                                }]
+                                    }))]
                                 .into()
-                            )
-                        }
+                            ))
                     ]
                     .into()
                 )
@@ -1237,25 +1236,24 @@ mod tests {
                 throttle_time_ms: Some(5_000),
                 node_endpoints: Some([].into()),
                 responses: Some(
-                    [TopicProduceResponse {
-                        name: "a".into(),
-                        partition_responses: Some(
-                            [PartitionProduceResponse {
-                                index: 0,
-                                error_code: 0,
-                                base_offset: 65456,
-                                log_append_time_ms: Some(0),
-                                log_start_offset: Some(0),
-                                record_errors: Some([].into()),
-                                error_message: Some("none".into()),
-                                current_leader: Some(LeaderIdAndEpoch {
-                                    leader_id: 12321,
-                                    leader_epoch: 23432
-                                })
-                            }]
+                    [TopicProduceResponse::default()
+                        .name("a".into())
+                        .partition_responses(Some(
+                            [PartitionProduceResponse::default()
+                                .index(0)
+                                .error_code(0)
+                                .base_offset(65456)
+                                .log_append_time_ms(Some(0))
+                                .log_start_offset(Some(0))
+                                .record_errors(Some([].into()))
+                                .error_message(Some("none".into()))
+                                .current_leader(Some(
+                                    LeaderIdAndEpoch::default()
+                                        .leader_id(12321)
+                                        .leader_epoch(23432)
+                                ))]
                             .into()
-                        )
-                    }]
+                        ))]
                     .into()
                 ),
                 api_version: 11,
@@ -1276,25 +1274,24 @@ mod tests {
                 throttle_time_ms: Some(5_000),
                 node_endpoints: Some([].into()),
                 responses: Some(
-                    [TopicProduceResponse {
-                        name: "b".into(),
-                        partition_responses: Some(
-                            [PartitionProduceResponse {
-                                index: 0,
-                                error_code: 0,
-                                base_offset: 65456,
-                                log_append_time_ms: Some(0),
-                                log_start_offset: Some(0),
-                                record_errors: Some([].into()),
-                                error_message: Some("none".into()),
-                                current_leader: Some(LeaderIdAndEpoch {
-                                    leader_id: 12321,
-                                    leader_epoch: 23432
-                                })
-                            }]
+                    [TopicProduceResponse::default()
+                        .name("b".into())
+                        .partition_responses(Some(
+                            [PartitionProduceResponse::default()
+                                .index(0)
+                                .error_code(0)
+                                .base_offset(65456)
+                                .log_append_time_ms(Some(0))
+                                .log_start_offset(Some(0))
+                                .record_errors(Some([].into()))
+                                .error_message(Some("none".into()))
+                                .current_leader(Some(
+                                    LeaderIdAndEpoch::default()
+                                        .leader_id(12321)
+                                        .leader_epoch(23432)
+                                ))]
                             .into()
-                        )
-                    }]
+                        ))]
                     .into()
                 ),
                 ..Default::default()
@@ -1395,6 +1392,7 @@ mod tests {
             .lock()
             .map(|guard| guard.clone())
             .expect("poison");
+
         assert_eq!(
             vec![ProduceRequest {
                 api_key: ApiKey(0),
@@ -1405,12 +1403,12 @@ mod tests {
                 acks: 0,
                 timeout_ms: 5000,
                 topic_data: Some(
-                    [TopicProduceData {
-                        name: "a".into(),
-                        partition_data: Some(
-                            [PartitionProduceData {
-                                index: 0,
-                                records: Some(Frame {
+                    [TopicProduceData::default()
+                        .name("a".into())
+                        .partition_data(Some(
+                            [PartitionProduceData::default()
+                                .index(0)
+                                .records(Some(Frame {
                                     batches: [deflated::Batch {
                                         base_offset: 0,
                                         batch_length: 69,
@@ -1430,11 +1428,9 @@ mod tests {
                                         )
                                     }]
                                     .into()
-                                })
-                            }]
+                                }))]
                             .into()
-                        )
-                    }]
+                        ))]
                     .into()
                 )
             }],
@@ -1452,25 +1448,24 @@ mod tests {
                 throttle_time_ms: Some(5_000),
                 node_endpoints: Some([].into()),
                 responses: Some(
-                    [TopicProduceResponse {
-                        name: "a".into(),
-                        partition_responses: Some(
-                            [PartitionProduceResponse {
-                                index: 0,
-                                error_code: 0,
-                                base_offset: 65456,
-                                log_append_time_ms: Some(0),
-                                log_start_offset: Some(0),
-                                record_errors: Some([].into()),
-                                error_message: Some("none".into()),
-                                current_leader: Some(LeaderIdAndEpoch {
-                                    leader_id: 12321,
-                                    leader_epoch: 23432
-                                })
-                            }]
+                    [TopicProduceResponse::default()
+                        .name("a".into())
+                        .partition_responses(Some(
+                            [PartitionProduceResponse::default()
+                                .index(0)
+                                .error_code(0)
+                                .base_offset(65456)
+                                .log_append_time_ms(Some(0))
+                                .log_start_offset(Some(0))
+                                .record_errors(Some([].into()))
+                                .error_message(Some("none".into()))
+                                .current_leader(Some(
+                                    LeaderIdAndEpoch::default()
+                                        .leader_id(12321)
+                                        .leader_epoch(23432)
+                                ))]
                             .into()
-                        )
-                    }]
+                        ))]
                     .into()
                 ),
                 ..Default::default()
@@ -1489,25 +1484,24 @@ mod tests {
                 throttle_time_ms: Some(5_000),
                 node_endpoints: Some([].into()),
                 responses: Some(
-                    [TopicProduceResponse {
-                        name: "a".into(),
-                        partition_responses: Some(
-                            [PartitionProduceResponse {
-                                index: 0,
-                                error_code: 0,
-                                base_offset: 65456,
-                                log_append_time_ms: Some(0),
-                                log_start_offset: Some(0),
-                                record_errors: Some([].into()),
-                                error_message: Some("none".into()),
-                                current_leader: Some(LeaderIdAndEpoch {
-                                    leader_id: 12321,
-                                    leader_epoch: 23432
-                                })
-                            }]
+                    [TopicProduceResponse::default()
+                        .name("a".into())
+                        .partition_responses(Some(
+                            [PartitionProduceResponse::default()
+                                .index(0)
+                                .error_code(0)
+                                .base_offset(65456)
+                                .log_append_time_ms(Some(0))
+                                .log_start_offset(Some(0))
+                                .record_errors(Some([].into()))
+                                .error_message(Some("none".into()))
+                                .current_leader(Some(
+                                    LeaderIdAndEpoch::default()
+                                        .leader_id(12321)
+                                        .leader_epoch(23432)
+                                ))]
                             .into()
-                        )
-                    }]
+                        ))]
                     .into()
                 ),
                 ..Default::default()

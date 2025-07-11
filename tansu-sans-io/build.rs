@@ -1,18 +1,3 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
-
 use convert_case::{Case, Casing};
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
@@ -118,6 +103,8 @@ fn kind(
     f: &Field,
     dependencies: &[Type],
 ) -> TokenStream {
+    let _ = (module, dependencies);
+
     #[cfg(feature = "diagnostics")]
     eprintln!(
         "module: {}, field: {}, dependencies: {:?}, primitive: {}, nullable.is_none: {}, \
@@ -138,18 +125,8 @@ fn kind(
         let t = f.kind().type_name();
 
         if f.kind().is_sequence() {
-            if f.kind().is_sequence_of_primitive() {
-                quote! {
-                    Option<Vec<#t>>
-                }
-            } else {
-                quote! {
-                    Option<Vec<#module::#t>>
-                }
-            }
-        } else if parent.is_none() && dependencies.contains(&t) {
             quote! {
-                Option<#module::#t>
+                Option<Vec<#t>>
             }
         } else {
             quote! {
@@ -158,43 +135,14 @@ fn kind(
         }
     } else if f.kind().is_sequence() {
         let t = f.kind().type_name();
-
-        if parent.is_none() && dependencies.contains(&t) {
-            quote! {
-                Option<Vec<#module::#t>>
-            }
-        } else {
-            quote! {
-                Option<Vec<#t>>
-            }
-        }
-    } else if f.kind().is_primitive() {
-        let t = f.kind().type_name();
-
-        if f.nullable().is_none() && f.versions().is_mandatory(parent.map(Field::versions)) {
-            quote! {
-                #t
-            }
-        } else {
-            quote! {
-                Option<#t>
-            }
+        quote! {
+            Option<Vec<#t>>
         }
     } else {
         let t = f.kind().type_name();
         if f.nullable().is_none() && f.versions().is_mandatory(parent.map(Field::versions)) {
-            if parent.is_none() && dependencies.contains(&t) {
-                quote! {
-                    #module::#t
-                }
-            } else {
-                quote! {
-                    #t
-                }
-            }
-        } else if parent.is_none() && dependencies.contains(&t) {
             quote! {
-                Option<#module::#t>
+                #t
             }
         } else {
             quote! {
@@ -237,8 +185,8 @@ fn tag_kind(
     }
 }
 
-#[allow(clippy::too_many_lines)]
-fn body_enum(messages: &[Message], include_tag: bool) -> TokenStream {
+#[allow(dead_code)]
+fn was_body_enum(messages: &[Message], include_tag: bool) -> TokenStream {
     let variants: Vec<TokenStream> = messages
         .iter()
         .map(|message| {
@@ -565,6 +513,95 @@ fn body_enum(messages: &[Message], include_tag: bool) -> TokenStream {
     }
 }
 
+#[allow(clippy::too_many_lines)]
+fn body_enum(messages: &[Message], include_tag: bool) -> TokenStream {
+    let variants = messages.iter().map(|message| {
+        let name = message.type_name();
+        let module =
+            syn::parse_str::<syn::Path>(&name.to_token_stream().to_string().to_case(Case::Snake))
+                .unwrap();
+
+        quote! {
+            #name(#module::#name)
+        }
+    });
+
+    if include_tag {
+        let from_mezzanine = {
+            let conversions = messages.iter().map(|message| {
+                let name = message.type_name();
+                let module = syn::parse_str::<syn::Path>(
+                    &name.to_token_stream().to_string().to_case(Case::Snake),
+                )
+                .unwrap();
+
+                quote! {
+                    mezzanine::Body::#name(inner) => {
+                        Body::#name(crate::#module::#name::from(inner))
+                    }
+                }
+            });
+
+            quote! {
+                impl From<mezzanine::Body> for Body {
+                    fn from(value: mezzanine::Body) -> Self {
+                        match value {
+                            #(#conversions),*
+                        }
+                    }
+                }
+            }
+        };
+
+        quote! {
+            #[non_exhaustive]
+            #[derive(Clone, Debug, PartialEq, PartialOrd, serde::Deserialize, serde::Serialize)]
+            #[serde(from = "mezzanine::Body")]
+            #[serde(into = "mezzanine::Body")]
+            pub enum Body {
+                #(#variants),*
+            }
+
+            #from_mezzanine
+        }
+    } else {
+        let from_tagged = {
+            let conversions = messages.iter().map(|message| {
+                let name = message.type_name();
+                let module = syn::parse_str::<syn::Path>(
+                    &name.to_token_stream().to_string().to_case(Case::Snake),
+                )
+                .unwrap();
+
+                quote! {
+                    crate::Body::#name(inner) => {
+                        Body::#name(#module::#name::from(inner))
+                    }
+                }
+            });
+
+            quote! {
+                impl From<crate::Body> for Body {
+                    fn from(value: crate::Body) -> Self {
+                        match value {
+                            #(#conversions),*
+                        }
+                    }
+                }
+            }
+        };
+
+        quote! {
+            #[derive(Clone, Debug, PartialEq, PartialOrd, serde::Deserialize, serde::Serialize)]
+            pub(crate) enum Body {
+                #(#variants),*
+            }
+
+            #from_tagged
+        }
+    }
+}
+
 fn visibility_field_kind(
     parent: Option<&Field>,
     visibility: Option<&TokenStream>,
@@ -599,19 +636,57 @@ fn visibility_field_kind(
 
 fn root_message_struct(
     name: &Type,
+    api_key: i16,
     fields: &[Field],
     common_structs: Option<&[CommonStruct]>,
     include_tag: bool,
 ) -> TokenStream {
-    message_struct(
-        &syn::parse_str::<syn::Path>(&name.to_token_stream().to_string().to_case(Case::Snake))
-            .unwrap(),
-        None,
-        name,
-        fields,
-        common_structs,
-        include_tag,
-    )
+    let module =
+        syn::parse_str::<syn::Path>(&name.to_token_stream().to_string().to_case(Case::Snake))
+            .unwrap();
+
+    let tokens = message_struct(&module, None, name, fields, common_structs, include_tag);
+
+    if include_tag {
+        quote! {
+            pub mod #module {
+                use super::*;
+
+                #tokens
+
+                impl From<#name> for Body {
+                    fn from(value: #name) -> Body {
+                        Body::#name(value)
+                    }
+                }
+
+                impl TryFrom<Body> for #name {
+                    type Error = Error;
+
+                    fn try_from(value: Body) -> Result<Self, Self::Error> {
+                        if let Body::#name(inner) = value {
+                            Ok(inner)
+                        } else {
+                            Err(Error::UnexpectedType(format!("{value:?}")))
+                        }
+                    }
+                }
+
+                impl ApiKey for #name {
+                    const KEY:i16 = #api_key;
+                }
+            }
+
+            pub use #module::#name;
+
+        }
+    } else {
+        quote! {
+            pub mod #module {
+                #tokens
+            }
+        }
+    }
 }
 
 #[allow(clippy::too_many_lines)]
@@ -657,28 +732,16 @@ fn message_struct(
         )
         .collect();
 
-    let vis = quote!(pub);
-
     let vfk = visibility_field_kind(
         parent,
-        Some(&vis),
+        Some(&quote!(pub)),
         fields,
         module,
         &dependencies,
         include_tag,
     );
 
-    if parent.is_none() {
-        if token_streams.is_empty() {
-            quote! {}
-        } else {
-            quote! {
-                pub mod #module {
-                    #(#token_streams)*
-                }
-            }
-        }
-    } else if include_tag {
+    if include_tag {
         let tags: Vec<TokenStream> = fields
             .iter()
             .filter(|field| field.tag().is_some())
@@ -696,6 +759,19 @@ fn message_struct(
                 if field.kind().is_primitive() {
                     quote! {
                         let #f = value.tag_buffer.as_ref().and_then(|tag_buffer| tag_buffer.decode::<#k>(&#tag).ok().unwrap_or(None))
+                    }
+                } else if field.kind().is_sequence() {
+                    quote! {
+                        let #f = if let Some(tag_buffer) = value.tag_buffer.as_ref() {
+                            if let Ok(Some(#f)) = tag_buffer.decode::<#k>(&#tag)
+                            {
+                                Some(#f.into_iter().map(Into::into).collect())
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
                     }
                 } else {
                     quote! {
@@ -716,7 +792,7 @@ fn message_struct(
             })
             .collect();
 
-        let assignments: Vec<TokenStream> = fields
+        let assignments = fields
             .iter()
             .map(|field| {
                 let f = field.ident();
@@ -733,20 +809,53 @@ fn message_struct(
                     quote! {
                         #f: value.#f.map(|v| v.into_iter().map(Into::into).collect())
                     }
+                } else if field.nullable().is_some() {
+                    quote! {
+                        #f: value.#f.map(|#f|#f.into())
+                    }
                 } else {
                     quote! {
                         #f: value.#f.into()
                     }
                 }
             })
-            .collect();
+            .collect::<Vec<_>>();
 
-        let from = syn::parse_str::<syn::Path>(&format!(
+        let builders = fields
+            .iter()
+            .map(|field| {
+                let ident = field.ident();
+                let kind = kind(parent, module, field, &dependencies);
+
+                quote! {
+                    pub fn #ident(mut self, #ident: #kind) -> Self {
+                        self.#ident = #ident;
+                        self
+                    }
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let mezzanine_name = syn::parse_str::<syn::Path>(&format!(
             "crate::mezzanine::{}::{}",
             module.to_token_stream(),
             name.to_token_stream()
         ))
         .unwrap();
+
+        let from_mezzanine = (!fields.is_empty()).then(|| {
+            quote! {
+                impl From<#mezzanine_name> for #name {
+                    fn from(value: #mezzanine_name) -> Self {
+                        #(#tags;)*
+
+                        Self {
+                            #(#assignments,)*
+                        }
+                    }
+                }
+            }
+        });
 
         let derived = if fields.iter().any(Field::has_float) {
             quote! {
@@ -758,20 +867,27 @@ fn message_struct(
             }
         };
 
+        let visibility = if include_tag {
+            quote! {
+                pub
+            }
+        } else {
+            quote! {
+                pub(crate)
+            }
+        };
+
         quote! {
+            #[non_exhaustive]
             #derived
-            pub struct #name {
+            #visibility struct #name {
                 #(#vfk,)*
             }
 
-            impl From<#from> for #name {
-                fn from(value: #from) -> Self {
-                    #(#tags;)*
+            #from_mezzanine
 
-                    Self {
-                        #(#assignments,)*
-                    }
-                }
+            impl #name {
+                #(#builders)*
             }
 
             #(#token_streams)*
@@ -856,6 +972,10 @@ fn message_struct(
                     quote! {
                         #f: value.#f.map(|v| v.into_iter().map(Into::into).collect())
                     }
+                } else if field.nullable().is_some() {
+                    quote! {
+                        #f: value.#f.map(|#f|#f.into())
+                    }
                 } else {
                     quote! {
                         #f: value.#f.into()
@@ -864,12 +984,30 @@ fn message_struct(
             })
             .collect();
 
-        let from = syn::parse_str::<syn::Path>(&format!(
+        let tagged_name = syn::parse_str::<syn::Path>(&format!(
             "crate::{}::{}",
             module.to_token_stream(),
             name.to_token_stream()
         ))
         .unwrap();
+
+        let from_tagged = (!fields.is_empty()).then(|| {
+            quote! {
+                impl From<#tagged_name> for #name {
+                    fn from(value: #tagged_name) -> Self {
+                        #[allow(unused_mut)]
+                        let mut tag_buffer = Vec::new();
+
+                        #(#tags)*
+
+                        Self {
+                            #(#assignments,)*
+                            tag_buffer: Some(tag_buffer.into()),
+                        }
+                    }
+                }
+            }
+        });
 
         let derived = if fields.iter().any(Field::has_float) {
             quote! {
@@ -888,19 +1026,7 @@ fn message_struct(
                 pub tag_buffer: Option<crate::primitive::tagged::TagBuffer>,
             }
 
-            impl From<#from> for #name {
-                fn from(value: #from) -> Self {
-                    #[allow(unused_mut)]
-                    let mut tag_buffer = Vec::new();
-
-                    #(#tags)*
-
-                    Self {
-                        #(#assignments,)*
-                        tag_buffer: Some(tag_buffer.into()),
-                    }
-                }
-            }
+            #from_tagged
 
             #(#token_streams)*
         }
@@ -941,6 +1067,21 @@ fn common_struct(
             })
             .collect();
 
+        let builders = fields
+            .iter()
+            .map(|field| {
+                let ident = field.ident();
+                let kind = kind(parent, module, field, &[]);
+
+                quote! {
+                    pub fn #ident(mut self, #ident: #kind) -> Self {
+                        self.#ident = #ident;
+                        self
+                    }
+                }
+            })
+            .collect::<Vec<_>>();
+
         let from = syn::parse_str::<syn::Path>(&format!(
             "crate::mezzanine::{}::{}",
             module.to_token_stream(),
@@ -958,10 +1099,25 @@ fn common_struct(
             }
         };
 
+        let visibility = if include_tag {
+            quote! {
+                pub
+            }
+        } else {
+            quote! {
+                pub(crate)
+            }
+        };
+
         quote! {
+            #[non_exhaustive]
             #derived
-            pub struct #name {
+            #visibility struct #name {
                 #(#vfk,)*
+            }
+
+            impl #name {
+                #(#builders)*
             }
 
             impl From<#from> for #name {
@@ -1101,6 +1257,7 @@ fn root(messages: &[Message], include_tag: bool) -> Vec<TokenStream> {
         .map(|message| {
             root_message_struct(
                 &message.type_name(),
+                message.api_key(),
                 message.fields(),
                 message.common_structs(),
                 include_tag,
@@ -1114,10 +1271,41 @@ fn process(messages: &[Message], include_tag: bool) -> TokenStream {
     let root = root(messages, include_tag);
 
     if include_tag {
+        let as_names = messages
+            .iter()
+            .map(|message| {
+                let name = message.type_name();
+
+                let module = syn::parse_str::<syn::Path>(
+                    &name.to_token_stream().to_string().to_case(Case::Snake),
+                )
+                .unwrap_or_else(|_| panic!("module: {}", &name.to_token_stream().to_string()));
+
+                let as_name = syn::parse_str::<syn::Path>(
+                    &format!("As{}", name.to_token_stream()).to_case(Case::Snake),
+                )
+                .unwrap();
+
+                quote! {
+                    pub fn #as_name(self) -> Option<#module::#name> {
+                        if let Self::#name(value) = self {
+                            Some(value)
+                        } else {
+                            None
+                        }
+                    }
+                }
+            })
+            .collect::<Vec<_>>();
+
         quote! {
             #(#root)*
 
             #body_enum
+
+            impl Body {
+                #(#as_names)*
+            }
         }
     } else {
         quote! {
@@ -1131,20 +1319,16 @@ fn process(messages: &[Message], include_tag: bool) -> TokenStream {
 }
 
 fn all(pattern: &str) -> Result<Vec<Message>> {
-    glob::glob(pattern)
-        .map_err(Into::into)
-        .and_then(|mut paths| {
-            paths.try_fold(Vec::new(), |mut acc, p| {
-                p.map_err(Into::into)
+    glob::glob(pattern).map_err(Into::into).and_then(|paths| {
+        paths
+            .map(|path| {
+                path.map_err(Into::into)
                     .inspect(|path| println!("cargo::rerun-if-changed={}", path.display()))
                     .and_then(read_value)
                     .and_then(|v| Message::try_from(&Wv::from(&v)).map_err(Into::into))
-                    .map(|m| {
-                        acc.push(m);
-                        acc
-                    })
             })
-        })
+            .collect::<Result<Vec<_>>>()
+    })
 }
 
 fn each_field_meta(
@@ -1245,7 +1429,9 @@ pub fn main() {
 
     let broker_messages = messages
         .into_iter()
-        .filter(|message| broker_api_keys.contains(&message.api_key()))
+        .filter(|message| {
+            broker_api_keys.contains(&message.api_key()) && !message.fields().is_empty()
+        })
         .collect::<Vec<_>>();
 
     let tagged = process(&broker_messages, true);
@@ -1262,7 +1448,7 @@ pub fn main() {
         #message_meta
     };
 
-    let r = syn::parse_file(&q.to_string()).unwrap();
+    let r = syn::parse_file(&q.to_string()).unwrap_or_else(|_| panic!("{}", q.to_string()));
 
     fs::write(&dest_path, prettyplease::unparse(&r)).unwrap();
 

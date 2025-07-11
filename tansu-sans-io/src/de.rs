@@ -1,18 +1,3 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
-
 use crate::{Error, Result, RootMessageMeta};
 use serde::{
     Deserializer,
@@ -922,7 +907,7 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
                 _ = self.meta.parse.pop_front();
                 _ = self.meta.field.take();
                 outcome
-            } else if name == "Body" {
+            } else if name.ends_with("Request") || name.ends_with("Response") {
                 self.meta.parse.push_front(mm.fields.into());
                 let outcome = visitor.visit_seq(Struct::new(self, name, fields));
                 _ = self.meta.parse.pop_front();
@@ -1168,7 +1153,7 @@ impl<'de> VariantAccess<'de> for Enum<'de, '_> {
         T: DeserializeSeed<'de>,
     {
         debug!(name = self.name, seed = type_name_of_val(&seed));
-        unimplemented!()
+        seed.deserialize(&mut *self.de)
     }
 
     fn tuple_variant<V>(self, len: usize, visitor: V) -> Result<V::Value, Self::Error>

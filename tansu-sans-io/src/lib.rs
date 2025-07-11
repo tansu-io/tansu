@@ -1,17 +1,35 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+//! # Tansu Sans IO
+//!
+//! The crate provides a Kafka protocol implementation that performs no I/O (it operates only on bytes)
+//!
+//! ## Design
+//!
+//! Each Kafka API message is defined by a JSON message descriptor. Each descriptor
+//! contains a list of fields together with their associated type. Each field can
+//! include a range of versions for which it is valid, its encoding and whether it
+//! includes tagged fields.
+//!
+//! This crate includes a build time proc macro that generates simple Rust structures
+//! containing all the fields present in the the Kakfa message descriptor. Each generated
+//! type implements [`serde::Serialize`] and [`serde::Deserialize`] traits. As part of
+//! the generation phase [`crate::MESSAGE_META`] is created, which is used by the actual message serializers.
+//!
+//! The Kafka protocol implementation is done by [`crate::ser::Encoder`] and [`crate::de::Decoder`],
+//! using [`crate::MESSAGE_META`] to determine which fields are present, their serialization type
+//! and whether any tagged fields can be present for a particular message version. The serializers
+//! are not generated.
+//!
+//! Some useful starting points:
+//!
+//! - **Data Structures** - The key structures are: [`crate::Frame`], [`crate::Header`] and [`crate::Body`].
+//! - **Producing or fetching messages** - [`crate::ProduceRequest`] and [`crate::FetchRequest`]
+//!
+//! [`crate::Frame`]: Frame
+//! [`crate::Header`]: Header
+//! [`crate::Body`]: Body
+//! [`crate::ProduceRequest`]: ProduceRequest
+//! [`crate::FetchRequest`]: FetchRequest
+//!
 
 pub mod de;
 pub mod primitive;
@@ -26,6 +44,7 @@ use record::deflated::Frame as RecordBatch;
 pub use ser::Encoder;
 use serde::{Deserialize, Serialize};
 use std::{
+    array::TryFromSliceError,
     collections::HashMap,
     env::VarError,
     fmt::{self, Display, Formatter},
@@ -89,6 +108,10 @@ impl RootMessageMeta {
     }
 }
 
+pub trait ApiKey {
+    const KEY: i16;
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     ApiError(ErrorCode),
@@ -110,6 +133,8 @@ pub enum Error {
     SystemTime(SystemTimeError),
     TansuModel(tansu_model::Error),
     TryFromInt(#[from] num::TryFromIntError),
+    TryFromSlice(#[from] TryFromSliceError),
+    UnexpectedType(String),
     UnknownApiErrorCode(i16),
     UnknownCompressionType(i16),
     Utf8(str::Utf8Error),
@@ -174,14 +199,21 @@ impl From<SystemTimeError> for Error {
     }
 }
 
+/// A Kafka API frame prefixed with its length, followed by a header and the message body.
 #[derive(Clone, Debug, Deserialize, PartialEq, PartialOrd, Serialize)]
 pub struct Frame {
+    /// The size of this frame.
     pub size: i32,
+
+    /// The frame header.
     pub header: Header,
+
+    /// The frame body.
     pub body: Body,
 }
 
 impl Frame {
+    /// serialize an API request into a frame of bytes
     pub fn request(header: Header, body: Body) -> Result<Vec<u8>> {
         let mut c = Cursor::new(vec![]);
 
@@ -203,6 +235,7 @@ impl Frame {
         Ok(c.into_inner())
     }
 
+    /// deserialize bytes into an API request frame
     pub fn request_from_bytes(bytes: &[u8]) -> Result<Frame> {
         debug!(?bytes);
         let mut c = Cursor::new(bytes);
@@ -210,6 +243,7 @@ impl Frame {
         Frame::deserialize(&mut deserializer)
     }
 
+    /// serialize an API response into a frame of bytes
     pub fn response(header: Header, body: Body, api_key: i16, api_version: i16) -> Result<Vec<u8>> {
         let mut c = Cursor::new(vec![]);
         let mut serializer = Encoder::response(&mut c, api_key, api_version);
@@ -235,6 +269,7 @@ impl Frame {
         Ok(c.into_inner())
     }
 
+    /// deserialize bytes into an API response frame
     pub fn response_from_bytes(bytes: &[u8], api_key: i16, api_version: i16) -> Result<Frame> {
         let mut c = Cursor::new(bytes);
         let mut deserializer = Decoder::response(&mut c, api_key, api_version);
@@ -242,17 +277,29 @@ impl Frame {
     }
 }
 
+/// A Kafka API request or response header.
 #[derive(Clone, Debug, Deserialize, PartialEq, PartialOrd, Serialize)]
 #[serde(try_from = "HeaderMezzanine")]
 #[serde(into = "HeaderMezzanine")]
 pub enum Header {
+    /// An API request header.
     Request {
+        /// The API key being used for this request.
         api_key: i16,
+
+        /// The API version being used for this request.
         api_version: i16,
+
+        /// The correlation ID that should be used for any replies to this request.
         correlation_id: i32,
+
+        /// An optional client ID.
         client_id: Option<String>,
     },
+
+    /// An API Response header.
     Response {
+        /// The correlation ID for the corresponding request.
         correlation_id: i32,
     },
 }
@@ -1232,6 +1279,20 @@ impl Compression {
                     .decompress_vec(
                         // https://github.com/xerial/snappy-java/tree/master?tab=readme-ov-file#compatibility-notes
                         if input.starts_with(b"\x82SNAPPY\0") {
+                            if let (b"\x82SNAPPY\0", remainder) = input.split_at(8) {
+                                let (version, remainder) = remainder.split_at(4);
+                                let version = version.try_into().map(i32::from_be_bytes)?;
+
+                                let (compatible_version, remainder) = remainder.split_at(4);
+                                let compatible_version =
+                                    compatible_version.try_into().map(i32::from_be_bytes)?;
+
+                                let (block_size, _) = remainder.split_at(4);
+                                let block_size = block_size.try_into().map(i32::from_be_bytes)?;
+
+                                debug!(version, compatible_version, block_size);
+                            }
+
                             let skip_header = &input[20..];
                             debug!(?skip_header);
                             skip_header

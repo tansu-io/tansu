@@ -46,13 +46,12 @@ pub async fn person_valid(
 
     let topic_id = sc
         .create_topic(
-            CreatableTopic {
-                name: topic_name.into(),
-                num_partitions,
-                replication_factor,
-                assignments: assignments.clone(),
-                configs: configs.clone(),
-            },
+            CreatableTopic::default()
+                .name(topic_name.into())
+                .num_partitions(num_partitions)
+                .replication_factor(replication_factor)
+                .assignments(assignments.clone())
+                .configs(configs.clone()),
             false,
         )
         .await?;
@@ -105,13 +104,12 @@ pub async fn person_invalid(
 
     let topic_id = sc
         .create_topic(
-            CreatableTopic {
-                name: topic_name.into(),
-                num_partitions,
-                replication_factor,
-                assignments: assignments.clone(),
-                configs: configs.clone(),
-            },
+            CreatableTopic::default()
+                .name(topic_name.into())
+                .num_partitions(num_partitions)
+                .replication_factor(replication_factor)
+                .assignments(assignments.clone())
+                .configs(configs.clone()),
             false,
         )
         .await?;

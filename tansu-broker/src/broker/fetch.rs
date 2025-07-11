@@ -19,7 +19,8 @@ use tansu_sans_io::{
     Body, ErrorCode, IsolationLevel,
     fetch_request::{FetchPartition, FetchTopic},
     fetch_response::{
-        EpochEndOffset, FetchableTopicResponse, LeaderIdAndEpoch, PartitionData, SnapshotId,
+        EpochEndOffset, FetchResponse, FetchableTopicResponse, LeaderIdAndEpoch, PartitionData,
+        SnapshotId,
     },
     metadata_response::MetadataResponseTopic,
     record::{deflated::Batch, deflated::Frame},
@@ -104,58 +105,52 @@ where
             .await
             .inspect_err(|error| error!(?error, ?tp))?;
 
-        Ok(PartitionData {
-            partition_index,
-            error_code: ErrorCode::None.into(),
-            high_watermark: offset_stage.high_watermark(),
-            last_stable_offset: Some(offset_stage.last_stable()),
-            log_start_offset: Some(offset_stage.log_start()),
-            diverging_epoch: None,
-            current_leader: None,
-            snapshot_id: None,
-            aborted_transactions: Some([].into()),
-            preferred_read_replica: Some(-1),
-            records: if batches.is_empty() {
+        Ok(PartitionData::default()
+            .partition_index(partition_index)
+            .error_code(ErrorCode::None.into())
+            .high_watermark(offset_stage.high_watermark())
+            .last_stable_offset(Some(offset_stage.last_stable()))
+            .log_start_offset(Some(offset_stage.log_start()))
+            .diverging_epoch(None)
+            .current_leader(None)
+            .snapshot_id(None)
+            .aborted_transactions(Some([].into()))
+            .preferred_read_replica(Some(-1))
+            .records(if batches.is_empty() {
                 None
             } else {
                 Some(Frame { batches })
-            },
-        })
+            }))
         .inspect(|r| debug!(?r))
     }
 
     fn unknown_topic_response(&self, fetch: &FetchTopic) -> Result<FetchableTopicResponse> {
-        Ok(FetchableTopicResponse {
-            topic: fetch.topic.clone(),
-            topic_id: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
-            partitions: fetch.partitions.as_ref().map(|partitions| {
+        Ok(FetchableTopicResponse::default()
+            .topic(fetch.topic.clone())
+            .topic_id(Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]))
+            .partitions(fetch.partitions.as_ref().map(|partitions| {
                 partitions
                     .iter()
-                    .map(|partition| PartitionData {
-                        partition_index: partition.partition,
-                        error_code: ErrorCode::UnknownTopicOrPartition.into(),
-                        high_watermark: 0,
-                        last_stable_offset: Some(0),
-                        log_start_offset: Some(-1),
-                        diverging_epoch: Some(EpochEndOffset {
-                            epoch: -1,
-                            end_offset: -1,
-                        }),
-                        current_leader: Some(LeaderIdAndEpoch {
-                            leader_id: 0,
-                            leader_epoch: 0,
-                        }),
-                        snapshot_id: Some(SnapshotId {
-                            end_offset: -1,
-                            epoch: -1,
-                        }),
-                        aborted_transactions: Some([].into()),
-                        preferred_read_replica: Some(-1),
-                        records: None,
+                    .map(|partition| {
+                        PartitionData::default()
+                            .partition_index(partition.partition)
+                            .error_code(ErrorCode::UnknownTopicOrPartition.into())
+                            .high_watermark(0)
+                            .last_stable_offset(Some(0))
+                            .log_start_offset(Some(-1))
+                            .diverging_epoch(Some(
+                                EpochEndOffset::default().epoch(-1).end_offset(-1),
+                            ))
+                            .current_leader(Some(
+                                LeaderIdAndEpoch::default().leader_id(0).leader_epoch(0),
+                            ))
+                            .snapshot_id(Some(SnapshotId::default().end_offset(-1).epoch(-1)))
+                            .aborted_transactions(Some([].into()))
+                            .preferred_read_replica(Some(-1))
+                            .records(None)
                     })
                     .collect()
-            }),
-        })
+            })))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -195,11 +190,10 @@ where
                 partitions.push(partition);
             }
 
-            Ok(FetchableTopicResponse {
-                topic: fetch.topic.to_owned(),
-                topic_id: topic_id.to_owned(),
-                partitions: Some(partitions),
-            })
+            Ok(FetchableTopicResponse::default()
+                .topic(fetch.topic.to_owned())
+                .topic_id(topic_id.to_owned())
+                .partitions(Some(partitions)))
         } else {
             self.unknown_topic_response(fetch)
         }
@@ -305,13 +299,13 @@ where
             vec![]
         });
 
-        Ok(Body::FetchResponse {
-            throttle_time_ms: Some(0),
-            error_code: Some(ErrorCode::None.into()),
-            session_id: Some(0),
-            node_endpoints: Some([].into()),
-            responses,
-        })
+        Ok(FetchResponse::default()
+            .throttle_time_ms(Some(0))
+            .error_code(Some(ErrorCode::None.into()))
+            .session_id(Some(0))
+            .node_endpoints(Some([].into()))
+            .responses(responses)
+            .into())
         .inspect(|r| debug!(?r))
     }
 }

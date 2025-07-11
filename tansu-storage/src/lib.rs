@@ -41,7 +41,9 @@ use std::{
 };
 use tansu_sans_io::{
     Body, ConfigResource, ErrorCode, IsolationLevel, NULL_TOPIC_ID,
-    add_partitions_to_txn_request::{AddPartitionsToTxnTopic, AddPartitionsToTxnTransaction},
+    add_partitions_to_txn_request::{
+        AddPartitionsToTxnRequest, AddPartitionsToTxnTopic, AddPartitionsToTxnTransaction,
+    },
     add_partitions_to_txn_response::{AddPartitionsToTxnResult, AddPartitionsToTxnTopicResult},
     consumer_group_describe_response,
     create_topics_request::CreatableTopic,
@@ -492,6 +494,7 @@ impl From<DeleteTopicState> for TopicId {
             DeleteTopicState {
                 name: Some(name),
                 topic_id,
+                ..
             } if topic_id == NULL_TOPIC_ID => name.into(),
 
             DeleteTopicState { topic_id, .. } => topic_id.into(),
@@ -714,17 +717,16 @@ impl From<&GroupDetail> for consumer_group_describe_response::DescribedGroup {
 
         let group_state = ConsumerGroupState::from(value).to_string();
 
-        Self {
-            error_code: ErrorCode::None.into(),
-            error_message: Some(ErrorCode::None.to_string()),
-            group_id: Default::default(),
-            group_state,
-            group_epoch: -1,
-            assignment_epoch: -1,
-            assignor_name,
-            members: Some([].into()),
-            authorized_operations: -1,
-        }
+        Self::default()
+            .error_code(ErrorCode::None.into())
+            .error_message(Some(ErrorCode::None.to_string()))
+            .group_id(Default::default())
+            .group_state(group_state)
+            .group_epoch(-1)
+            .assignment_epoch(-1)
+            .assignor_name(assignor_name)
+            .members(Some([].into()))
+            .authorized_operations(-1)
     }
 }
 
@@ -770,33 +772,31 @@ impl From<&NamedGroupDetail> for consumer_group_describe_response::DescribedGrou
 
                 let group_state = ConsumerGroupState::from(group_detail).to_string();
 
-                Self {
-                    error_code: ErrorCode::None.into(),
-                    error_message: Some(ErrorCode::None.to_string()),
-                    group_id: name.into(),
-                    group_state,
-                    group_epoch: -1,
-                    assignment_epoch: -1,
-                    assignor_name,
-                    members: Some([].into()),
-                    authorized_operations: -1,
-                }
+                Self::default()
+                    .error_code(ErrorCode::None.into())
+                    .error_message(Some(ErrorCode::None.to_string()))
+                    .group_id(name.into())
+                    .group_state(group_state)
+                    .group_epoch(-1)
+                    .assignment_epoch(-1)
+                    .assignor_name(assignor_name)
+                    .members(Some([].into()))
+                    .authorized_operations(-1)
             }
 
             NamedGroupDetail {
                 name,
                 response: GroupDetailResponse::ErrorCode(error_code),
-            } => Self {
-                error_code: (*error_code).into(),
-                error_message: Some(error_code.to_string()),
-                group_id: name.into(),
-                group_state: "Unknown".into(),
-                group_epoch: -1,
-                assignment_epoch: -1,
-                assignor_name: "".into(),
-                members: Some([].into()),
-                authorized_operations: -1,
-            },
+            } => Self::default()
+                .error_code((*error_code).into())
+                .error_message(Some(error_code.to_string()))
+                .group_id(name.into())
+                .group_state("Unknown".into())
+                .group_epoch(-1)
+                .assignment_epoch(-1)
+                .assignor_name("".into())
+                .members(Some([].into()))
+                .authorized_operations(-1),
         }
     }
 }
@@ -813,39 +813,38 @@ impl From<&NamedGroupDetail> for describe_groups_response::DescribedGroup {
                 let members = group_detail
                     .members
                     .keys()
-                    .map(|member_id| describe_groups_response::DescribedGroupMember {
-                        member_id: member_id.into(),
-                        group_instance_id: None,
-                        client_id: "".into(),
-                        client_host: "".into(),
-                        member_metadata: Bytes::new(),
-                        member_assignment: Bytes::new(),
+                    .map(|member_id| {
+                        describe_groups_response::DescribedGroupMember::default()
+                            .member_id(member_id.into())
+                            .group_instance_id(None)
+                            .client_id("".into())
+                            .client_host("".into())
+                            .member_metadata(Bytes::new())
+                            .member_assignment(Bytes::new())
                     })
                     .collect::<Vec<_>>();
 
-                Self {
-                    error_code: ErrorCode::None.into(),
-                    group_id: name.clone(),
-                    group_state,
-                    protocol_type: group_detail.state.protocol_type().unwrap_or_default(),
-                    protocol_data: "".into(),
-                    members: Some(members),
-                    authorized_operations: Some(-1),
-                }
+                Self::default()
+                    .error_code(ErrorCode::None.into())
+                    .group_id(name.clone())
+                    .group_state(group_state)
+                    .protocol_type(group_detail.state.protocol_type().unwrap_or_default())
+                    .protocol_data("".into())
+                    .members(Some(members))
+                    .authorized_operations(Some(-1))
             }
 
             NamedGroupDetail {
                 name,
                 response: GroupDetailResponse::ErrorCode(error_code),
-            } => Self {
-                error_code: (*error_code).into(),
-                group_id: name.clone(),
-                group_state: "Unknown".into(),
-                protocol_type: "".into(),
-                protocol_data: "".into(),
-                members: Some(vec![]),
-                authorized_operations: Some(-1),
-            },
+            } => Self::default()
+                .error_code((*error_code).into())
+                .group_id(name.clone())
+                .group_state("Unknown".into())
+                .protocol_type("".into())
+                .protocol_data("".into())
+                .members(Some(vec![]))
+                .authorized_operations(Some(-1)),
         }
     }
 }
@@ -905,26 +904,28 @@ impl TryFrom<Body> for TxnAddPartitionsRequest {
 
     fn try_from(value: Body) -> result::Result<Self, Self::Error> {
         match value {
-            Body::AddPartitionsToTxnRequest {
+            Body::AddPartitionsToTxnRequest(AddPartitionsToTxnRequest {
                 transactions: None,
                 v_3_and_below_transactional_id: Some(transactional_id),
                 v_3_and_below_producer_id: Some(producer_id),
                 v_3_and_below_producer_epoch: Some(producer_epoch),
                 v_3_and_below_topics: Some(topics),
-            } => Ok(Self::VersionZeroToThree {
+                ..
+            }) => Ok(Self::VersionZeroToThree {
                 transaction_id: transactional_id,
                 producer_id,
                 producer_epoch,
                 topics,
             }),
 
-            Body::AddPartitionsToTxnRequest {
+            Body::AddPartitionsToTxnRequest(AddPartitionsToTxnRequest {
                 transactions: Some(transactions),
                 v_3_and_below_transactional_id: None,
                 v_3_and_below_producer_id: None,
                 v_3_and_below_producer_epoch: None,
                 v_3_and_below_topics: None,
-            } => Ok(Self::VersionFourPlus { transactions }),
+                ..
+            }) => Ok(Self::VersionFourPlus { transactions }),
 
             unexpected => Err(Error::UnexpectedBody(Box::new(unexpected))),
         }

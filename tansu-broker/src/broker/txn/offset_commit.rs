@@ -13,7 +13,10 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use tansu_sans_io::{Body, txn_offset_commit_request::TxnOffsetCommitRequestTopic};
+use tansu_sans_io::{
+    Body, txn_offset_commit_request::TxnOffsetCommitRequestTopic,
+    txn_offset_commit_response::TxnOffsetCommitResponse,
+};
 use tansu_storage::{Storage, TxnOffsetCommitRequest};
 
 use crate::Result;
@@ -57,9 +60,9 @@ where
             })
             .await?;
 
-        Ok(Body::TxnOffsetCommitResponse {
-            throttle_time_ms: 0,
-            topics: Some(responses),
-        })
+        Ok(TxnOffsetCommitResponse::default()
+            .throttle_time_ms(0)
+            .topics(Some(responses))
+            .into())
     }
 }

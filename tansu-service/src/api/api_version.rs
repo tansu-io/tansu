@@ -51,10 +51,11 @@ impl TryFrom<ApiRequest> for ApiVersionRequest {
             correlation_id,
             client_id,
             body:
-                Body::ApiVersionsRequest {
+                Body::ApiVersionsRequest(tansu_sans_io::ApiVersionsRequest {
                     client_software_name,
                     client_software_version,
-                },
+                    ..
+                }),
         } = api_request
         {
             Ok(ApiVersionRequest {
@@ -96,7 +97,7 @@ impl TryFrom<ApiResponse> for ApiVersionResponse {
             api_version,
             correlation_id,
             body:
-                Body::ApiVersionsResponse {
+                Body::ApiVersionsResponse(tansu_sans_io::ApiVersionsResponse {
                     error_code,
                     api_keys,
                     throttle_time_ms,
@@ -104,7 +105,8 @@ impl TryFrom<ApiResponse> for ApiVersionResponse {
                     finalized_features_epoch,
                     finalized_features,
                     zk_migration_ready,
-                },
+                    ..
+                }),
         } = api_response
         {
             Ok(ApiVersionResponse {

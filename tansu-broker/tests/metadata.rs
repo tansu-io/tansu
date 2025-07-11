@@ -42,13 +42,12 @@ pub async fn topics_none(
 
     let id = sc
         .create_topic(
-            CreatableTopic {
-                name: topic_name.clone(),
-                num_partitions,
-                replication_factor,
-                assignments: assignments.clone(),
-                configs: configs.clone(),
-            },
+            CreatableTopic::default()
+                .name(topic_name.clone())
+                .num_partitions(num_partitions)
+                .replication_factor(replication_factor)
+                .assignments(assignments.clone())
+                .configs(configs.clone()),
             false,
         )
         .await
@@ -152,13 +151,12 @@ pub async fn topics_some_empty(
 
     let id = sc
         .create_topic(
-            CreatableTopic {
-                name: topic_name.clone(),
-                num_partitions,
-                replication_factor,
-                assignments: assignments.clone(),
-                configs: configs.clone(),
-            },
+            CreatableTopic::default()
+                .name(topic_name.clone())
+                .num_partitions(num_partitions)
+                .replication_factor(replication_factor)
+                .assignments(assignments.clone())
+                .configs(configs.clone()),
             false,
         )
         .await
@@ -262,13 +260,12 @@ pub async fn topics_some_matching_by_name(
 
     let id = sc
         .create_topic(
-            CreatableTopic {
-                name: topic_name.clone(),
-                num_partitions,
-                replication_factor,
-                assignments: assignments.clone(),
-                configs: configs.clone(),
-            },
+            CreatableTopic::default()
+                .name(topic_name.clone())
+                .num_partitions(num_partitions)
+                .replication_factor(replication_factor)
+                .assignments(assignments.clone())
+                .configs(configs.clone()),
             false,
         )
         .await
@@ -411,13 +408,12 @@ pub async fn topics_some_matching_by_id(
 
     let id = sc
         .create_topic(
-            CreatableTopic {
-                name: topic_name.clone(),
-                num_partitions,
-                replication_factor,
-                assignments: assignments.clone(),
-                configs: configs.clone(),
-            },
+            CreatableTopic::default()
+                .name(topic_name.clone())
+                .num_partitions(num_partitions)
+                .replication_factor(replication_factor)
+                .assignments(assignments.clone())
+                .configs(configs.clone()),
             false,
         )
         .await

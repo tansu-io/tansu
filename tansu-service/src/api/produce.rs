@@ -121,12 +121,13 @@ impl TryFrom<ApiRequest> for ProduceRequest {
             correlation_id,
             client_id,
             body:
-                Body::ProduceRequest {
+                Body::ProduceRequest(tansu_sans_io::ProduceRequest {
                     transactional_id,
                     acks,
                     timeout_ms,
                     topic_data,
-                },
+                    ..
+                }),
         } = api_request
         {
             Ok(ProduceRequest {
@@ -167,12 +168,13 @@ impl From<ProduceRequest> for ApiRequest {
             api_version: produce.api_version,
             correlation_id: produce.correlation_id,
             client_id: produce.client_id,
-            body: Body::ProduceRequest {
-                transactional_id: produce.transactional_id,
-                acks: produce.acks,
-                timeout_ms: produce.timeout_ms,
-                topic_data: produce.topic_data,
-            },
+            body: Body::ProduceRequest(
+                tansu_sans_io::ProduceRequest::default()
+                    .transactional_id(produce.transactional_id)
+                    .acks(produce.acks)
+                    .timeout_ms(produce.timeout_ms)
+                    .topic_data(produce.topic_data),
+            ),
         }
     }
 }
@@ -195,11 +197,12 @@ impl From<ProduceResponse> for ApiResponse {
             api_version: produce.api_version,
             correlation_id: produce.correlation_id,
 
-            body: Body::ProduceResponse {
-                responses: produce.responses,
-                throttle_time_ms: produce.throttle_time_ms,
-                node_endpoints: produce.node_endpoints,
-            },
+            body: Body::ProduceResponse(
+                tansu_sans_io::ProduceResponse::default()
+                    .responses(produce.responses)
+                    .throttle_time_ms(produce.throttle_time_ms)
+                    .node_endpoints(produce.node_endpoints),
+            ),
         }
     }
 }
@@ -213,11 +216,12 @@ impl TryFrom<ApiResponse> for ProduceResponse {
             api_version,
             correlation_id,
             body:
-                Body::ProduceResponse {
+                Body::ProduceResponse(tansu_sans_io::ProduceResponse {
                     responses,
                     throttle_time_ms,
                     node_endpoints,
-                },
+                    ..
+                }),
         } = api_response
         {
             Ok(Self {

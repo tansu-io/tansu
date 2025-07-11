@@ -13,7 +13,9 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use tansu_sans_io::{Body, metadata_request::MetadataRequestTopic};
+use tansu_sans_io::{
+    Body, metadata_request::MetadataRequestTopic, metadata_response::MetadataResponse,
+};
 use tansu_storage::{Storage, TopicId};
 use tracing::error;
 
@@ -48,13 +50,13 @@ where
         let topics = Some(response.topics().to_owned());
         let cluster_authorized_operations = None;
 
-        Ok(Body::MetadataResponse {
-            throttle_time_ms,
-            brokers,
-            cluster_id,
-            controller_id,
-            topics,
-            cluster_authorized_operations,
-        })
+        Ok(MetadataResponse::default()
+            .throttle_time_ms(throttle_time_ms)
+            .brokers(brokers)
+            .cluster_id(cluster_id)
+            .controller_id(controller_id)
+            .topics(topics)
+            .cluster_authorized_operations(cluster_authorized_operations)
+            .into())
     }
 }

@@ -1,18 +1,3 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
-
 use std::fmt::Formatter;
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
@@ -22,7 +7,7 @@ use serde::{
     Deserialize, Deserializer, Serialize,
     de::{self, SeqAccess, Visitor},
 };
-use tracing::debug;
+use tracing::{debug, error};
 
 use crate::{Compression, Decoder, Encoder, Error, Result, record::Record};
 
@@ -94,6 +79,22 @@ pub struct CrcData {
     pub base_sequence: i32,
     pub record_count: u32,
     pub record_data: Bytes,
+}
+
+impl From<&Batch> for CrcData {
+    fn from(batch: &Batch) -> Self {
+        Self {
+            attributes: batch.attributes,
+            last_offset_delta: batch.last_offset_delta,
+            base_timestamp: batch.base_timestamp,
+            max_timestamp: batch.max_timestamp,
+            producer_id: batch.producer_id,
+            producer_epoch: batch.producer_epoch,
+            base_sequence: batch.base_sequence,
+            record_count: batch.record_count,
+            record_data: batch.record_data.clone(),
+        }
+    }
 }
 
 impl CrcData {
@@ -402,6 +403,21 @@ impl<'de> Deserialize<'de> for Batch {
                     record_count,
                     record_data,
                 };
+
+                {
+                    let crc_data = CrcData::from(&batch);
+                    _ = crc_data
+                        .crc()
+                        .inspect(|computed| {
+                            if *computed == crc {
+                                debug!(crc, computed);
+                            } else {
+                                error!(crc, computed);
+                            }
+                        })
+                        .inspect_err(|err| error!(?err))
+                        .map_err(|err| <A::Error as de::Error>::custom(format!("{err:?}")))?;
+                }
 
                 Ok(batch)
             }

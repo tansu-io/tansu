@@ -13,7 +13,9 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use tansu_sans_io::{Body, ErrorCode};
+use tansu_sans_io::{
+    Body, ErrorCode, get_telemetry_subscriptions_response::GetTelemetrySubscriptionsResponse,
+};
 use uuid::Uuid;
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -25,16 +27,16 @@ impl GetTelemetrySubscriptionsRequest {
 
         let client_instance_id = *Uuid::new_v4().as_bytes();
 
-        Body::GetTelemetrySubscriptionsResponse {
-            throttle_time_ms: 0,
-            error_code: ErrorCode::None.into(),
-            client_instance_id,
-            subscription_id: 0,
-            accepted_compression_types: Some([0].into()),
-            push_interval_ms: 5_000,
-            telemetry_max_bytes: 1_024,
-            delta_temporality: false,
-            requested_metrics: Some([].into()),
-        }
+        GetTelemetrySubscriptionsResponse::default()
+            .throttle_time_ms(0)
+            .error_code(ErrorCode::None.into())
+            .client_instance_id(client_instance_id)
+            .subscription_id(0)
+            .accepted_compression_types(Some([0].into()))
+            .push_interval_ms(5_000)
+            .telemetry_max_bytes(1_024)
+            .delta_temporality(false)
+            .requested_metrics(Some([].into()))
+            .into()
     }
 }

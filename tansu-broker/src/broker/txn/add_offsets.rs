@@ -14,6 +14,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use tansu_sans_io::Body;
+use tansu_sans_io::add_offsets_to_txn_response::AddOffsetsToTxnResponse;
 use tansu_storage::Storage;
 use tracing::debug;
 
@@ -45,9 +46,11 @@ where
             .txn_add_offsets(transaction_id, producer_id, producer_epoch, group_id)
             .await
             .map_err(Into::into)
-            .map(|error_code| Body::AddOffsetsToTxnResponse {
-                throttle_time_ms: 0,
-                error_code: error_code.into(),
+            .map(|error_code| {
+                AddOffsetsToTxnResponse::default()
+                    .throttle_time_ms(0)
+                    .error_code(error_code.into())
+                    .into()
             })
     }
 }

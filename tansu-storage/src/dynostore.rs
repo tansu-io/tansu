@@ -237,10 +237,11 @@ impl Meta {
                     configuration
                         .into_iter()
                         .fold(Vec::new(), |mut acc, (key, value)| {
-                            acc.push(CreatableTopicConfig {
-                                name: key.to_owned(),
-                                value: value.map(|value| value.to_owned()),
-                            });
+                            acc.push(
+                                CreatableTopicConfig::default()
+                                    .name(key.to_owned())
+                                    .value(value.map(|value| value.to_owned())),
+                            );
                             acc
                         }),
                 );
@@ -498,17 +499,19 @@ impl DynoStore {
 
             if let Some(partitions) = topic.partitions.as_deref() {
                 for partition in partitions {
-                    partition_responses.push(TxnOffsetCommitResponsePartition {
-                        partition_index: partition.partition_index,
-                        error_code: error_code.into(),
-                    });
+                    partition_responses.push(
+                        TxnOffsetCommitResponsePartition::default()
+                            .partition_index(partition.partition_index)
+                            .error_code(error_code.into()),
+                    );
                 }
             }
 
-            responses.push(TxnOffsetCommitResponseTopic {
-                name: topic.name.to_string(),
-                partitions: Some(partition_responses),
-            });
+            responses.push(
+                TxnOffsetCommitResponseTopic::default()
+                    .name(topic.name.to_string())
+                    .partitions(Some(partition_responses)),
+            );
         }
 
         Ok(responses)
@@ -532,30 +535,26 @@ impl Storage for DynoStore {
         let _ = resource;
 
         match ConfigResource::from(resource.resource_type) {
-            ConfigResource::Group => Ok(AlterConfigsResourceResponse {
-                error_code: ErrorCode::None.into(),
-                error_message: Some("".into()),
-                resource_type: resource.resource_type,
-                resource_name: resource.resource_name,
-            }),
-            ConfigResource::ClientMetric => Ok(AlterConfigsResourceResponse {
-                error_code: ErrorCode::None.into(),
-                error_message: Some("".into()),
-                resource_type: resource.resource_type,
-                resource_name: resource.resource_name,
-            }),
-            ConfigResource::BrokerLogger => Ok(AlterConfigsResourceResponse {
-                error_code: ErrorCode::None.into(),
-                error_message: Some("".into()),
-                resource_type: resource.resource_type,
-                resource_name: resource.resource_name,
-            }),
-            ConfigResource::Broker => Ok(AlterConfigsResourceResponse {
-                error_code: ErrorCode::None.into(),
-                error_message: Some("".into()),
-                resource_type: resource.resource_type,
-                resource_name: resource.resource_name,
-            }),
+            ConfigResource::Group => Ok(AlterConfigsResourceResponse::default()
+                .error_code(ErrorCode::None.into())
+                .error_message(Some("".into()))
+                .resource_type(resource.resource_type)
+                .resource_name(resource.resource_name)),
+            ConfigResource::ClientMetric => Ok(AlterConfigsResourceResponse::default()
+                .error_code(ErrorCode::None.into())
+                .error_message(Some("".into()))
+                .resource_type(resource.resource_type)
+                .resource_name(resource.resource_name)),
+            ConfigResource::BrokerLogger => Ok(AlterConfigsResourceResponse::default()
+                .error_code(ErrorCode::None.into())
+                .error_message(Some("".into()))
+                .resource_type(resource.resource_type)
+                .resource_name(resource.resource_name)),
+            ConfigResource::Broker => Ok(AlterConfigsResourceResponse::default()
+                .error_code(ErrorCode::None.into())
+                .error_message(Some("".into()))
+                .resource_type(resource.resource_type)
+                .resource_name(resource.resource_name)),
             ConfigResource::Topic => self
                 .meta
                 .with_mut(&self.object_store, |meta| {
@@ -565,18 +564,18 @@ impl Storage for DynoStore {
                     )
                 })
                 .await
-                .map(|()| AlterConfigsResourceResponse {
-                    error_code: ErrorCode::None.into(),
-                    error_message: Some("".into()),
-                    resource_type: resource.resource_type,
-                    resource_name: resource.resource_name,
+                .map(|()| {
+                    AlterConfigsResourceResponse::default()
+                        .error_code(ErrorCode::None.into())
+                        .error_message(Some("".into()))
+                        .resource_type(resource.resource_type)
+                        .resource_name(resource.resource_name)
                 }),
-            ConfigResource::Unknown => Ok(AlterConfigsResourceResponse {
-                error_code: ErrorCode::None.into(),
-                error_message: Some("".into()),
-                resource_type: resource.resource_type,
-                resource_name: resource.resource_name,
-            }),
+            ConfigResource::Unknown => Ok(AlterConfigsResourceResponse::default()
+                .error_code(ErrorCode::None.into())
+                .error_message(Some("".into()))
+                .resource_type(resource.resource_type)
+                .resource_name(resource.resource_name)),
         }
     }
 
@@ -717,12 +716,13 @@ impl Storage for DynoStore {
         let port = self.advertised_listener.port().unwrap_or(9092).into();
         let rack = None;
 
-        Ok(vec![DescribeClusterBroker {
-            broker_id,
-            host,
-            port,
-            rack,
-        }])
+        Ok(vec![
+            DescribeClusterBroker::default()
+                .broker_id(broker_id)
+                .host(host)
+                .port(port)
+                .rack(rack),
+        ])
     }
 
     async fn produce(
@@ -1417,16 +1417,18 @@ impl Storage for DynoStore {
     async fn metadata(&mut self, topics: Option<&[TopicId]>) -> Result<MetadataResponse> {
         debug!(?topics);
 
-        let brokers = vec![MetadataResponseBroker {
-            node_id: self.node,
-            host: self
-                .advertised_listener
-                .host_str()
-                .unwrap_or("0.0.0.0")
-                .into(),
-            port: self.advertised_listener.port().unwrap_or(9092).into(),
-            rack: None,
-        }];
+        let brokers = vec![
+            MetadataResponseBroker::default()
+                .node_id(self.node)
+                .host(
+                    self.advertised_listener
+                        .host_str()
+                        .unwrap_or("0.0.0.0")
+                        .into(),
+                )
+                .port(self.advertised_listener.port().unwrap_or(9092).into())
+                .rack(None),
+        ];
 
         let responses = match topics {
             Some(topics) if !topics.is_empty() => {
@@ -1474,58 +1476,54 @@ impl Storage for DynoStore {
                                         );
                                         let isr_nodes = replica_nodes.clone();
 
-                                        MetadataResponsePartition {
-                                            error_code,
-                                            partition_index,
-                                            leader_id,
-                                            leader_epoch: Some(-1),
-                                            replica_nodes,
-                                            isr_nodes,
-                                            offline_replicas: Some([].into()),
-                                        }
+                                        MetadataResponsePartition::default()
+                                            .error_code(error_code)
+                                            .partition_index(partition_index)
+                                            .leader_id(leader_id)
+                                            .leader_epoch(Some(-1))
+                                            .replica_nodes(replica_nodes)
+                                            .isr_nodes(isr_nodes)
+                                            .offline_replicas(Some([].into()))
                                     })
                                     .collect(),
                             );
 
-                            MetadataResponseTopic {
-                                error_code,
-                                name,
-                                topic_id,
-                                is_internal,
-                                partitions,
-                                topic_authorized_operations: Some(-2147483648),
-                            }
+                            MetadataResponseTopic::default()
+                                .error_code(error_code)
+                                .name(name)
+                                .topic_id(topic_id)
+                                .is_internal(is_internal)
+                                .partitions(partitions)
+                                .topic_authorized_operations(Some(-2147483648))
                         }
 
-                        Ok(None) => MetadataResponseTopic {
-                            error_code: ErrorCode::UnknownTopicOrPartition.into(),
-                            name: match topic {
+                        Ok(None) => MetadataResponseTopic::default()
+                            .error_code(ErrorCode::UnknownTopicOrPartition.into())
+                            .name(match topic {
                                 TopicId::Name(name) => Some(name.into()),
                                 TopicId::Id(_) => None,
-                            },
-                            topic_id: Some(match topic {
+                            })
+                            .topic_id(Some(match topic {
                                 TopicId::Name(_) => NULL_TOPIC_ID,
                                 TopicId::Id(id) => id.into_bytes(),
-                            }),
-                            is_internal: Some(false),
-                            partitions: Some([].into()),
-                            topic_authorized_operations: Some(-2147483648),
-                        },
+                            }))
+                            .is_internal(Some(false))
+                            .partitions(Some([].into()))
+                            .topic_authorized_operations(Some(-2147483648)),
 
-                        Err(_) => MetadataResponseTopic {
-                            error_code: ErrorCode::UnknownServerError.into(),
-                            name: match topic {
+                        Err(_) => MetadataResponseTopic::default()
+                            .error_code(ErrorCode::UnknownServerError.into())
+                            .name(match topic {
                                 TopicId::Name(name) => Some(name.into()),
                                 TopicId::Id(_) => Some("".into()),
-                            },
-                            topic_id: Some(match topic {
+                            })
+                            .topic_id(Some(match topic {
                                 TopicId::Name(_) => NULL_TOPIC_ID,
                                 TopicId::Id(id) => id.into_bytes(),
-                            }),
-                            is_internal: Some(false),
-                            partitions: Some([].into()),
-                            topic_authorized_operations: Some(-2147483648),
-                        },
+                            }))
+                            .is_internal(Some(false))
+                            .partitions(Some([].into()))
+                            .topic_authorized_operations(Some(-2147483648)),
                     };
 
                     responses.push(response);
@@ -1577,27 +1575,27 @@ impl Storage for DynoStore {
                                         );
                                         let isr_nodes = replica_nodes.clone();
 
-                                        MetadataResponsePartition {
-                                            error_code,
-                                            partition_index,
-                                            leader_id,
-                                            leader_epoch: Some(-1),
-                                            replica_nodes,
-                                            isr_nodes,
-                                            offline_replicas: Some([].into()),
-                                        }
+                                        MetadataResponsePartition::default()
+                                            .error_code(error_code)
+                                            .partition_index(partition_index)
+                                            .leader_id(leader_id)
+                                            .leader_epoch(Some(-1))
+                                            .replica_nodes(replica_nodes)
+                                            .isr_nodes(isr_nodes)
+                                            .offline_replicas(Some([].into()))
                                     })
                                     .collect(),
                             );
 
-                            responses.push(MetadataResponseTopic {
-                                error_code,
-                                name,
-                                topic_id,
-                                is_internal,
-                                partitions,
-                                topic_authorized_operations: Some(-2147483648),
-                            });
+                            responses.push(
+                                MetadataResponseTopic::default()
+                                    .error_code(error_code)
+                                    .name(name)
+                                    .topic_id(topic_id)
+                                    .is_internal(is_internal)
+                                    .partitions(partitions)
+                                    .topic_authorized_operations(Some(-2147483648)),
+                            );
                         }
                         Ok(responses)
                     })
@@ -1626,37 +1624,36 @@ impl Storage for DynoStore {
                 Ok(Some(topic_metadata)) => {
                     let error_code = ErrorCode::None;
 
-                    Ok(DescribeConfigsResult {
-                        error_code: error_code.into(),
-                        error_message: Some(error_code.to_string()),
-                        resource_type: i8::from(resource),
-                        resource_name: name.into(),
-                        configs: topic_metadata.topic.configs.map(|configs| {
+                    Ok(DescribeConfigsResult::default()
+                        .error_code(error_code.into())
+                        .error_message(Some(error_code.to_string()))
+                        .resource_type(i8::from(resource))
+                        .resource_name(name.into())
+                        .configs(topic_metadata.topic.configs.map(|configs| {
                             configs
                                 .iter()
-                                .map(|config| DescribeConfigsResourceResult {
-                                    name: config.name.clone(),
-                                    value: config.value.clone(),
-                                    read_only: false,
-                                    is_default: None,
-                                    config_source: Some(ConfigSource::DefaultConfig.into()),
-                                    is_sensitive: false,
-                                    synonyms: Some([].into()),
-                                    config_type: Some(ConfigType::String.into()),
-                                    documentation: Some("".into()),
+                                .map(|config| {
+                                    DescribeConfigsResourceResult::default()
+                                        .name(config.name.clone())
+                                        .value(config.value.clone())
+                                        .read_only(false)
+                                        .is_default(None)
+                                        .config_source(Some(ConfigSource::DefaultConfig.into()))
+                                        .is_sensitive(false)
+                                        .synonyms(Some([].into()))
+                                        .config_type(Some(ConfigType::String.into()))
+                                        .documentation(Some("".into()))
                                 })
                                 .collect()
-                        }),
-                    })
+                        })))
                 }
 
-                Ok(None) => Ok(DescribeConfigsResult {
-                    error_code: ErrorCode::None.into(),
-                    error_message: Some(ErrorCode::None.to_string()),
-                    resource_type: i8::from(resource),
-                    resource_name: name.into(),
-                    configs: Some(vec![]),
-                }),
+                Ok(None) => Ok(DescribeConfigsResult::default()
+                    .error_code(ErrorCode::None.into())
+                    .error_message(Some(ErrorCode::None.to_string()))
+                    .resource_type(i8::from(resource))
+                    .resource_name(name.into())
+                    .configs(Some(vec![]))),
 
                 Err(_) => todo!(),
             },
@@ -1682,66 +1679,70 @@ impl Storage for DynoStore {
                 .await
                 .inspect_err(|error| error!(?error))
             {
-                Ok(Some(topic_metadata)) => responses.push(DescribeTopicPartitionsResponseTopic {
-                    error_code: ErrorCode::None.into(),
-                    name: Some(topic_metadata.topic.name),
-                    topic_id: topic.into(),
-                    is_internal: false,
-                    partitions: Some(
-                        (0..topic_metadata.topic.num_partitions)
-                            .map(|partition_index| DescribeTopicPartitionsResponsePartition {
-                                error_code: ErrorCode::None.into(),
-                                partition_index,
-                                leader_id: self.node,
-                                leader_epoch: -1,
-                                replica_nodes: Some(vec![
-                                    self.node;
-                                    topic_metadata.topic.replication_factor
-                                        as usize
-                                ]),
-                                isr_nodes: Some(vec![
-                                    self.node;
-                                    topic_metadata.topic.replication_factor
-                                        as usize
-                                ]),
-                                eligible_leader_replicas: Some(vec![]),
-                                last_known_elr: Some(vec![]),
-                                offline_replicas: Some(vec![]),
-                            })
-                            .collect(),
-                    ),
-                    topic_authorized_operations: -2147483648,
-                }),
+                Ok(Some(topic_metadata)) => responses.push(
+                    DescribeTopicPartitionsResponseTopic::default()
+                        .error_code(ErrorCode::None.into())
+                        .name(Some(topic_metadata.topic.name))
+                        .topic_id(topic.into())
+                        .is_internal(false)
+                        .partitions(Some(
+                            (0..topic_metadata.topic.num_partitions)
+                                .map(|partition_index| {
+                                    DescribeTopicPartitionsResponsePartition::default()
+                                        .error_code(ErrorCode::None.into())
+                                        .partition_index(partition_index)
+                                        .leader_id(self.node)
+                                        .leader_epoch(-1)
+                                        .replica_nodes(Some(vec![
+                                            self.node;
+                                            topic_metadata.topic.replication_factor
+                                                as usize
+                                        ]))
+                                        .isr_nodes(Some(vec![
+                                            self.node;
+                                            topic_metadata.topic.replication_factor
+                                                as usize
+                                        ]))
+                                        .eligible_leader_replicas(Some(vec![]))
+                                        .last_known_elr(Some(vec![]))
+                                        .offline_replicas(Some(vec![]))
+                                })
+                                .collect(),
+                        ))
+                        .topic_authorized_operations(-2147483648),
+                ),
 
-                Ok(None) => responses.push(DescribeTopicPartitionsResponseTopic {
-                    error_code: ErrorCode::UnknownTopicOrPartition.into(),
-                    name: match topic {
-                        TopicId::Name(name) => Some(name.into()),
-                        TopicId::Id(_) => None,
-                    },
-                    topic_id: match topic {
-                        TopicId::Name(_) => NULL_TOPIC_ID,
-                        TopicId::Id(id) => id.into_bytes(),
-                    },
-                    is_internal: false,
-                    partitions: Some([].into()),
-                    topic_authorized_operations: -2147483648,
-                }),
+                Ok(None) => responses.push(
+                    DescribeTopicPartitionsResponseTopic::default()
+                        .error_code(ErrorCode::UnknownTopicOrPartition.into())
+                        .name(match topic {
+                            TopicId::Name(name) => Some(name.into()),
+                            TopicId::Id(_) => None,
+                        })
+                        .topic_id(match topic {
+                            TopicId::Name(_) => NULL_TOPIC_ID,
+                            TopicId::Id(id) => id.into_bytes(),
+                        })
+                        .is_internal(false)
+                        .partitions(Some([].into()))
+                        .topic_authorized_operations(-2147483648),
+                ),
 
-                Err(_) => responses.push(DescribeTopicPartitionsResponseTopic {
-                    error_code: ErrorCode::UnknownServerError.into(),
-                    name: match topic {
-                        TopicId::Name(name) => Some(name.into()),
-                        TopicId::Id(_) => None,
-                    },
-                    topic_id: match topic {
-                        TopicId::Name(_) => NULL_TOPIC_ID,
-                        TopicId::Id(id) => id.into_bytes(),
-                    },
-                    is_internal: false,
-                    partitions: Some([].into()),
-                    topic_authorized_operations: -2147483648,
-                }),
+                Err(_) => responses.push(
+                    DescribeTopicPartitionsResponseTopic::default()
+                        .error_code(ErrorCode::UnknownServerError.into())
+                        .name(match topic {
+                            TopicId::Name(name) => Some(name.into()),
+                            TopicId::Id(_) => None,
+                        })
+                        .topic_id(match topic {
+                            TopicId::Name(_) => NULL_TOPIC_ID,
+                            TopicId::Id(id) => id.into_bytes(),
+                        })
+                        .is_internal(false)
+                        .partitions(Some([].into()))
+                        .topic_authorized_operations(-2147483648),
+                ),
             }
         }
 
@@ -1763,12 +1764,13 @@ impl Storage for DynoStore {
 
         for prefix in list_result.common_prefixes {
             if let Some(group_id) = prefix.parts().last() {
-                listed_groups.push(ListedGroup {
-                    group_id: group_id.as_ref().into(),
-                    protocol_type: "consumer".into(),
-                    group_state: Some("Unknown".into()),
-                    group_type: None,
-                });
+                listed_groups.push(
+                    ListedGroup::default()
+                        .group_id(group_id.as_ref().into())
+                        .protocol_type("consumer".into())
+                        .group_state(Some("Unknown".into()))
+                        .group_type(None),
+                );
             }
         }
 
@@ -1819,15 +1821,18 @@ impl Storage for DynoStore {
 
                 debug!(group_id, ?deleted_committed_offsets);
 
-                results.push(DeletableGroupResult {
-                    group_id: group_id.into(),
-                    error_code: if had_group_state || !deleted_committed_offsets.is_empty() {
-                        ErrorCode::None
-                    } else {
-                        ErrorCode::GroupIdNotFound
-                    }
-                    .into(),
-                });
+                results.push(
+                    DeletableGroupResult::default()
+                        .group_id(group_id.into())
+                        .error_code(
+                            if had_group_state || !deleted_committed_offsets.is_empty() {
+                                ErrorCode::None
+                            } else {
+                                ErrorCode::GroupIdNotFound
+                            }
+                            .into(),
+                        ),
+                );
             }
         }
 
@@ -2128,17 +2133,20 @@ impl Storage for DynoStore {
                                 let mut results_by_partition = vec![];
 
                                 for partition_index in topic.partitions.as_deref().unwrap_or(&[]) {
-                                    results_by_partition.push(AddPartitionsToTxnPartitionResult {
-                                        partition_index: *partition_index,
-                                        partition_error_code: ErrorCode::TransactionalIdNotFound
-                                            .into(),
-                                    });
+                                    results_by_partition.push(
+                                        AddPartitionsToTxnPartitionResult::default()
+                                            .partition_index(*partition_index)
+                                            .partition_error_code(
+                                                ErrorCode::TransactionalIdNotFound.into(),
+                                            ),
+                                    );
                                 }
 
-                                results.push(AddPartitionsToTxnTopicResult {
-                                    name: topic.name.clone(),
-                                    results_by_partition: Some(results_by_partition),
-                                })
+                                results.push(
+                                    AddPartitionsToTxnTopicResult::default()
+                                        .name(topic.name.clone())
+                                        .results_by_partition(Some(results_by_partition)),
+                                )
                             }
 
                             return Ok(TxnAddPartitionsResponse::VersionZeroToThree(results));
@@ -2151,16 +2159,20 @@ impl Storage for DynoStore {
                                 let mut results_by_partition = vec![];
 
                                 for partition_index in topic.partitions.as_deref().unwrap_or(&[]) {
-                                    results_by_partition.push(AddPartitionsToTxnPartitionResult {
-                                        partition_index: *partition_index,
-                                        partition_error_code: ErrorCode::UnknownProducerId.into(),
-                                    });
+                                    results_by_partition.push(
+                                        AddPartitionsToTxnPartitionResult::default()
+                                            .partition_index(*partition_index)
+                                            .partition_error_code(
+                                                ErrorCode::UnknownProducerId.into(),
+                                            ),
+                                    );
                                 }
 
-                                results.push(AddPartitionsToTxnTopicResult {
-                                    name: topic.name.clone(),
-                                    results_by_partition: Some(results_by_partition),
-                                })
+                                results.push(
+                                    AddPartitionsToTxnTopicResult::default()
+                                        .name(topic.name.clone())
+                                        .results_by_partition(Some(results_by_partition)),
+                                )
                             }
 
                             return Ok(TxnAddPartitionsResponse::VersionZeroToThree(results));
@@ -2173,16 +2185,18 @@ impl Storage for DynoStore {
                                 let mut results_by_partition = vec![];
 
                                 for partition_index in topic.partitions.as_deref().unwrap_or(&[]) {
-                                    results_by_partition.push(AddPartitionsToTxnPartitionResult {
-                                        partition_index: *partition_index,
-                                        partition_error_code: ErrorCode::ProducerFenced.into(),
-                                    });
+                                    results_by_partition.push(
+                                        AddPartitionsToTxnPartitionResult::default()
+                                            .partition_index(*partition_index)
+                                            .partition_error_code(ErrorCode::ProducerFenced.into()),
+                                    );
                                 }
 
-                                results.push(AddPartitionsToTxnTopicResult {
-                                    name: topic.name.clone(),
-                                    results_by_partition: Some(results_by_partition),
-                                })
+                                results.push(
+                                    AddPartitionsToTxnTopicResult::default()
+                                        .name(topic.name.clone())
+                                        .results_by_partition(Some(results_by_partition)),
+                                )
                             }
 
                             return Ok(TxnAddPartitionsResponse::VersionZeroToThree(results));
@@ -2195,16 +2209,18 @@ impl Storage for DynoStore {
                                 let mut results_by_partition = vec![];
 
                                 for partition_index in topic.partitions.as_deref().unwrap_or(&[]) {
-                                    results_by_partition.push(AddPartitionsToTxnPartitionResult {
-                                        partition_index: *partition_index,
-                                        partition_error_code: ErrorCode::ProducerFenced.into(),
-                                    });
+                                    results_by_partition.push(
+                                        AddPartitionsToTxnPartitionResult::default()
+                                            .partition_index(*partition_index)
+                                            .partition_error_code(ErrorCode::ProducerFenced.into()),
+                                    );
                                 }
 
-                                results.push(AddPartitionsToTxnTopicResult {
-                                    name: topic.name.clone(),
-                                    results_by_partition: Some(results_by_partition),
-                                })
+                                results.push(
+                                    AddPartitionsToTxnTopicResult::default()
+                                        .name(topic.name.clone())
+                                        .results_by_partition(Some(results_by_partition)),
+                                )
                             }
 
                             return Ok(TxnAddPartitionsResponse::VersionZeroToThree(results));
@@ -2225,16 +2241,18 @@ impl Storage for DynoStore {
                                     .entry(*partition_index)
                                     .or_default();
 
-                                results_by_partition.push(AddPartitionsToTxnPartitionResult {
-                                    partition_index: *partition_index,
-                                    partition_error_code: i16::from(ErrorCode::None),
-                                });
+                                results_by_partition.push(
+                                    AddPartitionsToTxnPartitionResult::default()
+                                        .partition_index(*partition_index)
+                                        .partition_error_code(i16::from(ErrorCode::None)),
+                                );
                             }
 
-                            results.push(AddPartitionsToTxnTopicResult {
-                                name: topic.name.clone(),
-                                results_by_partition: Some(results_by_partition),
-                            })
+                            results.push(
+                                AddPartitionsToTxnTopicResult::default()
+                                    .name(topic.name.clone())
+                                    .results_by_partition(Some(results_by_partition)),
+                            )
                         }
 
                         txn_detail.started_at = Some(SystemTime::now());
@@ -2310,17 +2328,19 @@ impl Storage for DynoStore {
                                     },
                                 );
 
-                            partition_responses.push(TxnOffsetCommitResponsePartition {
-                                partition_index: partition.partition_index,
-                                error_code: ErrorCode::None.into(),
-                            });
+                            partition_responses.push(
+                                TxnOffsetCommitResponsePartition::default()
+                                    .partition_index(partition.partition_index)
+                                    .error_code(ErrorCode::None.into()),
+                            );
                         }
                     }
 
-                    responses.push(TxnOffsetCommitResponseTopic {
-                        name: topic.name.to_string(),
-                        partitions: Some(partition_responses),
-                    });
+                    responses.push(
+                        TxnOffsetCommitResponseTopic::default()
+                            .name(topic.name.to_string())
+                            .partitions(Some(partition_responses)),
+                    );
                 }
 
                 Ok(responses)

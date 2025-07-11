@@ -14,7 +14,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use crate::Result;
-use tansu_sans_io::{Body, ErrorCode};
+use tansu_sans_io::{Body, ErrorCode, describe_cluster_response::DescribeClusterResponse};
 use tansu_storage::Storage;
 use tracing::debug;
 
@@ -38,15 +38,15 @@ where
         let brokers = self.storage.brokers().await?;
         debug!(?brokers);
 
-        Ok(Body::DescribeClusterResponse {
-            throttle_time_ms: 0,
-            error_code: ErrorCode::None.into(),
-            error_message: None,
-            endpoint_type,
-            cluster_id: self.cluster_id.clone(),
-            controller_id: -1,
-            brokers: Some(brokers),
-            cluster_authorized_operations: -2_147_483_648,
-        })
+        Ok(DescribeClusterResponse::default()
+            .throttle_time_ms(0)
+            .error_code(ErrorCode::None.into())
+            .error_message(None)
+            .endpoint_type(endpoint_type)
+            .cluster_id(self.cluster_id.clone())
+            .controller_id(-1)
+            .brokers(Some(brokers))
+            .cluster_authorized_operations(-2_147_483_648)
+            .into())
     }
 }

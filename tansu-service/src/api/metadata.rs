@@ -52,12 +52,13 @@ impl TryFrom<ApiRequest> for MetadataRequest {
             correlation_id,
             client_id,
             body:
-                Body::MetadataRequest {
+                Body::MetadataRequest(tansu_sans_io::MetadataRequest {
                     topics,
                     allow_auto_topic_creation,
                     include_cluster_authorized_operations,
                     include_topic_authorized_operations,
-                },
+                    ..
+                }),
         } = api_request
         {
             Ok(Self {
@@ -83,13 +84,17 @@ impl From<MetadataRequest> for ApiRequest {
             api_version: metadata.api_version,
             correlation_id: metadata.correlation_id,
             client_id: metadata.client_id,
-            body: Body::MetadataRequest {
-                topics: metadata.topics,
-                allow_auto_topic_creation: metadata.allow_auto_topic_creation,
-                include_cluster_authorized_operations: metadata
-                    .include_cluster_authorized_operations,
-                include_topic_authorized_operations: metadata.include_topic_authorized_operations,
-            },
+            body: Body::MetadataRequest(
+                tansu_sans_io::MetadataRequest::default()
+                    .topics(metadata.topics)
+                    .allow_auto_topic_creation(metadata.allow_auto_topic_creation)
+                    .include_cluster_authorized_operations(
+                        metadata.include_cluster_authorized_operations,
+                    )
+                    .include_topic_authorized_operations(
+                        metadata.include_topic_authorized_operations,
+                    ),
+            ),
         }
     }
 }
@@ -114,14 +119,15 @@ impl From<MetadataResponse> for ApiResponse {
             api_key: metadata.api_key,
             api_version: metadata.api_version,
             correlation_id: metadata.correlation_id,
-            body: Body::MetadataResponse {
-                throttle_time_ms: metadata.throttle_time_ms,
-                brokers: metadata.brokers,
-                cluster_id: metadata.cluster_id,
-                controller_id: metadata.controller_id,
-                topics: metadata.topics,
-                cluster_authorized_operations: metadata.cluster_authorized_operations,
-            },
+            body: Body::MetadataResponse(
+                tansu_sans_io::MetadataResponse::default()
+                    .throttle_time_ms(metadata.throttle_time_ms)
+                    .brokers(metadata.brokers)
+                    .cluster_id(metadata.cluster_id)
+                    .controller_id(metadata.controller_id)
+                    .topics(metadata.topics)
+                    .cluster_authorized_operations(metadata.cluster_authorized_operations),
+            ),
         }
     }
 }
@@ -135,14 +141,15 @@ impl TryFrom<ApiResponse> for MetadataResponse {
             api_version,
             correlation_id,
             body:
-                Body::MetadataResponse {
+                Body::MetadataResponse(tansu_sans_io::MetadataResponse {
                     throttle_time_ms,
                     brokers,
                     cluster_id,
                     controller_id,
                     topics,
                     cluster_authorized_operations,
-                },
+                    ..
+                }),
         } = api_response
         {
             Ok(Self {

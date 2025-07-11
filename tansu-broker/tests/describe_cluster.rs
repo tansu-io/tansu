@@ -15,7 +15,9 @@
 
 use common::register_broker;
 use tansu_broker::{Result, broker::describe_cluster::DescribeClusterRequest};
-use tansu_sans_io::{Body, ErrorCode, describe_cluster_response::DescribeClusterBroker};
+use tansu_sans_io::{
+    Body, DescribeClusterResponse, ErrorCode, describe_cluster_response::DescribeClusterBroker,
+};
 use tansu_storage::StorageContainer;
 use tracing::debug;
 use url::Url;
@@ -50,7 +52,7 @@ pub async fn describe(
 
     assert!(matches!(
         response,
-        Body::DescribeClusterResponse {
+        Body::DescribeClusterResponse (DescribeClusterResponse {
             throttle_time_ms: 0,
             error_code,
             error_message: None,
@@ -58,13 +60,13 @@ pub async fn describe(
             brokers,
             cluster_authorized_operations: -2_147_483_648,
             ..
-        } if error_code == i16::from(ErrorCode::None)
-        && brokers == Some(vec![DescribeClusterBroker {
-            broker_id,
-            host,
-            port,
-            rack,
-        }])
+        }) if error_code == i16::from(ErrorCode::None)
+        && brokers == Some(vec![DescribeClusterBroker::default()
+            .broker_id(broker_id)
+            .host(host)
+            .port(port)
+            .rack(rack)
+        ])
     ));
 
     Ok(())

@@ -1,27 +1,12 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
-
 use bytes::Bytes;
 use common::init_tracing;
 use pretty_assertions::assert_eq;
 use tansu_sans_io::{
     Body, ErrorCode, Frame, Header, Result,
-    join_group_response::JoinGroupResponseMember,
+    join_group_response::{JoinGroupResponse, JoinGroupResponseMember},
     offset_fetch_response::{
-        OffsetFetchResponseGroup, OffsetFetchResponsePartition, OffsetFetchResponsePartitions,
-        OffsetFetchResponseTopic, OffsetFetchResponseTopics,
+        OffsetFetchResponse, OffsetFetchResponseGroup, OffsetFetchResponsePartition,
+        OffsetFetchResponsePartitions, OffsetFetchResponseTopic, OffsetFetchResponseTopics,
     },
 };
 use tracing::debug;
@@ -43,11 +28,10 @@ fn join_group_response() -> Result<()> {
     let metadata =
         Bytes::from_static(b"\0\x03\0\0\0\x01\0\tbenchmark\0\0\0\0\0\0\0\0\xff\xff\xff\xff\0\0");
     let members = Some(
-        [JoinGroupResponseMember {
-            member_id: member_id.clone(),
-            group_instance_id: Some("group_instance_id".into()),
-            metadata: metadata.clone(),
-        }]
+        [JoinGroupResponseMember::default()
+            .member_id(member_id.clone())
+            .group_instance_id(Some("group_instance_id".into()))
+            .metadata(metadata.clone())]
         .into(),
     );
 
@@ -55,22 +39,21 @@ fn join_group_response() -> Result<()> {
 
     let header = Header::Response { correlation_id };
 
-    let body = Body::JoinGroupResponse {
-        throttle_time_ms,
-        error_code,
-        generation_id,
-        protocol_type,
-        protocol_name: protocol_name.clone(),
-        leader: leader.clone(),
-        skip_assignment,
-        member_id: member_id.clone(),
-        members: members.clone(),
-    };
+    let join_group_response = JoinGroupResponse::default()
+        .throttle_time_ms(throttle_time_ms)
+        .error_code(error_code)
+        .generation_id(generation_id)
+        .protocol_type(protocol_type)
+        .protocol_name(protocol_name.clone())
+        .leader(leader.clone())
+        .skip_assignment(skip_assignment)
+        .member_id(member_id.clone())
+        .members(members.clone());
 
     let api_key = 11;
     let api_version = 5;
 
-    let encoded = Frame::response(header, body, api_key, api_version)?;
+    let encoded = Frame::response(header, join_group_response.into(), api_key, api_version)?;
 
     debug!(?encoded);
 
@@ -78,7 +61,7 @@ fn join_group_response() -> Result<()> {
         Ok(Frame {
             header: Header::Response { .. },
             body:
-                Body::JoinGroupResponse {
+                Body::JoinGroupResponse(JoinGroupResponse {
                     throttle_time_ms: encoded_throttle_time_ms,
                     error_code: encoded_error_code,
                     generation_id: encoded_generation_id,
@@ -88,7 +71,8 @@ fn join_group_response() -> Result<()> {
                     skip_assignment: encoded_skip_assignment,
                     member_id: encoded_member_id,
                     members: encoded_members,
-                },
+                    ..
+                }),
             ..
         }) => {
             assert_eq!(throttle_time_ms, encoded_throttle_time_ms);
@@ -117,69 +101,67 @@ fn offset_fetch_response() -> Result<()> {
     let encoded_throttle_time_ms = Some(0);
     let encoded_error_code = Some(ErrorCode::None.into());
     let encoded_groups = Some(
-        [OffsetFetchResponseGroup {
-            group_id: "example_consumer_group_id".into(),
-            topics: Some(
-                [OffsetFetchResponseTopics {
-                    name: "topic-name-a".into(),
-                    partitions: Some(
-                        [OffsetFetchResponsePartitions {
-                            partition_index: 32123,
-                            committed_offset: 4343,
-                            committed_leader_epoch: 87678,
-                            metadata: Some("".into()),
-                            error_code: ErrorCode::None.into(),
-                        }]
+        [OffsetFetchResponseGroup::default()
+            .group_id("example_consumer_group_id".into())
+            .topics(Some(
+                [OffsetFetchResponseTopics::default()
+                    .name("topic-name-a".into())
+                    .partitions(Some(
+                        [OffsetFetchResponsePartitions::default()
+                            .partition_index(32123)
+                            .committed_offset(4343)
+                            .committed_leader_epoch(87678)
+                            .metadata(Some("".into()))
+                            .error_code(ErrorCode::None.into())]
                         .into(),
-                    ),
-                }]
+                    ))]
                 .into(),
-            ),
-            error_code: ErrorCode::None.into(),
-        }]
-        .into(),
-    );
-    let encoded_topics = Some(
-        [OffsetFetchResponseTopic {
-            name: "benchmark".into(),
-            partitions: Some(
-                [1, 0, 6, 5, 4, 3, 2]
-                    .into_iter()
-                    .map(|partition_index| OffsetFetchResponsePartition {
-                        partition_index,
-                        committed_offset: -1,
-                        committed_leader_epoch: Some(-1),
-                        metadata: Some("".into()),
-                        error_code: ErrorCode::None.into(),
-                    })
-                    .collect(),
-            ),
-        }]
+            ))
+            .error_code(ErrorCode::None.into())]
         .into(),
     );
 
-    let body = Body::OffsetFetchResponse {
-        throttle_time_ms: encoded_throttle_time_ms,
-        error_code: encoded_error_code,
-        groups: encoded_groups.clone(),
-        topics: encoded_topics.clone(),
-    };
+    let encoded_topics = Some(
+        [OffsetFetchResponseTopic::default()
+            .name("benchmark".into())
+            .partitions(Some(
+                [1, 0, 6, 5, 4, 3, 2]
+                    .into_iter()
+                    .map(|partition_index| {
+                        OffsetFetchResponsePartition::default()
+                            .partition_index(partition_index)
+                            .committed_offset(-1)
+                            .committed_leader_epoch(Some(-1))
+                            .metadata(Some("".into()))
+                            .error_code(ErrorCode::None.into())
+                    })
+                    .collect(),
+            ))]
+        .into(),
+    );
+
+    let offset_fetch_response = OffsetFetchResponse::default()
+        .throttle_time_ms(encoded_throttle_time_ms)
+        .error_code(encoded_error_code)
+        .groups(encoded_groups.clone())
+        .topics(encoded_topics.clone());
 
     let api_key = 9;
     let api_version = 7;
 
-    let encoded = Frame::response(header, body, api_key, api_version)?;
+    let encoded = Frame::response(header, offset_fetch_response.into(), api_key, api_version)?;
 
     match Frame::response_from_bytes(&encoded, api_key, api_version) {
         Ok(Frame {
             header: Header::Response { .. },
             body:
-                Body::OffsetFetchResponse {
+                Body::OffsetFetchResponse(OffsetFetchResponse {
                     throttle_time_ms,
                     topics,
                     error_code,
                     groups,
-                },
+                    ..
+                }),
             ..
         }) => {
             assert_eq!(throttle_time_ms, encoded_throttle_time_ms);

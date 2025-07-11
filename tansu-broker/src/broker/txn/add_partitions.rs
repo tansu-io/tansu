@@ -13,7 +13,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use tansu_sans_io::{Body, ErrorCode};
+use tansu_sans_io::{Body, ErrorCode, add_partitions_to_txn_response::AddPartitionsToTxnResponse};
 use tansu_storage::{Storage, TxnAddPartitionsRequest, TxnAddPartitionsResponse};
 use tracing::debug;
 
@@ -36,21 +36,21 @@ where
         debug!(?partitions);
         match self.storage.txn_add_partitions(partitions).await? {
             TxnAddPartitionsResponse::VersionZeroToThree(results_by_topic_v_3_and_below) => {
-                Ok(Body::AddPartitionsToTxnResponse {
-                    throttle_time_ms: 0,
-                    error_code: Some(ErrorCode::None.into()),
-                    results_by_transaction: Some([].into()),
-                    results_by_topic_v_3_and_below: Some(results_by_topic_v_3_and_below),
-                })
+                Ok(AddPartitionsToTxnResponse::default()
+                    .throttle_time_ms(0)
+                    .error_code(Some(ErrorCode::None.into()))
+                    .results_by_transaction(Some([].into()))
+                    .results_by_topic_v_3_and_below(Some(results_by_topic_v_3_and_below))
+                    .into())
             }
 
             TxnAddPartitionsResponse::VersionFourPlus(results_by_transaction) => {
-                Ok(Body::AddPartitionsToTxnResponse {
-                    throttle_time_ms: 0,
-                    error_code: Some(ErrorCode::None.into()),
-                    results_by_transaction: Some(results_by_transaction),
-                    results_by_topic_v_3_and_below: Some([].into()),
-                })
+                Ok(AddPartitionsToTxnResponse::default()
+                    .throttle_time_ms(0)
+                    .error_code(Some(ErrorCode::None.into()))
+                    .results_by_transaction(Some(results_by_transaction))
+                    .results_by_topic_v_3_and_below(Some([].into()))
+                    .into())
             }
         }
     }

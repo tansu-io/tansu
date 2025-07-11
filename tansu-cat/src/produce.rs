@@ -20,8 +20,8 @@ use crate::{Error, Result};
 use futures::StreamExt;
 use serde_json::Value;
 use tansu_sans_io::{
-    Body, ErrorCode, Frame, Header,
-    produce_request::{PartitionProduceData, TopicProduceData},
+    ErrorCode, Frame, Header,
+    produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
     record::{deflated, inflated},
 };
 use tansu_schema::{AsKafkaRecord, Registry};
@@ -276,26 +276,23 @@ impl Connection {
             client_id: Some("tansu".into()),
         };
 
-        let body = Body::ProduceRequest {
-            transactional_id: None,
-            acks: -1,
-            timeout_ms: 1_500,
-            topic_data: Some(
-                [TopicProduceData {
-                    name: topic.into(),
-                    partition_data: Some(
-                        [PartitionProduceData {
-                            index: partition,
-                            records: Some(frame),
-                        }]
+        let produce_request = ProduceRequest::default()
+            .transactional_id(None)
+            .acks(-1)
+            .timeout_ms(1_500)
+            .topic_data(Some(
+                [TopicProduceData::default()
+                    .name(topic.into())
+                    .partition_data(Some(
+                        [PartitionProduceData::default()
+                            .index(partition)
+                            .records(Some(frame))]
                         .into(),
-                    ),
-                }]
+                    ))]
                 .into(),
-            ),
-        };
+            ));
 
-        let encoded = Frame::request(header, body)?;
+        let encoded = Frame::request(header, produce_request.into())?;
 
         self.broker
             .write_all(&encoded[..])

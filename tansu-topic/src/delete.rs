@@ -14,7 +14,8 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use tansu_sans_io::{
-    Body, ErrorCode, Frame, Header, NULL_TOPIC_ID, delete_topics_request::DeleteTopicState,
+    ApiKey as _, Body, DeleteTopicsRequest, DeleteTopicsResponse, ErrorCode, Frame, Header,
+    NULL_TOPIC_ID, delete_topics_request::DeleteTopicState,
     delete_topics_response::DeletableTopicResult,
 };
 use tokio::{
@@ -111,7 +112,7 @@ impl Connection {
     async fn delete(&mut self, topic: &str) -> Result<ErrorCode> {
         debug!(%topic);
 
-        let api_key = 20;
+        let api_key = DeleteTopicsRequest::KEY;
         let api_version = 6;
 
         let header = Header::Request {
@@ -123,19 +124,17 @@ impl Connection {
 
         let timeout_ms = 30_000;
 
-        let body = Body::DeleteTopicsRequest {
-            topics: Some(
-                [DeleteTopicState {
-                    name: Some(topic.into()),
-                    topic_id: NULL_TOPIC_ID,
-                }]
+        let delete_topics_request = DeleteTopicsRequest::default()
+            .topics(Some(
+                [DeleteTopicState::default()
+                    .name(Some(topic.into()))
+                    .topic_id(NULL_TOPIC_ID)]
                 .into(),
-            ),
-            topic_names: None,
-            timeout_ms,
-        };
+            ))
+            .topic_names(None)
+            .timeout_ms(timeout_ms);
 
-        let encoded = Frame::request(header, body)?;
+        let encoded = Frame::request(header, delete_topics_request.into())?;
 
         self.broker
             .write_all(&encoded[..])
@@ -159,10 +158,10 @@ impl Connection {
         {
             Frame {
                 body:
-                    Body::DeleteTopicsResponse {
+                    Body::DeleteTopicsResponse(DeleteTopicsResponse {
                         responses: Some(responses),
                         ..
-                    },
+                    }),
                 ..
             } => match responses.as_slice() {
                 [DeletableTopicResult { error_code, .. }] => {

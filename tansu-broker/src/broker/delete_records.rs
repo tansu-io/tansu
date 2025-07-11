@@ -14,7 +14,10 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use crate::Result;
-use tansu_sans_io::{Body, delete_records_request::DeleteRecordsTopic};
+use tansu_sans_io::{
+    Body, delete_records_request::DeleteRecordsTopic,
+    delete_records_response::DeleteRecordsResponse,
+};
 use tansu_storage::Storage;
 use tracing::debug;
 
@@ -39,9 +42,9 @@ where
             .inspect_err(|err| debug!(?err, ?topics))
             .map(Some)?;
 
-        Ok(Body::DeleteRecordsResponse {
-            throttle_time_ms: 0,
-            topics,
-        })
+        Ok(DeleteRecordsResponse::default()
+            .throttle_time_ms(0)
+            .topics(topics)
+            .into())
     }
 }

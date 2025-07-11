@@ -94,33 +94,33 @@ pub async fn lake_store(
 }
 
 fn empty_config(topic: &str) -> DescribeConfigsResult {
-    DescribeConfigsResult {
-        error_code: ErrorCode::None.into(),
-        error_message: None,
-        resource_type: ConfigResource::Topic.into(),
-        resource_name: topic.into(),
-        configs: Some(vec![]),
-    }
+    DescribeConfigsResult::default()
+        .error_code(ErrorCode::None.into())
+        .error_message(None)
+        .resource_type(ConfigResource::Topic.into())
+        .resource_name(topic.into())
+        .configs(Some(vec![]))
 }
 
 fn normalized_config(topic: &str) -> DescribeConfigsResult {
-    DescribeConfigsResult {
-        error_code: ErrorCode::None.into(),
-        error_message: None,
-        resource_type: ConfigResource::Topic.into(),
-        resource_name: topic.into(),
-        configs: Some(vec![DescribeConfigsResourceResult {
-            name: String::from("tansu.lake.normalize"),
-            value: Some(String::from("true")),
-            read_only: true,
-            is_default: None,
-            config_source: None,
-            is_sensitive: false,
-            synonyms: None,
-            config_type: None,
-            documentation: None,
-        }]),
-    }
+    DescribeConfigsResult::default()
+        .error_code(ErrorCode::None.into())
+        .error_message(None)
+        .resource_type(ConfigResource::Topic.into())
+        .resource_name(topic.into())
+        .configs(Some(
+            [DescribeConfigsResourceResult::default()
+                .name(String::from("tansu.lake.normalize"))
+                .value(Some(String::from("true")))
+                .read_only(true)
+                .is_default(None)
+                .config_source(None)
+                .is_sensitive(false)
+                .synonyms(None)
+                .config_type(None)
+                .documentation(None)]
+            .into(),
+        ))
 }
 
 mod json {

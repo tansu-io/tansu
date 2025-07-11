@@ -20,8 +20,8 @@ use crate::{Error, Result};
 use futures::SinkExt;
 use tansu_sans_io::{
     Body, ErrorCode, Frame, Header,
-    fetch_request::{FetchPartition, FetchTopic},
-    fetch_response::FetchableTopicResponse,
+    fetch_request::{FetchPartition, FetchRequest, FetchTopic},
+    fetch_response::{FetchResponse, FetchableTopicResponse},
     record::inflated,
 };
 use tansu_schema::{AsJsonValue, Registry};
@@ -294,38 +294,23 @@ impl Connection {
             client_id: None,
         };
 
-        let body = Body::FetchRequest {
-            cluster_id: None,
-            replica_state: None,
-            replica_id: Some(-1),
-            max_wait_ms,
-            min_bytes,
-            max_bytes,
-            isolation_level: Some(1),
-            session_id: None,
-            session_epoch: None,
-            topics: Some(
-                [FetchTopic {
-                    topic: Some(topic.into()),
-                    topic_id: None,
-                    partitions: Some(
-                        [FetchPartition {
-                            partition: 0,
-                            current_leader_epoch: None,
-                            fetch_offset: 0,
-                            last_fetched_epoch: None,
-                            log_start_offset: Some(0),
-                            partition_max_bytes: 4096,
-                            replica_directory_id: None,
-                        }]
-                        .into(),
-                    ),
-                }]
-                .into(),
-            ),
-            forgotten_topics_data: None,
-            rack_id: None,
-        };
+        let body = Body::FetchRequest(
+            FetchRequest::default()
+                .replica_id(Some(-1))
+                .max_wait_ms(max_wait_ms)
+                .min_bytes(min_bytes)
+                .max_bytes(max_bytes)
+                .isolation_level(Some(1))
+                .topics(Some(vec![
+                    FetchTopic::default()
+                        .topic(Some(topic.into()))
+                        .partitions(Some(vec![
+                            FetchPartition::default()
+                                .log_start_offset(Some(0))
+                                .partition_max_bytes(4096),
+                        ])),
+                ])),
+        );
 
         debug!(?header, ?body);
 
@@ -355,19 +340,19 @@ impl Connection {
         match response {
             Frame {
                 body:
-                    Body::FetchResponse {
+                    Body::FetchResponse(FetchResponse {
                         responses: Some(responses),
                         ..
-                    },
+                    }),
                 ..
             } => Ok(responses),
 
             Frame {
                 body:
-                    Body::FetchResponse {
+                    Body::FetchResponse(FetchResponse {
                         error_code: Some(error_code),
                         ..
-                    },
+                    }),
                 ..
             } => Err(Error::Api(ErrorCode::try_from(error_code)?)),
 

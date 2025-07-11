@@ -16,11 +16,11 @@
 use std::collections::BTreeMap;
 
 use bytes::Bytes;
-use common::{FetchResponse, StorageType, alphanumeric_string, init_tracing, register_broker};
+use common::{StorageType, alphanumeric_string, init_tracing, register_broker};
 use rand::{prelude::*, rng};
 use tansu_broker::{Result, broker::fetch::FetchRequest};
 use tansu_sans_io::{
-    ErrorCode, IsolationLevel, NULL_TOPIC_ID,
+    ErrorCode, FetchResponse, IsolationLevel, NULL_TOPIC_ID,
     create_topics_request::CreatableTopic,
     fetch_request::{FetchPartition, FetchTopic},
     record::{Record, inflated},
@@ -45,13 +45,12 @@ pub async fn empty_topic(cluster_id: Uuid, broker_id: i32, mut sc: StorageContai
 
     let topic_id = sc
         .create_topic(
-            CreatableTopic {
-                name: topic_name.clone(),
-                num_partitions,
-                replication_factor,
-                assignments: assignments.clone(),
-                configs: configs.clone(),
-            },
+            CreatableTopic::default()
+                .name(topic_name.clone())
+                .num_partitions(num_partitions)
+                .replication_factor(replication_factor)
+                .assignments(assignments.clone())
+                .configs(configs.clone()),
             false,
         )
         .await?;
@@ -66,19 +65,19 @@ pub async fn empty_topic(cluster_id: Uuid, broker_id: i32, mut sc: StorageContai
     let min_bytes = 1;
     let max_bytes = Some(50 * 1024);
     let isolation_level = &IsolationLevel::ReadUncommitted;
-    let topics = [FetchTopic {
-        topic: Some(topition.topic().to_string()),
-        topic_id: Some(NULL_TOPIC_ID),
-        partitions: Some(vec![FetchPartition {
-            partition: topition.partition(),
-            current_leader_epoch: Some(-1),
-            fetch_offset: 0,
-            last_fetched_epoch: Some(-1),
-            log_start_offset: Some(-1),
-            partition_max_bytes: 50 * 1024,
-            replica_directory_id: None,
-        }]),
-    }];
+    let topics = [FetchTopic::default()
+        .topic(Some(topition.topic().to_string()))
+        .topic_id(Some(NULL_TOPIC_ID))
+        .partitions(Some(vec![
+            FetchPartition::default()
+                .partition(topition.partition())
+                .current_leader_epoch(Some(-1))
+                .fetch_offset(0)
+                .last_fetched_epoch(Some(-1))
+                .log_start_offset(Some(-1))
+                .partition_max_bytes(50 * 1024)
+                .replica_directory_id(None),
+        ]))];
 
     let fetch: FetchResponse = FetchRequest::with_storage(sc.clone())
         .response(
@@ -89,11 +88,14 @@ pub async fn empty_topic(cluster_id: Uuid, broker_id: i32, mut sc: StorageContai
             Some(&topics[..]),
         )
         .await
-        .and_then(TryInto::try_into)?;
+        .and_then(|body| TryInto::try_into(body).map_err(Into::into))?;
 
-    assert_eq!(ErrorCode::None, fetch.error_code());
+    assert_eq!(
+        ErrorCode::None,
+        ErrorCode::try_from(fetch.error_code.unwrap())?
+    );
 
-    for response in fetch.responses() {
+    for response in fetch.responses.as_ref().unwrap_or(&vec![]) {
         for partition in response.partitions.as_ref().unwrap_or(&vec![]) {
             for batch in &partition.records.as_ref().unwrap().batches {
                 assert_eq!(-1, batch.producer_id);
@@ -105,7 +107,8 @@ pub async fn empty_topic(cluster_id: Uuid, broker_id: i32, mut sc: StorageContai
     assert_eq!(
         record_count,
         fetch
-            .responses()
+            .responses
+            .unwrap_or_default()
             .iter()
             .map(|response| {
                 response
@@ -148,13 +151,12 @@ pub async fn simple_non_txn(
 
     let topic_id = sc
         .create_topic(
-            CreatableTopic {
-                name: topic_name.clone(),
-                num_partitions,
-                replication_factor,
-                assignments: assignments.clone(),
-                configs: configs.clone(),
-            },
+            CreatableTopic::default()
+                .name(topic_name.clone())
+                .num_partitions(num_partitions)
+                .replication_factor(replication_factor)
+                .assignments(assignments.clone())
+                .configs(configs.clone()),
             false,
         )
         .await?;
@@ -240,19 +242,19 @@ pub async fn simple_non_txn(
     let min_bytes = 1;
     let max_bytes = Some(50 * 1024);
     let isolation_level = &IsolationLevel::ReadUncommitted;
-    let topics = [FetchTopic {
-        topic: Some(topition.topic().to_string()),
-        topic_id: Some(NULL_TOPIC_ID),
-        partitions: Some(vec![FetchPartition {
-            partition: topition.partition(),
-            current_leader_epoch: Some(-1),
-            fetch_offset: 0,
-            last_fetched_epoch: Some(-1),
-            log_start_offset: Some(-1),
-            partition_max_bytes: 50 * 1024,
-            replica_directory_id: None,
-        }]),
-    }];
+    let topics = [FetchTopic::default()
+        .topic(Some(topition.topic().to_string()))
+        .topic_id(Some(NULL_TOPIC_ID))
+        .partitions(Some(vec![
+            FetchPartition::default()
+                .partition(topition.partition())
+                .current_leader_epoch(Some(-1))
+                .fetch_offset(0)
+                .last_fetched_epoch(Some(-1))
+                .log_start_offset(Some(-1))
+                .partition_max_bytes(50 * 1024)
+                .replica_directory_id(None),
+        ]))];
 
     let fetch: FetchResponse = FetchRequest::with_storage(sc.clone())
         .response(
@@ -263,14 +265,18 @@ pub async fn simple_non_txn(
             Some(&topics[..]),
         )
         .await
-        .and_then(TryInto::try_into)?;
+        .and_then(|body| TryInto::try_into(body).map_err(Into::into))?;
 
-    assert_eq!(ErrorCode::None, fetch.error_code());
+    assert_eq!(
+        ErrorCode::None,
+        ErrorCode::try_from(fetch.error_code.unwrap())?
+    );
 
     assert_eq!(
         record_count,
         fetch
-            .responses()
+            .responses
+            .unwrap_or_default()
             .iter()
             .map(|response| {
                 response

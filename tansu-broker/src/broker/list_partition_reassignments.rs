@@ -18,7 +18,7 @@ use tansu_sans_io::{
     Body, ErrorCode,
     list_partition_reassignments_request::ListPartitionReassignmentsTopics,
     list_partition_reassignments_response::{
-        OngoingPartitionReassignment, OngoingTopicReassignment,
+        ListPartitionReassignmentsResponse, OngoingPartitionReassignment, OngoingTopicReassignment,
     },
 };
 use tansu_storage::{Storage, TopicId};
@@ -54,27 +54,29 @@ where
         for topic in metadata.topics() {
             let Some(ref name) = topic.name else { continue };
 
-            ongoing.push(OngoingTopicReassignment {
-                name: name.into(),
-                partitions: topic.partitions.as_ref().map(|partitions| {
-                    partitions
-                        .iter()
-                        .map(|partition| OngoingPartitionReassignment {
-                            partition_index: partition.partition_index,
-                            replicas: partition.replica_nodes.clone(),
-                            adding_replicas: Some(vec![]),
-                            removing_replicas: Some(vec![]),
-                        })
-                        .collect::<Vec<_>>()
-                }),
-            });
+            ongoing.push(
+                OngoingTopicReassignment::default()
+                    .name(name.into())
+                    .partitions(topic.partitions.as_ref().map(|partitions| {
+                        partitions
+                            .iter()
+                            .map(|partition| {
+                                OngoingPartitionReassignment::default()
+                                    .partition_index(partition.partition_index)
+                                    .replicas(partition.replica_nodes.clone())
+                                    .adding_replicas(Some(vec![]))
+                                    .removing_replicas(Some(vec![]))
+                            })
+                            .collect::<Vec<_>>()
+                    })),
+            );
         }
 
-        Ok(Body::ListPartitionReassignmentsResponse {
-            throttle_time_ms: 0,
-            error_code: ErrorCode::None.into(),
-            error_message: None,
-            topics: Some(ongoing),
-        })
+        Ok(ListPartitionReassignmentsResponse::default()
+            .throttle_time_ms(0)
+            .error_code(ErrorCode::None.into())
+            .error_message(None)
+            .topics(Some(ongoing))
+            .into())
     }
 }

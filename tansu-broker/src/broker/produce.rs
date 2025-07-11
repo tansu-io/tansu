@@ -43,16 +43,15 @@ where
     }
 
     fn error(&self, index: i32, error_code: ErrorCode) -> PartitionProduceResponse {
-        PartitionProduceResponse {
-            index,
-            error_code: error_code.into(),
-            base_offset: -1,
-            log_append_time_ms: Some(-1),
-            log_start_offset: Some(0),
-            record_errors: Some([].into()),
-            error_message: None,
-            current_leader: None,
-        }
+        PartitionProduceResponse::default()
+            .index(index)
+            .error_code(error_code.into())
+            .base_offset(-1)
+            .log_append_time_ms(Some(-1))
+            .log_start_offset(Some(0))
+            .record_errors(Some([].into()))
+            .error_message(None)
+            .current_leader(None)
     }
 
     async fn partition(
@@ -99,16 +98,15 @@ where
             }
 
             if let Some(base_offset) = base_offset {
-                PartitionProduceResponse {
-                    index: partition.index,
-                    error_code: ErrorCode::None.into(),
-                    base_offset,
-                    log_append_time_ms: Some(-1),
-                    log_start_offset: Some(0),
-                    record_errors: Some([].into()),
-                    error_message: None,
-                    current_leader: None,
-                }
+                PartitionProduceResponse::default()
+                    .index(partition.index)
+                    .error_code(ErrorCode::None.into())
+                    .base_offset(base_offset)
+                    .log_append_time_ms(Some(-1))
+                    .log_start_offset(Some(0))
+                    .record_errors(Some([].into()))
+                    .error_message(None)
+                    .current_leader(None)
             } else {
                 self.error(partition.index, ErrorCode::UnknownServerError)
             }
@@ -130,10 +128,9 @@ where
             }
         }
 
-        TopicProduceResponse {
-            name: topic.name,
-            partition_responses: Some(partitions),
-        }
+        TopicProduceResponse::default()
+            .name(topic.name)
+            .partition_responses(Some(partitions))
     }
 
     pub async fn response(
@@ -217,17 +214,18 @@ mod tests {
             .build()
             .and_then(deflated::Batch::try_from)
             .map(|deflated| {
-                let partition_data = PartitionProduceData {
-                    index,
-                    records: Some(Frame {
-                        batches: vec![deflated],
-                    }),
-                };
+                let partition_data =
+                    PartitionProduceData::default()
+                        .index(index)
+                        .records(Some(Frame {
+                            batches: vec![deflated],
+                        }));
 
-                Some(vec![TopicProduceData {
-                    name: topic.into(),
-                    partition_data: Some(vec![partition_data]),
-                }])
+                Some(vec![
+                    TopicProduceData::default()
+                        .name(topic.into())
+                        .partition_data(Some(vec![partition_data])),
+                ])
             })
             .map_err(Into::into)
     }
@@ -250,19 +248,21 @@ mod tests {
 
         assert_eq!(
             ProduceResponse {
-                responses: Some(vec![TopicProduceResponse {
-                    name: topic.into(),
-                    partition_responses: Some(vec![PartitionProduceResponse {
-                        index,
-                        error_code: ErrorCode::UnknownProducerId.into(),
-                        base_offset: -1,
-                        log_append_time_ms: Some(-1),
-                        log_start_offset: Some(0),
-                        record_errors: Some(vec![]),
-                        error_message: None,
-                        current_leader: None,
-                    }],),
-                }]),
+                responses: Some(vec![
+                    TopicProduceResponse::default()
+                        .name(topic.into())
+                        .partition_responses(Some(vec![
+                            PartitionProduceResponse::default()
+                                .index(index)
+                                .error_code(ErrorCode::UnknownProducerId.into())
+                                .base_offset(-1)
+                                .log_append_time_ms(Some(-1))
+                                .log_start_offset(Some(0))
+                                .record_errors(Some(vec![]))
+                                .error_message(None)
+                                .current_leader(None)
+                        ]))
+                ]),
                 throttle_time_ms: Some(0),
                 node_endpoints: None
             },
@@ -308,19 +308,21 @@ mod tests {
 
         assert_eq!(
             ProduceResponse {
-                responses: Some(vec![TopicProduceResponse {
-                    name: topic.into(),
-                    partition_responses: Some(vec![PartitionProduceResponse {
-                        index,
-                        error_code: ErrorCode::None.into(),
-                        base_offset: 0,
-                        log_append_time_ms: Some(-1),
-                        log_start_offset: Some(0),
-                        record_errors: Some(vec![]),
-                        error_message: None,
-                        current_leader: None,
-                    }],),
-                }]),
+                responses: Some(vec![
+                    TopicProduceResponse::default()
+                        .name(topic.into())
+                        .partition_responses(Some(vec![
+                            PartitionProduceResponse::default()
+                                .index(index)
+                                .error_code(ErrorCode::None.into())
+                                .base_offset(0)
+                                .log_append_time_ms(Some(-1))
+                                .log_start_offset(Some(0))
+                                .record_errors(Some(vec![]))
+                                .error_message(None)
+                                .current_leader(None)
+                        ]))
+                ]),
                 throttle_time_ms: Some(0),
                 node_endpoints: None
             },
@@ -346,19 +348,21 @@ mod tests {
 
         assert_eq!(
             ProduceResponse {
-                responses: Some(vec![TopicProduceResponse {
-                    name: topic.into(),
-                    partition_responses: Some(vec![PartitionProduceResponse {
-                        index,
-                        error_code: ErrorCode::None.into(),
-                        base_offset: 1,
-                        log_append_time_ms: Some(-1),
-                        log_start_offset: Some(0),
-                        record_errors: Some(vec![]),
-                        error_message: None,
-                        current_leader: None,
-                    }],),
-                }]),
+                responses: Some(vec![
+                    TopicProduceResponse::default()
+                        .name(topic.into())
+                        .partition_responses(Some(vec![
+                            PartitionProduceResponse::default()
+                                .index(index)
+                                .error_code(ErrorCode::None.into())
+                                .base_offset(1)
+                                .log_append_time_ms(Some(-1))
+                                .log_start_offset(Some(0))
+                                .record_errors(Some(vec![]))
+                                .error_message(None)
+                                .current_leader(None)
+                        ]))
+                ]),
                 throttle_time_ms: Some(0),
                 node_endpoints: None
             },
@@ -390,19 +394,21 @@ mod tests {
 
         assert_eq!(
             ProduceResponse {
-                responses: Some(vec![TopicProduceResponse {
-                    name: topic.into(),
-                    partition_responses: Some(vec![PartitionProduceResponse {
-                        index,
-                        error_code: ErrorCode::None.into(),
-                        base_offset: 3,
-                        log_append_time_ms: Some(-1),
-                        log_start_offset: Some(0),
-                        record_errors: Some(vec![]),
-                        error_message: None,
-                        current_leader: None,
-                    }],),
-                }]),
+                responses: Some(vec![
+                    TopicProduceResponse::default()
+                        .name(topic.into())
+                        .partition_responses(Some(vec![
+                            PartitionProduceResponse::default()
+                                .index(index)
+                                .error_code(ErrorCode::None.into())
+                                .base_offset(3)
+                                .log_append_time_ms(Some(-1))
+                                .log_start_offset(Some(0))
+                                .record_errors(Some(vec![]))
+                                .error_message(None)
+                                .current_leader(None)
+                        ]))
+                ]),
                 throttle_time_ms: Some(0),
                 node_endpoints: None
             },
@@ -452,19 +458,21 @@ mod tests {
 
         assert_eq!(
             ProduceResponse {
-                responses: Some(vec![TopicProduceResponse {
-                    name: topic.into(),
-                    partition_responses: Some(vec![PartitionProduceResponse {
-                        index,
-                        error_code: ErrorCode::None.into(),
-                        base_offset: 0,
-                        log_append_time_ms: Some(-1),
-                        log_start_offset: Some(0),
-                        record_errors: Some(vec![]),
-                        error_message: None,
-                        current_leader: None,
-                    }],),
-                }]),
+                responses: Some(vec![
+                    TopicProduceResponse::default()
+                        .name(topic.into())
+                        .partition_responses(Some(vec![
+                            PartitionProduceResponse::default()
+                                .index(index)
+                                .error_code(ErrorCode::None.into())
+                                .base_offset(0)
+                                .log_append_time_ms(Some(-1))
+                                .log_start_offset(Some(0))
+                                .record_errors(Some(vec![]))
+                                .error_message(None)
+                                .current_leader(None)
+                        ]))
+                ]),
                 throttle_time_ms: Some(0),
                 node_endpoints: None
             },
@@ -490,19 +498,21 @@ mod tests {
 
         assert_eq!(
             ProduceResponse {
-                responses: Some(vec![TopicProduceResponse {
-                    name: topic.into(),
-                    partition_responses: Some(vec![PartitionProduceResponse {
-                        index,
-                        error_code: ErrorCode::DuplicateSequenceNumber.into(),
-                        base_offset: -1,
-                        log_append_time_ms: Some(-1),
-                        log_start_offset: Some(0),
-                        record_errors: Some(vec![]),
-                        error_message: None,
-                        current_leader: None,
-                    }],),
-                }]),
+                responses: Some(vec![
+                    TopicProduceResponse::default()
+                        .name(topic.into())
+                        .partition_responses(Some(vec![
+                            PartitionProduceResponse::default()
+                                .index(index)
+                                .error_code(ErrorCode::DuplicateSequenceNumber.into())
+                                .base_offset(-1)
+                                .log_append_time_ms(Some(-1))
+                                .log_start_offset(Some(0))
+                                .record_errors(Some(vec![]))
+                                .error_message(None)
+                                .current_leader(None)
+                        ]))
+                ]),
                 throttle_time_ms: Some(0),
                 node_endpoints: None
             },
@@ -552,19 +562,21 @@ mod tests {
 
         assert_eq!(
             ProduceResponse {
-                responses: Some(vec![TopicProduceResponse {
-                    name: topic.into(),
-                    partition_responses: Some(vec![PartitionProduceResponse {
-                        index,
-                        error_code: ErrorCode::None.into(),
-                        base_offset: 0,
-                        log_append_time_ms: Some(-1),
-                        log_start_offset: Some(0),
-                        record_errors: Some(vec![]),
-                        error_message: None,
-                        current_leader: None,
-                    }],),
-                }]),
+                responses: Some(vec![
+                    TopicProduceResponse::default()
+                        .name(topic.into())
+                        .partition_responses(Some(vec![
+                            PartitionProduceResponse::default()
+                                .index(index)
+                                .error_code(ErrorCode::None.into())
+                                .base_offset(0)
+                                .log_append_time_ms(Some(-1))
+                                .log_start_offset(Some(0))
+                                .record_errors(Some(vec![]))
+                                .error_message(None)
+                                .current_leader(None)
+                        ]))
+                ]),
                 throttle_time_ms: Some(0),
                 node_endpoints: None
             },
@@ -590,19 +602,21 @@ mod tests {
 
         assert_eq!(
             ProduceResponse {
-                responses: Some(vec![TopicProduceResponse {
-                    name: topic.into(),
-                    partition_responses: Some(vec![PartitionProduceResponse {
-                        index,
-                        error_code: ErrorCode::OutOfOrderSequenceNumber.into(),
-                        base_offset: -1,
-                        log_append_time_ms: Some(-1),
-                        log_start_offset: Some(0),
-                        record_errors: Some(vec![]),
-                        error_message: None,
-                        current_leader: None,
-                    }],),
-                }]),
+                responses: Some(vec![
+                    TopicProduceResponse::default()
+                        .name(topic.into())
+                        .partition_responses(Some(vec![
+                            PartitionProduceResponse::default()
+                                .index(index)
+                                .error_code(ErrorCode::OutOfOrderSequenceNumber.into())
+                                .base_offset(-1)
+                                .log_append_time_ms(Some(-1))
+                                .log_start_offset(Some(0))
+                                .record_errors(Some(vec![]))
+                                .error_message(None)
+                                .current_leader(None)
+                        ]))
+                ]),
                 throttle_time_ms: Some(0),
                 node_endpoints: None
             },

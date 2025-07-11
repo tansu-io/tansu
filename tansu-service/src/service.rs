@@ -468,24 +468,23 @@ mod tests {
                 correlation_id,
                 client_id: Some(client_id.to_owned()),
             },
-            Body::ProduceRequest {
-                transactional_id: None,
-                acks: 0,
-                timeout_ms: 5_000,
-                topic_data: Some(
-                    [TopicProduceData {
-                        name: topic_name.into(),
-                        partition_data: Some(
-                            [PartitionProduceData {
-                                index: partition_index,
-                                records: Some(deflated::Frame { batches: [].into() }),
-                            }]
-                            .into(),
-                        ),
-                    }]
-                    .into(),
-                ),
-            },
+            Body::ProduceRequest(
+                tansu_sans_io::ProduceRequest::default()
+                    .transactional_id(None)
+                    .acks(0)
+                    .timeout_ms(5_000)
+                    .topic_data(Some(
+                        [TopicProduceData::default()
+                            .name(topic_name.into())
+                            .partition_data(Some(
+                                [PartitionProduceData::default()
+                                    .index(partition_index)
+                                    .records(Some(deflated::Frame { batches: [].into() }))]
+                                .into(),
+                            ))]
+                        .into(),
+                    )),
+            ),
         )
         .map(Bytes::from)
         .inspect(|frame| debug!(?frame))?;
@@ -496,39 +495,48 @@ mod tests {
                     api_key: produce_request.api_key,
                     api_version: produce_request.api_version,
                     correlation_id: produce_request.correlation_id,
-                    body: Body::ProduceResponse {
-                        responses: produce_request.topic_data.map(|topic_data| {
-                            topic_data
-                                .iter()
-                                .map(|topic_produce_data| TopicProduceResponse {
-                                    name: topic_produce_data.name.clone(),
-                                    partition_responses: topic_produce_data
-                                        .partition_data
-                                        .as_ref()
-                                        .map(|partition_produce_data| {
-                                            partition_produce_data
-                                                .iter()
-                                                .map(|partition_produce| PartitionProduceResponse {
-                                                    index: partition_produce.index,
-                                                    error_code: ErrorCode::None.into(),
-                                                    base_offset: 65456,
-                                                    log_append_time_ms: Some(0),
-                                                    log_start_offset: Some(0),
-                                                    record_errors: Some([].into()),
-                                                    error_message: Some("none".into()),
-                                                    current_leader: Some(LeaderIdAndEpoch {
-                                                        leader_id: 12321,
-                                                        leader_epoch: 23432,
-                                                    }),
-                                                })
-                                                .collect()
-                                        }),
-                                })
-                                .collect()
-                        }),
-                        throttle_time_ms: Some(54345),
-                        node_endpoints: Some([].into()),
-                    },
+                    body: Body::ProduceResponse(
+                        tansu_sans_io::ProduceResponse::default()
+                            .responses(produce_request.topic_data.map(|topic_data| {
+                                topic_data
+                                    .iter()
+                                    .map(|topic_produce_data| {
+                                        TopicProduceResponse::default()
+                                            .name(topic_produce_data.name.clone())
+                                            .partition_responses(
+                                                topic_produce_data.partition_data.as_ref().map(
+                                                    |partition_produce_data| {
+                                                        partition_produce_data
+                                                            .iter()
+                                                            .map(|partition_produce| {
+                                                                PartitionProduceResponse::default()
+                                                                    .index(partition_produce.index)
+                                                                    .error_code(
+                                                                        ErrorCode::None.into(),
+                                                                    )
+                                                                    .base_offset(65456)
+                                                                    .log_append_time_ms(Some(0))
+                                                                    .log_start_offset(Some(0))
+                                                                    .record_errors(Some([].into()))
+                                                                    .error_message(Some(
+                                                                        "none".into(),
+                                                                    ))
+                                                                    .current_leader(Some(
+                                                                        LeaderIdAndEpoch::default()
+                                                                            .leader_id(12321)
+                                                                            .leader_epoch(23432),
+                                                                    ))
+                                                            })
+                                                            .collect()
+                                                    },
+                                                ),
+                                            )
+                                    })
+                                    .collect()
+                            }))
+                            .throttle_time_ms(Some(54345))
+                            .node_endpoints(Some([].into())),
+                    ),
                 })
             }));
 

@@ -65,8 +65,11 @@ use std::{
     time::{Duration, SystemTime},
 };
 use tansu_sans_io::{
-    Body, ErrorCode, Frame, Header, IsolationLevel, consumer_group_describe_response,
-    describe_groups_response,
+    Body, ErrorCode, Frame, Header, IsolationLevel,
+    add_offsets_to_txn_request::AddOffsetsToTxnRequest, api_versions_request,
+    consumer_group_describe_request, consumer_group_describe_response, create_topics_request,
+    create_topics_response::CreateTopicsResponse, delete_groups_request::DeleteGroupsRequest,
+    delete_groups_response::DeleteGroupsResponse, describe_groups_response,
 };
 use tansu_schema::{Registry, lake::House};
 use tansu_storage::{
@@ -424,12 +427,13 @@ where
         debug!(?body, ?correlation_id);
 
         match body {
-            Body::AddOffsetsToTxnRequest {
+            Body::AddOffsetsToTxnRequest(AddOffsetsToTxnRequest {
                 transactional_id,
                 producer_id,
                 producer_epoch,
                 group_id,
-            } => {
+                ..
+            }) => {
                 debug!(?transactional_id, ?producer_id, ?producer_epoch, ?group_id);
 
                 AddOffsets::with_storage(self.storage.clone())
@@ -448,10 +452,11 @@ where
                     .await
             }
 
-            Body::ApiVersionsRequest {
+            Body::ApiVersionsRequest(api_versions_request::ApiVersionsRequest {
                 client_software_name,
                 client_software_version,
-            } => {
+                ..
+            }) => {
                 debug!(?client_software_name, ?client_software_version,);
 
                 let api_versions = ApiVersionsRequest;
@@ -461,10 +466,13 @@ where
                 ))
             }
 
-            Body::ConsumerGroupDescribeRequest {
-                group_ids,
-                include_authorized_operations,
-            } => self
+            Body::ConsumerGroupDescribeRequest(
+                consumer_group_describe_request::ConsumerGroupDescribeRequest {
+                    group_ids,
+                    include_authorized_operations,
+                    ..
+                },
+            ) => self
                 .storage
                 .describe_groups(group_ids.as_deref(), include_authorized_operations)
                 .await
@@ -475,40 +483,48 @@ where
                         .collect::<Vec<_>>()
                 })
                 .map(Some)
-                .map(|groups| Body::ConsumerGroupDescribeResponse {
-                    throttle_time_ms: 0,
-                    groups,
+                .map(|groups| {
+                    consumer_group_describe_response::ConsumerGroupDescribeResponse::default()
+                        .throttle_time_ms(0)
+                        .groups(groups)
+                        .into()
                 })
                 .map_err(Into::into),
 
-            Body::CreateTopicsRequest {
+            Body::CreateTopicsRequest(create_topics_request::CreateTopicsRequest {
                 validate_only,
                 topics,
                 ..
-            } => {
+            }) => {
                 debug!(?validate_only, ?topics);
                 CreateTopic::with_storage(self.storage.clone())
                     .response(topics, validate_only.unwrap_or(false))
                     .await
                     .map(Some)
-                    .map(|topics| Body::CreateTopicsResponse {
-                        throttle_time_ms: Some(0),
-                        topics,
+                    .map(|topics| {
+                        CreateTopicsResponse::default()
+                            .throttle_time_ms(Some(0))
+                            .topics(topics)
+                            .into()
                     })
             }
 
-            Body::DeleteGroupsRequest { groups_names } => self
+            Body::DeleteGroupsRequest(DeleteGroupsRequest { groups_names, .. }) => self
                 .storage
                 .delete_groups(groups_names.as_deref())
                 .await
                 .map(Some)
-                .map(|results| Body::DeleteGroupsResponse {
-                    throttle_time_ms: 0,
-                    results,
+                .map(|results| {
+                    DeleteGroupsResponse::default()
+                        .throttle_time_ms(0)
+                        .results(results)
+                        .into()
                 })
                 .map_err(Into::into),
 
-            Body::DeleteRecordsRequest { topics, .. } => {
+            Body::DeleteRecordsRequest(
+                tansu_sans_io::delete_records_request::DeleteRecordsRequest { topics, .. },
+            ) => {
                 debug!(?topics);
 
                 DeleteRecordsRequest::with_storage(self.storage.clone())
@@ -516,26 +532,36 @@ where
                     .await
             }
 
-            Body::DeleteTopicsRequest {
-                topics,
-                topic_names,
-                timeout_ms,
-            } => {
+            Body::DeleteTopicsRequest(
+                tansu_sans_io::delete_topics_request::DeleteTopicsRequest {
+                    topics,
+                    topic_names,
+                    timeout_ms,
+                    ..
+                },
+            ) => {
                 debug!(?topics, ?topic_names, ?timeout_ms);
 
-                Ok(Body::DeleteTopicsResponse {
-                    throttle_time_ms: Some(0),
-                    responses: DeleteTopicsRequest::with_storage(self.storage.clone())
-                        .response(topics, topic_names)
-                        .await
-                        .map(Some)?,
-                })
+                Ok(
+                    tansu_sans_io::delete_topics_response::DeleteTopicsResponse::default()
+                        .throttle_time_ms(Some(0))
+                        .responses(
+                            DeleteTopicsRequest::with_storage(self.storage.clone())
+                                .response(topics, topic_names)
+                                .await
+                                .map(Some)?,
+                        )
+                        .into(),
+                )
             }
 
-            Body::DescribeClusterRequest {
-                include_cluster_authorized_operations,
-                endpoint_type,
-            } => {
+            Body::DescribeClusterRequest(
+                tansu_sans_io::describe_cluster_request::DescribeClusterRequest {
+                    include_cluster_authorized_operations,
+                    endpoint_type,
+                    ..
+                },
+            ) => {
                 debug!(?include_cluster_authorized_operations, ?endpoint_type);
 
                 DescribeClusterRequest {
@@ -546,11 +572,14 @@ where
                 .await
             }
 
-            Body::DescribeConfigsRequest {
-                resources,
-                include_synonyms,
-                include_documentation,
-            } => {
+            Body::DescribeConfigsRequest(
+                tansu_sans_io::describe_configs_request::DescribeConfigsRequest {
+                    resources,
+                    include_synonyms,
+                    include_documentation,
+                    ..
+                },
+            ) => {
                 debug!(?resources, ?include_synonyms, ?include_documentation,);
 
                 DescribeConfigsRequest::with_storage(self.storage.clone())
@@ -561,16 +590,21 @@ where
                     )
                     .await
                     .map(Some)
-                    .map(|results| Body::DescribeConfigsResponse {
-                        throttle_time_ms: 0,
-                        results,
+                    .map(|results| {
+                        tansu_sans_io::describe_configs_response::DescribeConfigsResponse::default()
+                            .throttle_time_ms(0)
+                            .results(results)
+                            .into()
                     })
             }
 
-            Body::DescribeGroupsRequest {
-                groups,
-                include_authorized_operations,
-            } => self
+            Body::DescribeGroupsRequest(
+                tansu_sans_io::describe_groups_request::DescribeGroupsRequest {
+                    groups,
+                    include_authorized_operations,
+                    ..
+                },
+            ) => self
                 .storage
                 .describe_groups(
                     groups.as_deref(),
@@ -584,17 +618,22 @@ where
                         .collect::<Vec<_>>()
                 })
                 .map(Some)
-                .map(|groups| Body::DescribeGroupsResponse {
-                    throttle_time_ms: Some(0),
-                    groups,
+                .map(|groups| {
+                    tansu_sans_io::describe_groups_response::DescribeGroupsResponse::default()
+                        .throttle_time_ms(Some(0))
+                        .groups(groups)
+                        .into()
                 })
                 .map_err(Into::into),
 
-            Body::DescribeTopicPartitionsRequest {
-                topics,
-                response_partition_limit,
-                cursor,
-            } => self
+            Body::DescribeTopicPartitionsRequest(
+                tansu_sans_io::describe_topic_partitions_request::DescribeTopicPartitionsRequest {
+                    topics,
+                    response_partition_limit,
+                    cursor,
+                    ..
+                },
+            ) => self
                 .storage
                 .describe_topic_partitions(
                     topics
@@ -605,21 +644,21 @@ where
                     cursor.map(Into::into),
                 )
                 .await
-                .map(|topics| Body::DescribeTopicPartitionsResponse {
-                    throttle_time_ms: 0,
-                    topics: Some(topics),
-                    next_cursor: None,
-                })
+                .map(|topics| tansu_sans_io::describe_topic_partitions_response::DescribeTopicPartitionsResponse::default()
+                    .throttle_time_ms(0)
+                    .topics(Some(topics))
+                    .next_cursor(None).into()
+                )
                 .map_err(Into::into),
 
-            Body::FetchRequest {
+            Body::FetchRequest (tansu_sans_io::fetch_request::FetchRequest {
                 max_wait_ms,
                 min_bytes,
                 max_bytes,
                 isolation_level,
                 topics,
                 ..
-            } => {
+            }) => {
                 debug!(
                     ?max_wait_ms,
                     ?min_bytes,
@@ -641,11 +680,12 @@ where
                     .inspect_err(|error| error!(?error))
             }
 
-            Body::FindCoordinatorRequest {
+            Body::FindCoordinatorRequest(tansu_sans_io::find_coordinator_request::FindCoordinatorRequest {
                 key,
                 key_type,
                 coordinator_keys,
-            } => {
+                ..
+            }) => {
                 debug!(?key, ?key_type, ?coordinator_keys);
 
                 let find_coordinator = FindCoordinatorRequest;
@@ -659,18 +699,19 @@ where
                 ))
             }
 
-            Body::GetTelemetrySubscriptionsRequest { client_instance_id } => {
+            Body::GetTelemetrySubscriptionsRequest(tansu_sans_io::get_telemetry_subscriptions_request::GetTelemetrySubscriptionsRequest { client_instance_id,.. }) => {
                 debug!(?client_instance_id);
                 let get_telemetry_subscriptions = GetTelemetrySubscriptionsRequest;
                 Ok(get_telemetry_subscriptions.response(client_instance_id))
             }
 
-            Body::HeartbeatRequest {
+            Body::HeartbeatRequest(tansu_sans_io::heartbeat_request::HeartbeatRequest {
                 group_id,
                 generation_id,
                 member_id,
                 group_instance_id,
-            } => {
+                ..
+            }) => {
                 debug!(?group_id, ?generation_id, ?member_id, ?group_instance_id,);
 
                 self.groups
@@ -683,10 +724,11 @@ where
                     .await
             }
 
-            Body::IncrementalAlterConfigsRequest {
+            Body::IncrementalAlterConfigsRequest (tansu_sans_io::incremental_alter_configs_request::IncrementalAlterConfigsRequest{
                 resources,
                 validate_only,
-            } => {
+                ..
+            }) => {
                 debug!(?resources, ?validate_only);
                 let mut responses = vec![];
 
@@ -694,18 +736,20 @@ where
                     responses.push(self.storage.incremental_alter_resource(resource).await?);
                 }
 
-                Ok(Body::IncrementalAlterConfigsResponse {
-                    throttle_time_ms: 0,
-                    responses: Some(responses),
-                })
+                Ok(tansu_sans_io::incremental_alter_configs_response::IncrementalAlterConfigsResponse::default()
+                    .throttle_time_ms(0)
+                    .responses(Some(responses))
+                    .into()
+                )
             }
 
-            Body::InitProducerIdRequest {
+            Body::InitProducerIdRequest (tansu_sans_io::init_producer_id_request::InitProducerIdRequest {
                 transactional_id,
                 transaction_timeout_ms,
                 producer_id,
                 producer_epoch,
-            } => {
+                ..
+            }) => {
                 debug!(
                     ?transactional_id,
                     ?transaction_timeout_ms,
@@ -721,15 +765,16 @@ where
                         producer_epoch,
                     )
                     .await
-                    .map(|response| Body::InitProducerIdResponse {
-                        throttle_time_ms: 0,
-                        error_code: response.error.into(),
-                        producer_id: response.id,
-                        producer_epoch: response.epoch,
-                    })
+                    .map(|response| tansu_sans_io::init_producer_id_response::InitProducerIdResponse::default()
+                        .throttle_time_ms(0)
+                        .error_code(response.error.into())
+                        .producer_id(response.id)
+                        .producer_epoch(response.epoch)
+                        .into()
+                    )
             }
 
-            Body::JoinGroupRequest {
+            Body::JoinGroupRequest(tansu_sans_io::join_group_request::JoinGroupRequest {
                 group_id,
                 session_timeout_ms,
                 rebalance_timeout_ms,
@@ -738,7 +783,8 @@ where
                 protocol_type,
                 protocols,
                 reason,
-            } => {
+                ..
+            }) => {
                 debug!(
                     ?group_id,
                     ?session_timeout_ms,
@@ -765,11 +811,12 @@ where
                     .await
             }
 
-            Body::LeaveGroupRequest {
+            Body::LeaveGroupRequest(tansu_sans_io::leave_group_request::LeaveGroupRequest {
                 group_id,
                 member_id,
                 members,
-            } => {
+                ..
+            }) => {
                 debug!(?group_id, ?member_id, ?members);
 
                 self.groups
@@ -777,28 +824,31 @@ where
                     .await
             }
 
-            Body::ListGroupsRequest {
+            Body::ListGroupsRequest(tansu_sans_io::list_groups_request::ListGroupsRequest {
                 states_filter,
                 types_filter,
-            } => {
+                ..
+            }) => {
                 debug!(?states_filter, ?types_filter);
                 self.storage
                     .list_groups(states_filter.as_deref())
                     .await
                     .map(Some)
-                    .map(|groups| Body::ListGroupsResponse {
-                        throttle_time_ms: Some(0),
-                        error_code: ErrorCode::None.into(),
-                        groups,
-                    })
+                    .map(|groups| tansu_sans_io::list_groups_response::ListGroupsResponse::default()
+                        .throttle_time_ms(Some(0))
+                        .error_code(ErrorCode::None.into())
+                        .groups(groups)
+                        .into()
+                    )
                     .map_err(Into::into)
             }
 
-            Body::ListOffsetsRequest {
+            Body::ListOffsetsRequest(tansu_sans_io::list_offsets_request::ListOffsetsRequest {
                 replica_id,
                 isolation_level,
                 topics,
-            } => {
+                ..
+            }) => {
                 debug!(?replica_id, ?isolation_level, ?topics);
 
                 let isolation_level = isolation_level
@@ -811,7 +861,7 @@ where
                     .await
             }
 
-            Body::ListPartitionReassignmentsRequest { topics, .. } => {
+            Body::ListPartitionReassignmentsRequest(tansu_sans_io::list_partition_reassignments_request::ListPartitionReassignmentsRequest { topics, .. }) => {
                 debug!(?topics);
 
                 ListPartitionReassignmentsRequest::with_storage(self.storage.clone())
@@ -819,21 +869,22 @@ where
                     .await
             }
 
-            Body::MetadataRequest { topics, .. } => {
+            Body::MetadataRequest(tansu_sans_io::metadata_request::MetadataRequest { topics, .. }) => {
                 debug!(?topics);
                 MetadataRequest::with_storage(self.storage.clone())
                     .response(topics)
                     .await
             }
 
-            Body::OffsetCommitRequest {
+            Body::OffsetCommitRequest(tansu_sans_io::offset_commit_request::OffsetCommitRequest {
                 group_id,
                 generation_id_or_member_epoch,
                 member_id,
                 group_instance_id,
                 retention_time_ms,
                 topics,
-            } => {
+                ..
+            }) => {
                 debug!(
                     ?group_id,
                     ?generation_id_or_member_epoch,
@@ -855,12 +906,13 @@ where
                 self.groups.offset_commit(detail).await
             }
 
-            Body::OffsetFetchRequest {
+            Body::OffsetFetchRequest(tansu_sans_io::offset_fetch_request::OffsetFetchRequest {
                 group_id,
                 topics,
                 groups,
                 require_stable,
-            } => {
+                ..
+            }) => {
                 debug!(?group_id, ?topics, ?groups, ?require_stable);
                 self.groups
                     .offset_fetch(
@@ -872,24 +924,26 @@ where
                     .await
             }
 
-            Body::ProduceRequest {
+            Body::ProduceRequest(tansu_sans_io::produce_request::ProduceRequest {
                 transactional_id,
                 acks,
                 timeout_ms,
                 topic_data,
-            } => {
+                ..
+            }) => {
                 debug!(?transactional_id, ?acks, ?timeout_ms, ?topic_data);
                 ProduceRequest::with_storage(self.storage.clone())
                     .response(transactional_id, acks, timeout_ms, topic_data)
                     .await
-                    .map(|response| Body::ProduceResponse {
-                        responses: response.responses,
-                        throttle_time_ms: response.throttle_time_ms,
-                        node_endpoints: response.node_endpoints,
-                    })
+                    .map(|response| tansu_sans_io::produce_response::ProduceResponse::default()
+                        .responses(response.responses)
+                        .throttle_time_ms(response.throttle_time_ms)
+                        .node_endpoints(response.node_endpoints)
+                        .into()
+                    )
             }
 
-            Body::SyncGroupRequest {
+            Body::SyncGroupRequest (tansu_sans_io::sync_group_request::SyncGroupRequest {
                 group_id,
                 generation_id,
                 member_id,
@@ -897,7 +951,8 @@ where
                 protocol_type,
                 protocol_name,
                 assignments,
-            } => {
+                ..
+            }) => {
                 self.groups
                     .sync(
                         &group_id,
@@ -911,7 +966,7 @@ where
                     .await
             }
 
-            Body::TxnOffsetCommitRequest {
+            Body::TxnOffsetCommitRequest(tansu_sans_io::txn_offset_commit_request::TxnOffsetCommitRequest {
                 transactional_id,
                 group_id,
                 producer_id,
@@ -920,7 +975,8 @@ where
                 member_id,
                 group_instance_id,
                 topics,
-            } => {
+                ..
+            }) => {
                 debug!(
                     ?transactional_id,
                     ?group_id,
@@ -946,12 +1002,13 @@ where
                     .await
             }
 
-            Body::EndTxnRequest {
+            Body::EndTxnRequest(tansu_sans_io::end_txn_request::EndTxnRequest {
                 transactional_id,
                 producer_id,
                 producer_epoch,
                 committed,
-            } => self
+                ..
+            }) => self
                 .storage
                 .txn_end(
                     transactional_id.as_str(),
@@ -960,10 +1017,11 @@ where
                     committed,
                 )
                 .await
-                .map(|error_code| Body::EndTxnResponse {
-                    throttle_time_ms: 0,
-                    error_code: i16::from(error_code),
-                })
+                .map(|error_code| tansu_sans_io::end_txn_response::EndTxnResponse::default()
+                    .throttle_time_ms(0)
+                    .error_code(i16::from(error_code))
+                    .into()
+                )
                 .map_err(Into::into),
 
             request => {
@@ -1066,13 +1124,15 @@ fn attributes(api_key: i16, api_version: i16, _correlation_id: i32, body: &Body)
 
 fn request_span(api_key: i16, api_version: i16, correlation_id: i32, body: &Body) -> Span {
     match body {
-        Body::AddOffsetsToTxnRequest {
-            transactional_id,
-            producer_id,
-            producer_epoch,
-            group_id,
-            ..
-        } => {
+        Body::AddOffsetsToTxnRequest(
+            tansu_sans_io::add_offsets_to_txn_request::AddOffsetsToTxnRequest {
+                transactional_id,
+                producer_id,
+                producer_epoch,
+                group_id,
+                ..
+            },
+        ) => {
             debug_span!(
                 "add_offsets_to_txn",
                 api_key,
@@ -1106,12 +1166,13 @@ fn request_span(api_key: i16, api_version: i16, correlation_id: i32, body: &Body
             debug_span!("delete_topics", api_key, api_version, correlation_id)
         }
 
-        Body::EndTxnRequest {
+        Body::EndTxnRequest(tansu_sans_io::end_txn_request::EndTxnRequest {
             transactional_id,
             producer_id,
             producer_epoch,
             committed,
-        } => {
+            ..
+        }) => {
             debug_span!(
                 "end_txn",
                 api_key,
@@ -1132,12 +1193,14 @@ fn request_span(api_key: i16, api_version: i16, correlation_id: i32, body: &Body
             debug_span!("find_coordinator", api_key, api_version, correlation_id)
         }
 
-        Body::InitProducerIdRequest {
-            transactional_id,
-            producer_id,
-            producer_epoch,
-            ..
-        } => {
+        Body::InitProducerIdRequest(
+            tansu_sans_io::init_producer_id_request::InitProducerIdRequest {
+                transactional_id,
+                producer_id,
+                producer_epoch,
+                ..
+            },
+        ) => {
             debug_span!(
                 "init_producer_id",
                 api_key,
@@ -1149,12 +1212,12 @@ fn request_span(api_key: i16, api_version: i16, correlation_id: i32, body: &Body
             )
         }
 
-        Body::JoinGroupRequest {
+        Body::JoinGroupRequest(tansu_sans_io::join_group_request::JoinGroupRequest {
             group_id,
             member_id,
             group_instance_id,
             ..
-        } => debug_span!(
+        }) => debug_span!(
             "join_group",
             correlation_id,
             group_id,
@@ -1182,13 +1245,13 @@ fn request_span(api_key: i16, api_version: i16, correlation_id: i32, body: &Body
             debug_span!("produce", api_key, api_version, correlation_id)
         }
 
-        Body::SyncGroupRequest {
+        Body::SyncGroupRequest(tansu_sans_io::sync_group_request::SyncGroupRequest {
             group_id,
             generation_id,
             member_id,
             group_instance_id,
             ..
-        } => debug_span!(
+        }) => debug_span!(
             "sync_group",
             correlation_id,
             group_id,
@@ -1197,16 +1260,18 @@ fn request_span(api_key: i16, api_version: i16, correlation_id: i32, body: &Body
             group_instance_id,
         ),
 
-        Body::TxnOffsetCommitRequest {
-            transactional_id,
-            group_id,
-            producer_id,
-            producer_epoch,
-            generation_id,
-            member_id,
-            group_instance_id,
-            ..
-        } => {
+        Body::TxnOffsetCommitRequest(
+            tansu_sans_io::txn_offset_commit_request::TxnOffsetCommitRequest {
+                transactional_id,
+                group_id,
+                producer_id,
+                producer_epoch,
+                generation_id,
+                member_id,
+                group_instance_id,
+                ..
+            },
+        ) => {
             debug_span!(
                 "txn_offset_commit",
                 api_key,

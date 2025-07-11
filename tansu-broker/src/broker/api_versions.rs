@@ -15,7 +15,9 @@
 
 use std::sync::LazyLock;
 
-use tansu_sans_io::{Body, ErrorCode, RootMessageMeta, api_versions_response::ApiVersion};
+use tansu_sans_io::{
+    ApiVersionsResponse, Body, ErrorCode, RootMessageMeta, api_versions_response::ApiVersion,
+};
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ApiVersionsRequest;
@@ -39,25 +41,26 @@ impl ApiVersionsRequest {
         let _ = client_software_name;
         let _ = client_software_version;
 
-        Body::ApiVersionsResponse {
-            finalized_features: None,
-            finalized_features_epoch: None,
-            supported_features: None,
-            zk_migration_ready: None,
-            error_code: ErrorCode::None.into(),
-            api_keys: Some(
+        ApiVersionsResponse::default()
+            .finalized_features(None)
+            .finalized_features_epoch(None)
+            .supported_features(None)
+            .zk_migration_ready(None)
+            .error_code(ErrorCode::None.into())
+            .api_keys(Some(
                 RootMessageMeta::messages()
                     .requests()
                     .iter()
                     .filter(|(api_key, _)| !UNSUPPORTED.contains(api_key))
-                    .map(|(_, meta)| ApiVersion {
-                        api_key: meta.api_key,
-                        min_version: meta.version.valid.start,
-                        max_version: meta.version.valid.end,
+                    .map(|(_, meta)| {
+                        ApiVersion::default()
+                            .api_key(meta.api_key)
+                            .min_version(meta.version.valid.start)
+                            .max_version(meta.version.valid.end)
                     })
                     .collect(),
-            ),
-            throttle_time_ms: Some(0),
-        }
+            ))
+            .throttle_time_ms(Some(0))
+            .into()
     }
 }

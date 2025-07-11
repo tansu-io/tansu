@@ -76,10 +76,11 @@ impl Default for DescribeConfigRequest {
 impl DescribeConfigRequest {
     pub fn with_topics(self, topics: impl IntoIterator<Item = impl Into<String>>) -> Self {
         let mut resources = self.resources.unwrap_or_default();
-        resources.extend(topics.into_iter().map(|topic| DescribeConfigsResource {
-            resource_type: i8::from(ConfigResource::Topic),
-            resource_name: topic.into(),
-            configuration_keys: Some([].into()),
+        resources.extend(topics.into_iter().map(|topic| {
+            DescribeConfigsResource::default()
+                .resource_type(i8::from(ConfigResource::Topic))
+                .resource_name(topic.into())
+                .configuration_keys(Some([].into()))
         }));
 
         Self {
@@ -90,11 +91,12 @@ impl DescribeConfigRequest {
 
     pub fn with_topic(self, resource_name: &str) -> Self {
         let mut resources = self.resources.unwrap_or_default();
-        resources.push(DescribeConfigsResource {
-            resource_type: i8::from(ConfigResource::Topic),
-            resource_name: resource_name.into(),
-            configuration_keys: Some([].into()),
-        });
+        resources.push(
+            DescribeConfigsResource::default()
+                .resource_type(i8::from(ConfigResource::Topic))
+                .resource_name(resource_name.into())
+                .configuration_keys(Some([].into())),
+        );
 
         Self {
             resources: Some(resources),
@@ -110,11 +112,12 @@ impl From<DescribeConfigRequest> for ApiRequest {
             api_version: describe.api_version,
             correlation_id: describe.correlation_id,
             client_id: describe.client_id,
-            body: Body::DescribeConfigsRequest {
-                resources: describe.resources,
-                include_synonyms: describe.include_synonyms,
-                include_documentation: describe.include_documentation,
-            },
+            body: Body::DescribeConfigsRequest(
+                tansu_sans_io::DescribeConfigsRequest::default()
+                    .resources(describe.resources)
+                    .include_synonyms(describe.include_synonyms)
+                    .include_documentation(describe.include_documentation),
+            ),
         }
     }
 }
@@ -138,10 +141,11 @@ impl TryFrom<ApiResponse> for DescribeConfigResponse {
             api_version,
             correlation_id,
             body:
-                Body::DescribeConfigsResponse {
+                Body::DescribeConfigsResponse(tansu_sans_io::DescribeConfigsResponse {
                     throttle_time_ms,
                     results,
-                },
+                    ..
+                }),
         } = api_response
         {
             Ok(Self {

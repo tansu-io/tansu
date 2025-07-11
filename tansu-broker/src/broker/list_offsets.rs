@@ -18,7 +18,9 @@ use std::{collections::BTreeSet, ops::Deref};
 use tansu_sans_io::{
     Body, IsolationLevel,
     list_offsets_request::ListOffsetsTopic,
-    list_offsets_response::{ListOffsetsPartitionResponse, ListOffsetsTopicResponse},
+    list_offsets_response::{
+        ListOffsetsPartitionResponse, ListOffsetsResponse, ListOffsetsTopicResponse,
+    },
 };
 use tansu_storage::{ListOffsetRequest, Storage, Topition};
 use tracing::{debug, error};
@@ -76,30 +78,34 @@ where
                                 topics
                             })
                             .iter()
-                            .map(|topic_name| ListOffsetsTopicResponse {
-                                name: (*topic_name).into(),
-                                partitions: Some(
-                                    offsets
-                                        .iter()
-                                        .filter_map(|(topition, offset)| {
-                                            if topition.topic() == *topic_name {
-                                                Some(ListOffsetsPartitionResponse {
-                                                    partition_index: topition.partition(),
-                                                    error_code: offset.error_code().into(),
-                                                    old_style_offsets: None,
-                                                    timestamp: offset
-                                                        .timestamp()
-                                                        .unwrap_or(Some(-1))
-                                                        .or(Some(-1)),
-                                                    offset: offset.offset().or(Some(0)),
-                                                    leader_epoch: Some(0),
-                                                })
-                                            } else {
-                                                None
-                                            }
-                                        })
-                                        .collect(),
-                                ),
+                            .map(|topic_name| {
+                                ListOffsetsTopicResponse::default()
+                                    .name((*topic_name).into())
+                                    .partitions(Some(
+                                        offsets
+                                            .iter()
+                                            .filter_map(|(topition, offset)| {
+                                                if topition.topic() == *topic_name {
+                                                    Some(
+                                                        ListOffsetsPartitionResponse::default()
+                                                            .partition_index(topition.partition())
+                                                            .error_code(offset.error_code().into())
+                                                            .old_style_offsets(None)
+                                                            .timestamp(
+                                                                offset
+                                                                    .timestamp()
+                                                                    .unwrap_or(Some(-1))
+                                                                    .or(Some(-1)),
+                                                            )
+                                                            .offset(offset.offset().or(Some(0)))
+                                                            .leader_epoch(Some(0)),
+                                                    )
+                                                } else {
+                                                    None
+                                                }
+                                            })
+                                            .collect(),
+                                    ))
                             })
                             .collect()
                     })?,
@@ -108,10 +114,10 @@ where
             None
         };
 
-        Ok(Body::ListOffsetsResponse {
-            throttle_time_ms,
-            topics,
-        })
+        Ok(ListOffsetsResponse::default()
+            .throttle_time_ms(throttle_time_ms)
+            .topics(topics)
+            .into())
         .inspect(|r| debug!(?r))
     }
 }
