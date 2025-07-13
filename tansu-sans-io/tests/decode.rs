@@ -53,7 +53,7 @@ fn api_versions_request_v3_000() -> Result<()> {
                     .client_software_version(Some("3.6.1".into())),
             )
         },
-        Frame::request_from_bytes(&v)?
+        Frame::request_from_bytes(&v[..])?
     );
 
     Ok(())
@@ -130,7 +130,7 @@ fn api_versions_response_v1_000() -> Result<()> {
                     .throttle_time_ms(Some(0)),
             ),
         },
-        Frame::response_from_bytes(&v, ApiVersionsResponse::KEY, 1)?
+        Frame::response_from_bytes(&v[..], ApiVersionsResponse::KEY, 1)?
     );
 
     Ok(())
@@ -242,7 +242,7 @@ fn api_versions_response_v3_000() -> Result<()> {
                     .throttle_time_ms(Some(0))
             )
         },
-        Frame::response_from_bytes(&v, ApiVersionsResponse::KEY, 3)?
+        Frame::response_from_bytes(&v[..], ApiVersionsResponse::KEY, 3)?
     );
 
     Ok(())
@@ -294,7 +294,7 @@ fn create_topics_request_v7_000() -> Result<()> {
                 .validate_only(validate_only)
                 .into(),
         },
-        Frame::request_from_bytes(&v)?
+        Frame::request_from_bytes(&v[..])?
     );
 
     Ok(())
@@ -519,7 +519,7 @@ fn create_topics_response_v7_000() -> Result<()> {
 
     assert_eq!(
         frame,
-        Frame::response_from_bytes(&encoded, api_key, api_version)
+        Frame::response_from_bytes(&encoded[..], api_key, api_version)
             .inspect(|frame| debug!(?frame))?
     );
 
@@ -557,7 +557,7 @@ fn delete_topics_request_v6_000() -> Result<()> {
                 .timeout_ms(30000)
                 .into()
         },
-        Frame::request_from_bytes(&v)?
+        Frame::request_from_bytes(&v[..])?
     );
 
     Ok(())
@@ -587,7 +587,7 @@ fn describe_cluster_request_v1_000() -> Result<()> {
                 .endpoint_type(Some(1))
                 .into()
         },
-        Frame::request_from_bytes(&v)?
+        Frame::request_from_bytes(&v[..])?
     );
 
     Ok(())
@@ -626,7 +626,7 @@ fn describe_configs_request_v4_000() -> Result<()> {
                 .include_documentation(Some(false))
                 .into()
         },
-        Frame::request_from_bytes(&v)?
+        Frame::request_from_bytes(&v[..])?
     );
 
     Ok(())
@@ -665,7 +665,7 @@ fn describe_configs_request_v4_001() -> Result<()> {
                 .include_documentation(Some(false))
                 .into()
         },
-        Frame::request_from_bytes(&v)?
+        Frame::request_from_bytes(&v[..])?
     );
 
     Ok(())
@@ -704,7 +704,7 @@ fn describe_configs_request_v4_002() -> Result<()> {
                 .include_documentation(Some(false))
                 .into()
         },
-        Frame::request_from_bytes(&v)?
+        Frame::request_from_bytes(&v[..])?
     );
 
     Ok(())
@@ -1240,7 +1240,7 @@ fn describe_configs_response_v4_001() -> Result<()> {
                 ))
                 .into(),
         },
-        Frame::response_from_bytes(&v, api_key, api_version)?
+        Frame::response_from_bytes(&v[..], api_key, api_version)?
     );
 
     Ok(())
@@ -1702,7 +1702,7 @@ fn describe_configs_response_v4_002() -> Result<()> {
                 ))
                 .into()
         },
-        Frame::response_from_bytes(&v, api_key, api_version)?
+        Frame::response_from_bytes(&v[..], api_key, api_version)?
     );
 
     Ok(())
@@ -1732,7 +1732,7 @@ fn describe_groups_request_v1_000() -> Result<()> {
                 .include_authorized_operations(None)
                 .into()
         },
-        Frame::request_from_bytes(&v)?
+        Frame::request_from_bytes(&v[..])?
     );
 
     Ok(())
@@ -1767,7 +1767,7 @@ fn describe_groups_response_v1_000() -> Result<()> {
                 ))
                 .into(),
         },
-        Frame::response_from_bytes(&v, DescribeGroupsResponse::KEY, 1)?
+        Frame::response_from_bytes(&v[..], DescribeGroupsResponse::KEY, 1)?
     );
 
     Ok(())
@@ -1825,7 +1825,7 @@ fn fetch_request_v6_000() -> Result<()> {
                 .rack_id(None)
                 .into(),
         },
-        Frame::request_from_bytes(&v)?
+        Frame::request_from_bytes(&v[..])?
     );
 
     Ok(())
@@ -1906,7 +1906,7 @@ fn fetch_request_v12_000() -> Result<()> {
                 .rack_id(Some("".into()))
                 .into(),
         },
-        Frame::request_from_bytes(&v)?
+        Frame::request_from_bytes(&v[..])?
     );
 
     Ok(())
@@ -2114,7 +2114,7 @@ fn fetch_request_v15_000() -> Result<()> {
                 .rack_id(Some("".into()))
                 .into(),
         },
-        Frame::request_from_bytes(&v)?
+        Frame::request_from_bytes(&v[..])?
     );
 
     Ok(())
@@ -2154,7 +2154,7 @@ fn fetch_request_v16_000() -> Result<()> {
                 .rack_id(Some("".into()))
                 .into()
         },
-        Frame::request_from_bytes(&encoded)?
+        Frame::request_from_bytes(&encoded[..])?
     );
 
     Ok(())
@@ -2215,7 +2215,7 @@ fn fetch_request_v16_001() -> Result<()> {
                 .rack_id(Some("".into()))
                 .into()
         },
-        Frame::request_from_bytes(&encoded)?
+        Frame::request_from_bytes(&encoded[..])?
     );
 
     Ok(())
@@ -2298,7 +2298,7 @@ fn fetch_response_v12_000() -> Result<()> {
                 .node_endpoints(None)
                 .into()
         },
-        Frame::response_from_bytes(&v, api_key, api_version)?
+        Frame::response_from_bytes(&v[..], api_key, api_version)?
     );
 
     Ok(())
@@ -2446,7 +2446,7 @@ fn fetch_response_v12_001() -> Result<()> {
                 .node_endpoints(None)
                 .into()
         },
-        Frame::response_from_bytes(&v, api_key, api_version)?
+        Frame::response_from_bytes(&v[..], api_key, api_version)?
     );
 
     Ok(())
@@ -2659,7 +2659,7 @@ fn fetch_response_v12_002() -> Result<()> {
                 .node_endpoints(None)
                 .into()
         },
-        Frame::response_from_bytes(&v, api_key, api_version)?
+        Frame::response_from_bytes(&v[..], api_key, api_version)?
     );
 
     Ok(())
@@ -2752,7 +2752,7 @@ fn fetch_response_v16_001() -> Result<()> {
                 .node_endpoints(Some([].into()))
                 .into()
         },
-        Frame::response_from_bytes(&v, api_key, api_version)?
+        Frame::response_from_bytes(&v[..], api_key, api_version)?
     );
 
     Ok(())
@@ -2762,7 +2762,7 @@ fn fetch_response_v16_001() -> Result<()> {
 fn fetch_response_v16_002() -> Result<()> {
     let _guard = init_tracing()?;
 
-    let api_key = 1;
+    let api_key = FetchResponse::KEY;
     let api_version = 16;
 
     let v = vec![
@@ -2845,7 +2845,7 @@ fn fetch_response_v16_002() -> Result<()> {
                 .node_endpoints(None)
                 .into()
         },
-        Frame::response_from_bytes(&v, api_key, api_version)?
+        Frame::response_from_bytes(&v[..], api_key, api_version)?
     );
 
     Ok(())
@@ -2874,7 +2874,7 @@ fn find_coordinator_request_v1_000() -> Result<()> {
                 .coordinator_keys(None)
                 .into()
         },
-        Frame::request_from_bytes(&v)?
+        Frame::request_from_bytes(&v[..])?
     );
 
     Ok(())
@@ -2905,7 +2905,7 @@ fn find_coordinator_request_v2_000() -> Result<()> {
                 .coordinator_keys(None)
                 .into()
         },
-        Frame::request_from_bytes(&v)?
+        Frame::request_from_bytes(&v[..])?
     );
 
     Ok(())
@@ -2935,7 +2935,7 @@ fn find_coordinator_response_v1_000() -> Result<()> {
                 .coordinators(None)
                 .into()
         },
-        Frame::response_from_bytes(&v, FindCoordinatorResponse::KEY, 1)?
+        Frame::response_from_bytes(&v[..], FindCoordinatorResponse::KEY, 1)?
     );
 
     Ok(())
@@ -2966,7 +2966,7 @@ fn find_coordinator_request_v4_000() -> Result<()> {
                 .coordinator_keys(Some(["test-consumer-group".into()].into()))
                 .into()
         },
-        Frame::request_from_bytes(&v)?
+        Frame::request_from_bytes(&v[..])?
     );
 
     Ok(())
@@ -2998,7 +2998,7 @@ fn heartbeat_request_v4_000() -> Result<()> {
                 .group_instance_id(None)
                 .into()
         },
-        Frame::request_from_bytes(&v)?
+        Frame::request_from_bytes(&v[..])?
     );
 
     Ok(())
@@ -3030,7 +3030,7 @@ fn init_producer_id_request_v4_000() -> Result<()> {
                 .producer_epoch(Some(-1))
                 .into()
         },
-        Frame::request_from_bytes(&v)?
+        Frame::request_from_bytes(&v[..])?
     );
 
     Ok(())
@@ -3088,7 +3088,7 @@ fn join_group_request_v5_000() -> Result<()> {
                 .reason(None)
                 .into()
         },
-        Frame::request_from_bytes(&v)?
+        Frame::request_from_bytes(&v[..])?
     );
 
     Ok(())
@@ -3139,7 +3139,7 @@ fn join_group_response_v5_000() -> Result<()> {
                 ))
                 .into()
         },
-        Frame::response_from_bytes(&v, api_key, api_version)?
+        Frame::response_from_bytes(&v[..], api_key, api_version)?
     );
 
     Ok(())
@@ -3191,7 +3191,7 @@ fn join_group_request_v9_000() -> Result<()> {
                 .reason(Some("".into()))
                     .into()
         },
-        Frame::request_from_bytes(&v)?
+        Frame::request_from_bytes(&v[..])?
     );
 
     Ok(())
@@ -3232,7 +3232,7 @@ fn leave_group_request_v5_000() -> Result<()> {
                 ))
                 .into()
         },
-        Frame::request_from_bytes(&v)?
+        Frame::request_from_bytes(&v[..])?
     );
 
     Ok(())
@@ -3261,7 +3261,7 @@ fn list_groups_request_v4_000() -> Result<()> {
                 .types_filter(None)
                 .into()
         },
-        Frame::request_from_bytes(&v)?
+        Frame::request_from_bytes(&v[..])?
     );
 
     Ok(())
@@ -3304,7 +3304,7 @@ fn list_offsets_response_v0_000() -> Result<()> {
                 ))
                 .into()
         },
-        Frame::response_from_bytes(&v, ListOffsetsResponse::KEY, 0)?
+        Frame::response_from_bytes(&v[..], ListOffsetsResponse::KEY, 0)?
     );
 
     Ok(())
@@ -3341,7 +3341,7 @@ fn list_partition_reassignments_request_v0_000() -> Result<()> {
                 ))
                 .into()
         },
-        Frame::request_from_bytes(&v)?
+        Frame::request_from_bytes(&v[..])?
     );
 
     Ok(())
@@ -3372,7 +3372,7 @@ fn list_transactions_request_v1_000() -> Result<()> {
                 .duration_filter(Some(-1))
                 .into()
         },
-        Frame::request_from_bytes(&v)?
+        Frame::request_from_bytes(&v[..])?
     );
 
     Ok(())
@@ -3409,7 +3409,7 @@ fn list_transactions_response_v1_000() -> Result<()> {
                 ))
                 .into()
         },
-        Frame::response_from_bytes(&v, api_key, api_version)?
+        Frame::response_from_bytes(&v[..], api_key, api_version)?
     );
 
     Ok(())
@@ -3447,7 +3447,7 @@ fn metadata_request_v1_000() -> Result<()> {
                 .include_topic_authorized_operations(None)
                 .into()
         },
-        Frame::request_from_bytes(&v)?
+        Frame::request_from_bytes(&v[..])?
     );
 
     Ok(())
@@ -3561,7 +3561,7 @@ fn metadata_response_v1_000() -> Result<()> {
                 .cluster_authorized_operations(None)
                 .into()
         },
-        Frame::response_from_bytes(&v, api_key, api_version)?
+        Frame::response_from_bytes(&v[..], api_key, api_version)?
     );
 
     Ok(())
@@ -3591,7 +3591,7 @@ fn metadata_request_v7_000() -> Result<()> {
                 .include_topic_authorized_operations(None)
                 .into()
         },
-        Frame::request_from_bytes(&v)?
+        Frame::request_from_bytes(&v[..])?
     );
 
     Ok(())
@@ -3674,7 +3674,7 @@ fn metadata_response_v7_000() -> Result<()> {
                 .cluster_authorized_operations(None)
                 .into()
         },
-        Frame::response_from_bytes(&v, api_key, api_version)?
+        Frame::response_from_bytes(&v[..], api_key, api_version)?
     );
 
     Ok(())
@@ -3713,7 +3713,7 @@ fn metadata_request_v12_000() -> Result<()> {
                 .include_topic_authorized_operations(Some(false))
                 .into()
         },
-        Frame::request_from_bytes(&v)?
+        Frame::request_from_bytes(&v[..])?
     );
 
     Ok(())
@@ -3762,7 +3762,7 @@ fn metadata_response_v12_000() -> Result<()> {
                 .cluster_authorized_operations(None)
                 .into()
         },
-        Frame::response_from_bytes(&v, api_key, api_version)?
+        Frame::response_from_bytes(&v[..], api_key, api_version)?
     );
 
     Ok(())
@@ -3793,7 +3793,7 @@ fn metadata_request_v12_001() -> Result<()> {
                 .include_topic_authorized_operations(Some(false))
                 .into()
         },
-        Frame::request_from_bytes(&v)?
+        Frame::request_from_bytes(&v[..])?
     );
 
     Ok(())
@@ -3830,7 +3830,7 @@ fn metadata_request_v12_002() -> Result<()> {
                 .include_topic_authorized_operations(Some(false))
                 .into()
         },
-        Frame::request_from_bytes(&v)?
+        Frame::request_from_bytes(&v[..])?
     );
 
     Ok(())
@@ -3949,7 +3949,7 @@ fn metadata_response_v12_002() -> Result<()> {
                 .cluster_authorized_operations(None)
                 .into()
         },
-        Frame::response_from_bytes(&v, api_key, api_version)?
+        Frame::response_from_bytes(&v[..], api_key, api_version)?
     );
 
     Ok(())
@@ -3993,7 +3993,7 @@ fn offset_fetch_request_v3_000() -> Result<()> {
                 .require_stable(None)
                 .into()
         },
-        Frame::request_from_bytes(&v)?
+        Frame::request_from_bytes(&v[..])?
     );
 
     Ok(())
@@ -4033,7 +4033,7 @@ fn offset_fetch_request_v7_000() -> Result<()> {
                 .require_stable(Some(true))
                 .into()
         },
-        Frame::request_from_bytes(&v)?
+        Frame::request_from_bytes(&v[..])?
     );
 
     Ok(())
@@ -4085,7 +4085,7 @@ fn offset_fetch_response_v7_000() -> Result<()> {
                 ))
                 .into()
         },
-        Frame::response_from_bytes(&v, api_key, api_version)?
+        Frame::response_from_bytes(&v[..], api_key, api_version)?
     );
 
     Ok(())
@@ -4132,7 +4132,7 @@ fn offset_fetch_request_v9_000() -> Result<()> {
                 .require_stable(Some(true))
                 .into()
         },
-        Frame::request_from_bytes(&v)?
+        Frame::request_from_bytes(&v[..])?
     );
 
     Ok(())
@@ -4200,7 +4200,7 @@ fn offset_commit_request_v9_000() -> Result<()> {
                 ))
                 .into()
         },
-        Frame::request_from_bytes(&v)?
+        Frame::request_from_bytes(&v[..])?
     );
 
     Ok(())
@@ -4236,7 +4236,7 @@ fn offset_for_leader_request_v0_000() -> Result<()> {
                 ))
                 .into()
         },
-        Frame::request_from_bytes(&v)?
+        Frame::request_from_bytes(&v[..])?
     );
 
     Ok(())
@@ -4350,7 +4350,7 @@ fn produce_request_v0_000() -> Result<()> {
                 ))
                 .into()
         },
-        Frame::request_from_bytes(&v)?
+        Frame::request_from_bytes(&v[..])?
     );
 
     Ok(())
@@ -4465,7 +4465,7 @@ fn produce_request_v3_000() -> Result<()> {
                 ))
                 .into()
         },
-        Frame::request_from_bytes(&v)?
+        Frame::request_from_bytes(&v[..])?
     );
 
     Ok(())
@@ -4545,7 +4545,7 @@ fn produce_request_v7_000() -> Result<()> {
                 ))
                 .into()
         },
-        Frame::request_from_bytes(&v)?
+        Frame::request_from_bytes(&v[..])?
     );
 
     Ok(())
@@ -4619,7 +4619,7 @@ fn produce_request_v9_000() -> Result<()> {
                 ))
                 .into()
         },
-        Frame::request_from_bytes(&v)?
+        Frame::request_from_bytes(&v[..])?
     );
 
     Ok(())
@@ -4789,7 +4789,7 @@ fn produce_request_v9_001() -> Result<()> {
                 ))
                 .into()
         },
-        Frame::request_from_bytes(&v)?
+        Frame::request_from_bytes(&v[..])?
     );
 
     Ok(())
@@ -4888,7 +4888,7 @@ fn produce_request_v10_000() -> Result<()> {
                 ))
                 .into()
         },
-        Frame::request_from_bytes(&v)?
+        Frame::request_from_bytes(&v[..])?
     );
 
     Ok(())
@@ -5239,7 +5239,7 @@ sunt\x01uXculpa qui officia deser\x01\x1e\x1cmollit a!!<id est laborum.\0");
                 ))
                 .into()
         },
-        Frame::request_from_bytes(&v)?
+        Frame::request_from_bytes(&v[..])?
     );
 
     assert_eq!(
@@ -5366,7 +5366,7 @@ sun\x05uXculpa qui officia deser\x01\x1e\x0cmoll!\x93!!<id est laborum.\0",
                 ))
                 .into()
         },
-        Frame::request_from_bytes(&v)?
+        Frame::request_from_bytes(&v[..])?
     );
 
     assert_eq!(
@@ -5438,7 +5438,7 @@ fn produce_response_v9_000() -> Result<()> {
                 .throttle_time_ms(Some(0))
                 .into()
         },
-        Frame::response_from_bytes(&v, ProduceResponse::KEY, 9)?
+        Frame::response_from_bytes(&v[..], ProduceResponse::KEY, 9)?
     );
 
     Ok(())
@@ -5484,7 +5484,7 @@ pub fn sync_group_request_v5_000() -> Result<()> {
                 )
             ).into()
         },
-        Frame::request_from_bytes(&v)?
+        Frame::request_from_bytes(&v[..])?
     );
 
     Ok(())
@@ -5517,7 +5517,7 @@ fn describe_topic_partitions_request_v0_000() -> Result<()> {
                     .cursor(None)
             )
         },
-        Frame::request_from_bytes(&v)?
+        Frame::request_from_bytes(&v[..])?
     );
 
     Ok(())
@@ -5599,7 +5599,7 @@ fn describe_topic_partitions_response_v0_000() -> Result<()> {
                     .next_cursor(None)
             )
         },
-        Frame::response_from_bytes(&v, api_key, api_version)?
+        Frame::response_from_bytes(&v[..], api_key, api_version)?
     );
 
     Ok(())

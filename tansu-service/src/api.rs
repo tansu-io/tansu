@@ -69,7 +69,6 @@ impl TryFrom<ApiRequest> for Bytes {
             },
             api_request.body,
         )
-        .map(Bytes::from)
         .map_err(Into::into)
     }
 }
@@ -110,7 +109,6 @@ impl TryFrom<ApiResponse> for Bytes {
             api_response.api_key.0,
             api_response.api_version,
         )
-        .map(Bytes::from)
         .map_err(Into::into)
     }
 }

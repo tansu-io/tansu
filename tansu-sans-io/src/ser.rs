@@ -73,6 +73,7 @@ struct Meta {
     parse: VecDeque<FieldLookup>,
 }
 
+/// Serialize the serde data model into the Kafka protocol.
 pub struct Encoder<'a> {
     writer: &'a mut dyn Write,
     containers: VecDeque<Container>,
@@ -90,7 +91,7 @@ impl fmt::Debug for Encoder<'_> {
 }
 
 impl<'a> Encoder<'a> {
-    pub fn request(writer: &'a mut dyn Write) -> Self {
+    pub(crate) fn request(writer: &'a mut dyn Write) -> Self {
         Self {
             writer,
             containers: VecDeque::new(),
@@ -102,7 +103,7 @@ impl<'a> Encoder<'a> {
         }
     }
 
-    pub fn response(writer: &'a mut dyn Write, api_key: i16, api_version: i16) -> Self {
+    pub(crate) fn response(writer: &'a mut dyn Write, api_key: i16, api_version: i16) -> Self {
         Self {
             writer,
             containers: VecDeque::new(),

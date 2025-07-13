@@ -13,6 +13,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+use bytes::Bytes;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use std::iter;
 use tansu_sans_io::record::{Record, deflated, inflated};
@@ -49,7 +50,7 @@ fn append_in_memory(c: &mut Criterion) {
                 _ = segment
                     .append(
                         inflated::Batch::builder()
-                            .record(Record::builder().value(value.into()))
+                            .record(Record::builder().value(Some(Bytes::from(value))))
                             .build()
                             .and_then(deflated::Batch::try_from)
                             .unwrap(),
@@ -93,7 +94,7 @@ fn append_in_memory_provider(c: &mut Criterion) {
                 _ = segment
                     .append(
                         inflated::Batch::builder()
-                            .record(Record::builder().value(value.into()))
+                            .record(Record::builder().value(Some(Bytes::from(value))))
                             .build()
                             .and_then(deflated::Batch::try_from)
                             .unwrap(),

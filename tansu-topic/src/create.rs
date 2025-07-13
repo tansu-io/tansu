@@ -202,7 +202,7 @@ impl Connection {
             .await
             .inspect_err(|err| debug!(?err))?;
 
-        match Frame::response_from_bytes(&response_buffer, api_key, api_version)
+        match Frame::response_from_bytes(&response_buffer[..], api_key, api_version)
             .inspect(|response| debug!(?response))
             .inspect_err(|err| debug!(?err))?
         {

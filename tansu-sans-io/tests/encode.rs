@@ -2,14 +2,14 @@ use bytes::Bytes;
 use common::init_tracing;
 use pretty_assertions::assert_eq;
 use tansu_sans_io::{
-    ApiKey, ApiVersionsRequest, ApiVersionsResponse, CreateTopicsRequest, CreateTopicsResponse,
-    DeleteTopicsRequest, DescribeClusterRequest, DescribeConfigsRequest, DescribeConfigsResponse,
-    DescribeGroupsRequest, DescribeGroupsResponse, DescribeTopicPartitionsRequest,
-    DescribeTopicPartitionsResponse, FetchRequest, FetchResponse, FindCoordinatorRequest,
-    FindCoordinatorResponse, Frame, Header, HeartbeatRequest, InitProducerIdRequest,
-    JoinGroupRequest, JoinGroupResponse, ListGroupsRequest, ListOffsetsResponse,
-    ListPartitionReassignmentsRequest, MetadataRequest, MetadataResponse, OffsetFetchRequest,
-    OffsetForLeaderEpochRequest, ProduceRequest, ProduceResponse, Result,
+    ApiKey, ApiVersionsRequest, ApiVersionsResponse, CreateTopicsResponse, DeleteTopicsRequest,
+    DescribeClusterRequest, DescribeConfigsRequest, DescribeConfigsResponse, DescribeGroupsRequest,
+    DescribeGroupsResponse, DescribeTopicPartitionsRequest, DescribeTopicPartitionsResponse,
+    FetchRequest, FetchResponse, FindCoordinatorRequest, FindCoordinatorResponse, Frame, Header,
+    HeartbeatRequest, InitProducerIdRequest, JoinGroupRequest, JoinGroupResponse,
+    ListGroupsRequest, ListOffsetsResponse, ListPartitionReassignmentsRequest, MetadataRequest,
+    MetadataResponse, OffsetFetchRequest, OffsetForLeaderEpochRequest, ProduceRequest,
+    ProduceResponse, Result,
     join_group_request::JoinGroupRequestProtocol,
     join_group_response::JoinGroupResponseMember,
     record::{
@@ -522,19 +522,19 @@ fn api_versions_response_v3_000() -> Result<()> {
 
 #[test]
 fn create_topics_request_v7_000() -> Result<()> {
-    use tansu_sans_io::create_topics_request::{CreatableTopic, CreatableTopicConfig};
+    use tansu_sans_io::{
+        ApiKey as _, CreateTopicsRequest, Frame, Header,
+        create_topics_request::{CreatableTopic, CreatableTopicConfig},
+    };
 
     let _guard = init_tracing()?;
 
     let header = Header::Request {
-        api_key: 19,
+        api_key: CreateTopicsRequest::KEY,
         api_version: 7,
         correlation_id: 298,
         client_id: Some("adminclient-1".into()),
     };
-
-    let timeout_ms = 30_000;
-    let validate_only = Some(false);
 
     let body = CreateTopicsRequest::default()
         .topics(Some(
@@ -551,8 +551,8 @@ fn create_topics_request_v7_000() -> Result<()> {
                 ))]
             .into(),
         ))
-        .timeout_ms(timeout_ms)
-        .validate_only(validate_only)
+        .timeout_ms(30_000)
+        .validate_only(Some(false))
         .into();
 
     assert_eq!(

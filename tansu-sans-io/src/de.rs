@@ -70,6 +70,7 @@ impl Read for ReadPosition<'_> {
     }
 }
 
+/// Deserialize the Kafka protocol into the serde data model.
 pub struct Decoder<'de> {
     reader: ReadPosition<'de>,
     containers: VecDeque<Container>,
@@ -127,7 +128,7 @@ impl<'de> Decoder<'de> {
         }
     }
 
-    pub fn request(reader: &'de mut dyn Read) -> Self {
+    pub(crate) fn request(reader: &'de mut dyn Read) -> Self {
         Self {
             reader: ReadPosition::new(reader),
             containers: VecDeque::new(),
@@ -143,7 +144,7 @@ impl<'de> Decoder<'de> {
         }
     }
 
-    pub fn response(reader: &'de mut dyn Read, api_key: i16, api_version: i16) -> Self {
+    pub(crate) fn response(reader: &'de mut dyn Read, api_key: i16, api_version: i16) -> Self {
         Self {
             reader: ReadPosition::new(reader),
             containers: VecDeque::new(),

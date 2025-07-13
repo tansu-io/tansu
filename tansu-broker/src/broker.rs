@@ -36,6 +36,7 @@ use crate::{
     otel,
 };
 use api_versions::ApiVersionsRequest;
+use bytes::Bytes;
 use create_topic::CreateTopic;
 use delete_records::DeleteRecordsRequest;
 use delete_topics::DeleteTopicsRequest;
@@ -374,7 +375,7 @@ where
         }
     }
 
-    async fn process_request(&mut self, _peer: &SocketAddr, input: &[u8]) -> Result<Vec<u8>> {
+    async fn process_request(&mut self, _peer: &SocketAddr, input: &[u8]) -> Result<Bytes> {
         match Frame::request_from_bytes(input)? {
             Frame {
                 header:

@@ -1791,8 +1791,8 @@ impl Storage for Postgres {
                 let mut record_builder = Record::builder()
                     .offset_delta(offset_delta)
                     .timestamp_delta(timestamp_delta)
-                    .key(k.into())
-                    .value(v.into());
+                    .key(k)
+                    .value(v);
 
                 for header in self
                     .prepare_query(
@@ -1816,14 +1816,14 @@ impl Storage for Postgres {
                         .try_get::<_, Option<&[u8]>>(0)
                         .inspect_err(|err| error!(?err))?
                     {
-                        header_builder = header_builder.key(k.to_vec());
+                        header_builder = header_builder.key(Bytes::copy_from_slice(k));
                     }
 
                     if let Some(v) = header
                         .try_get::<_, Option<&[u8]>>(1)
                         .inspect_err(|err| error!(?err))?
                     {
-                        header_builder = header_builder.value(v.to_vec());
+                        header_builder = header_builder.value(Bytes::copy_from_slice(v));
                     }
 
                     record_builder = record_builder.header(header_builder);

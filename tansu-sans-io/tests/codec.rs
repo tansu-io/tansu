@@ -16,7 +16,7 @@ fn api_versions_request_v3_000() -> Result<()> {
 
     assert_eq!(
         expected,
-        Frame::request_from_bytes(&expected)
+        Frame::request_from_bytes(&expected[..])
             .and_then(|frame| Frame::request(frame.header, frame.body))?
     );
 
@@ -44,7 +44,7 @@ fn api_versions_response_v1_000() -> Result<()> {
 
     assert_eq!(
         expected,
-        Frame::response_from_bytes(&expected, api_key, api_version)
+        Frame::response_from_bytes(&expected[..], api_key, api_version)
             .and_then(|frame| Frame::response(frame.header, frame.body, api_key, api_version))?
     );
 
@@ -80,7 +80,7 @@ fn api_versions_response_v3_000() -> Result<()> {
 
     assert_eq!(
         expected,
-        Frame::response_from_bytes(&expected, api_key, api_version)
+        Frame::response_from_bytes(&expected[..], api_key, api_version)
             .and_then(|frame| Frame::response(frame.header, frame.body, api_key, api_version))?
     );
 
@@ -100,7 +100,7 @@ fn create_topics_request_v7_000() -> Result<()> {
 
     assert_eq!(
         expected,
-        Frame::request_from_bytes(&expected)
+        Frame::request_from_bytes(&expected[..])
             .inspect(|decoded| debug!(?decoded))
             .and_then(|frame| Frame::request(frame.header, frame.body))?
     );
@@ -174,7 +174,7 @@ fn create_topics_response_v7_000() -> Result<()> {
 
     assert_eq!(
         expected,
-        Frame::response_from_bytes(&expected, api_key, api_version)
+        Frame::response_from_bytes(&expected[..], api_key, api_version)
             .and_then(|frame| Frame::response(frame.header, frame.body, api_key, api_version))?
     );
 
@@ -193,7 +193,7 @@ fn delete_topics_request_v6_000() -> Result<()> {
 
     assert_eq!(
         expected,
-        Frame::request_from_bytes(&expected)
+        Frame::request_from_bytes(&expected[..])
             .and_then(|frame| Frame::request(frame.header, frame.body))?
     );
 
@@ -211,7 +211,7 @@ fn describe_cluster_request_v1_000() -> Result<()> {
 
     assert_eq!(
         expected,
-        Frame::request_from_bytes(&expected)
+        Frame::request_from_bytes(&expected[..])
             .and_then(|frame| Frame::request(frame.header, frame.body))?
     );
 
@@ -229,7 +229,7 @@ fn describe_configs_request_v4_000() -> Result<()> {
 
     assert_eq!(
         expected,
-        Frame::request_from_bytes(&expected)
+        Frame::request_from_bytes(&expected[..])
             .and_then(|frame| Frame::request(frame.header, frame.body))?
     );
 
@@ -361,7 +361,7 @@ fn describe_configs_response_v4_001() -> Result<()> {
 
     assert_eq!(
         expected,
-        Frame::response_from_bytes(&expected, api_key, api_version)
+        Frame::response_from_bytes(&expected[..], api_key, api_version)
             .and_then(|frame| Frame::response(frame.header, frame.body, api_key, api_version))?
     );
 
@@ -378,7 +378,7 @@ fn describe_groups_request_v1_000() -> Result<()> {
 
     assert_eq!(
         expected,
-        Frame::request_from_bytes(&expected)
+        Frame::request_from_bytes(&expected[..])
             .and_then(|frame| Frame::request(frame.header, frame.body))?
     );
 
@@ -399,7 +399,7 @@ fn describe_groups_response_v1_000() -> Result<()> {
 
     assert_eq!(
         expected,
-        Frame::response_from_bytes(&expected, api_key, api_version)
+        Frame::response_from_bytes(&expected[..], api_key, api_version)
             .and_then(|frame| Frame::response(frame.header, frame.body, api_key, api_version))?
     );
 
@@ -418,7 +418,7 @@ fn fetch_request_v6_000() -> Result<()> {
 
     assert_eq!(
         expected,
-        Frame::request_from_bytes(&expected)
+        Frame::request_from_bytes(&expected[..])
             .and_then(|frame| Frame::request(frame.header, frame.body))?
     );
 
@@ -442,7 +442,7 @@ fn fetch_request_v12_000() -> Result<()> {
 
     assert_eq!(
         expected,
-        Frame::request_from_bytes(&expected)
+        Frame::request_from_bytes(&expected[..])
             .and_then(|frame| Frame::request(frame.header, frame.body))?
     );
 
@@ -461,7 +461,7 @@ fn fetch_request_v16_000() -> Result<()> {
 
     assert_eq!(
         expected,
-        Frame::request_from_bytes(&expected)
+        Frame::request_from_bytes(&expected[..])
             .and_then(|frame| Frame::request(frame.header, frame.body))?
     );
 
@@ -487,7 +487,7 @@ fn fetch_response_v12_000() -> Result<()> {
 
     assert_eq!(
         expected,
-        Frame::response_from_bytes(&expected, api_key, api_version)
+        Frame::response_from_bytes(&expected[..], api_key, api_version)
             .and_then(|frame| Frame::response(frame.header, frame.body, api_key, api_version))?
     );
 
@@ -517,7 +517,7 @@ fn fetch_response_v12_001() -> Result<()> {
 
     assert_eq!(
         expected,
-        Frame::response_from_bytes(&expected, api_key, api_version)
+        Frame::response_from_bytes(&expected[..], api_key, api_version)
             .and_then(|frame| Frame::response(frame.header, frame.body, api_key, api_version))?
     );
 
@@ -550,7 +550,7 @@ fn fetch_response_v12_002() -> Result<()> {
 
     assert_eq!(
         expected,
-        Frame::response_from_bytes(&expected, api_key, api_version)
+        Frame::response_from_bytes(&expected[..], api_key, api_version)
             .and_then(|frame| Frame::response(frame.header, frame.body, api_key, api_version))?
     );
 
@@ -567,7 +567,7 @@ fn find_coordinator_request_v1_000() -> Result<()> {
 
     assert_eq!(
         expected,
-        Frame::request_from_bytes(&expected)
+        Frame::request_from_bytes(&expected[..])
             .and_then(|frame| Frame::request(frame.header, frame.body))?
     );
 
@@ -586,7 +586,7 @@ fn find_coordinator_request_v2_000() -> Result<()> {
 
     assert_eq!(
         expected,
-        Frame::request_from_bytes(&expected)
+        Frame::request_from_bytes(&expected[..])
             .and_then(|frame| Frame::request(frame.header, frame.body))?
     );
 
@@ -605,7 +605,7 @@ fn find_coordinator_request_v4_000() -> Result<()> {
 
     assert_eq!(
         expected,
-        Frame::request_from_bytes(&expected)
+        Frame::request_from_bytes(&expected[..])
             .and_then(|frame| Frame::request(frame.header, frame.body))?
     );
 
@@ -627,7 +627,7 @@ fn find_coordinator_response_v1_000() -> Result<()> {
 
     assert_eq!(
         expected,
-        Frame::response_from_bytes(&expected, api_key, api_version)
+        Frame::response_from_bytes(&expected[..], api_key, api_version)
             .and_then(|frame| Frame::response(frame.header, frame.body, api_key, api_version))?
     );
 
@@ -648,7 +648,7 @@ fn find_coordinator_response_v2_000() -> Result<()> {
 
     assert_eq!(
         expected,
-        Frame::response_from_bytes(&expected, api_key, api_version)
+        Frame::response_from_bytes(&expected[..], api_key, api_version)
             .and_then(|frame| Frame::response(frame.header, frame.body, api_key, api_version))?
     );
 
@@ -667,7 +667,7 @@ fn heartbeat_request_v4_000() -> Result<()> {
 
     assert_eq!(
         expected,
-        Frame::request_from_bytes(&expected)
+        Frame::request_from_bytes(&expected[..])
             .and_then(|frame| Frame::request(frame.header, frame.body))?
     );
 
@@ -686,7 +686,7 @@ fn init_producer_id_request_v4_000() -> Result<()> {
 
     assert_eq!(
         expected,
-        Frame::request_from_bytes(&expected)
+        Frame::request_from_bytes(&expected[..])
             .and_then(|frame| Frame::request(frame.header, frame.body))?
     );
 
@@ -710,7 +710,7 @@ fn join_group_request_v5_000() -> Result<()> {
 
     assert_eq!(
         expected,
-        Frame::request_from_bytes(&expected)
+        Frame::request_from_bytes(&expected[..])
             .and_then(|frame| Frame::request(frame.header, frame.body))?
     );
 
@@ -739,7 +739,7 @@ fn join_group_response_v5_000() -> Result<()> {
 
     assert_eq!(
         expected,
-        Frame::response_from_bytes(&expected, api_key, api_version)
+        Frame::response_from_bytes(&expected[..], api_key, api_version)
             .and_then(|frame| Frame::response(frame.header, frame.body, api_key, api_version))?
     );
 
@@ -763,7 +763,7 @@ fn join_group_request_v9_000() -> Result<()> {
 
     assert_eq!(
         expected,
-        Frame::request_from_bytes(&expected)
+        Frame::request_from_bytes(&expected[..])
             .and_then(|frame| Frame::request(frame.header, frame.body))?
     );
 
@@ -784,7 +784,7 @@ fn leave_group_request_v5_000() -> Result<()> {
 
     assert_eq!(
         expected,
-        Frame::request_from_bytes(&expected)
+        Frame::request_from_bytes(&expected[..])
             .and_then(|frame| Frame::request(frame.header, frame.body))?
     );
 
@@ -802,7 +802,7 @@ fn list_groups_request_v4_000() -> Result<()> {
 
     assert_eq!(
         expected,
-        Frame::request_from_bytes(&expected)
+        Frame::request_from_bytes(&expected[..])
             .and_then(|frame| Frame::request(frame.header, frame.body))?
     );
 
@@ -824,7 +824,7 @@ fn list_offsets_response_v0_000() -> Result<()> {
 
     assert_eq!(
         expected,
-        Frame::response_from_bytes(&expected, api_key, api_version)
+        Frame::response_from_bytes(&expected[..], api_key, api_version)
             .and_then(|frame| Frame::response(frame.header, frame.body, api_key, api_version))?
     );
 
@@ -843,7 +843,7 @@ fn list_partition_reassignments_request_v0_000() -> Result<()> {
 
     assert_eq!(
         expected,
-        Frame::request_from_bytes(&expected)
+        Frame::request_from_bytes(&expected[..])
             .and_then(|frame| Frame::request(frame.header, frame.body))?
     );
 
@@ -861,7 +861,7 @@ fn metadata_request_v1_000() -> Result<()> {
 
     assert_eq!(
         expected,
-        Frame::request_from_bytes(&expected)
+        Frame::request_from_bytes(&expected[..])
             .and_then(|frame| Frame::request(frame.header, frame.body))?
     );
 
@@ -889,7 +889,7 @@ fn metadata_response_v1_0000() -> Result<()> {
 
     assert_eq!(
         expected,
-        Frame::response_from_bytes(&expected, api_key, api_version)
+        Frame::response_from_bytes(&expected[..], api_key, api_version)
             .and_then(|frame| Frame::response(frame.header, frame.body, api_key, api_version))?
     );
 
@@ -908,7 +908,7 @@ fn metadata_request_v12_000() -> Result<()> {
 
     assert_eq!(
         expected,
-        Frame::request_from_bytes(&expected)
+        Frame::request_from_bytes(&expected[..])
             .and_then(|frame| Frame::request(frame.header, frame.body))?
     );
 
@@ -926,7 +926,7 @@ fn metadata_request_v12_001() -> Result<()> {
 
     assert_eq!(
         expected,
-        Frame::request_from_bytes(&expected)
+        Frame::request_from_bytes(&expected[..])
             .and_then(|frame| Frame::request(frame.header, frame.body))?
     );
 
@@ -949,7 +949,7 @@ fn metadata_response_v12_0000() -> Result<()> {
 
     assert_eq!(
         expected,
-        Frame::response_from_bytes(&expected, api_key, api_version)
+        Frame::response_from_bytes(&expected[..], api_key, api_version)
             .and_then(|frame| Frame::response(frame.header, frame.body, api_key, api_version))?
     );
 
@@ -971,7 +971,7 @@ fn offset_commit_request_v9_000() -> Result<()> {
 
     assert_eq!(
         expected,
-        Frame::request_from_bytes(&expected)
+        Frame::request_from_bytes(&expected[..])
             .and_then(|frame| Frame::request(frame.header, frame.body))?
     );
 
@@ -990,7 +990,7 @@ fn offset_fetch_request_v3_000() -> Result<()> {
 
     assert_eq!(
         expected,
-        Frame::request_from_bytes(&expected)
+        Frame::request_from_bytes(&expected[..])
             .and_then(|frame| Frame::request(frame.header, frame.body))?
     );
 
@@ -1010,7 +1010,7 @@ fn offset_fetch_request_v9_000() -> Result<()> {
 
     assert_eq!(
         expected,
-        Frame::request_from_bytes(&expected)
+        Frame::request_from_bytes(&expected[..])
             .and_then(|frame| Frame::request(frame.header, frame.body))?
     );
 
@@ -1037,7 +1037,7 @@ fn offset_fetch_response_v7_000() -> Result<()> {
 
     assert_eq!(
         expected,
-        Frame::response_from_bytes(&expected, api_key, api_version)
+        Frame::response_from_bytes(&expected[..], api_key, api_version)
             .and_then(|frame| Frame::response(frame.header, frame.body, api_key, api_version))?
     );
 
@@ -1055,7 +1055,7 @@ fn offset_for_leader_request_v0_000() -> Result<()> {
 
     assert_eq!(
         expected,
-        Frame::request_from_bytes(&expected)
+        Frame::request_from_bytes(&expected[..])
             .and_then(|frame| Frame::request(frame.header, frame.body))?
     );
 
@@ -1080,7 +1080,7 @@ fn produce_request_v3_000() -> Result<()> {
 
     assert_eq!(
         expected,
-        Frame::request_from_bytes(&expected)
+        Frame::request_from_bytes(&expected[..])
             .and_then(|frame| Frame::request(frame.header, frame.body))?
     );
 
@@ -1102,7 +1102,7 @@ fn produce_request_v9_000() -> Result<()> {
 
     assert_eq!(
         expected,
-        Frame::request_from_bytes(&expected)
+        Frame::request_from_bytes(&expected[..])
             .and_then(|frame| Frame::request(frame.header, frame.body))?
     );
 
@@ -1124,7 +1124,7 @@ fn produce_response_v9_000() -> Result<()> {
 
     assert_eq!(
         expected,
-        Frame::response_from_bytes(&expected, api_key, api_version)
+        Frame::response_from_bytes(&expected[..], api_key, api_version)
             .and_then(|frame| Frame::response(frame.header, frame.body, api_key, api_version))?
     );
 
@@ -1146,7 +1146,7 @@ pub fn sync_group_request_v5_000() -> Result<()> {
 
     assert_eq!(
         expected,
-        Frame::request_from_bytes(&expected)
+        Frame::request_from_bytes(&expected[..])
             .and_then(|frame| Frame::request(frame.header, frame.body))?
     );
 

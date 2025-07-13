@@ -2,6 +2,7 @@ use crate::{Error, Kind, MessageKind, Result, VersionRange};
 use serde_json::Value;
 use std::str::FromStr;
 
+// A Wrapped JSON type
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Wv<'a>(&'a Value);
 

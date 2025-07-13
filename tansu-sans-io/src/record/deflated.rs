@@ -1,3 +1,4 @@
+//! Deflated (compressed) Kafka Records
 use std::fmt::Formatter;
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
@@ -34,6 +35,7 @@ impl TryFrom<crate::record::inflated::Frame> for Frame {
 }
 
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+/// A deflated (compressed) batch of Kafka records
 pub struct Batch {
     pub base_offset: i64,
     pub batch_length: i32,
@@ -69,7 +71,7 @@ impl Batch {
 }
 
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
-pub struct CrcData {
+struct CrcData {
     pub attributes: i16,
     pub last_offset_delta: i32,
     pub base_timestamp: i64,

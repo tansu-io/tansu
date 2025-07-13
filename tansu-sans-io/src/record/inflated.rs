@@ -438,130 +438,6 @@ mod tests {
     use std::io::Cursor;
 
     #[test]
-    fn compaction() -> Result<()> {
-        let keys: Vec<String> = (0..=6).map(|i| format!("k{i}")).collect();
-        let values: Vec<String> = (0..=11).map(|i| format!("v{i}")).collect();
-
-        let base_offset = 98789;
-        let base_timestamp = 1721978771334;
-
-        let indexes = [
-            (1, 1),
-            (2, 2),
-            (1, 3),
-            (1, 4),
-            (3, 5),
-            (2, 6),
-            (4, 7),
-            (5, 8),
-            (5, 9),
-            (2, 10),
-            (6, 11),
-        ];
-
-        let mut builder = Batch::builder()
-            .base_offset(base_offset)
-            .partition_leader_epoch(-1)
-            .magic(2)
-            .attributes(0)
-            .last_offset_delta(i32::try_from(indexes.len() - 1)?)
-            .base_timestamp(base_timestamp)
-            .max_timestamp(base_timestamp + i64::try_from(indexes.len())? - 1)
-            .producer_id(-1)
-            .producer_epoch(0)
-            .base_sequence(0);
-
-        for (offset_delta, (key_index, value_index)) in indexes.into_iter().enumerate() {
-            builder = builder.record(
-                Record::builder()
-                    .offset_delta(i32::try_from(offset_delta)?)
-                    .timestamp_delta(i64::try_from(offset_delta)?)
-                    .key(keys[key_index].as_bytes().into())
-                    .value(values[value_index].as_bytes().into()),
-            );
-        }
-
-        let compacted = builder
-            .build()
-            .and_then(|batch| batch.compact(&[].into()))?;
-
-        assert_eq!(5, compacted.records);
-
-        let retained: BTreeSet<i32> = compacted
-            .batch
-            .records
-            .iter()
-            .map(|record| record.offset_delta)
-            .collect();
-
-        assert_eq!(BTreeSet::from([3, 4, 6, 8, 9, 10]), retained);
-
-        Ok(())
-    }
-
-    #[test]
-    fn compaction_with_key_in_head_of_log() -> Result<()> {
-        let keys: Vec<String> = (0..=6).map(|i| format!("k{i}")).collect();
-        let values: Vec<String> = (0..=11).map(|i| format!("v{i}")).collect();
-
-        let base_offset = 98789;
-        let base_timestamp = 1721978771334;
-
-        let indexes = [
-            (1, 1),
-            (2, 2),
-            (1, 3),
-            (1, 4),
-            (3, 5),
-            (2, 6),
-            (4, 7),
-            (5, 8),
-            (5, 9),
-            (2, 10),
-            (6, 11),
-        ];
-
-        let mut builder = Batch::builder()
-            .base_offset(base_offset)
-            .partition_leader_epoch(-1)
-            .magic(2)
-            .attributes(0)
-            .last_offset_delta(i32::try_from(indexes.len() - 1)?)
-            .base_timestamp(base_timestamp)
-            .max_timestamp(base_timestamp + i64::try_from(indexes.len())? - 1)
-            .producer_id(-1)
-            .producer_epoch(0)
-            .base_sequence(0);
-
-        for (offset_delta, (key_index, value_index)) in indexes.into_iter().enumerate() {
-            builder = builder.record(
-                Record::builder()
-                    .offset_delta(i32::try_from(offset_delta)?)
-                    .timestamp_delta(i64::try_from(offset_delta)?)
-                    .key(keys[key_index].as_bytes().into())
-                    .value(values[value_index].as_bytes().into()),
-            );
-        }
-
-        let compacted = builder.build().and_then(|batch| {
-            batch.compact(&[Bytes::copy_from_slice(keys[6].as_bytes())].into())
-        })?;
-
-        assert_eq!(6, compacted.records);
-
-        let retained: BTreeSet<i32> = compacted
-            .batch
-            .records
-            .iter()
-            .map(|record| record.offset_delta)
-            .collect();
-
-        assert_eq!(BTreeSet::from([3, 4, 6, 8, 9]), retained);
-
-        Ok(())
-    }
-
-    #[test]
     fn batch() -> Result<()> {
         let decoded = Batch::builder()
             .base_offset(0)
@@ -574,7 +450,7 @@ mod tests {
             .producer_id(1)
             .producer_epoch(0)
             .base_sequence(1)
-            .record(Record::builder().value(vec![100, 101, 102].into()))
+            .record(Record::builder().value(Some(Bytes::from(vec![100, 101, 102]))))
             .build()?;
 
         assert_eq!(decoded.batch_length, 59);
@@ -602,7 +478,7 @@ mod tests {
             .producer_id(1)
             .producer_epoch(0)
             .base_sequence(1)
-            .record(Record::builder().value(vec![100, 101, 102].into()))
+            .record(Record::builder().value(Some(Bytes::from(vec![100, 101, 102]))))
             .build()?;
 
         let mut c = Cursor::new(&mut encoded);
@@ -633,7 +509,7 @@ mod tests {
             .producer_id(1)
             .producer_epoch(0)
             .base_sequence(1)
-            .record(Record::builder().value(vec![100, 101, 102].into()))
+            .record(Record::builder().value(Some(Bytes::from(vec![100, 101, 102]))))
             .build()?;
 
         let mut c = Cursor::new(&mut encoded);
@@ -647,8 +523,8 @@ mod tests {
 
     #[test]
     fn build_batch_records() -> Result<()> {
-        let keys: Vec<String> = (0..=6).map(|i| format!("k{i}")).collect();
-        let values: Vec<String> = (0..=11).map(|i| format!("v{i}")).collect();
+        let keys: Vec<_> = (0..=6).map(|i| format!("k{i}")).map(Bytes::from).collect();
+        let values: Vec<_> = (0..=11).map(|i| format!("v{i}")).map(Bytes::from).collect();
 
         let mut builder = Batch::builder();
         let indexes = [
@@ -669,8 +545,8 @@ mod tests {
             builder = builder.record(
                 Record::builder()
                     .offset_delta(i32::try_from(offset_delta)?)
-                    .key(keys[key_index].as_bytes().into())
-                    .value(values[value_index].as_bytes().into()),
+                    .key(Some(keys[key_index].clone()))
+                    .value(Some(values[value_index].clone())),
             );
         }
 

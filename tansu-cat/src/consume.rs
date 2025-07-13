@@ -332,7 +332,7 @@ impl Connection {
             .await
             .inspect_err(|err| debug!(?err))?;
 
-        let response = Frame::response_from_bytes(&response_buffer, api_key, api_version)
+        let response = Frame::response_from_bytes(&response_buffer[..], api_key, api_version)
             .inspect_err(|err| debug!(?err))?;
 
         debug!(?response);

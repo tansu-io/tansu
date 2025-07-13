@@ -1,3 +1,138 @@
+//! Kafka Record
+//!
+//! Constructing a [`Record`] using a builder:
+//!
+//! ```
+//! use bytes::Bytes;
+//! use tansu_sans_io::record::{Header, Record};
+//!
+//! let record = Record::builder()
+//!     .key(Some(Bytes::from_static(b"message")))
+//!     .value(Some(Bytes::from_static(b"hello world!")))
+//!     .header(
+//!         Header::builder()
+//!             .key(Bytes::from_static(b"format"))
+//!             .value(Bytes::from_static(b"text")),
+//!     )
+//!     .header(
+//!         Header::builder()
+//!             .key(Bytes::from_static(b"importance"))
+//!             .value(Bytes::from_static(b"high")),
+//!     );
+//!
+//! ```
+//!
+//! An [`inflated`] Kafka record batch must be [`deflated`] before it can be sent using [`Compression`](super::Compression) with a [`ProduceRequest`](super::ProduceRequest):
+//!
+//! ```
+//! # use tansu_sans_io::Error;
+//! # pub fn main() -> Result<(), Error> {
+//! #
+//! use bytes::Bytes;
+//! use tansu_sans_io::{
+//!     ApiKey as _, BatchAttribute, Compression, Frame, Header, ProduceRequest,
+//!     produce_request::{PartitionProduceData, TopicProduceData},
+//!     record::{self, deflated, inflated},
+//! };
+//!
+//! let batch = inflated::Batch::builder()
+//!     .attributes(
+//!         BatchAttribute::default()
+//!             .compression(Compression::Lz4)
+//!             .into(),
+//!     )
+//!     .record(record::Record::builder().value(Bytes::from_static(b"hello world!").into()))
+//!     .build()
+//!     .and_then(deflated::Batch::try_from)?;
+//!
+//! let produce_request = ProduceRequest::default()
+//!     .topic_data(Some(
+//!         [TopicProduceData::default()
+//!             .name("test".into())
+//!             .partition_data(Some(
+//!                 [PartitionProduceData::default()
+//!                     .index(0)
+//!                     .records(Some(deflated::Frame {
+//!                         batches: vec![batch],
+//!                     }))]
+//!                 .into(),
+//!             ))]
+//!         .into(),
+//!     ))
+//!     .into();
+//!
+//! let correlation_id = 12321;
+//!
+//! let request = Frame::request(
+//!     Header::Request {
+//!         api_key: ProduceRequest::KEY,
+//!         api_version: 6,
+//!         correlation_id,
+//!         client_id: Some("tansu".into()),
+//!     },
+//!     produce_request,
+//! )?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! A [`deflated`] Kafka record batch from a [`FetchRequest`](super::FetchRequest) must be [`inflated`] before it can be used:
+//!
+//! ```
+//! # use tansu_sans_io::Error;
+//! # pub fn main() -> Result<(), Error> {
+//! #
+//! use bytes::Bytes;
+//! use tansu_sans_io::{ApiKey as _, FetchResponse, Frame, record::inflated};
+//!
+//! let api_key = FetchResponse::KEY;
+//! let api_version = 16;
+//!
+//! let v = vec![
+//!     0, 0, 0, 186, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 28, 205, 172, 195, 142, 19,
+//!     71, 71, 182, 128, 13, 18, 65, 142, 210, 222, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+//!     0, 0, 0, 0, 0, 0, 0, 1, 255, 255, 255, 255, 255, 255, 255, 255, 1, 0, 0, 0, 0, 74, 0, 0, 0,
+//!     0, 0, 0, 0, 0, 0, 0, 0, 61, 255, 255, 255, 255, 2, 153, 143, 24, 144, 0, 0, 0, 0, 0, 0, 0,
+//!     0, 1, 144, 238, 148, 84, 54, 0, 0, 1, 144, 238, 148, 84, 54, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0,
+//!     0, 0, 0, 0, 0, 0, 0, 1, 22, 0, 0, 0, 1, 10, 112, 111, 105, 117, 121, 0, 3, 0, 13, 255, 255,
+//!     255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 1, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2,
+//!     13, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0,
+//! ];
+//!
+//! let fetch_response = Frame::response_from_bytes(&v[..], api_key, api_version)
+//!     .and_then(|message_frame| FetchResponse::try_from(message_frame.body))?;
+//!
+//! // first batch, from the first partition of the first topic
+//! // in the response:
+//!
+//! let deflated = fetch_response
+//!     .responses
+//!     .as_ref()
+//!     .and_then(|topics| topics.first())
+//!     .and_then(|topic| topic.partitions.as_ref())
+//!     .and_then(|partitions| partitions.first())
+//!     .and_then(|partition| partition.records.as_ref())
+//!     .map(|record_frame| record_frame.batches.as_slice())
+//!     .and_then(|batches| batches.first())
+//!     .expect("deflated batch");
+//!
+//! // we just have raw record data at this point:
+//! assert_eq!(12, deflated.record_data.len());
+//!
+//! // inflate the batch:
+//! let inflated = inflated::Batch::try_from(deflated)?;
+//!
+//! // first record in the inflated batch:
+//! assert_eq!(
+//!     Some(Bytes::from_static(b"poiuy")),
+//!     inflated
+//!         .records
+//!         .first()
+//!         .and_then(|first| first.value.clone())
+//! );
+//! # Ok(())
+//! # }
+//! ```
 pub(crate) mod codec;
 pub mod deflated;
 pub mod header;
@@ -168,13 +303,19 @@ impl Builder {
     }
 
     #[must_use]
-    pub fn key(self, key: Octets) -> Self {
-        Self { key, ..self }
+    pub fn key(self, key: Option<Bytes>) -> Self {
+        Self {
+            key: key.into(),
+            ..self
+        }
     }
 
     #[must_use]
-    pub fn value(self, value: Octets) -> Self {
-        Self { value, ..self }
+    pub fn value(self, value: Option<Bytes>) -> Self {
+        Self {
+            value: value.into(),
+            ..self
+        }
     }
 
     #[must_use]
@@ -206,7 +347,7 @@ mod tests {
         assert_eq!(
             9,
             Record::builder()
-                .value(vec![100, 101, 102].into())
+                .value(Some(Bytes::from(vec![100, 101, 102])))
                 .size_in_bytes()?
         );
         Ok(())
@@ -214,7 +355,7 @@ mod tests {
 
     #[test]
     fn serialize_record_builder() -> Result<()> {
-        let rb = Record::builder().value(vec![100, 101, 102].into());
+        let rb = Record::builder().value(Some(Bytes::from(vec![100, 101, 102])));
 
         let mut c = Cursor::new(vec![]);
         let mut e = Encoder::new(&mut c);
@@ -226,14 +367,15 @@ mod tests {
 
     #[test]
     fn try_from_record_builder() -> Result<()> {
-        let record = Record::try_from(Record::builder().value(vec![100, 101, 102].into()))?;
+        let record =
+            Record::try_from(Record::builder().value(Some(Bytes::from(vec![100, 101, 102]))))?;
         assert_eq!(9, record.length);
         Ok(())
     }
 
     #[test]
     fn sequence_of_record_builder() -> Result<()> {
-        let rb = Record::builder().value(vec![100, 101, 102].into());
+        let rb = Record::builder().value(Some(Bytes::from(vec![100, 101, 102])));
         let records = Sequence::from(vec![rb.clone()]);
         assert_eq!(14, records.size_in_bytes()?);
 

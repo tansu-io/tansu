@@ -6216,6 +6216,7 @@ dependencies = [
 name = "tansu-cat"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "futures",
  "futures-core",
  "futures-util",

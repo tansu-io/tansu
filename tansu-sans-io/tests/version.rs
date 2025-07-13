@@ -57,7 +57,7 @@ fn join_group_response() -> Result<()> {
 
     debug!(?encoded);
 
-    match Frame::response_from_bytes(&encoded, api_key, api_version) {
+    match Frame::response_from_bytes(&encoded[..], api_key, api_version) {
         Ok(Frame {
             header: Header::Response { .. },
             body:
@@ -151,7 +151,7 @@ fn offset_fetch_response() -> Result<()> {
 
     let encoded = Frame::response(header, offset_fetch_response.into(), api_key, api_version)?;
 
-    match Frame::response_from_bytes(&encoded, api_key, api_version) {
+    match Frame::response_from_bytes(&encoded[..], api_key, api_version) {
         Ok(Frame {
             header: Header::Response { .. },
             body:

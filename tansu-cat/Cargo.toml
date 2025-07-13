@@ -6,6 +6,7 @@ license.workspace = true
 publish = false
 
 [dependencies]
+bytes.workspace = true
 futures-core.workspace = true
 futures-util.workspace = true
 futures.workspace = true

@@ -36,13 +36,13 @@ pub struct Builder {
 
 impl Builder {
     #[must_use]
-    pub fn key(mut self, key: Vec<u8>) -> Self {
+    pub fn key(mut self, key: Bytes) -> Self {
         self.key = Octets::from(Some(key));
         self
     }
 
     #[must_use]
-    pub fn value(mut self, value: Vec<u8>) -> Self {
+    pub fn value(mut self, value: Bytes) -> Self {
         self.value = Octets::from(Some(value));
         self
     }

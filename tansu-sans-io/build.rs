@@ -558,6 +558,7 @@ fn body_enum(messages: &[Message], include_tag: bool) -> TokenStream {
             #[derive(Clone, Debug, PartialEq, PartialOrd, serde::Deserialize, serde::Serialize)]
             #[serde(from = "mezzanine::Body")]
             #[serde(into = "mezzanine::Body")]
+            #[doc = "A Kafka API request or response message body."]
             pub enum Body {
                 #(#variants),*
             }
