@@ -17,32 +17,51 @@ members = [
 
 [workspace.package]
 edition = "2024"
-version = "0.1.0"
-license = "AGPL-3.0-or-later"
-license-file = "LICENSE"
+version = "0.4.1"
+license = "Apache-2.0"
+homepage = "https://tansu.io"
+repository = "https://github.com/tansu-io/tansu"
+keywords = [
+    "arrow",
+    "datalake",
+    "delta",
+    "deltalake",
+    "kafka",
+    "parquet",
+    "postgres",
+    "s3",
+]
+authors = ["Peter Morgan <peter.morgan@tansu.io>"]
+include = [
+    "benches/*.rs",
+    "src/**/*.rs",
+    "Cargo.toml",
+    "LICENSE.txt",
+    "NOTICE.txt",
+]
 
-# [workspace.lints.clippy]
-# all = "warn"
+[workspace.lints.clippy]
+all = "warn"
 
-# [workspace.lints.rust]
-# deprecated_in_future = "warn"
-# elided_lifetimes_in_paths = "deny"
-# missing_copy_implementations = "warn"
-# missing_debug_implementations = "warn"
-# non_ascii_idents = "forbid"
-# nonstandard_style = { level = "deny", priority = -1 }
-# rust_2018_idioms = { level = "deny", priority = -1 }
-# unreachable_pub = "warn"
-# unsafe_code = "forbid"
-# unused_import_braces = "warn"
-# unused_labels = "warn"
-# unused_lifetimes = "warn"
-# unused_qualifications = "warn"
-# unused_results = "warn"
+[workspace.lints.rust]
+deprecated_in_future = "warn"
+elided_lifetimes_in_paths = "deny"
+missing_copy_implementations = "warn"
+missing_debug_implementations = "warn"
+non_ascii_idents = "forbid"
+nonstandard_style = { level = "deny", priority = -1 }
+rust_2018_idioms = { level = "deny", priority = -1 }
+unreachable_pub = "warn"
+unsafe_code = "forbid"
+unused_import_braces = "warn"
+unused_labels = "warn"
+unused_lifetimes = "warn"
+unused_qualifications = "warn"
+unused_results = "warn"
 
-# [workspace.lints.rustdoc]
-# broken_intra_doc_links = "deny"
-# private_intra_doc_links = "deny"
+[workspace.lints.rustdoc]
+broken_intra_doc_links = "deny"
+private_intra_doc_links = "deny"
 
 [workspace.dependencies]
 anyhow = "1.0.94"

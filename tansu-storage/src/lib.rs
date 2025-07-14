@@ -1,17 +1,26 @@
 // Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
+// http://www.apache.org/licenses/LICENSE-2.0
 //
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+//! Tansu Storage Abstraction
+//!
+//! Provides an abstraction over Storage. Currently implemented as:
+//! - [`StorageContainer`], which implements [`Storage`] and can be configured to either use [`Postgres`] or [`DynoStore`].
+//!
+//! The underlying storage implementations of [`Storage`]:
+//! - [`Postgres`]
+//! - [`DynoStore`]
+//!
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -74,11 +83,11 @@ use tracing_subscriber::filter::ParseError;
 use uuid::Uuid;
 
 pub mod dynostore;
-pub mod index;
-pub mod os;
 pub mod pg;
-pub mod segment;
 
+mod os;
+
+/// Storage Errors
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
     #[error("api")]
@@ -202,6 +211,9 @@ impl From<tansu_schema::Error> for Error {
 
 pub type Result<T, E = Error> = result::Result<T, E>;
 
+/// Topic Partition (topition)
+///
+/// A topic partition pair.
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct Topition {
     topic: String,
@@ -289,6 +301,9 @@ impl From<&Topition> for PathBuf {
     }
 }
 
+/// Topic Partition Offset
+///
+/// A topic partition with an offset.
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct TopitionOffset {
     topition: Topition,
@@ -316,6 +331,10 @@ impl From<&TopitionOffset> for PathBuf {
     }
 }
 
+/// List Offset Request
+///
+/// An enumeration of offset request types, with conversion from/to an i64 protocol representation.
+///
 #[derive(Copy, Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ListOffsetRequest {
     #[default]
@@ -383,6 +402,9 @@ impl TryFrom<i64> for ListOffsetRequest {
     }
 }
 
+/// Offset Commit Request
+///
+/// A structure representing an [`tansu_sans_io::OffsetCommitRequestPartition](OffsetCommitRequestPartition).
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct OffsetCommitRequest {
     offset: i64,
@@ -417,6 +439,9 @@ impl TryFrom<&OffsetCommitRequestPartition> for OffsetCommitRequest {
     }
 }
 
+/// Topic Id
+///
+/// An enumeration of either the name or UUID of a topic.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum TopicId {
     Name(String),
@@ -514,6 +539,9 @@ impl From<&Topition> for TopicId {
     }
 }
 
+/// Broker Registration Request
+///
+/// A broker will register with storage using this structure.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct BrokerRegistrationRequest {
     pub broker_id: i32,
@@ -548,6 +576,9 @@ impl MetadataResponse {
     }
 }
 
+/// Offset Stage
+///
+/// An offset stage structure represents the `last_stable`, `high_watermark` and `log_start` offsets.
 #[derive(
     Clone, Copy, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize,
 )]
@@ -571,12 +602,16 @@ impl OffsetStage {
     }
 }
 
+/// Group Member
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct GroupMember {
     pub join_response: JoinGroupResponseMember,
     pub last_contact: Option<SystemTime>,
 }
 
+/// Group State
+///
+/// A group is either in the process of [`GroupState::Forming`] or has [`GroupState::Formed`].
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum GroupState {
     Forming {
@@ -633,6 +668,9 @@ impl Default for GroupState {
     }
 }
 
+/// Consumer Group State
+///
+/// A helper type for conversion into [`consumer_group_describe_response::DescribedGroup`].
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum ConsumerGroupState {
     Unknown,
@@ -660,6 +698,9 @@ impl Display for ConsumerGroupState {
     }
 }
 
+/// Group Detail
+///
+/// A helper type that can be easily converted into [`consumer_group_describe_response::DescribedGroup`].
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct GroupDetail {
     pub session_timeout_ms: i32,
@@ -736,6 +777,10 @@ pub enum GroupDetailResponse {
     Found(GroupDetail),
 }
 
+/// NamedGroupDetail
+///
+/// A helper type that can be easily converted into [`consumer_group_describe_response::DescribedGroup`]
+/// or [`describe_groups_response::DescribedGroup`].
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct NamedGroupDetail {
     name: String,
@@ -849,6 +894,7 @@ impl From<&NamedGroupDetail> for describe_groups_response::DescribedGroup {
     }
 }
 
+/// Topition (topic partition) Detail
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct TopitionDetail {
     error: ErrorCode,
@@ -856,18 +902,23 @@ pub struct TopitionDetail {
     partitions: Option<Vec<PartitionDetail>>,
 }
 
+/// Partition Detail
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct PartitionDetail {
     error: ErrorCode,
     partition_index: i32,
 }
 
+/// Version
+///
+/// Representing an `e_tag` and `version` used in conditional writes to an object store.
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct Version {
     e_tag: Option<String>,
     version: Option<String>,
 }
 
+/// Producer Id Response
 #[derive(Copy, Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct ProducerIdResponse {
     pub error: ErrorCode,
@@ -885,6 +936,9 @@ impl Default for ProducerIdResponse {
     }
 }
 
+/// Transaction Add Partitions Request
+///
+/// For protocol versions 0..=3 using `AddPartitionsToTxnTopic`, thereafter using `AddPartitionsToTxnTransaction`.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum TxnAddPartitionsRequest {
     VersionZeroToThree {
@@ -932,6 +986,9 @@ impl TryFrom<Body> for TxnAddPartitionsRequest {
     }
 }
 
+/// Transaction Add Partitions Response
+///
+/// For protocol versions 0..=3 using `AddPartitionsToTxnTopic`, thereafter using `AddPartitionsToTxnTransaction`.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum TxnAddPartitionsResponse {
     VersionZeroToThree(Vec<AddPartitionsToTxnTopicResult>),
@@ -954,6 +1011,7 @@ impl TxnAddPartitionsResponse {
     }
 }
 
+/// Transaction Offset Commit Request
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct TxnOffsetCommitRequest {
     pub transaction_id: String,
@@ -966,6 +1024,7 @@ pub struct TxnOffsetCommitRequest {
     pub topics: Vec<TxnOffsetCommitRequestTopic>,
 }
 
+/// Transaction State
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum TxnState {
     Begin,
@@ -1019,34 +1078,39 @@ impl From<TxnState> for String {
     }
 }
 
-#[async_trait]
-pub trait StorageProvider {
-    async fn provide_storage(&mut self) -> impl Storage;
-}
-
+/// Storage
+///
+/// The Core storage abstraction. All storage engines implement this type.
 #[async_trait]
 pub trait Storage: Clone + Debug + Send + Sync + 'static {
+    /// On startup a broker will register with storage.
     async fn register_broker(
         &mut self,
         broker_registration: BrokerRegistrationRequest,
     ) -> Result<()>;
 
+    /// Create a topic on this storage.
     async fn create_topic(&mut self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid>;
 
+    /// Incrementally alter a resource on this storage.
     async fn incremental_alter_resource(
         &mut self,
         resource: AlterConfigsResource,
     ) -> Result<AlterConfigsResourceResponse>;
 
+    /// Delete records on this storage.
     async fn delete_records(
         &mut self,
         topics: &[DeleteRecordsTopic],
     ) -> Result<Vec<DeleteRecordsTopicResult>>;
 
+    /// Delete a topic from this storage.
     async fn delete_topic(&mut self, topic: &TopicId) -> Result<ErrorCode>;
 
+    /// Query the brokers registered with this storage.
     async fn brokers(&mut self) -> Result<Vec<DescribeClusterBroker>>;
 
+    /// Produce a deflated batch to this storage.
     async fn produce(
         &mut self,
         transaction_id: Option<&str>,
@@ -1054,6 +1118,7 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
         batch: deflated::Batch,
     ) -> Result<i64>;
 
+    /// Fetch deflated batches from storage.
     async fn fetch(
         &mut self,
         topition: &'_ Topition,
@@ -1063,14 +1128,17 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
         isolation: IsolationLevel,
     ) -> Result<Vec<deflated::Batch>>;
 
+    /// Query the offset stage for a topic partition.
     async fn offset_stage(&mut self, topition: &Topition) -> Result<OffsetStage>;
 
+    /// Query the offsets for one or more topic partitions.
     async fn list_offsets(
         &mut self,
         isolation_level: IsolationLevel,
         offsets: &[(Topition, ListOffsetRequest)],
     ) -> Result<Vec<(Topition, ListOffsetResponse)>>;
 
+    /// Commit offsets for one or more topic partitions in a consumer group.
     async fn offset_commit(
         &mut self,
         group_id: &str,
@@ -1078,6 +1146,7 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
         offsets: &[(Topition, OffsetCommitRequest)],
     ) -> Result<Vec<(Topition, ErrorCode)>>;
 
+    /// Fetch committed offsets for one or more topic partitions in a consumer group.
     async fn offset_fetch(
         &mut self,
         group_id: Option<&str>,
@@ -1085,13 +1154,16 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
         require_stable: Option<bool>,
     ) -> Result<BTreeMap<Topition, i64>>;
 
+    /// Fetch all committed offsets in a consumer group.
     async fn committed_offset_topitions(
         &mut self,
         group_id: &str,
     ) -> Result<BTreeMap<Topition, i64>>;
 
+    /// Query broker and topic metadata.
     async fn metadata(&mut self, topics: Option<&[TopicId]>) -> Result<MetadataResponse>;
 
+    /// Query the configuration of a resource in this storage.
     async fn describe_config(
         &self,
         name: &str,
@@ -1099,19 +1171,23 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
         keys: Option<&[String]>,
     ) -> Result<DescribeConfigsResult>;
 
+    /// Query available groups optionally with a state filter.
     async fn list_groups(&mut self, states_filter: Option<&[String]>) -> Result<Vec<ListedGroup>>;
 
+    /// Delete one or more groups from storage.
     async fn delete_groups(
         &mut self,
         group_ids: Option<&[String]>,
     ) -> Result<Vec<DeletableGroupResult>>;
 
+    /// Describe the groups found in this storage.
     async fn describe_groups(
         &mut self,
         group_ids: Option<&[String]>,
         include_authorized_operations: bool,
     ) -> Result<Vec<NamedGroupDetail>>;
 
+    /// Describe the topic partitions found in this storage.
     async fn describe_topic_partitions(
         &mut self,
         topics: Option<&[TopicId]>,
@@ -1119,6 +1195,7 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
         cursor: Option<Topition>,
     ) -> Result<Vec<DescribeTopicPartitionsResponseTopic>>;
 
+    /// Conditionally update the state of a group in this storage.
     async fn update_group(
         &mut self,
         group_id: &str,
@@ -1126,6 +1203,7 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
         version: Option<Version>,
     ) -> Result<Version, UpdateError<GroupDetail>>;
 
+    /// Initialise a transactional or idempotent producer in this storage.
     async fn init_producer(
         &mut self,
         transaction_id: Option<&str>,
@@ -1134,6 +1212,7 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
         producer_epoch: Option<i16>,
     ) -> Result<ProducerIdResponse>;
 
+    /// Add offsets to a transaction for a producer.
     async fn txn_add_offsets(
         &mut self,
         transaction_id: &str,
@@ -1142,16 +1221,19 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
         group_id: &str,
     ) -> Result<ErrorCode>;
 
+    /// Add partitions to a transaction.
     async fn txn_add_partitions(
         &mut self,
         partitions: TxnAddPartitionsRequest,
     ) -> Result<TxnAddPartitionsResponse>;
 
+    /// Commit an offset within a transaction.
     async fn txn_offset_commit(
         &mut self,
         offsets: TxnOffsetCommitRequest,
     ) -> Result<Vec<TxnOffsetCommitResponseTopic>>;
 
+    /// Commit or abort a running transaction.
     async fn txn_end(
         &mut self,
         transaction_id: &str,
@@ -1160,11 +1242,13 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
         committed: bool,
     ) -> Result<ErrorCode>;
 
+    /// Run periodic maintenance on this storage.
     async fn maintain(&self) -> Result<()> {
         Ok(())
     }
 }
 
+/// Conditional Update Errors
 #[derive(Debug, thiserror::Error)]
 pub enum UpdateError<T> {
     Error(#[from] Error),
@@ -1176,6 +1260,11 @@ pub enum UpdateError<T> {
     Uuid(#[from] uuid::Error),
 }
 
+/// Storage Container
+///
+/// An enumeration of available storage implementations.
+/// - [`Postgres`]
+/// - [`DynoStore`]
 #[derive(Clone, Debug)]
 pub enum StorageContainer {
     Postgres(Postgres),
