@@ -1,17 +1,16 @@
 // Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
+// http://www.apache.org/licenses/LICENSE-2.0
 //
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use bytes::Bytes;
 use common::{CLIENT_ID, COOPERATIVE_STICKY, PROTOCOL_TYPE, RANGE, StorageType, register_broker};
@@ -52,14 +51,12 @@ pub async fn join_with_empty_member_id(
     let first_member_sticky_meta = Bytes::from_static(b"first_member_sticky_meta_01");
 
     let protocols = [
-        JoinGroupRequestProtocol {
-            name: RANGE.into(),
-            metadata: first_member_range_meta.clone(),
-        },
-        JoinGroupRequestProtocol {
-            name: COOPERATIVE_STICKY.into(),
-            metadata: first_member_sticky_meta,
-        },
+        JoinGroupRequestProtocol::default()
+            .name(RANGE.into())
+            .metadata(first_member_range_meta.clone()),
+        JoinGroupRequestProtocol::default()
+            .name(COOPERATIVE_STICKY.into())
+            .metadata(first_member_sticky_meta),
     ];
 
     // join static group without a member id
@@ -78,7 +75,10 @@ pub async fn join_with_empty_member_id(
     )
     .await?;
 
-    assert_eq!(ErrorCode::None, join_response.error_code);
+    assert_eq!(
+        ErrorCode::None,
+        ErrorCode::try_from(join_response.error_code)?
+    );
     assert_eq!(Some(PROTOCOL_TYPE.into()), join_response.protocol_type);
     assert_eq!(Some(RANGE.into()), join_response.protocol_name);
     assert_eq!(join_response.member_id, join_response.leader);
@@ -87,7 +87,7 @@ pub async fn join_with_empty_member_id(
             .member_id
             .starts_with(group_instance_id.as_str())
     );
-    assert_eq!(1, join_response.members.len());
+    assert_eq!(1, join_response.members.unwrap().len());
 
     Ok(())
 }
@@ -113,14 +113,12 @@ pub async fn rejoin_with_empty_member_id(
     let first_member_sticky_meta = Bytes::from_static(b"first_member_sticky_meta_01");
 
     let protocols = [
-        JoinGroupRequestProtocol {
-            name: RANGE.into(),
-            metadata: first_member_range_meta.clone(),
-        },
-        JoinGroupRequestProtocol {
-            name: COOPERATIVE_STICKY.into(),
-            metadata: first_member_sticky_meta,
-        },
+        JoinGroupRequestProtocol::default()
+            .name(RANGE.into())
+            .metadata(first_member_range_meta.clone()),
+        JoinGroupRequestProtocol::default()
+            .name(COOPERATIVE_STICKY.into())
+            .metadata(first_member_sticky_meta),
     ];
 
     // join static group without a member id
@@ -139,7 +137,10 @@ pub async fn rejoin_with_empty_member_id(
     )
     .await?;
 
-    assert_eq!(ErrorCode::None, join_response.error_code);
+    assert_eq!(
+        ErrorCode::None,
+        ErrorCode::try_from(join_response.error_code)?
+    );
     assert_eq!(Some(PROTOCOL_TYPE.into()), join_response.protocol_type);
     assert_eq!(Some(RANGE.into()), join_response.protocol_name);
     assert_eq!(join_response.member_id, join_response.leader);
@@ -148,7 +149,7 @@ pub async fn rejoin_with_empty_member_id(
             .member_id
             .starts_with(group_instance_id.as_str())
     );
-    assert_eq!(1, join_response.members.len());
+    assert_eq!(1, join_response.members.unwrap().len());
 
     let rejoin_response = common::join_group(
         &mut controller,
@@ -164,13 +165,16 @@ pub async fn rejoin_with_empty_member_id(
     )
     .await?;
 
-    assert_eq!(ErrorCode::None, rejoin_response.error_code);
+    assert_eq!(
+        ErrorCode::None,
+        ErrorCode::try_from(rejoin_response.error_code)?
+    );
     assert_eq!(Some(PROTOCOL_TYPE.into()), rejoin_response.protocol_type);
     assert_eq!(Some(RANGE.into()), rejoin_response.protocol_name);
     assert_eq!(rejoin_response.leader, join_response.leader);
     assert_eq!(rejoin_response.member_id, join_response.member_id);
     assert_eq!(rejoin_response.generation_id, join_response.generation_id);
-    assert_eq!(1, rejoin_response.members.len());
+    assert_eq!(1, rejoin_response.members.unwrap().len());
 
     Ok(())
 }

@@ -1,17 +1,121 @@
 // Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
+// http://www.apache.org/licenses/LICENSE-2.0
 //
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+//! A Kafka protocol implementation that performs no I/O (it operates only on bytes)
+//!
+//! ## Design
+//!
+//! Apache Kafka defines each API message with a JSON message descriptor. Each descriptor
+//! contains a list of fields together with their associated type. Each field can
+//! include a range of versions for which it is valid, its encoding and whether it
+//! includes tagged fields. Further background on the protocol and implementation
+//! used are in the [`serde-kafka-protocol`] article.
+//!
+//! Some useful starting points:
+//!
+//! - **Data Structures** - The key structures are: [`Frame`], [`Header`] and [`Body`].
+//! - **Producing or fetching messages** - [`record`], [`ProduceRequest`] and [`FetchRequest`]
+//!
+//! [`serde-kafka-protocol`]: https://blog.tansu.io/articles/serde-kafka-protocol
+//! [`serde-data-model`]: https://serde.rs/data-model.html
+//!
+//! ## Examples
+//!
+//! Encoding a [`CreateTopicsRequest`] request:
+//!
+//! ```
+//! # use tansu_sans_io::Error;
+//! # fn main() -> Result<(), Error> {
+//! use tansu_sans_io::{
+//!     ApiKey as _, CreateTopicsRequest, Frame, Header,
+//!     create_topics_request::{CreatableTopic, CreatableTopicConfig},
+//! };
+//!
+//! let header = Header::Request {
+//!     api_key: CreateTopicsRequest::KEY,
+//!     api_version: 7,
+//!     correlation_id: 298,
+//!     client_id: Some("adminclient-1".into()),
+//! };
+//!
+//! let body = CreateTopicsRequest::default()
+//!     .topics(Some(
+//!         [CreatableTopic::default()
+//!             .name("balances".into())
+//!             .num_partitions(-1)
+//!             .replication_factor(-1)
+//!             .assignments(Some([].into()))
+//!             .configs(Some(
+//!                 [CreatableTopicConfig::default()
+//!                     .name("cleanup.policy".into())
+//!                     .value(Some("compact".into()))]
+//!                 .into(),
+//!             ))]
+//!         .into(),
+//!     ))
+//!     .timeout_ms(30_000)
+//!     .validate_only(Some(false))
+//!     .into();
+//!
+//! let encoded = Frame::request(header, body)?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! Decoding a [`FindCoordinatorRequest`]:
+//!
+//! ```
+//! # use tansu_sans_io::Error;
+//! # fn main() -> Result<(), Error> {
+//! use tansu_sans_io::{ApiKey as _, FindCoordinatorRequest, Frame, Header};
+//!
+//! let encoded = vec![
+//!     0, 0, 0, 50, 0, 10, 0, 4, 0, 0, 0, 0, 0, 16, 99, 111, 110, 115, 111, 108, 101, 45, 99, 111,
+//!     110, 115, 117, 109, 101, 114, 0, 0, 2, 20, 116, 101, 115, 116, 45, 99, 111, 110, 115, 117,
+//!     109, 101, 114, 45, 103, 114, 111, 117, 112, 0,
+//! ];
+//!
+//! assert_eq!(
+//!     Frame {
+//!         size: 50,
+//!         header: Header::Request {
+//!             api_key: FindCoordinatorRequest::KEY,
+//!             api_version: 4,
+//!             correlation_id: 0,
+//!             client_id: Some("console-consumer".into())
+//!         },
+//!         body: FindCoordinatorRequest::default()
+//!             .key(None)
+//!             .key_type(Some(0))
+//!             .coordinator_keys(Some(["test-consumer-group".into()].into()))
+//!             .into()
+//!     },
+//!     Frame::request_from_bytes(&encoded[..])?
+//! );
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! This crate includes a build time proc macro that generates simple Rust structures
+//! containing all the fields present in the the Kafka message descriptor. Each generated
+//! type implements [`serde::Serialize`] and [`serde::Deserialize`] traits. As part of
+//! the generation phase [`MESSAGE_META`] is created, which is used by the actual message serializers.
+//!
+//! The Kafka protocol is implemented by [`ser::Encoder`] and [`de::Decoder`],
+//! using [`MESSAGE_META`] to determine which fields are present, their serialization type
+//! and whether any tagged fields can be present for a particular message version. Serializers
+//! map from the [`serde-data-model`] to the Kafka protocol or vice versa.
 
 pub mod de;
 pub mod primitive;
@@ -26,6 +130,7 @@ use record::deflated::Frame as RecordBatch;
 pub use ser::Encoder;
 use serde::{Deserialize, Serialize};
 use std::{
+    array::TryFromSliceError,
     collections::HashMap,
     env::VarError,
     fmt::{self, Display, Formatter},
@@ -40,6 +145,7 @@ use tansu_model::{MessageKind, MessageMeta};
 use tracing::{debug, error, warn};
 use tracing_subscriber::filter::ParseError;
 
+/// The null topic identifier.
 pub const NULL_TOPIC_ID: [u8; 16] = [0; 16];
 
 #[derive(Debug)]
@@ -89,6 +195,10 @@ impl RootMessageMeta {
     }
 }
 
+pub trait ApiKey {
+    const KEY: i16;
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     ApiError(ErrorCode),
@@ -110,6 +220,8 @@ pub enum Error {
     SystemTime(SystemTimeError),
     TansuModel(tansu_model::Error),
     TryFromInt(#[from] num::TryFromIntError),
+    TryFromSlice(#[from] TryFromSliceError),
+    UnexpectedType(String),
     UnknownApiErrorCode(i16),
     UnknownCompressionType(i16),
     Utf8(str::Utf8Error),
@@ -174,15 +286,95 @@ impl From<SystemTimeError> for Error {
     }
 }
 
+/// A Kafka API frame prefixed with its length, followed by a header and the message body.
+///
+/// # Examples
+///
+/// ## Encoding
+///
+/// Encoding a [`CreateTopicsRequest`] request:
+///
+/// ```
+/// use tansu_sans_io::{
+///     ApiKey as _, CreateTopicsRequest, Frame, Header,
+///     create_topics_request::{CreatableTopic, CreatableTopicConfig},
+/// };
+///
+/// let header = Header::Request {
+///     api_key: CreateTopicsRequest::KEY,
+///     api_version: 7,
+///     correlation_id: 298,
+///     client_id: Some("adminclient-1".into()),
+/// };
+///
+/// let body = CreateTopicsRequest::default()
+///     .topics(Some(
+///         [CreatableTopic::default()
+///             .name("balances".into())
+///             .num_partitions(-1)
+///             .replication_factor(-1)
+///             .assignments(Some([].into()))
+///             .configs(Some(
+///                 [CreatableTopicConfig::default()
+///                     .name("cleanup.policy".into())
+///                     .value(Some("compact".into()))]
+///                 .into(),
+///             ))]
+///         .into(),
+///     ))
+///     .timeout_ms(30_000)
+///     .validate_only(Some(false))
+///     .into();
+///
+/// let encoded = Frame::request(header, body).unwrap();
+/// ```
+///
+/// ## Decoding
+///
+/// Decoding a [`FindCoordinatorRequest`]:
+///
+/// ```
+/// use tansu_sans_io::{ApiKey as _, FindCoordinatorRequest, Frame, Header};
+///
+/// let encoded = vec![
+///     0, 0, 0, 50, 0, 10, 0, 4, 0, 0, 0, 0, 0, 16, 99, 111, 110, 115, 111, 108, 101, 45, 99, 111,
+///     110, 115, 117, 109, 101, 114, 0, 0, 2, 20, 116, 101, 115, 116, 45, 99, 111, 110, 115, 117,
+///     109, 101, 114, 45, 103, 114, 111, 117, 112, 0,
+/// ];
+///
+/// assert_eq!(
+///     Frame {
+///         size: 50,
+///         header: Header::Request {
+///             api_key: FindCoordinatorRequest::KEY,
+///             api_version: 4,
+///             correlation_id: 0,
+///             client_id: Some("console-consumer".into())
+///         },
+///         body: FindCoordinatorRequest::default()
+///             .key(None)
+///             .key_type(Some(0))
+///             .coordinator_keys(Some(["test-consumer-group".into()].into()))
+///             .into()
+///     },
+///     Frame::request_from_bytes(&encoded[..]).unwrap()
+/// );
+/// ```
 #[derive(Clone, Debug, Deserialize, PartialEq, PartialOrd, Serialize)]
 pub struct Frame {
+    /// The size of this frame.
     pub size: i32,
+
+    /// The frame header.
     pub header: Header,
+
+    /// The frame body.
     pub body: Body,
 }
 
 impl Frame {
-    pub fn request(header: Header, body: Body) -> Result<Vec<u8>> {
+    /// serialize an API request into a frame of bytes
+    pub fn request(header: Header, body: Body) -> Result<Bytes> {
         let mut c = Cursor::new(vec![]);
 
         let mut serializer = Encoder::request(&mut c);
@@ -200,17 +392,18 @@ impl Frame {
         let buf = size.to_be_bytes();
         c.write_all(&buf)?;
 
-        Ok(c.into_inner())
+        Ok(Bytes::from(c.into_inner()))
     }
 
-    pub fn request_from_bytes(bytes: &[u8]) -> Result<Frame> {
-        debug!(?bytes);
-        let mut c = Cursor::new(bytes);
-        let mut deserializer = Decoder::request(&mut c);
+    /// deserialize bytes into an API request frame
+    pub fn request_from_bytes(bytes: impl Buf) -> Result<Frame> {
+        let mut reader = bytes.reader();
+        let mut deserializer = Decoder::request(&mut reader);
         Frame::deserialize(&mut deserializer)
     }
 
-    pub fn response(header: Header, body: Body, api_key: i16, api_version: i16) -> Result<Vec<u8>> {
+    /// serialize an API response into a frame of bytes
+    pub fn response(header: Header, body: Body, api_key: i16, api_version: i16) -> Result<Bytes> {
         let mut c = Cursor::new(vec![]);
         let mut serializer = Encoder::response(&mut c, api_key, api_version);
 
@@ -232,27 +425,40 @@ impl Frame {
         let buf = size.to_be_bytes();
         c.write_all(&buf)?;
 
-        Ok(c.into_inner())
+        Ok(Bytes::from(c.into_inner()))
     }
 
-    pub fn response_from_bytes(bytes: &[u8], api_key: i16, api_version: i16) -> Result<Frame> {
-        let mut c = Cursor::new(bytes);
-        let mut deserializer = Decoder::response(&mut c, api_key, api_version);
+    /// deserialize bytes into an API response frame
+    pub fn response_from_bytes(bytes: impl Buf, api_key: i16, api_version: i16) -> Result<Frame> {
+        let mut reader = bytes.reader();
+        let mut deserializer = Decoder::response(&mut reader, api_key, api_version);
         Frame::deserialize(&mut deserializer)
     }
 }
 
+/// A Kafka API request or response header.
 #[derive(Clone, Debug, Deserialize, PartialEq, PartialOrd, Serialize)]
 #[serde(try_from = "HeaderMezzanine")]
 #[serde(into = "HeaderMezzanine")]
 pub enum Header {
+    /// An API request header.
     Request {
+        /// The API key being used for this request.
         api_key: i16,
+
+        /// The API version being used for this request.
         api_version: i16,
+
+        /// The correlation ID that should be used by the response to this request.
         correlation_id: i32,
+
+        /// An optional client ID.
         client_id: Option<String>,
     },
+
+    /// An API Response header.
     Response {
+        /// The correlation ID for the corresponding request.
         correlation_id: i32,
     },
 }
@@ -970,6 +1176,7 @@ impl Display for ErrorCode {
 #[derive(
     Clone, Copy, Default, Deserialize, Eq, Hash, Debug, Ord, PartialEq, PartialOrd, Serialize,
 )]
+/// Kafka API response error codes.
 pub enum ErrorCode {
     UnknownServerError,
     #[default]
@@ -1096,6 +1303,7 @@ pub enum ErrorCode {
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+/// The fetch isolation level.
 pub enum IsolationLevel {
     #[default]
     ReadUncommitted,
@@ -1130,6 +1338,7 @@ impl From<&IsolationLevel> for i8 {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+/// Produce message acknowledgement.
 pub enum Ack {
     None,
     Leader,
@@ -1150,6 +1359,7 @@ impl TryFrom<i16> for Ack {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+/// The timestamp type.
 pub enum TimestampType {
     #[default]
     CreateTime,
@@ -1180,6 +1390,7 @@ impl From<TimestampType> for i16 {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+/// Kafka message compression types.
 pub enum Compression {
     #[default]
     None,
@@ -1232,6 +1443,20 @@ impl Compression {
                     .decompress_vec(
                         // https://github.com/xerial/snappy-java/tree/master?tab=readme-ov-file#compatibility-notes
                         if input.starts_with(b"\x82SNAPPY\0") {
+                            if let (b"\x82SNAPPY\0", remainder) = input.split_at(8) {
+                                let (version, remainder) = remainder.split_at(4);
+                                let version = version.try_into().map(i32::from_be_bytes)?;
+
+                                let (compatible_version, remainder) = remainder.split_at(4);
+                                let compatible_version =
+                                    compatible_version.try_into().map(i32::from_be_bytes)?;
+
+                                let (block_size, _) = remainder.split_at(4);
+                                let block_size = block_size.try_into().map(i32::from_be_bytes)?;
+
+                                debug!(version, compatible_version, block_size);
+                            }
+
                             let skip_header = &input[20..];
                             debug!(?skip_header);
                             skip_header
@@ -1259,6 +1484,7 @@ impl Compression {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+/// The produce batch attributes.
 pub struct BatchAttribute {
     pub compression: Compression,
     pub timestamp: TimestampType,
@@ -1341,6 +1567,7 @@ impl TryFrom<i16> for BatchAttribute {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+/// The control batch marker.
 pub struct ControlBatch {
     pub version: i16,
     pub r#type: i16,
@@ -1399,6 +1626,7 @@ impl TryFrom<ControlBatch> for Bytes {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+/// An end transaction marker.
 pub struct EndTransactionMarker {
     pub version: i16,
     pub coordinator_epoch: i32,
@@ -1425,6 +1653,7 @@ impl TryFrom<EndTransactionMarker> for Bytes {
     }
 }
 
+/// The endpoint type.
 pub enum EndpointType {
     Unknown,
     Broker,
@@ -1451,6 +1680,7 @@ impl From<EndpointType> for i8 {
     }
 }
 
+/// The coordinator type.
 pub enum CoordinatorType {
     Group,
     Transaction,
@@ -1471,6 +1701,7 @@ impl TryFrom<i8> for CoordinatorType {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+/// What type of resource is the configuration describing.
 pub enum ConfigResource {
     Group,
     ClientMetric,
@@ -1530,6 +1761,7 @@ impl From<ConfigResource> for i32 {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+/// The type of configuration.
 pub enum ConfigType {
     #[default]
     Unknown,
@@ -1579,6 +1811,7 @@ impl From<ConfigType> for i8 {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+/// From which source was the configuration provided.
 pub enum ConfigSource {
     DynamicTopicConfig,
     DynamicBrokerLoggerConfig,
@@ -1623,6 +1856,7 @@ impl From<ConfigSource> for i8 {
     }
 }
 
+/// The configuration operation type.
 pub enum OpType {
     Set,
     Delete,

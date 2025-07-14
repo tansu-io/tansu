@@ -1,17 +1,16 @@
 // Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
+// http://www.apache.org/licenses/LICENSE-2.0
 //
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::time::{Duration, Instant};
 
@@ -19,7 +18,8 @@ use tansu_sans_io::{
     Body, ErrorCode, IsolationLevel,
     fetch_request::{FetchPartition, FetchTopic},
     fetch_response::{
-        EpochEndOffset, FetchableTopicResponse, LeaderIdAndEpoch, PartitionData, SnapshotId,
+        EpochEndOffset, FetchResponse, FetchableTopicResponse, LeaderIdAndEpoch, PartitionData,
+        SnapshotId,
     },
     metadata_response::MetadataResponseTopic,
     record::{deflated::Batch, deflated::Frame},
@@ -104,58 +104,52 @@ where
             .await
             .inspect_err(|error| error!(?error, ?tp))?;
 
-        Ok(PartitionData {
-            partition_index,
-            error_code: ErrorCode::None.into(),
-            high_watermark: offset_stage.high_watermark(),
-            last_stable_offset: Some(offset_stage.last_stable()),
-            log_start_offset: Some(offset_stage.log_start()),
-            diverging_epoch: None,
-            current_leader: None,
-            snapshot_id: None,
-            aborted_transactions: Some([].into()),
-            preferred_read_replica: Some(-1),
-            records: if batches.is_empty() {
+        Ok(PartitionData::default()
+            .partition_index(partition_index)
+            .error_code(ErrorCode::None.into())
+            .high_watermark(offset_stage.high_watermark())
+            .last_stable_offset(Some(offset_stage.last_stable()))
+            .log_start_offset(Some(offset_stage.log_start()))
+            .diverging_epoch(None)
+            .current_leader(None)
+            .snapshot_id(None)
+            .aborted_transactions(Some([].into()))
+            .preferred_read_replica(Some(-1))
+            .records(if batches.is_empty() {
                 None
             } else {
                 Some(Frame { batches })
-            },
-        })
+            }))
         .inspect(|r| debug!(?r))
     }
 
     fn unknown_topic_response(&self, fetch: &FetchTopic) -> Result<FetchableTopicResponse> {
-        Ok(FetchableTopicResponse {
-            topic: fetch.topic.clone(),
-            topic_id: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
-            partitions: fetch.partitions.as_ref().map(|partitions| {
+        Ok(FetchableTopicResponse::default()
+            .topic(fetch.topic.clone())
+            .topic_id(Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]))
+            .partitions(fetch.partitions.as_ref().map(|partitions| {
                 partitions
                     .iter()
-                    .map(|partition| PartitionData {
-                        partition_index: partition.partition,
-                        error_code: ErrorCode::UnknownTopicOrPartition.into(),
-                        high_watermark: 0,
-                        last_stable_offset: Some(0),
-                        log_start_offset: Some(-1),
-                        diverging_epoch: Some(EpochEndOffset {
-                            epoch: -1,
-                            end_offset: -1,
-                        }),
-                        current_leader: Some(LeaderIdAndEpoch {
-                            leader_id: 0,
-                            leader_epoch: 0,
-                        }),
-                        snapshot_id: Some(SnapshotId {
-                            end_offset: -1,
-                            epoch: -1,
-                        }),
-                        aborted_transactions: Some([].into()),
-                        preferred_read_replica: Some(-1),
-                        records: None,
+                    .map(|partition| {
+                        PartitionData::default()
+                            .partition_index(partition.partition)
+                            .error_code(ErrorCode::UnknownTopicOrPartition.into())
+                            .high_watermark(0)
+                            .last_stable_offset(Some(0))
+                            .log_start_offset(Some(-1))
+                            .diverging_epoch(Some(
+                                EpochEndOffset::default().epoch(-1).end_offset(-1),
+                            ))
+                            .current_leader(Some(
+                                LeaderIdAndEpoch::default().leader_id(0).leader_epoch(0),
+                            ))
+                            .snapshot_id(Some(SnapshotId::default().end_offset(-1).epoch(-1)))
+                            .aborted_transactions(Some([].into()))
+                            .preferred_read_replica(Some(-1))
+                            .records(None)
                     })
                     .collect()
-            }),
-        })
+            })))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -195,11 +189,10 @@ where
                 partitions.push(partition);
             }
 
-            Ok(FetchableTopicResponse {
-                topic: fetch.topic.to_owned(),
-                topic_id: topic_id.to_owned(),
-                partitions: Some(partitions),
-            })
+            Ok(FetchableTopicResponse::default()
+                .topic(fetch.topic.to_owned())
+                .topic_id(topic_id.to_owned())
+                .partitions(Some(partitions)))
         } else {
             self.unknown_topic_response(fetch)
         }
@@ -305,13 +298,13 @@ where
             vec![]
         });
 
-        Ok(Body::FetchResponse {
-            throttle_time_ms: Some(0),
-            error_code: Some(ErrorCode::None.into()),
-            session_id: Some(0),
-            node_endpoints: Some([].into()),
-            responses,
-        })
+        Ok(FetchResponse::default()
+            .throttle_time_ms(Some(0))
+            .error_code(Some(ErrorCode::None.into()))
+            .session_id(Some(0))
+            .node_endpoints(Some([].into()))
+            .responses(responses)
+            .into())
         .inspect(|r| debug!(?r))
     }
 }

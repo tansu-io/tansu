@@ -1,18 +1,18 @@
 // Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
+// http://www.apache.org/licenses/LICENSE-2.0
 //
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
-
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+//! Deflated (compressed) Kafka Records
 use std::fmt::Formatter;
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
@@ -22,7 +22,7 @@ use serde::{
     Deserialize, Deserializer, Serialize,
     de::{self, SeqAccess, Visitor},
 };
-use tracing::debug;
+use tracing::{debug, error};
 
 use crate::{Compression, Decoder, Encoder, Error, Result, record::Record};
 
@@ -49,6 +49,7 @@ impl TryFrom<crate::record::inflated::Frame> for Frame {
 }
 
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+/// A deflated (compressed) batch of Kafka records
 pub struct Batch {
     pub base_offset: i64,
     pub batch_length: i32,
@@ -84,7 +85,7 @@ impl Batch {
 }
 
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
-pub struct CrcData {
+struct CrcData {
     pub attributes: i16,
     pub last_offset_delta: i32,
     pub base_timestamp: i64,
@@ -94,6 +95,22 @@ pub struct CrcData {
     pub base_sequence: i32,
     pub record_count: u32,
     pub record_data: Bytes,
+}
+
+impl From<&Batch> for CrcData {
+    fn from(batch: &Batch) -> Self {
+        Self {
+            attributes: batch.attributes,
+            last_offset_delta: batch.last_offset_delta,
+            base_timestamp: batch.base_timestamp,
+            max_timestamp: batch.max_timestamp,
+            producer_id: batch.producer_id,
+            producer_epoch: batch.producer_epoch,
+            base_sequence: batch.base_sequence,
+            record_count: batch.record_count,
+            record_data: batch.record_data.clone(),
+        }
+    }
 }
 
 impl CrcData {
@@ -402,6 +419,21 @@ impl<'de> Deserialize<'de> for Batch {
                     record_count,
                     record_data,
                 };
+
+                {
+                    let crc_data = CrcData::from(&batch);
+                    _ = crc_data
+                        .crc()
+                        .inspect(|computed| {
+                            if *computed == crc {
+                                debug!(crc, computed);
+                            } else {
+                                error!(crc, computed);
+                            }
+                        })
+                        .inspect_err(|err| error!(?err))
+                        .map_err(|err| <A::Error as de::Error>::custom(format!("{err:?}")))?;
+                }
 
                 Ok(batch)
             }

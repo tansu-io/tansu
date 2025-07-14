@@ -9,8 +9,16 @@ build: (cargo-build "--bin" "tansu")
 
 release: (cargo-build "--release" "--workspace" "--all-targets")
 
-test:
+test: test-workspace test-doc
+
+test-workspace:
     cargo test --workspace --all-targets
+
+test-doc:
+    cargo test --workspace --doc
+
+doc:
+    cargo doc
 
 clippy:
     cargo clippy -- -D warnings

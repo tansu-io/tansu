@@ -1,17 +1,16 @@
-// Copyright ⓒ 2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
+// http://www.apache.org/licenses/LICENSE-2.0
 //
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::marker::PhantomData;
 
@@ -20,8 +19,8 @@ use crate::{Error, Result};
 use futures::SinkExt;
 use tansu_sans_io::{
     Body, ErrorCode, Frame, Header,
-    fetch_request::{FetchPartition, FetchTopic},
-    fetch_response::FetchableTopicResponse,
+    fetch_request::{FetchPartition, FetchRequest, FetchTopic},
+    fetch_response::{FetchResponse, FetchableTopicResponse},
     record::inflated,
 };
 use tansu_schema::{AsJsonValue, Registry};
@@ -294,38 +293,23 @@ impl Connection {
             client_id: None,
         };
 
-        let body = Body::FetchRequest {
-            cluster_id: None,
-            replica_state: None,
-            replica_id: Some(-1),
-            max_wait_ms,
-            min_bytes,
-            max_bytes,
-            isolation_level: Some(1),
-            session_id: None,
-            session_epoch: None,
-            topics: Some(
-                [FetchTopic {
-                    topic: Some(topic.into()),
-                    topic_id: None,
-                    partitions: Some(
-                        [FetchPartition {
-                            partition: 0,
-                            current_leader_epoch: None,
-                            fetch_offset: 0,
-                            last_fetched_epoch: None,
-                            log_start_offset: Some(0),
-                            partition_max_bytes: 4096,
-                            replica_directory_id: None,
-                        }]
-                        .into(),
-                    ),
-                }]
-                .into(),
-            ),
-            forgotten_topics_data: None,
-            rack_id: None,
-        };
+        let body = Body::FetchRequest(
+            FetchRequest::default()
+                .replica_id(Some(-1))
+                .max_wait_ms(max_wait_ms)
+                .min_bytes(min_bytes)
+                .max_bytes(max_bytes)
+                .isolation_level(Some(1))
+                .topics(Some(vec![
+                    FetchTopic::default()
+                        .topic(Some(topic.into()))
+                        .partitions(Some(vec![
+                            FetchPartition::default()
+                                .log_start_offset(Some(0))
+                                .partition_max_bytes(4096),
+                        ])),
+                ])),
+        );
 
         debug!(?header, ?body);
 
@@ -347,7 +331,7 @@ impl Connection {
             .await
             .inspect_err(|err| debug!(?err))?;
 
-        let response = Frame::response_from_bytes(&response_buffer, api_key, api_version)
+        let response = Frame::response_from_bytes(&response_buffer[..], api_key, api_version)
             .inspect_err(|err| debug!(?err))?;
 
         debug!(?response);
@@ -355,19 +339,19 @@ impl Connection {
         match response {
             Frame {
                 body:
-                    Body::FetchResponse {
+                    Body::FetchResponse(FetchResponse {
                         responses: Some(responses),
                         ..
-                    },
+                    }),
                 ..
             } => Ok(responses),
 
             Frame {
                 body:
-                    Body::FetchResponse {
+                    Body::FetchResponse(FetchResponse {
                         error_code: Some(error_code),
                         ..
-                    },
+                    }),
                 ..
             } => Err(Error::Api(ErrorCode::try_from(error_code)?)),
 

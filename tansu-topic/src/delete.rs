@@ -1,20 +1,20 @@
-// Copyright ⓒ 2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
+// http://www.apache.org/licenses/LICENSE-2.0
 //
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use tansu_sans_io::{
-    Body, ErrorCode, Frame, Header, NULL_TOPIC_ID, delete_topics_request::DeleteTopicState,
+    ApiKey as _, Body, DeleteTopicsRequest, DeleteTopicsResponse, ErrorCode, Frame, Header,
+    NULL_TOPIC_ID, delete_topics_request::DeleteTopicState,
     delete_topics_response::DeletableTopicResult,
 };
 use tokio::{
@@ -111,7 +111,7 @@ impl Connection {
     async fn delete(&mut self, topic: &str) -> Result<ErrorCode> {
         debug!(%topic);
 
-        let api_key = 20;
+        let api_key = DeleteTopicsRequest::KEY;
         let api_version = 6;
 
         let header = Header::Request {
@@ -123,19 +123,17 @@ impl Connection {
 
         let timeout_ms = 30_000;
 
-        let body = Body::DeleteTopicsRequest {
-            topics: Some(
-                [DeleteTopicState {
-                    name: Some(topic.into()),
-                    topic_id: NULL_TOPIC_ID,
-                }]
+        let delete_topics_request = DeleteTopicsRequest::default()
+            .topics(Some(
+                [DeleteTopicState::default()
+                    .name(Some(topic.into()))
+                    .topic_id(NULL_TOPIC_ID)]
                 .into(),
-            ),
-            topic_names: None,
-            timeout_ms,
-        };
+            ))
+            .topic_names(None)
+            .timeout_ms(timeout_ms);
 
-        let encoded = Frame::request(header, body)?;
+        let encoded = Frame::request(header, delete_topics_request.into())?;
 
         self.broker
             .write_all(&encoded[..])
@@ -153,16 +151,16 @@ impl Connection {
             .await
             .inspect_err(|err| debug!(?err))?;
 
-        match Frame::response_from_bytes(&response_buffer, api_key, api_version)
+        match Frame::response_from_bytes(&response_buffer[..], api_key, api_version)
             .inspect(|response| debug!(?response))
             .inspect_err(|err| debug!(?err))?
         {
             Frame {
                 body:
-                    Body::DeleteTopicsResponse {
+                    Body::DeleteTopicsResponse(DeleteTopicsResponse {
                         responses: Some(responses),
                         ..
-                    },
+                    }),
                 ..
             } => match responses.as_slice() {
                 [DeletableTopicResult { error_code, .. }] => {

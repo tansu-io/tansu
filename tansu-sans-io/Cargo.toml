@@ -5,29 +5,29 @@ version.workspace = true
 license.workspace = true
 publish = false
 
-# [lints.clippy]
-# all = "warn"
+[lints.clippy]
+all = "warn"
 
-# [lints.rust]
-# deprecated_in_future = "warn"
-# elided_lifetimes_in_paths = "deny"
-# missing_copy_implementations = "allow"
-# missing_debug_implementations = "allow"
-# non_ascii_idents = "forbid"
-# nonstandard_style = "deny"
-# rust_2018_idioms = "deny"
-# unreachable_pub = "allow"
-# unsafe_code = "forbid"
-# unused_import_braces = "warn"
-# unused_labels = "warn"
-# unused_lifetimes = "warn"
-# unused_qualifications = "allow"
-# unused_results = "warn"
-# unused_variables = "allow"
+[lints.rust]
+deprecated_in_future = "warn"
+elided_lifetimes_in_paths = "deny"
+missing_copy_implementations = "allow"
+missing_debug_implementations = "allow"
+non_ascii_idents = "forbid"
+nonstandard_style = "deny"
+rust_2018_idioms = "deny"
+unreachable_pub = "allow"
+unsafe_code = "forbid"
+unused_import_braces = "warn"
+unused_labels = "warn"
+unused_lifetimes = "warn"
+unused_qualifications = "allow"
+unused_results = "warn"
+unused_variables = "allow"
 
-# [lints.rustdoc]
-# broken_intra_doc_links = "deny"
-# private_intra_doc_links = "deny"
+[lints.rustdoc]
+broken_intra_doc_links = "deny"
+private_intra_doc_links = "deny"
 
 [dependencies]
 bytes.workspace = true
@@ -37,7 +37,7 @@ flate2.workspace = true
 lz4.workspace = true
 serde.workspace = true
 snap.workspace = true
-tansu-model = { path = "../tansu-model" }
+tansu-model = { version = "0.4.1", path = "../tansu-model" }
 thiserror.workspace = true
 tracing-subscriber.workspace = true
 tracing.workspace = true
@@ -51,7 +51,7 @@ proc-macro2.workspace = true
 quote.workspace = true
 serde_json.workspace = true
 syn.workspace = true
-tansu-model = { path = "../tansu-model" }
+tansu-model = { version = "0.4.1", path = "../tansu-model" }
 
 [dev-dependencies]
 criterion.workspace = true

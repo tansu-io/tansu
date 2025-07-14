@@ -1,24 +1,25 @@
 // Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
+// http://www.apache.org/licenses/LICENSE-2.0
 //
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::{collections::BTreeSet, ops::Deref};
 
 use tansu_sans_io::{
     Body, IsolationLevel,
     list_offsets_request::ListOffsetsTopic,
-    list_offsets_response::{ListOffsetsPartitionResponse, ListOffsetsTopicResponse},
+    list_offsets_response::{
+        ListOffsetsPartitionResponse, ListOffsetsResponse, ListOffsetsTopicResponse,
+    },
 };
 use tansu_storage::{ListOffsetRequest, Storage, Topition};
 use tracing::{debug, error};
@@ -76,30 +77,34 @@ where
                                 topics
                             })
                             .iter()
-                            .map(|topic_name| ListOffsetsTopicResponse {
-                                name: (*topic_name).into(),
-                                partitions: Some(
-                                    offsets
-                                        .iter()
-                                        .filter_map(|(topition, offset)| {
-                                            if topition.topic() == *topic_name {
-                                                Some(ListOffsetsPartitionResponse {
-                                                    partition_index: topition.partition(),
-                                                    error_code: offset.error_code().into(),
-                                                    old_style_offsets: None,
-                                                    timestamp: offset
-                                                        .timestamp()
-                                                        .unwrap_or(Some(-1))
-                                                        .or(Some(-1)),
-                                                    offset: offset.offset().or(Some(0)),
-                                                    leader_epoch: Some(0),
-                                                })
-                                            } else {
-                                                None
-                                            }
-                                        })
-                                        .collect(),
-                                ),
+                            .map(|topic_name| {
+                                ListOffsetsTopicResponse::default()
+                                    .name((*topic_name).into())
+                                    .partitions(Some(
+                                        offsets
+                                            .iter()
+                                            .filter_map(|(topition, offset)| {
+                                                if topition.topic() == *topic_name {
+                                                    Some(
+                                                        ListOffsetsPartitionResponse::default()
+                                                            .partition_index(topition.partition())
+                                                            .error_code(offset.error_code().into())
+                                                            .old_style_offsets(None)
+                                                            .timestamp(
+                                                                offset
+                                                                    .timestamp()
+                                                                    .unwrap_or(Some(-1))
+                                                                    .or(Some(-1)),
+                                                            )
+                                                            .offset(offset.offset().or(Some(0)))
+                                                            .leader_epoch(Some(0)),
+                                                    )
+                                                } else {
+                                                    None
+                                                }
+                                            })
+                                            .collect(),
+                                    ))
                             })
                             .collect()
                     })?,
@@ -108,10 +113,10 @@ where
             None
         };
 
-        Ok(Body::ListOffsetsResponse {
-            throttle_time_ms,
-            topics,
-        })
+        Ok(ListOffsetsResponse::default()
+            .throttle_time_ms(throttle_time_ms)
+            .topics(topics)
+            .into())
         .inspect(|r| debug!(?r))
     }
 }

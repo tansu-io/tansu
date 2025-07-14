@@ -1,17 +1,16 @@
 // Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
+// http://www.apache.org/licenses/LICENSE-2.0
 //
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use crate::{Error, Result, RootMessageMeta};
 use serde::{
@@ -85,6 +84,7 @@ impl Read for ReadPosition<'_> {
     }
 }
 
+/// Deserialize the Kafka protocol into the serde data model.
 pub struct Decoder<'de> {
     reader: ReadPosition<'de>,
     containers: VecDeque<Container>,
@@ -142,7 +142,7 @@ impl<'de> Decoder<'de> {
         }
     }
 
-    pub fn request(reader: &'de mut dyn Read) -> Self {
+    pub(crate) fn request(reader: &'de mut dyn Read) -> Self {
         Self {
             reader: ReadPosition::new(reader),
             containers: VecDeque::new(),
@@ -158,7 +158,7 @@ impl<'de> Decoder<'de> {
         }
     }
 
-    pub fn response(reader: &'de mut dyn Read, api_key: i16, api_version: i16) -> Self {
+    pub(crate) fn response(reader: &'de mut dyn Read, api_key: i16, api_version: i16) -> Self {
         Self {
             reader: ReadPosition::new(reader),
             containers: VecDeque::new(),
@@ -922,7 +922,7 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
                 _ = self.meta.parse.pop_front();
                 _ = self.meta.field.take();
                 outcome
-            } else if name == "Body" {
+            } else if name.ends_with("Request") || name.ends_with("Response") {
                 self.meta.parse.push_front(mm.fields.into());
                 let outcome = visitor.visit_seq(Struct::new(self, name, fields));
                 _ = self.meta.parse.pop_front();
@@ -1168,7 +1168,7 @@ impl<'de> VariantAccess<'de> for Enum<'de, '_> {
         T: DeserializeSeed<'de>,
     {
         debug!(name = self.name, seed = type_name_of_val(&seed));
-        unimplemented!()
+        seed.deserialize(&mut *self.de)
     }
 
     fn tuple_variant<V>(self, len: usize, visitor: V) -> Result<V::Value, Self::Error>
