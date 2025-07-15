@@ -1,9 +1,10 @@
 [package]
 name = "tansu-broker"
 edition.workspace = true
-version.workspace = true
+version = "0.4.1"
 license.workspace = true
-publish = false
+repository.workspace = true
+publish = true
 
 [lints]
 workspace = true

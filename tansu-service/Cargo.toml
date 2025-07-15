@@ -1,8 +1,10 @@
 [package]
 name = "tansu-service"
 edition.workspace = true
-version.workspace = true
+version = "0.4.1"
 license.workspace = true
+repository.workspace = true
+publish = true
 
 [lints]
 workspace = true
