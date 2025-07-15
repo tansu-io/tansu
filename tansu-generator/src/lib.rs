@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Tansu Message Generator
+//!
+//! Generate fake data for schema backed topics.
+
 use std::{
     fmt, io,
     marker::PhantomData,
