@@ -12,6 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Tansu CLI
+//!
+//! The CLI is a single statically linked binary that contains:
+//! - Broker
+//! - Cat: produce, validate (if backed by a schema) and fetch messages
+//! - Generator: use fake data generators to produce messages with a rate limit
+//! - Proxy: a Kafka API proxy
+//! - Topic: Topic administration
+
 use std::process;
 
 use crate::Result;
