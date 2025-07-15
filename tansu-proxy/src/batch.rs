@@ -69,7 +69,7 @@ enum BatchResponse {
 }
 
 #[derive(Clone, Debug)]
-pub struct BatchProduceService<S: Clone + Debug> {
+pub(crate) struct BatchProduceService<S: Clone + Debug> {
     service: S,
     requests: Arc<Mutex<Vec<BatchRequest>>>,
     responses: Arc<Mutex<BTreeMap<Uuid, BatchResponse>>>,
@@ -364,13 +364,13 @@ where
 
 #[allow(dead_code)]
 #[derive(Clone, Debug, Default)]
-pub struct BatchProduceLayer {
+pub(crate) struct BatchProduceLayer {
     resource_config: ResourceConfig,
 }
 
 #[allow(dead_code)]
 impl BatchProduceLayer {
-    pub fn new(resource_config: ResourceConfig) -> Self {
+    pub(crate) fn new(resource_config: ResourceConfig) -> Self {
         Self { resource_config }
     }
 }
@@ -425,7 +425,7 @@ impl From<&[BatchRequest]> for Owner {
         for request in requests {
             debug!(?request);
 
-            meta.entry(request.id).or_insert(ProduceMetaResponse {
+            _ = meta.entry(request.id).or_insert(ProduceMetaResponse {
                 api_key: request.request.api_key,
                 api_version: request.request.api_version,
                 correlation_id: request.request.correlation_id,
@@ -437,7 +437,7 @@ impl From<&[BatchRequest]> for Owner {
                 for partition in topic.partition_data.as_deref().unwrap_or_default() {
                     debug!(?partition);
 
-                    topition
+                    _ = topition
                         .entry(Topition {
                             topic: topic.name.clone(),
                             partition: partition.index,
@@ -612,7 +612,7 @@ impl From<Vec<BatchRequest>> for BatchProduction {
                 for partition in topic.partition_data.unwrap_or_default() {
                     debug!(?partition);
 
-                    owners.entry(request.id).or_default().insert(Topition {
+                    _ = owners.entry(request.id).or_default().insert(Topition {
                         topic: topic.name.clone(),
                         partition: partition.index,
                     });
@@ -804,7 +804,7 @@ mod tests {
     use tansu_sans_io::{
         ErrorCode,
         produce_response::{LeaderIdAndEpoch, PartitionProduceResponse, TopicProduceResponse},
-        record,
+        record::Record,
     };
     use tokio::{task::yield_now, time::advance};
     use tracing::{Instrument, Level, debug, span, subscriber::DefaultGuard};
@@ -909,7 +909,7 @@ mod tests {
         inflated::Batch::builder()
             .base_timestamp(1_234_567_890 * 1_000)
             .max_timestamp(1_234_567_890 * 1_000)
-            .record(record::Record::builder().value(Bytes::from_static(value).into()))
+            .record(Record::builder().value(Bytes::from_static(value).into()))
             .build()
             .and_then(deflated::Batch::try_from)
             .map_err(Into::into)

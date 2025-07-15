@@ -1127,25 +1127,26 @@ impl Postgres {
                 String::from(TxnState::PrepareAbort)
             };
 
-            self.tx_prepare_execute(
-                tx,
-                include_sql!("pg/txn_status_update.sql").as_str(),
-                &[
-                    &self.cluster,
-                    &transaction_id,
-                    &producer_id,
-                    &producer_epoch,
-                    &outcome,
-                ],
-                "end_in_tx",
-            )
-            .await
-            .inspect(|n| {
-                debug!(
-                    cluster = self.cluster,
-                    transaction_id, producer_id, producer_epoch, outcome, n
+            _ = self
+                .tx_prepare_execute(
+                    tx,
+                    include_sql!("pg/txn_status_update.sql").as_str(),
+                    &[
+                        &self.cluster,
+                        &transaction_id,
+                        &producer_id,
+                        &producer_epoch,
+                        &outcome,
+                    ],
+                    "end_in_tx",
                 )
-            })?;
+                .await
+                .inspect(|n| {
+                    debug!(
+                        cluster = self.cluster,
+                        transaction_id, producer_id, producer_epoch, outcome, n
+                    )
+                })?;
         }
 
         Ok(ErrorCode::None)

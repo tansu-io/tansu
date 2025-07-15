@@ -120,12 +120,12 @@ pub enum Error {
     Io(#[from] io::Error),
 
     #[error("{:?}", self)]
-    JsonToAvro(Box<apache_avro::Schema>, Box<serde_json::Value>),
+    JsonToAvro(Box<apache_avro::Schema>, Box<Value>),
 
     #[error("field: {field}, not found in: {value} with schema: {schema}")]
     JsonToAvroFieldNotFound {
         schema: Box<apache_avro::Schema>,
-        value: Box<serde_json::Value>,
+        value: Box<Value>,
         field: String,
     },
 
@@ -187,7 +187,7 @@ pub enum Error {
     UnsupportedSchemaRegistryUrl(Url),
 
     #[error("{:?}", self)]
-    UnsupportedSchemaRuntimeValue(DataType, serde_json::Value),
+    UnsupportedSchemaRuntimeValue(DataType, Value),
 
     #[error("{:?}", self)]
     Uuid(#[from] uuid::Error),

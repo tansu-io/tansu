@@ -5,18 +5,21 @@ version.workspace = true
 license.workspace = true
 publish = false
 
+[lints]
+workspace = true
+
 [dependencies]
 clap.workspace = true
 dotenv.workspace = true
 regex.workspace = true
-tansu-cat = { path = "../tansu-cat" }
-tansu-generator = { path = "../tansu-generator" }
-tansu-sans-io = { path = "../tansu-sans-io" }
-tansu-proxy = { path = "../tansu-proxy" }
-tansu-schema = { path = "../tansu-schema" }
-tansu-broker = { path = "../tansu-broker" }
-tansu-storage = { path = "../tansu-storage" }
-tansu-topic = { path = "../tansu-topic" }
+tansu-cat = { version = "0.4.1", path = "../tansu-cat" }
+tansu-generator = { version = "0.4.1", path = "../tansu-generator" }
+tansu-sans-io = { version = "0.4.1", path = "../tansu-sans-io" }
+tansu-proxy = { version = "0.4.1", path = "../tansu-proxy" }
+tansu-schema = { version = "0.4.1", path = "../tansu-schema" }
+tansu-broker = { version = "0.4.1", path = "../tansu-broker" }
+tansu-storage = { version = "0.4.1", path = "../tansu-storage" }
+tansu-topic = { version = "0.4.1", path = "../tansu-topic" }
 thiserror.workspace = true
 tokio.workspace = true
 tracing-subscriber.workspace = true

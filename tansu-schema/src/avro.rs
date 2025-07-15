@@ -110,7 +110,7 @@ impl TryFrom<Bytes> for Schema {
 
         serde_json::from_slice::<JsonValue>(&encoded[..])
             .map(|mut schema| {
-                schema
+                _ = schema
                     .get_mut(FIELDS)
                     .and_then(|fields| fields.as_object_mut())
                     .and_then(|object| object.insert(MessageKind::Meta.as_ref().to_owned(), meta));
@@ -602,7 +602,7 @@ fn field_ids(schema: &AvroSchema) -> HashMap<String, i32> {
             AvroSchema::Array(inner) => {
                 let mut path = Vec::from(path);
                 path.push(ARROW_LIST_FIELD_NAME);
-                ids.insert(path.join("."), *id);
+                _ = ids.insert(path.join("."), *id);
                 *id += 1;
 
                 ids.extend(field_ids_with_path(&path[..], &inner.items, id));
@@ -611,20 +611,20 @@ fn field_ids(schema: &AvroSchema) -> HashMap<String, i32> {
             AvroSchema::Map(inner) => {
                 let mut path = Vec::from(path);
                 path.push("entries");
-                ids.insert(path.join("."), *id);
+                _ = ids.insert(path.join("."), *id);
                 *id += 1;
 
                 {
                     let mut path = path.clone();
                     path.push("keys");
-                    ids.insert(path.join("."), *id);
+                    _ = ids.insert(path.join("."), *id);
                     *id += 1;
                 }
 
                 {
                     let mut path = path.clone();
                     path.push("values");
-                    ids.insert(path.join("."), *id);
+                    _ = ids.insert(path.join("."), *id);
                     *id += 1;
 
                     ids.extend(field_ids_with_path(&path[..], &inner.types, id))
@@ -636,7 +636,7 @@ fn field_ids(schema: &AvroSchema) -> HashMap<String, i32> {
                     let mut path = Vec::from(path);
                     path.push(field.name.as_str());
 
-                    ids.insert(path.join("."), *id);
+                    _ = ids.insert(path.join("."), *id);
                     *id += 1;
                 }
 
@@ -1497,7 +1497,7 @@ fn decode(validator: Option<&AvroSchema>, encoded: Option<Bytes>) -> Result<Opti
     debug!(?validator, ?encoded);
     validator.map_or(Ok(None), |schema| {
         encoded.map_or(Err(Error::Api(ErrorCode::InvalidRecord)), |encoded| {
-            apache_avro::Reader::with_schema(schema, &encoded[..])
+            Reader::with_schema(schema, &encoded[..])
                 .and_then(|reader| reader.into_iter().next().transpose())
                 .inspect(|value| debug!(?value))
                 .inspect_err(|err| debug!(?err))
@@ -1804,7 +1804,7 @@ impl AsJsonValue for Schema {
 pub fn r<'a>(
     schema: &AvroSchema,
     fields: impl IntoIterator<Item = (&'a str, Value)>,
-) -> apache_avro::types::Record {
+) -> apache_avro::types::Record<'_> {
     apache_avro::types::Record::new(schema)
         .map(|mut record| {
             for (name, value) in fields {
@@ -1819,7 +1819,7 @@ pub fn r<'a>(
 pub fn schema_write(schema: &AvroSchema, value: Value) -> Result<Bytes> {
     debug!(?schema, ?value);
     let mut writer = apache_avro::Writer::new(schema, vec![]);
-    writer.append(value)?;
+    _ = writer.append(value)?;
     writer.into_inner().map(Bytes::from).map_err(Into::into)
 }
 
@@ -1830,7 +1830,7 @@ mod tests {
     use crate::Registry;
 
     use super::*;
-    use apache_avro::{Decimal, types::Value};
+    use apache_avro::{Decimal, Reader, types::Value};
     use arrow::util::pretty::pretty_format_batches;
     use datafusion::prelude::*;
     use iceberg::{
@@ -2228,7 +2228,7 @@ mod tests {
         assert!(writer.append(record)? > 0);
 
         let input = writer.into_inner()?;
-        let reader = apache_avro::Reader::with_schema(&schema, &input[..])?;
+        let reader = Reader::with_schema(&schema, &input[..])?;
 
         let v = reader.into_iter().next().unwrap()?;
 

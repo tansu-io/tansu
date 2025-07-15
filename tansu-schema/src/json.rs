@@ -108,7 +108,7 @@ impl TryFrom<Bytes> for Schema {
             serde_json::from_slice::<Value>(&Bytes::from_static(include_bytes!("meta.json")))
                 .inspect(|meta| debug!(%meta))?;
 
-        schema
+        _ = schema
             .get_mut(PROPERTIES)
             .and_then(|properties| properties.as_object_mut())
             .inspect(|properties| debug!(?properties))
@@ -746,7 +746,7 @@ fn field_ids(schema: &Value) -> BTreeMap<String, i32> {
                         let mut path = Vec::from(path);
                         path.push(k);
 
-                        ids.insert(path.join("."), *id);
+                        _ = ids.insert(path.join("."), *id);
                         *id += 1;
 
                         ids.extend(field_ids_with_path(&path[..], v, id))
@@ -757,7 +757,7 @@ fn field_ids(schema: &Value) -> BTreeMap<String, i32> {
             Some("array") => {
                 let mut path = Vec::from(path);
                 path.push(ARROW_LIST_FIELD_NAME);
-                ids.insert(path.join("."), *id);
+                _ = ids.insert(path.join("."), *id);
                 *id += 1;
 
                 if let Some(items) = schema.get("items") {
@@ -784,7 +784,7 @@ fn field_ids(schema: &Value) -> BTreeMap<String, i32> {
             .inspect(|schema| debug!(?kind, ?schema))
             .is_some()
         {
-            ids.insert(kind.as_ref().into(), id);
+            _ = ids.insert(kind.as_ref().into(), id);
             id += 1;
         }
     }

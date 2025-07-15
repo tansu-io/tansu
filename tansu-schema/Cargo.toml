@@ -5,6 +5,9 @@ version.workspace = true
 license.workspace = true
 publish = false
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow.workspace = true
 apache-avro.workspace = true
@@ -38,7 +41,7 @@ rhai-rand.workspace = true
 rhai.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-tansu-sans-io = { path = "../tansu-sans-io" }
+tansu-sans-io = { version = "0.4.1", path = "../tansu-sans-io" }
 tempfile.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

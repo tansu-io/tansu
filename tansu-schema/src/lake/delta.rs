@@ -262,7 +262,7 @@ impl Delta {
         }?;
 
         self.tables.lock().map(|mut guard| {
-            guard
+            _ = guard
                 .entry(name.to_owned())
                 .and_modify(|existing| {
                     if table.version() > existing.delta_table.version() {
@@ -307,9 +307,9 @@ impl Delta {
             })?;
 
         self.tables.lock().map(|mut guard| {
-            guard.entry(name.to_string()).and_modify(|existing| {
+            _ = guard.entry(name.to_string()).and_modify(|existing| {
                 if table.version() > existing.delta_table.version() {
-                    existing.delta_table = table.to_owned()
+                    existing.delta_table = table.to_owned();
                 } else {
                     warn!(
                         name,
@@ -381,7 +381,7 @@ impl Delta {
         {
             let start = SystemTime::now();
 
-            writer
+            _ = writer
                 .flush_and_commit(table)
                 .await
                 .inspect_err(|err| debug!(?err))
@@ -396,9 +396,9 @@ impl Delta {
         }
 
         self.tables.lock().map(|mut guard| {
-            guard.entry(name.to_string()).and_modify(|existing| {
+            _ = guard.entry(name.to_string()).and_modify(|existing| {
                 if table.version() > existing.delta_table.version() {
-                    existing.delta_table = table.to_owned()
+                    existing.delta_table = table.to_owned();
                 } else {
                     warn!(
                         name,
@@ -737,7 +737,7 @@ mod tests {
 
             let ctx = SessionContext::new();
 
-            ctx.register_table("t", Arc::new(table))?;
+            _ = ctx.register_table("t", Arc::new(table))?;
 
             let df = ctx.sql("select * from t").await?;
             let results = df.collect().await?;
@@ -826,7 +826,7 @@ mod tests {
 
             let ctx = SessionContext::new();
 
-            ctx.register_table("t", Arc::new(table))?;
+            _ = ctx.register_table("t", Arc::new(table))?;
 
             let df = ctx.sql("select * from t").await?;
             let results = df.collect().await?;
@@ -926,7 +926,7 @@ mod tests {
 
             let ctx = SessionContext::new();
 
-            ctx.register_table("t", Arc::new(table))?;
+            _ = ctx.register_table("t", Arc::new(table))?;
 
             let df = ctx.sql("select * from t").await?;
             let results = df.collect().await?;
@@ -1036,7 +1036,7 @@ mod tests {
 
             let ctx = SessionContext::new();
 
-            ctx.register_table("t", Arc::new(table))?;
+            _ = ctx.register_table("t", Arc::new(table))?;
 
             let df = ctx.sql("select * from t").await?;
             let results = df.collect().await?;
@@ -1146,7 +1146,7 @@ mod tests {
 
             let ctx = SessionContext::new();
 
-            ctx.register_table("t", Arc::new(table))?;
+            _ = ctx.register_table("t", Arc::new(table))?;
 
             let df = ctx.sql("select * from t").await?;
             let results = df.collect().await?;
@@ -1246,7 +1246,7 @@ mod tests {
 
             let ctx = SessionContext::new();
 
-            ctx.register_table("t", Arc::new(table))?;
+            _ = ctx.register_table("t", Arc::new(table))?;
 
             let df = ctx.sql("select * from t").await?;
             let results = df.collect().await?;
@@ -1356,7 +1356,7 @@ mod tests {
 
             let ctx = SessionContext::new();
 
-            ctx.register_table("t", Arc::new(table))?;
+            _ = ctx.register_table("t", Arc::new(table))?;
 
             let df = ctx.sql("select * from t").await?;
             let results = df.collect().await?;
@@ -1576,7 +1576,7 @@ mod tests {
 
             let ctx = SessionContext::new();
 
-            ctx.register_table("t", Arc::new(table))?;
+            _ = ctx.register_table("t", Arc::new(table))?;
 
             let df = ctx.sql("select * from t").await?;
             let results = df.collect().await?;
@@ -1662,7 +1662,7 @@ mod tests {
 
             let ctx = SessionContext::new();
 
-            ctx.register_table("t", Arc::new(table))?;
+            _ = ctx.register_table("t", Arc::new(table))?;
 
             let df = ctx.sql("select * from t").await?;
             let results = df.collect().await?;
@@ -1788,7 +1788,7 @@ mod tests {
 
             let ctx = SessionContext::new();
 
-            ctx.register_table("t", Arc::new(table))?;
+            _ = ctx.register_table("t", Arc::new(table))?;
 
             let df = ctx.sql("select * from t").await?;
             let results = df.collect().await?;
@@ -1901,7 +1901,7 @@ mod tests {
 
             let ctx = SessionContext::new();
 
-            ctx.register_table("t", Arc::new(table))?;
+            _ = ctx.register_table("t", Arc::new(table))?;
 
             let df = ctx.sql("select * from t").await?;
             let results = df.collect().await?;

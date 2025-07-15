@@ -31,7 +31,7 @@ fn frame_length(encoded: [u8; 4]) -> usize {
 
 pub async fn read_frame(tcp_stream: &mut TcpStream) -> Result<Bytes> {
     let mut size = [0u8; 4];
-    tcp_stream.read_exact(&mut size).await?;
+    _ = tcp_stream.read_exact(&mut size).await?;
 
     let mut buffer: Vec<u8> = vec![0u8; frame_length(size)];
     buffer[0..size.len()].copy_from_slice(&size[..]);

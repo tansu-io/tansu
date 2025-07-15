@@ -19,7 +19,7 @@ use tracing_subscriber::{
 };
 
 #[derive(Debug)]
-pub struct Guard {
+pub(super) struct Guard {
     tracer: Option<SdkTracerProvider>,
 }
 
@@ -33,7 +33,7 @@ impl Drop for Guard {
     }
 }
 
-pub fn init_tracing_subscriber(tracing_format: TracingFormat) -> Result<Guard> {
+pub(super) fn init_tracing_subscriber(tracing_format: TracingFormat) -> Result<Guard> {
     // let provider = init_tracer_provider()?;
 
     // let tracer = provider.tracer(format!("{}-otel-subscriber", env!("CARGO_PKG_NAME")));

@@ -294,7 +294,7 @@ impl LakeHouse for Iceberg {
             .fast_append(Some(commit_uuid), vec![])
             .inspect_err(|err| debug!(?err))?;
 
-        fast_append
+        _ = fast_append
             .add_data_files(data_files)
             .inspect_err(|err| debug!(?err))?;
 
@@ -360,7 +360,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_namespace() -> Result<()> {
-        dotenv().ok();
+        _ = dotenv().ok();
         let _guard = init_tracing()?;
 
         let catalog_uri = &var("ICEBERG_CATALOG").unwrap_or("http://localhost:8181".into())[..];
@@ -385,7 +385,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_duplicate_namespace() -> Result<()> {
-        dotenv().ok();
+        _ = dotenv().ok();
         let _guard = init_tracing()?;
 
         let catalog_uri = &var("ICEBERG_CATALOG").unwrap_or("http://localhost:8181".into())[..];
@@ -425,7 +425,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_table() -> Result<()> {
-        dotenv().ok();
+        _ = dotenv().ok();
         let _guard = init_tracing()?;
 
         let catalog_uri = &var("ICEBERG_CATALOG").unwrap_or("http://localhost:8181".into())[..];
@@ -464,7 +464,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_duplicate_table() -> Result<()> {
-        dotenv().ok();
+        _ = dotenv().ok();
         let _guard = init_tracing()?;
 
         let catalog_uri = &var("ICEBERG_CATALOG").unwrap_or("http://localhost:8181".into())[..];

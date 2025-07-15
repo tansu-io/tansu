@@ -5,8 +5,8 @@ version.workspace = true
 license.workspace = true
 publish = false
 
-# [lints]
-# workspace = true
+[lints]
+workspace = true
 
 [dependencies]
 async-trait.workspace = true
@@ -17,9 +17,9 @@ opentelemetry-semantic-conventions.workspace = true
 opentelemetry.workspace = true
 opentelemetry_sdk.workspace = true
 rama.workspace = true
-tansu-otel = { path = "../tansu-otel" }
-tansu-sans-io = { path = "../tansu-sans-io" }
-tansu-service = { path = "../tansu-service" }
+tansu-otel = { version = "0.4.1", path = "../tansu-otel" }
+tansu-sans-io = { version = "0.4.1", path = "../tansu-sans-io" }
+tansu-service = { version = "0.4.1", path = "../tansu-service" }
 thiserror.workspace = true
 tokio.workspace = true
 tracing-subscriber.workspace = true

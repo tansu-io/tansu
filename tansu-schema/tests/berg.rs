@@ -83,7 +83,7 @@ pub async fn lake_store(
 
     let ctx = SessionContext::new();
 
-    ctx.register_table("t", table_provider)?;
+    _ = ctx.register_table("t", table_provider)?;
 
     ctx.sql("select * from t")
         .await?
@@ -128,7 +128,7 @@ mod json {
 
     #[tokio::test]
     async fn key_and_value() -> Result<()> {
-        dotenv().ok();
+        _ = dotenv().ok();
         let _guard = init_tracing()?;
 
         let schema = serde_json::to_vec(&json!({
@@ -206,7 +206,7 @@ mod json {
 
     #[tokio::test]
     async fn grade() -> Result<()> {
-        dotenv().ok();
+        _ = dotenv().ok();
         let _guard = init_tracing()?;
 
         let schema = Schema::try_from(Bytes::from_static(include_bytes!(
@@ -286,7 +286,7 @@ mod json {
 
     #[tokio::test]
     async fn key() -> Result<()> {
-        dotenv().ok();
+        _ = dotenv().ok();
         let _guard = init_tracing()?;
 
         let schema = serde_json::to_vec(&json!({
@@ -342,7 +342,7 @@ mod json {
 
     #[tokio::test]
     async fn primitive_key_and_value() -> Result<()> {
-        dotenv().ok();
+        _ = dotenv().ok();
         let _guard = init_tracing()?;
 
         let schema = serde_json::to_vec(&json!({
@@ -405,7 +405,7 @@ mod json {
 
     #[tokio::test]
     async fn primitive_key_and_array_value() -> Result<()> {
-        dotenv().ok();
+        _ = dotenv().ok();
         let _guard = init_tracing()?;
 
         let schema = serde_json::to_vec(&json!({
@@ -472,7 +472,7 @@ mod json {
     #[ignore]
     #[tokio::test]
     async fn primitive_key_and_array_object_value() -> Result<()> {
-        dotenv().ok();
+        _ = dotenv().ok();
         let _guard = init_tracing()?;
 
         let schema = serde_json::to_vec(&json!({
@@ -555,7 +555,7 @@ mod json {
     #[ignore]
     #[tokio::test]
     async fn primitive_key_and_struct_with_array_field_value() -> Result<()> {
-        dotenv().ok();
+        _ = dotenv().ok();
         let _guard = init_tracing()?;
 
         let schema = serde_json::to_vec(&json!({
@@ -640,7 +640,7 @@ mod proto {
 
     #[tokio::test]
     async fn message_descriptor_singular_to_field() -> Result<()> {
-        dotenv().ok();
+        _ = dotenv().ok();
         let _guard = init_tracing()?;
 
         let proto = Bytes::from_static(
@@ -731,7 +731,7 @@ mod proto {
 
     #[tokio::test]
     async fn taxi_plain() -> Result<()> {
-        dotenv().ok();
+        _ = dotenv().ok();
         let _guard = init_tracing()?;
 
         let schema = Schema::try_from(Bytes::from_static(include_bytes!(
@@ -780,7 +780,7 @@ mod proto {
     #[ignore]
     #[tokio::test]
     async fn taxi_normalized() -> Result<()> {
-        dotenv().ok();
+        _ = dotenv().ok();
         let _guard = init_tracing()?;
 
         let schema = Schema::try_from(Bytes::from_static(include_bytes!(
@@ -827,7 +827,7 @@ mod proto {
 
     #[tokio::test]
     async fn value_message_ref() -> Result<()> {
-        dotenv().ok();
+        _ = dotenv().ok();
         let _guard = init_tracing()?;
 
         let proto = Bytes::from_static(
@@ -885,7 +885,7 @@ mod proto {
 
     #[tokio::test]
     async fn simple_repeated() -> Result<()> {
-        dotenv().ok();
+        _ = dotenv().ok();
         let _guard = init_tracing()?;
 
         let proto = Bytes::from_static(
@@ -938,7 +938,7 @@ mod proto {
 
     #[tokio::test]
     async fn repeated() -> Result<()> {
-        dotenv().ok();
+        _ = dotenv().ok();
         let _guard = init_tracing()?;
 
         let proto = Bytes::from_static(
@@ -1007,7 +1007,7 @@ mod avro {
 
     #[tokio::test]
     async fn record_of_primitive_data_types() -> Result<()> {
-        dotenv().ok();
+        _ = dotenv().ok();
         let _guard = init_tracing()?;
 
         let schema = Schema::from(json!({
@@ -1079,7 +1079,7 @@ mod avro {
 
     #[tokio::test]
     async fn record_of_with_list_of_primitive_data_types() -> Result<()> {
-        dotenv().ok();
+        _ = dotenv().ok();
         let _guard = init_tracing()?;
 
         let schema = Schema::from(json!({
@@ -1167,7 +1167,7 @@ mod avro {
 
     #[tokio::test]
     async fn union() -> Result<()> {
-        dotenv().ok();
+        _ = dotenv().ok();
         let _guard = init_tracing()?;
 
         let schema = Schema::from(json!({
@@ -1222,7 +1222,7 @@ mod avro {
 
     #[tokio::test]
     async fn enumeration() -> Result<()> {
-        dotenv().ok();
+        _ = dotenv().ok();
         let _guard = init_tracing()?;
 
         let schema = Schema::from(json!({
@@ -1281,7 +1281,7 @@ mod avro {
 
     #[tokio::test]
     async fn observation_enumeration() -> Result<()> {
-        dotenv().ok();
+        _ = dotenv().ok();
         let _guard = init_tracing()?;
 
         let schema = Schema::from(json!({
@@ -1345,7 +1345,7 @@ mod avro {
     #[ignore]
     #[tokio::test]
     async fn map() -> Result<()> {
-        dotenv().ok();
+        _ = dotenv().ok();
         let _guard = init_tracing()?;
 
         let schema = Schema::from(json!({
@@ -1397,7 +1397,7 @@ mod avro {
 
     #[tokio::test]
     async fn simple_integer_key() -> Result<()> {
-        dotenv().ok();
+        _ = dotenv().ok();
         let _guard = init_tracing()?;
 
         let schema = Schema::from(json!({
@@ -1451,7 +1451,7 @@ mod avro {
 
     #[tokio::test]
     async fn simple_record_value() -> Result<()> {
-        dotenv().ok();
+        _ = dotenv().ok();
         let _guard = init_tracing()?;
 
         let schema = Schema::from(json!({
@@ -1526,7 +1526,7 @@ mod avro {
 
     #[tokio::test]
     async fn array_bool_value() -> Result<()> {
-        dotenv().ok();
+        _ = dotenv().ok();
         let _guard = init_tracing()?;
 
         let schema = Schema::from(json!({
@@ -1589,7 +1589,7 @@ mod avro {
 
     #[tokio::test]
     async fn array_int_value() -> Result<()> {
-        dotenv().ok();
+        _ = dotenv().ok();
         let _guard = init_tracing()?;
 
         let schema = Schema::from(json!({
@@ -1650,7 +1650,7 @@ mod avro {
 
     #[tokio::test]
     async fn array_long_value() -> Result<()> {
-        dotenv().ok();
+        _ = dotenv().ok();
         let _guard = init_tracing()?;
 
         let schema = Schema::from(json!({
@@ -1711,7 +1711,7 @@ mod avro {
 
     #[tokio::test]
     async fn array_float_value() -> Result<()> {
-        dotenv().ok();
+        _ = dotenv().ok();
         let _guard = init_tracing()?;
 
         let schema = Schema::from(json!({
@@ -1775,7 +1775,7 @@ mod avro {
 
     #[tokio::test]
     async fn array_double_value() -> Result<()> {
-        dotenv().ok();
+        _ = dotenv().ok();
         let _guard = init_tracing()?;
 
         let schema = Schema::from(json!({
@@ -1839,7 +1839,7 @@ mod avro {
 
     #[tokio::test]
     async fn array_string_value() -> Result<()> {
-        dotenv().ok();
+        _ = dotenv().ok();
         let _guard = init_tracing()?;
 
         let schema = Schema::from(json!({
@@ -1904,7 +1904,7 @@ mod avro {
     #[ignore]
     #[tokio::test]
     async fn array_record_value() -> Result<()> {
-        dotenv().ok();
+        _ = dotenv().ok();
         let _guard = init_tracing()?;
 
         let schema = Schema::from(json!({
@@ -1988,7 +1988,7 @@ mod avro {
 
     #[tokio::test]
     async fn array_bytes_value() -> Result<()> {
-        dotenv().ok();
+        _ = dotenv().ok();
         let _guard = init_tracing()?;
 
         let schema = Schema::from(json!({
@@ -2052,7 +2052,7 @@ mod avro {
 
     #[tokio::test]
     async fn uuid_logical_type() -> Result<()> {
-        dotenv().ok();
+        _ = dotenv().ok();
         let _guard = init_tracing()?;
 
         let schema = Schema::from(json!({
@@ -2122,7 +2122,7 @@ mod avro {
     #[ignore]
     #[tokio::test]
     async fn time_millis_logical_type() -> Result<()> {
-        dotenv().ok();
+        _ = dotenv().ok();
         let _guard = init_tracing()?;
 
         let schema = Schema::from(json!({
@@ -2183,7 +2183,7 @@ mod avro {
 
     #[tokio::test]
     async fn time_micros_logical_type() -> Result<()> {
-        dotenv().ok();
+        _ = dotenv().ok();
         let _guard = init_tracing()?;
 
         let schema = Schema::from(json!({
@@ -2245,7 +2245,7 @@ mod avro {
     #[ignore]
     #[tokio::test]
     async fn timestamp_millis_logical_type() -> Result<()> {
-        dotenv().ok();
+        _ = dotenv().ok();
         let _guard = init_tracing()?;
 
         let schema = Schema::from(json!({
@@ -2306,7 +2306,7 @@ mod avro {
 
     #[tokio::test]
     async fn timestamp_micros_logical_type() -> Result<()> {
-        dotenv().ok();
+        _ = dotenv().ok();
         let _guard = init_tracing()?;
 
         let schema = Schema::from(json!({

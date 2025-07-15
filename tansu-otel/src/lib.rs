@@ -52,7 +52,7 @@ pub fn meter_provider(
                 .map_err(Into::into)
         })
         .map(|exporter| {
-            let meter_provider = opentelemetry_sdk::metrics::SdkMeterProvider::builder()
+            let meter_provider = SdkMeterProvider::builder()
                 .with_periodic_exporter(exporter)
                 .with_resource(
                     Resource::builder_empty()

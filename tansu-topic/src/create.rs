@@ -30,7 +30,7 @@ use crate::{Error, Result};
 
 use super::Topic;
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Builder<B, N, P> {
     broker: B,
     name: N,
@@ -91,7 +91,7 @@ pub struct Configuration {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Create {
+pub(crate) struct Create {
     configuration: Configuration,
 }
 
@@ -104,7 +104,7 @@ impl TryFrom<Configuration> for Create {
 }
 
 impl Create {
-    pub async fn main(self) -> Result<ErrorCode> {
+    pub(crate) async fn main(self) -> Result<ErrorCode> {
         let mut connection = Connection::open(&self.configuration.broker).await?;
 
         connection

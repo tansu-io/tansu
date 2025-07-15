@@ -59,7 +59,7 @@ static ERRORS: LazyLock<Counter<u64>> = LazyLock::new(|| {
 });
 
 #[derive(Clone, Debug, Default)]
-pub struct OptiCon<D> {
+pub(super) struct OptiCon<D> {
     path: Path,
     tags: TagSet,
     attributes: Attributes,
@@ -67,7 +67,7 @@ pub struct OptiCon<D> {
 }
 
 impl<D> OptiCon<D> {
-    pub fn path(path: impl Into<Path>) -> Self {
+    pub(super) fn path(path: impl Into<Path>) -> Self {
         Self {
             path: path.into(),
             tags: Default::default(),
@@ -131,7 +131,7 @@ where
         }
     }
 
-    pub async fn with<E, F>(&self, object_store: &impl ObjectStore, f: F) -> Result<E>
+    pub(super) async fn with<E, F>(&self, object_store: &impl ObjectStore, f: F) -> Result<E>
     where
         F: Fn(&D) -> Result<E>,
     {
@@ -221,7 +221,7 @@ where
         )
     }
 
-    pub async fn with_mut<E, F>(&self, object_store: &impl ObjectStore, f: F) -> Result<E>
+    pub(super) async fn with_mut<E, F>(&self, object_store: &impl ObjectStore, f: F) -> Result<E>
     where
         E: Debug,
         F: Fn(&mut D) -> Result<E>,
