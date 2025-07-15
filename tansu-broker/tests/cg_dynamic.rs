@@ -1,27 +1,26 @@
 // Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
+// http://www.apache.org/licenses/LICENSE-2.0
 //
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use bytes::Bytes;
 use common::{
-    CLIENT_ID, COOPERATIVE_STICKY, HeartbeatResponse, PROTOCOL_TYPE, RANGE, StorageType,
-    alphanumeric_string, heartbeat, join, join_group, register_broker, sync_group,
+    CLIENT_ID, COOPERATIVE_STICKY, PROTOCOL_TYPE, RANGE, StorageType, alphanumeric_string,
+    heartbeat, join, join_group, register_broker, sync_group,
 };
 use rand::{prelude::*, rng};
 use tansu_broker::{Result, coordinator::group::administrator::Controller};
 use tansu_sans_io::{
-    ErrorCode, join_group_request::JoinGroupRequestProtocol,
+    ErrorCode, HeartbeatResponse, join_group_request::JoinGroupRequestProtocol,
     sync_group_request::SyncGroupRequestAssignment,
 };
 use tansu_storage::StorageContainer;
@@ -52,14 +51,12 @@ pub async fn reject_empty_member_id_on_join(
     let first_member_sticky_meta = Bytes::from_static(b"first_member_sticky_meta_01");
 
     let protocols = [
-        JoinGroupRequestProtocol {
-            name: RANGE.into(),
-            metadata: first_member_range_meta.clone(),
-        },
-        JoinGroupRequestProtocol {
-            name: COOPERATIVE_STICKY.into(),
-            metadata: first_member_sticky_meta,
-        },
+        JoinGroupRequestProtocol::default()
+            .name(RANGE.into())
+            .metadata(first_member_range_meta.clone()),
+        JoinGroupRequestProtocol::default()
+            .name(COOPERATIVE_STICKY.into())
+            .metadata(first_member_sticky_meta),
     ];
 
     // join dynamic group without a member id
@@ -80,12 +77,15 @@ pub async fn reject_empty_member_id_on_join(
 
     // join rejected as member id is required
     //
-    assert_eq!(ErrorCode::MemberIdRequired, member_id_required.error_code);
+    assert_eq!(
+        ErrorCode::MemberIdRequired,
+        ErrorCode::try_from(member_id_required.error_code)?
+    );
     assert_eq!(Some(PROTOCOL_TYPE.into()), member_id_required.protocol_type);
     assert_eq!(Some("".into()), member_id_required.protocol_name);
     assert!(member_id_required.leader.is_empty());
     assert!(member_id_required.member_id.starts_with(CLIENT_ID));
-    assert_eq!(0, member_id_required.members.len());
+    assert_eq!(0, member_id_required.members.unwrap().len());
 
     Ok(())
 }
@@ -118,10 +118,9 @@ pub async fn lifecycle(cluster_id: Uuid, broker_id: i32, mut sc: StorageContaine
 
     let first_member_assignment_01 = common::random_bytes(15);
 
-    let assignments = [SyncGroupRequestAssignment {
-        member_id: first_member.id().into(),
-        assignment: first_member_assignment_01.clone(),
-    }];
+    let assignments = [SyncGroupRequestAssignment::default()
+        .member_id(first_member.id().into())
+        .assignment(first_member_assignment_01.clone())];
 
     // sync to form the group
     //
@@ -136,26 +135,25 @@ pub async fn lifecycle(cluster_id: Uuid, broker_id: i32, mut sc: StorageContaine
         &assignments,
     )
     .await?;
-    assert_eq!(ErrorCode::None, sync_response.error_code);
-    assert_eq!(PROTOCOL_TYPE, sync_response.protocol_type);
-    assert_eq!(RANGE, sync_response.protocol_name);
+    assert_eq!(
+        ErrorCode::None,
+        ErrorCode::try_from(sync_response.error_code)?
+    );
+    assert_eq!(PROTOCOL_TYPE, sync_response.protocol_type.unwrap());
+    assert_eq!(RANGE, sync_response.protocol_name.unwrap());
     assert_eq!(first_member_assignment_01, sync_response.assignment);
 
     // heartbeat establishing leadership of current generation
     //
-    assert_eq!(
-        HeartbeatResponse {
-            error_code: ErrorCode::None,
-        },
-        heartbeat(
-            &mut controller,
-            group_id.as_str(),
-            first_member.generation(),
-            first_member.id(),
-            group_instance_id
-        )
-        .await?
-    );
+    let HeartbeatResponse { error_code, .. } = heartbeat(
+        &mut controller,
+        group_id.as_str(),
+        first_member.generation(),
+        first_member.id(),
+        group_instance_id,
+    )
+    .await?;
+    assert_eq!(ErrorCode::None, ErrorCode::try_from(error_code)?);
 
     // 2nd member joins
     //
@@ -184,24 +182,26 @@ pub async fn lifecycle(cluster_id: Uuid, broker_id: i32, mut sc: StorageContaine
         &assignments,
     )
     .await?;
-    assert_eq!(ErrorCode::RebalanceInProgress, sync_response.error_code);
-    assert_eq!(PROTOCOL_TYPE, sync_response.protocol_type);
-    assert_eq!(RANGE, sync_response.protocol_name);
+    assert_eq!(
+        ErrorCode::RebalanceInProgress,
+        ErrorCode::try_from(sync_response.error_code)?
+    );
+    assert_eq!(PROTOCOL_TYPE, sync_response.protocol_type.unwrap());
+    assert_eq!(RANGE, sync_response.protocol_name.unwrap());
 
     // rebalance in progress on heartbeat from leader with previous generation
     //
+    let HeartbeatResponse { error_code, .. } = heartbeat(
+        &mut controller,
+        group_id.as_str(),
+        first_member.generation(),
+        first_member.id(),
+        group_instance_id,
+    )
+    .await?;
     assert_eq!(
-        HeartbeatResponse {
-            error_code: ErrorCode::RebalanceInProgress,
-        },
-        heartbeat(
-            &mut controller,
-            group_id.as_str(),
-            first_member.generation(),
-            first_member.id(),
-            group_instance_id
-        )
-        .await?
+        ErrorCode::RebalanceInProgress,
+        ErrorCode::try_from(error_code)?
     );
 
     // 2nd member rejoins due to rebalance
@@ -242,14 +242,12 @@ pub async fn lifecycle(cluster_id: Uuid, broker_id: i32, mut sc: StorageContaine
     let second_member_assignment_02 = common::random_bytes(15);
 
     let assignments = [
-        SyncGroupRequestAssignment {
-            member_id: first_member.id().into(),
-            assignment: first_member_assignment_02.clone(),
-        },
-        SyncGroupRequestAssignment {
-            member_id: second_member.id().into(),
-            assignment: second_member_assignment_02.clone(),
-        },
+        SyncGroupRequestAssignment::default()
+            .member_id(first_member.id().into())
+            .assignment(first_member_assignment_02.clone()),
+        SyncGroupRequestAssignment::default()
+            .member_id(second_member.id().into())
+            .assignment(second_member_assignment_02.clone()),
     ];
 
     // 1st member leader sync to form and assign the group
@@ -265,9 +263,12 @@ pub async fn lifecycle(cluster_id: Uuid, broker_id: i32, mut sc: StorageContaine
         &assignments,
     )
     .await?;
-    assert_eq!(ErrorCode::None, sync_response.error_code);
-    assert_eq!(PROTOCOL_TYPE, sync_response.protocol_type);
-    assert_eq!(RANGE, sync_response.protocol_name);
+    assert_eq!(
+        ErrorCode::None,
+        ErrorCode::try_from(sync_response.error_code)?
+    );
+    assert_eq!(PROTOCOL_TYPE, sync_response.protocol_type.unwrap());
+    assert_eq!(RANGE, sync_response.protocol_name.unwrap());
     assert_eq!(first_member_assignment_02, sync_response.assignment);
 
     // 2st member receives group assignments
@@ -283,42 +284,37 @@ pub async fn lifecycle(cluster_id: Uuid, broker_id: i32, mut sc: StorageContaine
         &assignments,
     )
     .await?;
-    assert_eq!(ErrorCode::None, sync_response.error_code);
-    assert_eq!(PROTOCOL_TYPE, sync_response.protocol_type);
-    assert_eq!(RANGE, sync_response.protocol_name);
+    assert_eq!(
+        ErrorCode::None,
+        ErrorCode::try_from(sync_response.error_code)?
+    );
+    assert_eq!(PROTOCOL_TYPE, sync_response.protocol_type.unwrap());
+    assert_eq!(RANGE, sync_response.protocol_name.unwrap());
     assert_eq!(second_member_assignment_02, sync_response.assignment);
 
     // 1st member heartbeat
     //
-    assert_eq!(
-        HeartbeatResponse {
-            error_code: ErrorCode::None,
-        },
-        heartbeat(
-            &mut controller,
-            group_id.as_str(),
-            first_member.generation(),
-            first_member.id(),
-            group_instance_id
-        )
-        .await?
-    );
+    let HeartbeatResponse { error_code, .. } = heartbeat(
+        &mut controller,
+        group_id.as_str(),
+        first_member.generation(),
+        first_member.id(),
+        group_instance_id,
+    )
+    .await?;
+    assert_eq!(ErrorCode::None, ErrorCode::try_from(error_code)?);
 
     // 2nd member heartbeat
     //
-    assert_eq!(
-        HeartbeatResponse {
-            error_code: ErrorCode::None,
-        },
-        heartbeat(
-            &mut controller,
-            group_id.as_str(),
-            second_member.generation(),
-            second_member.id(),
-            group_instance_id
-        )
-        .await?
-    );
+    let HeartbeatResponse { error_code, .. } = heartbeat(
+        &mut controller,
+        group_id.as_str(),
+        second_member.generation(),
+        second_member.id(),
+        group_instance_id,
+    )
+    .await?;
+    assert_eq!(ErrorCode::None, ErrorCode::try_from(error_code)?);
 
     // 1st member leaves the group
     //
@@ -329,22 +325,24 @@ pub async fn lifecycle(cluster_id: Uuid, broker_id: i32, mut sc: StorageContaine
         group_instance_id,
     )
     .await?;
-    assert_eq!(ErrorCode::None, leave_response.error_code);
+    assert_eq!(
+        ErrorCode::None,
+        ErrorCode::try_from(leave_response.error_code)?
+    );
 
     // 2nd member heartbeat resulting in rebalance in progress
     //
+    let HeartbeatResponse { error_code, .. } = heartbeat(
+        &mut controller,
+        group_id.as_str(),
+        second_member.generation(),
+        second_member.id(),
+        group_instance_id,
+    )
+    .await?;
     assert_eq!(
-        HeartbeatResponse {
-            error_code: ErrorCode::RebalanceInProgress,
-        },
-        heartbeat(
-            &mut controller,
-            group_id.as_str(),
-            second_member.generation(),
-            second_member.id(),
-            group_instance_id
-        )
-        .await?
+        ErrorCode::RebalanceInProgress,
+        ErrorCode::try_from(error_code)?
     );
 
     // 2nd member rejoins due to rebalance as leader
@@ -364,10 +362,9 @@ pub async fn lifecycle(cluster_id: Uuid, broker_id: i32, mut sc: StorageContaine
 
     let second_member_assignment_03 = common::random_bytes(15);
 
-    let assignments = [SyncGroupRequestAssignment {
-        member_id: second_member.id().into(),
-        assignment: second_member_assignment_03.clone(),
-    }];
+    let assignments = [SyncGroupRequestAssignment::default()
+        .member_id(second_member.id().into())
+        .assignment(second_member_assignment_03.clone())];
 
     // 2nd member leader sync to reform and assign the group
     //
@@ -382,26 +379,25 @@ pub async fn lifecycle(cluster_id: Uuid, broker_id: i32, mut sc: StorageContaine
         &assignments,
     )
     .await?;
-    assert_eq!(ErrorCode::None, sync_response.error_code);
-    assert_eq!(PROTOCOL_TYPE, sync_response.protocol_type);
-    assert_eq!(RANGE, sync_response.protocol_name);
+    assert_eq!(
+        ErrorCode::None,
+        ErrorCode::try_from(sync_response.error_code)?
+    );
+    assert_eq!(PROTOCOL_TYPE, sync_response.protocol_type.unwrap());
+    assert_eq!(RANGE, sync_response.protocol_name.unwrap());
     assert_eq!(second_member_assignment_03, sync_response.assignment);
 
     // 2nd member heartbeat
     //
-    assert_eq!(
-        HeartbeatResponse {
-            error_code: ErrorCode::None,
-        },
-        heartbeat(
-            &mut controller,
-            group_id.as_str(),
-            second_member.generation(),
-            second_member.id(),
-            group_instance_id
-        )
-        .await?
-    );
+    let HeartbeatResponse { error_code, .. } = heartbeat(
+        &mut controller,
+        group_id.as_str(),
+        second_member.generation(),
+        second_member.id(),
+        group_instance_id,
+    )
+    .await?;
+    assert_eq!(ErrorCode::None, ErrorCode::try_from(error_code)?);
 
     Ok(())
 }

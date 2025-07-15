@@ -353,9 +353,9 @@ Please [raise an issue][tansu-issues] if you encounter a problem.
 
 ## License
 
-Tansu is licensed under the [GNU AGPL][agpl-license].
+Tansu is licensed under [Apache 2.0][apache-license].
 
-[agpl-license]: https://www.gnu.org/licenses/agpl-3.0.en.html
+[apache-license]: https://www.apache.org/licenses/LICENSE-2.0
 [apache-zookeeper]: https://en.wikipedia.org/wiki/Apache_ZooKeeper
 [aws-s3-conditional-requests]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-requests.html
 [aws-s3-conditional-writes]: https://aws.amazon.com/about-aws/whats-new/2024/08/amazon-s3-conditional-writes/

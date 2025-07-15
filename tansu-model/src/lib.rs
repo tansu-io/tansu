@@ -1,17 +1,21 @@
 // Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
+// http://www.apache.org/licenses/LICENSE-2.0
 //
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+//! Structures representing Kafka JSON protocol definitions.
+//!
+//! This crate converts Kafka JSON protocol definitions into structures
+//! that can be easily used during the Tansu Sans I/O build process.
 
 pub mod error;
 pub mod wv;
@@ -66,6 +70,7 @@ fn type_mapping(kind: &str) -> String {
 }
 
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+/// The Kafka field kind (type).
 pub struct Kind(String);
 
 impl ToTokens for Kind {
@@ -101,32 +106,38 @@ impl Kind {
 
     #[must_use]
     #[allow(clippy::missing_panics_doc)]
+    /// The Rust type name of this kind.
     pub fn type_name(&self) -> Type {
         syn::parse_str::<Type>(&type_mapping(&self.0))
             .unwrap_or_else(|_| panic!("not a type: {self:?}"))
     }
 
     #[must_use]
+    /// Returns true if this kind is a sequence (array)
     pub fn is_sequence(&self) -> bool {
         self.0.starts_with("[]")
     }
 
     #[must_use]
+    /// Returns true is this kind is a Kafka primitive (defined) type
     pub fn is_primitive(&self) -> bool {
         PRIMITIVE.contains(&self.0.as_str())
     }
 
     #[must_use]
+    /// Returns true if this kind is a float64
     pub fn is_float(&self) -> bool {
         self.0.eq("float64")
     }
 
     #[must_use]
+    /// Returns true if this is a sequence of Kafka primitive types
     pub fn is_sequence_of_primitive(&self) -> bool {
         self.is_sequence() && PRIMITIVE.contains(&&self.0[2..])
     }
 
     #[must_use]
+    /// Optionally when the kind is a sequence, returns the kind of the sequence
     pub fn kind_of_sequence(&self) -> Option<Self> {
         if self.is_sequence() {
             Some(Self::new(&self.0[2..]))
@@ -153,6 +164,7 @@ impl TryFrom<&Value> for Kind {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+/// The listener for this message type.
 pub enum Listener {
     ZkBroker,
     #[default]
@@ -187,6 +199,7 @@ impl FromStr for Listener {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+/// Model request and response types only
 pub enum MessageKind {
     #[default]
     Request,
@@ -221,6 +234,7 @@ impl FromStr for MessageKind {
 }
 
 #[derive(Clone, Copy, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+/// A range of versions.
 pub struct VersionRange {
     pub start: i16,
     pub end: i16,
@@ -304,9 +318,13 @@ impl FromStr for VersionRange {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+/// The validity, deprecation and flexible version ranges of a Kafka API message.
 pub struct Version {
+    /// The valid version ranges of this Kafka message.
     pub valid: VersionRange,
+    /// The deprecated version range of this Kafka message.
     pub deprecated: Option<VersionRange>,
+    /// The range of versions where this message uses flexible encoding.
     pub flexible: VersionRange,
 }
 
@@ -349,17 +367,29 @@ impl<'a> TryFrom<&Wv<'a>> for Version {
 }
 
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+/// Kafka message field schema
 pub struct Field {
+    /// The name of this field.
     name: String,
+    /// The Kafka type of this field.
     kind: Kind,
+    /// A comment about this field.
     about: Option<String>,
+    /// The version range for this field.
     versions: VersionRange,
+    /// Whether this field can be used as the key in a map.
     map_key: Option<bool>,
+    /// Whether this field can be null.
     nullable: Option<VersionRange>,
+    /// The tag ID for this field
     tag: Option<u32>,
+    /// The version range in which this field can be tagged.
     tagged: Option<VersionRange>,
+    /// The entity type of this field.
     entity_type: Option<String>,
+    /// The default value of this field.
     default: Option<String>,
+    /// Any fields this field contains.
     fields: Option<Vec<Field>>,
 }
 
@@ -411,8 +441,8 @@ impl Field {
     }
 
     #[must_use]
-    pub fn about(&self) -> &Option<String> {
-        &self.about
+    pub fn about(&self) -> Option<&str> {
+        self.about.as_deref()
     }
 
     #[must_use]
@@ -768,11 +798,17 @@ pub struct HeaderMeta {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+/// Kafka API message metadata.
 pub struct MessageMeta {
+    /// The name of the Kafka API message.
     pub name: &'static str,
+    /// The API key used by this message.
     pub api_key: i16,
+    /// The version ranges for this message.
     pub version: Version,
+    /// The message kind of this message.
     pub message_kind: MessageKind,
+    /// The fields that this message describes.
     pub fields: &'static [(&'static str, &'static FieldMeta)],
 }
 
@@ -816,12 +852,19 @@ impl MessageMeta {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+/// Kafka API message field metadata
 pub struct FieldMeta {
+    /// The version range of this field.
     pub version: VersionRange,
+    /// The version range where this field may be null.
     pub nullable: Option<VersionRange>,
+    /// The kind (type) metadata of this field.
     pub kind: KindMeta,
+    /// When present the tag ID of this field.
     pub tag: Option<u32>,
+    /// The range of versions where this field is tagged.
     pub tagged: Option<VersionRange>,
+    /// The fields contained within this structure.
     pub fields: &'static [(&'static str, &'static FieldMeta)],
 }
 
@@ -1655,7 +1698,7 @@ mod tests {
         assert_eq!("Key", m.fields()[0].name());
         assert_eq!(Kind::new("string"), m.fields()[0].kind);
         assert_eq!(VersionRange { start: 0, end: 3 }, m.fields()[0].versions());
-        assert_eq!(&Some("The coordinator key.".into()), m.fields()[0].about());
+        assert_eq!(Some("The coordinator key.".into()), m.fields()[0].about());
 
         Ok(())
     }

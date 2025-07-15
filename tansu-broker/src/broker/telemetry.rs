@@ -1,19 +1,20 @@
-// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
+// http://www.apache.org/licenses/LICENSE-2.0
 //
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
-use tansu_sans_io::{Body, ErrorCode};
+use tansu_sans_io::{
+    Body, ErrorCode, get_telemetry_subscriptions_response::GetTelemetrySubscriptionsResponse,
+};
 use uuid::Uuid;
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -25,16 +26,16 @@ impl GetTelemetrySubscriptionsRequest {
 
         let client_instance_id = *Uuid::new_v4().as_bytes();
 
-        Body::GetTelemetrySubscriptionsResponse {
-            throttle_time_ms: 0,
-            error_code: ErrorCode::None.into(),
-            client_instance_id,
-            subscription_id: 0,
-            accepted_compression_types: Some([0].into()),
-            push_interval_ms: 5_000,
-            telemetry_max_bytes: 1_024,
-            delta_temporality: false,
-            requested_metrics: Some([].into()),
-        }
+        GetTelemetrySubscriptionsResponse::default()
+            .throttle_time_ms(0)
+            .error_code(ErrorCode::None.into())
+            .client_instance_id(client_instance_id)
+            .subscription_id(0)
+            .accepted_compression_types(Some([0].into()))
+            .push_interval_ms(5_000)
+            .telemetry_max_bytes(1_024)
+            .delta_temporality(false)
+            .requested_metrics(Some([].into()))
+            .into()
     }
 }

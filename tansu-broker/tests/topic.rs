@@ -1,17 +1,16 @@
-// Copyright ⓒ 2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
+// http://www.apache.org/licenses/LICENSE-2.0
 //
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use common::{alphanumeric_string, register_broker};
 use tansu_broker::Result;
@@ -43,13 +42,12 @@ pub async fn create_delete(
 
     let topic_id = sc
         .create_topic(
-            CreatableTopic {
-                name: topic_name.clone(),
-                num_partitions,
-                replication_factor,
-                assignments: assignments.clone(),
-                configs: configs.clone(),
-            },
+            CreatableTopic::default()
+                .name(topic_name.clone())
+                .num_partitions(num_partitions)
+                .replication_factor(replication_factor)
+                .assignments(assignments.clone())
+                .configs(configs.clone()),
             false,
         )
         .await?;
@@ -81,13 +79,12 @@ pub async fn create_describe_topic_partitions_by_id(
 
     let topic_id = sc
         .create_topic(
-            CreatableTopic {
-                name: topic_name.clone(),
-                num_partitions,
-                replication_factor,
-                assignments: assignments.clone(),
-                configs: configs.clone(),
-            },
+            CreatableTopic::default()
+                .name(topic_name.clone())
+                .num_partitions(num_partitions)
+                .replication_factor(replication_factor)
+                .assignments(assignments.clone())
+                .configs(configs.clone()),
             false,
         )
         .await?;
@@ -153,13 +150,12 @@ pub async fn create_describe_topic_partitions_by_name(
 
     let topic_id = sc
         .create_topic(
-            CreatableTopic {
-                name: topic_name.clone(),
-                num_partitions,
-                replication_factor,
-                assignments: assignments.clone(),
-                configs: configs.clone(),
-            },
+            CreatableTopic::default()
+                .name(topic_name.clone())
+                .num_partitions(num_partitions)
+                .replication_factor(replication_factor)
+                .assignments(assignments.clone())
+                .configs(configs.clone()),
             false,
         )
         .await?;
@@ -257,22 +253,20 @@ pub async fn create_with_config_delete(
 
     let assignments = Some([].into());
     let configs = Some(
-        [CreatableTopicConfig {
-            name: "xyz".into(),
-            value: Some("12321".into()),
-        }]
+        [CreatableTopicConfig::default()
+            .name("xyz".into())
+            .value(Some("12321".into()))]
         .into(),
     );
 
     let topic_id = sc
         .create_topic(
-            CreatableTopic {
-                name: topic_name.clone(),
-                num_partitions,
-                replication_factor,
-                assignments: assignments.clone(),
-                configs: configs.clone(),
-            },
+            CreatableTopic::default()
+                .name(topic_name.clone())
+                .num_partitions(num_partitions)
+                .replication_factor(replication_factor)
+                .assignments(assignments.clone())
+                .configs(configs.clone()),
             false,
         )
         .await?;

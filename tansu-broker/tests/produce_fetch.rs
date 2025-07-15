@@ -1,17 +1,16 @@
 // Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
+// http://www.apache.org/licenses/LICENSE-2.0
 //
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::collections::BTreeMap;
 
@@ -54,13 +53,12 @@ pub async fn simple_non_txn(
     //
     let topic_id = sc
         .create_topic(
-            CreatableTopic {
-                name: input_topic_name.clone(),
-                num_partitions,
-                replication_factor,
-                assignments: assignments.clone(),
-                configs: configs.clone(),
-            },
+            CreatableTopic::default()
+                .name(input_topic_name.clone())
+                .num_partitions(num_partitions)
+                .replication_factor(replication_factor)
+                .assignments(assignments.clone())
+                .configs(configs.clone()),
             false,
         )
         .await?;
@@ -169,13 +167,12 @@ pub async fn with_txn(cluster_id: Uuid, broker_id: i32, mut sc: StorageContainer
 
     let topic_id = sc
         .create_topic(
-            CreatableTopic {
-                name: topic_name.clone(),
-                num_partitions,
-                replication_factor,
-                assignments: assignments.clone(),
-                configs: configs.clone(),
-            },
+            CreatableTopic::default()
+                .name(topic_name.clone())
+                .num_partitions(num_partitions)
+                .replication_factor(replication_factor)
+                .assignments(assignments.clone())
+                .configs(configs.clone()),
             false,
         )
         .await
@@ -211,10 +208,9 @@ pub async fn with_txn(cluster_id: Uuid, broker_id: i32, mut sc: StorageContainer
                 transaction_id: transaction_id.clone(),
                 producer_id: txn_producer.id,
                 producer_epoch: txn_producer.epoch,
-                topics: [AddPartitionsToTxnTopic {
-                    name: topic_name.clone(),
-                    partitions: Some([partition_index].into()),
-                }]
+                topics: [AddPartitionsToTxnTopic::default()
+                    .name(topic_name.clone())
+                    .partitions(Some([partition_index].into()))]
                 .into(),
             })
             .await
@@ -230,16 +226,14 @@ pub async fn with_txn(cluster_id: Uuid, broker_id: i32, mut sc: StorageContainer
             })?;
 
         assert_eq!(
-            [AddPartitionsToTxnTopicResult {
-                name: topic_name.clone(),
-                results_by_partition: Some(
-                    [AddPartitionsToTxnPartitionResult {
-                        partition_index,
-                        partition_error_code: ErrorCode::None.into(),
-                    }]
+            [AddPartitionsToTxnTopicResult::default()
+                .name(topic_name.clone())
+                .results_by_partition(Some(
+                    [AddPartitionsToTxnPartitionResult::default()
+                        .partition_index(partition_index)
+                        .partition_error_code(ErrorCode::None.into())]
                     .into()
-                )
-            }],
+                ))],
             add_partitions.zero_to_three()
         );
 
@@ -403,13 +397,12 @@ pub async fn with_multiple_txn(
 
     let topic_id = sc
         .create_topic(
-            CreatableTopic {
-                name: topic_name.clone(),
-                num_partitions,
-                replication_factor,
-                assignments: assignments.clone(),
-                configs: configs.clone(),
-            },
+            CreatableTopic::default()
+                .name(topic_name.clone())
+                .num_partitions(num_partitions)
+                .replication_factor(replication_factor)
+                .assignments(assignments.clone())
+                .configs(configs.clone()),
             false,
         )
         .await
@@ -445,10 +438,9 @@ pub async fn with_multiple_txn(
                 transaction_id: transaction_id.clone(),
                 producer_id: txn_producer.id,
                 producer_epoch: txn_producer.epoch,
-                topics: [AddPartitionsToTxnTopic {
-                    name: topic_name.clone(),
-                    partitions: Some([partition_index].into()),
-                }]
+                topics: [AddPartitionsToTxnTopic::default()
+                    .name(topic_name.clone())
+                    .partitions(Some([partition_index].into()))]
                 .into(),
             })
             .await
@@ -463,16 +455,14 @@ pub async fn with_multiple_txn(
             })?;
 
         assert_eq!(
-            [AddPartitionsToTxnTopicResult {
-                name: topic_name.clone(),
-                results_by_partition: Some(
-                    [AddPartitionsToTxnPartitionResult {
-                        partition_index,
-                        partition_error_code: ErrorCode::None.into(),
-                    }]
+            [AddPartitionsToTxnTopicResult::default()
+                .name(topic_name.clone())
+                .results_by_partition(Some(
+                    [AddPartitionsToTxnPartitionResult::default()
+                        .partition_index(partition_index)
+                        .partition_error_code(ErrorCode::None.into())]
                     .into()
-                )
-            }],
+                ))],
             add_partitions.zero_to_three()
         );
 

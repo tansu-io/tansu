@@ -3,6 +3,7 @@ name = "tansu-model"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
+repository.workspace = true
 publish = false
 
 [lints]

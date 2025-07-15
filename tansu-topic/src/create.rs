@@ -1,22 +1,21 @@
-// Copyright ⓒ 2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
+// http://www.apache.org/licenses/LICENSE-2.0
 //
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::collections::HashMap;
 
 use tansu_sans_io::{
-    Body, ErrorCode, Frame, Header,
+    ApiKey as _, Body, CreateTopicsRequest, CreateTopicsResponse, ErrorCode, Frame, Header,
     create_topics_request::{CreatableTopic, CreatableTopicConfig},
     create_topics_response::CreatableTopicResult,
 };
@@ -149,7 +148,7 @@ impl Connection {
     ) -> Result<ErrorCode> {
         debug!(%topic, partitions);
 
-        let api_key = 19;
+        let api_key = CreateTopicsRequest::KEY;
         let api_version = 7;
 
         let header = Header::Request {
@@ -162,30 +161,29 @@ impl Connection {
         let timeout_ms = 30_000;
         let validate_only = Some(false);
 
-        let body = Body::CreateTopicsRequest {
-            topics: Some(
-                [CreatableTopic {
-                    name: topic.into(),
-                    num_partitions: partitions,
-                    replication_factor: -1,
-                    assignments: Some([].into()),
-                    configs: Some(
+        let create_topics_request = CreateTopicsRequest::default()
+            .topics(Some(
+                [CreatableTopic::default()
+                    .name(topic.into())
+                    .num_partitions(partitions)
+                    .replication_factor(-1)
+                    .assignments(Some([].into()))
+                    .configs(Some(
                         configs
                             .into_iter()
-                            .map(|(name, value)| CreatableTopicConfig {
-                                name,
-                                value: Some(value),
+                            .map(|(name, value)| {
+                                CreatableTopicConfig::default()
+                                    .name(name)
+                                    .value(Some(value))
                             })
                             .collect(),
-                    ),
-                }]
+                    ))]
                 .into(),
-            ),
-            timeout_ms,
-            validate_only,
-        };
+            ))
+            .timeout_ms(timeout_ms)
+            .validate_only(validate_only);
 
-        let encoded = Frame::request(header, body)?;
+        let encoded = Frame::request(header, create_topics_request.into())?;
 
         self.broker
             .write_all(&encoded[..])
@@ -203,16 +201,16 @@ impl Connection {
             .await
             .inspect_err(|err| debug!(?err))?;
 
-        match Frame::response_from_bytes(&response_buffer, api_key, api_version)
+        match Frame::response_from_bytes(&response_buffer[..], api_key, api_version)
             .inspect(|response| debug!(?response))
             .inspect_err(|err| debug!(?err))?
         {
             Frame {
                 body:
-                    Body::CreateTopicsResponse {
+                    Body::CreateTopicsResponse(CreateTopicsResponse {
                         topics: Some(topics),
                         ..
-                    },
+                    }),
                 ..
             } => match topics.as_slice() {
                 [CreatableTopicResult { error_code, .. }] => {

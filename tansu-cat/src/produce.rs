@@ -1,17 +1,16 @@
-// Copyright ⓒ 2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
+// http://www.apache.org/licenses/LICENSE-2.0
 //
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::marker::PhantomData;
 
@@ -20,8 +19,8 @@ use crate::{Error, Result};
 use futures::StreamExt;
 use serde_json::Value;
 use tansu_sans_io::{
-    Body, ErrorCode, Frame, Header,
-    produce_request::{PartitionProduceData, TopicProduceData},
+    ErrorCode, Frame, Header,
+    produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
     record::{deflated, inflated},
 };
 use tansu_schema::{AsKafkaRecord, Registry};
@@ -276,26 +275,23 @@ impl Connection {
             client_id: Some("tansu".into()),
         };
 
-        let body = Body::ProduceRequest {
-            transactional_id: None,
-            acks: -1,
-            timeout_ms: 1_500,
-            topic_data: Some(
-                [TopicProduceData {
-                    name: topic.into(),
-                    partition_data: Some(
-                        [PartitionProduceData {
-                            index: partition,
-                            records: Some(frame),
-                        }]
+        let produce_request = ProduceRequest::default()
+            .transactional_id(None)
+            .acks(-1)
+            .timeout_ms(1_500)
+            .topic_data(Some(
+                [TopicProduceData::default()
+                    .name(topic.into())
+                    .partition_data(Some(
+                        [PartitionProduceData::default()
+                            .index(partition)
+                            .records(Some(frame))]
                         .into(),
-                    ),
-                }]
+                    ))]
                 .into(),
-            ),
-        };
+            ));
 
-        let encoded = Frame::request(header, body)?;
+        let encoded = Frame::request(header, produce_request.into())?;
 
         self.broker
             .write_all(&encoded[..])
@@ -313,7 +309,7 @@ impl Connection {
             .await
             .inspect_err(|err| debug!(?err))?;
 
-        let response = Frame::response_from_bytes(&response_buffer, api_key, api_version)
+        let response = Frame::response_from_bytes(&response_buffer[..], api_key, api_version)
             .inspect_err(|err| debug!(?err))?;
 
         debug!(?response);

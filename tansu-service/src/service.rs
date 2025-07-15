@@ -1,17 +1,16 @@
-// Copyright ⓒ 2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
+// http://www.apache.org/licenses/LICENSE-2.0
 //
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::{
     collections::BTreeMap,
@@ -468,24 +467,23 @@ mod tests {
                 correlation_id,
                 client_id: Some(client_id.to_owned()),
             },
-            Body::ProduceRequest {
-                transactional_id: None,
-                acks: 0,
-                timeout_ms: 5_000,
-                topic_data: Some(
-                    [TopicProduceData {
-                        name: topic_name.into(),
-                        partition_data: Some(
-                            [PartitionProduceData {
-                                index: partition_index,
-                                records: Some(deflated::Frame { batches: [].into() }),
-                            }]
-                            .into(),
-                        ),
-                    }]
-                    .into(),
-                ),
-            },
+            Body::ProduceRequest(
+                tansu_sans_io::ProduceRequest::default()
+                    .transactional_id(None)
+                    .acks(0)
+                    .timeout_ms(5_000)
+                    .topic_data(Some(
+                        [TopicProduceData::default()
+                            .name(topic_name.into())
+                            .partition_data(Some(
+                                [PartitionProduceData::default()
+                                    .index(partition_index)
+                                    .records(Some(deflated::Frame { batches: [].into() }))]
+                                .into(),
+                            ))]
+                        .into(),
+                    )),
+            ),
         )
         .map(Bytes::from)
         .inspect(|frame| debug!(?frame))?;
@@ -496,39 +494,48 @@ mod tests {
                     api_key: produce_request.api_key,
                     api_version: produce_request.api_version,
                     correlation_id: produce_request.correlation_id,
-                    body: Body::ProduceResponse {
-                        responses: produce_request.topic_data.map(|topic_data| {
-                            topic_data
-                                .iter()
-                                .map(|topic_produce_data| TopicProduceResponse {
-                                    name: topic_produce_data.name.clone(),
-                                    partition_responses: topic_produce_data
-                                        .partition_data
-                                        .as_ref()
-                                        .map(|partition_produce_data| {
-                                            partition_produce_data
-                                                .iter()
-                                                .map(|partition_produce| PartitionProduceResponse {
-                                                    index: partition_produce.index,
-                                                    error_code: ErrorCode::None.into(),
-                                                    base_offset: 65456,
-                                                    log_append_time_ms: Some(0),
-                                                    log_start_offset: Some(0),
-                                                    record_errors: Some([].into()),
-                                                    error_message: Some("none".into()),
-                                                    current_leader: Some(LeaderIdAndEpoch {
-                                                        leader_id: 12321,
-                                                        leader_epoch: 23432,
-                                                    }),
-                                                })
-                                                .collect()
-                                        }),
-                                })
-                                .collect()
-                        }),
-                        throttle_time_ms: Some(54345),
-                        node_endpoints: Some([].into()),
-                    },
+                    body: Body::ProduceResponse(
+                        tansu_sans_io::ProduceResponse::default()
+                            .responses(produce_request.topic_data.map(|topic_data| {
+                                topic_data
+                                    .iter()
+                                    .map(|topic_produce_data| {
+                                        TopicProduceResponse::default()
+                                            .name(topic_produce_data.name.clone())
+                                            .partition_responses(
+                                                topic_produce_data.partition_data.as_ref().map(
+                                                    |partition_produce_data| {
+                                                        partition_produce_data
+                                                            .iter()
+                                                            .map(|partition_produce| {
+                                                                PartitionProduceResponse::default()
+                                                                    .index(partition_produce.index)
+                                                                    .error_code(
+                                                                        ErrorCode::None.into(),
+                                                                    )
+                                                                    .base_offset(65456)
+                                                                    .log_append_time_ms(Some(0))
+                                                                    .log_start_offset(Some(0))
+                                                                    .record_errors(Some([].into()))
+                                                                    .error_message(Some(
+                                                                        "none".into(),
+                                                                    ))
+                                                                    .current_leader(Some(
+                                                                        LeaderIdAndEpoch::default()
+                                                                            .leader_id(12321)
+                                                                            .leader_epoch(23432),
+                                                                    ))
+                                                            })
+                                                            .collect()
+                                                    },
+                                                ),
+                                            )
+                                    })
+                                    .collect()
+                            }))
+                            .throttle_time_ms(Some(54345))
+                            .node_endpoints(Some([].into())),
+                    ),
                 })
             }));
 

@@ -1,17 +1,18 @@
 // Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
+// http://www.apache.org/licenses/LICENSE-2.0
 //
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! PostgreSQL Storage engine
 
 use std::{
     cmp::Ordering,
@@ -75,6 +76,7 @@ macro_rules! include_sql {
     };
 }
 
+/// PostgreSQL Storage Engine
 #[derive(Clone, Debug)]
 pub struct Postgres {
     cluster: String,
@@ -85,6 +87,7 @@ pub struct Postgres {
     lake: Option<House>,
 }
 
+/// PostgreSQL Storage Builder
 #[derive(Clone, Default, Debug)]
 pub struct Builder<C, N, L, P> {
     cluster: C,
@@ -1190,12 +1193,13 @@ impl Storage for Postgres {
         let port = self.advertised_listener.port().unwrap_or(9092).into();
         let rack = None;
 
-        Ok(vec![DescribeClusterBroker {
-            broker_id,
-            host,
-            port,
-            rack,
-        }])
+        Ok(vec![
+            DescribeClusterBroker::default()
+                .broker_id(broker_id)
+                .host(host)
+                .port(port)
+                .rack(rack),
+        ])
     }
 
     async fn create_topic(&mut self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {
@@ -1379,25 +1383,22 @@ impl Storage for Postgres {
                             error!(?err, ?cluster, ?topic, ?partition_index, ?offset)
                         })
                         .map_or(
-                            Ok(DeleteRecordsPartitionResult {
-                                partition_index: partition.partition_index,
-                                low_watermark: 0,
-                                error_code: ErrorCode::UnknownServerError.into(),
-                            }),
+                            Ok(DeleteRecordsPartitionResult::default()
+                                .partition_index(partition.partition_index)
+                                .low_watermark(0)
+                                .error_code(ErrorCode::UnknownServerError.into())),
                             |row| {
                                 row.map_or(
-                                    Ok(DeleteRecordsPartitionResult {
-                                        partition_index: partition.partition_index,
-                                        low_watermark: 0,
-                                        error_code: ErrorCode::UnknownServerError.into(),
-                                    }),
+                                    Ok(DeleteRecordsPartitionResult::default()
+                                        .partition_index(partition.partition_index)
+                                        .low_watermark(0)
+                                        .error_code(ErrorCode::UnknownServerError.into())),
                                     |row| {
                                         row.try_get::<_, i64>(0).map(|low_watermark| {
-                                            DeleteRecordsPartitionResult {
-                                                partition_index: partition.partition_index,
-                                                low_watermark,
-                                                error_code: ErrorCode::None.into(),
-                                            }
+                                            DeleteRecordsPartitionResult::default()
+                                                .partition_index(partition.partition_index)
+                                                .low_watermark(low_watermark)
+                                                .error_code(ErrorCode::None.into())
                                         })
                                     },
                                 )
@@ -1408,10 +1409,11 @@ impl Storage for Postgres {
                 }
             }
 
-            responses.push(DeleteRecordsTopicResult {
-                name: topic.name.clone(),
-                partitions: Some(partition_responses),
-            });
+            responses.push(
+                DeleteRecordsTopicResult::default()
+                    .name(topic.name.clone())
+                    .partitions(Some(partition_responses)),
+            );
         }
         Ok(responses)
     }
@@ -1531,30 +1533,26 @@ impl Storage for Postgres {
         resource: AlterConfigsResource,
     ) -> Result<AlterConfigsResourceResponse> {
         match ConfigResource::from(resource.resource_type) {
-            ConfigResource::Group => Ok(AlterConfigsResourceResponse {
-                error_code: ErrorCode::None.into(),
-                error_message: Some("".into()),
-                resource_type: resource.resource_type,
-                resource_name: resource.resource_name,
-            }),
-            ConfigResource::ClientMetric => Ok(AlterConfigsResourceResponse {
-                error_code: ErrorCode::None.into(),
-                error_message: Some("".into()),
-                resource_type: resource.resource_type,
-                resource_name: resource.resource_name,
-            }),
-            ConfigResource::BrokerLogger => Ok(AlterConfigsResourceResponse {
-                error_code: ErrorCode::None.into(),
-                error_message: Some("".into()),
-                resource_type: resource.resource_type,
-                resource_name: resource.resource_name,
-            }),
-            ConfigResource::Broker => Ok(AlterConfigsResourceResponse {
-                error_code: ErrorCode::None.into(),
-                error_message: Some("".into()),
-                resource_type: resource.resource_type,
-                resource_name: resource.resource_name,
-            }),
+            ConfigResource::Group => Ok(AlterConfigsResourceResponse::default()
+                .error_code(ErrorCode::None.into())
+                .error_message(Some("".into()))
+                .resource_type(resource.resource_type)
+                .resource_name(resource.resource_name)),
+            ConfigResource::ClientMetric => Ok(AlterConfigsResourceResponse::default()
+                .error_code(ErrorCode::None.into())
+                .error_message(Some("".into()))
+                .resource_type(resource.resource_type)
+                .resource_name(resource.resource_name)),
+            ConfigResource::BrokerLogger => Ok(AlterConfigsResourceResponse::default()
+                .error_code(ErrorCode::None.into())
+                .error_message(Some("".into()))
+                .resource_type(resource.resource_type)
+                .resource_name(resource.resource_name)),
+            ConfigResource::Broker => Ok(AlterConfigsResourceResponse::default()
+                .error_code(ErrorCode::None.into())
+                .error_message(Some("".into()))
+                .resource_type(resource.resource_type)
+                .resource_name(resource.resource_name)),
             ConfigResource::Topic => {
                 let mut error_code = ErrorCode::None;
 
@@ -1606,19 +1604,17 @@ impl Storage for Postgres {
                     }
                 }
 
-                Ok(AlterConfigsResourceResponse {
-                    error_code: error_code.into(),
-                    error_message: Some("".into()),
-                    resource_type: resource.resource_type,
-                    resource_name: resource.resource_name,
-                })
+                Ok(AlterConfigsResourceResponse::default()
+                    .error_code(error_code.into())
+                    .error_message(Some("".into()))
+                    .resource_type(resource.resource_type)
+                    .resource_name(resource.resource_name))
             }
-            ConfigResource::Unknown => Ok(AlterConfigsResourceResponse {
-                error_code: ErrorCode::None.into(),
-                error_message: Some("".into()),
-                resource_type: resource.resource_type,
-                resource_name: resource.resource_name,
-            }),
+            ConfigResource::Unknown => Ok(AlterConfigsResourceResponse::default()
+                .error_code(ErrorCode::None.into())
+                .error_message(Some("".into()))
+                .resource_type(resource.resource_type)
+                .resource_name(resource.resource_name)),
         }
     }
 
@@ -1798,8 +1794,8 @@ impl Storage for Postgres {
                 let mut record_builder = Record::builder()
                     .offset_delta(offset_delta)
                     .timestamp_delta(timestamp_delta)
-                    .key(k.into())
-                    .value(v.into());
+                    .key(k)
+                    .value(v);
 
                 for header in self
                     .prepare_query(
@@ -1823,14 +1819,14 @@ impl Storage for Postgres {
                         .try_get::<_, Option<&[u8]>>(0)
                         .inspect_err(|err| error!(?err))?
                     {
-                        header_builder = header_builder.key(k.to_vec());
+                        header_builder = header_builder.key(Bytes::copy_from_slice(k));
                     }
 
                     if let Some(v) = header
                         .try_get::<_, Option<&[u8]>>(1)
                         .inspect_err(|err| error!(?err))?
                     {
-                        header_builder = header_builder.value(v.to_vec());
+                        header_builder = header_builder.value(Bytes::copy_from_slice(v));
                     }
 
                     record_builder = record_builder.header(header_builder);
@@ -2164,16 +2160,18 @@ impl Storage for Postgres {
 
         let c = self.connection().await.inspect_err(|err| error!(?err))?;
 
-        let brokers = vec![MetadataResponseBroker {
-            node_id: self.node,
-            host: self
-                .advertised_listener
-                .host_str()
-                .unwrap_or("0.0.0.0")
-                .into(),
-            port: self.advertised_listener.port().unwrap_or(9092).into(),
-            rack: None,
-        }];
+        let brokers = vec![
+            MetadataResponseBroker::default()
+                .node_id(self.node)
+                .host(
+                    self.advertised_listener
+                        .host_str()
+                        .unwrap_or("0.0.0.0")
+                        .into(),
+                )
+                .port(self.advertised_listener.port().unwrap_or(9092).into())
+                .rack(None),
+        ];
 
         debug!(?brokers);
 
@@ -2235,48 +2233,44 @@ impl Storage for Postgres {
                                                 );
                                                 let isr_nodes = replica_nodes.clone();
 
-                                                MetadataResponsePartition {
-                                                    error_code,
-                                                    partition_index,
-                                                    leader_id,
-                                                    leader_epoch: Some(-1),
-                                                    replica_nodes,
-                                                    isr_nodes,
-                                                    offline_replicas: Some([].into()),
-                                                }
+                                                MetadataResponsePartition::default()
+                                                    .error_code(error_code)
+                                                    .partition_index(partition_index)
+                                                    .leader_id(leader_id)
+                                                    .leader_epoch(Some(-1))
+                                                    .replica_nodes(replica_nodes)
+                                                    .isr_nodes(isr_nodes)
+                                                    .offline_replicas(Some([].into()))
                                             })
                                             .collect(),
                                     );
 
-                                    MetadataResponseTopic {
-                                        error_code,
-                                        name,
-                                        topic_id,
-                                        is_internal,
-                                        partitions,
-                                        topic_authorized_operations: Some(-2147483648),
-                                    }
+                                    MetadataResponseTopic::default()
+                                        .error_code(error_code)
+                                        .name(name)
+                                        .topic_id(topic_id)
+                                        .is_internal(is_internal)
+                                        .partitions(partitions)
+                                        .topic_authorized_operations(Some(-2147483648))
                                 }
 
-                                Ok(None) => MetadataResponseTopic {
-                                    error_code: ErrorCode::UnknownTopicOrPartition.into(),
-                                    name: Some(name.into()),
-                                    topic_id: Some(NULL_TOPIC_ID),
-                                    is_internal: Some(false),
-                                    partitions: Some([].into()),
-                                    topic_authorized_operations: Some(-2147483648),
-                                },
+                                Ok(None) => MetadataResponseTopic::default()
+                                    .error_code(ErrorCode::UnknownTopicOrPartition.into())
+                                    .name(Some(name.into()))
+                                    .topic_id(Some(NULL_TOPIC_ID))
+                                    .is_internal(Some(false))
+                                    .partitions(Some([].into()))
+                                    .topic_authorized_operations(Some(-2147483648)),
 
                                 Err(reason) => {
                                     debug!(?reason);
-                                    MetadataResponseTopic {
-                                        error_code: ErrorCode::UnknownTopicOrPartition.into(),
-                                        name: Some(name.into()),
-                                        topic_id: Some(NULL_TOPIC_ID),
-                                        is_internal: Some(false),
-                                        partitions: Some([].into()),
-                                        topic_authorized_operations: Some(-2147483648),
-                                    }
+                                    MetadataResponseTopic::default()
+                                        .error_code(ErrorCode::UnknownTopicOrPartition.into())
+                                        .name(Some(name.into()))
+                                        .topic_id(Some(NULL_TOPIC_ID))
+                                        .is_internal(Some(false))
+                                        .partitions(Some([].into()))
+                                        .topic_authorized_operations(Some(-2147483648))
                                 }
                             }
                         }
@@ -2332,38 +2326,35 @@ impl Storage for Postgres {
                                                 );
                                                 let isr_nodes = replica_nodes.clone();
 
-                                                MetadataResponsePartition {
-                                                    error_code,
-                                                    partition_index,
-                                                    leader_id,
-                                                    leader_epoch: Some(-1),
-                                                    replica_nodes,
-                                                    isr_nodes,
-                                                    offline_replicas: Some([].into()),
-                                                }
+                                                MetadataResponsePartition::default()
+                                                    .error_code(error_code)
+                                                    .partition_index(partition_index)
+                                                    .leader_id(leader_id)
+                                                    .leader_epoch(Some(-1))
+                                                    .replica_nodes(replica_nodes)
+                                                    .isr_nodes(isr_nodes)
+                                                    .offline_replicas(Some([].into()))
                                             })
                                             .collect(),
                                     );
 
-                                    MetadataResponseTopic {
-                                        error_code,
-                                        name,
-                                        topic_id,
-                                        is_internal,
-                                        partitions,
-                                        topic_authorized_operations: Some(-2147483648),
-                                    }
+                                    MetadataResponseTopic::default()
+                                        .error_code(error_code)
+                                        .name(name)
+                                        .topic_id(topic_id)
+                                        .is_internal(is_internal)
+                                        .partitions(partitions)
+                                        .topic_authorized_operations(Some(-2147483648))
                                 }
                                 Err(reason) => {
                                     debug!(?reason);
-                                    MetadataResponseTopic {
-                                        error_code: ErrorCode::UnknownTopicOrPartition.into(),
-                                        name: None,
-                                        topic_id: Some(id.into_bytes()),
-                                        is_internal: Some(false),
-                                        partitions: Some([].into()),
-                                        topic_authorized_operations: Some(-2147483648),
-                                    }
+                                    MetadataResponseTopic::default()
+                                        .error_code(ErrorCode::UnknownTopicOrPartition.into())
+                                        .name(None)
+                                        .topic_id(Some(id.into_bytes()))
+                                        .is_internal(Some(false))
+                                        .partitions(Some([].into()))
+                                        .topic_authorized_operations(Some(-2147483648))
                                 }
                             }
                         }
@@ -2426,39 +2417,40 @@ impl Storage for Postgres {
                                         );
                                         let isr_nodes = replica_nodes.clone();
 
-                                        MetadataResponsePartition {
-                                            error_code,
-                                            partition_index,
-                                            leader_id,
-                                            leader_epoch: Some(-1),
-                                            replica_nodes,
-                                            isr_nodes,
-                                            offline_replicas: Some([].into()),
-                                        }
+                                        MetadataResponsePartition::default()
+                                            .error_code(error_code)
+                                            .partition_index(partition_index)
+                                            .leader_id(leader_id)
+                                            .leader_epoch(Some(-1))
+                                            .replica_nodes(replica_nodes)
+                                            .isr_nodes(isr_nodes)
+                                            .offline_replicas(Some([].into()))
                                     })
                                     .collect(),
                             );
 
-                            responses.push(MetadataResponseTopic {
-                                error_code,
-                                name,
-                                topic_id,
-                                is_internal,
-                                partitions,
-                                topic_authorized_operations: Some(-2147483648),
-                            });
+                            responses.push(
+                                MetadataResponseTopic::default()
+                                    .error_code(error_code)
+                                    .name(name)
+                                    .topic_id(topic_id)
+                                    .is_internal(is_internal)
+                                    .partitions(partitions)
+                                    .topic_authorized_operations(Some(-2147483648)),
+                            );
                         }
                     }
                     Err(reason) => {
                         debug!(?reason);
-                        responses.push(MetadataResponseTopic {
-                            error_code: ErrorCode::UnknownTopicOrPartition.into(),
-                            name: None,
-                            topic_id: Some(NULL_TOPIC_ID),
-                            is_internal: Some(false),
-                            partitions: Some([].into()),
-                            topic_authorized_operations: Some(-2147483648),
-                        });
+                        responses.push(
+                            MetadataResponseTopic::default()
+                                .error_code(ErrorCode::UnknownTopicOrPartition.into())
+                                .name(None)
+                                .topic_id(Some(NULL_TOPIC_ID))
+                                .is_internal(Some(false))
+                                .partitions(Some([].into()))
+                                .topic_authorized_operations(Some(-2147483648)),
+                        );
                     }
                 }
 
@@ -2528,38 +2520,37 @@ impl Storage for Postgres {
                     .map(Some)
                     .inspect_err(|err| error!(?err))?;
 
-                configs.push(DescribeConfigsResourceResult {
-                    name,
-                    value,
-                    read_only: false,
-                    is_default: None,
-                    config_source: Some(ConfigSource::DefaultConfig.into()),
-                    is_sensitive: false,
-                    synonyms: Some([].into()),
-                    config_type: Some(ConfigType::String.into()),
-                    documentation: Some("".into()),
-                });
+                configs.push(
+                    DescribeConfigsResourceResult::default()
+                        .name(name)
+                        .value(value)
+                        .read_only(false)
+                        .is_default(None)
+                        .config_source(Some(ConfigSource::DefaultConfig.into()))
+                        .is_sensitive(false)
+                        .synonyms(Some([].into()))
+                        .config_type(Some(ConfigType::String.into()))
+                        .documentation(Some("".into())),
+                );
             }
 
             let error_code = ErrorCode::None;
 
-            Ok(DescribeConfigsResult {
-                error_code: error_code.into(),
-                error_message: Some(error_code.to_string()),
-                resource_type: i8::from(resource),
-                resource_name: name.into(),
-                configs: Some(configs),
-            })
+            Ok(DescribeConfigsResult::default()
+                .error_code(error_code.into())
+                .error_message(Some(error_code.to_string()))
+                .resource_type(i8::from(resource))
+                .resource_name(name.into())
+                .configs(Some(configs)))
         } else {
             let error_code = ErrorCode::UnknownTopicOrPartition;
 
-            Ok(DescribeConfigsResult {
-                error_code: error_code.into(),
-                error_message: Some(error_code.to_string()),
-                resource_type: i8::from(resource),
-                resource_name: name.into(),
-                configs: Some([].into()),
-            })
+            Ok(DescribeConfigsResult::default()
+                .error_code(error_code.into())
+                .error_message(Some(error_code.to_string()))
+                .resource_type(i8::from(resource))
+                .resource_name(name.into())
+                .configs(Some([].into())))
         }
     }
 
@@ -2605,70 +2596,66 @@ impl Storage for Postgres {
                                 ?replication_factor
                             );
 
-                            DescribeTopicPartitionsResponseTopic {
-                                error_code: ErrorCode::None.into(),
-                                name,
-                                topic_id,
-                                is_internal: false,
-                                partitions: Some(
+                            DescribeTopicPartitionsResponseTopic::default()
+                                .error_code(ErrorCode::None.into())
+                                .name(name)
+                                .topic_id(topic_id)
+                                .is_internal(false)
+                                .partitions(Some(
                                     (0..partitions)
                                         .map(|partition_index| {
-                                            DescribeTopicPartitionsResponsePartition {
-                                                error_code: ErrorCode::None.into(),
-                                                partition_index,
-                                                leader_id: self.node,
-                                                leader_epoch: -1,
-                                                replica_nodes: Some(vec![
+                                            DescribeTopicPartitionsResponsePartition::default()
+                                                .error_code(ErrorCode::None.into())
+                                                .partition_index(partition_index)
+                                                .leader_id(self.node)
+                                                .leader_epoch(-1)
+                                                .replica_nodes(Some(vec![
                                                     self.node;
                                                     replication_factor
                                                         as usize
-                                                ]),
-                                                isr_nodes: Some(vec![
+                                                ]))
+                                                .isr_nodes(Some(vec![
                                                     self.node;
                                                     replication_factor as usize
-                                                ]),
-                                                eligible_leader_replicas: Some(vec![]),
-                                                last_known_elr: Some(vec![]),
-                                                offline_replicas: Some(vec![]),
-                                            }
+                                                ]))
+                                                .eligible_leader_replicas(Some(vec![]))
+                                                .last_known_elr(Some(vec![]))
+                                                .offline_replicas(Some(vec![]))
                                         })
                                         .collect(),
-                                ),
-                                topic_authorized_operations: -2147483648,
-                            }
+                                ))
+                                .topic_authorized_operations(-2147483648)
                         }
 
-                        Ok(None) => DescribeTopicPartitionsResponseTopic {
-                            error_code: ErrorCode::UnknownTopicOrPartition.into(),
-                            name: match topic {
+                        Ok(None) => DescribeTopicPartitionsResponseTopic::default()
+                            .error_code(ErrorCode::UnknownTopicOrPartition.into())
+                            .name(match topic {
                                 TopicId::Name(name) => Some(name.into()),
                                 TopicId::Id(_) => None,
-                            },
-                            topic_id: match topic {
+                            })
+                            .topic_id(match topic {
                                 TopicId::Name(_) => NULL_TOPIC_ID,
                                 TopicId::Id(id) => id.into_bytes(),
-                            },
-                            is_internal: false,
-                            partitions: Some([].into()),
-                            topic_authorized_operations: -2147483648,
-                        },
+                            })
+                            .is_internal(false)
+                            .partitions(Some([].into()))
+                            .topic_authorized_operations(-2147483648),
 
                         Err(reason) => {
                             debug!(?reason);
-                            DescribeTopicPartitionsResponseTopic {
-                                error_code: ErrorCode::UnknownServerError.into(),
-                                name: match topic {
+                            DescribeTopicPartitionsResponseTopic::default()
+                                .error_code(ErrorCode::UnknownServerError.into())
+                                .name(match topic {
                                     TopicId::Name(name) => Some(name.into()),
                                     TopicId::Id(_) => None,
-                                },
-                                topic_id: match topic {
+                                })
+                                .topic_id(match topic {
                                     TopicId::Name(_) => NULL_TOPIC_ID,
                                     TopicId::Id(id) => id.into_bytes(),
-                                },
-                                is_internal: false,
-                                partitions: Some([].into()),
-                                topic_authorized_operations: -2147483648,
-                            }
+                                })
+                                .is_internal(false)
+                                .partitions(Some([].into()))
+                                .topic_authorized_operations(-2147483648)
                         }
                     }
                 }
@@ -2699,54 +2686,52 @@ impl Storage for Postgres {
                                 ?replication_factor
                             );
 
-                            DescribeTopicPartitionsResponseTopic {
-                                error_code: ErrorCode::None.into(),
-                                name,
-                                topic_id,
-                                is_internal: false,
-                                partitions: Some(
+                            DescribeTopicPartitionsResponseTopic::default()
+                                .error_code(ErrorCode::None.into())
+                                .name(name)
+                                .topic_id(topic_id)
+                                .is_internal(false)
+                                .partitions(Some(
                                     (0..partitions)
                                         .map(|partition_index| {
-                                            DescribeTopicPartitionsResponsePartition {
-                                                error_code: ErrorCode::None.into(),
-                                                partition_index,
-                                                leader_id: self.node,
-                                                leader_epoch: -1,
-                                                replica_nodes: Some(vec![
+                                            DescribeTopicPartitionsResponsePartition::default()
+                                                .error_code(ErrorCode::None.into())
+                                                .partition_index(partition_index)
+                                                .leader_id(self.node)
+                                                .leader_epoch(-1)
+                                                .replica_nodes(Some(vec![
                                                     self.node;
                                                     replication_factor
                                                         as usize
-                                                ]),
-                                                isr_nodes: Some(vec![
+                                                ]))
+                                                .isr_nodes(Some(vec![
                                                     self.node;
                                                     replication_factor as usize
-                                                ]),
-                                                eligible_leader_replicas: Some(vec![]),
-                                                last_known_elr: Some(vec![]),
-                                                offline_replicas: Some(vec![]),
-                                            }
+                                                ]))
+                                                .eligible_leader_replicas(Some(vec![]))
+                                                .last_known_elr(Some(vec![]))
+                                                .offline_replicas(Some(vec![]))
                                         })
                                         .collect(),
-                                ),
-                                topic_authorized_operations: -2147483648,
-                            }
+                                ))
+                                .topic_authorized_operations(-2147483648)
                         }
+
                         Err(reason) => {
                             debug!(?reason);
-                            DescribeTopicPartitionsResponseTopic {
-                                error_code: ErrorCode::UnknownTopicOrPartition.into(),
-                                name: match topic {
+                            DescribeTopicPartitionsResponseTopic::default()
+                                .error_code(ErrorCode::UnknownTopicOrPartition.into())
+                                .name(match topic {
                                     TopicId::Name(name) => Some(name.into()),
                                     TopicId::Id(_) => None,
-                                },
-                                topic_id: match topic {
+                                })
+                                .topic_id(match topic {
                                     TopicId::Name(_) => NULL_TOPIC_ID,
                                     TopicId::Id(id) => id.into_bytes(),
-                                },
-                                is_internal: false,
-                                partitions: Some([].into()),
-                                topic_authorized_operations: -2147483648,
-                            }
+                                })
+                                .is_internal(false)
+                                .partitions(Some([].into()))
+                                .topic_authorized_operations(-2147483648)
                         }
                     }
                 }
@@ -2775,12 +2760,13 @@ impl Storage for Postgres {
         {
             let group_id = row.try_get::<_, String>(0)?;
 
-            listed_groups.push(ListedGroup {
-                group_id,
-                protocol_type: "consumer".into(),
-                group_state: Some("unknown".into()),
-                group_type: None,
-            });
+            listed_groups.push(
+                ListedGroup::default()
+                    .group_id(group_id)
+                    .protocol_type("consumer".into())
+                    .group_state(Some("unknown".into()))
+                    .group_type(None),
+            );
         }
 
         Ok(listed_groups)
@@ -2828,15 +2814,18 @@ impl Storage for Postgres {
                     .await
                     .inspect_err(|err| error!(?err))?;
 
-                results.push(DeletableGroupResult {
-                    group_id: group_id.into(),
-                    error_code: if rows == 0 {
-                        ErrorCode::GroupIdNotFound
-                    } else {
-                        ErrorCode::None
-                    }
-                    .into(),
-                });
+                results.push(
+                    DeletableGroupResult::default()
+                        .group_id(group_id.into())
+                        .error_code(
+                            if rows == 0 {
+                                ErrorCode::GroupIdNotFound
+                            } else {
+                                ErrorCode::None
+                            }
+                            .into(),
+                        ),
+                );
             }
         }
 
@@ -3270,16 +3259,18 @@ impl Storage for Postgres {
                                 )
                             })?;
 
-                        results_by_partition.push(AddPartitionsToTxnPartitionResult {
-                            partition_index,
-                            partition_error_code: i16::from(ErrorCode::None),
-                        });
+                        results_by_partition.push(
+                            AddPartitionsToTxnPartitionResult::default()
+                                .partition_index(partition_index)
+                                .partition_error_code(i16::from(ErrorCode::None)),
+                        );
                     }
 
-                    results.push(AddPartitionsToTxnTopicResult {
-                        name: topic.name,
-                        results_by_partition: Some(results_by_partition),
-                    })
+                    results.push(
+                        AddPartitionsToTxnTopicResult::default()
+                            .name(topic.name)
+                            .results_by_partition(Some(results_by_partition)),
+                    )
                 }
 
                 _ = self
@@ -3410,28 +3401,32 @@ impl Storage for Postgres {
                             .await
                             .inspect_err(|err| error!(?err))?;
 
-                        partitions.push(TxnOffsetCommitResponsePartition {
-                            partition_index: partition.partition_index,
-                            error_code: i16::from(ErrorCode::None),
-                        });
+                        partitions.push(
+                            TxnOffsetCommitResponsePartition::default()
+                                .partition_index(partition.partition_index)
+                                .error_code(i16::from(ErrorCode::None)),
+                        );
                     } else {
-                        partitions.push(TxnOffsetCommitResponsePartition {
-                            partition_index: partition.partition_index,
-                            error_code: i16::from(ErrorCode::InvalidProducerEpoch),
-                        });
+                        partitions.push(
+                            TxnOffsetCommitResponsePartition::default()
+                                .partition_index(partition.partition_index)
+                                .error_code(i16::from(ErrorCode::InvalidProducerEpoch)),
+                        );
                     }
                 } else {
-                    partitions.push(TxnOffsetCommitResponsePartition {
-                        partition_index: partition.partition_index,
-                        error_code: i16::from(ErrorCode::UnknownProducerId),
-                    });
+                    partitions.push(
+                        TxnOffsetCommitResponsePartition::default()
+                            .partition_index(partition.partition_index)
+                            .error_code(i16::from(ErrorCode::UnknownProducerId)),
+                    );
                 }
             }
 
-            topics.push(TxnOffsetCommitResponseTopic {
-                name: topic.name,
-                partitions: Some(partitions),
-            });
+            topics.push(
+                TxnOffsetCommitResponseTopic::default()
+                    .name(topic.name)
+                    .partitions(Some(partitions)),
+            );
         }
 
         tx.commit().await?;

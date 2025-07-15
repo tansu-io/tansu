@@ -1,17 +1,16 @@
 // Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
+// http://www.apache.org/licenses/LICENSE-2.0
 //
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use crate::Result;
 use tansu_sans_io::{
@@ -46,12 +45,13 @@ where
             for topic in topics {
                 let error_code = self.storage.delete_topic(&topic.clone().into()).await?;
 
-                responses.push(DeletableTopicResult {
-                    name: topic.name.clone(),
-                    topic_id: Some(topic.topic_id),
-                    error_code: i16::from(error_code),
-                    error_message: Some(error_code.to_string()),
-                });
+                responses.push(
+                    DeletableTopicResult::default()
+                        .name(topic.name.clone())
+                        .topic_id(Some(topic.topic_id))
+                        .error_code(i16::from(error_code))
+                        .error_message(Some(error_code.to_string())),
+                );
             }
         }
 
@@ -60,12 +60,13 @@ where
                 let topic_id = name.clone().into();
                 let error_code = self.storage.delete_topic(&topic_id).await?;
 
-                responses.push(DeletableTopicResult {
-                    name: Some(name),
-                    topic_id: None,
-                    error_code: i16::from(error_code),
-                    error_message: Some(error_code.to_string()),
-                });
+                responses.push(
+                    DeletableTopicResult::default()
+                        .name(Some(name))
+                        .topic_id(None)
+                        .error_code(i16::from(error_code))
+                        .error_message(Some(error_code.to_string())),
+                );
             }
         }
 
@@ -133,13 +134,14 @@ mod tests {
 
         let created = CreateTopic::with_storage(storage.clone())
             .response(
-                Some(vec![CreatableTopic {
-                    name: name.into(),
-                    num_partitions,
-                    replication_factor,
-                    assignments: assignments.clone(),
-                    configs: configs.clone(),
-                }]),
+                Some(vec![
+                    CreatableTopic::default()
+                        .name(name.into())
+                        .num_partitions(num_partitions)
+                        .replication_factor(replication_factor)
+                        .assignments(assignments.clone())
+                        .configs(configs.clone()),
+                ]),
                 validate_only,
             )
             .await?;
@@ -149,10 +151,11 @@ mod tests {
 
         let deleted = DeleteTopicsRequest::with_storage(storage.clone())
             .response(
-                Some(vec![DeleteTopicState {
-                    name: Some(name.into()),
-                    topic_id: NULL_TOPIC_ID,
-                }]),
+                Some(vec![
+                    DeleteTopicState::default()
+                        .name(Some(name.into()))
+                        .topic_id(NULL_TOPIC_ID),
+                ]),
                 Some(vec![]),
             )
             .await?;
@@ -163,13 +166,14 @@ mod tests {
 
         let created = CreateTopic::with_storage(storage.clone())
             .response(
-                Some(vec![CreatableTopic {
-                    name: name.into(),
-                    num_partitions,
-                    replication_factor,
-                    assignments,
-                    configs,
-                }]),
+                Some(vec![
+                    CreatableTopic::default()
+                        .name(name.into())
+                        .num_partitions(num_partitions)
+                        .replication_factor(replication_factor)
+                        .assignments(assignments)
+                        .configs(configs),
+                ]),
                 validate_only,
             )
             .await?;

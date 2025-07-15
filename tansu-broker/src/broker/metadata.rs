@@ -1,19 +1,20 @@
 // Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
+// http://www.apache.org/licenses/LICENSE-2.0
 //
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
-use tansu_sans_io::{Body, metadata_request::MetadataRequestTopic};
+use tansu_sans_io::{
+    Body, metadata_request::MetadataRequestTopic, metadata_response::MetadataResponse,
+};
 use tansu_storage::{Storage, TopicId};
 use tracing::error;
 
@@ -48,13 +49,13 @@ where
         let topics = Some(response.topics().to_owned());
         let cluster_authorized_operations = None;
 
-        Ok(Body::MetadataResponse {
-            throttle_time_ms,
-            brokers,
-            cluster_id,
-            controller_id,
-            topics,
-            cluster_authorized_operations,
-        })
+        Ok(MetadataResponse::default()
+            .throttle_time_ms(throttle_time_ms)
+            .brokers(brokers)
+            .cluster_id(cluster_id)
+            .controller_id(controller_id)
+            .topics(topics)
+            .cluster_authorized_operations(cluster_authorized_operations)
+            .into())
     }
 }

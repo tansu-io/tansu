@@ -1,17 +1,16 @@
 // Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
+// http://www.apache.org/licenses/LICENSE-2.0
 //
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use bytes::Bytes;
 use common::{StorageType, alphanumeric_string, register_broker};
@@ -49,17 +48,18 @@ fn topic_data(
         .build()
         .and_then(deflated::Batch::try_from)
         .map(|deflated| {
-            let partition_data = PartitionProduceData {
-                index,
-                records: Some(Frame {
-                    batches: vec![deflated],
-                }),
-            };
+            let partition_data =
+                PartitionProduceData::default()
+                    .index(index)
+                    .records(Some(Frame {
+                        batches: vec![deflated],
+                    }));
 
-            Some(vec![TopicProduceData {
-                name: topic.into(),
-                partition_data: Some(vec![partition_data]),
-            }])
+            Some(vec![
+                TopicProduceData::default()
+                    .name(topic.into())
+                    .partition_data(Some(vec![partition_data])),
+            ])
         })
         .map_err(Into::into)
 }
@@ -76,13 +76,12 @@ async fn non_txn_idempotent_unknown_producer_id(
 
     _ = sc
         .create_topic(
-            CreatableTopic {
-                name: topic.clone(),
-                num_partitions: 3,
-                replication_factor: 1,
-                assignments: Some([].into()),
-                configs: Some([].into()),
-            },
+            CreatableTopic::default()
+                .name(topic.clone())
+                .num_partitions(3)
+                .replication_factor(1)
+                .assignments(Some([].into()))
+                .configs(Some([].into())),
             false,
         )
         .await?;
@@ -93,19 +92,21 @@ async fn non_txn_idempotent_unknown_producer_id(
 
     assert_eq!(
         ProduceResponse {
-            responses: Some(vec![TopicProduceResponse {
-                name: topic.clone(),
-                partition_responses: Some(vec![PartitionProduceResponse {
-                    index,
-                    error_code: ErrorCode::UnknownProducerId.into(),
-                    base_offset: -1,
-                    log_append_time_ms: Some(-1),
-                    log_start_offset: Some(0),
-                    record_errors: Some(vec![]),
-                    error_message: None,
-                    current_leader: None,
-                }],),
-            }]),
+            responses: Some(vec![
+                TopicProduceResponse::default()
+                    .name(topic.clone())
+                    .partition_responses(Some(vec![
+                        PartitionProduceResponse::default()
+                            .index(index)
+                            .error_code(ErrorCode::UnknownProducerId.into())
+                            .base_offset(-1)
+                            .log_append_time_ms(Some(-1))
+                            .log_start_offset(Some(0))
+                            .record_errors(Some(vec![]))
+                            .error_message(None)
+                            .current_leader(None)
+                    ]))
+            ]),
             throttle_time_ms: Some(0),
             node_endpoints: None
         },
@@ -140,13 +141,12 @@ async fn non_txn_idempotent(
 
     _ = sc
         .create_topic(
-            CreatableTopic {
-                name: topic.clone(),
-                num_partitions: 3,
-                replication_factor: 1,
-                assignments: Some([].into()),
-                configs: Some([].into()),
-            },
+            CreatableTopic::default()
+                .name(topic.clone())
+                .num_partitions(3)
+                .replication_factor(1)
+                .assignments(Some([].into()))
+                .configs(Some([].into())),
             false,
         )
         .await?;
@@ -163,19 +163,21 @@ async fn non_txn_idempotent(
 
     assert_eq!(
         ProduceResponse {
-            responses: Some(vec![TopicProduceResponse {
-                name: topic.clone(),
-                partition_responses: Some(vec![PartitionProduceResponse {
-                    index,
-                    error_code: ErrorCode::None.into(),
-                    base_offset: 0,
-                    log_append_time_ms: Some(-1),
-                    log_start_offset: Some(0),
-                    record_errors: Some(vec![]),
-                    error_message: None,
-                    current_leader: None,
-                }],),
-            }]),
+            responses: Some(vec![
+                TopicProduceResponse::default()
+                    .name(topic.clone())
+                    .partition_responses(Some(vec![
+                        PartitionProduceResponse::default()
+                            .index(index)
+                            .error_code(ErrorCode::None.into())
+                            .base_offset(0)
+                            .log_append_time_ms(Some(-1))
+                            .log_start_offset(Some(0))
+                            .record_errors(Some(vec![]))
+                            .error_message(None)
+                            .current_leader(None)
+                    ]))
+            ]),
             throttle_time_ms: Some(0),
             node_endpoints: None
         },
@@ -201,19 +203,21 @@ async fn non_txn_idempotent(
 
     assert_eq!(
         ProduceResponse {
-            responses: Some(vec![TopicProduceResponse {
-                name: topic.clone(),
-                partition_responses: Some(vec![PartitionProduceResponse {
-                    index,
-                    error_code: ErrorCode::None.into(),
-                    base_offset: 1,
-                    log_append_time_ms: Some(-1),
-                    log_start_offset: Some(0),
-                    record_errors: Some(vec![]),
-                    error_message: None,
-                    current_leader: None,
-                }],),
-            }]),
+            responses: Some(vec![
+                TopicProduceResponse::default()
+                    .name(topic.clone())
+                    .partition_responses(Some(vec![
+                        PartitionProduceResponse::default()
+                            .index(index)
+                            .error_code(ErrorCode::None.into())
+                            .base_offset(1)
+                            .log_append_time_ms(Some(-1))
+                            .log_start_offset(Some(0))
+                            .record_errors(Some(vec![]))
+                            .error_message(None)
+                            .current_leader(None)
+                    ]))
+            ]),
             throttle_time_ms: Some(0),
             node_endpoints: None
         },
@@ -244,19 +248,21 @@ async fn non_txn_idempotent(
 
     assert_eq!(
         ProduceResponse {
-            responses: Some(vec![TopicProduceResponse {
-                name: topic.clone(),
-                partition_responses: Some(vec![PartitionProduceResponse {
-                    index,
-                    error_code: ErrorCode::None.into(),
-                    base_offset: 3,
-                    log_append_time_ms: Some(-1),
-                    log_start_offset: Some(0),
-                    record_errors: Some(vec![]),
-                    error_message: None,
-                    current_leader: None,
-                }],),
-            }]),
+            responses: Some(vec![
+                TopicProduceResponse::default()
+                    .name(topic.clone())
+                    .partition_responses(Some(vec![
+                        PartitionProduceResponse::default()
+                            .index(index)
+                            .error_code(ErrorCode::None.into())
+                            .base_offset(3)
+                            .log_append_time_ms(Some(-1))
+                            .log_start_offset(Some(0))
+                            .record_errors(Some(vec![]))
+                            .error_message(None)
+                            .current_leader(None)
+                    ]))
+            ]),
             throttle_time_ms: Some(0),
             node_endpoints: None
         },
@@ -295,13 +301,12 @@ async fn non_txn_idempotent_duplicate_sequence(
 
     _ = sc
         .create_topic(
-            CreatableTopic {
-                name: topic.clone(),
-                num_partitions: 3,
-                replication_factor: 1,
-                assignments: Some([].into()),
-                configs: Some([].into()),
-            },
+            CreatableTopic::default()
+                .name(topic.clone())
+                .num_partitions(3)
+                .replication_factor(1)
+                .assignments(Some([].into()))
+                .configs(Some([].into())),
             false,
         )
         .await?;
@@ -318,19 +323,21 @@ async fn non_txn_idempotent_duplicate_sequence(
 
     assert_eq!(
         ProduceResponse {
-            responses: Some(vec![TopicProduceResponse {
-                name: topic.clone(),
-                partition_responses: Some(vec![PartitionProduceResponse {
-                    index,
-                    error_code: ErrorCode::None.into(),
-                    base_offset: 0,
-                    log_append_time_ms: Some(-1),
-                    log_start_offset: Some(0),
-                    record_errors: Some(vec![]),
-                    error_message: None,
-                    current_leader: None,
-                }],),
-            }]),
+            responses: Some(vec![
+                TopicProduceResponse::default()
+                    .name(topic.clone())
+                    .partition_responses(Some(vec![
+                        PartitionProduceResponse::default()
+                            .index(index)
+                            .error_code(ErrorCode::None.into())
+                            .base_offset(0)
+                            .log_append_time_ms(Some(-1))
+                            .log_start_offset(Some(0))
+                            .record_errors(Some(vec![]))
+                            .error_message(None)
+                            .current_leader(None)
+                    ]))
+            ]),
             throttle_time_ms: Some(0),
             node_endpoints: None
         },
@@ -355,19 +362,21 @@ async fn non_txn_idempotent_duplicate_sequence(
 
     assert_eq!(
         ProduceResponse {
-            responses: Some(vec![TopicProduceResponse {
-                name: topic.clone(),
-                partition_responses: Some(vec![PartitionProduceResponse {
-                    index,
-                    error_code: ErrorCode::DuplicateSequenceNumber.into(),
-                    base_offset: -1,
-                    log_append_time_ms: Some(-1),
-                    log_start_offset: Some(0),
-                    record_errors: Some(vec![]),
-                    error_message: None,
-                    current_leader: None,
-                }],),
-            }]),
+            responses: Some(vec![
+                TopicProduceResponse::default()
+                    .name(topic.clone())
+                    .partition_responses(Some(vec![
+                        PartitionProduceResponse::default()
+                            .index(index)
+                            .error_code(ErrorCode::DuplicateSequenceNumber.into())
+                            .base_offset(-1)
+                            .log_append_time_ms(Some(-1))
+                            .log_start_offset(Some(0))
+                            .record_errors(Some(vec![]))
+                            .error_message(None)
+                            .current_leader(None)
+                    ]))
+            ]),
             throttle_time_ms: Some(0),
             node_endpoints: None
         },
@@ -405,13 +414,12 @@ async fn non_txn_idempotent_sequence_out_of_order(
 
     _ = sc
         .create_topic(
-            CreatableTopic {
-                name: topic.clone(),
-                num_partitions: 3,
-                replication_factor: 1,
-                assignments: Some([].into()),
-                configs: Some([].into()),
-            },
+            CreatableTopic::default()
+                .name(topic.clone())
+                .num_partitions(3)
+                .replication_factor(1)
+                .assignments(Some([].into()))
+                .configs(Some([].into())),
             false,
         )
         .await?;
@@ -428,19 +436,21 @@ async fn non_txn_idempotent_sequence_out_of_order(
 
     assert_eq!(
         ProduceResponse {
-            responses: Some(vec![TopicProduceResponse {
-                name: topic.clone(),
-                partition_responses: Some(vec![PartitionProduceResponse {
-                    index,
-                    error_code: ErrorCode::None.into(),
-                    base_offset: 0,
-                    log_append_time_ms: Some(-1),
-                    log_start_offset: Some(0),
-                    record_errors: Some(vec![]),
-                    error_message: None,
-                    current_leader: None,
-                }],),
-            }]),
+            responses: Some(vec![
+                TopicProduceResponse::default()
+                    .name(topic.clone())
+                    .partition_responses(Some(vec![
+                        PartitionProduceResponse::default()
+                            .index(index)
+                            .error_code(ErrorCode::None.into())
+                            .base_offset(0)
+                            .log_append_time_ms(Some(-1))
+                            .log_start_offset(Some(0))
+                            .record_errors(Some(vec![]))
+                            .error_message(None)
+                            .current_leader(None)
+                    ]))
+            ]),
             throttle_time_ms: Some(0),
             node_endpoints: None
         },
@@ -465,19 +475,21 @@ async fn non_txn_idempotent_sequence_out_of_order(
 
     assert_eq!(
         ProduceResponse {
-            responses: Some(vec![TopicProduceResponse {
-                name: topic.clone(),
-                partition_responses: Some(vec![PartitionProduceResponse {
-                    index,
-                    error_code: ErrorCode::OutOfOrderSequenceNumber.into(),
-                    base_offset: -1,
-                    log_append_time_ms: Some(-1),
-                    log_start_offset: Some(0),
-                    record_errors: Some(vec![]),
-                    error_message: None,
-                    current_leader: None,
-                }],),
-            }]),
+            responses: Some(vec![
+                TopicProduceResponse::default()
+                    .name(topic.clone())
+                    .partition_responses(Some(vec![
+                        PartitionProduceResponse::default()
+                            .index(index)
+                            .error_code(ErrorCode::OutOfOrderSequenceNumber.into())
+                            .base_offset(-1)
+                            .log_append_time_ms(Some(-1))
+                            .log_start_offset(Some(0))
+                            .record_errors(Some(vec![]))
+                            .error_message(None)
+                            .current_leader(None)
+                    ]))
+            ]),
             throttle_time_ms: Some(0),
             node_endpoints: None
         },
