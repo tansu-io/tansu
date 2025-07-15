@@ -428,7 +428,7 @@ impl Generate {
         let join_all = async {
             while !set.is_empty() {
                 debug!(len = set.len());
-                set.join_next().await;
+                _ = set.join_next().await;
             }
         };
 
@@ -485,7 +485,7 @@ impl Generate {
         set.abort_all();
 
         while !set.is_empty() {
-            set.join_next().await;
+            _ = set.join_next().await;
         }
 
         Ok(ErrorCode::None)
@@ -497,7 +497,7 @@ impl Generate {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Builder<B, T, P, S> {
     broker: B,
     topic: T,

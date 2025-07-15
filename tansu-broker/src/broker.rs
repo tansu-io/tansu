@@ -66,10 +66,13 @@ use std::{
 };
 use tansu_sans_io::{
     Body, ErrorCode, Frame, Header, IsolationLevel,
-    add_offsets_to_txn_request::AddOffsetsToTxnRequest, api_versions_request,
-    consumer_group_describe_request, consumer_group_describe_response, create_topics_request,
-    create_topics_response::CreateTopicsResponse, delete_groups_request::DeleteGroupsRequest,
-    delete_groups_response::DeleteGroupsResponse, describe_groups_response,
+    add_offsets_to_txn_request::AddOffsetsToTxnRequest,
+    api_versions_request, consumer_group_describe_request, consumer_group_describe_response,
+    create_topics_request,
+    create_topics_response::CreateTopicsResponse,
+    delete_groups_request::DeleteGroupsRequest,
+    delete_groups_response::DeleteGroupsResponse,
+    describe_groups_response::{self, DescribeGroupsResponse},
 };
 use tansu_schema::{Registry, lake::House};
 use tansu_storage::{
@@ -147,7 +150,7 @@ where
         let mut terminate_signal = signal(SignalKind::terminate()).unwrap();
         debug!(?terminate_signal);
 
-        set.spawn(async move {
+        _ = set.spawn(async move {
             self.serve(receiver)
                 .await
                 .inspect_err(|err| error!(?err))
@@ -172,13 +175,13 @@ where
         };
 
         if let Some(cancellation) = cancellation {
-            sender.send(cancellation).inspect_err(|err| debug!(?err))?;
+            _ = sender.send(cancellation).inspect_err(|err| debug!(?err))?;
 
             let cleanup = async {
                 while !set.is_empty() {
                     debug!(len = set.len());
 
-                    set.join_next().await;
+                    _ = set.join_next().await;
                 }
             };
 
@@ -194,7 +197,7 @@ where
                     set.abort_all();
 
                     while !set.is_empty() {
-                        set.join_next().await;
+                        _ = set.join_next().await;
                     }
                 }
             }
@@ -244,7 +247,7 @@ where
         .await
         .inspect_err(|err| error!(?err, %self.advertised_listener))?;
 
-        let mut interval = time::interval(time::Duration::from_millis(600_000));
+        let mut interval = time::interval(Duration::from_millis(600_000));
 
         let mut set = JoinSet::new();
 
@@ -312,7 +315,7 @@ where
         while !set.is_empty() {
             debug!(len = set.len());
 
-            set.join_next().await;
+            _ = set.join_next().await;
         }
 
         Ok(())
@@ -619,7 +622,7 @@ where
                 })
                 .map(Some)
                 .map(|groups| {
-                    tansu_sans_io::describe_groups_response::DescribeGroupsResponse::default()
+                    DescribeGroupsResponse::default()
                         .throttle_time_ms(Some(0))
                         .groups(groups)
                         .into()
@@ -1124,15 +1127,13 @@ fn attributes(api_key: i16, api_version: i16, _correlation_id: i32, body: &Body)
 
 fn request_span(api_key: i16, api_version: i16, correlation_id: i32, body: &Body) -> Span {
     match body {
-        Body::AddOffsetsToTxnRequest(
-            tansu_sans_io::add_offsets_to_txn_request::AddOffsetsToTxnRequest {
-                transactional_id,
-                producer_id,
-                producer_epoch,
-                group_id,
-                ..
-            },
-        ) => {
+        Body::AddOffsetsToTxnRequest(AddOffsetsToTxnRequest {
+            transactional_id,
+            producer_id,
+            producer_epoch,
+            group_id,
+            ..
+        }) => {
             debug_span!(
                 "add_offsets_to_txn",
                 api_key,
@@ -1322,7 +1323,7 @@ static REQUEST_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
         .build()
 });
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Builder<N, C, I, A, S, L> {
     node_id: N,
     cluster_id: C,
@@ -1437,7 +1438,7 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
     }
 
     pub fn schema_registry(self, schema_registry: Option<Url>) -> Builder<N, C, I, A, S, L> {
-        schema_registry
+        _ = schema_registry
             .as_ref()
             .inspect(|schema_registry| debug!(%schema_registry));
 
@@ -1455,7 +1456,7 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
     }
 
     pub fn lake_house(self, lake_house: Option<House>) -> Builder<N, C, I, A, S, L> {
-        lake_house
+        _ = lake_house
             .as_ref()
             .inspect(|lake_house| debug!(?lake_house));
 

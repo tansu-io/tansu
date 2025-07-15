@@ -32,7 +32,7 @@ use tokio_util::codec::{FramedWrite, LinesCodec};
 use tracing::debug;
 use url::Url;
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Builder<B, T, P, S> {
     broker: B,
     topic: T,
@@ -45,7 +45,7 @@ pub struct Builder<B, T, P, S> {
     partition_max_bytes: i32,
 }
 
-pub type PhantomBuilder =
+pub(crate) type PhantomBuilder =
     Builder<PhantomData<Url>, PhantomData<String>, PhantomData<i32>, PhantomData<Option<Url>>>;
 
 impl<B, T, P, S> Builder<B, T, P, S> {
@@ -171,7 +171,7 @@ pub struct Configuration {
 }
 
 #[derive(Clone, Debug)]
-pub struct Consume {
+pub(crate) struct Consume {
     configuration: Configuration,
     registry: Option<Registry>,
 }
@@ -194,7 +194,7 @@ impl TryFrom<Configuration> for Consume {
 }
 
 impl Consume {
-    pub async fn main(self) -> Result<ErrorCode> {
+    pub(crate) async fn main(self) -> Result<ErrorCode> {
         let stdout = io::stdout();
 
         let mut writer = FramedWrite::new(stdout, LinesCodec::new());

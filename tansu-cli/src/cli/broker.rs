@@ -124,7 +124,7 @@ impl Arg {
     }
 }
 
-impl TryFrom<Arg> for tansu_broker::broker::Broker<Controller<StorageContainer>, StorageContainer> {
+impl TryFrom<Arg> for Broker<Controller<StorageContainer>, StorageContainer> {
     type Error = Error;
 
     fn try_from(args: Arg) -> Result<Self, Self::Error> {

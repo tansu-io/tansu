@@ -903,7 +903,7 @@ pub struct TopitionDetail {
 }
 
 /// Partition Detail
-#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Copy, Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct PartitionDetail {
     error: ErrorCode,
     partition_index: i32,

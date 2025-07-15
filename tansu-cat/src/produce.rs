@@ -33,7 +33,7 @@ use tokio_util::codec::{FramedRead, LinesCodec};
 use tracing::debug;
 use url::Url;
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Builder<B, T, P, S, F> {
     broker: B,
     topic: T,
@@ -42,7 +42,7 @@ pub struct Builder<B, T, P, S, F> {
     file_name: F,
 }
 
-pub type PhantomBuilder = Builder<
+pub(crate) type PhantomBuilder = Builder<
     PhantomData<Url>,
     PhantomData<String>,
     PhantomData<i32>,
@@ -124,7 +124,7 @@ pub struct Configuration {
 }
 
 #[derive(Clone, Debug)]
-pub struct Produce {
+pub(crate) struct Produce {
     configuration: Configuration,
     registry: Option<Registry>,
 }
@@ -147,7 +147,7 @@ impl TryFrom<Configuration> for Produce {
 }
 
 impl Produce {
-    pub async fn main(self) -> Result<ErrorCode> {
+    pub(crate) async fn main(self) -> Result<ErrorCode> {
         debug!(%self.configuration.file_name);
 
         let schema = if let Some(ref registry) = self.registry {
@@ -191,7 +191,7 @@ impl Produce {
                 let mut file = File::open(self.configuration.file_name).await?;
 
                 let mut contents = vec![];
-                file.read_to_end(&mut contents).await?;
+                _ = file.read_to_end(&mut contents).await?;
 
                 let v = serde_json::from_slice::<Value>(&contents[..])?;
 

@@ -84,7 +84,7 @@ pub(super) enum Command {
     },
 }
 
-impl From<Command> for tansu_cat::Cat {
+impl From<Command> for Cat {
     fn from(value: Command) -> Self {
         match value {
             Command::Produce {
@@ -128,6 +128,6 @@ impl From<Command> for tansu_cat::Cat {
 
 impl Command {
     pub(super) async fn main(self) -> Result<ErrorCode> {
-        tansu_cat::Cat::from(self).main().await.map_err(Into::into)
+        Cat::from(self).main().await.map_err(Into::into)
     }
 }

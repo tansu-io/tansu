@@ -4,6 +4,9 @@ edition.workspace = true
 version.workspace = true
 license.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 opentelemetry-otlp.workspace = true
 opentelemetry-semantic-conventions.workspace = true

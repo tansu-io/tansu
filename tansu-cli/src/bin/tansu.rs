@@ -20,7 +20,7 @@ use tracing::{debug, error};
 
 #[tokio::main]
 async fn main() -> Result<ErrorCode> {
-    dotenv().ok();
+    _ = dotenv().ok();
 
     let _guard = otel::init(TracingFormat::Text)?;
 

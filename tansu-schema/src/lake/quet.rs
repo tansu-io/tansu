@@ -71,7 +71,7 @@ impl LakeHouse for Parquet {
             let mut buffer = Vec::new();
             let mut writer = AsyncArrowWriter::try_new(&mut buffer, record_batch.schema(), None)?;
             writer.write(&record_batch).await?;
-            writer.close().await?;
+            _ = writer.close().await?;
             PutPayload::from(Bytes::from(buffer))
         };
 

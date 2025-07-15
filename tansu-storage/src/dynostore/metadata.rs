@@ -74,7 +74,7 @@ impl CacheEntry {
 }
 
 #[derive(Clone, Debug)]
-pub struct Cache<O> {
+pub(super) struct Cache<O> {
     entries: Arc<Mutex<HashMap<Path, CacheEntry>>>,
     object_store: O,
     retention: Duration,
@@ -91,7 +91,7 @@ impl<O> Cache<O>
 where
     O: ObjectStore,
 {
-    pub fn new(object_store: O, retention: Duration) -> Self {
+    pub(super) fn new(object_store: O, retention: Duration) -> Self {
         let entries = Arc::new(Mutex::new(HashMap::new()));
 
         Self {

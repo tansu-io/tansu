@@ -222,44 +222,37 @@ impl Schema {
         let engine = {
             let mut engine = Engine::new();
 
-            engine.register_fn("first_name", || {
-                fake::faker::name::raw::FirstName(fake::locales::EN).fake::<String>()
-            });
-
-            engine.register_fn("last_name", || {
-                fake::faker::name::raw::LastName(fake::locales::EN).fake::<String>()
-            });
-
-            engine.register_fn("safe_email", || {
-                fake::faker::internet::raw::SafeEmail(fake::locales::EN).fake::<String>()
-            });
-
-            engine.register_fn("building_number", || {
-                fake::faker::address::raw::BuildingNumber(fake::locales::EN).fake::<String>()
-            });
-
-            engine.register_fn("street_name", || {
-                fake::faker::address::raw::StreetName(fake::locales::EN).fake::<String>()
-            });
-
-            engine.register_fn("city_name", || {
-                fake::faker::address::raw::CityName(fake::locales::EN).fake::<String>()
-            });
-
-            engine.register_fn("post_code", || {
-                fake::faker::address::raw::PostCode(fake::locales::EN).fake::<String>()
-            });
-
-            engine.register_fn("country_name", || {
-                fake::faker::address::raw::CountryName(fake::locales::EN).fake::<String>()
-            });
-
-            engine.register_fn("industry", || {
-                fake::faker::company::raw::Industry(fake::locales::EN).fake::<String>()
-            });
+            _ = engine
+                .register_fn("first_name", || {
+                    fake::faker::name::raw::FirstName(fake::locales::EN).fake::<String>()
+                })
+                .register_fn("last_name", || {
+                    fake::faker::name::raw::LastName(fake::locales::EN).fake::<String>()
+                })
+                .register_fn("safe_email", || {
+                    fake::faker::internet::raw::SafeEmail(fake::locales::EN).fake::<String>()
+                })
+                .register_fn("building_number", || {
+                    fake::faker::address::raw::BuildingNumber(fake::locales::EN).fake::<String>()
+                })
+                .register_fn("street_name", || {
+                    fake::faker::address::raw::StreetName(fake::locales::EN).fake::<String>()
+                })
+                .register_fn("city_name", || {
+                    fake::faker::address::raw::CityName(fake::locales::EN).fake::<String>()
+                })
+                .register_fn("post_code", || {
+                    fake::faker::address::raw::PostCode(fake::locales::EN).fake::<String>()
+                })
+                .register_fn("country_name", || {
+                    fake::faker::address::raw::CountryName(fake::locales::EN).fake::<String>()
+                })
+                .register_fn("industry", || {
+                    fake::faker::company::raw::Industry(fake::locales::EN).fake::<String>()
+                });
 
             let random = RandomPackage::new();
-            random.register_into_engine(&mut engine);
+            _ = random.register_into_engine(&mut engine);
             engine
         };
 
@@ -1008,7 +1001,7 @@ impl FieldGeneratorConfiguration {
                 } else if let UnknownValueRef::LengthDelimited(items) = unknown {
                     let mut message = generator.new_instance();
 
-                    message
+                    _ = message
                         .merge_from_bytes_dyn(items)
                         .inspect_err(|err| debug!(?err))
                         .ok();
@@ -1385,7 +1378,7 @@ fn field_ids(schemas: &[FileDescriptor]) -> BTreeMap<String, i32> {
 
         if path.is_empty() {
             for schema in schemas {
-                ids.insert(schema.name().to_lowercase(), *id);
+                _ = ids.insert(schema.name().to_lowercase(), *id);
                 *id += 1;
             }
         }
@@ -1411,7 +1404,7 @@ fn field_ids(schemas: &[FileDescriptor]) -> BTreeMap<String, i32> {
                     path
                 };
 
-                ids.insert(path.join("."), *id);
+                _ = ids.insert(path.join("."), *id);
                 *id += 1;
             }
 
@@ -1450,7 +1443,7 @@ fn field_ids(schemas: &[FileDescriptor]) -> BTreeMap<String, i32> {
                             path
                         };
 
-                        ids.insert(path.join("."), *id);
+                        _ = ids.insert(path.join("."), *id);
                         *id += 1;
 
                         if let RuntimeType::Message(message_descriptor) = repeated {
@@ -1472,7 +1465,7 @@ fn field_ids(schemas: &[FileDescriptor]) -> BTreeMap<String, i32> {
                             path
                         };
 
-                        ids.insert(path.join("."), *id);
+                        _ = ids.insert(path.join("."), *id);
                         *id += 1;
 
                         {
@@ -1482,7 +1475,7 @@ fn field_ids(schemas: &[FileDescriptor]) -> BTreeMap<String, i32> {
                                 path
                             };
 
-                            ids.insert(path.join("."), *id);
+                            _ = ids.insert(path.join("."), *id);
                             *id += 1;
 
                             if let RuntimeType::Message(message_descriptor) = keys {
@@ -1502,7 +1495,7 @@ fn field_ids(schemas: &[FileDescriptor]) -> BTreeMap<String, i32> {
                                 path
                             };
 
-                            ids.insert(path.join("."), *id);
+                            _ = ids.insert(path.join("."), *id);
                             *id += 1;
 
                             if let RuntimeType::Message(message_descriptor) = values {
@@ -1816,7 +1809,7 @@ fn append_map_builder(
     builder.append(true).map_err(Into::into)
 }
 
-fn decode_value(value: ReflectValueRef, builder: &mut dyn ArrayBuilder) -> Result<()> {
+fn decode_value(value: ReflectValueRef<'_>, builder: &mut dyn ArrayBuilder) -> Result<()> {
     debug!(?value);
 
     match value {
@@ -3192,7 +3185,7 @@ mod tests {
         let topic = "t";
         let ctx = SessionContext::new();
 
-        schema
+        _ = schema
             .generate()
             .and_then(|record| {
                 Batch::builder()
@@ -3311,7 +3304,7 @@ mod tests {
         let topic = "t";
         let ctx = SessionContext::new();
 
-        schema
+        _ = schema
             .generate()
             .and_then(|record| {
                 Batch::builder()

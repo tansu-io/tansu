@@ -28,7 +28,7 @@ use crate::{Error, Result};
 
 use super::Topic;
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Builder<B, N> {
     broker: B,
     name: N,
@@ -66,7 +66,7 @@ pub struct Configuration {
 }
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct Delete {
+pub(crate) struct Delete {
     configuration: Configuration,
 }
 
@@ -79,7 +79,7 @@ impl TryFrom<Configuration> for Delete {
 }
 
 impl Delete {
-    pub async fn main(self) -> Result<ErrorCode> {
+    pub(crate) async fn main(self) -> Result<ErrorCode> {
         let mut connection = Connection::open(&self.configuration.broker).await?;
         connection.delete(self.configuration.name.as_str()).await
     }

@@ -231,7 +231,7 @@ impl Meta {
                 }
             }
 
-            metadata
+            _ = metadata
                 .topic
                 .configs
                 .replace(
@@ -614,8 +614,8 @@ impl Storage for DynoStore {
 
                     watermark
                         .with_mut(&self.object_store, |watermark| {
-                            watermark.high.take();
-                            watermark.low.take();
+                            _ = watermark.high.take();
+                            _ = watermark.low.take();
 
                             Ok(())
                         })
@@ -643,7 +643,7 @@ impl Storage for DynoStore {
         if let Some(metadata) = self.topic_metadata(topic).await? {
             self.meta
                 .with_mut(&self.object_store, |meta| {
-                    meta.topics.remove(metadata.topic.name.as_str());
+                    _ = meta.topics.remove(metadata.topic.name.as_str());
                     Ok(())
                 })
                 .await?;

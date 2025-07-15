@@ -389,7 +389,7 @@ impl ResourceConfig {
         self.configuration
             .lock()
             .map(|mut guard| {
-                guard
+                _ = guard
                     .entry(resource_name.clone())
                     .or_default()
                     .entry(key.clone())

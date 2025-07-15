@@ -5,6 +5,9 @@ version.workspace = true
 license.workspace = true
 publish = false
 
+[lints]
+workspace = true
+
 [dependencies]
 futures-core.workspace = true
 futures-util.workspace = true
