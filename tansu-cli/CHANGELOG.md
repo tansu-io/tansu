@@ -1,0 +1,22 @@
+# Changelog
+
+## [0.4.2](https://github.com/tansu-io/tansu/compare/tansu-cli-v0.4.1...tansu-cli-v0.4.2) (2025-07-15)
+
+
+### Bug Fixes
+
+* ci missing "." version ([008a4bf](https://github.com/tansu-io/tansu/commit/008a4bff1a86b5736d9e1c4433220a76b39a8f28))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * tansu-cat bumped from 0.4.1 to 0.4.2
+    * tansu-generator bumped from 0.4.1 to 0.4.2
+    * tansu-sans-io bumped from 0.4.1 to 0.4.2
+    * tansu-proxy bumped from 0.4.1 to 0.4.2
+    * tansu-schema bumped from 0.4.1 to 0.4.2
+    * tansu-broker bumped from 0.4.1 to 0.4.2
+    * tansu-storage bumped from 0.4.1 to 0.4.2
+    * tansu-topic bumped from 0.4.1 to 0.4.2
