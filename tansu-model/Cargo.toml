@@ -1,10 +1,14 @@
 [package]
 name = "tansu-model"
+description = "Kafka JSON protocol definitions, bootstrapping Tansu sans I/O"
+authors.workspace = true
 edition.workspace = true
-version = "0.4.2"
+homepage.workspace = true
+include.workspace = true
+keywords.workspace = true
 license.workspace = true
 repository.workspace = true
-publish = true
+version.workspace = true
 
 [lints]
 workspace = true

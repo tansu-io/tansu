@@ -1,10 +1,14 @@
 [package]
 name = "tansu-schema"
+description = "Avro, JSON and Protocol buffer validation with conversion to Apache Iceberg, Delta Lake or Parquet via Apache Arrow"
+authors.workspace = true
 edition.workspace = true
-version = "0.4.2"
+homepage.workspace = true
+include.workspace = true
+keywords.workspace = true
 license.workspace = true
 repository.workspace = true
-publish = true
+version.workspace = true
 
 [lints]
 workspace = true
@@ -42,7 +46,7 @@ rhai-rand.workspace = true
 rhai.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-tansu-sans-io = { version = "0.4.2", path = "../tansu-sans-io" }
+tansu-sans-io.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

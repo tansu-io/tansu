@@ -6177,6 +6177,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7b2093cf4c8eb1e67749a6762251bc9cd836b6fc171623bd0a9d324d37af2417"
 
 [[package]]
+name = "tansu"
+version = "0.4.2"
+dependencies = [
+ "dotenv",
+ "tansu-broker",
+ "tansu-cli",
+ "tansu-sans-io",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "tansu-broker"
 version = "0.4.2"
 dependencies = [

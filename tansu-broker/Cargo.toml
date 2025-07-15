@@ -1,10 +1,14 @@
 [package]
 name = "tansu-broker"
+description = "Tansu Kafka API compatible broker"
+authors.workspace = true
 edition.workspace = true
-version = "0.4.2"
+homepage.workspace = true
+include.workspace = true
+keywords.workspace = true
 license.workspace = true
 repository.workspace = true
-publish = true
+version.workspace = true
 
 [lints]
 workspace = true
@@ -28,10 +32,10 @@ rand.workspace = true
 regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-tansu-model = { version = "0.4.2", path = "../tansu-model" }
-tansu-sans-io = { version = "0.4.2", path = "../tansu-sans-io" }
-tansu-schema = { version = "0.4.2", path = "../tansu-schema" }
-tansu-storage = { version = "0.4.2", path = "../tansu-storage" }
+tansu-model.workspace = true
+tansu-sans-io.workspace = true
+tansu-schema.workspace = true
+tansu-storage.workspace = true
 thiserror.workspace = true
 tokio-postgres.workspace = true
 tokio.workspace = true
