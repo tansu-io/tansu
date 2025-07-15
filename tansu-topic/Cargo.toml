@@ -1,7 +1,7 @@
 [package]
 name = "tansu-topic"
 edition.workspace = true
-version = "0.4.2"
+version = "0.4.3"
 license.workspace = true
 repository.workspace = true
 publish = true
@@ -13,7 +13,7 @@ workspace = true
 futures-core.workspace = true
 futures-util.workspace = true
 futures.workspace = true
-tansu-sans-io = { version = "0.4.2", path = "../tansu-sans-io" }
+tansu-sans-io = { version = "0.4.3", path = "../tansu-sans-io" }
 thiserror.workspace = true
 tokio-util.workspace = true
 tokio.workspace = true
