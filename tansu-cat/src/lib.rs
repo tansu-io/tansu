@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Tansu Cat
+//!
+//! Fetch or Produce (with validation when backed by a schema) messages to a topic
+
 use std::{fmt, io, result, sync::Arc};
 
 use consume::Consume;
