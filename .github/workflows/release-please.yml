@@ -1,0 +1,30 @@
+---
+name: release-please
+on:
+  push:
+    branches:
+      - main
+permissions:
+  contents: write
+  pull-requests: write
+jobs:
+  release-please:
+    environment: release-please
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v4
+        with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          release-type: rust
+  publish-crates-io:
+    runs-on: ubuntu-latest
+    needs: release-please
+    if: needs.release-please.outputs.created
+    environment: crates.io
+    steps:
+      - uses: actions/checkout@v4
+      - run: >
+          cargo publish
+          --verbose
+          --locked
+          --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
