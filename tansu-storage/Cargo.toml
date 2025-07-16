@@ -4,11 +4,22 @@ description = "Storage abstraction for PostgreSQL and ObjectStore (S3 or memory)
 authors.workspace = true
 edition.workspace = true
 homepage.workspace = true
-include.workspace = true
 keywords.workspace = true
 license.workspace = true
 repository.workspace = true
 version.workspace = true
+
+include = [
+    "build.rs",
+    "benches/*.rs",
+    "src/**/*.rs",
+    "src/**/*.sql",
+    "tests",
+    "Cargo.toml",
+    "LICENSE.txt",
+    "NOTICE.txt",
+]
+
 
 [lints]
 workspace = true
