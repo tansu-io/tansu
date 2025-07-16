@@ -94,7 +94,7 @@ lazy_static = "1.4.0"
 lz4 = "1.28.1"
 nonzero_ext = "0.3.0"
 num-bigint = "0.4"
-object_store = { version = "0.12.1", features = ["aws"] }
+object_store = { version = "0.12.3", features = ["aws"] }
 opentelemetry = "0.30.0"
 opentelemetry-otlp = "0.30.0"
 opentelemetry-semantic-conventions = "0.30.0"
