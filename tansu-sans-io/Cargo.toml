@@ -4,11 +4,22 @@ description = "A Kafka protocol implementation using serde"
 authors.workspace = true
 edition.workspace = true
 homepage.workspace = true
-include.workspace = true
 keywords = ["kafka", "serde", "quote", "syn", "proc-macro2"]
 license.workspace = true
 repository.workspace = true
 version.workspace = true
+
+include = [
+    "build.rs",
+    "benches/*.rs",
+    "src/**/*.rs",
+    "message/*.json",
+    "tests",
+    "Cargo.toml",
+    "LICENSE.txt",
+    "NOTICE.txt",
+]
+
 
 [lints.clippy]
 all = "warn"
