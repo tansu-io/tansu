@@ -126,6 +126,7 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 pub use de::Decoder;
 use flate2::read::GzDecoder;
 use primitive::tagged::TagBuffer;
+use record::deflated::Frame as RecordBatch;
 pub use ser::Encoder;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -143,9 +144,6 @@ use std::{
 use tansu_model::{MessageKind, MessageMeta};
 use tracing::{debug, error, warn};
 use tracing_subscriber::filter::ParseError;
-
-#[allow(unused_imports)]
-use record::deflated::Frame as RecordBatch;
 
 /// The null topic identifier.
 pub const NULL_TOPIC_ID: [u8; 16] = [0; 16];

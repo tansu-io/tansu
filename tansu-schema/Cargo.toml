@@ -18,8 +18,7 @@ include = [
     "src/**/*.json",
     "tests",
     "Cargo.toml",
-    "LICENSE.txt",
-    "NOTICE.txt",
+    "LICENSE",
 ]
 
 

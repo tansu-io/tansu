@@ -16,8 +16,7 @@ include = [
     "src/**/*.sql",
     "tests",
     "Cargo.toml",
-    "LICENSE.txt",
-    "NOTICE.txt",
+    "LICENSE",
 ]
 
 
