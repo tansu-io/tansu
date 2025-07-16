@@ -22,16 +22,7 @@ version = "0.4.2"
 license = "Apache-2.0"
 homepage = "https://tansu.io"
 repository = "https://github.com/tansu-io/tansu"
-keywords = [
-    "arrow",
-    "datalake",
-    "delta",
-    "deltalake",
-    "kafka",
-    "parquet",
-    "postgres",
-    "s3",
-]
+keywords = ["deltalake", "iceberg", "kafka", "postgres", "s3"]
 authors = ["Peter Morgan <peter.morgan@tansu.io>"]
 include = [
     "benches/*.rs",
