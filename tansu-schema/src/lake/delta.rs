@@ -120,6 +120,48 @@ static RATE_LIMIT_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
         .build()
 });
 
+static OPTIMIZE_NUM_FILES_ADDED: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    METER
+        .u64_counter("deltalake_optimize_num_files_added")
+        .with_description("Number of optimized files added")
+        .build()
+});
+
+static OPTIMIZE_NUM_FILES_REMOVED: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    METER
+        .u64_counter("deltalake_optimize_num_files_removed")
+        .with_description("Number of unoptimized files removed")
+        .build()
+});
+
+static OPTIMIZE_PARTITIONS_OPTIMIZED: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    METER
+        .u64_counter("deltalake_optimize_partitions_optimized")
+        .with_description("Number of partitions that had at least one file optimized")
+        .build()
+});
+
+static OPTIMIZE_NUM_BATCHES: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    METER
+        .u64_counter("deltalake_optimize_num_batches")
+        .with_description("The number of batches written")
+        .build()
+});
+
+static OPTIMIZE_TOTAL_CONSIDERED_FILES: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    METER
+        .u64_counter("deltalake_optimize_total_considered_files")
+        .with_description("How many files were considered during optimization. Not every file considered is optimized")
+        .build()
+});
+
+static OPTIMIZE_TOTAL_FILES_SKIPPED: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    METER
+        .u64_counter("deltalake_optimize_total_files_skipped")
+        .with_description("How many files were considered for optimization but were skipped")
+        .build()
+});
+
 #[derive(Clone, Debug)]
 pub struct Delta {
     location: Url,
@@ -430,16 +472,33 @@ impl Delta {
     async fn optimize(&self, name: &str, optimize_type: OptimizeType) -> Result<()> {
         debug!(%name, ?optimize_type);
 
-        DeltaOps::try_from_uri(&self.table_uri(name))
-            .await
-            .inspect_err(|err| debug!(?err))?
+        let optimize_type_label = KeyValue::new(
+            "optimize_type",
+            match optimize_type {
+                OptimizeType::Compact => "compact",
+                OptimizeType::ZOrder(..) => "z_order",
+            },
+        );
+
+        let (table, metrics) = DeltaOps::try_from_uri(&self.table_uri(name))
+            .await?
             .optimize()
             .with_type(optimize_type)
-            .await
-            .inspect(|(table, metrics)| debug!(?table, ?metrics))
-            .inspect_err(|err| debug!(?err))
-            .map_err(Into::into)
-            .and(Ok(()))
+            .await?;
+
+        let properties = [
+            KeyValue::new("table_uri", table.table_uri()),
+            optimize_type_label,
+        ];
+
+        OPTIMIZE_NUM_FILES_ADDED.add(metrics.num_files_added, &properties);
+        OPTIMIZE_NUM_FILES_REMOVED.add(metrics.num_files_removed, &properties);
+        OPTIMIZE_PARTITIONS_OPTIMIZED.add(metrics.partitions_optimized, &properties);
+        OPTIMIZE_NUM_BATCHES.add(metrics.num_batches, &properties);
+        OPTIMIZE_TOTAL_CONSIDERED_FILES.add(metrics.total_considered_files as u64, &properties);
+        OPTIMIZE_TOTAL_FILES_SKIPPED.add(metrics.total_files_skipped as u64, &properties);
+
+        Ok(())
     }
 }
 
