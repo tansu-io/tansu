@@ -23,8 +23,8 @@ use std::{
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use object_store::{
-    GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore, PutMultipartOpts,
-    PutOptions, PutPayload, PutResult, UpdateVersion, path::Path,
+    GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
+    PutMultipartOptions, PutOptions, PutPayload, PutResult, UpdateVersion, path::Path,
 };
 use opentelemetry::{KeyValue, metrics::Counter};
 use tracing::debug;
@@ -227,7 +227,7 @@ where
     async fn put_multipart_opts(
         &self,
         location: &Path,
-        opts: PutMultipartOpts,
+        opts: PutMultipartOptions,
     ) -> Result<Box<dyn MultipartUpload>, object_store::Error> {
         debug!(%location, ?opts);
 
@@ -531,7 +531,7 @@ mod tests {
         async fn put_multipart_opts(
             &self,
             location: &Path,
-            opts: PutMultipartOpts,
+            opts: PutMultipartOptions,
         ) -> Result<Box<dyn MultipartUpload>, object_store::Error> {
             self.object_store.put_multipart_opts(location, opts).await
         }

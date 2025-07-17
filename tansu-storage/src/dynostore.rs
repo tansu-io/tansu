@@ -32,7 +32,7 @@ use futures::{
 use metadata::Cache;
 use object_store::{
     Attribute, AttributeValue, Attributes, DynObjectStore, GetOptions, GetResult, ListResult,
-    MultipartUpload, ObjectMeta, ObjectStore, PutMode, PutMultipartOpts, PutOptions, PutPayload,
+    MultipartUpload, ObjectMeta, ObjectStore, PutMode, PutMultipartOptions, PutOptions, PutPayload,
     PutResult, UpdateVersion, path::Path,
 };
 use opentelemetry::{
@@ -2707,7 +2707,7 @@ where
     async fn put_multipart_opts(
         &self,
         location: &Path,
-        opts: PutMultipartOpts,
+        opts: PutMultipartOptions,
     ) -> Result<Box<dyn MultipartUpload>, object_store::Error> {
         debug!(%location, ?opts);
 
