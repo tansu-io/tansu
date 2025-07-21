@@ -6260,6 +6260,7 @@ version = "0.4.9"
 dependencies = [
  "clap",
  "dotenv",
+ "humantime",
  "regex",
  "tansu-broker",
  "tansu-cat",

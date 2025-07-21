@@ -136,7 +136,7 @@ impl TryFrom<Configuration> for Produce {
         configuration
             .schema_registry
             .as_ref()
-            .map(Registry::try_from)
+            .map(|url| Registry::builder_try_from_url(url).map(|builder| builder.build()))
             .transpose()
             .map(|registry| Self {
                 configuration,

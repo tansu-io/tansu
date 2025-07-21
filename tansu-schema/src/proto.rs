@@ -138,7 +138,7 @@ impl Schema {
         data_type: DataType,
         nullable: bool,
     ) -> Field {
-        debug!(?path, name, ?data_type, ?nullable, ids = ?ids);
+        debug!(?path, name, ?data_type, ?nullable, ?ids);
 
         let path = append(path, name).join(".");
 
@@ -328,7 +328,7 @@ impl Schema {
         path: &[&str],
         descriptor: &MessageDescriptor,
     ) -> Vec<Field> {
-        debug!(?path, descriptor_full_name = ?descriptor.full_name());
+        debug!(?path, ?ids, descriptor_full_name = ?descriptor.full_name());
 
         descriptor
             .fields()
@@ -482,7 +482,7 @@ impl Schema {
         path: &[&str],
         runtime_type: &RuntimeType,
     ) -> Box<dyn ArrayBuilder> {
-        debug!(?path, ?runtime_type);
+        debug!(?path, ?runtime_type, ?ids);
 
         match runtime_type {
             RuntimeType::U32 | RuntimeType::I32 | RuntimeType::Enum(_) => {
@@ -653,7 +653,7 @@ impl Schema {
         path: &[&str],
         descriptor: &MessageDescriptor,
     ) -> Vec<Box<dyn ArrayBuilder>> {
-        debug!(?path, ?descriptor);
+        debug!(?path, descriptor = descriptor.full_name(), ?ids);
 
         descriptor
             .fields()
@@ -2025,6 +2025,7 @@ impl AsArrow for Schema {
             columns.iter_mut().map(|builder| builder.finish()).collect(),
         )
         .inspect_err(|err| debug!(?err))
+        .inspect(|record_batch| debug!(?record_batch))
         .map_err(Into::into)
     }
 }

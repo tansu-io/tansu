@@ -28,7 +28,7 @@ use async_trait::async_trait;
 use iceberg::{
     Catalog, NamespaceIdent, TableCreation, TableIdent,
     io::{FileIOBuilder, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY},
-    spec::{DataFileFormat, Schema},
+    spec::{DataFileFormat, Schema, TableMetadataBuilder},
     table::Table,
     transaction::Transaction,
     writer::{
@@ -196,10 +196,32 @@ impl Iceberg {
         let table_ident = TableIdent::new(namespace_ident.clone(), name.into());
 
         let table = if self.catalog.table_exists(&table_ident).await? {
-            self.catalog
+            let table = self
+                .catalog
                 .load_table(&table_ident)
                 .await
-                .inspect_err(|err| debug!(?err))?
+                .inspect_err(|err| debug!(?err))?;
+
+            if table.metadata().current_schema().as_ref() != &schema {
+                debug!(current = ?table.metadata(), ?schema);
+
+                _ = TableMetadataBuilder::new_from_metadata(
+                    table.metadata().to_owned(),
+                    table
+                        .metadata_location()
+                        .map(|location| location.to_owned()),
+                )
+                .add_schema(schema.clone())
+                .set_current_schema(-1)
+                .and_then(|builder| builder.build())
+                .inspect(|update| {
+                    debug!(?update.metadata);
+                    debug!(?update.changes);
+                    debug!(?update.expired_metadata_logs);
+                })?;
+            }
+
+            table
         } else {
             self.catalog
                 .create_table(
