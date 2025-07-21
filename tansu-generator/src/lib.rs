@@ -144,7 +144,8 @@ impl TryFrom<Configuration> for Generate {
     type Error = Error;
 
     fn try_from(configuration: Configuration) -> Result<Self, Self::Error> {
-        Registry::try_from(&configuration.schema_registry)
+        Registry::builder_try_from_url(&configuration.schema_registry)
+            .map(|builder| builder.build())
             .map(|registry| Self {
                 configuration,
                 registry,

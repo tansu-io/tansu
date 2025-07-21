@@ -25,7 +25,7 @@ use std::{
     result,
     string::FromUtf8Error,
     sync::{Arc, LazyLock, Mutex, PoisonError},
-    time::SystemTime,
+    time::{Duration, SystemTime},
 };
 
 use arrow::{datatypes::DataType, error::ArrowError, record_batch::RecordBatch};
@@ -245,12 +245,27 @@ pub trait Generator {
 
 // Schema
 //
-// This is wrapper enumeration for the supported schema types
+// This is wrapper enumeration of the supported schema types
 #[derive(Clone, Debug)]
 pub enum Schema {
     Avro(Box<avro::Schema>),
     Json(Arc<json::Schema>),
     Proto(Box<proto::Schema>),
+}
+
+#[derive(Clone, Debug)]
+struct CachedSchema {
+    loaded_at: SystemTime,
+    schema: Schema,
+}
+
+impl CachedSchema {
+    fn new(schema: Schema) -> Self {
+        Self {
+            schema,
+            loaded_at: SystemTime::now(),
+        }
+    }
 }
 
 impl AsKafkaRecord for Schema {
@@ -316,14 +331,95 @@ impl Generator for Schema {
     }
 }
 
+type SchemaCache = Arc<Mutex<BTreeMap<String, CachedSchema>>>;
+
 // Schema Registry
 #[derive(Clone, Debug)]
 pub struct Registry {
     object_store: Arc<DynObjectStore>,
-    schemas: Arc<Mutex<BTreeMap<String, Schema>>>,
-    validation_duration: Histogram<u64>,
-    validation_error: Counter<u64>,
-    as_arrow_duration: Histogram<u64>,
+    schemas: SchemaCache,
+    cache_expiry_after: Option<Duration>,
+}
+
+// Schema Registry builder
+#[derive(Clone, Debug)]
+pub struct Builder {
+    object_store: Arc<DynObjectStore>,
+    cache_expiry_after: Option<Duration>,
+}
+
+impl TryFrom<&Url> for Builder {
+    type Error = Error;
+
+    fn try_from(storage: &Url) -> Result<Self, Self::Error> {
+        debug!(%storage);
+
+        match storage.scheme() {
+            "s3" => {
+                let bucket_name = storage.host_str().unwrap_or("schema");
+
+                AmazonS3Builder::from_env()
+                    .with_bucket_name(bucket_name)
+                    .build()
+                    .map_err(Into::into)
+                    .map(Self::new)
+            }
+
+            "file" => {
+                let mut path = env::current_dir().inspect(|current_dir| debug!(?current_dir))?;
+
+                if let Some(domain) = storage.domain() {
+                    path.push(domain);
+                }
+
+                if let Some(relative) = storage.path().strip_prefix("/") {
+                    path.push(relative);
+                } else {
+                    path.push(storage.path());
+                }
+
+                debug!(?path);
+
+                LocalFileSystem::new_with_prefix(path)
+                    .map_err(Into::into)
+                    .map(Self::new)
+            }
+
+            "memory" => Ok(Self::new(InMemory::new())),
+
+            _unsupported => Err(Error::UnsupportedSchemaRegistryUrl(storage.to_owned())),
+        }
+    }
+}
+
+impl From<Builder> for Registry {
+    fn from(builder: Builder) -> Self {
+        Self {
+            object_store: builder.object_store,
+            schemas: Arc::new(Mutex::new(BTreeMap::new())),
+            cache_expiry_after: builder.cache_expiry_after,
+        }
+    }
+}
+
+impl Builder {
+    pub fn new(object_store: impl ObjectStore) -> Self {
+        Self {
+            object_store: Arc::new(object_store),
+            cache_expiry_after: None,
+        }
+    }
+
+    pub fn with_cache_expiry_after(self, cache_expiry_after: Option<Duration>) -> Self {
+        Self {
+            cache_expiry_after,
+            ..self
+        }
+    }
+
+    pub fn build(self) -> Registry {
+        Registry::from(self)
+    }
 }
 
 pub(crate) static METER: LazyLock<Meter> = LazyLock::new(|| {
@@ -335,26 +431,40 @@ pub(crate) static METER: LazyLock<Meter> = LazyLock::new(|| {
     )
 });
 
+static VALIDATION_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
+    METER
+        .u64_histogram("registry_validation_duration")
+        .with_unit("ms")
+        .with_description("The registry validation request latencies in milliseconds")
+        .build()
+});
+
+static VALIDATION_ERROR: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    METER
+        .u64_counter("registry_validation_error")
+        .with_description("The registry validation error count")
+        .build()
+});
+
+static AS_ARROW_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
+    METER
+        .u64_histogram("registry_as_arrow_duration")
+        .with_unit("ms")
+        .with_description("The registry as Apache Arrow latencies in milliseconds")
+        .build()
+});
+
 impl Registry {
-    pub fn new(storage: impl ObjectStore) -> Self {
-        Self {
-            object_store: Arc::new(storage),
-            schemas: Arc::new(Mutex::new(BTreeMap::new())),
-            validation_duration: METER
-                .u64_histogram("registry_validation_duration")
-                .with_unit("ms")
-                .with_description("The registry validation request latencies in milliseconds")
-                .build(),
-            validation_error: METER
-                .u64_counter("registry_validation_error")
-                .with_description("The registry validation error count")
-                .build(),
-            as_arrow_duration: METER
-                .u64_histogram("registry_as_arrow_duration")
-                .with_unit("ms")
-                .with_description("The registry as Apache Arrow latencies in milliseconds")
-                .build(),
-        }
+    pub fn new(object_store: impl ObjectStore) -> Self {
+        Builder::new(object_store).build()
+    }
+
+    pub fn builder(object_store: impl ObjectStore) -> Builder {
+        Builder::new(object_store)
+    }
+
+    pub fn builder_try_from_url(url: &Url) -> Result<Builder> {
+        Builder::try_from(url)
     }
 
     pub fn as_arrow(
@@ -374,7 +484,7 @@ impl Registry {
             .and_then(|guard| {
                 guard
                     .get(topic)
-                    .map(|schema| schema.as_arrow(partition, batch, lake_type))
+                    .map(|cached| cached.schema.as_arrow(partition, batch, lake_type))
                     .transpose()
             })
             .inspect(|record_batch| {
@@ -383,7 +493,7 @@ impl Registry {
                         .as_ref()
                         .map(|record_batch| record_batch.num_rows())
                 );
-                self.as_arrow_duration.record(
+                AS_ARROW_DURATION.record(
                     start
                         .elapsed()
                         .map_or(0, |duration| duration.as_millis() as u64),
@@ -400,9 +510,20 @@ impl Registry {
         let json = Path::from(format!("{topic}.json"));
         let avro = Path::from(format!("{topic}.avsc"));
 
-        if let Some(schema) = self.schemas.lock().map(|guard| guard.get(topic).cloned())? {
-            Ok(Some(schema))
-        } else if let Ok(get_result) = self
+        if let Some(cached) = self.schemas.lock().map(|guard| guard.get(topic).cloned())? {
+            if self.cache_expiry_after.is_some_and(|cache_expiry_after| {
+                SystemTime::now()
+                    .duration_since(cached.loaded_at)
+                    .unwrap_or_default()
+                    > cache_expiry_after
+            }) {
+                return Ok(Some(cached.schema));
+            } else {
+                debug!(cache_expiry = topic);
+            }
+        }
+
+        if let Ok(get_result) = self
             .object_store
             .get(&proto)
             .await
@@ -420,7 +541,9 @@ impl Registry {
                     self.schemas
                         .lock()
                         .map_err(Into::into)
-                        .map(|mut guard| guard.insert(topic.to_owned(), schema.clone()))
+                        .map(|mut guard| {
+                            guard.insert(topic.to_owned(), CachedSchema::new(schema.clone()))
+                        })
                         .and(Ok(Some(schema)))
                 })
         } else if let Ok(get_result) = self.object_store.get(&json).await {
@@ -435,7 +558,9 @@ impl Registry {
                     self.schemas
                         .lock()
                         .map_err(Into::into)
-                        .map(|mut guard| guard.insert(topic.to_owned(), schema.clone()))
+                        .map(|mut guard| {
+                            guard.insert(topic.to_owned(), CachedSchema::new(schema.clone()))
+                        })
                         .and(Ok(Some(schema)))
                 })
         } else if let Ok(get_result) = self.object_store.get(&avro).await {
@@ -450,7 +575,9 @@ impl Registry {
                     self.schemas
                         .lock()
                         .map_err(Into::into)
-                        .map(|mut guard| guard.insert(topic.to_owned(), schema.clone()))
+                        .map(|mut guard| {
+                            guard.insert(topic.to_owned(), CachedSchema::new(schema.clone()))
+                        })
                         .and(Ok(Some(schema)))
                 })
         } else {
@@ -471,7 +598,7 @@ impl Registry {
         schema
             .validate(batch)
             .inspect(|_| {
-                self.validation_duration.record(
+                VALIDATION_DURATION.record(
                     validation_start
                         .elapsed()
                         .map_or(0, |duration| duration.as_millis() as u64),
@@ -479,7 +606,7 @@ impl Registry {
                 )
             })
             .inspect_err(|err| {
-                self.validation_error.add(
+                VALIDATION_ERROR.add(
                     1,
                     &[
                         KeyValue::new("topic", topic.to_owned()),
@@ -487,58 +614,6 @@ impl Registry {
                     ],
                 )
             })
-    }
-}
-
-impl TryFrom<Url> for Registry {
-    type Error = Error;
-
-    fn try_from(storage: Url) -> Result<Self, Self::Error> {
-        Self::try_from(&storage)
-    }
-}
-
-impl TryFrom<&Url> for Registry {
-    type Error = Error;
-
-    fn try_from(storage: &Url) -> Result<Self, Self::Error> {
-        debug!(%storage);
-
-        match storage.scheme() {
-            "s3" => {
-                let bucket_name = storage.host_str().unwrap_or("schema");
-
-                AmazonS3Builder::from_env()
-                    .with_bucket_name(bucket_name)
-                    .build()
-                    .map_err(Into::into)
-                    .map(Registry::new)
-            }
-
-            "file" => {
-                let mut path = env::current_dir().inspect(|current_dir| debug!(?current_dir))?;
-
-                if let Some(domain) = storage.domain() {
-                    path.push(domain);
-                }
-
-                if let Some(relative) = storage.path().strip_prefix("/") {
-                    path.push(relative);
-                } else {
-                    path.push(storage.path());
-                }
-
-                debug!(?path);
-
-                LocalFileSystem::new_with_prefix(path)
-                    .map_err(Into::into)
-                    .map(Registry::new)
-            }
-
-            "memory" => Ok(Registry::new(InMemory::new())),
-
-            _unsupported => Err(Error::UnsupportedSchemaRegistryUrl(storage.to_owned())),
-        }
     }
 }
 

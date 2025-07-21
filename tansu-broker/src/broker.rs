@@ -1332,7 +1332,7 @@ pub struct Builder<N, C, I, A, S, L> {
     storage: S,
     listener: L,
     otlp_endpoint_url: Option<Url>,
-    schema_registry: Option<Url>,
+    schema_registry: Option<Registry>,
     lake_house: Option<House>,
 }
 
@@ -1437,11 +1437,7 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
         }
     }
 
-    pub fn schema_registry(self, schema_registry: Option<Url>) -> Builder<N, C, I, A, S, L> {
-        _ = schema_registry
-            .as_ref()
-            .inspect(|schema_registry| debug!(%schema_registry));
-
+    pub fn schema_registry(self, schema_registry: Option<Registry>) -> Builder<N, C, I, A, S, L> {
         Builder {
             node_id: self.node_id,
             cluster_id: self.cluster_id,
@@ -1490,17 +1486,12 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
 
 impl Builder<i32, String, Uuid, Url, Url, Url> {
     fn storage_engine(&self) -> Result<StorageContainer> {
-        let schemas = self
-            .schema_registry
-            .as_ref()
-            .map_or(Ok(None), |schema| Registry::try_from(schema).map(Some))?;
-
         match self.storage.scheme() {
             "postgres" | "postgresql" => Postgres::builder(self.storage.to_string().as_str())
                 .map(|builder| builder.cluster(self.cluster_id.as_str()))
                 .map(|builder| builder.node(self.node_id))
                 .map(|builder| builder.advertised_listener(self.advertised_listener.clone()))
-                .map(|builder| builder.schemas(schemas))
+                .map(|builder| builder.schemas(self.schema_registry.clone()))
                 .map(|builder| builder.lake(self.lake_house.clone()))
                 .map(|builder| builder.build())
                 .map(StorageContainer::Postgres)
@@ -1516,7 +1507,7 @@ impl Builder<i32, String, Uuid, Url, Url, Url> {
                     .map(|object_store| {
                         DynoStore::new(self.cluster_id.as_str(), self.node_id, object_store)
                             .advertised_listener(self.advertised_listener.clone())
-                            .schemas(schemas)
+                            .schemas(self.schema_registry.clone())
                             .lake(self.lake_house.clone())
                     })
                     .map(StorageContainer::DynoStore)
@@ -1526,7 +1517,7 @@ impl Builder<i32, String, Uuid, Url, Url, Url> {
             "memory" => Ok(StorageContainer::DynoStore(
                 DynoStore::new(self.cluster_id.as_str(), self.node_id, InMemory::new())
                     .advertised_listener(self.advertised_listener.clone())
-                    .schemas(schemas)
+                    .schemas(self.schema_registry.clone())
                     .lake(self.lake_house.clone()),
             )),
 

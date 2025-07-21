@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     num::NonZeroU32,
     sync::{Arc, LazyLock, Mutex},
     time::{Duration, SystemTime},
@@ -388,7 +388,7 @@ impl Delta {
         }
     }
 
-    async fn write(&self, name: &str, table: &mut DeltaTable, batch: RecordBatch) -> Result<()> {
+    async fn write(&self, name: &str, mut table: DeltaTable, batch: RecordBatch) -> Result<()> {
         let properties = [KeyValue::new("table_uri", table.table_uri())];
 
         if let Some(num_rows) = NonZeroU32::new(batch.num_rows() as u32) {
@@ -397,7 +397,7 @@ impl Delta {
 
         let num_rows = batch.num_rows() as u64;
 
-        let mut writer = RecordBatchWriter::for_table(table)
+        let mut writer = RecordBatchWriter::for_table(&table)
             .map(|batch_writer| batch_writer.with_writer_properties(WriterProperties::default()))
             .inspect_err(|err| debug!(?err))?;
 
@@ -417,14 +417,14 @@ impl Delta {
                             .map_or(0, |duration| duration.as_millis() as u64),
                         &properties,
                     )
-                })?;
+                })?
         }
 
         {
             let start = SystemTime::now();
 
             _ = writer
-                .flush_and_commit(table)
+                .flush_and_commit(&mut table)
                 .await
                 .inspect_err(|err| debug!(?err))
                 .inspect(|_| {
@@ -440,7 +440,7 @@ impl Delta {
         self.tables.lock().map(|mut guard| {
             _ = guard.entry(name.to_string()).and_modify(|existing| {
                 if table.version() > existing.delta_table.version() {
-                    existing.delta_table = table.to_owned();
+                    existing.delta_table = table;
                 } else {
                     warn!(
                         name,
@@ -500,6 +500,66 @@ impl Delta {
 
         Ok(())
     }
+
+    async fn migrate_schema(&self, table: DeltaTable, schema: &ArrowSchema) -> Result<DeltaTable> {
+        let mut expected = schema
+            .fields()
+            .iter()
+            .inspect(|field| debug!(?field))
+            .map(|field| StructField::try_from(field.as_ref()).map_err(Into::into))
+            .inspect(|struct_field| debug!(?struct_field))
+            .collect::<Result<VecDeque<_>>>()
+            .inspect(|columns| debug!(?columns))
+            .inspect_err(|err| debug!(?err))?;
+
+        let mut actual = table
+            .schema()
+            .map(|schema| schema.fields().collect::<VecDeque<_>>())
+            .unwrap_or_default();
+        debug!(?actual);
+
+        let additional = {
+            let mut additional = vec![];
+
+            while !expected.is_empty() {
+                match (expected.pop_front(), actual.pop_front()) {
+                    (Some(expected_field), Some(actual_field))
+                        if expected_field.name == actual_field.name =>
+                    {
+                        debug!(unchanged = expected_field.name);
+
+                        continue;
+                    }
+
+                    (Some(expected_field), None) => {
+                        debug!(additional = expected_field.name);
+                        additional.push(expected_field);
+                    }
+
+                    (Some(expected_field), Some(actual_field)) => {
+                        debug!(expected = expected_field.name, actual = actual_field.name);
+                        todo!("{expected_field:?}, {actual_field:?}")
+                    }
+
+                    (expected_field, actual_field) => {
+                        todo!("{expected_field:?}, {actual_field:?}")
+                    }
+                }
+            }
+
+            additional
+        };
+
+        if additional.is_empty() {
+            Ok(table)
+        } else {
+            DeltaOps::from(table)
+                .add_columns()
+                .with_fields(additional.into_iter())
+                .await
+                .map_err(Into::into)
+        }
+    }
 }
 
 #[async_trait]
@@ -516,7 +576,7 @@ impl LakeHouse for Delta {
 
         let config = Config::from(config);
 
-        let mut table =
+        let table =
             if let Some(table) = self.tables.lock().map(|guard| guard.get(topic).cloned())? {
                 table.delta_table
             } else {
@@ -524,8 +584,12 @@ impl LakeHouse for Delta {
                     .await?
             };
 
+        let table = self
+            .migrate_schema(table, record_batch.schema().as_ref())
+            .await?;
+
         if config.generated_fields().is_empty() {
-            _ = self.write(topic, &mut table, record_batch).await?;
+            _ = self.write(topic, table, record_batch).await?;
         } else {
             _ = self
                 .write_with_datafusion(topic, [record_batch].into_iter())
@@ -670,7 +734,10 @@ mod tests {
 
     mod proto {
         use super::*;
-        use crate::proto::{MessageKind, Schema};
+        use crate::{
+            Generator,
+            proto::{MessageKind, Schema},
+        };
 
         #[tokio::test]
         async fn message_descriptor_singular_to_field() -> Result<()> {
@@ -1734,6 +1801,187 @@ mod tests {
                 "+------------------------------------------------------------------------------------+----------------------------------------+",
                 "| {partition: 32123, timestamp: 1973-10-17T18:36:57, year: 1973, month: 10, day: 17} | {id: 12321, industry: [abc, def, pqr]} |",
                 "+------------------------------------------------------------------------------------+----------------------------------------+",
+            ];
+
+            assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
+
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn customer_schema_migration() -> Result<()> {
+            let _guard = init_tracing()?;
+
+            let partition = 32123;
+
+            let record_batch_001 = {
+                let schema = Schema::try_from(Bytes::from_static(include_bytes!(
+                    "../../tests/migrate-001.proto"
+                )))?;
+
+                Batch::builder()
+                    .record(schema.generate()?)
+                    .base_timestamp(119_731_017_000)
+                    .build()
+                    .map_err(Into::into)
+                    .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))?
+            };
+
+            let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
+            let location = format!("file://{}", temp_dir.path().to_str().unwrap());
+            let database = "pqr";
+
+            let lake_house =
+                Url::parse(location.as_ref())
+                    .map_err(Into::into)
+                    .and_then(|location| {
+                        Builder::<PhantomData<Url>>::default()
+                            .location(location)
+                            .database(Some(database.into()))
+                            .build()
+                    })?;
+
+            let topic = "t";
+
+            let config = DescribeConfigsResult::default()
+                .error_code(ErrorCode::None.into())
+                .error_message(None)
+                .resource_type(ConfigResource::Topic.into())
+                .resource_name(topic.into())
+                .configs(Some(vec![
+                    DescribeConfigsResourceResult::default()
+                        .name(String::from("tansu.lake.normalize"))
+                        .value(Some(String::from("true")))
+                        .read_only(true),
+                ]));
+
+            let offset = 543212345;
+
+            lake_house
+                .store(topic, partition, offset, record_batch_001, config.clone())
+                .await
+                .inspect(|result| debug!(?result))
+                .inspect_err(|err| debug!(?err))?;
+
+            let table = {
+                let mut table =
+                    DeltaTableBuilder::from_uri(format!("{location}/{database}.{topic}"))
+                        .build()?;
+                table.load().await?;
+                table
+            };
+
+            let ctx = SessionContext::new();
+            _ = ctx.register_table("t", Arc::new(table))?;
+
+            let df = ctx.sql("select * from t").await?;
+            let results = df.collect().await?;
+
+            let pretty_results = pretty_format_batches(&results)?.to_string();
+
+            let expected = vec![
+                "+----------------+---------------------+-----------+------------+----------+---------------------+",
+                "| meta.partition | meta.timestamp      | meta.year | meta.month | meta.day | value.email_address |",
+                "+----------------+---------------------+-----------+------------+----------+---------------------+",
+                "| 32123          | 1973-10-17T18:36:57 | 1973      | 10         | 17       | lorem               |",
+                "+----------------+---------------------+-----------+------------+----------+---------------------+",
+            ];
+
+            assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
+
+            let record_batch_002 = {
+                let schema = Schema::try_from(Bytes::from_static(include_bytes!(
+                    "../../tests/migrate-002.proto"
+                )))?;
+
+                Batch::builder()
+                    .record(schema.generate()?)
+                    .base_timestamp(119_731_017_000)
+                    .build()
+                    .map_err(Into::into)
+                    .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))?
+            };
+
+            let offset = 654323456;
+
+            lake_house
+                .store(topic, partition, offset, record_batch_002, config.clone())
+                .await
+                .inspect(|result| debug!(?result))
+                .inspect_err(|err| debug!(?err))?;
+
+            let table = {
+                let mut table =
+                    DeltaTableBuilder::from_uri(format!("{location}/{database}.{topic}"))
+                        .build()?;
+                table.load().await?;
+                table
+            };
+
+            let ctx = SessionContext::new();
+            _ = ctx.register_table("t", Arc::new(table))?;
+
+            let df = ctx.sql("select * from t").await?;
+            let results = df.collect().await?;
+
+            let pretty_results = pretty_format_batches(&results)?.to_string();
+
+            let expected = vec![
+                "+----------------+---------------------+-----------+------------+----------+---------------------+-----------------+",
+                "| meta.partition | meta.timestamp      | meta.year | meta.month | meta.day | value.email_address | value.full_name |",
+                "+----------------+---------------------+-----------+------------+----------+---------------------+-----------------+",
+                "| 32123          | 1973-10-17T18:36:57 | 1973      | 10         | 17       | lorem               | ipsum           |",
+                "| 32123          | 1973-10-17T18:36:57 | 1973      | 10         | 17       | lorem               |                 |",
+                "+----------------+---------------------+-----------+------------+----------+---------------------+-----------------+",
+            ];
+
+            assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
+
+            let record_batch_003 = {
+                let schema = Schema::try_from(Bytes::from_static(include_bytes!(
+                    "../../tests/migrate-003.proto"
+                )))?;
+
+                Batch::builder()
+                    .record(schema.generate()?)
+                    .base_timestamp(119_731_017_000)
+                    .build()
+                    .map_err(Into::into)
+                    .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))?
+            };
+
+            let offset = 765434567;
+
+            lake_house
+                .store(topic, partition, offset, record_batch_003, config)
+                .await
+                .inspect(|result| debug!(?result))
+                .inspect_err(|err| debug!(?err))?;
+
+            let table = {
+                let mut table =
+                    DeltaTableBuilder::from_uri(format!("{location}/{database}.{topic}"))
+                        .build()?;
+                table.load().await?;
+                table
+            };
+
+            let ctx = SessionContext::new();
+            _ = ctx.register_table("t", Arc::new(table))?;
+
+            let df = ctx.sql("select * from t").await?;
+            let results = df.collect().await?;
+
+            let pretty_results = pretty_format_batches(&results)?.to_string();
+
+            let expected = vec![
+                "+----------------+---------------------+-----------+------------+----------+---------------------+-----------------+----------------------------+------------------------+-----------------+----------------------+-------------------------+--------------------+",
+                "| meta.partition | meta.timestamp      | meta.year | meta.month | meta.day | value.email_address | value.full_name | value.home.building_number | value.home.street_name | value.home.city | value.home.post_code | value.home.country_name | value.industry     |",
+                "+----------------+---------------------+-----------+------------+----------+---------------------+-----------------+----------------------------+------------------------+-----------------+----------------------+-------------------------+--------------------+",
+                "| 32123          | 1973-10-17T18:36:57 | 1973      | 10         | 17       | lorem               | ipsum           | dolor                      | sit                    | amet            | consectetur          | adipiscing              | [elit, elit, elit] |",
+                "| 32123          | 1973-10-17T18:36:57 | 1973      | 10         | 17       | lorem               | ipsum           |                            |                        |                 |                      |                         |                    |",
+                "| 32123          | 1973-10-17T18:36:57 | 1973      | 10         | 17       | lorem               |                 |                            |                        |                 |                      |                         |                    |",
+                "+----------------+---------------------+-----------+------------+----------+---------------------+-----------------+----------------------------+------------------------+-----------------+----------------------+-------------------------+--------------------+",
             ];
 
             assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
