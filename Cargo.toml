@@ -102,7 +102,7 @@ opentelemetry_sdk = { version = "0.30.0", features = ["testing"] }
 ordered-float = "4.6"
 parquet = "55"
 pretty_assertions = "1"
-prettyplease = "0.2.29"
+prettyplease = "0.2.36"
 proc-macro2 = "1.0.93"
 protobuf-json-mapping = "3.7.1"
 protobuf-parse = "3.7.1"
