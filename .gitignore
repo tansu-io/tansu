@@ -15,3 +15,4 @@ perf.data*
 license.html
 *.duckdb
 .zed
+*.db

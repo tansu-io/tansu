@@ -1,4 +1,3 @@
--- -*- mode: sql; sql-product: postgres; -*-
 -- Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 --
 -- Licensed under the Apache License, Version 2.0 (the "License");
@@ -13,9 +12,13 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-insert into topic
-(cluster, name, uuid, partitions, replication_factor, is_internal)
-select c.id, $2, $3, $4, $5, false
-from cluster c
-where c.name = $1
-returning topic.uuid;
+-- AddPartitionsToTxnRequest
+--
+create table if not exists txn_topition (
+    id integer primary key autoincrement,
+    txn_detail int references txn_detail (id),
+    topition int references topition (id),
+    last_updated timestamp default current_timestamp not null,
+    created_at timestamp default current_timestamp not null,
+    unique (txn_detail, topition)
+);

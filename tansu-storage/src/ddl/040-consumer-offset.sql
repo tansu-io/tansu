@@ -1,4 +1,3 @@
--- -*- mode: sql; sql-product: postgres; -*-
 -- Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 --
 -- Licensed under the Apache License, Version 2.0 (the "License");
@@ -13,9 +12,15 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-insert into topic
-(cluster, name, uuid, partitions, replication_factor, is_internal)
-select c.id, $2, $3, $4, $5, false
-from cluster c
-where c.name = $1
-returning topic.uuid;
+create table if not exists consumer_offset (
+    id integer primary key autoincrement,
+    consumer_group int references consumer_group (id),
+    topition int references topition (id),
+    committed_offset bigint,
+    leader_epoch int,
+    timestamp timestamp,
+    metadata text,
+    last_updated timestamp default current_timestamp not null,
+    created_at timestamp default current_timestamp not null,
+    unique (consumer_group, topition)
+);

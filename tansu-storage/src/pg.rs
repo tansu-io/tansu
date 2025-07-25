@@ -15,7 +15,6 @@
 //! PostgreSQL Storage engine
 
 use std::{
-    cmp::Ordering,
     collections::BTreeMap,
     hash::{DefaultHasher, Hash, Hasher},
     marker::PhantomData,
@@ -68,6 +67,7 @@ use crate::{
     MetadataResponse, NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse,
     Result, Storage, TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse,
     TxnOffsetCommitRequest, TxnState, UpdateError, Version,
+    sql::{idempotent_sequence_check, remove_comments},
 };
 
 macro_rules! include_sql {
@@ -109,9 +109,7 @@ impl<C, N, L, P> Builder<C, N, L, P> {
             lake: self.lake,
         }
     }
-}
 
-impl<C, N, L, P> Builder<C, N, L, P> {
     pub fn node(self, node: i32) -> Builder<C, i32, L, P> {
         Builder {
             cluster: self.cluster,
@@ -122,9 +120,7 @@ impl<C, N, L, P> Builder<C, N, L, P> {
             lake: self.lake,
         }
     }
-}
 
-impl<C, N, L, P> Builder<C, N, L, P> {
     pub fn advertised_listener(self, advertised_listener: Url) -> Builder<C, N, Url, P> {
         Builder {
             cluster: self.cluster,
@@ -234,34 +230,6 @@ impl Postgres {
         self.pool.get().await.map_err(Into::into)
     }
 
-    fn idempotent_sequence_check(
-        producer_epoch: &i16,
-        sequence: &i32,
-        deflated: &deflated::Batch,
-    ) -> Result<i32> {
-        debug!(?producer_epoch, ?sequence, ?deflated);
-
-        match producer_epoch.cmp(&deflated.producer_epoch) {
-            Ordering::Equal => match sequence.cmp(&deflated.base_sequence) {
-                Ordering::Equal => Ok(deflated.last_offset_delta + 1),
-
-                Ordering::Greater => {
-                    debug!(?sequence, ?deflated.base_sequence);
-                    Err(Error::Api(ErrorCode::DuplicateSequenceNumber))
-                }
-
-                Ordering::Less => {
-                    debug!(?sequence, ?deflated.base_sequence);
-                    Err(Error::Api(ErrorCode::OutOfOrderSequenceNumber))
-                }
-            },
-
-            Ordering::Greater => Err(Error::Api(ErrorCode::ProducerFenced)),
-
-            Ordering::Less => Err(Error::Api(ErrorCode::InvalidProducerEpoch)),
-        }
-    }
-
     async fn idempotent_message_check(
         &mut self,
         transaction_id: Option<&str>,
@@ -319,7 +287,7 @@ impl Postgres {
                 sequence,
             );
 
-            let increment = Self::idempotent_sequence_check(&current_epoch, &sequence, deflated)?;
+            let increment = idempotent_sequence_check(&current_epoch, &sequence, deflated)?;
 
             debug!(increment);
 
@@ -1209,6 +1177,8 @@ impl Storage for Postgres {
         let mut c = self.connection().await?;
         let tx = c.transaction().await?;
 
+        let uuid = Uuid::new_v4();
+
         let topic_uuid = self
             .tx_prepare_query_one(
                 &tx,
@@ -1216,6 +1186,7 @@ impl Storage for Postgres {
                 &[
                     &self.cluster,
                     &topic.name,
+                    &uuid,
                     &topic.num_partitions,
                     &(topic.replication_factor as i32),
                 ],
@@ -3474,29 +3445,6 @@ where
     Uuid::from_u128(s.finish() as u128)
 }
 
-fn remove_comments(commented: &str) -> String {
-    commented.lines().fold(String::new(), |uncommented, line| {
-        if let Some(position) = line.find("--") {
-            match line.split_at(position) {
-                ("", _) => uncommented,
-                (before, _) => {
-                    if uncommented.is_empty() {
-                        before.trim().into()
-                    } else {
-                        format!("{uncommented} {before}")
-                    }
-                }
-            }
-        } else if line.trim().is_empty() {
-            uncommented
-        } else if uncommented.is_empty() {
-            line.trim().into()
-        } else {
-            format!("{uncommented} {}", line.trim())
-        }
-    })
-}
-
 static SQL_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
     METER
         .u64_histogram("tansu_sql_duration")
@@ -3518,55 +3466,3 @@ static SQL_ERROR: LazyLock<Counter<u64>> = LazyLock::new(|| {
         .with_description("The SQL error count")
         .build()
 });
-
-#[cfg(test)]
-mod tests {
-    use crate::{Error, Result};
-    use tracing::subscriber::DefaultGuard;
-    use tracing_subscriber::EnvFilter;
-
-    fn init_tracing() -> Result<DefaultGuard> {
-        use std::{fs::File, sync::Arc, thread};
-
-        Ok(tracing::subscriber::set_default(
-            tracing_subscriber::fmt()
-                .with_level(true)
-                .with_line_number(true)
-                .with_thread_names(false)
-                .with_env_filter(EnvFilter::from_default_env().add_directive(
-                    format!("{}=debug", env!("CARGO_PKG_NAME").replace("-", "_")).parse()?,
-                ))
-                .with_writer(
-                    thread::current()
-                        .name()
-                        .ok_or(Error::Message(String::from("unnamed thread")))
-                        .and_then(|name| {
-                            File::create(format!("../logs/{}/{name}.log", env!("CARGO_PKG_NAME"),))
-                                .map_err(Into::into)
-                        })
-                        .map(Arc::new)?,
-                )
-                .finish(),
-        ))
-    }
-
-    #[test]
-    fn remove_comments() -> Result<()> {
-        let _guard = init_tracing()?;
-
-        assert_eq!(String::from(""), super::remove_comments(""));
-        assert_eq!(String::from("pqr"), super::remove_comments("-- abc\npqr"));
-        assert_eq!(String::from("abc"), super::remove_comments("abc -- def"));
-        assert_eq!(String::from("abc def"), super::remove_comments("abc\ndef"));
-        assert_eq!(
-            String::from("abc def"),
-            super::remove_comments("abc\n\ndef")
-        );
-        assert_eq!(
-            String::from("abc def"),
-            super::remove_comments("abc \ndef ")
-        );
-
-        Ok(())
-    }
-}
