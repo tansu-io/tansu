@@ -2,6 +2,9 @@ set dotenv-load
 
 default: fmt build test clippy
 
+about:
+    cargo about generate about.hbs > license.html
+
 cargo-build +args:
     cargo build {{args}}
 
