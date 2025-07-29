@@ -20,6 +20,7 @@ use rand::{
     prelude::*,
     rng,
 };
+use std::{env, io::ErrorKind, thread};
 use tansu_broker::{
     Error, Result,
     coordinator::group::{Coordinator, administrator::Controller},
@@ -34,13 +35,14 @@ use tansu_schema::Registry;
 use tansu_storage::{
     BrokerRegistrationRequest, Storage, StorageContainer, dynostore::DynoStore, pg::Postgres,
 };
+use tokio::fs::remove_file;
 use tracing::{debug, subscriber::DefaultGuard};
 use tracing_subscriber::EnvFilter;
 use url::Url;
 use uuid::Uuid;
 
 pub(crate) fn init_tracing() -> Result<DefaultGuard> {
-    use std::{fs::File, sync::Arc, thread};
+    use std::{fs::File, sync::Arc};
 
     Ok(tracing::subscriber::set_default(
         tracing_subscriber::fmt()
@@ -70,11 +72,12 @@ pub(crate) fn init_tracing() -> Result<DefaultGuard> {
 }
 
 pub(crate) enum StorageType {
-    Postgres,
     InMemory,
+    Lite,
+    Postgres,
 }
 
-pub(crate) fn storage_container(
+pub(crate) async fn storage_container(
     storage_type: StorageType,
     cluster: impl Into<String>,
     node: i32,
@@ -96,6 +99,52 @@ pub(crate) fn storage_container(
                 .advertised_listener(advertised_listener)
                 .schemas(schemas),
         )),
+
+        StorageType::Lite => {
+            let relative = thread::current()
+                .name()
+                .ok_or(Error::Message(String::from("unnamed thread")))
+                .map(|name| {
+                    format!(
+                        "../logs/{}/{}::{name}.db",
+                        env!("CARGO_PKG_NAME"),
+                        env!("CARGO_CRATE_NAME")
+                    )
+                })?;
+
+            let mut path = env::current_dir()?;
+            path.push(relative);
+            debug!(?path);
+
+            match remove_file(path).await {
+                Ok(_) => Ok(()),
+                Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+                otherwise @ Err(_) => otherwise,
+            }?;
+
+            StorageContainer::builder()
+                .cluster_id(cluster)
+                .node_id(node)
+                .advertised_listener(advertised_listener)
+                .schema_registry(schemas)
+                .storage(
+                    thread::current()
+                        .name()
+                        .ok_or(Error::Message(String::from("unnamed thread")))
+                        .map(|name| {
+                            format!(
+                                "sqlite://../logs/{}/{}::{name}.db",
+                                env!("CARGO_PKG_NAME"),
+                                env!("CARGO_CRATE_NAME")
+                            )
+                        })
+                        .inspect(|url| debug!(url))
+                        .and_then(|url| Url::parse(&url).map_err(Into::into))?,
+                )
+                .build()
+                .await
+                .map_err(Into::into)
+        }
     }
 }
 

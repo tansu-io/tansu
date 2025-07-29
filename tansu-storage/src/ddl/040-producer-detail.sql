@@ -14,10 +14,10 @@
 
 create table if not exists producer_detail (
     id integer primary key autoincrement,
-    producer_epoch int references producer_epoch (id),
-    topition int references topition (id),
-    sequence int default 0 not null,
-    last_updated timestamp default current_timestamp not null,
-    created_at timestamp default current_timestamp not null,
+    producer_epoch integer references producer_epoch (id),
+    topition integer references topition (id),
+    sequence integer default 0 not null,
+    last_updated text default current_timestamp not null,
+    created_at text default current_timestamp not null,
     unique (producer_epoch, topition)
-);
+) strict;

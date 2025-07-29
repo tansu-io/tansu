@@ -14,9 +14,16 @@
 
 use tansu_sans_io::{ErrorCode, record::deflated};
 use tracing::debug;
+use uuid::Uuid;
 
 use crate::{Error, Result};
-use std::{cmp::Ordering, collections::BTreeMap, ops::Deref, sync::LazyLock};
+use std::{
+    cmp::Ordering,
+    collections::BTreeMap,
+    hash::{DefaultHasher, Hash, Hasher as _},
+    ops::Deref,
+    sync::LazyLock,
+};
 
 pub(crate) struct Cache(BTreeMap<&'static str, String>);
 
@@ -337,6 +344,10 @@ pub(crate) static SQL: LazyLock<Cache> = LazyLock::new(|| {
             include_sql!("pg/watermark_select_for_update.sql"),
         ),
         (
+            "watermark_select_no_update.sql",
+            include_sql!("pg/watermark_select_no_update.sql"),
+        ),
+        (
             "watermark_select_stable.sql",
             include_sql!("pg/watermark_select_stable.sql"),
         ),
@@ -402,6 +413,15 @@ pub(crate) fn idempotent_sequence_check(
 
         Ordering::Less => Err(Error::Api(ErrorCode::InvalidProducerEpoch)),
     }
+}
+
+pub(crate) fn default_hash<H>(h: &H) -> Uuid
+where
+    H: Hash,
+{
+    let mut s = DefaultHasher::new();
+    h.hash(&mut s);
+    Uuid::from_u128(s.finish() as u128)
 }
 
 #[cfg(test)]

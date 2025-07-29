@@ -15,6 +15,6 @@
 create table if not exists cluster (
     id integer primary key autoincrement,
     name text not null unique,
-    last_updated timestamp default current_timestamp not null,
-    created_at timestamp default current_timestamp not null
-);
+    last_updated text default current_timestamp not null,
+    created_at text default current_timestamp not null
+) strict;

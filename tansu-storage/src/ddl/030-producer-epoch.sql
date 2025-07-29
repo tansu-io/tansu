@@ -14,9 +14,9 @@
 
 create table if not exists producer_epoch (
     id integer primary key autoincrement,
-    producer bigint references producer (id),
-    epoch smallint default 0 not null,
-    last_updated timestamp default current_timestamp not null,
-    created_at timestamp default current_timestamp not null,
+    producer integer references producer (id),
+    epoch integer default 0 not null,
+    last_updated text default current_timestamp not null,
+    created_at text default current_timestamp not null,
     unique (producer, epoch)
-);
+) strict;

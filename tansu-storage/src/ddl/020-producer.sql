@@ -17,6 +17,6 @@
 create table if not exists producer (
     id integer primary key autoincrement,
     cluster int references cluster (id) not null,
-    last_updated timestamp default current_timestamp not null,
-    created_at timestamp default current_timestamp not null
-);
+    last_updated text default current_timestamp not null,
+    created_at text default current_timestamp not null
+) strict;

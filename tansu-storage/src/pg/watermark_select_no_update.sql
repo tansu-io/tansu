@@ -13,29 +13,19 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
+select
 
--- prepare txn_detail_update_sequence (text, integer, integer) as
-
-update txn_detail
-
-set
-
-sequence = txn_detail.sequence + $5
+w.low, w.high
 
 from
 
-cluster c,
-producer p,
-txn
+cluster c
+join topic t on t.cluster = c.id
+join topition tp on tp.topic = t.id
+join watermark w on w.topition = tp.id
 
 where
 
 c.name = $1
-and txn.name = $2
-and p.id = $3
-and txn_detail.epoch = $4
-
-and p.cluster = c.id
-and txn.cluster = c.id
-and txn.producer = p.id
-and txn_detail.txn = txn.id;
+and t.name = $2
+and tp.partition = $3;

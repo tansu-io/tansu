@@ -14,9 +14,9 @@
 
 create table if not exists consumer_group (
     id integer primary key autoincrement,
-    cluster int references cluster (id) not null,
+    cluster integer references cluster (id) not null,
     name text not null,
-    last_updated timestamp default current_timestamp not null,
-    created_at timestamp default current_timestamp not null,
+    last_updated text default current_timestamp not null,
+    created_at text default current_timestamp not null,
     unique(cluster, name)
-);
+) strict;

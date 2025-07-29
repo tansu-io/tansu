@@ -14,9 +14,9 @@
 
 create table if not exists watermark (
     id integer primary key autoincrement,
-    topition int references topition (id),
-    low bigint,
-    high bigint,
-    last_updated timestamp default current_timestamp not null,
-    created_at timestamp default current_timestamp not null
-);
+    topition integer references topition (id),
+    low integer,
+    high integer,
+    last_updated text default current_timestamp not null,
+    created_at text default current_timestamp not null
+) strict;

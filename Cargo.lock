@@ -6416,6 +6416,7 @@ dependencies = [
  "hyper 1.6.0",
  "hyper-util",
  "jsonschema",
+ "libsql",
  "object_store",
  "opentelemetry 0.30.0",
  "opentelemetry-otlp",
@@ -6659,6 +6660,7 @@ version = "0.4.9"
 dependencies = [
  "async-trait",
  "bytes",
+ "chrono",
  "criterion",
  "deadpool",
  "deadpool-postgres",

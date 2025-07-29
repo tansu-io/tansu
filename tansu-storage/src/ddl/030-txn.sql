@@ -16,10 +16,10 @@
 --
 create table if not exists txn (
     id integer primary key autoincrement,
-    cluster int references cluster (id),
+    cluster integer references cluster (id),
     name text,
-    producer bigint references producer (id),
-    last_updated timestamp default current_timestamp not null,
-    created_at timestamp default current_timestamp not null,
+    producer integer references producer (id),
+    last_updated text default current_timestamp not null,
+    created_at text default current_timestamp not null,
     unique (cluster, name)
-);
+) strict;

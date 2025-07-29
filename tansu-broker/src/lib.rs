@@ -80,6 +80,7 @@ pub enum Error {
     Join(#[from] JoinError),
     Json(#[from] serde_json::Error),
     KafkaProtocol(#[from] tansu_sans_io::Error),
+    LibSQL(#[from] libsql::Error),
     Message(String),
     Model(#[from] tansu_model::Error),
     ObjectStore(#[from] object_store::Error),

@@ -77,7 +77,7 @@ mod pg {
 
     use super::*;
 
-    fn storage_container(
+    async fn storage_container(
         cluster: impl Into<String>,
         node: i32,
         advertised_listener: Url,
@@ -89,6 +89,7 @@ mod pg {
             advertised_listener,
             None,
         )
+        .await
     }
 
     #[tokio::test]
@@ -103,7 +104,7 @@ mod pg {
             cluster,
             node,
             advertised_listener.clone(),
-            storage_container(cluster, node, advertised_listener)?,
+            storage_container(cluster, node, advertised_listener).await?,
         )
         .await
     }
@@ -115,7 +116,7 @@ mod in_memory {
 
     use super::*;
 
-    fn storage_container(
+    async fn storage_container(
         cluster: impl Into<String>,
         node: i32,
         advertised_listener: Url,
@@ -127,6 +128,7 @@ mod in_memory {
             advertised_listener,
             None,
         )
+        .await
     }
 
     #[tokio::test]
@@ -141,7 +143,7 @@ mod in_memory {
             cluster,
             node,
             advertised_listener.clone(),
-            storage_container(cluster, node, advertised_listener)?,
+            storage_container(cluster, node, advertised_listener).await?,
         )
         .await
     }

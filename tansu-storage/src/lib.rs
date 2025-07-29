@@ -104,6 +104,9 @@ pub enum Error {
     #[error("api")]
     Api(ErrorCode),
 
+    #[error("chrono")]
+    ChronoParse(#[from] chrono::ParseError),
+
     #[error("build")]
     DeadPoolBuild(#[from] deadpool::managed::BuildError),
 
@@ -1278,11 +1281,12 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
 #[derive(Debug, thiserror::Error)]
 pub enum UpdateError<T> {
     Error(#[from] Error),
+    LibSql(#[from] libsql::Error),
+    MissingEtag,
     ObjectStore(#[from] object_store::Error),
     Outdated { current: T, version: Version },
     SerdeJson(#[from] serde_json::Error),
     TokioPostgres(#[from] tokio_postgres::error::Error),
-    MissingEtag,
     Uuid(#[from] uuid::Error),
 }
 

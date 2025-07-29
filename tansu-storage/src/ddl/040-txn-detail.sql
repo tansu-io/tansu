@@ -14,17 +14,17 @@
 
 create table if not exists txn_detail (
     id integer primary key autoincrement,
-    txn bigint references txn (id),
-    producer_epoch int references producer_epoch (id),
-    transaction_timeout_ms int not null,
+    txn integer references txn (id),
+    producer_epoch integer references producer_epoch (id),
+    transaction_timeout_ms integer not null,
     -- AddPartitionsToTxnRequest:
     -- If this is the first partition added to the transaction,
     -- the coordinator will also start the transaction timer
-    started_at timestamp,
+    started_at text,
     -- BEGIN, PREPARE_COMMIT, PREPARE_ABORT, COMMITTED or ABORTED
     --
     status text,
-    last_updated timestamp default current_timestamp not null,
-    created_at timestamp default current_timestamp not null,
+    last_updated text default current_timestamp not null,
+    created_at text default current_timestamp not null,
     unique (txn, producer_epoch)
-);
+) strict;

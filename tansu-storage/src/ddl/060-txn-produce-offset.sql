@@ -14,9 +14,9 @@
 
 create table if not exists txn_produce_offset (
     id integer primary key autoincrement,
-    txn_topition int references txn_topition (id) unique,
-    offset_start bigint,
-    offset_end bigint,
-    last_updated timestamp default current_timestamp not null,
-    created_at timestamp default current_timestamp not null
-);
+    txn_topition integer references txn_topition (id) unique,
+    offset_start integer,
+    offset_end integer,
+    last_updated text default current_timestamp not null,
+    created_at text default current_timestamp not null
+) strict;

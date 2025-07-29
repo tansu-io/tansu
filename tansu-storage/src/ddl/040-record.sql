@@ -13,15 +13,15 @@
 -- limitations under the License.
 
 create table if not exists record (
-    topition int references topition (id),
-    offset_id bigint not null,
-    attributes smallint,
-    producer_id bigint,
-    producer_epoch smallint,
-    timestamp timestamp,
-    k bytea,
-    v bytea,
-    last_updated timestamp default current_timestamp not null,
-    created_at timestamp default current_timestamp not null,
+    topition integer references topition (id),
+    offset_id integer not null,
+    attributes integer,
+    producer_id integer,
+    producer_epoch integer,
+    timestamp integer,
+    v blob,
+    k blob,
+    last_updated text default current_timestamp not null,
+    created_at text default current_timestamp not null,
     primary key (topition, offset_id)
-);
+) strict;

@@ -14,12 +14,12 @@
 
 create table if not exists txn_offset_commit_tp (
     id integer primary key autoincrement,
-    offset_commit int references txn_offset_commit (id),
-    topition int references topition (id),
-    committed_offset bigint,
-    leader_epoch int,
+    offset_commit integer references txn_offset_commit (id),
+    topition integer references topition (id),
+    committed_offset integer,
+    leader_epoch integer,
     metadata text,
-    last_updated timestamp default current_timestamp not null,
-    created_at timestamp default current_timestamp not null,
+    last_updated text default current_timestamp not null,
+    created_at text default current_timestamp not null,
     unique (offset_commit, topition)
-);
+) strict;

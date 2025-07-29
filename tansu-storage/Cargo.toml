@@ -26,6 +26,7 @@ workspace = true
 [dependencies]
 async-trait.workspace = true
 bytes.workspace = true
+chrono.workspace = true
 deadpool-postgres.workspace = true
 deadpool.workspace = true
 futures-core.workspace = true

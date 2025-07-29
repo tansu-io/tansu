@@ -16,7 +16,7 @@
 
 use std::{
     collections::BTreeMap,
-    hash::{DefaultHasher, Hash, Hasher},
+    hash::Hash,
     marker::PhantomData,
     str::FromStr,
     sync::LazyLock,
@@ -67,7 +67,7 @@ use crate::{
     MetadataResponse, NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse,
     Result, Storage, TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse,
     TxnOffsetCommitRequest, TxnState, UpdateError, Version,
-    sql::{idempotent_sequence_check, remove_comments},
+    sql::{default_hash, idempotent_sequence_check, remove_comments},
 };
 
 macro_rules! include_sql {
@@ -1740,7 +1740,7 @@ impl Storage for Postgres {
                     .inspect_err(|err| error!(?err))?;
                 let offset_delta = i32::try_from(offset - batch_builder.base_offset)?;
 
-                let timestamp_delta = first
+                let timestamp_delta = record
                     .try_get::<_, SystemTime>(2)
                     .map_err(Error::from)
                     .and_then(|system_time| {
@@ -3434,15 +3434,6 @@ impl Storage for Postgres {
             Ok(())
         }
     }
-}
-
-fn default_hash<H>(h: &H) -> Uuid
-where
-    H: Hash,
-{
-    let mut s = DefaultHasher::new();
-    h.hash(&mut s);
-    Uuid::from_u128(s.finish() as u128)
 }
 
 static SQL_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {

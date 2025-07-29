@@ -16,9 +16,9 @@
 --
 create table if not exists txn_topition (
     id integer primary key autoincrement,
-    txn_detail int references txn_detail (id),
-    topition int references topition (id),
-    last_updated timestamp default current_timestamp not null,
-    created_at timestamp default current_timestamp not null,
+    txn_detail integer references txn_detail (id),
+    topition integer references topition (id),
+    last_updated text default current_timestamp not null,
+    created_at text default current_timestamp not null,
     unique (txn_detail, topition)
-);
+) strict;

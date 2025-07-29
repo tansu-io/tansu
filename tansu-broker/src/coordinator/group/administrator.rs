@@ -844,6 +844,8 @@ where
 
                 Err(UpdateError::TokioPostgres(error)) => return Err(error.into()),
 
+                Err(UpdateError::LibSql(error)) => return Err(error.into()),
+
                 Err(UpdateError::MissingEtag) => {
                     return Err(Error::Message(String::from("missing e-tag")));
                 }
@@ -973,6 +975,8 @@ where
 
                 Err(UpdateError::TokioPostgres(error)) => return Err(error.into()),
 
+                Err(UpdateError::LibSql(error)) => return Err(error.into()),
+
                 Err(UpdateError::MissingEtag) => {
                     return Err(Error::Message(String::from("missing e-tag")));
                 }
@@ -1051,6 +1055,8 @@ where
 
                 Err(UpdateError::TokioPostgres(error)) => return Err(error.into()),
 
+                Err(UpdateError::LibSql(error)) => return Err(error.into()),
+
                 Err(UpdateError::MissingEtag) => {
                     return Err(Error::Message(String::from("missing e-tag")));
                 }
@@ -1123,6 +1129,8 @@ where
                 Err(UpdateError::SerdeJson(error)) => return Err(error.into()),
 
                 Err(UpdateError::TokioPostgres(error)) => return Err(error.into()),
+
+                Err(UpdateError::LibSql(error)) => return Err(error.into()),
 
                 Err(UpdateError::MissingEtag) => {
                     return Err(Error::Message(String::from("missing e-tag")));
@@ -1226,6 +1234,8 @@ where
                 Err(UpdateError::SerdeJson(error)) => return Err(error.into()),
 
                 Err(UpdateError::TokioPostgres(error)) => return Err(error.into()),
+
+                Err(UpdateError::LibSql(error)) => return Err(error.into()),
 
                 Err(UpdateError::MissingEtag) => {
                     return Err(Error::Message(String::from("missing e-tag")));

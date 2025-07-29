@@ -23,6 +23,7 @@ http-body-util.workspace = true
 hyper-util.workspace = true
 hyper.workspace = true
 jsonschema.workspace = true
+libsql.workspace = true
 object_store.workspace = true
 opentelemetry-otlp.workspace = true
 opentelemetry-semantic-conventions.workspace = true

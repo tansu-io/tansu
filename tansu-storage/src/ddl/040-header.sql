@@ -13,10 +13,10 @@
 -- limitations under the License.
 
 create table if not exists header (
-    topition int,
-    offset_id bigint,
-    k bytea,
-    v bytea,
-    last_updated timestamp default current_timestamp not null,
-    created_at timestamp default current_timestamp not null
-);
+    topition integer,
+    offset_id integer,
+    k blob,
+    v blob,
+    last_updated text default current_timestamp not null,
+    created_at text default current_timestamp not null
+) strict;

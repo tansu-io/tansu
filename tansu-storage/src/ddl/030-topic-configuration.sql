@@ -17,7 +17,7 @@ create table if not exists topic_configuration (
     topic int references topic (id),
     name text not null,
     value text,
-    last_updated timestamp default current_timestamp not null,
-    created_at timestamp default current_timestamp not null,
+    last_updated text default current_timestamp not null,
+    created_at text default current_timestamp not null,
     unique (topic, name)
-);
+) strict;

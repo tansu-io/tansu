@@ -30,5 +30,5 @@ and txn.producer = p.id
 and p.cluster = c.id
 and t.cluster = c.id
 and tp.topic = t.id
-and txn_tp.transaction = txn.id
+and txn_tp.txn = txn.id
 and txn_tp.topition = tp.id;

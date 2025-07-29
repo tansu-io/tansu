@@ -14,9 +14,9 @@
 
 create table if not exists topition (
     id integer primary key autoincrement,
-    topic int references topic (id),
-    partition int,
-    last_updated timestamp default current_timestamp not null,
-    created_at timestamp default current_timestamp not null,
+    topic integer references topic (id),
+    partition integer,
+    last_updated text default current_timestamp not null,
+    created_at text default current_timestamp not null,
     unique (topic, partition)
-);
+) strict;

@@ -14,9 +14,12 @@
 -- limitations under the License.
 
 delete from watermark
-using cluster c, topic t, topition tp
-where c.name = $1
-and t.name = $2
-and t.cluster = c.id
-and tp.topic = t.id
-and watermark.topition = tp.id;
+where watermark.topition in (
+    select tp.id
+    from
+    cluster c
+    join topic t on t.cluster = c.id
+    join topition tp on tp.topic = t.id
+    where c.name = $1
+    and t.name = $2
+);
