@@ -14,7 +14,7 @@
 
 FROM --platform=$BUILDPLATFORM tonistiigi/xx AS xx
 
-FROM --platform=$BUILDPLATFORM rust:1.87-alpine AS builder
+FROM --platform=$BUILDPLATFORM rust:1.88-alpine AS builder
 COPY --from=xx / /
 RUN apk add clang cmake lld
 RUN rustup target add $(xx-cargo --print-target-triple)
@@ -23,8 +23,8 @@ WORKDIR /usr/src
 ADD / /usr/src/
 
 ARG TARGETPLATFORM
-RUN xx-apk add --no-cache musl-dev zlib-dev gcc
-RUN xx-cargo build --bin tansu --features dynostore,libsql,postgres --release --target-dir ./build
+RUN xx-apk add --no-cache musl-dev zlib-dev zlib-static gcc
+RUN xx-cargo build --bin tansu --all-features --release --target-dir ./build
 RUN xx-verify --static ./build/$(xx-cargo --print-target-triple)/release/tansu
 
 RUN <<EOF
