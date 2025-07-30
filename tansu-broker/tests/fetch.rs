@@ -301,6 +301,7 @@ pub async fn simple_non_txn(
     Ok(())
 }
 
+#[cfg(feature = "postgres")]
 mod pg {
     use super::*;
 
@@ -391,6 +392,7 @@ mod in_memory {
     }
 }
 
+#[cfg(feature = "libsql")]
 mod lite {
     use super::*;
 

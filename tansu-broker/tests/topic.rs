@@ -280,6 +280,7 @@ pub async fn create_with_config_delete(
     Ok(())
 }
 
+#[cfg(feature = "postgres")]
 mod pg {
     use common::{StorageType, init_tracing};
     use rand::{prelude::*, rng};
@@ -468,6 +469,7 @@ mod in_memory {
     }
 }
 
+#[cfg(feature = "libsql")]
 mod lite {
     use common::{StorageType, init_tracing};
     use rand::{prelude::*, rng};

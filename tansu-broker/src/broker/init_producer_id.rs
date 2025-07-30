@@ -59,10 +59,10 @@ where
 mod tests {
     use super::*;
     use crate::Error;
-    use object_store::memory::InMemory;
     use tansu_sans_io::ErrorCode;
-    use tansu_storage::dynostore::DynoStore;
+    use tansu_storage::StorageContainer;
     use tracing::subscriber::DefaultGuard;
+    use url::Url;
 
     #[cfg(miri)]
     fn init_tracing() -> Result<()> {
@@ -109,8 +109,16 @@ mod tests {
         let producer_id = Some(-1);
         let producer_epoch = Some(-1);
 
-        let mut request =
-            InitProducerIdRequest::with_storage(DynoStore::new(cluster, node, InMemory::new()));
+        let storage = StorageContainer::builder()
+            .cluster_id(cluster)
+            .node_id(node)
+            .advertised_listener(Url::parse("tcp://localhost:9092")?)
+            .schema_registry(None)
+            .storage(Url::parse("memory://")?)
+            .build()
+            .await?;
+
+        let mut request = InitProducerIdRequest::with_storage(storage);
 
         assert_eq!(
             ProducerIdResponse {

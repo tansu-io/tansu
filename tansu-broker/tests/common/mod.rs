@@ -14,7 +14,6 @@
 
 #![allow(dead_code)]
 use bytes::Bytes;
-use object_store::memory::InMemory;
 use rand::{
     distr::{Alphanumeric, StandardUniform},
     prelude::*,
@@ -32,9 +31,7 @@ use tansu_sans_io::{
     offset_fetch_request::OffsetFetchRequestTopic, sync_group_request::SyncGroupRequestAssignment,
 };
 use tansu_schema::Registry;
-use tansu_storage::{
-    BrokerRegistrationRequest, Storage, StorageContainer, dynostore::DynoStore, pg::Postgres,
-};
+use tansu_storage::{BrokerRegistrationRequest, Storage, StorageContainer};
 use tokio::fs::remove_file;
 use tracing::{debug, subscriber::DefaultGuard};
 use tracing_subscriber::EnvFilter;
@@ -85,20 +82,25 @@ pub(crate) async fn storage_container(
     schemas: Option<Registry>,
 ) -> Result<StorageContainer> {
     match storage_type {
-        StorageType::Postgres => Postgres::builder("postgres://postgres:postgres@localhost")
-            .map(|builder| builder.cluster(cluster))
-            .map(|builder| builder.node(node))
-            .map(|builder| builder.advertised_listener(advertised_listener))
-            .map(|builder| builder.schemas(schemas))
-            .map(|builder| builder.build())
-            .map(StorageContainer::Postgres)
+        StorageType::Postgres => StorageContainer::builder()
+            .cluster_id(cluster)
+            .node_id(node)
+            .advertised_listener(advertised_listener)
+            .schema_registry(schemas)
+            .storage(Url::parse("postgres://postgres:postgres@localhost")?)
+            .build()
+            .await
             .map_err(Into::into),
 
-        StorageType::InMemory => Ok(StorageContainer::DynoStore(
-            DynoStore::new(cluster.into().as_str(), node, InMemory::new())
-                .advertised_listener(advertised_listener)
-                .schemas(schemas),
-        )),
+        StorageType::InMemory => StorageContainer::builder()
+            .cluster_id(cluster)
+            .node_id(node)
+            .advertised_listener(advertised_listener)
+            .schema_registry(schemas)
+            .storage(Url::parse("memory://")?)
+            .build()
+            .await
+            .map_err(Into::into),
 
         StorageType::Lite => {
             let relative = thread::current()

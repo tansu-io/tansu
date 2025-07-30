@@ -12,14 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[cfg(feature = "postgres")]
 use bytes::Bytes;
+
+#[cfg(feature = "postgres")]
 use common::{
     CLIENT_ID, COOPERATIVE_STICKY, PROTOCOL_TYPE, RANGE, StorageType, alphanumeric_string,
     heartbeat, init_tracing, join_group, offset_fetch, register_broker, storage_container,
     sync_group,
 };
+
+#[cfg(feature = "postgres")]
 use rand::{prelude::*, rng};
+
+#[cfg(feature = "postgres")]
 use tansu_broker::{Result, coordinator::group::administrator::Controller};
+
+#[cfg(feature = "postgres")]
 use tansu_sans_io::{
     BatchAttribute, ErrorCode, HeartbeatResponse, IsolationLevel, OffsetFetchResponse,
     add_partitions_to_txn_request::AddPartitionsToTxnTopic,
@@ -33,15 +42,24 @@ use tansu_sans_io::{
     txn_offset_commit_request::{TxnOffsetCommitRequestPartition, TxnOffsetCommitRequestTopic},
     txn_offset_commit_response::{TxnOffsetCommitResponsePartition, TxnOffsetCommitResponseTopic},
 };
+
+#[cfg(feature = "postgres")]
 use tansu_storage::{
     ListOffsetRequest, Storage, Topition, TxnAddPartitionsRequest, TxnOffsetCommitRequest,
 };
+
+#[cfg(feature = "postgres")]
 use tracing::debug;
+
+#[cfg(feature = "postgres")]
 use url::Url;
+
+#[cfg(feature = "postgres")]
 use uuid::Uuid;
 
 mod common;
 
+#[cfg(feature = "postgres")]
 #[tokio::test]
 async fn simple_txn_commit() -> Result<()> {
     let _guard = init_tracing()?;

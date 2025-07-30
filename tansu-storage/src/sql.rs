@@ -19,14 +19,16 @@ use uuid::Uuid;
 use crate::{Error, Result};
 use std::{
     cmp::Ordering,
-    collections::BTreeMap,
     hash::{DefaultHasher, Hash, Hasher as _},
-    ops::Deref,
-    sync::LazyLock,
 };
 
+#[cfg(any(feature = "libsql", feature = "turso"))]
+use std::{collections::BTreeMap, ops::Deref, sync::LazyLock};
+
+#[cfg(any(feature = "libsql", feature = "turso"))]
 pub(crate) struct Cache(BTreeMap<&'static str, String>);
 
+#[cfg(any(feature = "libsql", feature = "turso"))]
 impl Deref for Cache {
     type Target = BTreeMap<&'static str, String>;
 
@@ -35,6 +37,7 @@ impl Deref for Cache {
     }
 }
 
+#[cfg(any(feature = "libsql", feature = "turso"))]
 impl Cache {
     pub(crate) fn new(inner: BTreeMap<&'static str, String>) -> Self {
         Self(inner)
@@ -48,12 +51,14 @@ impl Cache {
     }
 }
 
+#[cfg(any(feature = "libsql", feature = "turso"))]
 macro_rules! include_sql {
     ($e: expr) => {
         remove_comments(include_str!($e))
     };
 }
 
+#[cfg(any(feature = "libsql", feature = "turso"))]
 pub(crate) static SQL: LazyLock<Cache> = LazyLock::new(|| {
     let mapping = [
         (
@@ -198,6 +203,10 @@ pub(crate) static SQL: LazyLock<Cache> = LazyLock::new(|| {
             include_sql!("pg/topic_configuration_delete.sql"),
         ),
         (
+            "topic_configuration_select.sql",
+            include_sql!("pg/topic_configuration_select.sql"),
+        ),
+        (
             "topic_configuration_upsert.sql",
             include_sql!("pg/topic_configuration_upsert.sql"),
         ),
@@ -206,6 +215,7 @@ pub(crate) static SQL: LazyLock<Cache> = LazyLock::new(|| {
             include_sql!("pg/topic_delete_by.sql"),
         ),
         ("topic_insert.sql", include_sql!("pg/topic_insert.sql")),
+        ("topic_select.sql", include_sql!("pg/topic_select.sql")),
         (
             "topic_select_name.sql",
             include_sql!("pg/topic_select_name.sql"),

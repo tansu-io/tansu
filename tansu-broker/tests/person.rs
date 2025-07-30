@@ -147,6 +147,7 @@ pub async fn person_invalid(
     Ok(())
 }
 
+#[cfg(feature = "postgres")]
 mod pg {
     use std::env;
 
@@ -267,6 +268,7 @@ mod in_memory {
     }
 }
 
+#[cfg(feature = "libsql")]
 mod lite {
     use std::env;
 

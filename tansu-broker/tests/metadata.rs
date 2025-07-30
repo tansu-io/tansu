@@ -535,6 +535,7 @@ pub async fn topics_some_not_matching_by_id(
     Ok(())
 }
 
+#[cfg(feature = "postgres")]
 mod pg {
     use common::{StorageType, init_tracing};
     use rand::{prelude::*, rng};
@@ -783,6 +784,7 @@ mod in_memory {
     }
 }
 
+#[cfg(feature = "libsql")]
 mod lite {
     use common::{StorageType, init_tracing};
     use rand::{prelude::*, rng};

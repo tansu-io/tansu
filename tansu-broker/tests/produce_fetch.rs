@@ -600,6 +600,7 @@ pub async fn with_multiple_txn(
     Ok(())
 }
 
+#[cfg(feature = "postgres")]
 mod pg {
     use super::*;
 
@@ -720,6 +721,7 @@ mod in_memory {
     }
 }
 
+#[cfg(feature = "libsql")]
 mod lite {
     use super::*;
 

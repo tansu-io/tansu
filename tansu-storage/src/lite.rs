@@ -44,8 +44,8 @@ use opentelemetry::{
 use rand::{rng, seq::SliceRandom as _};
 use regex::Regex;
 use tansu_sans_io::{
-    BatchAttribute, ConfigResource, ControlBatch, EndTransactionMarker, ErrorCode, IsolationLevel,
-    NULL_TOPIC_ID, OpType,
+    BatchAttribute, ConfigResource, ConfigSource, ConfigType, ControlBatch, EndTransactionMarker,
+    ErrorCode, IsolationLevel, NULL_TOPIC_ID, OpType,
     add_partitions_to_txn_response::{
         AddPartitionsToTxnPartitionResult, AddPartitionsToTxnTopicResult,
     },
@@ -54,7 +54,7 @@ use tansu_sans_io::{
     delete_records_request::DeleteRecordsTopic,
     delete_records_response::DeleteRecordsTopicResult,
     describe_cluster_response::DescribeClusterBroker,
-    describe_configs_response::DescribeConfigsResult,
+    describe_configs_response::{DescribeConfigsResourceResult, DescribeConfigsResult},
     describe_topic_partitions_response::{
         DescribeTopicPartitionsResponsePartition, DescribeTopicPartitionsResponseTopic,
     },
@@ -223,52 +223,6 @@ impl Engine {
             })
     }
 
-    #[allow(dead_code)]
-    async fn prepare_query<P>(
-        &self,
-        connection: &Connection,
-        sql: &str,
-        params: P,
-    ) -> result::Result<Vec<Row>, libsql::Error>
-    where
-        P: IntoParams,
-        P: Debug,
-    {
-        debug!(?connection, sql, ?params);
-
-        let mut statement = connection.prepare(sql).await?;
-
-        let execute_start = SystemTime::now();
-
-        let mut rows = statement.query(params).await.inspect_err(|err| {
-            SQL_ERROR.add(1, &self.attributes_for_error(sql, err)[..]);
-        })?;
-
-        let mut results = vec![];
-
-        while let Some(row) = rows.next().await.inspect_err(|err| {
-            SQL_ERROR.add(1, &self.attributes_for_error(sql, err)[..]);
-        })? {
-            results.push(row);
-        }
-
-        let attributes = [
-            KeyValue::new("sql", sql.to_owned()),
-            KeyValue::new("cluster_id", self.cluster.clone()),
-        ];
-
-        SQL_DURATION.record(
-            execute_start
-                .elapsed()
-                .map_or(0, |duration| duration.as_millis() as u64),
-            &attributes,
-        );
-
-        SQL_REQUESTS.add(1, &attributes);
-
-        Ok(results)
-    }
-
     async fn prepare_query_opt<P>(
         &self,
         connection: &Connection,
@@ -375,15 +329,15 @@ impl Engine {
         connection: &Connection,
     ) -> Result<()> {
         debug!(transaction_id, ?deflated);
-        if let Some(row) = self
-            .prepare_query_opt(
-                connection,
+
+        let mut rows = connection
+            .query(
                 &sql_lookup("producer_epoch_current_for_producer.sql")?,
                 (self.cluster.as_str(), deflated.producer_id),
             )
-            .await
-            .inspect_err(|err| error!(?err))?
-        {
+            .await?;
+
+        if let Some(row) = rows.next().await.inspect_err(|err| error!(?err))? {
             let current_epoch = row
                 .get::<i32>(0)
                 .inspect_err(|err| error!(self.cluster, deflated.producer_id, ?err))?
@@ -1300,20 +1254,18 @@ impl Storage for Engine {
                         OpType::Set => {
                             let c = self.connection().await?;
 
-                            if self
-                                .prepare_query(
-                                    &c,
-                                    &sql_lookup("topic_configuration_upsert.sql")?,
-                                    (
-                                        self.cluster.as_str(),
-                                        resource.resource_name.as_str(),
-                                        config.name.as_str(),
-                                        config.value.as_deref(),
-                                    ),
-                                )
-                                .await
-                                .inspect_err(|err| error!(?err))
-                                .is_err()
+                            if c.query(
+                                &sql_lookup("topic_configuration_upsert.sql")?,
+                                (
+                                    self.cluster.as_str(),
+                                    resource.resource_name.as_str(),
+                                    config.name.as_str(),
+                                    config.value.as_deref(),
+                                ),
+                            )
+                            .await
+                            .inspect_err(|err| error!(?err))
+                            .is_err()
                             {
                                 error_code = ErrorCode::UnknownServerError;
                                 break;
@@ -1322,19 +1274,17 @@ impl Storage for Engine {
                         OpType::Delete => {
                             let c = self.connection().await?;
 
-                            if self
-                                .prepare_query(
-                                    &c,
-                                    &sql_lookup("topic_configuration_delete.sql")?,
-                                    (
-                                        self.cluster.as_str(),
-                                        resource.resource_name.as_str(),
-                                        config.name.as_str(),
-                                    ),
-                                )
-                                .await
-                                .inspect_err(|err| error!(?err))
-                                .is_err()
+                            if c.query(
+                                &sql_lookup("topic_configuration_delete.sql")?,
+                                (
+                                    self.cluster.as_str(),
+                                    resource.resource_name.as_str(),
+                                    config.name.as_str(),
+                                ),
+                            )
+                            .await
+                            .inspect_err(|err| error!(?err))
+                            .is_err()
                             {
                                 error_code = ErrorCode::UnknownServerError;
                                 break;
@@ -1773,15 +1723,14 @@ impl Storage for Engine {
 
         let c = self.connection().await?;
 
-        for row in self
-            .prepare_query(
-                &c,
+        let mut rows = c
+            .query(
                 &sql_lookup("consumer_offset_select_by_group.sql")?,
                 (self.cluster.as_str(), group_id),
             )
-            .await
-            .inspect_err(|err| error!(?err))?
-        {
+            .await?;
+
+        while let Some(row) = rows.next().await? {
             let topic = row.get_str(0)?;
             let partition = row.get::<i32>(1)?;
             let offset = row.get::<i64>(2)?;
@@ -2270,7 +2219,66 @@ impl Storage for Engine {
         keys: Option<&[String]>,
     ) -> Result<DescribeConfigsResult> {
         debug!(cluster = self.cluster, name, ?resource, ?keys);
-        todo!()
+
+        let c = self.connection().await.inspect_err(|err| error!(?err))?;
+
+        let mut rows = c
+            .query(
+                &sql_lookup("topic_select.sql")?,
+                (self.cluster.as_str(), name),
+            )
+            .await?;
+
+        if rows.next().await?.is_some() {
+            let mut rows = c
+                .query(
+                    &sql_lookup("topic_configuration_select.sql")?,
+                    (self.cluster.as_str(), name),
+                )
+                .await?;
+
+            let mut configs = vec![];
+
+            while let Some(row) = rows.next().await? {
+                let name = row.get_str(0).inspect_err(|err| error!(?err))?;
+                let value = row
+                    .get::<Option<String>>(1)
+                    .map(|value| value.unwrap_or_default())
+                    .map(Some)
+                    .inspect_err(|err| error!(?err))?;
+
+                configs.push(
+                    DescribeConfigsResourceResult::default()
+                        .name(name.to_owned())
+                        .value(value)
+                        .read_only(false)
+                        .is_default(None)
+                        .config_source(Some(ConfigSource::DefaultConfig.into()))
+                        .is_sensitive(false)
+                        .synonyms(Some([].into()))
+                        .config_type(Some(ConfigType::String.into()))
+                        .documentation(Some("".into())),
+                );
+            }
+
+            let error_code = ErrorCode::None;
+
+            Ok(DescribeConfigsResult::default()
+                .error_code(error_code.into())
+                .error_message(Some(error_code.to_string()))
+                .resource_type(i8::from(resource))
+                .resource_name(name.into())
+                .configs(Some(configs)))
+        } else {
+            let error_code = ErrorCode::UnknownTopicOrPartition;
+
+            Ok(DescribeConfigsResult::default()
+                .error_code(error_code.into())
+                .error_message(Some(error_code.to_string()))
+                .resource_type(i8::from(resource))
+                .resource_name(name.into())
+                .configs(Some([].into())))
+        }
     }
 
     async fn describe_topic_partitions(
@@ -2469,15 +2477,14 @@ impl Storage for Engine {
 
         let mut listed_groups = vec![];
 
-        for row in self
-            .prepare_query(
-                &c,
+        let mut rows = c
+            .query(
                 &sql_lookup("consumer_group_select.sql")?,
                 &[self.cluster.as_str()],
             )
-            .await
-            .inspect_err(|err| error!(?err))?
-        {
+            .await?;
+
+        while let Some(row) = rows.next().await? {
             let group_id = row.get_str(0)?;
 
             listed_groups.push(

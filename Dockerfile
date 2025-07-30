@@ -24,11 +24,11 @@ ADD / /usr/src/
 
 ARG TARGETPLATFORM
 RUN xx-apk add --no-cache musl-dev zlib-dev gcc
-RUN xx-cargo build --bin tansu --release --target-dir ./build
+RUN xx-cargo build --bin tansu --features dynostore,libsql,postgres --release --target-dir ./build
 RUN xx-verify --static ./build/$(xx-cargo --print-target-triple)/release/tansu
 
 RUN <<EOF
-mkdir -p /image/schema /image/tmp /image/etc/ssl
+mkdir -p /image/schema /image/data /image/tmp /image/etc/ssl
 cp -v build/$(xx-cargo --print-target-triple)/release/tansu /image
 cp -v LICENSE /image
 cp -rv /etc/ssl /image/etc

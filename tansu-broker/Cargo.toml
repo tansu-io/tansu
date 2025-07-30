@@ -10,6 +10,7 @@ license.workspace = true
 repository.workspace = true
 version.workspace = true
 
+
 [lints]
 workspace = true
 
@@ -17,14 +18,14 @@ workspace = true
 async-trait.workspace = true
 bytes.workspace = true
 clap.workspace = true
-deadpool-postgres.workspace = true
+deadpool-postgres = { workspace = true, optional = true }
 futures.workspace = true
 http-body-util.workspace = true
 hyper-util.workspace = true
 hyper.workspace = true
 jsonschema.workspace = true
-libsql.workspace = true
-object_store.workspace = true
+libsql = { workspace = true, optional = true }
+object_store = { workspace = true, optional = true }
 opentelemetry-otlp.workspace = true
 opentelemetry-semantic-conventions.workspace = true
 opentelemetry.workspace = true
@@ -38,7 +39,7 @@ tansu-sans-io.workspace = true
 tansu-schema.workspace = true
 tansu-storage.workspace = true
 thiserror.workspace = true
-tokio-postgres.workspace = true
+tokio-postgres = { workspace = true, optional = true }
 tokio.workspace = true
 tracing-opentelemetry.workspace = true
 tracing-subscriber.workspace = true
@@ -50,5 +51,8 @@ uuid.workspace = true
 pretty_assertions.workspace = true
 
 [features]
-default = []
-nightly-features = []
+default = ["dynostore", "postgres"]
+dynostore = ["dep:object_store"]
+libsql = ["dep:libsql"]
+postgres = ["dep:deadpool-postgres", "dep:tokio-postgres"]
+turso = []

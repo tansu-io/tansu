@@ -13,18 +13,15 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-delete from topic_configuration
+select tc.name, tc.value
+
+from
+
+cluster c
+join topic t on t.cluster = c.id
+join topic_configuration tc on tc.topic = t.id
+
 where
 
-topic_configuration.topic in (
-    select t.id
-    from cluster c
-    join topic t on t.cluster = c.id
-
-    where
-
-    c.name = $1
-    and t.name = $2
-)
-
-and topic_configuration.name = $3;
+c.name = $1
+and t.name = $2;

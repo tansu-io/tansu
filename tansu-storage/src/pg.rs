@@ -2449,34 +2449,22 @@ impl Storage for Postgres {
         let c = self.connection().await.inspect_err(|err| error!(?err))?;
 
         let prepared = c
-            .prepare(concat!(
-                "select topic.id",
-                " from cluster, topic",
-                " where cluster.name = $1",
-                " and topic.name = $2",
-                " and topic.cluster = cluster.id",
-            ))
+            .prepare(&include_sql!("pg/topic_select.sql"))
             .await
             .inspect_err(|err| error!(?err))?;
 
-        if let Some(row) = c
-            .query_opt(&prepared, &[&self.cluster.as_str(), &name])
+        if c.query_opt(&prepared, &[&self.cluster.as_str(), &name])
             .await
             .inspect_err(|err| error!(?err))?
+            .is_some()
         {
-            let id = row.try_get::<_, i32>(0).inspect_err(|err| error!(?err))?;
-
             let prepared = c
-                .prepare(concat!(
-                    "select name, value",
-                    " from topic_configuration",
-                    " where topic_configuration.topic = $1",
-                ))
+                .prepare(&include_sql!("pg/topic_configuration_select.sql"))
                 .await
                 .inspect_err(|err| error!(?err))?;
 
             let rows = c
-                .query(&prepared, &[&id])
+                .query(&prepared, &[&self.cluster.as_str(), &name])
                 .await
                 .inspect_err(|err| error!(?err))?;
 

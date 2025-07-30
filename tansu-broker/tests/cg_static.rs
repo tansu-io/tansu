@@ -179,6 +179,7 @@ pub async fn rejoin_with_empty_member_id(
     Ok(())
 }
 
+#[cfg(feature = "postgres")]
 mod pg {
     use super::*;
 

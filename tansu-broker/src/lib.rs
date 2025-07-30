@@ -80,19 +80,31 @@ pub enum Error {
     Join(#[from] JoinError),
     Json(#[from] serde_json::Error),
     KafkaProtocol(#[from] tansu_sans_io::Error),
+
+    #[cfg(feature = "libsql")]
     LibSQL(#[from] libsql::Error),
+
     Message(String),
     Model(#[from] tansu_model::Error),
+
+    #[cfg(feature = "dynostore")]
     ObjectStore(#[from] object_store::Error),
+
     ParseFilter(#[from] ParseError),
     ParseInt(#[from] std::num::ParseIntError),
     Poison,
+
+    #[cfg(feature = "postgres")]
     Pool(#[from] deadpool_postgres::PoolError),
+
     SchemaRegistry(Box<tansu_schema::Error>),
     Storage(#[from] tansu_storage::Error),
     StringUtf8(#[from] FromUtf8Error),
     Regex(#[from] regex::Error),
+
+    #[cfg(feature = "postgres")]
     TokioPostgres(#[from] tokio_postgres::error::Error),
+
     TryFromInt(#[from] TryFromIntError),
     UnsupportedStorageUrl(Url),
     UnsupportedTracingFormat(String),

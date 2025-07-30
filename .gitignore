@@ -16,3 +16,4 @@ license.html
 *.duckdb
 .zed
 *.db
+*.db-journal

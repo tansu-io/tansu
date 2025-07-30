@@ -165,7 +165,6 @@ mod tests {
     use super::*;
     use crate::{Error, broker::init_producer_id::InitProducerIdRequest};
     use bytes::Bytes;
-    use object_store::memory::InMemory;
     use tansu_sans_io::{
         ErrorCode,
         record::{
@@ -174,8 +173,9 @@ mod tests {
             inflated,
         },
     };
-    use tansu_storage::dynostore::DynoStore;
+    use tansu_storage::StorageContainer;
     use tracing::subscriber::DefaultGuard;
+    use url::Url;
 
     fn init_tracing() -> Result<DefaultGuard> {
         use std::{fs::File, sync::Arc, thread};
@@ -239,7 +239,14 @@ mod tests {
         let topic = "pqr";
         let index = 0;
 
-        let storage = DynoStore::new(cluster, node, InMemory::new());
+        let storage = StorageContainer::builder()
+            .cluster_id(cluster)
+            .node_id(node)
+            .advertised_listener(Url::parse("tcp://localhost:9092")?)
+            .schema_registry(None)
+            .storage(Url::parse("memory://")?)
+            .build()
+            .await?;
 
         let transactional_id = None;
         let acks = 0;
@@ -293,7 +300,14 @@ mod tests {
         let topic = "pqr";
         let index = 0;
 
-        let storage = DynoStore::new(cluster, node, InMemory::new());
+        let storage = StorageContainer::builder()
+            .cluster_id(cluster)
+            .node_id(node)
+            .advertised_listener(Url::parse("tcp://localhost:9092")?)
+            .schema_registry(None)
+            .storage(Url::parse("memory://")?)
+            .build()
+            .await?;
 
         let producer = InitProducerIdRequest::with_storage(storage.clone())
             .response(None, 0, Some(-1), Some(-1))
@@ -443,7 +457,14 @@ mod tests {
         let topic = "pqr";
         let index = 0;
 
-        let storage = DynoStore::new(cluster, node, InMemory::new());
+        let storage = StorageContainer::builder()
+            .cluster_id(cluster)
+            .node_id(node)
+            .advertised_listener(Url::parse("tcp://localhost:9092")?)
+            .schema_registry(None)
+            .storage(Url::parse("memory://")?)
+            .build()
+            .await?;
 
         let producer = InitProducerIdRequest::with_storage(storage.clone())
             .response(None, 0, Some(-1), Some(-1))
@@ -547,7 +568,14 @@ mod tests {
         let topic = "pqr";
         let index = 0;
 
-        let storage = DynoStore::new(cluster, node, InMemory::new());
+        let storage = StorageContainer::builder()
+            .cluster_id(cluster)
+            .node_id(node)
+            .advertised_listener(Url::parse("tcp://localhost:9092")?)
+            .schema_registry(None)
+            .storage(Url::parse("memory://")?)
+            .build()
+            .await?;
 
         let producer = InitProducerIdRequest::with_storage(storage.clone())
             .response(None, 0, Some(-1), Some(-1))

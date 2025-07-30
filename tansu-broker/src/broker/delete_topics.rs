@@ -79,9 +79,9 @@ mod tests {
     use crate::broker::create_topic::CreateTopic;
 
     use super::*;
-    use object_store::memory::InMemory;
     use tansu_sans_io::{ErrorCode, NULL_TOPIC_ID, create_topics_request::CreatableTopic};
-    use tansu_storage::dynostore::DynoStore;
+    use tansu_storage::StorageContainer;
+    use url::Url;
     use uuid::Uuid;
 
     #[tokio::test]
@@ -89,7 +89,14 @@ mod tests {
         let cluster = "abc";
         let node = 12321;
 
-        let mut storage = DynoStore::new(cluster, node, InMemory::new());
+        let mut storage = StorageContainer::builder()
+            .cluster_id(cluster)
+            .node_id(node)
+            .advertised_listener(Url::parse("tcp://localhost:9092")?)
+            .schema_registry(None)
+            .storage(Url::parse("memory://")?)
+            .build()
+            .await?;
 
         let topic = "pqr";
 
@@ -106,7 +113,14 @@ mod tests {
         let cluster = "abc";
         let node = 12321;
 
-        let mut storage = DynoStore::new(cluster, node, InMemory::new());
+        let mut storage = StorageContainer::builder()
+            .cluster_id(cluster)
+            .node_id(node)
+            .advertised_listener(Url::parse("tcp://localhost:9092")?)
+            .schema_registry(None)
+            .storage(Url::parse("memory://")?)
+            .build()
+            .await?;
 
         let topic = Uuid::new_v4();
 
@@ -123,7 +137,14 @@ mod tests {
         let cluster = "abc";
         let node = 12321;
 
-        let storage = DynoStore::new(cluster, node, InMemory::new());
+        let storage = StorageContainer::builder()
+            .cluster_id(cluster)
+            .node_id(node)
+            .advertised_listener(Url::parse("tcp://localhost:9092")?)
+            .schema_registry(None)
+            .storage(Url::parse("memory://")?)
+            .build()
+            .await?;
 
         let name = "pqr";
         let num_partitions = 5;

@@ -71,6 +71,7 @@ pub async fn describe(
     Ok(())
 }
 
+#[cfg(feature = "postgres")]
 mod pg {
     use common::{StorageType, init_tracing};
     use rand::{prelude::*, rng};
@@ -129,6 +130,39 @@ mod in_memory {
             None,
         )
         .await
+    }
+
+    #[tokio::test]
+    async fn describe() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster = Uuid::now_v7();
+        let node = rng().random_range(0..i32::MAX);
+        let advertised_listener = Url::parse("tcp://example.com:9092/")?;
+
+        super::describe(
+            cluster,
+            node,
+            advertised_listener.clone(),
+            storage_container(cluster, node, advertised_listener).await?,
+        )
+        .await
+    }
+}
+
+#[cfg(feature = "libsql")]
+mod lite {
+    use common::{StorageType, init_tracing};
+    use rand::{prelude::*, rng};
+
+    use super::*;
+
+    async fn storage_container(
+        cluster: impl Into<String>,
+        node: i32,
+        advertised_listener: Url,
+    ) -> Result<StorageContainer> {
+        common::storage_container(StorageType::Lite, cluster, node, advertised_listener, None).await
     }
 
     #[tokio::test]

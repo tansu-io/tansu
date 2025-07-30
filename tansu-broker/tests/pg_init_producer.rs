@@ -12,17 +12,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[cfg(feature = "postgres")]
 use common::{StorageType, alphanumeric_string, init_tracing, register_broker, storage_container};
+
+#[cfg(feature = "postgres")]
 use rand::{prelude::*, rng};
+
+#[cfg(feature = "postgres")]
 use tansu_broker::Result;
+
+#[cfg(feature = "postgres")]
 use tansu_storage::Storage;
+
+#[cfg(feature = "postgres")]
 use tracing::debug;
+
+#[cfg(feature = "postgres")]
 use url::Url;
+
+#[cfg(feature = "postgres")]
 use uuid::Uuid;
 
 mod common;
 
 #[tokio::test]
+#[cfg(feature = "postgres")]
 async fn with_txn() -> Result<()> {
     let _guard = init_tracing()?;
 
