@@ -23,13 +23,13 @@ use uuid::Uuid;
 pub mod common;
 
 pub async fn topics_none(
-    cluster_id: Uuid,
+    cluster_id: impl Into<String>,
     broker_id: i32,
     advertised_listener: Url,
     mut sc: StorageContainer,
 ) -> Result<()> {
-    debug!(%cluster_id, broker_id, %advertised_listener);
-    register_broker(&cluster_id, broker_id, &mut sc).await?;
+    debug!(broker_id, %advertised_listener);
+    register_broker(cluster_id, broker_id, &mut sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -132,13 +132,13 @@ pub async fn topics_none(
 }
 
 pub async fn topics_some_empty(
-    cluster_id: Uuid,
+    cluster_id: impl Into<String>,
     broker_id: i32,
     advertised_listener: Url,
     mut sc: StorageContainer,
 ) -> Result<()> {
-    debug!(%cluster_id, broker_id, %advertised_listener);
-    register_broker(&cluster_id, broker_id, &mut sc).await?;
+    debug!(broker_id, %advertised_listener);
+    register_broker(cluster_id, broker_id, &mut sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -241,13 +241,13 @@ pub async fn topics_some_empty(
 }
 
 pub async fn topics_some_matching_by_name(
-    cluster_id: Uuid,
+    cluster_id: impl Into<String>,
     broker_id: i32,
     advertised_listener: Url,
     mut sc: StorageContainer,
 ) -> Result<()> {
-    debug!(%cluster_id, broker_id, %advertised_listener);
-    register_broker(&cluster_id, broker_id, &mut sc).await?;
+    debug!(broker_id, %advertised_listener);
+    register_broker(cluster_id, broker_id, &mut sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -350,13 +350,13 @@ pub async fn topics_some_matching_by_name(
 }
 
 pub async fn topics_some_not_matching_by_name(
-    cluster_id: Uuid,
+    cluster_id: impl Into<String>,
     broker_id: i32,
     advertised_listener: Url,
     mut sc: StorageContainer,
 ) -> Result<()> {
-    debug!(%cluster_id, broker_id, %advertised_listener);
-    register_broker(&cluster_id, broker_id, &mut sc).await?;
+    debug!(broker_id, %advertised_listener);
+    register_broker(cluster_id, broker_id, &mut sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -389,13 +389,13 @@ pub async fn topics_some_not_matching_by_name(
 }
 
 pub async fn topics_some_matching_by_id(
-    cluster_id: Uuid,
+    cluster_id: impl Into<String>,
     broker_id: i32,
     advertised_listener: Url,
     mut sc: StorageContainer,
 ) -> Result<()> {
-    debug!(%cluster_id, broker_id, %advertised_listener);
-    register_broker(&cluster_id, broker_id, &mut sc).await?;
+    debug!(broker_id, %advertised_listener);
+    register_broker(cluster_id, broker_id, &mut sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -498,13 +498,13 @@ pub async fn topics_some_matching_by_id(
 }
 
 pub async fn topics_some_not_matching_by_id(
-    cluster_id: Uuid,
+    cluster_id: impl Into<String>,
     broker_id: i32,
     advertised_listener: Url,
     mut sc: StorageContainer,
 ) -> Result<()> {
-    debug!(%cluster_id, broker_id, %advertised_listener);
-    register_broker(&cluster_id, broker_id, &mut sc).await?;
+    debug!(broker_id, %advertised_listener);
+    register_broker(cluster_id, broker_id, &mut sc).await?;
 
     let id = Uuid::new_v4();
 

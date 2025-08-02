@@ -65,11 +65,11 @@ fn topic_data(
 }
 
 async fn non_txn_idempotent_unknown_producer_id(
-    cluster_id: Uuid,
+    cluster_id: impl Into<String>,
     broker_id: i32,
     mut sc: StorageContainer,
 ) -> Result<()> {
-    register_broker(&cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, &mut sc).await?;
 
     let topic = alphanumeric_string(10);
     let index = 0;
@@ -130,11 +130,11 @@ async fn non_txn_idempotent_unknown_producer_id(
 }
 
 async fn non_txn_idempotent(
-    cluster_id: Uuid,
+    cluster_id: impl Into<String>,
     broker_id: i32,
     mut sc: StorageContainer,
 ) -> Result<()> {
-    register_broker(&cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, &mut sc).await?;
 
     let topic = alphanumeric_string(10);
     let index = 0;
@@ -290,11 +290,11 @@ async fn non_txn_idempotent(
 }
 
 async fn non_txn_idempotent_duplicate_sequence(
-    cluster_id: Uuid,
+    cluster_id: impl Into<String>,
     broker_id: i32,
     mut sc: StorageContainer,
 ) -> Result<()> {
-    register_broker(&cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, &mut sc).await?;
 
     let topic = alphanumeric_string(10);
     let index = 0;
@@ -403,11 +403,11 @@ async fn non_txn_idempotent_duplicate_sequence(
 }
 
 async fn non_txn_idempotent_sequence_out_of_order(
-    cluster_id: Uuid,
+    cluster_id: impl Into<String>,
     broker_id: i32,
     mut sc: StorageContainer,
 ) -> Result<()> {
-    register_broker(&cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, &mut sc).await?;
 
     let topic = alphanumeric_string(10);
     let index = 0;

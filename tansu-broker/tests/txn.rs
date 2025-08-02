@@ -39,11 +39,11 @@ use uuid::Uuid;
 pub mod common;
 
 pub async fn simple_txn_commit_offset_commit(
-    cluster_id: Uuid,
+    cluster_id: impl Into<String>,
     broker_id: i32,
     mut sc: StorageContainer,
 ) -> Result<()> {
-    register_broker(&cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, &mut sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -162,11 +162,11 @@ pub async fn simple_txn_commit_offset_commit(
 }
 
 pub async fn simple_txn_commit_offset_abort(
-    cluster_id: Uuid,
+    cluster_id: impl Into<String>,
     broker_id: i32,
     mut sc: StorageContainer,
 ) -> Result<()> {
-    register_broker(&cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, &mut sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -285,11 +285,11 @@ pub async fn simple_txn_commit_offset_abort(
 }
 
 pub async fn simple_txn_produce_commit(
-    cluster_id: Uuid,
+    cluster_id: impl Into<String>,
     broker_id: i32,
     mut sc: StorageContainer,
 ) -> Result<()> {
-    register_broker(&cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, &mut sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -569,11 +569,11 @@ pub async fn simple_txn_produce_commit(
 }
 
 pub async fn simple_txn_produce_abort(
-    cluster_id: Uuid,
+    cluster_id: impl Into<String>,
     broker_id: i32,
     mut sc: StorageContainer,
 ) -> Result<()> {
-    register_broker(&cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, &mut sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -854,11 +854,11 @@ pub async fn simple_txn_produce_abort(
 // txns that overlap on the same topition
 //
 pub async fn with_overlap(
-    cluster_id: Uuid,
+    cluster_id: impl Into<String>,
     broker_id: i32,
     mut sc: StorageContainer,
 ) -> Result<()> {
-    register_broker(&cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, &mut sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -1218,11 +1218,11 @@ pub async fn with_overlap(
 }
 
 pub async fn init_producer_twice(
-    cluster_id: Uuid,
+    cluster_id: impl Into<String>,
     broker_id: i32,
     mut sc: StorageContainer,
 ) -> Result<()> {
-    register_broker(&cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, &mut sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);

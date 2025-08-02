@@ -17,3 +17,4 @@ license.html
 .zed
 *.db
 *.db-journal
+*.db-wal

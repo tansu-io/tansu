@@ -75,6 +75,9 @@ pub enum Error {
     EmptyJoinGroupRequestProtocol,
     ExpectedJoinGroupRequestProtocol(&'static str),
     ExporterBuild(#[from] ExporterBuildError),
+
+    GlobPattern(#[from] glob::PatternError),
+
     Hyper(#[from] hyper::http::Error),
     Io(Arc<io::Error>),
     Join(#[from] JoinError),
@@ -106,6 +109,10 @@ pub enum Error {
     TokioPostgres(#[from] tokio_postgres::error::Error),
 
     TryFromInt(#[from] TryFromIntError),
+
+    #[cfg(feature = "turso")]
+    Turso(#[from] turso::Error),
+
     UnsupportedStorageUrl(Url),
     UnsupportedTracingFormat(String),
     Url(#[from] url::ParseError),

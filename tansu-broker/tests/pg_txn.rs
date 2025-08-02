@@ -78,7 +78,7 @@ async fn simple_txn_commit() -> Result<()> {
     )
     .await?;
 
-    register_broker(&cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, &mut sc).await?;
 
     let input_topic_name: String = alphanumeric_string(15);
     debug!(?input_topic_name);

@@ -14,6 +14,7 @@
 
 #![allow(dead_code)]
 use bytes::Bytes;
+use glob::glob;
 use rand::{
     distr::{Alphanumeric, StandardUniform},
     prelude::*,
@@ -72,15 +73,19 @@ pub(crate) enum StorageType {
     InMemory,
     Lite,
     Postgres,
+    Turso,
 }
 
-pub(crate) async fn storage_container(
+pub(crate) async fn storage_container<C>(
     storage_type: StorageType,
-    cluster: impl Into<String>,
+    cluster: C,
     node: i32,
     advertised_listener: Url,
     schemas: Option<Registry>,
-) -> Result<StorageContainer> {
+) -> Result<StorageContainer>
+where
+    C: Into<String>,
+{
     match storage_type {
         StorageType::Postgres => StorageContainer::builder()
             .cluster_id(cluster)
@@ -147,6 +152,60 @@ pub(crate) async fn storage_container(
                 .await
                 .map_err(Into::into)
         }
+
+        StorageType::Turso => {
+            let relative = thread::current()
+                .name()
+                .ok_or(Error::Message(String::from("unnamed thread")))
+                .map(|name| {
+                    format!(
+                        "../logs/{}/{}::{name}.db*",
+                        env!("CARGO_PKG_NAME"),
+                        env!("CARGO_CRATE_NAME")
+                    )
+                })?;
+
+            let mut path = env::current_dir()?;
+            path.push(relative);
+            debug!(?path);
+
+            if let Some(pattern) = path.to_str() {
+                debug!(pattern);
+
+                let paths = glob(pattern)?;
+
+                for path in paths {
+                    if let Ok(path) = path {
+                        debug!(?path);
+
+                        remove_file(path).await?;
+                    }
+                }
+            }
+
+            StorageContainer::builder()
+                .cluster_id(cluster)
+                .node_id(node)
+                .advertised_listener(advertised_listener)
+                .schema_registry(schemas)
+                .storage(
+                    thread::current()
+                        .name()
+                        .ok_or(Error::Message(String::from("unnamed thread")))
+                        .map(|name| {
+                            format!(
+                                "turso://../logs/{}/{}::{name}.db",
+                                env!("CARGO_PKG_NAME"),
+                                env!("CARGO_CRATE_NAME")
+                            )
+                        })
+                        .inspect(|url| debug!(url))
+                        .and_then(|url| Url::parse(&url).map_err(Into::into))?,
+                )
+                .build()
+                .await
+                .map_err(Into::into)
+        }
     }
 }
 
@@ -165,50 +224,6 @@ pub(crate) fn random_bytes(length: usize) -> Bytes {
         .collect::<Vec<u8>>()
         .into()
 }
-
-// #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-// pub(crate) struct JoinGroupResponse {
-//     pub error_code: ErrorCode,
-//     pub generation_id: i32,
-//     pub protocol_type: Option<String>,
-//     pub protocol_name: Option<String>,
-//     pub leader: String,
-//     pub skip_assignment: bool,
-//     pub member_id: String,
-//     pub members: Vec<JoinGroupResponseMember>,
-// }
-
-// impl TryFrom<Body> for JoinGroupResponse {
-//     type Error = Error;
-
-//     fn try_from(value: Body) -> Result<Self, Self::Error> {
-//         match value {
-//             Body::JoinGroupResponse {
-//                 throttle_time_ms: Some(0),
-//                 error_code,
-//                 generation_id,
-//                 protocol_type,
-//                 protocol_name,
-//                 leader,
-//                 skip_assignment: Some(skip_assignment),
-//                 members: Some(members),
-//                 member_id,
-//             } => ErrorCode::try_from(error_code)
-//                 .map(|error_code| JoinGroupResponse {
-//                     error_code,
-//                     generation_id,
-//                     protocol_type,
-//                     protocol_name,
-//                     leader,
-//                     skip_assignment,
-//                     member_id,
-//                     members,
-//                 })
-//                 .map_err(Into::into),
-//             otherwise => panic!("{otherwise:?}"),
-//         }
-//     }
-// }
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn join_group(
@@ -239,39 +254,6 @@ pub(crate) async fn join_group(
         .and_then(|body| TryInto::try_into(body).map_err(Into::into))
 }
 
-// #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-// pub(crate) struct SyncGroupResponse {
-//     pub error_code: ErrorCode,
-//     pub protocol_type: String,
-//     pub protocol_name: String,
-//     pub assignment: Bytes,
-// }
-
-// impl TryFrom<Body> for SyncGroupResponse {
-//     type Error = Error;
-
-//     fn try_from(value: Body) -> std::result::Result<Self, Self::Error> {
-//         match value {
-//             Body::SyncGroupResponse {
-//                 throttle_time_ms: Some(0),
-//                 error_code,
-//                 protocol_type: Some(protocol_type),
-//                 protocol_name: Some(protocol_name),
-//                 assignment,
-//             } => ErrorCode::try_from(error_code)
-//                 .map(|error_code| SyncGroupResponse {
-//                     error_code,
-//                     protocol_type,
-//                     protocol_name,
-//                     assignment,
-//                 })
-//                 .map_err(Into::into),
-
-//             otherwise => panic!("{otherwise:?}"),
-//         }
-//     }
-// }
-
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn sync_group(
     controller: &mut Controller<StorageContainer>,
@@ -297,28 +279,6 @@ pub(crate) async fn sync_group(
         .and_then(|body| TryInto::try_into(body).map_err(Into::into))
 }
 
-// #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-// pub(crate) struct HeartbeatResponse {
-//     pub error_code: ErrorCode,
-// }
-
-// impl TryFrom<Body> for HeartbeatResponse {
-//     type Error = Error;
-
-//     fn try_from(value: Body) -> std::result::Result<Self, Self::Error> {
-//         match value {
-//             Body::HeartbeatResponse {
-//                 throttle_time_ms: Some(0),
-//                 error_code,
-//             } => ErrorCode::try_from(error_code)
-//                 .map(|error_code| HeartbeatResponse { error_code })
-//                 .map_err(Into::into),
-
-//             otherwise => panic!("{otherwise:?}"),
-//         }
-//     }
-// }
-
 pub(crate) async fn heartbeat(
     controller: &mut Controller<StorageContainer>,
     group_id: &str,
@@ -332,31 +292,6 @@ pub(crate) async fn heartbeat(
         .and_then(|body| TryInto::try_into(body).map_err(Into::into))
 }
 
-// #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-// pub(crate) struct OffsetFetchResponse {
-//     pub topics: Vec<OffsetFetchResponseTopic>,
-//     pub error_code: ErrorCode,
-// }
-
-// impl TryFrom<Body> for OffsetFetchResponse {
-//     type Error = Error;
-
-//     fn try_from(value: Body) -> Result<Self, Self::Error> {
-//         match value {
-//             Body::OffsetFetchResponse {
-//                 throttle_time_ms: Some(0),
-//                 topics: Some(topics),
-//                 error_code: Some(error_code),
-//                 groups: None,
-//             } => ErrorCode::try_from(error_code)
-//                 .map(|error_code| OffsetFetchResponse { topics, error_code })
-//                 .map_err(Into::into),
-
-//             otherwise => panic!("{otherwise:?}"),
-//         }
-//     }
-// }
-
 pub(crate) async fn offset_fetch(
     controller: &mut Controller<StorageContainer>,
     group_id: &str,
@@ -367,36 +302,6 @@ pub(crate) async fn offset_fetch(
         .await
         .and_then(|body| TryInto::try_into(body).map_err(Into::into))
 }
-
-// #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-// pub(crate) struct LeaveGroupResponse {
-//     pub error_code: ErrorCode,
-//     members: Vec<MemberResponse>,
-// }
-
-// impl TryFrom<Body> for LeaveGroupResponse {
-//     type Error = Error;
-
-//     fn try_from(value: Body) -> Result<Self, Self::Error> {
-//         match value {
-//             Body::LeaveGroupResponse {
-//                 error_code,
-//                 members,
-//                 ..
-//             } => ErrorCode::try_from(error_code)
-//                 .map(|error_code| {
-//                     let members = members.unwrap_or_default();
-//                     LeaveGroupResponse {
-//                         error_code,
-//                         members,
-//                     }
-//                 })
-//                 .map_err(Into::into),
-
-//             otherwise => panic!("{otherwise:?}"),
-//         }
-//     }
-// }
 
 pub(crate) async fn leave(
     controller: &mut Controller<StorageContainer>,
@@ -570,18 +475,21 @@ pub(crate) async fn join(
     }
 }
 
-pub(crate) async fn register_broker(
-    cluster_id: &Uuid,
+pub(crate) async fn register_broker<C>(
+    cluster_id: C,
     broker_id: i32,
     sc: &mut StorageContainer,
-) -> Result<()> {
+) -> Result<()>
+where
+    C: Into<String>,
+{
     let incarnation_id = Uuid::now_v7();
 
-    debug!(?cluster_id, ?broker_id, ?incarnation_id);
+    // debug!(?cluster_id, ?broker_id, ?incarnation_id);
 
     let broker_registration = BrokerRegistrationRequest {
         broker_id,
-        cluster_id: cluster_id.to_owned().into(),
+        cluster_id: cluster_id.into(),
         incarnation_id,
         rack: None,
     };
@@ -590,44 +498,3 @@ pub(crate) async fn register_broker(
         .await
         .map_err(Into::into)
 }
-
-// #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-// pub(crate) struct FetchResponse {
-//     error_code: ErrorCode,
-//     session_id: Option<i32>,
-//     responses: Vec<FetchableTopicResponse>,
-//     node_endpoints: Vec<NodeEndpoint>,
-// }
-
-// impl FetchResponse {
-//     pub(crate) fn error_code(&self) -> ErrorCode {
-//         self.error_code
-//     }
-
-//     pub(crate) fn responses(&self) -> &[FetchableTopicResponse] {
-//         &self.responses
-//     }
-// }
-
-// impl TryFrom<Body> for FetchResponse {
-//     type Error = Error;
-
-//     fn try_from(value: Body) -> Result<Self, Self::Error> {
-//         match value {
-//             Body::FetchResponse {
-//                 error_code,
-//                 session_id,
-//                 responses,
-//                 node_endpoints,
-//                 ..
-//             } => Ok(FetchResponse {
-//                 error_code: error_code.map_or(Ok(ErrorCode::None), TryInto::try_into)?,
-//                 session_id,
-//                 responses: responses.unwrap_or_default(),
-//                 node_endpoints: node_endpoints.unwrap_or_default(),
-//             }),
-
-//             otherwise => panic!("{otherwise:?}"),
-//         }
-//     }
-// }

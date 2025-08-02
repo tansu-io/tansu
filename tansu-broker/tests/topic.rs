@@ -25,11 +25,11 @@ use uuid::Uuid;
 pub mod common;
 
 pub async fn create_delete(
-    cluster_id: Uuid,
+    cluster_id: impl Into<String>,
     broker_id: i32,
     mut sc: StorageContainer,
 ) -> Result<()> {
-    register_broker(&cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, &mut sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -62,11 +62,11 @@ pub async fn create_delete(
 }
 
 pub async fn create_describe_topic_partitions_by_id(
-    cluster_id: Uuid,
+    cluster_id: impl Into<String>,
     broker_id: i32,
     mut sc: StorageContainer,
 ) -> Result<()> {
-    register_broker(&cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, &mut sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -133,11 +133,11 @@ pub async fn create_describe_topic_partitions_by_id(
 }
 
 pub async fn create_describe_topic_partitions_by_name(
-    cluster_id: Uuid,
+    cluster_id: impl Into<String>,
     broker_id: i32,
     mut sc: StorageContainer,
 ) -> Result<()> {
-    register_broker(&cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, &mut sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -204,11 +204,11 @@ pub async fn create_describe_topic_partitions_by_name(
 }
 
 pub async fn describe_non_existing_topic_partitions_by_name(
-    cluster_id: Uuid,
+    cluster_id: impl Into<String>,
     broker_id: i32,
     mut sc: StorageContainer,
 ) -> Result<()> {
-    register_broker(&cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, &mut sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -239,11 +239,11 @@ pub async fn describe_non_existing_topic_partitions_by_name(
 }
 
 pub async fn create_with_config_delete(
-    cluster_id: Uuid,
+    cluster_id: impl Into<String>,
     broker_id: i32,
     mut sc: StorageContainer,
 ) -> Result<()> {
-    register_broker(&cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, &mut sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -542,6 +542,101 @@ mod lite {
 
         super::create_delete(
             cluster_id,
+            broker_id,
+            storage_container(cluster_id, broker_id).await?,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn create_with_config_delete() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        super::create_with_config_delete(
+            cluster_id,
+            broker_id,
+            storage_container(cluster_id, broker_id).await?,
+        )
+        .await
+    }
+}
+
+#[cfg(feature = "turso")]
+mod turso {
+    use common::{StorageType, init_tracing};
+    use rand::{prelude::*, rng};
+    use url::Url;
+
+    use super::*;
+
+    async fn storage_container(cluster: impl Into<String>, node: i32) -> Result<StorageContainer> {
+        common::storage_container(
+            StorageType::Turso,
+            cluster,
+            node,
+            Url::parse("tcp://127.0.0.1/")?,
+            None,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn create_describe_topic_partitions_by_id() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        super::create_describe_topic_partitions_by_id(
+            cluster_id,
+            broker_id,
+            storage_container(cluster_id, broker_id).await?,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn create_describe_topic_partitions_by_name() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        super::create_describe_topic_partitions_by_name(
+            cluster_id,
+            broker_id,
+            storage_container(cluster_id, broker_id).await?,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn describe_non_existing_topic_partitions_by_name() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        super::describe_non_existing_topic_partitions_by_name(
+            cluster_id,
+            broker_id,
+            storage_container(cluster_id, broker_id).await?,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn create_delete() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = format!("cluster-{}", Uuid::now_v7());
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        super::create_delete(
+            cluster_id.clone(),
             broker_id,
             storage_container(cluster_id, broker_id).await?,
         )

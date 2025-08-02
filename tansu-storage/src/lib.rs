@@ -114,7 +114,7 @@ mod lite;
 mod os;
 
 #[cfg(feature = "turso")]
-mod turso;
+mod limbo;
 
 /// Storage Errors
 #[derive(thiserror::Error, Debug)]
@@ -225,10 +225,14 @@ pub enum Error {
 
     #[cfg(feature = "turso")]
     #[error("turso: {0}")]
-    Turso(#[from] ::turso::Error),
+    Turso(#[from] turso::Error),
 
     #[error("body: {0:?}")]
     UnexpectedBody(Box<Body>),
+
+    #[cfg(feature = "turso")]
+    #[error("unexpected value: {0:?}")]
+    UnexpectedValue(turso::Value),
 
     #[error("unknown key: {0}")]
     UnknownCacheKey(String),
@@ -1322,14 +1326,20 @@ pub enum UpdateError<T> {
 
     #[cfg(feature = "postgres")]
     TokioPostgres(#[from] tokio_postgres::error::Error),
+
+    #[cfg(feature = "turso")]
+    Turso(#[from] turso::Error),
+
     Uuid(#[from] uuid::Error),
 }
 
 /// Storage Container
 ///
 /// An enumeration of available storage implementations.
-/// - [`Postgres`]
 /// - [`DynoStore`]
+/// - [`Postgres`]
+/// - [`limbo::Engine`]
+/// - [`lite::Engine`]
 #[derive(Clone, Debug)]
 pub enum StorageContainer {
     #[cfg(feature = "postgres")]
@@ -1342,7 +1352,7 @@ pub enum StorageContainer {
     Lite(lite::Engine),
 
     #[cfg(feature = "turso")]
-    Turso(turso::Engine),
+    Turso(limbo::Engine),
 }
 
 impl StorageContainer {
@@ -1494,7 +1504,7 @@ impl Builder<i32, String, Url, Url> {
                 .map(StorageContainer::Lite),
 
             #[cfg(feature = "turso")]
-            "turso" => turso::Engine::builder()
+            "turso" => limbo::Engine::builder()
                 .storage(self.storage.clone())
                 .node(self.node_id)
                 .cluster(self.cluster_id.clone())

@@ -29,11 +29,11 @@ use uuid::Uuid;
 pub mod common;
 
 pub async fn person_valid(
-    cluster_id: Uuid,
+    cluster_id: impl Into<String>,
     broker_id: i32,
     mut sc: StorageContainer,
 ) -> Result<()> {
-    register_broker(&cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, &mut sc).await?;
 
     let topic_name = "person";
     debug!(?topic_name);
@@ -87,11 +87,11 @@ pub async fn person_valid(
 }
 
 pub async fn person_invalid(
-    cluster_id: Uuid,
+    cluster_id: impl Into<String>,
     broker_id: i32,
     mut sc: StorageContainer,
 ) -> Result<()> {
-    register_broker(&cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, &mut sc).await?;
 
     let topic_name = "person";
     debug!(?topic_name);

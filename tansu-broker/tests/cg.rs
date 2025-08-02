@@ -24,11 +24,11 @@ use uuid::Uuid;
 pub mod common;
 
 pub async fn offset_commit(
-    cluster_id: Uuid,
+    cluster_id: impl Into<String>,
     broker_id: i32,
     mut sc: StorageContainer,
 ) -> Result<()> {
-    register_broker(&cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, &mut sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -90,11 +90,11 @@ pub async fn offset_commit(
 }
 
 pub async fn topic_delete_cascade_to_offset_commit(
-    cluster_id: Uuid,
+    cluster_id: impl Into<String>,
     broker_id: i32,
     mut sc: StorageContainer,
 ) -> Result<()> {
-    register_broker(&cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, &mut sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -156,11 +156,11 @@ pub async fn topic_delete_cascade_to_offset_commit(
 }
 
 pub async fn consumer_group_delete_cascade_to_offset_commit(
-    cluster_id: Uuid,
+    cluster_id: impl Into<String>,
     broker_id: i32,
     mut sc: StorageContainer,
 ) -> Result<()> {
-    register_broker(&cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, &mut sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -225,11 +225,11 @@ pub async fn consumer_group_delete_cascade_to_offset_commit(
 }
 
 pub async fn delete_unknown_consumer_group(
-    cluster_id: Uuid,
+    cluster_id: impl Into<String>,
     broker_id: i32,
     mut sc: StorageContainer,
 ) -> Result<()> {
-    register_broker(&cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, &mut sc).await?;
 
     let group_id: String = alphanumeric_string(15);
 
@@ -245,11 +245,11 @@ pub async fn delete_unknown_consumer_group(
 }
 
 pub async fn offset_commit_unknown_topition(
-    cluster_id: Uuid,
+    cluster_id: impl Into<String>,
     broker_id: i32,
     mut sc: StorageContainer,
 ) -> Result<()> {
-    register_broker(&cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, &mut sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -290,11 +290,11 @@ pub async fn offset_commit_unknown_topition(
 }
 
 pub async fn offset_fetch_unknown_topition(
-    cluster_id: Uuid,
+    cluster_id: impl Into<String>,
     broker_id: i32,
     mut sc: StorageContainer,
 ) -> Result<()> {
-    register_broker(&cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, &mut sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -319,11 +319,11 @@ pub async fn offset_fetch_unknown_topition(
 }
 
 pub async fn list_groups_none(
-    cluster_id: Uuid,
+    cluster_id: impl Into<String>,
     broker_id: i32,
     mut sc: StorageContainer,
 ) -> Result<()> {
-    register_broker(&cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, &mut sc).await?;
 
     let groups = sc.list_groups(None).await?;
     assert_eq!(0, groups.len());

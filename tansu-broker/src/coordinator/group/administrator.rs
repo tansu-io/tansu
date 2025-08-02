@@ -849,6 +849,9 @@ where
                 #[cfg(feature = "libsql")]
                 Err(UpdateError::LibSql(error)) => return Err(error.into()),
 
+                #[cfg(feature = "turso")]
+                Err(UpdateError::Turso(error)) => return Err(error.into()),
+
                 Err(UpdateError::MissingEtag) => {
                     return Err(Error::Message(String::from("missing e-tag")));
                 }
@@ -983,6 +986,9 @@ where
                 #[cfg(feature = "libsql")]
                 Err(UpdateError::LibSql(error)) => return Err(error.into()),
 
+                #[cfg(feature = "turso")]
+                Err(UpdateError::Turso(error)) => return Err(error.into()),
+
                 Err(UpdateError::MissingEtag) => {
                     return Err(Error::Message(String::from("missing e-tag")));
                 }
@@ -1066,6 +1072,9 @@ where
                 #[cfg(feature = "libsql")]
                 Err(UpdateError::LibSql(error)) => return Err(error.into()),
 
+                #[cfg(feature = "turso")]
+                Err(UpdateError::Turso(error)) => return Err(error.into()),
+
                 Err(UpdateError::MissingEtag) => {
                     return Err(Error::Message(String::from("missing e-tag")));
                 }
@@ -1143,6 +1152,9 @@ where
 
                 #[cfg(feature = "libsql")]
                 Err(UpdateError::LibSql(error)) => return Err(error.into()),
+
+                #[cfg(feature = "turso")]
+                Err(UpdateError::Turso(error)) => return Err(error.into()),
 
                 Err(UpdateError::MissingEtag) => {
                     return Err(Error::Message(String::from("missing e-tag")));
@@ -1251,6 +1263,9 @@ where
 
                 #[cfg(feature = "libsql")]
                 Err(UpdateError::LibSql(error)) => return Err(error.into()),
+
+                #[cfg(feature = "turso")]
+                Err(UpdateError::Turso(error)) => return Err(error.into()),
 
                 Err(UpdateError::MissingEtag) => {
                     return Err(Error::Message(String::from("missing e-tag")));

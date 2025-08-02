@@ -25,11 +25,11 @@ use uuid::Uuid;
 mod common;
 
 pub async fn join_with_empty_member_id(
-    cluster_id: Uuid,
+    cluster_id: impl Into<String>,
     broker_id: i32,
     mut sc: StorageContainer,
 ) -> Result<()> {
-    register_broker(&cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, &mut sc).await?;
 
     let mut controller = Controller::with_storage(sc.clone())?;
 
@@ -93,11 +93,11 @@ pub async fn join_with_empty_member_id(
 }
 
 pub async fn rejoin_with_empty_member_id(
-    cluster_id: Uuid,
+    cluster_id: impl Into<String>,
     broker_id: i32,
     mut sc: StorageContainer,
 ) -> Result<()> {
-    register_broker(&cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, &mut sc).await?;
 
     let mut controller = Controller::with_storage(sc.clone())?;
 

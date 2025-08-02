@@ -24,17 +24,21 @@ use uuid::Uuid;
 
 pub mod common;
 
-pub async fn describe(
-    cluster_id: Uuid,
+pub async fn describe<C>(
+    cluster_id: C,
     broker_id: i32,
     advertised_listener: Url,
     mut sc: StorageContainer,
-) -> Result<()> {
-    debug!(%cluster_id, broker_id, %advertised_listener);
-    register_broker(&cluster_id, broker_id, &mut sc).await?;
+) -> Result<()>
+where
+    C: Into<String>,
+    C: Clone,
+{
+    debug!(broker_id, %advertised_listener);
+    register_broker(cluster_id.clone(), broker_id, &mut sc).await?;
 
     let mut dc = DescribeClusterRequest {
-        cluster_id: cluster_id.to_string(),
+        cluster_id: cluster_id.into(),
         storage: sc,
     };
 

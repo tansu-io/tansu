@@ -1127,6 +1127,20 @@ name = "bytemuck"
 version = "1.23.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5c76a5792e44e4abe34d3abf15636779261d45a7450612059293d1d2cfc63422"
+dependencies = [
+ "bytemuck_derive",
+]
+
+[[package]]
+name = "bytemuck_derive"
+version = "1.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "441473f2b4b0459a68628c744bc61d23e730fb00128b841d30fa4bb3972257e4"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.104",
+]
 
 [[package]]
 name = "byteorder"
@@ -4623,6 +4637,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b15813163c1d831bf4a13c3610c05c0d03b39feb07f7e09fa234dac9b15aaf39"
 
 [[package]]
+name = "pack1"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d6e7cd9bd638dc2c831519a0caa1c006cab771a92b1303403a8322773c5b72d6"
+dependencies = [
+ "bytemuck",
+]
+
+[[package]]
 name = "parking"
 version = "2.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6412,6 +6435,7 @@ dependencies = [
  "clap",
  "deadpool-postgres",
  "futures",
+ "glob",
  "http-body-util",
  "hyper 1.6.0",
  "hyper-util",
@@ -6437,6 +6461,7 @@ dependencies = [
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
+ "turso",
  "url",
  "uuid",
 ]
@@ -7180,9 +7205,8 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
 name = "turso"
-version = "0.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ed88f59c72cdf2dc6f2a4417e3e5c56080573304e9ad62cac0c65f4332eb148d"
+version = "0.1.4-pre.1"
+source = "git+https://github.com/tursodatabase/turso.git?rev=43c1afe4b65bf662d1372f51b1e18304d6d26468#43c1afe4b65bf662d1372f51b1e18304d6d26468"
 dependencies = [
  "thiserror 2.0.12",
  "turso_core",
@@ -7190,12 +7214,12 @@ dependencies = [
 
 [[package]]
 name = "turso_core"
-version = "0.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "abdfbf86dcbe12ad33ad2ba91f174089215bc4373388a580bf9a2b40f7a31b87"
+version = "0.1.4-pre.1"
+source = "git+https://github.com/tursodatabase/turso.git?rev=43c1afe4b65bf662d1372f51b1e18304d6d26468#43c1afe4b65bf662d1372f51b1e18304d6d26468"
 dependencies = [
  "bitflags",
  "built",
+ "bytemuck",
  "cfg_block",
  "chrono",
  "crossbeam-skiplist",
@@ -7209,6 +7233,7 @@ dependencies = [
  "libm",
  "miette",
  "mimalloc",
+ "pack1",
  "parking_lot",
  "paste",
  "polling",
@@ -7231,9 +7256,8 @@ dependencies = [
 
 [[package]]
 name = "turso_ext"
-version = "0.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e0125dad369097c218efe3f44e0baf2b408bb6895823bfb7c1641bd411ff69b"
+version = "0.1.4-pre.1"
+source = "git+https://github.com/tursodatabase/turso.git?rev=43c1afe4b65bf662d1372f51b1e18304d6d26468#43c1afe4b65bf662d1372f51b1e18304d6d26468"
 dependencies = [
  "chrono",
  "getrandom 0.3.3",
@@ -7242,9 +7266,8 @@ dependencies = [
 
 [[package]]
 name = "turso_macros"
-version = "0.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "042b8ca3c726356dbdf0da230d3d55aea37c7baff199714b006f48cfeb70b871"
+version = "0.1.4-pre.1"
+source = "git+https://github.com/tursodatabase/turso.git?rev=43c1afe4b65bf662d1372f51b1e18304d6d26468#43c1afe4b65bf662d1372f51b1e18304d6d26468"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -7253,9 +7276,8 @@ dependencies = [
 
 [[package]]
 name = "turso_sqlite3_parser"
-version = "0.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e70ec087d3fb23daa8604f5200ffcc3d297927bea3de2b72772169c110377b3a"
+version = "0.1.4-pre.1"
+source = "git+https://github.com/tursodatabase/turso.git?rev=43c1afe4b65bf662d1372f51b1e18304d6d26468#43c1afe4b65bf662d1372f51b1e18304d6d26468"
 dependencies = [
  "bitflags",
  "cc",

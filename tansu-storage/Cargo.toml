@@ -1,6 +1,6 @@
 [package]
 name = "tansu-storage"
-description = "Storage abstraction for PostgreSQL and ObjectStore (S3 or memory)"
+description = "Storage abstraction for PostgreSQL, libSQL and ObjectStore (S3 or memory)"
 authors.workspace = true
 edition.workspace = true
 homepage.workspace = true
@@ -20,7 +20,7 @@ include = [
 ]
 
 [features]
-default = ["dynostore", "postgres"]
+default = ["dynostore", "libsql", "postgres"]
 dynostore = ["dep:object_store"]
 libsql = ["dep:libsql"]
 postgres = ["dep:tokio-postgres", "dep:deadpool", "dep:deadpool-postgres"]

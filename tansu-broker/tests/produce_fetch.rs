@@ -35,11 +35,11 @@ use uuid::Uuid;
 pub mod common;
 
 pub async fn simple_non_txn(
-    cluster_id: Uuid,
+    cluster_id: impl Into<String>,
     broker_id: i32,
     mut sc: StorageContainer,
 ) -> Result<()> {
-    register_broker(&cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, &mut sc).await?;
 
     let input_topic_name: String = alphanumeric_string(15);
     debug!(?input_topic_name);
@@ -154,8 +154,12 @@ pub async fn simple_non_txn(
     Ok(())
 }
 
-pub async fn with_txn(cluster_id: Uuid, broker_id: i32, mut sc: StorageContainer) -> Result<()> {
-    register_broker(&cluster_id, broker_id, &mut sc).await?;
+pub async fn with_txn(
+    cluster_id: impl Into<String>,
+    broker_id: i32,
+    mut sc: StorageContainer,
+) -> Result<()> {
+    register_broker(cluster_id, broker_id, &mut sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -381,11 +385,11 @@ pub async fn with_txn(cluster_id: Uuid, broker_id: i32, mut sc: StorageContainer
 }
 
 pub async fn with_multiple_txn(
-    cluster_id: Uuid,
+    cluster_id: impl Into<String>,
     broker_id: i32,
     mut sc: StorageContainer,
 ) -> Result<()> {
-    register_broker(&cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, &mut sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);

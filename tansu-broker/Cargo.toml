@@ -20,6 +20,7 @@ bytes.workspace = true
 clap.workspace = true
 deadpool-postgres = { workspace = true, optional = true }
 futures.workspace = true
+glob.workspace = true
 http-body-util.workspace = true
 hyper-util.workspace = true
 hyper.workspace = true
@@ -44,6 +45,7 @@ tokio.workspace = true
 tracing-opentelemetry.workspace = true
 tracing-subscriber.workspace = true
 tracing.workspace = true
+turso = { workspace = true, optional = true }
 url.workspace = true
 uuid.workspace = true
 
@@ -51,8 +53,8 @@ uuid.workspace = true
 pretty_assertions.workspace = true
 
 [features]
-default = ["dynostore", "postgres"]
+default = ["dynostore", "libsql", "postgres"]
 dynostore = ["dep:object_store"]
 libsql = ["dep:libsql"]
 postgres = ["dep:deadpool-postgres", "dep:tokio-postgres"]
-turso = []
+turso = ["dep:turso"]

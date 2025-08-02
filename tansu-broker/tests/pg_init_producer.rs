@@ -54,7 +54,7 @@ async fn with_txn() -> Result<()> {
     )
     .await?;
 
-    register_broker(&cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, &mut sc).await?;
 
     let transaction_id: String = alphanumeric_string(10);
     debug!(?transaction_id);

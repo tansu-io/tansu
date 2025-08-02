@@ -15,7 +15,7 @@ release: (cargo-build "--release" "--workspace" "--all-targets")
 test: test-workspace test-doc
 
 test-workspace:
-    cargo test --workspace --all-targets
+    cargo test --workspace --all-targets --all-features
 
 test-doc:
     cargo test --workspace --doc

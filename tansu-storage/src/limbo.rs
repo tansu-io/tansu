@@ -34,9 +34,6 @@ use crate::{
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::NaiveDateTime;
-use libsql::{
-    Connection, Database, Row, Transaction, TransactionBehavior, Value, params::IntoParams,
-};
 use opentelemetry::{
     KeyValue,
     metrics::{Counter, Histogram},
@@ -71,6 +68,10 @@ use tansu_schema::{
     lake::{House, LakeHouse as _},
 };
 use tracing::{debug, error};
+use turso::{
+    Connection, Database, Row, Value, params::IntoParams, transaction::Transaction,
+    transaction::TransactionBehavior,
+};
 use url::Url;
 use uuid::Uuid;
 
@@ -114,11 +115,43 @@ impl TryFrom<Row> for Txn {
     type Error = Error;
 
     fn try_from(row: Row) -> Result<Self, Self::Error> {
-        let name = row.get::<String>(0).inspect_err(|err| error!(?err))?;
-        let producer_id = row.get::<i64>(1).inspect_err(|err| error!(?err))?;
-        let producer_epoch = row.get::<i32>(2).inspect_err(|err| error!(?err))? as i16;
+        let name = row
+            .get_value(0)
+            .map_err(Into::into)
+            .and_then(|value| {
+                value
+                    .as_text()
+                    .cloned()
+                    .ok_or(Error::UnexpectedValue(value))
+            })
+            .inspect_err(|err| error!(?err))?;
+
+        let producer_id = row
+            .get_value(1)
+            .map_err(Into::into)
+            .and_then(|value| {
+                value
+                    .as_integer()
+                    .copied()
+                    .ok_or(Error::UnexpectedValue(value))
+            })
+            .inspect_err(|err| error!(?err))?;
+
+        let producer_epoch = row
+            .get_value(2)
+            .map_err(Into::into)
+            .and_then(|value| {
+                value
+                    .as_integer()
+                    .copied()
+                    .map(|value| value as i16)
+                    .ok_or(Error::UnexpectedValue(value))
+            })
+            .inspect_err(|err| error!(?err))?;
+
         let status = row
-            .get::<Option<String>>(3)
+            .get_value(3)
+            .map(|value| value.as_text().cloned())
             .map_err(Into::into)
             .and_then(|status| status.map_or(Ok(TxnState::Begin), TxnState::try_from))
             .inspect_err(|err| error!(?err))?;
@@ -132,7 +165,7 @@ impl TryFrom<Row> for Txn {
     }
 }
 
-/// LibSQL/SQLite storage engine
+/// Turso storage engine
 ///
 #[derive(Clone, Debug)]
 pub struct Engine {
@@ -153,17 +186,11 @@ impl Engine {
     }
 
     async fn connection(&self) -> Result<Connection> {
-        let connection = {
-            let db = self.db.lock()?;
-            db.connect()
-        }?;
-        self.prepare_execute(&connection, "PRAGMA foreign_keys = ON", ())
-            .await
-            .and(Ok(connection))
-            .map_err(Into::into)
+        let db = self.db.lock()?;
+        db.connect().map_err(Into::into)
     }
 
-    fn attributes_for_error(&self, sql: &str, error: &libsql::Error) -> Vec<KeyValue> {
+    fn attributes_for_error(&self, sql: &str, error: &turso::Error) -> Vec<KeyValue> {
         debug!(sql, ?error);
 
         let mut attributes = vec![
@@ -171,9 +198,8 @@ impl Engine {
             KeyValue::new("cluster_id", self.cluster.clone()),
         ];
 
-        if let libsql::Error::SqliteFailure(code, _) = error {
-            attributes.push(KeyValue::new("code", format!("{code}")));
-        }
+        debug!(?error);
+        todo!();
 
         attributes
     }
@@ -183,7 +209,7 @@ impl Engine {
         connection: &Connection,
         sql: &str,
         params: P,
-    ) -> result::Result<usize, libsql::Error>
+    ) -> result::Result<u64, turso::Error>
     where
         P: IntoParams,
         P: Debug,
@@ -228,7 +254,7 @@ impl Engine {
         connection: &Connection,
         sql: &str,
         params: P,
-    ) -> result::Result<Option<Row>, libsql::Error>
+    ) -> result::Result<Option<Row>, turso::Error>
     where
         P: IntoParams,
         P: Debug,
@@ -269,7 +295,7 @@ impl Engine {
         connection: &Connection,
         sql: &str,
         params: P,
-    ) -> result::Result<Row, libsql::Error>
+    ) -> result::Result<Row, turso::Error>
     where
         P: IntoParams,
         P: Debug,
@@ -283,14 +309,10 @@ impl Engine {
 
         let execute_start = SystemTime::now();
 
-        let mut rows = statement
-            .query(params)
-            .await
-            .inspect(|rows| debug!(?rows))
-            .inspect_err(|err| {
-                error!(?err, sql);
-                SQL_ERROR.add(1, &self.attributes_for_error(sql, err)[..]);
-            })?;
+        let mut rows = statement.query(params).await.inspect_err(|err| {
+            error!(?err, sql);
+            SQL_ERROR.add(1, &self.attributes_for_error(sql, err)[..]);
+        })?;
 
         if let Some(row) = rows
             .next()
@@ -339,9 +361,16 @@ impl Engine {
 
         if let Some(row) = rows.next().await.inspect_err(|err| error!(?err))? {
             let current_epoch = row
-                .get::<i32>(0)
-                .inspect_err(|err| error!(self.cluster, deflated.producer_id, ?err))?
-                as i16;
+                .get_value(0)
+                .inspect_err(|err| error!(self.cluster, deflated.producer_id, ?err))
+                .map_err(Into::into)
+                .and_then(|value| {
+                    value
+                        .as_integer()
+                        .copied()
+                        .map(|value| value as i16)
+                        .ok_or(Error::UnexpectedValue(value))
+                })?;
 
             let row = self
                 .prepare_query_one(
@@ -366,7 +395,17 @@ impl Engine {
                     )
                 })?;
 
-            let sequence = row.get::<i32>(0).inspect_err(|err| error!(?err))?;
+            let sequence = row
+                .get_value(0)
+                .inspect_err(|err| error!(self.cluster, deflated.producer_id, ?err))
+                .map_err(Into::into)
+                .and_then(|value| {
+                    value
+                        .as_integer()
+                        .copied()
+                        .map(|value| value as i32)
+                        .ok_or(Error::UnexpectedValue(value))
+                })?;
 
             debug!(
                 self.cluster,
@@ -428,20 +467,24 @@ impl Engine {
             .inspect_err(|err| error!(?err, cluster = ?self.cluster, ?topition))?
         {
             Ok((
-                row.get::<Option<i64>>(0).inspect_err(|err| error!(?err))?,
-                row.get::<Option<i64>>(1).inspect_err(|err| error!(?err))?,
+                row.get_value(0)
+                    .map(|value| value.as_integer().copied())
+                    .inspect_err(|err| error!(?err))?,
+                row.get_value(1)
+                    .map(|value| value.as_integer().copied())
+                    .inspect_err(|err| error!(?err))?,
             ))
         } else {
             Err(Error::Api(ErrorCode::UnknownTopicOrPartition))
         }
     }
 
-    async fn produce_in_tx(
+    async fn produce_in_tx<'conn>(
         &self,
         transaction_id: Option<&str>,
         topition: &Topition,
         deflated: deflated::Batch,
-        tx: &Transaction,
+        tx: &Transaction<'conn>,
     ) -> Result<i64> {
         debug!(cluster = ?self.cluster, ?transaction_id, ?topition, ?deflated);
 
@@ -449,7 +492,7 @@ impl Engine {
         let partition = topition.partition();
 
         if deflated.is_idempotent() {
-            self.idempotent_message_check(transaction_id, topition, &deflated, tx)
+            self.idempotent_message_check(transaction_id, topition, &deflated, tx.deref())
                 .await
                 .inspect_err(|err| error!(?err))?;
         }
@@ -595,19 +638,20 @@ impl Engine {
         Ok(high.unwrap_or_default())
     }
 
-    async fn end_in_tx(
+    async fn end_in_tx<'conn>(
         &mut self,
         transaction_id: &str,
         producer_id: i64,
         producer_epoch: i16,
         committed: bool,
-        tx: &Transaction,
+        tx: &Transaction<'conn>,
     ) -> Result<ErrorCode> {
         debug!(cluster = ?self.cluster, ?transaction_id, ?producer_id, ?producer_epoch, ?committed);
 
         let mut overlaps = vec![];
 
         let mut rows = tx
+            .deref()
             .query(
                 &sql_lookup("txn_select_produced_topitions.sql")?,
                 (
@@ -620,8 +664,19 @@ impl Engine {
             .await?;
 
         while let Some(row) = rows.next().await? {
-            let topic = row.get::<String>(0)?;
-            let partition = row.get::<i32>(1)?;
+            let topic = row.get_value(0).map_err(Into::into).and_then(|value| {
+                value
+                    .as_text()
+                    .cloned()
+                    .ok_or(Error::UnexpectedValue(value))
+            })?;
+
+            let partition = row.get_value(1).map_err(Into::into).and_then(|value| {
+                value
+                    .as_integer()
+                    .map(|i| *i as i32)
+                    .ok_or(Error::UnexpectedValue(value))
+            })?;
 
             let topition = Topition::new(topic.clone(), partition);
 
@@ -674,8 +729,20 @@ impl Engine {
                 .await?;
 
             if let Some(row) = rows.next().await? {
-                let offset_start = row.get::<i64>(0)?;
-                let offset_end = row.get::<i64>(1)?;
+                let offset_start = row.get_value(0).map_err(Into::into).and_then(|value| {
+                    value
+                        .as_integer()
+                        .copied()
+                        .ok_or(Error::UnexpectedValue(value))
+                })?;
+
+                let offset_end = row.get_value(1).map_err(Into::into).and_then(|value| {
+                    value
+                        .as_integer()
+                        .copied()
+                        .ok_or(Error::UnexpectedValue(value))
+                })?;
+
                 debug!(offset_start, offset_end);
 
                 let mut rows = tx
@@ -996,7 +1063,9 @@ impl Builder<String, i32, Url, Url> {
 
         debug!(?path);
 
-        let db = libsql::Builder::new_local(path).build().await?;
+        let db = turso::Builder::new_local(path.to_str().unwrap())
+            .build()
+            .await?;
 
         let connection = db.connect()?;
 
@@ -1019,19 +1088,22 @@ impl Builder<String, i32, Url, Url> {
     }
 }
 
-fn unique_constraint(error_code: ErrorCode) -> impl Fn(libsql::Error) -> Error {
+fn unique_constraint(error_code: ErrorCode) -> impl Fn(turso::Error) -> Error {
+    let _ = error_code;
     move |err| {
-        if let libsql::Error::SqliteFailure(code, ref reason) = err {
-            debug!(code, reason);
+        let _ = err;
+        todo!()
+        // if let turso::Error::SqliteFailure(code, ref reason) = err {
+        //     debug!(code, reason);
 
-            if code == 2067 {
-                Error::Api(error_code)
-            } else {
-                err.into()
-            }
-        } else {
-            err.into()
-        }
+        //     if code == 2067 {
+        //         Error::Api(error_code)
+        //     } else {
+        //         err.into()
+        //     }
+        // } else {
+        //     err.into()
+        // }
     }
 }
 
@@ -1048,7 +1120,7 @@ impl Storage for Engine {
         self.prepare_execute(
             &connection,
             &sql_lookup("register_broker.sql")?,
-            &[broker_registration.cluster_id.as_str()],
+            &[broker_registration.cluster_id],
         )
         .await
         .map_err(Into::into)
@@ -1079,7 +1151,7 @@ impl Storage for Engine {
     async fn create_topic(&mut self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {
         debug!(cluster = self.cluster, ?topic, validate_only);
 
-        let connection = self.connection().await.inspect_err(|err| error!(?err))?;
+        let mut connection = self.connection().await.inspect_err(|err| error!(?err))?;
 
         let tx = connection.transaction().await?;
 
@@ -1100,7 +1172,8 @@ impl Storage for Engine {
                 .map_err(unique_constraint(ErrorCode::TopicAlreadyExists))
                 .inspect(|row| debug!(?parameters, ?row))
                 .and_then(|row| {
-                    row.get::<String>(0)
+                    row.get_value(0)
+                        .map(|value| value.as_text().cloned().unwrap())
                         .inspect_err(|err| error!(?err))
                         .map_err(Into::into)
                 })
@@ -1159,7 +1232,7 @@ impl Storage for Engine {
     async fn delete_topic(&mut self, topic: &TopicId) -> Result<ErrorCode> {
         debug!(cluster = self.cluster, ?topic);
 
-        let connection = self.connection().await?;
+        let mut connection = self.connection().await?;
         let tx = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .await?;
@@ -1186,7 +1259,11 @@ impl Storage for Engine {
             return Ok(ErrorCode::UnknownTopicOrPartition);
         };
 
-        let topic_name = row.get_str(1)?;
+        let value = row.get_value(1)?;
+        let topic_name = value
+            .as_text()
+            .map(|topic_name| topic_name.as_str())
+            .ok_or(Error::UnexpectedValue(value.clone()))?;
 
         for sql in [
             "consumer_offset_delete_by_topic.sql",
@@ -1318,7 +1395,7 @@ impl Storage for Engine {
     ) -> Result<i64> {
         debug!(cluster = self.cluster, transaction_id, ?topition, ?deflated);
 
-        let connection = self.connection().await?;
+        let mut connection = self.connection().await?;
         let tx = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .await?;
@@ -1385,14 +1462,14 @@ impl Storage for Engine {
                     .offset_delta(offset_delta)
                     .timestamp_delta(timestamp_delta)
                     .key(
-                        row.get::<Option<Vec<u8>>>(3)
-                            .map(|o| o.map(Bytes::from))
+                        row.get_value(3)
+                            .map(|o| o.as_blob().map(|blob| Bytes::copy_from_slice(blob)))
                             .inspect(|k| debug!(?k))
                             .inspect_err(|err| error!(?err))?,
                     )
                     .value(
-                        row.get::<Option<Vec<u8>>>(4)
-                            .map(|o| o.map(Bytes::from))
+                        row.get_value(4)
+                            .map(|o| o.as_blob().map(|blob| Bytes::copy_from_slice(blob)))
                             .inspect(|v| debug!(?v))
                             .inspect_err(|err| error!(?err))?,
                     );
@@ -1413,14 +1490,16 @@ impl Storage for Engine {
                     let mut header_builder = Header::builder();
 
                     if let Some(k) = header
-                        .get::<Option<Vec<u8>>>(0)
+                        .get_value(0)
+                        .map(|value| value.as_blob().cloned())
                         .inspect_err(|err| error!(?err))?
                     {
                         header_builder = header_builder.key(Bytes::from(k));
                     }
 
                     if let Some(v) = header
-                        .get::<Option<Vec<u8>>>(1)
+                        .get_value(1)
+                        .map(|value| value.as_blob().cloned())
                         .inspect_err(|err| error!(?err))?
                     {
                         header_builder = header_builder.value(Bytes::from(v));
@@ -1434,12 +1513,25 @@ impl Storage for Engine {
 
             let mut batch_builder = inflated::Batch::builder()
                 .base_offset(
-                    row.get::<i64>(0)
+                    row.get_value(0)
+                        .map_err(Into::into)
+                        .and_then(|value| {
+                            value
+                                .as_integer()
+                                .copied()
+                                .ok_or(Error::UnexpectedValue(value))
+                        })
                         .inspect(|base_offset| debug!(base_offset))
                         .inspect_err(|err| error!(?err))?,
                 )
                 .attributes(
-                    row.get::<Option<i32>>(1)
+                    row.get_value(1)
+                        .map(|value| {
+                            value
+                                .as_integer()
+                                .copied()
+                                .map(|attributes| attributes as i32)
+                        })
                         .map(|attributes| attributes.unwrap_or(0))
                         .inspect_err(|err| error!(?err))? as i16,
                 )
@@ -1451,12 +1543,19 @@ impl Storage for Engine {
                         .inspect_err(|err| error!(?err))?,
                 )
                 .producer_id(
-                    row.get::<Option<i64>>(6)
+                    row.get_value(6)
+                        .map(|value| value.as_integer().copied())
                         .map(|producer_id| producer_id.unwrap_or(-1))
                         .inspect_err(|err| error!(?err))?,
                 )
                 .producer_epoch(
-                    row.get::<Option<i32>>(7)
+                    row.get_value(7)
+                        .map(|value| {
+                            value
+                                .as_integer()
+                                .copied()
+                                .map(|producer_epoch| producer_epoch as i32)
+                        })
                         .map(|producer_epoch| producer_epoch.unwrap_or(-1))
                         .inspect_err(|err| error!(?err))? as i16,
                 )
@@ -1465,18 +1564,32 @@ impl Storage for Engine {
 
             while let Some(row) = records.next().await? {
                 let attributes = row
-                    .get::<Option<i32>>(1)
+                    .get_value(1)
+                    .map(|value| {
+                        value
+                            .as_integer()
+                            .copied()
+                            .map(|attributes| attributes as i16)
+                    })
                     .map(|attributes| attributes.unwrap_or(0))
-                    .inspect_err(|err| error!(?err))? as i16;
+                    .inspect_err(|err| error!(?err))?;
 
                 let producer_id = row
-                    .get::<Option<i64>>(6)
+                    .get_value(6)
+                    .map(|value| value.as_integer().copied())
                     .map(|producer_id| producer_id.unwrap_or(-1))
                     .inspect_err(|err| error!(?err))?;
+
                 let producer_epoch = row
-                    .get::<Option<i32>>(7)
+                    .get_value(7)
+                    .map(|value| {
+                        value
+                            .as_integer()
+                            .copied()
+                            .map(|producer_epoch| producer_epoch as i16)
+                    })
                     .map(|producer_epoch| producer_epoch.unwrap_or(-1))
-                    .inspect_err(|err| error!(?err))? as i16;
+                    .inspect_err(|err| error!(?err))?;
 
                 if batch_builder.attributes != attributes
                     || batch_builder.producer_id != producer_id
@@ -1486,7 +1599,14 @@ impl Storage for Engine {
 
                     batch_builder = inflated::Batch::builder()
                         .base_offset(
-                            row.get::<i64>(0)
+                            row.get_value(0)
+                                .map_err(Into::into)
+                                .and_then(|value| {
+                                    value
+                                        .as_integer()
+                                        .copied()
+                                        .ok_or(Error::UnexpectedValue(value))
+                                })
                                 .inspect(|base_offset| debug!(base_offset))
                                 .inspect_err(|err| error!(?err))?,
                         )
@@ -1505,9 +1625,17 @@ impl Storage for Engine {
                 }
 
                 let offset = row
-                    .get::<i64>(0)
+                    .get_value(0)
+                    .map_err(Into::into)
+                    .and_then(|value| {
+                        value
+                            .as_integer()
+                            .copied()
+                            .ok_or(Error::UnexpectedValue(value))
+                    })
                     .inspect(|offset| debug!(offset))
                     .inspect_err(|err| error!(?err))?;
+
                 let offset_delta = i32::try_from(offset - batch_builder.base_offset)?;
 
                 let timestamp_delta = row
@@ -1527,14 +1655,16 @@ impl Storage for Engine {
                         .offset_delta(offset_delta)
                         .timestamp_delta(timestamp_delta)
                         .key(
-                            row.get::<Option<Vec<u8>>>(3)
-                                .map(|o| o.map(Bytes::from))
+                            row.get_value(3)
+                                .map(|value| value.as_blob().cloned())
+                                .map(|o| o.map(|blob| Bytes::from(blob)))
                                 .inspect(|k| debug!(?k))
                                 .inspect_err(|err| error!(?err))?,
                         )
                         .value(
-                            row.get::<Option<Vec<u8>>>(4)
-                                .map(|o| o.map(Bytes::from))
+                            row.get_value(4)
+                                .map(|value| value.as_blob().cloned())
+                                .map(|o| o.map(|blob| Bytes::from(blob)))
                                 .inspect(|v| debug!(?v))
                                 .inspect_err(|err| error!(?err))?,
                         );
@@ -1555,14 +1685,18 @@ impl Storage for Engine {
                         let mut header_builder = Header::builder();
 
                         if let Some(k) = header
-                            .get::<Option<Vec<u8>>>(0)
+                            .get_value(0)
+                            .map(|value| value.as_blob().cloned())
+                            .map(|o| o.map(|blob| Bytes::from(blob)))
                             .inspect_err(|err| error!(?err))?
                         {
                             header_builder = header_builder.key(Bytes::from(k));
                         }
 
                         if let Some(v) = header
-                            .get::<Option<Vec<u8>>>(1)
+                            .get_value(1)
+                            .map(|value| value.as_blob().cloned())
+                            .map(|o| o.map(|blob| Bytes::from(blob)))
                             .inspect_err(|err| error!(?err))?
                         {
                             header_builder = header_builder.value(Bytes::from(v));
@@ -1609,17 +1743,20 @@ impl Storage for Engine {
             .inspect_err(|err| error!(?topition, ?err))?;
 
         let log_start = row
-            .get::<Option<i64>>(0)
+            .get_value(0)
+            .map(|value| value.as_integer().copied())
             .inspect_err(|err| error!(?topition, ?err))?
             .unwrap_or_default();
 
         let high_watermark = row
-            .get::<Option<i64>>(1)
+            .get_value(1)
+            .map(|value| value.as_integer().copied())
             .inspect_err(|err| error!(?topition, ?err))?
             .unwrap_or_default();
 
         let last_stable = row
-            .get::<Option<i64>>(1)
+            .get_value(1)
+            .map(|value| value.as_integer().copied())
             .inspect_err(|err| error!(?topition, ?err))?
             .unwrap_or(high_watermark);
 
@@ -1639,7 +1776,7 @@ impl Storage for Engine {
         offsets: &[(Topition, OffsetCommitRequest)],
     ) -> Result<Vec<(Topition, ErrorCode)>> {
         debug!(cluster = self.cluster, ?group, ?retention, ?offsets);
-        let c = self.connection().await?;
+        let mut c = self.connection().await?;
         let tx = c.transaction().await?;
 
         let mut cg_inserted = false;
@@ -1731,9 +1868,27 @@ impl Storage for Engine {
             .await?;
 
         while let Some(row) = rows.next().await? {
-            let topic = row.get_str(0)?;
-            let partition = row.get::<i32>(1)?;
-            let offset = row.get::<i64>(2)?;
+            let topic = row.get_value(0).map_err(Into::into).and_then(|value| {
+                value
+                    .as_text()
+                    .cloned()
+                    .ok_or(Error::UnexpectedValue(value))
+            })?;
+
+            let partition = row.get_value(1).map_err(Into::into).and_then(|value| {
+                value
+                    .as_integer()
+                    .copied()
+                    .map(|partition| partition as i32)
+                    .ok_or(Error::UnexpectedValue(value))
+            })?;
+
+            let offset = row.get_value(2).map_err(Into::into).and_then(|value| {
+                value
+                    .as_integer()
+                    .copied()
+                    .ok_or(Error::UnexpectedValue(value))
+            })?;
 
             debug!(group_id, topic, partition, offset);
 
@@ -1782,7 +1937,14 @@ impl Storage for Engine {
             let offset = rows
                 .next()
                 .await
-                .and_then(|maybe| maybe.map_or(Ok(-1), |row| row.get::<i64>(0)))
+                .and_then(|row| {
+                    row.and_then(|row| {
+                        row.get_value(0)
+                            .map(|value| value.as_integer().copied())
+                            .transpose()
+                    })
+                    .unwrap_or(Ok(-1))
+                })
                 .inspect(|offset| {
                     debug!(
                         cluster = self.cluster,
@@ -1887,9 +2049,9 @@ impl Storage for Engine {
                 |row| {
                     debug!(?row);
 
-                    row.get::<i64>(0)
+                    row.get_value(0)
                         .map_err(Into::into)
-                        .map(Some)
+                        .map(|value| value.as_integer().copied())
                         .and_then(|offset| {
                             row.get_value(1)
                                 .map_err(Into::into)
@@ -1958,16 +2120,50 @@ impl Storage for Engine {
                             match rows.next().await.inspect_err(|err| error!(?err)) {
                                 Ok(Some(row)) => {
                                     let error_code = ErrorCode::None.into();
-                                    let topic_id = row
-                                        .get_str(0)
-                                        .map_err(Error::from)
-                                        .and_then(|str| Uuid::parse_str(str).map_err(Into::into))
-                                        .map(|uuid| uuid.into_bytes())
-                                        .map(Some)?;
-                                    let name = row.get::<String>(1).map(Some)?;
-                                    let is_internal = row.get::<bool>(2).map(Some)?;
-                                    let partitions = row.get::<i32>(3)?;
-                                    let replication_factor = row.get::<i32>(4)?;
+
+                                    let topic_id = row.get_value(0).map_err(Error::from).and_then(
+                                        |value| {
+                                            value
+                                                .as_text()
+                                                .map(|value| {
+                                                    Uuid::parse_str(value)
+                                                        .map(|uuid| uuid.into_bytes())
+                                                        .map_err(Into::into)
+                                                })
+                                                .transpose()
+                                        },
+                                    )?;
+
+                                    let name =
+                                        row.get_value(1).map(|value| value.as_text().cloned())?;
+
+                                    let is_internal =
+                                        row.get_value(2).map_err(Into::into).and_then(|value| {
+                                            value
+                                                .as_integer()
+                                                .map(|i| match i {
+                                                    &0 => Ok(false),
+                                                    &1 => Ok(true),
+                                                    _ => Err(Error::UnexpectedValue(value.clone())),
+                                                })
+                                                .transpose()
+                                        })?;
+
+                                    let partitions =
+                                        row.get_value(3).map_err(Into::into).and_then(|value| {
+                                            value
+                                                .as_integer()
+                                                .map(|i| *i as i32)
+                                                .ok_or(Error::UnexpectedValue(value))
+                                        })?;
+
+                                    let replication_factor =
+                                        row.get_value(4).map_err(Into::into).and_then(|value| {
+                                            value
+                                                .as_integer()
+                                                .map(|i| *i as i32)
+                                                .ok_or(Error::UnexpectedValue(value))
+                                        })?;
 
                                     debug!(
                                         ?error_code,
@@ -2052,16 +2248,49 @@ impl Storage for Engine {
                             match rows.next().await {
                                 Ok(Some(row)) => {
                                     let error_code = ErrorCode::None.into();
-                                    let topic_id = row
-                                        .get_str(0)
-                                        .map_err(Error::from)
-                                        .and_then(|str| Uuid::parse_str(str).map_err(Into::into))
-                                        .map(|uuid| uuid.into_bytes())
-                                        .map(Some)?;
-                                    let name = row.get::<String>(1).map(Some)?;
-                                    let is_internal = row.get::<bool>(2).map(Some)?;
-                                    let partitions = row.get::<i32>(3)?;
-                                    let replication_factor = row.get::<i32>(4)?;
+                                    let topic_id = row.get_value(0).map_err(Error::from).and_then(
+                                        |value| {
+                                            value
+                                                .as_text()
+                                                .map(|value| {
+                                                    Uuid::parse_str(value)
+                                                        .map(|uuid| uuid.into_bytes())
+                                                        .map_err(Into::into)
+                                                })
+                                                .transpose()
+                                        },
+                                    )?;
+
+                                    let name =
+                                        row.get_value(1).map(|value| value.as_text().cloned())?;
+
+                                    let is_internal =
+                                        row.get_value(2).map_err(Into::into).and_then(|value| {
+                                            value
+                                                .as_integer()
+                                                .map(|i| match i {
+                                                    &0 => Ok(false),
+                                                    &1 => Ok(true),
+                                                    _ => Err(Error::UnexpectedValue(value.clone())),
+                                                })
+                                                .transpose()
+                                        })?;
+
+                                    let partitions =
+                                        row.get_value(3).map_err(Into::into).and_then(|value| {
+                                            value
+                                                .as_integer()
+                                                .map(|i| *i as i32)
+                                                .ok_or(Error::UnexpectedValue(value))
+                                        })?;
+
+                                    let replication_factor =
+                                        row.get_value(4).map_err(Into::into).and_then(|value| {
+                                            value
+                                                .as_integer()
+                                                .map(|i| *i as i32)
+                                                .ok_or(Error::UnexpectedValue(value))
+                                        })?;
 
                                     debug!(
                                         ?error_code,
@@ -2150,16 +2379,44 @@ impl Storage for Engine {
 
                 while let Some(row) = rows.next().await? {
                     let error_code = ErrorCode::None.into();
-                    let topic_id = row
-                        .get_str(0)
-                        .map_err(Error::from)
-                        .and_then(|str| Uuid::parse_str(str).map_err(Into::into))
-                        .map(|uuid| uuid.into_bytes())
-                        .map(Some)?;
-                    let name = row.get::<String>(1).map(Some)?;
-                    let is_internal = row.get::<bool>(2).map(Some)?;
-                    let partitions = row.get::<i32>(3)?;
-                    let replication_factor = row.get::<i32>(4)?;
+                    let topic_id = row.get_value(0).map_err(Error::from).and_then(|value| {
+                        value
+                            .as_text()
+                            .map(|value| {
+                                Uuid::parse_str(value)
+                                    .map(|uuid| uuid.into_bytes())
+                                    .map_err(Into::into)
+                            })
+                            .transpose()
+                    })?;
+
+                    let name = row.get_value(1).map(|value| value.as_text().cloned())?;
+
+                    let is_internal = row.get_value(2).map_err(Into::into).and_then(|value| {
+                        value
+                            .as_integer()
+                            .map(|i| match i {
+                                &0 => Ok(false),
+                                &1 => Ok(true),
+                                _ => Err(Error::UnexpectedValue(value.clone())),
+                            })
+                            .transpose()
+                    })?;
+
+                    let partitions = row.get_value(3).map_err(Into::into).and_then(|value| {
+                        value
+                            .as_integer()
+                            .map(|i| *i as i32)
+                            .ok_or(Error::UnexpectedValue(value))
+                    })?;
+
+                    let replication_factor =
+                        row.get_value(4).map_err(Into::into).and_then(|value| {
+                            value
+                                .as_integer()
+                                .map(|i| *i as i32)
+                                .ok_or(Error::UnexpectedValue(value))
+                        })?;
 
                     debug!(
                         ?error_code,
@@ -2252,16 +2509,25 @@ impl Storage for Engine {
             let mut configs = vec![];
 
             while let Some(row) = rows.next().await? {
-                let name = row.get_str(0).inspect_err(|err| error!(?err))?;
+                let name = row
+                    .get_value(0)
+                    .map_err(Into::into)
+                    .and_then(|value| {
+                        value
+                            .as_text()
+                            .cloned()
+                            .ok_or(Error::UnexpectedValue(value))
+                    })
+                    .inspect_err(|err| error!(?err))?;
+
                 let value = row
-                    .get::<Option<String>>(1)
-                    .map(|value| value.unwrap_or_default())
-                    .map(Some)
+                    .get_value(1)
+                    .map(|value| value.as_text().cloned())
                     .inspect_err(|err| error!(?err))?;
 
                 configs.push(
                     DescribeConfigsResourceResult::default()
-                        .name(name.to_owned())
+                        .name(name)
                         .value(value)
                         .read_only(false)
                         .is_default(None)
@@ -2318,15 +2584,47 @@ impl Storage for Engine {
                         .inspect_err(|err| error!(?err))
                     {
                         Ok(Some(row)) => {
-                            let topic_id = row
-                                .get_str(0)
-                                .map_err(Error::from)
-                                .and_then(|str| Uuid::parse_str(str).map_err(Into::into))
-                                .map(|uuid| uuid.into_bytes())?;
-                            let name = row.get::<String>(1).map(Some)?;
-                            let is_internal = row.get::<bool>(2).map(Some)?;
-                            let partitions = row.get::<i32>(3)?;
-                            let replication_factor = row.get::<i32>(4)?;
+                            let topic_id =
+                                row.get_value(0).map_err(Error::from).and_then(|value| {
+                                    value.as_text().map_or(
+                                        Err(Error::UnexpectedValue(value.clone())),
+                                        |value| {
+                                            Uuid::parse_str(value)
+                                                .map(|uuid| uuid.into_bytes())
+                                                .map_err(Into::into)
+                                        },
+                                    )
+                                })?;
+
+                            let name = row.get_value(1).map(|value| value.as_text().cloned())?;
+
+                            let is_internal =
+                                row.get_value(2).map_err(Into::into).and_then(|value| {
+                                    value
+                                        .as_integer()
+                                        .map(|i| match i {
+                                            &0 => Ok(false),
+                                            &1 => Ok(true),
+                                            _ => Err(Error::UnexpectedValue(value.clone())),
+                                        })
+                                        .transpose()
+                                })?;
+
+                            let partitions =
+                                row.get_value(3).map_err(Into::into).and_then(|value| {
+                                    value
+                                        .as_integer()
+                                        .map(|i| *i as i32)
+                                        .ok_or(Error::UnexpectedValue(value))
+                                })?;
+
+                            let replication_factor =
+                                row.get_value(4).map_err(Into::into).and_then(|value| {
+                                    value
+                                        .as_integer()
+                                        .map(|i| *i as i32)
+                                        .ok_or(Error::UnexpectedValue(value))
+                                })?;
 
                             debug!(
                                 ?topic_id,
@@ -2410,15 +2708,47 @@ impl Storage for Engine {
                         .await
                     {
                         Ok(row) => {
-                            let topic_id = row
-                                .get_str(0)
-                                .map_err(Error::from)
-                                .and_then(|str| Uuid::parse_str(str).map_err(Into::into))
-                                .map(|uuid| uuid.into_bytes())?;
-                            let name = row.get::<String>(1).map(Some)?;
-                            let is_internal = row.get::<bool>(2).map(Some)?;
-                            let partitions = row.get::<i32>(3)?;
-                            let replication_factor = row.get::<i32>(4)?;
+                            let topic_id =
+                                row.get_value(0).map_err(Error::from).and_then(|value| {
+                                    value.as_text().map_or(
+                                        Err(Error::UnexpectedValue(value.clone())),
+                                        |value| {
+                                            Uuid::parse_str(value)
+                                                .map(|uuid| uuid.into_bytes())
+                                                .map_err(Into::into)
+                                        },
+                                    )
+                                })?;
+
+                            let name = row.get_value(1).map(|value| value.as_text().cloned())?;
+
+                            let is_internal =
+                                row.get_value(2).map_err(Into::into).and_then(|value| {
+                                    value
+                                        .as_integer()
+                                        .map(|i| match i {
+                                            &0 => Ok(false),
+                                            &1 => Ok(true),
+                                            _ => Err(Error::UnexpectedValue(value.clone())),
+                                        })
+                                        .transpose()
+                                })?;
+
+                            let partitions =
+                                row.get_value(3).map_err(Into::into).and_then(|value| {
+                                    value
+                                        .as_integer()
+                                        .map(|i| *i as i32)
+                                        .ok_or(Error::UnexpectedValue(value))
+                                })?;
+
+                            let replication_factor =
+                                row.get_value(4).map_err(Into::into).and_then(|value| {
+                                    value
+                                        .as_integer()
+                                        .map(|i| *i as i32)
+                                        .ok_or(Error::UnexpectedValue(value))
+                                })?;
 
                             debug!(
                                 ?topic_id,
@@ -2497,11 +2827,16 @@ impl Storage for Engine {
             .await?;
 
         while let Some(row) = rows.next().await? {
-            let group_id = row.get_str(0)?;
+            let group_id = row.get_value(0).map_err(Into::into).and_then(|value| {
+                value
+                    .as_text()
+                    .cloned()
+                    .ok_or(Error::UnexpectedValue(value.clone()))
+            })?;
 
             listed_groups.push(
                 ListedGroup::default()
-                    .group_id(group_id.to_owned())
+                    .group_id(group_id)
                     .protocol_type("consumer".into())
                     .group_state(Some("unknown".into()))
                     .group_type(None),
@@ -2592,8 +2927,14 @@ impl Storage for Engine {
                     .inspect_err(|err| error!(?err, group_id))?
                 {
                     let value = row
-                        .get_str(1)
+                        .get_value(1)
                         .map_err(Error::from)
+                        .and_then(|value| {
+                            value
+                                .as_text()
+                                .cloned()
+                                .ok_or(Error::UnexpectedValue(value.clone()))
+                        })
                         .map(serde_json::Value::from)
                         .inspect_err(|err| error!(?err, group_id))?;
 
@@ -2622,7 +2963,7 @@ impl Storage for Engine {
         debug!(cluster = self.cluster, group_id, ?detail, ?version);
         debug!(cluster = self.cluster, group_id, ?detail, ?version);
 
-        let c = self.connection().await?;
+        let mut c = self.connection().await?;
         let tx = c.transaction().await?;
 
         _ = self
@@ -2667,9 +3008,14 @@ impl Storage for Engine {
             .inspect(|row| debug!(?row))
             .inspect_err(|err| error!(?err))?
         {
-            row.get_str(2)
+            row.get_value(2)
                 .map_err(Error::from)
-                .and_then(|str| Uuid::parse_str(str).map_err(Into::into))
+                .and_then(|value| {
+                    value
+                        .as_text()
+                        .ok_or(Error::UnexpectedValue(value.clone()))
+                        .and_then(|str| Uuid::parse_str(str).map_err(Into::into))
+                })
                 .inspect_err(|err| error!(?err))
                 .map_err(Into::into)
                 .map(|uuid| uuid.to_string())
@@ -2691,9 +3037,14 @@ impl Storage for Engine {
                 .inspect_err(|err| error!(?err))?;
 
             let version = row
-                .get_str(0)
+                .get_value(0)
                 .map_err(Error::from)
-                .and_then(|str| Uuid::parse_str(str).map_err(Into::into))
+                .and_then(|value| {
+                    value
+                        .as_text()
+                        .ok_or(Error::UnexpectedValue(value.clone()))
+                        .and_then(|str| Uuid::parse_str(str).map_err(Into::into))
+                })
                 .inspect_err(|err| error!(?err))
                 .map(|uuid| uuid.to_string())
                 .map(Some)
@@ -2703,7 +3054,14 @@ impl Storage for Engine {
                 })
                 .inspect(|version| debug!(?version))?;
 
-            let value = row.get_str(1).map(serde_json::Value::from)?;
+            let value = row.get_value(1).map_err(Error::from).and_then(|value| {
+                value
+                    .as_text()
+                    .map(|v| v.as_str())
+                    .ok_or(Error::UnexpectedValue(value.clone()))
+                    .map(serde_json::Value::from)
+            })?;
+
             let current =
                 serde_json::from_value::<GroupDetail>(value).inspect(|current| debug!(?current))?;
 
@@ -2730,7 +3088,7 @@ impl Storage for Engine {
         );
         match (producer_id, producer_epoch, transaction_id) {
             (Some(-1), Some(-1), Some(transaction_id)) => {
-                let c = self.connection().await.inspect_err(|err| error!(?err))?;
+                let mut c = self.connection().await.inspect_err(|err| error!(?err))?;
                 let tx = c.transaction().await.inspect_err(|err| error!(?err))?;
 
                 if let Some(row) = self
@@ -2742,14 +3100,35 @@ impl Storage for Engine {
                     .await
                     .inspect_err(|err| error!(?err))?
                 {
-                    let id = row.get::<i64>(0).inspect_err(|err| error!(?err))?;
-                    let epoch = row.get::<i32>(1).inspect_err(|err| error!(?err))? as i16;
+                    let id = row
+                        .get_value(0)
+                        .map_err(Into::into)
+                        .and_then(|value| {
+                            value
+                                .as_integer()
+                                .copied()
+                                .ok_or(Error::UnexpectedValue(value))
+                        })
+                        .inspect_err(|err| error!(?err))?;
+                    let epoch = row
+                        .get_value(1)
+                        .map_err(Into::into)
+                        .and_then(|value| {
+                            value
+                                .as_integer()
+                                .map(|i| *i as i16)
+                                .ok_or(Error::UnexpectedValue(value))
+                        })
+                        .inspect_err(|err| error!(?err))?;
                     let status = row
-                        .get::<Option<String>>(2)
-                        .inspect_err(|err| error!(?err))?
-                        .map_or(Ok(None), |status| {
-                            TxnState::from_str(status.as_str()).map(Some)
-                        })?;
+                        .get_value(2)
+                        .map_err(Error::from)
+                        .and_then(|value| {
+                            value.as_text().map_or(Ok(None), |status| {
+                                TxnState::from_str(status.as_str()).map(Some)
+                            })
+                        })
+                        .inspect_err(|err| error!(?err))?;
 
                     debug!(transaction_id, id, epoch, ?status);
 
@@ -2778,8 +3157,15 @@ impl Storage for Engine {
                     .await
                     .inspect_err(|err| error!(?err))?
                 {
-                    let producer: i64 = row
-                        .get(0)
+                    let producer = row
+                        .get_value(0)
+                        .map_err(Into::into)
+                        .and_then(|value| {
+                            value
+                                .as_integer()
+                                .cloned()
+                                .ok_or(Error::UnexpectedValue(value.clone()))
+                        })
                         .inspect_err(|err| error!(?err))
                         .inspect(|producer| debug!(producer))?;
 
@@ -2793,7 +3179,14 @@ impl Storage for Engine {
                         .inspect_err(|err| error!(self.cluster, producer, ?err))?;
 
                     let epoch = row
-                        .get::<i32>(0)
+                        .get_value(0)
+                        .map_err(Into::into)
+                        .and_then(|value| {
+                            value
+                                .as_integer()
+                                .map(|i| *i as i16)
+                                .ok_or(Error::UnexpectedValue(value.clone()))
+                        })
                         .inspect(|epoch| debug!(epoch))
                         .inspect_err(|err| error!(?err))? as i16;
 
@@ -2808,7 +3201,16 @@ impl Storage for Engine {
                         .await
                         .inspect_err(|err| error!(?err))?;
 
-                    let producer: i64 = row.get(0).inspect_err(|err| error!(?err))?;
+                    let producer = row
+                        .get_value(0)
+                        .map_err(Into::into)
+                        .and_then(|value| {
+                            value
+                                .as_integer()
+                                .copied()
+                                .ok_or(Error::UnexpectedValue(value))
+                        })
+                        .inspect_err(|err| error!(?err))?;
 
                     let row = self
                         .prepare_query_one(
@@ -2819,7 +3221,12 @@ impl Storage for Engine {
                         .await
                         .inspect_err(|err| error!(self.cluster, producer, ?err))?;
 
-                    let epoch = row.get::<i32>(0)? as i16;
+                    let epoch = row.get_value(0).map_err(Into::into).and_then(|value| {
+                        value
+                            .as_integer()
+                            .map(|i| *i as i16)
+                            .ok_or(Error::UnexpectedValue(value))
+                    })?;
 
                     assert_eq!(
                         1,
@@ -2887,12 +3294,10 @@ impl Storage for Engine {
             }
 
             (Some(-1), Some(-1), None) => {
-                let connection = self.connection().await.inspect_err(|err| error!(?err))?;
-                // let tx = connection
-                //     .transaction_with_behavior(TransactionBehavior::Immediate)
-                //     .await?;
-
-                let tx = connection.transaction().await?;
+                let mut connection = self.connection().await.inspect_err(|err| error!(?err))?;
+                let tx = connection
+                    .transaction_with_behavior(TransactionBehavior::Immediate)
+                    .await?;
 
                 let mut rows = tx
                     .query(
@@ -2902,7 +3307,16 @@ impl Storage for Engine {
                     .await?;
 
                 if let Some(row) = rows.next().await? {
-                    let producer = row.get::<i64>(0).inspect(|producer| debug!(producer))?;
+                    let producer = row
+                        .get_value(0)
+                        .map_err(Into::into)
+                        .and_then(|value| {
+                            value
+                                .as_integer()
+                                .copied()
+                                .ok_or(Error::UnexpectedValue(value))
+                        })
+                        .inspect(|producer| debug!(producer))?;
 
                     while let Some(row) = rows.next().await? {
                         debug!(?row)
@@ -2917,8 +3331,14 @@ impl Storage for Engine {
 
                     if let Some(row) = rows.next().await? {
                         let epoch = row
-                            .get::<i32>(0)
-                            .map(|epoch| epoch as i16)
+                            .get_value(0)
+                            .map_err(Into::into)
+                            .and_then(|value| {
+                                value
+                                    .as_integer()
+                                    .map(|i| *i as i16)
+                                    .ok_or(Error::UnexpectedValue(value))
+                            })
                             .inspect(|epoch| debug!(epoch))?;
 
                         while let Some(row) = rows.next().await? {
@@ -2992,7 +3412,7 @@ impl Storage for Engine {
             } => {
                 debug!(?transaction_id, ?producer_id, ?producer_epoch, ?topics);
 
-                let c = self.connection().await.inspect_err(|err| error!(?err))?;
+                let mut c = self.connection().await.inspect_err(|err| error!(?err))?;
                 let tx = c.transaction().await.inspect_err(|err| error!(?err))?;
 
                 let mut results = vec![];
@@ -3078,7 +3498,7 @@ impl Storage for Engine {
     ) -> Result<Vec<TxnOffsetCommitResponseTopic>> {
         debug!(cluster = self.cluster, ?offsets);
 
-        let c = self.connection().await.inspect_err(|err| error!(?err))?;
+        let mut c = self.connection().await.inspect_err(|err| error!(?err))?;
         let tx = c.transaction().await.inspect_err(|err| error!(?err))?;
 
         let (producer_id, producer_epoch) = if let Some(row) = self
@@ -3091,14 +3511,13 @@ impl Storage for Engine {
             .inspect_err(|err| error!(?err))?
         {
             let producer_id = row
-                .get::<i64>(0)
-                .map(Some)
+                .get_value(0)
+                .map(|value| value.as_integer().copied())
                 .inspect_err(|err| error!(?err))?;
 
             let epoch = row
-                .get::<i32>(1)
-                .map(|epoch| epoch as i16)
-                .map(Some)
+                .get_value(1)
+                .map(|value| value.as_integer().map(|i| *i as i16))
                 .inspect_err(|err| error!(?err))?;
 
             (producer_id, epoch)
@@ -3205,7 +3624,7 @@ impl Storage for Engine {
     ) -> Result<ErrorCode> {
         debug!(cluster = ?self.cluster, transaction_id, producer_id, producer_epoch, committed);
 
-        let c = self.connection().await.inspect_err(|err| error!(?err))?;
+        let mut c = self.connection().await.inspect_err(|err| error!(?err))?;
         let tx = c.transaction().await.inspect_err(|err| error!(?err))?;
 
         let error_code = self
@@ -3579,7 +3998,9 @@ mod tests {
         let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
         let file_path = temp_dir.path().join("tansu.db");
 
-        let db = libsql::Builder::new_local(file_path).build().await?;
+        let db = turso::Builder::new_local(file_path.to_str().unwrap())
+            .build()
+            .await?;
         let connection = db.connect()?;
 
         assert_eq!(
