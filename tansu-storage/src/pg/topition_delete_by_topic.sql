@@ -14,8 +14,10 @@
 -- limitations under the License.
 
 delete from topition
-using cluster c, topic t
-where c.name = $1
-and t.name = $2
-and t.cluster = c.id
-and topition.topic = t.id;
+where topition.topic in (
+    select t.id
+    from cluster c
+    join topic t on t.cluster = c.id
+    where c.name = $1
+    and t.name = $2
+);

@@ -12,17 +12,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[cfg(feature = "postgres")]
 use common::{StorageType, alphanumeric_string, init_tracing, register_broker, storage_container};
+
+#[cfg(feature = "postgres")]
 use rand::{prelude::*, rng};
+
+#[cfg(feature = "postgres")]
 use tansu_broker::Result;
+
+#[cfg(feature = "postgres")]
 use tansu_storage::Storage;
+
+#[cfg(feature = "postgres")]
 use tracing::debug;
+
+#[cfg(feature = "postgres")]
 use url::Url;
+
+#[cfg(feature = "postgres")]
 use uuid::Uuid;
 
 mod common;
 
 #[tokio::test]
+#[cfg(feature = "postgres")]
 async fn with_txn() -> Result<()> {
     let _guard = init_tracing()?;
 
@@ -30,19 +44,17 @@ async fn with_txn() -> Result<()> {
 
     let cluster_id = Uuid::now_v7();
     let broker_id = rng.random_range(0..i32::MAX);
-    let mut sc = Url::parse("tcp://127.0.0.1/")
-        .map_err(Into::into)
-        .and_then(|advertised_listener| {
-            storage_container(
-                StorageType::Postgres,
-                cluster_id,
-                broker_id,
-                advertised_listener,
-                None,
-            )
-        })?;
 
-    register_broker(&cluster_id, broker_id, &mut sc).await?;
+    let mut sc = storage_container(
+        StorageType::Postgres,
+        cluster_id,
+        broker_id,
+        Url::parse("tcp://127.0.0.1/")?,
+        None,
+    )
+    .await?;
+
+    register_broker(cluster_id, broker_id, &mut sc).await?;
 
     let transaction_id: String = alphanumeric_string(10);
     debug!(?transaction_id);

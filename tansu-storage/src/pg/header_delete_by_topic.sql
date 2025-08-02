@@ -14,11 +14,24 @@
 -- limitations under the License.
 
 delete from header
-using cluster c, record r, topic t, topition tp
-where c.name = $1
-and t.name = $2
-and t.cluster = c.id
-and tp.topic = t.id
-and r.topition = tp.id
-and header.topition = r.topition
-and header.offset_id = r.offset_id;
+where header.topition in (
+    select r.topition
+    from cluster c
+    join topic t on t.cluster = c.id
+    join topition tp on tp.topic = t.id
+    join record r on r.topition = tp.id
+    where c.name = $1
+    and t.name = $2
+)
+
+and
+
+header.offset_id in (
+    select r.offset_id
+    from cluster c
+    join topic t on t.cluster = c.id
+    join topition tp on tp.topic = t.id
+    join record r on r.topition = tp.id
+    where c.name = $1
+    and t.name = $2
+);
