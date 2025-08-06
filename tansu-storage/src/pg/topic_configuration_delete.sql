@@ -14,9 +14,17 @@
 -- limitations under the License.
 
 delete from topic_configuration
-using cluster c, topic t
-where c.name = $1
-and t.name = $2
-and t.cluster = c.id
-and topic_configuration.topic = t.id
+where
+
+topic_configuration.topic in (
+    select t.id
+    from cluster c
+    join topic t on t.cluster = c.id
+
+    where
+
+    c.name = $1
+    and t.name = $2
+)
+
 and topic_configuration.name = $3;

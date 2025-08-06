@@ -33,7 +33,7 @@ c.name = $1
 and txn.name = $2
 and p.id = $3
 and pe.epoch = $4
-and txn_detail.transaction = txn.id
+and txn_detail."transaction" = txn.id
 and txn_detail.producer_epoch = pe.id
 and txn_detail.started_at is null
 and txn_detail.status is null;

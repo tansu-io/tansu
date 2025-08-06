@@ -14,7 +14,16 @@
 -- limitations under the License.
 
 delete from consumer_group_detail
-using cluster c, consumer_group cg
-where c.name = $1
-and cg.name = $2
-and cg.cluster = c.id;
+where consumer_group_detail.consumer_group in (
+    select cg.id
+
+    from
+
+    cluster c
+    join consumer_group cg on cg.cluster = c.id
+
+    where
+
+    c.name = $1
+    and cg.name = $2
+);

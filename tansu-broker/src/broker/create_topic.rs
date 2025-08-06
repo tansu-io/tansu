@@ -114,9 +114,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use object_store::memory::InMemory;
     use tansu_sans_io::NULL_TOPIC_ID;
-    use tansu_storage::dynostore::DynoStore;
+    use tansu_storage::StorageContainer;
+    use url::Url;
 
     use super::*;
 
@@ -125,7 +125,14 @@ mod tests {
         let cluster = "abc";
         let node = 12321;
 
-        let storage = DynoStore::new(cluster, node, InMemory::new());
+        let storage = StorageContainer::builder()
+            .cluster_id(cluster)
+            .node_id(node)
+            .advertised_listener(Url::parse("tcp://localhost:9092")?)
+            .schema_registry(None)
+            .storage(Url::parse("memory://")?)
+            .build()
+            .await?;
 
         let mut create_topic = CreateTopic::with_storage(storage);
 
@@ -165,7 +172,14 @@ mod tests {
         let cluster = "abc";
         let node = 12321;
 
-        let storage = DynoStore::new(cluster, node, InMemory::new());
+        let storage = StorageContainer::builder()
+            .cluster_id(cluster)
+            .node_id(node)
+            .advertised_listener(Url::parse("tcp://localhost:9092")?)
+            .schema_registry(None)
+            .storage(Url::parse("memory://")?)
+            .build()
+            .await?;
 
         let mut create_topic = CreateTopic::with_storage(storage);
 
@@ -205,7 +219,14 @@ mod tests {
         let cluster = "abc";
         let node = 12321;
 
-        let storage = DynoStore::new(cluster, node, InMemory::new());
+        let storage = StorageContainer::builder()
+            .cluster_id(cluster)
+            .node_id(node)
+            .advertised_listener(Url::parse("tcp://localhost:9092")?)
+            .schema_registry(None)
+            .storage(Url::parse("memory://")?)
+            .build()
+            .await?;
 
         let mut create_topic = CreateTopic::with_storage(storage);
 

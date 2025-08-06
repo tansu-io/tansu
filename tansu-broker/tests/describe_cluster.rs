@@ -24,17 +24,21 @@ use uuid::Uuid;
 
 pub mod common;
 
-pub async fn describe(
-    cluster_id: Uuid,
+pub async fn describe<C>(
+    cluster_id: C,
     broker_id: i32,
     advertised_listener: Url,
     mut sc: StorageContainer,
-) -> Result<()> {
-    debug!(%cluster_id, broker_id, %advertised_listener);
-    register_broker(&cluster_id, broker_id, &mut sc).await?;
+) -> Result<()>
+where
+    C: Into<String>,
+    C: Clone,
+{
+    debug!(broker_id, %advertised_listener);
+    register_broker(cluster_id.clone(), broker_id, &mut sc).await?;
 
     let mut dc = DescribeClusterRequest {
-        cluster_id: cluster_id.to_string(),
+        cluster_id: cluster_id.into(),
         storage: sc,
     };
 
@@ -71,13 +75,14 @@ pub async fn describe(
     Ok(())
 }
 
+#[cfg(feature = "postgres")]
 mod pg {
     use common::{StorageType, init_tracing};
     use rand::{prelude::*, rng};
 
     use super::*;
 
-    fn storage_container(
+    async fn storage_container(
         cluster: impl Into<String>,
         node: i32,
         advertised_listener: Url,
@@ -89,6 +94,7 @@ mod pg {
             advertised_listener,
             None,
         )
+        .await
     }
 
     #[tokio::test]
@@ -103,7 +109,7 @@ mod pg {
             cluster,
             node,
             advertised_listener.clone(),
-            storage_container(cluster, node, advertised_listener)?,
+            storage_container(cluster, node, advertised_listener).await?,
         )
         .await
     }
@@ -115,7 +121,7 @@ mod in_memory {
 
     use super::*;
 
-    fn storage_container(
+    async fn storage_container(
         cluster: impl Into<String>,
         node: i32,
         advertised_listener: Url,
@@ -127,6 +133,7 @@ mod in_memory {
             advertised_listener,
             None,
         )
+        .await
     }
 
     #[tokio::test]
@@ -141,7 +148,40 @@ mod in_memory {
             cluster,
             node,
             advertised_listener.clone(),
-            storage_container(cluster, node, advertised_listener)?,
+            storage_container(cluster, node, advertised_listener).await?,
+        )
+        .await
+    }
+}
+
+#[cfg(feature = "libsql")]
+mod lite {
+    use common::{StorageType, init_tracing};
+    use rand::{prelude::*, rng};
+
+    use super::*;
+
+    async fn storage_container(
+        cluster: impl Into<String>,
+        node: i32,
+        advertised_listener: Url,
+    ) -> Result<StorageContainer> {
+        common::storage_container(StorageType::Lite, cluster, node, advertised_listener, None).await
+    }
+
+    #[tokio::test]
+    async fn describe() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster = Uuid::now_v7();
+        let node = rng().random_range(0..i32::MAX);
+        let advertised_listener = Url::parse("tcp://example.com:9092/")?;
+
+        super::describe(
+            cluster,
+            node,
+            advertised_listener.clone(),
+            storage_container(cluster, node, advertised_listener).await?,
         )
         .await
     }

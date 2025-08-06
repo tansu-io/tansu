@@ -1,4 +1,3 @@
--- -*- mode: sql; sql-product: postgres; -*-
 -- Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 --
 -- Licensed under the Apache License, Version 2.0 (the "License");
@@ -13,15 +12,11 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-select b.node, l.host, l.port, b.rack
-
-from
-
-cluster c
-join broker b on b.cluster = c.id
-join listener l on l.broker = b.id
-
-where
-
-c.name = $1
-and l.name = 'broker';
+create table if not exists header (
+    topition integer,
+    offset_id integer,
+    k blob,
+    v blob,
+    last_updated text default current_timestamp not null,
+    created_at text default current_timestamp not null
+);

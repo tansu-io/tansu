@@ -23,13 +23,13 @@ use uuid::Uuid;
 pub mod common;
 
 pub async fn topics_none(
-    cluster_id: Uuid,
+    cluster_id: impl Into<String>,
     broker_id: i32,
     advertised_listener: Url,
     mut sc: StorageContainer,
 ) -> Result<()> {
-    debug!(%cluster_id, broker_id, %advertised_listener);
-    register_broker(&cluster_id, broker_id, &mut sc).await?;
+    debug!(broker_id, %advertised_listener);
+    register_broker(cluster_id, broker_id, &mut sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -132,13 +132,13 @@ pub async fn topics_none(
 }
 
 pub async fn topics_some_empty(
-    cluster_id: Uuid,
+    cluster_id: impl Into<String>,
     broker_id: i32,
     advertised_listener: Url,
     mut sc: StorageContainer,
 ) -> Result<()> {
-    debug!(%cluster_id, broker_id, %advertised_listener);
-    register_broker(&cluster_id, broker_id, &mut sc).await?;
+    debug!(broker_id, %advertised_listener);
+    register_broker(cluster_id, broker_id, &mut sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -241,13 +241,13 @@ pub async fn topics_some_empty(
 }
 
 pub async fn topics_some_matching_by_name(
-    cluster_id: Uuid,
+    cluster_id: impl Into<String>,
     broker_id: i32,
     advertised_listener: Url,
     mut sc: StorageContainer,
 ) -> Result<()> {
-    debug!(%cluster_id, broker_id, %advertised_listener);
-    register_broker(&cluster_id, broker_id, &mut sc).await?;
+    debug!(broker_id, %advertised_listener);
+    register_broker(cluster_id, broker_id, &mut sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -350,13 +350,13 @@ pub async fn topics_some_matching_by_name(
 }
 
 pub async fn topics_some_not_matching_by_name(
-    cluster_id: Uuid,
+    cluster_id: impl Into<String>,
     broker_id: i32,
     advertised_listener: Url,
     mut sc: StorageContainer,
 ) -> Result<()> {
-    debug!(%cluster_id, broker_id, %advertised_listener);
-    register_broker(&cluster_id, broker_id, &mut sc).await?;
+    debug!(broker_id, %advertised_listener);
+    register_broker(cluster_id, broker_id, &mut sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -389,13 +389,13 @@ pub async fn topics_some_not_matching_by_name(
 }
 
 pub async fn topics_some_matching_by_id(
-    cluster_id: Uuid,
+    cluster_id: impl Into<String>,
     broker_id: i32,
     advertised_listener: Url,
     mut sc: StorageContainer,
 ) -> Result<()> {
-    debug!(%cluster_id, broker_id, %advertised_listener);
-    register_broker(&cluster_id, broker_id, &mut sc).await?;
+    debug!(broker_id, %advertised_listener);
+    register_broker(cluster_id, broker_id, &mut sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -498,13 +498,13 @@ pub async fn topics_some_matching_by_id(
 }
 
 pub async fn topics_some_not_matching_by_id(
-    cluster_id: Uuid,
+    cluster_id: impl Into<String>,
     broker_id: i32,
     advertised_listener: Url,
     mut sc: StorageContainer,
 ) -> Result<()> {
-    debug!(%cluster_id, broker_id, %advertised_listener);
-    register_broker(&cluster_id, broker_id, &mut sc).await?;
+    debug!(broker_id, %advertised_listener);
+    register_broker(cluster_id, broker_id, &mut sc).await?;
 
     let id = Uuid::new_v4();
 
@@ -535,13 +535,14 @@ pub async fn topics_some_not_matching_by_id(
     Ok(())
 }
 
+#[cfg(feature = "postgres")]
 mod pg {
     use common::{StorageType, init_tracing};
     use rand::{prelude::*, rng};
 
     use super::*;
 
-    fn storage_container(
+    async fn storage_container(
         cluster: impl Into<String>,
         node: i32,
         advertised_listener: Url,
@@ -553,6 +554,7 @@ mod pg {
             advertised_listener,
             None,
         )
+        .await
     }
 
     #[tokio::test]
@@ -567,7 +569,7 @@ mod pg {
             cluster,
             node,
             advertised_listener.clone(),
-            storage_container(cluster, node, advertised_listener)?,
+            storage_container(cluster, node, advertised_listener).await?,
         )
         .await
     }
@@ -584,7 +586,7 @@ mod pg {
             cluster,
             node,
             advertised_listener.clone(),
-            storage_container(cluster, node, advertised_listener)?,
+            storage_container(cluster, node, advertised_listener).await?,
         )
         .await
     }
@@ -601,7 +603,7 @@ mod pg {
             cluster,
             node,
             advertised_listener.clone(),
-            storage_container(cluster, node, advertised_listener)?,
+            storage_container(cluster, node, advertised_listener).await?,
         )
         .await
     }
@@ -618,7 +620,7 @@ mod pg {
             cluster,
             node,
             advertised_listener.clone(),
-            storage_container(cluster, node, advertised_listener)?,
+            storage_container(cluster, node, advertised_listener).await?,
         )
         .await
     }
@@ -635,7 +637,7 @@ mod pg {
             cluster,
             node,
             advertised_listener.clone(),
-            storage_container(cluster, node, advertised_listener)?,
+            storage_container(cluster, node, advertised_listener).await?,
         )
         .await
     }
@@ -652,7 +654,7 @@ mod pg {
             cluster,
             node,
             advertised_listener.clone(),
-            storage_container(cluster, node, advertised_listener)?,
+            storage_container(cluster, node, advertised_listener).await?,
         )
         .await
     }
@@ -664,7 +666,7 @@ mod in_memory {
 
     use super::*;
 
-    fn storage_container(
+    async fn storage_container(
         cluster: impl Into<String>,
         node: i32,
         advertised_listener: Url,
@@ -676,6 +678,7 @@ mod in_memory {
             advertised_listener,
             None,
         )
+        .await
     }
 
     #[tokio::test]
@@ -690,7 +693,7 @@ mod in_memory {
             cluster,
             node,
             advertised_listener.clone(),
-            storage_container(cluster, node, advertised_listener)?,
+            storage_container(cluster, node, advertised_listener).await?,
         )
         .await
     }
@@ -707,7 +710,7 @@ mod in_memory {
             cluster,
             node,
             advertised_listener.clone(),
-            storage_container(cluster, node, advertised_listener)?,
+            storage_container(cluster, node, advertised_listener).await?,
         )
         .await
     }
@@ -724,7 +727,7 @@ mod in_memory {
             cluster,
             node,
             advertised_listener.clone(),
-            storage_container(cluster, node, advertised_listener)?,
+            storage_container(cluster, node, advertised_listener).await?,
         )
         .await
     }
@@ -741,7 +744,7 @@ mod in_memory {
             cluster,
             node,
             advertised_listener.clone(),
-            storage_container(cluster, node, advertised_listener)?,
+            storage_container(cluster, node, advertised_listener).await?,
         )
         .await
     }
@@ -758,7 +761,7 @@ mod in_memory {
             cluster,
             node,
             advertised_listener.clone(),
-            storage_container(cluster, node, advertised_listener)?,
+            storage_container(cluster, node, advertised_listener).await?,
         )
         .await
     }
@@ -775,7 +778,125 @@ mod in_memory {
             cluster,
             node,
             advertised_listener.clone(),
-            storage_container(cluster, node, advertised_listener)?,
+            storage_container(cluster, node, advertised_listener).await?,
+        )
+        .await
+    }
+}
+
+#[cfg(feature = "libsql")]
+mod lite {
+    use common::{StorageType, init_tracing};
+    use rand::{prelude::*, rng};
+
+    use super::*;
+
+    async fn storage_container(
+        cluster: impl Into<String>,
+        node: i32,
+        advertised_listener: Url,
+    ) -> Result<StorageContainer> {
+        common::storage_container(StorageType::Lite, cluster, node, advertised_listener, None).await
+    }
+
+    #[tokio::test]
+    async fn topics_none() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster = Uuid::now_v7();
+        let node = rng().random_range(0..i32::MAX);
+        let advertised_listener = Url::parse("tcp://example.com:9092/")?;
+
+        super::topics_none(
+            cluster,
+            node,
+            advertised_listener.clone(),
+            storage_container(cluster, node, advertised_listener).await?,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn topics_some_empty() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster = Uuid::now_v7();
+        let node = rng().random_range(0..i32::MAX);
+        let advertised_listener = Url::parse("tcp://example.com:9092/")?;
+
+        super::topics_some_empty(
+            cluster,
+            node,
+            advertised_listener.clone(),
+            storage_container(cluster, node, advertised_listener).await?,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn topics_some_matching_by_name() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster = Uuid::now_v7();
+        let node = rng().random_range(0..i32::MAX);
+        let advertised_listener = Url::parse("tcp://example.com:9092/")?;
+
+        super::topics_some_matching_by_name(
+            cluster,
+            node,
+            advertised_listener.clone(),
+            storage_container(cluster, node, advertised_listener).await?,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn topics_some_not_matching_by_name() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster = Uuid::now_v7();
+        let node = rng().random_range(0..i32::MAX);
+        let advertised_listener = Url::parse("tcp://example.com:9092/")?;
+
+        super::topics_some_not_matching_by_name(
+            cluster,
+            node,
+            advertised_listener.clone(),
+            storage_container(cluster, node, advertised_listener).await?,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn topics_some_matching_by_id() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster = Uuid::now_v7();
+        let node = rng().random_range(0..i32::MAX);
+        let advertised_listener = Url::parse("tcp://example.com:9092/")?;
+
+        super::topics_some_matching_by_id(
+            cluster,
+            node,
+            advertised_listener.clone(),
+            storage_container(cluster, node, advertised_listener).await?,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn topics_some_not_matching_by_id() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster = Uuid::now_v7();
+        let node = rng().random_range(0..i32::MAX);
+        let advertised_listener = Url::parse("tcp://example.com:9092/")?;
+
+        super::topics_some_not_matching_by_id(
+            cluster,
+            node,
+            advertised_listener.clone(),
+            storage_container(cluster, node, advertised_listener).await?,
         )
         .await
     }

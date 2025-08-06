@@ -38,4 +38,4 @@ and txn_detail.epoch = $4
 and p.cluster = c.id
 and txn.cluster = c.id
 and txn.producer = p.id
-and txn_detail.transaction = txn.id;
+and txn_detail."transaction" = txn.id;
