@@ -20,7 +20,7 @@ use async_trait::async_trait;
 use opentelemetry::{KeyValue, metrics::Histogram};
 use std::{fmt::Debug, marker::PhantomData, sync::LazyLock, time::SystemTime};
 use tansu_sans_io::describe_configs_response::DescribeConfigsResult;
-use tracing::debug;
+use tracing::{debug, warn};
 use url::Url;
 
 pub mod berg;
@@ -158,14 +158,18 @@ impl LakeHouse for House {
             ?partition,
             ?offset,
             rows = record_batch.num_rows(),
-            columns = record_batch.num_columns()
+            columns = record_batch.num_columns(),
+            ?record_batch
         );
 
         let start = SystemTime::now();
 
         let config = Config::from(configs.clone());
 
-        let record_batch = if config.is_normalized() {
+        let record_batch = if LakeHouseType::from(self).is_iceberg() & config.is_normalized() {
+            warn!(iceberg_normalized = config.is_normalized());
+            record_batch
+        } else if config.is_normalized() {
             record_batch.normalize(config.normalize_separator(), None)?
         } else {
             record_batch
