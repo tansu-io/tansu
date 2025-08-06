@@ -19,4 +19,4 @@ create table if not exists producer (
     cluster int references cluster (id) not null,
     last_updated text default current_timestamp not null,
     created_at text default current_timestamp not null
-) strict;
+);

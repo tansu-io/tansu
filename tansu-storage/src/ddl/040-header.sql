@@ -19,4 +19,4 @@ create table if not exists header (
     v blob,
     last_updated text default current_timestamp not null,
     created_at text default current_timestamp not null
-) strict;
+);

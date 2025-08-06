@@ -14,7 +14,7 @@
 
 create table if not exists txn_detail (
     id integer primary key autoincrement,
-    txn integer references txn (id),
+    "transaction" integer references txn (id),
     producer_epoch integer references producer_epoch (id),
     transaction_timeout_ms integer not null,
     -- AddPartitionsToTxnRequest:
@@ -26,5 +26,5 @@ create table if not exists txn_detail (
     status text,
     last_updated text default current_timestamp not null,
     created_at text default current_timestamp not null,
-    unique (txn, producer_epoch)
-) strict;
+    unique ("transaction", producer_epoch)
+);

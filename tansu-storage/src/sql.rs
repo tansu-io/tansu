@@ -62,10 +62,6 @@ macro_rules! include_sql {
 pub(crate) static SQL: LazyLock<Cache> = LazyLock::new(|| {
     let mapping = [
         (
-            "broker_metadata_select.sql",
-            include_sql!("pg/broker_metadata_select.sql"),
-        ),
-        (
             "consumer_group_delete.sql",
             include_sql!("pg/consumer_group_delete.sql"),
         ),
@@ -123,10 +119,6 @@ pub(crate) static SQL: LazyLock<Cache> = LazyLock::new(|| {
         ),
         ("header_fetch.sql", include_sql!("pg/header_fetch.sql")),
         ("header_insert.sql", include_sql!("pg/header_insert.sql")),
-        (
-            "init_txn_producer.sql",
-            include_sql!("pg/init_txn_producer.sql"),
-        ),
         (
             "list_earliest_offset.sql",
             include_sql!("pg/list_earliest_offset.sql"),

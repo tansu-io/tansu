@@ -23,4 +23,4 @@ create table if not exists consumer_offset (
     last_updated text default current_timestamp not null,
     created_at text default current_timestamp not null,
     unique (consumer_group, topition)
-) strict;
+);

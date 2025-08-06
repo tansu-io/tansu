@@ -3316,9 +3316,15 @@ impl Storage for Engine {
                                 .copied()
                                 .ok_or(Error::UnexpectedValue(value))
                         })
-                        .inspect(|producer| debug!(producer))?;
+                        .inspect(|producer| debug!(producer))
+                        .inspect_err(|err| error!(?err))?;
 
-                    while let Some(row) = rows.next().await? {
+                    while let Some(row) = rows
+                        .next()
+                        .await
+                        .inspect(|row| debug!(?row))
+                        .inspect_err(|err| error!(?err))?
+                    {
                         debug!(?row)
                     }
 
@@ -3327,7 +3333,8 @@ impl Storage for Engine {
                             &sql_lookup("producer_epoch_insert.sql")?,
                             (self.cluster.as_str(), producer),
                         )
-                        .await?;
+                        .await
+                        .inspect_err(|err| error!(?err, cluster = self.cluster, producer))?;
 
                     if let Some(row) = rows.next().await? {
                         let epoch = row

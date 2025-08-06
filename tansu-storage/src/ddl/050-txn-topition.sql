@@ -21,4 +21,4 @@ create table if not exists txn_topition (
     last_updated text default current_timestamp not null,
     created_at text default current_timestamp not null,
     unique (txn_detail, topition)
-) strict;
+);

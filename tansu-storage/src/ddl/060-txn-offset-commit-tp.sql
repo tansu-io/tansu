@@ -22,4 +22,4 @@ create table if not exists txn_offset_commit_tp (
     last_updated text default current_timestamp not null,
     created_at text default current_timestamp not null,
     unique (offset_commit, topition)
-) strict;
+);

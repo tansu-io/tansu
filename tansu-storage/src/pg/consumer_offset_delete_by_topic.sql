@@ -22,13 +22,4 @@ consumer_offset.topition in (
     join topic t on t.cluster = c.id
     join topition tp on tp.topic = t.id
     where c.name = $1 and t.name = $2
-)
-
-and
-
-consumer_offset.consumer_group in (
-    select cg.id
-    from cluster c
-    join consumer_group cg on cg.cluster = c.id
-    where c.name = $1
 );

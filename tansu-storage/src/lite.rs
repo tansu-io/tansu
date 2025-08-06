@@ -3282,9 +3282,14 @@ impl TryFrom<Value> for LiteTimestamp {
 
 #[cfg(test)]
 mod tests {
+    use std::thread;
+
     use tempfile::tempdir;
+    use tokio::fs::remove_file;
     use tracing::subscriber::DefaultGuard;
     use tracing_subscriber::EnvFilter;
+
+    use crate::{StorageContainer, sql::SQL};
 
     use super::*;
 
@@ -3761,6 +3766,92 @@ mod tests {
             .create_topic(creatable_topic, false)
             .await
             .inspect(|uuid| debug!(?uuid))?;
+
+        Ok(())
+    }
+
+    async fn clean_up() -> Result<()> {
+        let relative = db_path().map(|path| format!("{path}*"))?;
+
+        let mut path = env::current_dir()?;
+        path.push(relative);
+        debug!(?path);
+
+        if let Some(pattern) = path.to_str() {
+            debug!(pattern);
+
+            let paths = glob::glob(pattern)?;
+
+            for path in paths {
+                if let Ok(path) = path {
+                    debug!(?path);
+
+                    remove_file(path).await?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn storage_container(cluster: &str, node: i32) -> Result<StorageContainer> {
+        StorageContainer::builder()
+            .cluster_id(cluster)
+            .node_id(node)
+            .advertised_listener(Url::parse("tcp://127.0.0.1:9092")?)
+            .schema_registry(None)
+            .storage(
+                db_path()
+                    .map(|path| format!("sqlite://{path}"))
+                    .inspect(|url| debug!(url))
+                    .and_then(|url| Url::parse(&url).map_err(Into::into))?,
+            )
+            .build()
+            .await
+    }
+
+    fn db_path() -> Result<String> {
+        thread::current()
+            .name()
+            .ok_or(Error::Message(String::from("unnamed thread")))
+            .map(|name| {
+                format!(
+                    "../logs/{}/{}::{name}.db",
+                    env!("CARGO_PKG_NAME"),
+                    env!("CARGO_CRATE_NAME")
+                )
+            })
+    }
+
+    #[ignore]
+    #[tokio::test]
+    async fn sql_parse() -> Result<()> {
+        let _guard = init_tracing()?;
+        clean_up().await?;
+
+        let cluster = "tansu";
+        let node = 12321;
+
+        {
+            // use the storage container just to create tables
+            //
+            storage_container(cluster, node).await.and(Ok(()))?;
+        }
+
+        let db = libsql::Builder::new_local(db_path()?).build().await?;
+        let connection = db.connect()?;
+
+        for k in SQL.keys() {
+            debug!(k);
+
+            let sql = sql_lookup(k)?;
+
+            connection
+                .prepare(&sql)
+                .await
+                .inspect_err(|err| error!(?err, k, sql))
+                .and(Ok(()))?;
+        }
 
         Ok(())
     }

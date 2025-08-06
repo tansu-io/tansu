@@ -65,10 +65,13 @@ pub async fn new_topic(
         })
         .collect::<Vec<_>>();
 
-    for (_toptition, response) in sc
+    let items = sc
         .list_offsets(IsolationLevel::ReadUncommitted, &offsets[..])
-        .await?
-    {
+        .await?;
+
+    assert!(!items.is_empty());
+
+    for (_toptition, response) in items {
         assert_eq!(Some(0), response.offset);
         assert_eq!(None, response.timestamp);
     }

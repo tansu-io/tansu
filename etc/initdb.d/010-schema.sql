@@ -316,9 +316,9 @@ from
 
 create table if not exists txn_detail (
     id bigint generated always as identity primary key,
-    txn bigint references txn (id),
+    transaction bigint references txn (id),
     producer_epoch int references producer_epoch (id),
-    unique (txn, producer_epoch),
+    unique (transaction, producer_epoch),
     transaction_timeout_ms int not null,
     -- AddPartitionsToTxnRequest:
     -- If this is the first partition added to the transaction,
@@ -354,7 +354,7 @@ from
     join topition tp on tp.topic = t.id
     join producer_detail pd on pd.producer_epoch = pe.id
     and pd.topition = tp.id
-    join txn_detail txn_d on txn_d.txn = txn.id
+    join txn_detail txn_d on txn_d.transaction = txn.id
     and txn_d.producer_epoch = pe.id;
 
 -- AddPartitionsToTxnRequest
@@ -385,7 +385,7 @@ from
     join topition tp on tp.topic = t.id
     join txn on txn.cluster = c.id
     and txn.producer = p.id
-    join txn_detail txn_d on txn_d.txn = txn.id
+    join txn_detail txn_d on txn_d.transaction = txn.id
     and txn_d.producer_epoch = pe.id
     join txn_topition txn_tp on txn_tp.txn_detail = txn_d.id
     and txn_tp.topition = tp.id;
@@ -419,7 +419,7 @@ from
     join producer_epoch pe on pe.producer = pe.id
     join txn on txn.cluster = c.id
     and txn.producer = p.id
-    join txn_detail txn_d on txn_d.txn = txn.id
+    join txn_detail txn_d on txn_d.transaction = txn.id
     and txn_d.producer_epoch = pe.id
     join txn_topition txn_tp on txn_tp.txn_detail = txn_d.id
     join txn_produce_offset txn_po on txn_po.txn_topition = txn_tp.id
@@ -476,7 +476,7 @@ from
     join producer_epoch pe on pe.producer = pe.id
     join txn on txn.cluster = c.id
     and txn.producer = p.id
-    join txn_detail txn_d on txn_d.txn = txn.id
+    join txn_detail txn_d on txn_d.transaction = txn.id
     and txn_d.producer_epoch = pe.id
     join topic t on t.cluster = c.id
     join topition tp on tp.topic = t.id
@@ -506,7 +506,7 @@ with
             join topic t on t.cluster = c.id
             join topition tp on tp.topic = t.id
             join txn on txn.cluster = c.id
-            join txn_detail txn_d on txn_d.txn = txn.id
+            join txn_detail txn_d on txn_d.transaction = txn.id
             join txn_topition txn_tp on txn_tp.txn_detail = txn_d.id
             and txn_tp.topition = tp.id
             join txn_produce_offset txn_po on txn_po.txn_topition = txn_tp.id

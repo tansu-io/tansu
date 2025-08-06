@@ -24,4 +24,4 @@ create table if not exists record (
     last_updated text default current_timestamp not null,
     created_at text default current_timestamp not null,
     primary key (topition, offset_id)
-) strict;
+);

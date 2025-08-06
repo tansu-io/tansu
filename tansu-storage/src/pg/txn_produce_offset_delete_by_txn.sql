@@ -21,7 +21,7 @@ where txn_produce_offset.txn_topition in (
     join producer p on p.cluster = c.id
     join producer_epoch pe on pe.producer = p.id
     join txn on txn.cluster = c.id and txn.producer = p.id
-    join txn_detail txn_d on txn_d.txn = txn.id
+    join txn_detail txn_d on txn_d."transaction" = txn.id
     join txn_topition txn_tp on txn_tp.txn_detail = txn_d.id
 
     where

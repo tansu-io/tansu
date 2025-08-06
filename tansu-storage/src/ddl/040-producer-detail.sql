@@ -20,4 +20,4 @@ create table if not exists producer_detail (
     last_updated text default current_timestamp not null,
     created_at text default current_timestamp not null,
     unique (producer_epoch, topition)
-) strict;
+);
