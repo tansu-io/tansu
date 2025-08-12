@@ -103,7 +103,7 @@ ordered-float = "4.6"
 parquet = "55"
 pretty_assertions = "1"
 prettyplease = "0.2.29"
-proc-macro2 = "1.0.93"
+proc-macro2 = "1.0.96"
 protobuf-json-mapping = "3.7.1"
 protobuf-parse = "3.7.1"
 protobuf = { version = "3.7.1", features = ["with-bytes"] }
