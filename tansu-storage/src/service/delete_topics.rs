@@ -107,12 +107,16 @@ mod tests {
         let error_code = ErrorCode::UnknownTopicOrPartition;
 
         assert_eq!(
-            Body::from(DeleteTopicsResponse::default().responses(Some(vec![
-                DeletableTopicResult::default()
-                    .error_code(error_code.into())
-                    .error_message(Some(error_code.to_string()))
-                    .name(Some(topic.into())),
-            ]))),
+            Body::from(
+                DeleteTopicsResponse::default()
+                    .throttle_time_ms(Some(0))
+                    .responses(Some(vec![
+                        DeletableTopicResult::default()
+                            .error_code(error_code.into())
+                            .error_message(Some(error_code.to_string()))
+                            .name(Some(topic.into())),
+                    ]))
+            ),
             service
                 .serve(
                     Context::default(),
@@ -136,11 +140,16 @@ mod tests {
         let error_code = ErrorCode::UnknownTopicOrPartition;
 
         assert_eq!(
-            Body::from(DeleteTopicsResponse::default().responses(Some(vec![
-                    DeletableTopicResult::default()
-                        .error_code(error_code.into()).error_message(Some(error_code.to_string()))
-                        .topic_id(Some(topic.into_bytes()))
-                ]))),
+            Body::from(
+                DeleteTopicsResponse::default()
+                    .throttle_time_ms(Some(0))
+                    .responses(Some(vec![
+                        DeletableTopicResult::default()
+                            .error_code(error_code.into())
+                            .error_message(Some(error_code.to_string()))
+                            .topic_id(Some(topic.into_bytes()))
+                    ]))
+            ),
             service
                 .serve(
                     Context::default(),
@@ -206,13 +215,17 @@ mod tests {
         let error_code = ErrorCode::None;
 
         assert_eq!(
-            Body::from(DeleteTopicsResponse::default().responses(Some(vec![
-                DeletableTopicResult::default()
-                    .error_code(error_code.into())
-                    .error_message(Some(error_code.to_string()))
-                    .name(Some(name.into()))
-                    .topic_id(Some(NULL_TOPIC_ID)),
-            ]))),
+            Body::from(
+                DeleteTopicsResponse::default()
+                    .throttle_time_ms(Some(0))
+                    .responses(Some(vec![
+                        DeletableTopicResult::default()
+                            .error_code(error_code.into())
+                            .error_message(Some(error_code.to_string()))
+                            .name(Some(name.into()))
+                            .topic_id(Some(NULL_TOPIC_ID)),
+                    ]))
+            ),
             delete_topics
                 .serve(
                     Context::default(),
