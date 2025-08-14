@@ -578,34 +578,6 @@ fn is_reserved_keyword(s: &str) -> bool {
 }
 
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-struct Header {
-    name: String,
-    valid: VersionRange,
-    flexible: VersionRange,
-    fields: Vec<Field>,
-}
-
-impl<'a> TryFrom<&Wv<'a>> for Header {
-    type Error = Error;
-
-    fn try_from(value: &Wv<'a>) -> Result<Self, Self::Error> {
-        let fields: &[Value] = value.as_a("fields")?;
-
-        Ok(Header {
-            name: value.as_a("name")?,
-            valid: value.as_a("validVersions")?,
-            flexible: value.as_a("flexibleVersions")?,
-            fields: fields.iter().try_fold(Vec::new(), |mut acc, field| {
-                Field::try_from(&Wv::from(field)).map(|f| {
-                    acc.push(f);
-                    acc
-                })
-            })?,
-        })
-    }
-}
-
-#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Message {
     api_key: i16,
     kind: MessageKind,
@@ -892,10 +864,10 @@ impl FieldMeta {
         self.fields.iter().filter(|(_, fm)| fm.is_structure()).fold(
             BTreeMap::new(),
             |mut acc, (_name, fm)| {
-                if let Some(kind) = fm.kind.kind_of_sequence() {
-                    if !kind.is_primitive() {
-                        _ = acc.insert(kind.name(), fm);
-                    }
+                if let Some(kind) = fm.kind.kind_of_sequence()
+                    && !kind.is_primitive()
+                {
+                    _ = acc.insert(kind.name(), fm);
                 }
 
                 let mut children = fm.structures();
@@ -969,6 +941,34 @@ mod tests {
     const PRIMITIVES: [&str; 10] = [
         "bool", "bytes", "float64", "int16", "int32", "int64", "int8", "string", "uint16", "uuid",
     ];
+
+    #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+    struct Header {
+        name: String,
+        valid: VersionRange,
+        flexible: VersionRange,
+        fields: Vec<Field>,
+    }
+
+    impl<'a> TryFrom<&Wv<'a>> for Header {
+        type Error = Error;
+
+        fn try_from(value: &Wv<'a>) -> Result<Self, Self::Error> {
+            let fields: &[Value] = value.as_a("fields")?;
+
+            Ok(Header {
+                name: value.as_a("name")?,
+                valid: value.as_a("validVersions")?,
+                flexible: value.as_a("flexibleVersions")?,
+                fields: fields.iter().try_fold(Vec::new(), |mut acc, field| {
+                    Field::try_from(&Wv::from(field)).map(|f| {
+                        acc.push(f);
+                        acc
+                    })
+                })?,
+            })
+        }
+    }
 
     #[test]
     fn type_mapping_test() {
