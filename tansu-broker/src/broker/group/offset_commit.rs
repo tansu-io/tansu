@@ -12,12 +12,53 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use tansu_sans_io::{Body, offset_commit_request::OffsetCommitRequestTopic};
+use rama::{Context, Service};
+use tansu_sans_io::{
+    ApiKey, Body,
+    offset_commit_request::{self, OffsetCommitRequestTopic},
+};
 
 use crate::{
-    Result,
+    Error, Result,
+    broker::group::Request,
     coordinator::group::{Coordinator, OffsetCommit},
 };
+
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct OffsetCommitService;
+
+impl ApiKey for OffsetCommitService {
+    const KEY: i16 = offset_commit_request::OffsetCommitRequest::KEY;
+}
+
+impl<C, State> Service<State, Request<C>> for OffsetCommitService
+where
+    C: Coordinator,
+    State: Clone + Send + Sync + 'static,
+{
+    type Response = Body;
+    type Error = Error;
+
+    async fn serve(
+        &self,
+        _ctx: Context<State>,
+        mut request: Request<C>,
+    ) -> Result<Self::Response, Self::Error> {
+        let offset_commit =
+            offset_commit_request::OffsetCommitRequest::try_from(request.frame.body)?;
+        request
+            .coordinator
+            .offset_commit(OffsetCommit {
+                group_id: offset_commit.group_id.as_str(),
+                generation_id_or_member_epoch: offset_commit.generation_id_or_member_epoch,
+                member_id: offset_commit.member_id.as_deref(),
+                group_instance_id: offset_commit.group_instance_id.as_deref(),
+                retention_time_ms: offset_commit.retention_time_ms,
+                topics: offset_commit.topics.as_deref(),
+            })
+            .await
+    }
+}
 
 #[derive(Debug)]
 pub struct OffsetCommitRequest<C> {

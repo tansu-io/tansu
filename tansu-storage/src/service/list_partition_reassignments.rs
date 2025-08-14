@@ -12,34 +12,48 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::Result;
+use rama::{Context, Service};
 use tansu_sans_io::{
-    Body, ErrorCode,
-    list_partition_reassignments_request::ListPartitionReassignmentsTopics,
+    ApiKey, Body, ErrorCode, ListPartitionReassignmentsRequest, ListPartitionReassignmentsResponse,
     list_partition_reassignments_response::{
-        ListPartitionReassignmentsResponse, OngoingPartitionReassignment, OngoingTopicReassignment,
+        OngoingPartitionReassignment, OngoingTopicReassignment,
     },
 };
-use tansu_storage::{Storage, TopicId};
 
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct ListPartitionReassignmentsRequest<S> {
+use crate::{Error, Result, Storage, TopicId};
+
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ListPartitionReassignmentsService<S> {
     storage: S,
 }
 
-impl<S> ListPartitionReassignmentsRequest<S>
+impl<S> ApiKey for ListPartitionReassignmentsService<S> {
+    const KEY: i16 = ListPartitionReassignmentsRequest::KEY;
+}
+
+impl<S> ListPartitionReassignmentsService<S>
 where
     S: Storage,
 {
-    pub fn with_storage(storage: S) -> Self {
+    pub fn new(storage: S) -> Self {
         Self { storage }
     }
+}
 
-    pub async fn response(
-        &mut self,
-        topics: Option<&[ListPartitionReassignmentsTopics]>,
-    ) -> Result<Body> {
-        let topics = topics.map(|topics| {
+impl<S, State, Q> Service<State, Q> for ListPartitionReassignmentsService<S>
+where
+    S: Storage,
+    State: Clone + Send + Sync + 'static,
+    Q: Into<Body> + Send + Sync + 'static,
+{
+    type Response = Body;
+    type Error = Error;
+
+    async fn serve(&self, _ctx: Context<State>, request: Q) -> Result<Self::Response, Self::Error> {
+        let list_partition_reassignments =
+            ListPartitionReassignmentsRequest::try_from(request.into())?;
+
+        let topics = list_partition_reassignments.topics.map(|topics| {
             topics
                 .iter()
                 .map(|topic| TopicId::Name(topic.name.as_str().into()))

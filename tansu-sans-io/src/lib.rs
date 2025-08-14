@@ -199,6 +199,10 @@ pub trait ApiKey {
     const KEY: i16;
 }
 
+pub trait ApiName {
+    const NAME: &'static str;
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     ApiError(ErrorCode),
@@ -214,6 +218,7 @@ pub enum Error {
     NoSuchMessage(&'static str),
     NoSuchRequest(i16),
     ParseFilter(#[from] ParseError),
+    ResponseFrame,
     Snap(#[from] snap::Error),
     StringWithoutApiVersion,
     StringWithoutLength,
@@ -433,6 +438,47 @@ impl Frame {
         let mut reader = bytes.reader();
         let mut deserializer = Decoder::response(&mut reader, api_key, api_version);
         Frame::deserialize(&mut deserializer)
+    }
+
+    /// API request key
+    pub fn api_key(&self) -> Result<i16> {
+        if let Header::Request { api_key, .. } = self.header {
+            Ok(api_key)
+        } else {
+            Err(Error::ResponseFrame)
+        }
+    }
+
+    /// API name
+    pub fn api_name(&self) -> &str {
+        self.body.api_name()
+    }
+
+    /// API request version
+    pub fn api_version(&self) -> Result<i16> {
+        if let Header::Request { api_version, .. } = self.header {
+            Ok(api_version)
+        } else {
+            Err(Error::ResponseFrame)
+        }
+    }
+
+    /// API request/response correlation ID
+    pub fn correlation_id(&self) -> Result<i32> {
+        match self.header {
+            Header::Request { correlation_id, .. } | Header::Response { correlation_id } => {
+                Ok(correlation_id)
+            }
+        }
+    }
+
+    /// API request client ID
+    pub fn client_id(&self) -> Result<Option<&str>> {
+        if let Header::Request { ref client_id, .. } = self.header {
+            Ok(client_id.as_deref())
+        } else {
+            Err(Error::ResponseFrame)
+        }
     }
 }
 

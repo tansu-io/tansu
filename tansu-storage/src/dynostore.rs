@@ -521,16 +521,13 @@ impl DynoStore {
 
 #[async_trait]
 impl Storage for DynoStore {
-    async fn register_broker(
-        &mut self,
-        broker_registration: BrokerRegistrationRequest,
-    ) -> Result<()> {
+    async fn register_broker(&self, broker_registration: BrokerRegistrationRequest) -> Result<()> {
         debug!(?broker_registration);
         Ok(())
     }
 
     async fn incremental_alter_resource(
-        &mut self,
+        &self,
         resource: AlterConfigsResource,
     ) -> Result<AlterConfigsResourceResponse> {
         let _ = resource;
@@ -580,7 +577,7 @@ impl Storage for DynoStore {
         }
     }
 
-    async fn create_topic(&mut self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {
+    async fn create_topic(&self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {
         debug!(?topic, ?validate_only);
 
         match self
@@ -630,14 +627,14 @@ impl Storage for DynoStore {
     }
 
     async fn delete_records(
-        &mut self,
+        &self,
         topics: &[DeleteRecordsTopic],
     ) -> Result<Vec<DeleteRecordsTopicResult>> {
         debug!(?topics);
         todo!()
     }
 
-    async fn delete_topic(&mut self, topic: &TopicId) -> Result<ErrorCode> {
+    async fn delete_topic(&self, topic: &TopicId) -> Result<ErrorCode> {
         debug!(?topic);
 
         if let Some(metadata) = self.topic_metadata(topic).await? {
@@ -705,7 +702,7 @@ impl Storage for DynoStore {
         }
     }
 
-    async fn brokers(&mut self) -> Result<Vec<DescribeClusterBroker>> {
+    async fn brokers(&self) -> Result<Vec<DescribeClusterBroker>> {
         debug!(cluster = self.cluster);
 
         let broker_id = self.node;
@@ -727,7 +724,7 @@ impl Storage for DynoStore {
     }
 
     async fn produce(
-        &mut self,
+        &self,
         transaction_id: Option<&str>,
         topition: &Topition,
         deflated: deflated::Batch,
@@ -997,7 +994,7 @@ impl Storage for DynoStore {
     }
 
     async fn fetch(
-        &mut self,
+        &self,
         topition: &'_ Topition,
         offset: i64,
         min_bytes: u32,
@@ -1090,7 +1087,7 @@ impl Storage for DynoStore {
         Ok(batches)
     }
 
-    async fn offset_stage(&mut self, topition: &Topition) -> Result<OffsetStage> {
+    async fn offset_stage(&self, topition: &Topition) -> Result<OffsetStage> {
         debug!(?topition);
 
         let stable = self
@@ -1158,7 +1155,7 @@ impl Storage for DynoStore {
     }
 
     async fn list_offsets(
-        &mut self,
+        &self,
         isolation_level: IsolationLevel,
         offsets: &[(Topition, ListOffsetRequest)],
     ) -> Result<Vec<(Topition, ListOffsetResponse)>> {
@@ -1268,7 +1265,7 @@ impl Storage for DynoStore {
     }
 
     async fn offset_commit(
-        &mut self,
+        &self,
         group_id: &str,
         retention_time_ms: Option<Duration>,
         offsets: &[(Topition, OffsetCommitRequest)],
@@ -1315,10 +1312,7 @@ impl Storage for DynoStore {
         Ok(responses)
     }
 
-    async fn committed_offset_topitions(
-        &mut self,
-        group_id: &str,
-    ) -> Result<BTreeMap<Topition, i64>> {
+    async fn committed_offset_topitions(&self, group_id: &str) -> Result<BTreeMap<Topition, i64>> {
         debug!(group_id);
 
         let mut topitions = vec![];
@@ -1372,7 +1366,7 @@ impl Storage for DynoStore {
     }
 
     async fn offset_fetch(
-        &mut self,
+        &self,
         group_id: Option<&str>,
         topics: &[Topition],
         require_stable: Option<bool>,
@@ -1415,7 +1409,7 @@ impl Storage for DynoStore {
         Ok(responses)
     }
 
-    async fn metadata(&mut self, topics: Option<&[TopicId]>) -> Result<MetadataResponse> {
+    async fn metadata(&self, topics: Option<&[TopicId]>) -> Result<MetadataResponse> {
         debug!(?topics);
 
         let brokers = vec![
@@ -1664,7 +1658,7 @@ impl Storage for DynoStore {
     }
 
     async fn describe_topic_partitions(
-        &mut self,
+        &self,
         topics: Option<&[TopicId]>,
         partition_limit: i32,
         cursor: Option<Topition>,
@@ -1750,7 +1744,7 @@ impl Storage for DynoStore {
         Ok(responses)
     }
 
-    async fn list_groups(&mut self, states_filter: Option<&[String]>) -> Result<Vec<ListedGroup>> {
+    async fn list_groups(&self, states_filter: Option<&[String]>) -> Result<Vec<ListedGroup>> {
         debug!(?states_filter);
 
         let location = Path::from(format!("clusters/{}/groups/consumers/", self.cluster,));
@@ -1779,7 +1773,7 @@ impl Storage for DynoStore {
     }
 
     async fn delete_groups(
-        &mut self,
+        &self,
         group_ids: Option<&[String]>,
     ) -> Result<Vec<DeletableGroupResult>> {
         debug!(?group_ids);
@@ -1841,7 +1835,7 @@ impl Storage for DynoStore {
     }
 
     async fn describe_groups(
-        &mut self,
+        &self,
         group_ids: Option<&[String]>,
         include_authorized_operations: bool,
     ) -> Result<Vec<NamedGroupDetail>> {
@@ -1885,7 +1879,7 @@ impl Storage for DynoStore {
     }
 
     async fn update_group(
-        &mut self,
+        &self,
         group_id: &str,
         detail: GroupDetail,
         version: Option<Version>,
@@ -1908,7 +1902,7 @@ impl Storage for DynoStore {
     }
 
     async fn init_producer(
-        &mut self,
+        &self,
         transaction_id: Option<&str>,
         transaction_timeout_ms: i32,
         producer_id: Option<i64>,
@@ -2101,7 +2095,7 @@ impl Storage for DynoStore {
     }
 
     async fn txn_add_offsets(
-        &mut self,
+        &self,
         transaction_id: &str,
         producer_id: i64,
         producer_epoch: i16,
@@ -2113,7 +2107,7 @@ impl Storage for DynoStore {
     }
 
     async fn txn_add_partitions(
-        &mut self,
+        &self,
         partitions: TxnAddPartitionsRequest,
     ) -> Result<TxnAddPartitionsResponse> {
         debug!(?partitions);
@@ -2271,7 +2265,7 @@ impl Storage for DynoStore {
     }
 
     async fn txn_offset_commit(
-        &mut self,
+        &self,
         offsets: TxnOffsetCommitRequest,
     ) -> Result<Vec<TxnOffsetCommitResponseTopic>> {
         debug!(?offsets);
@@ -2350,7 +2344,7 @@ impl Storage for DynoStore {
     }
 
     async fn txn_end(
-        &mut self,
+        &self,
         transaction_id: &str,
         producer_id: i64,
         producer_epoch: i16,
@@ -2606,6 +2600,18 @@ impl Storage for DynoStore {
         }
         .inspect(|maintain| debug!(?maintain))
         .inspect_err(|err| debug!(?err))
+    }
+
+    fn cluster_id(&self) -> Result<&str> {
+        Ok(self.cluster.as_str())
+    }
+
+    fn node(&self) -> Result<i32> {
+        Ok(self.node)
+    }
+
+    fn advertised_listener(&self) -> Result<&Url> {
+        Ok(&self.advertised_listener)
     }
 }
 

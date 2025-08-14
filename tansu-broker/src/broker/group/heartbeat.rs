@@ -12,9 +12,44 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use tansu_sans_io::Body;
+use rama::{Context, Service};
+use tansu_sans_io::{ApiKey, Body, heartbeat_request};
 
-use crate::{Result, coordinator::group::Coordinator};
+use crate::{Error, Result, broker::group::Request, coordinator::group::Coordinator};
+
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct HeartbeatService;
+
+impl ApiKey for HeartbeatService {
+    const KEY: i16 = heartbeat_request::HeartbeatRequest::KEY;
+}
+
+impl<C, State> Service<State, Request<C>> for HeartbeatService
+where
+    C: Coordinator,
+    State: Clone + Send + Sync + 'static,
+{
+    type Response = Body;
+    type Error = Error;
+
+    async fn serve(
+        &self,
+        _ctx: Context<State>,
+        mut request: Request<C>,
+    ) -> Result<Self::Response, Self::Error> {
+        let heartbeat = heartbeat_request::HeartbeatRequest::try_from(request.frame.body)?;
+
+        request
+            .coordinator
+            .heartbeat(
+                heartbeat.group_id.as_str(),
+                heartbeat.generation_id,
+                heartbeat.member_id.as_str(),
+                heartbeat.group_instance_id.as_deref(),
+            )
+            .await
+    }
+}
 
 #[derive(Debug)]
 pub struct HeartbeatRequest<C> {

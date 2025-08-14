@@ -65,7 +65,7 @@ async fn register_broker() -> Result<()> {
     let broker_id = rng.random_range(0..i32::MAX);
     let incarnation_id = Uuid::now_v7();
 
-    let mut storage_container = storage_container(cluster_id, broker_id)?;
+    let storage_container = storage_container(cluster_id, broker_id)?;
     let port = rng.random_range(1024..u16::MAX);
 
     let broker_registration = BrokerRegistrationRequest {

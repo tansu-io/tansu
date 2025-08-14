@@ -199,334 +199,6 @@ fn tag_kind(
     }
 }
 
-#[allow(dead_code)]
-fn was_body_enum(messages: &[Message], include_tag: bool) -> TokenStream {
-    let variants: Vec<TokenStream> = messages
-        .iter()
-        .map(|message| {
-            let name = message.type_name();
-            let module = syn::parse_str::<syn::Path>(
-                &name.to_token_stream().to_string().to_case(Case::Snake),
-            )
-            .unwrap();
-
-            let dependencies: Vec<Type> = message
-                .fields()
-                .iter()
-                .filter(|f| f.fields().is_some())
-                .map(|f| f.kind().type_name())
-                .chain(
-                    message
-                        .common_structs()
-                        .unwrap_or(&[][..])
-                        .iter()
-                        .map(CommonStruct::type_name),
-                )
-                .collect();
-
-            let vfk = visibility_field_kind(
-                None,
-                None,
-                message.fields(),
-                &module,
-                &dependencies,
-                include_tag,
-            );
-
-            if include_tag {
-                quote! {
-                    #name {
-                        #(#vfk,)*
-                    }
-                }
-            } else {
-                quote! {
-                    #name {
-                        #(#vfk,)*
-                        tag_buffer: Option<crate::primitive::tagged::TagBuffer>,
-                    }
-                }
-            }
-        })
-        .collect();
-
-    if include_tag {
-        let values: Vec<TokenStream> = messages
-            .iter()
-            .map(|message| {
-                let from = syn::parse_str::<syn::Path>(&format!(
-                    "mezzanine::Body::{}",
-                    message.type_name().to_token_stream(),
-                ))
-                .unwrap();
-
-                let from_idents = message
-                    .fields()
-                    .iter()
-                    .filter(|field| field.tag().is_none())
-                    .map(Field::ident);
-
-                let conversions = message.fields().iter().map(|field| {
-                    if field.tag().is_some() {
-                        let f = field.ident();
-                        let tag = field.tag().unwrap();
-                        let module = syn::parse_str::<syn::Path>(&message.type_name().to_token_stream().to_string().to_case(Case::Snake))
-                                    .unwrap();
-
-                        let k = tag_kind(
-                                        None,
-                                        &syn::parse_str::<syn::Path>(&format!(
-                                            "crate::mezzanine::{}",
-                                            module.to_token_stream()
-                                        ))
-                                        .unwrap(),
-                                        field,
-                                        &[],
-                                    );
-
-                        if field.kind().is_primitive() {
-                            quote! {
-                                let #f = tag_buffer.as_ref().and_then(|tag_buffer| tag_buffer.decode::<#k>(&#tag).ok().unwrap_or(None))
-                            }
-                        } else if field.kind().is_sequence() {
-                            quote! {
-                                let #f = if let Some(tag_buffer) = tag_buffer.as_ref() {
-                                    if let Ok(Some(#f)) =
-                                    tag_buffer.decode::<#k>(&#tag)
-                                    {
-                                        Some(#f.into_iter().map(Into::into).collect())
-                                    } else {
-                                        None
-                                    }
-                                } else {
-                                    None
-                                }
-                            }
-                        } else {
-                            quote! {
-                                let #f = if let Some(tag_buffer) = tag_buffer.as_ref() {
-                                    if let Ok(Some(#f)) =
-                                        tag_buffer.decode::<#k>(&#tag)
-                                    {
-                                        Some(#f.into())
-                                    } else {
-                                        None
-                                    }
-                                } else {
-                                    None
-                                }
-                            }
-                        }
-                    } else if field.kind().is_primitive() || field.kind().is_sequence_of_primitive() {
-                        quote! {}
-                    } else if field.kind().is_sequence() {
-                        let f = field.ident();
-
-                        quote! {
-                            let #f = #f.map(|#f| #f.into_iter().map(Into::into).collect());
-                        }
-                    } else if field.nullable().is_some() {
-                        let f = field.ident();
-
-                        quote! {
-                            let #f = #f.map(|#f|#f.into());
-                        }
-                    } else {
-                        let f = field.ident();
-
-                        quote! {
-                            let #f  = #f.into();
-                        }
-                    }
-                });
-
-                let to = syn::parse_str::<syn::Path>(&format!(
-                    "Self::{}",
-                    message.type_name().to_token_stream(),
-                ))
-                .unwrap();
-
-                let to_idents = message.fields().iter().map(Field::ident);
-
-                if message.has_tags() {
-                    quote! {
-                        #from {
-                            #(#from_idents,)*
-                            tag_buffer,
-                        } => {
-                            #(#conversions;)*
-
-                            #to {
-                                #(#to_idents,)*
-                            }
-
-                        }
-                    }
-                } else {
-                    quote! {
-                        #from {
-                            #(#from_idents,)*
-                            tag_buffer,
-                        } => {
-                            #(#conversions;)*
-
-                            let _ = tag_buffer;
-
-                            #to {
-                                #(#to_idents,)*
-                            }
-
-                        }
-                    }
-
-                }
-            })
-            .collect();
-
-        quote! {
-            #[derive(Clone, Debug, PartialEq, PartialOrd, serde::Deserialize, serde::Serialize)]
-            #[serde(from = "mezzanine::Body")]
-            #[serde(into = "mezzanine::Body")]
-            pub enum Body {
-                #(#variants),*
-            }
-
-            impl From<mezzanine::Body> for Body {
-                fn from(value: mezzanine::Body) -> Self {
-                    match value {
-                        #(#values,)*
-                    }
-                }
-            }
-        }
-    } else {
-        let values: Vec<TokenStream> =
-            messages
-                .iter()
-                .map(|message| {
-                    let from = syn::parse_str::<syn::Path>(&format!(
-                        "crate::Body::{}",
-                        message.type_name().to_token_stream(),
-                    ))
-                    .unwrap();
-
-                    let from_idents = message.fields().iter().map(Field::ident);
-
-                    let conversions = message.fields().iter().map(|field| {
-                    if field.tag().is_some() {
-                        let f = field.ident();
-                        let tag = field.tag().unwrap();
-                        let module = syn::parse_str::<syn::Path>(
-                            &message.type_name().to_token_stream().to_string().to_case(Case::Snake),
-                        )
-                        .unwrap();
-                        let k = tag_kind(
-                            None,
-                            &syn::parse_str::<syn::Path>(&format!(
-                                "crate::mezzanine::{}",
-                                module.to_token_stream()
-                            ))
-                            .unwrap(),
-                            field,
-                            &[],
-                        );
-                        if field.kind().is_primitive() {
-                            quote! {
-                                if let Some(#f) = #f {
-                                    if let Ok(encoded) = crate::primitive::tagged::TagField::encode(#tag, &#f) {
-                                        tag_buffer.push(encoded);
-                                    }
-                                }
-                            }
-                        } else if field.kind().is_sequence() {
-                            quote! {
-                                if let Some(#f) = #f {
-                                    let mezzanine: #k = #f.into_iter().map(Into::into).collect();
-                                    if let Ok(encoded) = crate::primitive::tagged::TagField::encode(#tag, &mezzanine) {
-                                        tag_buffer.push(encoded);
-                                    }
-                                }
-                            }
-                        } else {
-                            quote! {
-                                if let Some(#f) = #f {
-                                    let mezzanine: #k = #f.into();
-                                    if let Ok(encoded) = crate::primitive::tagged::TagField::encode(#tag, &mezzanine) {
-                                        tag_buffer.push(encoded);
-                                    }
-                                }
-                            }
-                        }
-                    } else if field.kind().is_primitive() || field.kind().is_sequence_of_primitive()
-                    {
-                        quote! {}
-                    } else if field.kind().is_sequence() {
-                        let f = field.ident();
-
-                        quote! {
-                            let #f = #f.map(|#f| #f.into_iter().map(Into::into).collect());
-                        }
-                    } else if field.nullable().is_some() {
-                        let f = field.ident();
-
-                        quote! {
-                            let #f = #f.map(|#f|#f.into());
-                        }
-                    } else {
-                        let f = field.ident();
-
-                        quote! {
-                            let #f  = #f.into();
-                        }
-                    }
-                });
-
-                    let to = syn::parse_str::<syn::Path>(&format!(
-                        "Self::{}",
-                        message.type_name().to_token_stream(),
-                    ))
-                    .unwrap();
-
-                    let to_idents = message
-                        .fields()
-                        .iter()
-                        .filter(|field| field.tag().is_none())
-                        .map(Field::ident);
-
-                    quote! {
-                        #from {
-                            #(#from_idents,)*
-                        } => {
-                            #[allow(unused_mut)]
-                            let mut tag_buffer = Vec::new();
-                            #(#conversions;)*
-
-                            #to {
-                                #(#to_idents,)*
-                                tag_buffer: Some(tag_buffer.into()),
-                            }
-                        }
-                    }
-                })
-                .collect();
-
-        quote! {
-            #[derive(Clone, Debug, PartialEq, PartialOrd, serde::Deserialize, serde::Serialize)]
-            pub(crate) enum Body {
-                #(#variants),*
-            }
-
-            impl From<crate::Body> for Body {
-                fn from(value: crate::Body) -> Self {
-                    match value {
-                        #(#values,)*
-                    }
-                }
-            }
-        }
-    }
-}
-
 #[allow(clippy::too_many_lines)]
 fn body_enum(messages: &[Message], include_tag: bool) -> TokenStream {
     let variants = messages.iter().map(|message| {
@@ -649,13 +321,13 @@ fn visibility_field_kind(
         .collect()
 }
 
-fn root_message_struct(
-    name: &Type,
-    api_key: i16,
-    fields: &[Field],
-    common_structs: Option<&[CommonStruct]>,
-    include_tag: bool,
-) -> TokenStream {
+fn root_message_struct(message: &Message, include_tag: bool) -> TokenStream {
+    let name = &message.type_name();
+    let api_key = message.api_key();
+    let fields = message.fields();
+    let common_structs = message.common_structs();
+    let message_name = message.name();
+
     let module =
         syn::parse_str::<syn::Path>(&name.to_token_stream().to_string().to_case(Case::Snake))
             .unwrap();
@@ -690,6 +362,11 @@ fn root_message_struct(
                 impl ApiKey for #name {
                     const KEY:i16 = #api_key;
                 }
+
+                impl ApiName for #name {
+                    const NAME: &'static str = #message_name;
+                }
+
             }
 
             pub use #module::#name;
@@ -1269,15 +946,7 @@ fn common_struct(
 fn root(messages: &[Message], include_tag: bool) -> Vec<TokenStream> {
     messages
         .iter()
-        .map(|message| {
-            root_message_struct(
-                &message.type_name(),
-                message.api_key(),
-                message.fields(),
-                message.common_structs(),
-                include_tag,
-            )
-        })
+        .map(|message| root_message_struct(message, include_tag))
         .collect()
 }
 
@@ -1313,6 +982,28 @@ fn process(messages: &[Message], include_tag: bool) -> TokenStream {
             })
             .collect::<Vec<_>>();
 
+        let api_keys = messages
+            .iter()
+            .map(|message| {
+                let name = message.type_name();
+
+                quote! {
+                    Self::#name(_) => #name::KEY,
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let api_names = messages
+            .iter()
+            .map(|message| {
+                let name = message.type_name();
+
+                quote! {
+                    Self::#name(_) => #name::NAME,
+                }
+            })
+            .collect::<Vec<_>>();
+
         quote! {
             #(#root)*
 
@@ -1320,6 +1011,18 @@ fn process(messages: &[Message], include_tag: bool) -> TokenStream {
 
             impl Body {
                 #(#as_names)*
+
+                pub fn api_key(&self) -> i16 {
+                    match self {
+                        #(#api_keys)*
+                    }
+                }
+
+                pub fn api_name(&self) -> &str {
+                    match self {
+                        #(#api_names)*
+                    }
+                }
             }
         }
     } else {

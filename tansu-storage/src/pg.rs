@@ -263,7 +263,7 @@ impl Postgres {
     }
 
     async fn idempotent_message_check(
-        &mut self,
+        &self,
         transaction_id: Option<&str>,
         topition: &Topition,
         deflated: &deflated::Batch,
@@ -348,7 +348,7 @@ impl Postgres {
     }
 
     async fn watermark_select_for_update(
-        &mut self,
+        &self,
         topition: &Topition,
         tx: &Transaction<'_>,
     ) -> Result<(Option<i64>, Option<i64>)> {
@@ -711,7 +711,7 @@ impl Postgres {
     }
 
     async fn produce_in_tx(
-        &mut self,
+        &self,
         transaction_id: Option<&str>,
         topition: &Topition,
         deflated: deflated::Batch,
@@ -891,7 +891,7 @@ impl Postgres {
     }
 
     async fn end_in_tx(
-        &mut self,
+        &self,
         transaction_id: &str,
         producer_id: i64,
         producer_epoch: i16,
@@ -1155,10 +1155,7 @@ impl Postgres {
 
 #[async_trait]
 impl Storage for Postgres {
-    async fn register_broker(
-        &mut self,
-        broker_registration: BrokerRegistrationRequest,
-    ) -> Result<()> {
+    async fn register_broker(&self, broker_registration: BrokerRegistrationRequest) -> Result<()> {
         debug!(cluster = self.cluster, ?broker_registration);
 
         let c = self.connection().await?;
@@ -1182,7 +1179,7 @@ impl Storage for Postgres {
         Ok(())
     }
 
-    async fn brokers(&mut self) -> Result<Vec<DescribeClusterBroker>> {
+    async fn brokers(&self) -> Result<Vec<DescribeClusterBroker>> {
         debug!(cluster = self.cluster);
 
         let broker_id = self.node;
@@ -1203,7 +1200,7 @@ impl Storage for Postgres {
         ])
     }
 
-    async fn create_topic(&mut self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {
+    async fn create_topic(&self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {
         debug!(cluster = self.cluster, ?topic, validate_only);
 
         let mut c = self.connection().await?;
@@ -1292,7 +1289,7 @@ impl Storage for Postgres {
     }
 
     async fn delete_records(
-        &mut self,
+        &self,
         topics: &[DeleteRecordsTopic],
     ) -> Result<Vec<DeleteRecordsTopicResult>> {
         debug!(cluster = self.cluster, ?topics);
@@ -1419,7 +1416,7 @@ impl Storage for Postgres {
         Ok(responses)
     }
 
-    async fn delete_topic(&mut self, topic: &TopicId) -> Result<ErrorCode> {
+    async fn delete_topic(&self, topic: &TopicId) -> Result<ErrorCode> {
         debug!(cluster = self.cluster, ?topic);
 
         let mut c = self.connection().await?;
@@ -1530,7 +1527,7 @@ impl Storage for Postgres {
     }
 
     async fn incremental_alter_resource(
-        &mut self,
+        &self,
         resource: AlterConfigsResource,
     ) -> Result<AlterConfigsResourceResponse> {
         match ConfigResource::from(resource.resource_type) {
@@ -1620,7 +1617,7 @@ impl Storage for Postgres {
     }
 
     async fn produce(
-        &mut self,
+        &self,
         transaction_id: Option<&str>,
         topition: &Topition,
         deflated: deflated::Batch,
@@ -1641,7 +1638,7 @@ impl Storage for Postgres {
     }
 
     async fn fetch(
-        &mut self,
+        &self,
         topition: &Topition,
         offset: i64,
         min_bytes: u32,
@@ -1850,7 +1847,7 @@ impl Storage for Postgres {
         Ok(batches)
     }
 
-    async fn offset_stage(&mut self, topition: &Topition) -> Result<OffsetStage> {
+    async fn offset_stage(&self, topition: &Topition) -> Result<OffsetStage> {
         debug!(cluster = self.cluster, ?topition);
         let c = self.connection().await?;
 
@@ -1889,7 +1886,7 @@ impl Storage for Postgres {
     }
 
     async fn offset_commit(
-        &mut self,
+        &self,
         group: &str,
         retention: Option<Duration>,
         offsets: &[(Topition, OffsetCommitRequest)],
@@ -1970,10 +1967,7 @@ impl Storage for Postgres {
         Ok(responses)
     }
 
-    async fn committed_offset_topitions(
-        &mut self,
-        group_id: &str,
-    ) -> Result<BTreeMap<Topition, i64>> {
+    async fn committed_offset_topitions(&self, group_id: &str) -> Result<BTreeMap<Topition, i64>> {
         debug!(group_id);
 
         let mut results = BTreeMap::new();
@@ -2006,7 +2000,7 @@ impl Storage for Postgres {
     }
 
     async fn offset_fetch(
-        &mut self,
+        &self,
         group_id: Option<&str>,
         topics: &[Topition],
         require_stable: Option<bool>,
@@ -2053,7 +2047,7 @@ impl Storage for Postgres {
     }
 
     async fn list_offsets(
-        &mut self,
+        &self,
         isolation_level: IsolationLevel,
         offsets: &[(Topition, ListOffsetRequest)],
     ) -> Result<Vec<(Topition, ListOffsetResponse)>> {
@@ -2156,7 +2150,7 @@ impl Storage for Postgres {
         Ok(responses).inspect(|r| debug!(?r))
     }
 
-    async fn metadata(&mut self, topics: Option<&[TopicId]>) -> Result<MetadataResponse> {
+    async fn metadata(&self, topics: Option<&[TopicId]>) -> Result<MetadataResponse> {
         debug!(cluster = self.cluster, ?topics);
 
         let c = self.connection().await.inspect_err(|err| error!(?err))?;
@@ -2556,7 +2550,7 @@ impl Storage for Postgres {
     }
 
     async fn describe_topic_partitions(
-        &mut self,
+        &self,
         topics: Option<&[TopicId]>,
         partition_limit: i32,
         cursor: Option<Topition>,
@@ -2742,7 +2736,7 @@ impl Storage for Postgres {
         Ok(responses)
     }
 
-    async fn list_groups(&mut self, states_filter: Option<&[String]>) -> Result<Vec<ListedGroup>> {
+    async fn list_groups(&self, states_filter: Option<&[String]>) -> Result<Vec<ListedGroup>> {
         debug!(?states_filter);
 
         let c = self.connection().await.inspect_err(|err| error!(?err))?;
@@ -2774,7 +2768,7 @@ impl Storage for Postgres {
     }
 
     async fn delete_groups(
-        &mut self,
+        &self,
         group_ids: Option<&[String]>,
     ) -> Result<Vec<DeletableGroupResult>> {
         debug!(?group_ids);
@@ -2834,7 +2828,7 @@ impl Storage for Postgres {
     }
 
     async fn describe_groups(
-        &mut self,
+        &self,
         group_ids: Option<&[String]>,
         include_authorized_operations: bool,
     ) -> Result<Vec<NamedGroupDetail>> {
@@ -2876,7 +2870,7 @@ impl Storage for Postgres {
     }
 
     async fn update_group(
-        &mut self,
+        &self,
         group_id: &str,
         detail: GroupDetail,
         version: Option<Version>,
@@ -2978,7 +2972,7 @@ impl Storage for Postgres {
     }
 
     async fn init_producer(
-        &mut self,
+        &self,
         transaction_id: Option<&str>,
         transaction_timeout_ms: i32,
         producer_id: Option<i64>,
@@ -3197,7 +3191,7 @@ impl Storage for Postgres {
     }
 
     async fn txn_add_offsets(
-        &mut self,
+        &self,
         transaction_id: &str,
         producer_id: i64,
         producer_epoch: i16,
@@ -3212,7 +3206,7 @@ impl Storage for Postgres {
     }
 
     async fn txn_add_partitions(
-        &mut self,
+        &self,
         partitions: TxnAddPartitionsRequest,
     ) -> Result<TxnAddPartitionsResponse> {
         debug!(cluster = self.cluster, ?partitions);
@@ -3309,7 +3303,7 @@ impl Storage for Postgres {
     }
 
     async fn txn_offset_commit(
-        &mut self,
+        &self,
         offsets: TxnOffsetCommitRequest,
     ) -> Result<Vec<TxnOffsetCommitResponseTopic>> {
         debug!(cluster = self.cluster, ?offsets);
@@ -3436,7 +3430,7 @@ impl Storage for Postgres {
     }
 
     async fn txn_end(
-        &mut self,
+        &self,
         transaction_id: &str,
         producer_id: i64,
         producer_epoch: i16,
@@ -3462,6 +3456,18 @@ impl Storage for Postgres {
         } else {
             Ok(())
         }
+    }
+
+    fn cluster_id(&self) -> Result<&str> {
+        Ok(self.cluster.as_str())
+    }
+
+    fn node(&self) -> Result<i32> {
+        Ok(self.node)
+    }
+
+    fn advertised_listener(&self) -> Result<&Url> {
+        Ok(&self.advertised_listener)
     }
 }
 
