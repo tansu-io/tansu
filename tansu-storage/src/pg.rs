@@ -736,10 +736,10 @@ impl Postgres {
 
         let attributes = BatchAttribute::try_from(inflated.attributes)?;
 
-        if !attributes.control {
-            if let Some(ref schemas) = self.schemas {
-                schemas.validate(topition.topic(), &inflated).await?;
-            }
+        if !attributes.control
+            && let Some(ref schemas) = self.schemas
+        {
+            schemas.validate(topition.topic(), &inflated).await?;
         }
 
         let last_offset_delta = i64::from(inflated.last_offset_delta);
@@ -817,12 +817,13 @@ impl Postgres {
             }
         }
 
-        if let Some(transaction_id) = transaction_id {
-            if attributes.transaction {
-                let offset_start = high.unwrap_or_default();
-                let offset_end = high.map_or(last_offset_delta, |high| high + last_offset_delta);
+        if let Some(transaction_id) = transaction_id
+            && attributes.transaction
+        {
+            let offset_start = high.unwrap_or_default();
+            let offset_end = high.map_or(last_offset_delta, |high| high + last_offset_delta);
 
-                _ = self
+            _ = self
                     .tx_prepare_execute(tx,
                         include_sql!("pg/txn_produce_offset_insert.sql").as_str(),
                         &[
@@ -840,7 +841,6 @@ impl Postgres {
                     .await
                     .inspect(|n| debug!(cluster = ?self.cluster, ?transaction_id, ?inflated.producer_id, ?inflated.producer_epoch, ?topic, ?partition, ?offset_start, ?offset_end, ?n))
                     .inspect_err(|err| error!(?err))?;
-            }
         }
 
         _ = self
@@ -860,33 +860,30 @@ impl Postgres {
             .inspect(|n| debug!(?n))
             .inspect_err(|err| error!(?err))?;
 
-        if !attributes.control {
-            if let Some(ref registry) = self.schemas {
-                if let Some(ref lake) = self.lake {
-                    let lake_type = lake.lake_type().await?;
+        if !attributes.control
+            && let Some(ref registry) = self.schemas
+            && let Some(ref lake) = self.lake
+        {
+            let lake_type = lake.lake_type().await?;
 
-                    if let Some(record_batch) = registry.as_arrow(
-                        topition.topic(),
-                        topition.partition(),
-                        &inflated,
-                        lake_type,
-                    )? {
-                        let config = self
-                            .describe_config(topition.topic(), ConfigResource::Topic, None)
-                            .await?;
+            if let Some(record_batch) =
+                registry.as_arrow(topition.topic(), topition.partition(), &inflated, lake_type)?
+            {
+                let config = self
+                    .describe_config(topition.topic(), ConfigResource::Topic, None)
+                    .await?;
 
-                        lake.store(
-                            topition.topic(),
-                            topition.partition(),
-                            high.unwrap_or_default(),
-                            record_batch,
-                            config,
-                        )
-                        .await?;
-                    }
-                }
+                lake.store(
+                    topition.topic(),
+                    topition.partition(),
+                    high.unwrap_or_default(),
+                    record_batch,
+                    config,
+                )
+                .await?;
             }
         }
+
         Ok(high.unwrap_or_default())
     }
 

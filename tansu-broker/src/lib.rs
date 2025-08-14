@@ -174,10 +174,10 @@ impl VarRep {
 
 impl Replacer for &VarRep {
     fn replace_append(&mut self, caps: &regex::Captures<'_>, dst: &mut String) {
-        if let Some(variable) = caps.name("var") {
-            if let Some(value) = self.0.get(variable.as_str()) {
-                dst.push_str(value);
-            }
+        if let Some(variable) = caps.name("var")
+            && let Some(value) = self.0.get(variable.as_str())
+        {
+            dst.push_str(value);
         }
     }
 }

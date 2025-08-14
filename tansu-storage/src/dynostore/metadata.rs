@@ -16,6 +16,7 @@ use std::{
     collections::HashMap,
     fmt::Display,
     ops::{Deref, DerefMut},
+    slice::from_ref,
     sync::{Arc, LazyLock, Mutex, MutexGuard},
     time::{Duration, SystemTime},
 };
@@ -175,7 +176,7 @@ where
 
         let method = KeyValue::new("method", "put_opts");
 
-        REQUESTS.add(1, &[method.clone()]);
+        REQUESTS.add(1, from_ref(&method));
 
         self.object_store
             .put_opts(location, payload, opts)
@@ -183,7 +184,7 @@ where
             .inspect(|put_result| {
                 debug!(?put_result);
                 if let Ok(mut guard) = self.entries.lock() {
-                    self.evict(&mut guard, &[method.clone()]);
+                    self.evict(&mut guard, from_ref(&method));
 
                     let replacement = CacheEntry::from(put_result);
 
@@ -207,7 +208,7 @@ where
                 debug!(%location, ?error);
 
                 if let Ok(mut guard) = self.entries.lock() {
-                    self.evict(&mut guard, &[method.clone()]);
+                    self.evict(&mut guard, from_ref(&method));
 
                     if guard.deref_mut().remove(location).is_some() {
                         ENTRIES.add(1, &[method.clone(), KeyValue::new("outcome", "error")]);
@@ -233,7 +234,7 @@ where
 
         let method = KeyValue::new("method", "put_multipart_opts");
 
-        REQUESTS.add(1, &[method.clone()]);
+        REQUESTS.add(1, from_ref(&method));
 
         self.object_store
             .put_multipart_opts(location, opts)
@@ -260,10 +261,10 @@ where
 
         let method = KeyValue::new("method", "get_opts");
 
-        REQUESTS.add(1, &[method.clone()]);
+        REQUESTS.add(1, from_ref(&method));
 
         if let Ok(mut guard) = self.entries.lock() {
-            self.evict(&mut guard, &[method.clone()]);
+            self.evict(&mut guard, from_ref(&method));
 
             if let Some(entry) = guard.deref_mut().get_mut(location) {
                 debug!(%location, ?entry);
@@ -343,7 +344,7 @@ where
 
                 if let Ok(mut guard) = self.entries.lock() {
                     debug!(%location);
-                    self.evict(&mut guard, &[method.clone()]);
+                    self.evict(&mut guard, from_ref(&method));
 
                     if guard.deref_mut().remove(location).is_some() {
                         ENTRIES.add(1, &[method.clone(), KeyValue::new("outcome", "error")]);
@@ -369,10 +370,10 @@ where
             .delete(location)
             .await
             .inspect(|_| {
-                if let Ok(mut guard) = self.entries.lock() {
-                    if guard.deref_mut().remove(location).is_some() {
-                        ENTRIES.add(1, &[KeyValue::new("outcome", "delete")]);
-                    }
+                if let Ok(mut guard) = self.entries.lock()
+                    && guard.deref_mut().remove(location).is_some()
+                {
+                    ENTRIES.add(1, &[KeyValue::new("outcome", "delete")]);
                 }
             })
             .inspect_err(|error| {

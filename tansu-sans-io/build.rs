@@ -432,10 +432,9 @@ fn was_body_enum(messages: &[Message], include_tag: bool) -> TokenStream {
                         );
                         if field.kind().is_primitive() {
                             quote! {
-                                if let Some(#f) = #f {
-                                    if let Ok(encoded) = crate::primitive::tagged::TagField::encode(#tag, &#f) {
+                                if let Some(#f) = #f
+                                    && let Ok(encoded) = crate::primitive::tagged::TagField::encode(#tag, &#f) {
                                         tag_buffer.push(encoded);
-                                    }
                                 }
                             }
                         } else if field.kind().is_sequence() {
@@ -943,10 +942,9 @@ fn message_struct(
 
                 if field.kind().is_primitive() {
                     quote! {
-                        if let Some(#f) = value.#f {
-                            if let Ok(encoded) = crate::primitive::tagged::TagField::encode(#tag, &#f) {
-                                tag_buffer.push(encoded);
-                            }
+                        if let Some(#f) = value.#f
+                            && let Ok(encoded) = crate::primitive::tagged::TagField::encode(#tag, &#f) {
+                            tag_buffer.push(encoded);
                         }
                     }
                 } else if field.kind().is_sequence() {
