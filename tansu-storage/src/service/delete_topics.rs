@@ -76,6 +76,7 @@ where
         }
 
         Ok(DeleteTopicsResponse::default()
+            .throttle_time_ms(Some(0))
             .responses(Some(responses))
             .into())
     }
