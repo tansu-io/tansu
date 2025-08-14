@@ -14,7 +14,7 @@
 
 use rama::{Context, Service};
 use tansu_sans_io::{
-    ApiKey, Body, CreateTopicsRequest, CreateTopicsResponse, ErrorCode,
+    ApiKey, Body, CreateTopicsRequest, CreateTopicsResponse, ErrorCode, NULL_TOPIC_ID,
     create_topics_response::CreatableTopicResult,
 };
 use tracing::debug;
@@ -90,7 +90,7 @@ where
                 Err(Error::Api(error_code)) => topics.push(
                     CreatableTopicResult::default()
                         .name(name)
-                        .topic_id(Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]))
+                        .topic_id(Some(NULL_TOPIC_ID))
                         .error_code(error_code.into())
                         .error_message(Some(error_code.to_string()))
                         .topic_config_error_code(None)
@@ -105,7 +105,7 @@ where
                     topics.push(
                         CreatableTopicResult::default()
                             .name(name)
-                            .topic_id(Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]))
+                            .topic_id(Some(NULL_TOPIC_ID))
                             .error_code(ErrorCode::UnknownServerError.into())
                             .error_message(None)
                             .topic_config_error_code(None)
