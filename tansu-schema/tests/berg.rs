@@ -38,6 +38,7 @@ use url::Url;
 pub mod common;
 
 pub async fn lake_store(
+    namespace: &str,
     topic: &str,
     partition: i32,
     config: DescribeConfigsResult,
@@ -46,14 +47,19 @@ pub async fn lake_store(
     let catalog_uri = &var("ICEBERG_CATALOG").unwrap_or("http://localhost:8181".into())[..];
     let location_uri = &var("DATA_LAKE").unwrap_or("s3://lake".into())[..];
     let warehouse = var("ICEBERG_WAREHOUSE").ok();
-    let namespace = alphanumeric_string(5);
 
-    debug!(catalog_uri, location_uri, ?warehouse, namespace);
+    debug!(
+        catalog_uri,
+        location_uri,
+        ?warehouse,
+        namespace,
+        ?record_batch
+    );
 
     let lake_house = House::iceberg()
         .location(Url::parse(location_uri)?)
         .catalog(Url::parse(catalog_uri)?)
-        .namespace(Some(namespace.clone()))
+        .namespace(Some(namespace.to_owned()))
         .warehouse(warehouse.clone())
         .build()?;
 
@@ -185,8 +191,16 @@ mod json {
                 .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
+        let namespace = &alphanumeric_string(5);
         let topic = &alphanumeric_string(5);
-        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(
+            namespace,
+            topic,
+            partition,
+            empty_config(topic),
+            record_batch,
+        )
+        .await?;
 
         let pretty_results = pretty_format_batches(&results)?.to_string();
 
@@ -251,8 +265,16 @@ mod json {
                 .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
+        let namespace = &alphanumeric_string(5);
         let topic = &alphanumeric_string(5);
-        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(
+            namespace,
+            topic,
+            partition,
+            empty_config(topic),
+            record_batch,
+        )
+        .await?;
 
         let pretty_results = pretty_format_batches(&results)?.to_string();
 
@@ -320,8 +342,16 @@ mod json {
                 .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
+        let namespace = &alphanumeric_string(5);
         let topic = &alphanumeric_string(5);
-        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(
+            namespace,
+            topic,
+            partition,
+            empty_config(topic),
+            record_batch,
+        )
+        .await?;
 
         let pretty_results = pretty_format_batches(&results)?.to_string();
 
@@ -384,8 +414,16 @@ mod json {
                 .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
+        let namespace = &alphanumeric_string(5);
         let topic = &alphanumeric_string(5);
-        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(
+            namespace,
+            topic,
+            partition,
+            empty_config(topic),
+            record_batch,
+        )
+        .await?;
 
         let pretty_results = pretty_format_batches(&results)?.to_string();
 
@@ -450,8 +488,16 @@ mod json {
                 .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
+        let namespace = &alphanumeric_string(5);
         let topic = &alphanumeric_string(5);
-        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(
+            namespace,
+            topic,
+            partition,
+            empty_config(topic),
+            record_batch,
+        )
+        .await?;
 
         let pretty_results = pretty_format_batches(&results)?.to_string();
 
@@ -533,8 +579,16 @@ mod json {
                 .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
+        let namespace = &alphanumeric_string(5);
         let topic = &alphanumeric_string(5);
-        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(
+            namespace,
+            topic,
+            partition,
+            empty_config(topic),
+            record_batch,
+        )
+        .await?;
 
         let pretty_results = pretty_format_batches(&results)?.to_string();
 
@@ -611,8 +665,16 @@ mod json {
                 .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
+        let namespace = &alphanumeric_string(5);
         let topic = &alphanumeric_string(5);
-        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(
+            namespace,
+            topic,
+            partition,
+            empty_config(topic),
+            record_batch,
+        )
+        .await?;
 
         let pretty_results = pretty_format_batches(&results)?.to_string();
 
@@ -634,6 +696,7 @@ mod json {
 mod proto {
     use super::*;
     use tansu_schema::{
+        Generator as _,
         lake::LakeHouseType,
         proto::{MessageKind, Schema},
     };
@@ -711,8 +774,16 @@ mod proto {
                 .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))
         }?;
 
+        let namespace = &alphanumeric_string(5);
         let topic = &alphanumeric_string(5);
-        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(
+            namespace,
+            topic,
+            partition,
+            empty_config(topic),
+            record_batch,
+        )
+        .await?;
 
         let pretty_results = pretty_format_batches(&results)?.to_string();
 
@@ -759,8 +830,16 @@ mod proto {
             .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))
             .inspect(|record_batch| debug!(?record_batch))?;
 
+        let namespace = &alphanumeric_string(5);
         let topic = &alphanumeric_string(5);
-        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(
+            namespace,
+            topic,
+            partition,
+            empty_config(topic),
+            record_batch,
+        )
+        .await?;
 
         let pretty_results = pretty_format_batches(&results)?.to_string();
 
@@ -807,8 +886,16 @@ mod proto {
             .map_err(Into::into)
             .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?;
 
+        let namespace = &alphanumeric_string(5);
         let topic = &alphanumeric_string(5);
-        let results = lake_store(topic, partition, normalized_config(topic), record_batch).await?;
+        let results = lake_store(
+            namespace,
+            topic,
+            partition,
+            normalized_config(topic),
+            record_batch,
+        )
+        .await?;
 
         let pretty_results = pretty_format_batches(&results)?.to_string();
 
@@ -865,8 +952,16 @@ mod proto {
             .map_err(Into::into)
             .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?;
 
+        let namespace = &alphanumeric_string(5);
         let topic = &alphanumeric_string(5);
-        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(
+            namespace,
+            topic,
+            partition,
+            empty_config(topic),
+            record_batch,
+        )
+        .await?;
 
         let pretty_results = pretty_format_batches(&results)?.to_string();
 
@@ -918,8 +1013,16 @@ mod proto {
             .map_err(Into::into)
             .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?;
 
+        let namespace = &alphanumeric_string(5);
         let topic = &alphanumeric_string(5);
-        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(
+            namespace,
+            topic,
+            partition,
+            empty_config(topic),
+            record_batch,
+        )
+        .await?;
 
         let pretty_results = pretty_format_batches(&results)?.to_string();
 
@@ -976,8 +1079,16 @@ mod proto {
             .map_err(Into::into)
             .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?;
 
+        let namespace = &alphanumeric_string(5);
         let topic = &alphanumeric_string(5);
-        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(
+            namespace,
+            topic,
+            partition,
+            empty_config(topic),
+            record_batch,
+        )
+        .await?;
 
         let pretty_results = pretty_format_batches(&results)?.to_string();
 
@@ -987,6 +1098,115 @@ mod proto {
             "+------------------------------------------------------------------------------------+-------------------------------------------------------------------------------------------------------------------------------------------+",
             "| {partition: 32123, timestamp: 1973-10-17T18:36:57, year: 1973, month: 10, day: 17} | {results: [{url: https://example.com/abc, title: a, snippets: [p, q, r]}, {url: https://example.com/def, title: b, snippets: [x, y, z]}]} |",
             "+------------------------------------------------------------------------------------+-------------------------------------------------------------------------------------------------------------------------------------------+",
+        ];
+
+        assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
+
+        Ok(())
+    }
+
+    #[ignore]
+    #[tokio::test]
+    async fn customer_schema_migration() -> Result<()> {
+        _ = dotenv().ok();
+        let _guard = init_tracing()?;
+
+        let partition = 32123;
+
+        let record_batch_001 = {
+            let schema = Schema::try_from(Bytes::from_static(include_bytes!("migrate-001.proto")))?;
+
+            Batch::builder()
+                .record(schema.generate()?)
+                .base_timestamp(119_731_017_000)
+                .build()
+                .map_err(Into::into)
+                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
+        };
+
+        let namespace = &alphanumeric_string(5);
+        let topic = &alphanumeric_string(5);
+        let results = lake_store(
+            namespace,
+            topic,
+            partition,
+            empty_config(topic),
+            record_batch_001,
+        )
+        .await?;
+        let pretty_results = pretty_format_batches(&results)?.to_string();
+
+        let expected = vec![
+            "+------------------------------------------------------------------------------------+------------------------+",
+            "| meta                                                                               | value                  |",
+            "+------------------------------------------------------------------------------------+------------------------+",
+            "| {partition: 32123, timestamp: 1973-10-17T18:36:57, year: 1973, month: 10, day: 17} | {email_address: lorem} |",
+            "+------------------------------------------------------------------------------------+------------------------+",
+        ];
+
+        assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
+
+        let record_batch_002 = {
+            let schema = Schema::try_from(Bytes::from_static(include_bytes!("migrate-002.proto")))?;
+
+            Batch::builder()
+                .record(schema.generate()?)
+                .base_timestamp(119_731_017_000)
+                .build()
+                .map_err(Into::into)
+                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
+        };
+
+        let results = lake_store(
+            namespace,
+            topic,
+            partition,
+            normalized_config(topic),
+            record_batch_002,
+        )
+        .await?;
+        let pretty_results = pretty_format_batches(&results)?.to_string();
+
+        let expected = vec![
+            "+----------------+---------------------+-----------+------------+----------+---------------------+-----------------+",
+            "| meta.partition | meta.timestamp      | meta.year | meta.month | meta.day | value.email_address | value.full_name |",
+            "+----------------+---------------------+-----------+------------+----------+---------------------+-----------------+",
+            "| 32123          | 1973-10-17T18:36:57 | 1973      | 10         | 17       | lorem               | ipsum           |",
+            "| 32123          | 1973-10-17T18:36:57 | 1973      | 10         | 17       | lorem               |                 |",
+            "+----------------+---------------------+-----------+------------+----------+---------------------+-----------------+",
+        ];
+
+        assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
+
+        let record_batch_003 = {
+            let schema = Schema::try_from(Bytes::from_static(include_bytes!("migrate-003.proto")))?;
+
+            Batch::builder()
+                .record(schema.generate()?)
+                .base_timestamp(119_731_017_000)
+                .build()
+                .map_err(Into::into)
+                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
+        };
+
+        let results = lake_store(
+            namespace,
+            topic,
+            partition,
+            normalized_config(topic),
+            record_batch_003,
+        )
+        .await?;
+        let pretty_results = pretty_format_batches(&results)?.to_string();
+
+        let expected = vec![
+            "+----------------+---------------------+-----------+------------+----------+---------------------+-----------------+----------------------------+------------------------+-----------------+----------------------+-------------------------+--------------------+",
+            "| meta.partition | meta.timestamp      | meta.year | meta.month | meta.day | value.email_address | value.full_name | value.home.building_number | value.home.street_name | value.home.city | value.home.post_code | value.home.country_name | value.industry     |",
+            "+----------------+---------------------+-----------+------------+----------+---------------------+-----------------+----------------------------+------------------------+-----------------+----------------------+-------------------------+--------------------+",
+            "| 32123          | 1973-10-17T18:36:57 | 1973      | 10         | 17       | lorem               | ipsum           | dolor                      | sit                    | amet            | consectetur          | adipiscing              | [elit, elit, elit] |",
+            "| 32123          | 1973-10-17T18:36:57 | 1973      | 10         | 17       | lorem               | ipsum           |                            |                        |                 |                      |                         |                    |",
+            "| 32123          | 1973-10-17T18:36:57 | 1973      | 10         | 17       | lorem               |                 |                            |                        |                 |                      |                         |                    |",
+            "+----------------+---------------------+-----------+------------+----------+---------------------+-----------------+----------------------------+------------------------+-----------------+----------------------+-------------------------+--------------------+",
         ];
 
         assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
@@ -1059,8 +1279,16 @@ mod avro {
                 .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
+        let namespace = &alphanumeric_string(5);
         let topic = &alphanumeric_string(5);
-        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(
+            namespace,
+            topic,
+            partition,
+            empty_config(topic),
+            record_batch,
+        )
+        .await?;
 
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
@@ -1147,8 +1375,16 @@ mod avro {
                 .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
+        let namespace = &alphanumeric_string(5);
         let topic = &alphanumeric_string(5);
-        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(
+            namespace,
+            topic,
+            partition,
+            empty_config(topic),
+            record_batch,
+        )
+        .await?;
 
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
@@ -1200,8 +1436,16 @@ mod avro {
                 .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
+        let namespace = &alphanumeric_string(5);
         let topic = &alphanumeric_string(5);
-        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(
+            namespace,
+            topic,
+            partition,
+            empty_config(topic),
+            record_batch,
+        )
+        .await?;
 
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
@@ -1260,8 +1504,16 @@ mod avro {
                 .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
+        let namespace = &alphanumeric_string(5);
         let topic = &alphanumeric_string(5);
-        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(
+            namespace,
+            topic,
+            partition,
+            empty_config(topic),
+            record_batch,
+        )
+        .await?;
 
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
@@ -1324,8 +1576,16 @@ mod avro {
                 .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
+        let namespace = &alphanumeric_string(5);
         let topic = &alphanumeric_string(5);
-        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(
+            namespace,
+            topic,
+            partition,
+            empty_config(topic),
+            record_batch,
+        )
+        .await?;
 
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
@@ -1376,8 +1636,16 @@ mod avro {
                 .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
+        let namespace = &alphanumeric_string(5);
         let topic = &alphanumeric_string(5);
-        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(
+            namespace,
+            topic,
+            partition,
+            empty_config(topic),
+            record_batch,
+        )
+        .await?;
 
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
@@ -1428,8 +1696,16 @@ mod avro {
                 .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
+        let namespace = &alphanumeric_string(5);
         let topic = &alphanumeric_string(5);
-        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(
+            namespace,
+            topic,
+            partition,
+            empty_config(topic),
+            record_batch,
+        )
+        .await?;
 
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
@@ -1505,8 +1781,16 @@ mod avro {
                 .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
+        let namespace = &alphanumeric_string(5);
         let topic = &alphanumeric_string(5);
-        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(
+            namespace,
+            topic,
+            partition,
+            empty_config(topic),
+            record_batch,
+        )
+        .await?;
 
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
@@ -1566,8 +1850,16 @@ mod avro {
                 .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
+        let namespace = &alphanumeric_string(5);
         let topic = &alphanumeric_string(5);
-        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(
+            namespace,
+            topic,
+            partition,
+            empty_config(topic),
+            record_batch,
+        )
+        .await?;
 
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
@@ -1629,8 +1921,16 @@ mod avro {
                 .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
+        let namespace = &alphanumeric_string(5);
         let topic = &alphanumeric_string(5);
-        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(
+            namespace,
+            topic,
+            partition,
+            empty_config(topic),
+            record_batch,
+        )
+        .await?;
 
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
@@ -1690,8 +1990,16 @@ mod avro {
                 .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
+        let namespace = &alphanumeric_string(5);
         let topic = &alphanumeric_string(5);
-        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(
+            namespace,
+            topic,
+            partition,
+            empty_config(topic),
+            record_batch,
+        )
+        .await?;
 
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
@@ -1754,8 +2062,16 @@ mod avro {
                 .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
+        let namespace = &alphanumeric_string(5);
         let topic = &alphanumeric_string(5);
-        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(
+            namespace,
+            topic,
+            partition,
+            empty_config(topic),
+            record_batch,
+        )
+        .await?;
 
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
@@ -1818,8 +2134,16 @@ mod avro {
                 .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
+        let namespace = &alphanumeric_string(5);
         let topic = &alphanumeric_string(5);
-        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(
+            namespace,
+            topic,
+            partition,
+            empty_config(topic),
+            record_batch,
+        )
+        .await?;
 
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
@@ -1882,8 +2206,16 @@ mod avro {
                 .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
+        let namespace = &alphanumeric_string(5);
         let topic = &alphanumeric_string(5);
-        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(
+            namespace,
+            topic,
+            partition,
+            empty_config(topic),
+            record_batch,
+        )
+        .await?;
 
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
@@ -1967,8 +2299,16 @@ mod avro {
                 .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
+        let namespace = &alphanumeric_string(5);
         let topic = &alphanumeric_string(5);
-        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(
+            namespace,
+            topic,
+            partition,
+            empty_config(topic),
+            record_batch,
+        )
+        .await?;
 
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
@@ -2031,8 +2371,16 @@ mod avro {
                 .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
+        let namespace = &alphanumeric_string(5);
         let topic = &alphanumeric_string(5);
-        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(
+            namespace,
+            topic,
+            partition,
+            empty_config(topic),
+            record_batch,
+        )
+        .await?;
 
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
@@ -2099,8 +2447,16 @@ mod avro {
                 .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
+        let namespace = &alphanumeric_string(5);
         let topic = &alphanumeric_string(5);
-        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(
+            namespace,
+            topic,
+            partition,
+            empty_config(topic),
+            record_batch,
+        )
+        .await?;
 
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
@@ -2161,8 +2517,16 @@ mod avro {
                 .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
+        let namespace = &alphanumeric_string(5);
         let topic = &alphanumeric_string(5);
-        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(
+            namespace,
+            topic,
+            partition,
+            empty_config(topic),
+            record_batch,
+        )
+        .await?;
 
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
@@ -2222,8 +2586,16 @@ mod avro {
                 .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
+        let namespace = &alphanumeric_string(5);
         let topic = &alphanumeric_string(5);
-        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(
+            namespace,
+            topic,
+            partition,
+            empty_config(topic),
+            record_batch,
+        )
+        .await?;
 
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
@@ -2284,8 +2656,16 @@ mod avro {
                 .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
+        let namespace = &alphanumeric_string(5);
         let topic = &alphanumeric_string(5);
-        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(
+            namespace,
+            topic,
+            partition,
+            empty_config(topic),
+            record_batch,
+        )
+        .await?;
 
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
@@ -2345,8 +2725,16 @@ mod avro {
                 .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
         };
 
+        let namespace = &alphanumeric_string(5);
         let topic = &alphanumeric_string(5);
-        let results = lake_store(topic, partition, empty_config(topic), record_batch).await?;
+        let results = lake_store(
+            namespace,
+            topic,
+            partition,
+            empty_config(topic),
+            record_batch,
+        )
+        .await?;
 
         let pretty_results = pretty_format_batches(&results).map(|pretty| pretty.to_string())?;
 
