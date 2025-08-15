@@ -43,7 +43,7 @@ jobs:
       STORAGE_ENGINE: s3://tansu/
       TANSU_IMAGE: ghcr.io/tansu-io/tansu
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: extractions/setup-just@v3
       - run: just ci
       - uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -57,14 +57,14 @@ jobs:
   typos:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: crate-ci/typos@v1.34.0
         with:
           config: typos.toml
   third-party-license:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - env:
           CARGO_ABOUT_VERSION: 0.6.6
@@ -79,7 +79,7 @@ jobs:
   src:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: |
           git archive --format=tar.gz HEAD >${{runner.temp}}/src.tar.gz
       - uses: actions/upload-artifact@v4
@@ -98,7 +98,7 @@ jobs:
         os:
           - ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: docker/metadata-action@v5
         id: meta
         with:
@@ -162,11 +162,11 @@ jobs:
             type=ref,event=pr
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           repository: tansu-io/example-java
           path: integration
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           sparse-checkout: |
             etc/initdb.d/010-schema.sql
@@ -228,7 +228,7 @@ jobs:
             flags: ""
             enabled: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           cache: false
