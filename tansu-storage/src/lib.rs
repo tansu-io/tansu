@@ -103,6 +103,7 @@ pub mod dynostore;
 
 #[cfg(feature = "postgres")]
 pub mod pg;
+pub mod service;
 
 #[cfg(any(feature = "libsql", feature = "postgres", feature = "turso"))]
 pub(crate) mod sql;
@@ -1141,35 +1142,32 @@ impl From<TxnState> for String {
 #[async_trait]
 pub trait Storage: Clone + Debug + Send + Sync + 'static {
     /// On startup a broker will register with storage.
-    async fn register_broker(
-        &mut self,
-        broker_registration: BrokerRegistrationRequest,
-    ) -> Result<()>;
+    async fn register_broker(&self, broker_registration: BrokerRegistrationRequest) -> Result<()>;
 
     /// Create a topic on this storage.
-    async fn create_topic(&mut self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid>;
+    async fn create_topic(&self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid>;
 
     /// Incrementally alter a resource on this storage.
     async fn incremental_alter_resource(
-        &mut self,
+        &self,
         resource: AlterConfigsResource,
     ) -> Result<AlterConfigsResourceResponse>;
 
     /// Delete records on this storage.
     async fn delete_records(
-        &mut self,
+        &self,
         topics: &[DeleteRecordsTopic],
     ) -> Result<Vec<DeleteRecordsTopicResult>>;
 
     /// Delete a topic from this storage.
-    async fn delete_topic(&mut self, topic: &TopicId) -> Result<ErrorCode>;
+    async fn delete_topic(&self, topic: &TopicId) -> Result<ErrorCode>;
 
     /// Query the brokers registered with this storage.
-    async fn brokers(&mut self) -> Result<Vec<DescribeClusterBroker>>;
+    async fn brokers(&self) -> Result<Vec<DescribeClusterBroker>>;
 
     /// Produce a deflated batch to this storage.
     async fn produce(
-        &mut self,
+        &self,
         transaction_id: Option<&str>,
         topition: &Topition,
         batch: deflated::Batch,
@@ -1177,7 +1175,7 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
 
     /// Fetch deflated batches from storage.
     async fn fetch(
-        &mut self,
+        &self,
         topition: &'_ Topition,
         offset: i64,
         min_bytes: u32,
@@ -1186,18 +1184,18 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
     ) -> Result<Vec<deflated::Batch>>;
 
     /// Query the offset stage for a topic partition.
-    async fn offset_stage(&mut self, topition: &Topition) -> Result<OffsetStage>;
+    async fn offset_stage(&self, topition: &Topition) -> Result<OffsetStage>;
 
     /// Query the offsets for one or more topic partitions.
     async fn list_offsets(
-        &mut self,
+        &self,
         isolation_level: IsolationLevel,
         offsets: &[(Topition, ListOffsetRequest)],
     ) -> Result<Vec<(Topition, ListOffsetResponse)>>;
 
     /// Commit offsets for one or more topic partitions in a consumer group.
     async fn offset_commit(
-        &mut self,
+        &self,
         group_id: &str,
         retention_time_ms: Option<Duration>,
         offsets: &[(Topition, OffsetCommitRequest)],
@@ -1205,20 +1203,17 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
 
     /// Fetch committed offsets for one or more topic partitions in a consumer group.
     async fn offset_fetch(
-        &mut self,
+        &self,
         group_id: Option<&str>,
         topics: &[Topition],
         require_stable: Option<bool>,
     ) -> Result<BTreeMap<Topition, i64>>;
 
     /// Fetch all committed offsets in a consumer group.
-    async fn committed_offset_topitions(
-        &mut self,
-        group_id: &str,
-    ) -> Result<BTreeMap<Topition, i64>>;
+    async fn committed_offset_topitions(&self, group_id: &str) -> Result<BTreeMap<Topition, i64>>;
 
     /// Query broker and topic metadata.
-    async fn metadata(&mut self, topics: Option<&[TopicId]>) -> Result<MetadataResponse>;
+    async fn metadata(&self, topics: Option<&[TopicId]>) -> Result<MetadataResponse>;
 
     /// Query the configuration of a resource in this storage.
     async fn describe_config(
@@ -1229,24 +1224,24 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
     ) -> Result<DescribeConfigsResult>;
 
     /// Query available groups optionally with a state filter.
-    async fn list_groups(&mut self, states_filter: Option<&[String]>) -> Result<Vec<ListedGroup>>;
+    async fn list_groups(&self, states_filter: Option<&[String]>) -> Result<Vec<ListedGroup>>;
 
     /// Delete one or more groups from storage.
     async fn delete_groups(
-        &mut self,
+        &self,
         group_ids: Option<&[String]>,
     ) -> Result<Vec<DeletableGroupResult>>;
 
     /// Describe the groups found in this storage.
     async fn describe_groups(
-        &mut self,
+        &self,
         group_ids: Option<&[String]>,
         include_authorized_operations: bool,
     ) -> Result<Vec<NamedGroupDetail>>;
 
     /// Describe the topic partitions found in this storage.
     async fn describe_topic_partitions(
-        &mut self,
+        &self,
         topics: Option<&[TopicId]>,
         partition_limit: i32,
         cursor: Option<Topition>,
@@ -1254,7 +1249,7 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
 
     /// Conditionally update the state of a group in this storage.
     async fn update_group(
-        &mut self,
+        &self,
         group_id: &str,
         detail: GroupDetail,
         version: Option<Version>,
@@ -1262,7 +1257,7 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
 
     /// Initialise a transactional or idempotent producer in this storage.
     async fn init_producer(
-        &mut self,
+        &self,
         transaction_id: Option<&str>,
         transaction_timeout_ms: i32,
         producer_id: Option<i64>,
@@ -1271,7 +1266,7 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
 
     /// Add offsets to a transaction for a producer.
     async fn txn_add_offsets(
-        &mut self,
+        &self,
         transaction_id: &str,
         producer_id: i64,
         producer_epoch: i16,
@@ -1280,19 +1275,19 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
 
     /// Add partitions to a transaction.
     async fn txn_add_partitions(
-        &mut self,
+        &self,
         partitions: TxnAddPartitionsRequest,
     ) -> Result<TxnAddPartitionsResponse>;
 
     /// Commit an offset within a transaction.
     async fn txn_offset_commit(
-        &mut self,
+        &self,
         offsets: TxnOffsetCommitRequest,
     ) -> Result<Vec<TxnOffsetCommitResponseTopic>>;
 
     /// Commit or abort a running transaction.
     async fn txn_end(
-        &mut self,
+        &self,
         transaction_id: &str,
         producer_id: i64,
         producer_epoch: i16,
@@ -1303,6 +1298,12 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
     async fn maintain(&self) -> Result<()> {
         Ok(())
     }
+
+    fn cluster_id(&self) -> Result<&str>;
+
+    fn node(&self) -> Result<i32>;
+
+    fn advertised_listener(&self) -> Result<&Url>;
 }
 
 /// Conditional Update Errors
@@ -1545,10 +1546,7 @@ static STORAGE_CONTAINER_ERRORS: LazyLock<Counter<u64>> = LazyLock::new(|| {
 
 #[async_trait]
 impl Storage for StorageContainer {
-    async fn register_broker(
-        &mut self,
-        broker_registration: BrokerRegistrationRequest,
-    ) -> Result<()> {
+    async fn register_broker(&self, broker_registration: BrokerRegistrationRequest) -> Result<()> {
         let attributes = [KeyValue::new("method", "register_broker")];
 
         match self {
@@ -1574,7 +1572,7 @@ impl Storage for StorageContainer {
     }
 
     async fn incremental_alter_resource(
-        &mut self,
+        &self,
         resource: AlterConfigsResource,
     ) -> Result<AlterConfigsResourceResponse> {
         let attributes = [KeyValue::new("method", "incremental_alter_resource")];
@@ -1601,7 +1599,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    async fn create_topic(&mut self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {
+    async fn create_topic(&self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {
         let attributes = [KeyValue::new("method", "create_topic")];
         let span = debug_span!("create_topic", ?topic, validate_only);
 
@@ -1632,7 +1630,7 @@ impl Storage for StorageContainer {
     }
 
     async fn delete_records(
-        &mut self,
+        &self,
         topics: &[DeleteRecordsTopic],
     ) -> Result<Vec<DeleteRecordsTopicResult>> {
         let attributes = [KeyValue::new("method", "delete_records")];
@@ -1659,7 +1657,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    async fn delete_topic(&mut self, topic: &TopicId) -> Result<ErrorCode> {
+    async fn delete_topic(&self, topic: &TopicId) -> Result<ErrorCode> {
         let attributes = [KeyValue::new("method", "delete_topic")];
 
         match self {
@@ -1684,7 +1682,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    async fn brokers(&mut self) -> Result<Vec<DescribeClusterBroker>> {
+    async fn brokers(&self) -> Result<Vec<DescribeClusterBroker>> {
         let attributes = [KeyValue::new("method", "brokers")];
 
         match self {
@@ -1710,7 +1708,7 @@ impl Storage for StorageContainer {
     }
 
     async fn produce(
-        &mut self,
+        &self,
         transaction_id: Option<&str>,
         topition: &Topition,
         batch: deflated::Batch,
@@ -1740,7 +1738,7 @@ impl Storage for StorageContainer {
     }
 
     async fn fetch(
-        &mut self,
+        &self,
         topition: &'_ Topition,
         offset: i64,
         min_bytes: u32,
@@ -1775,7 +1773,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    async fn offset_stage(&mut self, topition: &Topition) -> Result<OffsetStage> {
+    async fn offset_stage(&self, topition: &Topition) -> Result<OffsetStage> {
         let attributes = [KeyValue::new("method", "offset_stage")];
 
         match self {
@@ -1801,7 +1799,7 @@ impl Storage for StorageContainer {
     }
 
     async fn list_offsets(
-        &mut self,
+        &self,
         isolation_level: IsolationLevel,
         offsets: &[(Topition, ListOffsetRequest)],
     ) -> Result<Vec<(Topition, ListOffsetResponse)>> {
@@ -1830,7 +1828,7 @@ impl Storage for StorageContainer {
     }
 
     async fn offset_commit(
-        &mut self,
+        &self,
         group_id: &str,
         retention_time_ms: Option<Duration>,
         offsets: &[(Topition, OffsetCommitRequest)],
@@ -1859,10 +1857,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    async fn committed_offset_topitions(
-        &mut self,
-        group_id: &str,
-    ) -> Result<BTreeMap<Topition, i64>> {
+    async fn committed_offset_topitions(&self, group_id: &str) -> Result<BTreeMap<Topition, i64>> {
         let attributes = [KeyValue::new("method", "committed_offset_topitions")];
 
         match self {
@@ -1888,7 +1883,7 @@ impl Storage for StorageContainer {
     }
 
     async fn offset_fetch(
-        &mut self,
+        &self,
         group_id: Option<&str>,
         topics: &[Topition],
         require_stable: Option<bool>,
@@ -1917,7 +1912,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    async fn metadata(&mut self, topics: Option<&[TopicId]>) -> Result<MetadataResponse> {
+    async fn metadata(&self, topics: Option<&[TopicId]>) -> Result<MetadataResponse> {
         let attributes = [KeyValue::new("method", "metadata")];
 
         match self {
@@ -1973,7 +1968,7 @@ impl Storage for StorageContainer {
     }
 
     async fn describe_topic_partitions(
-        &mut self,
+        &self,
         topics: Option<&[TopicId]>,
         partition_limit: i32,
         cursor: Option<Topition>,
@@ -2008,7 +2003,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    async fn list_groups(&mut self, states_filter: Option<&[String]>) -> Result<Vec<ListedGroup>> {
+    async fn list_groups(&self, states_filter: Option<&[String]>) -> Result<Vec<ListedGroup>> {
         let attributes = [KeyValue::new("method", "list_groups")];
 
         match self {
@@ -2034,7 +2029,7 @@ impl Storage for StorageContainer {
     }
 
     async fn delete_groups(
-        &mut self,
+        &self,
         group_ids: Option<&[String]>,
     ) -> Result<Vec<DeletableGroupResult>> {
         let attributes = [KeyValue::new("method", "delete_groups")];
@@ -2062,7 +2057,7 @@ impl Storage for StorageContainer {
     }
 
     async fn describe_groups(
-        &mut self,
+        &self,
         group_ids: Option<&[String]>,
         include_authorized_operations: bool,
     ) -> Result<Vec<NamedGroupDetail>> {
@@ -2095,7 +2090,7 @@ impl Storage for StorageContainer {
     }
 
     async fn update_group(
-        &mut self,
+        &self,
         group_id: &str,
         detail: GroupDetail,
         version: Option<Version>,
@@ -2125,7 +2120,7 @@ impl Storage for StorageContainer {
     }
 
     async fn init_producer(
-        &mut self,
+        &self,
         transaction_id: Option<&str>,
         transaction_timeout_ms: i32,
         producer_id: Option<i64>,
@@ -2183,7 +2178,7 @@ impl Storage for StorageContainer {
     }
 
     async fn txn_add_offsets(
-        &mut self,
+        &self,
         transaction_id: &str,
         producer_id: i64,
         producer_epoch: i16,
@@ -2222,7 +2217,7 @@ impl Storage for StorageContainer {
     }
 
     async fn txn_add_partitions(
-        &mut self,
+        &self,
         partitions: TxnAddPartitionsRequest,
     ) -> Result<TxnAddPartitionsResponse> {
         let attributes = [KeyValue::new("method", "txn_add_partitions")];
@@ -2250,7 +2245,7 @@ impl Storage for StorageContainer {
     }
 
     async fn txn_offset_commit(
-        &mut self,
+        &self,
         offsets: TxnOffsetCommitRequest,
     ) -> Result<Vec<TxnOffsetCommitResponseTopic>> {
         let attributes = [KeyValue::new("method", "txn_offset_commit")];
@@ -2278,7 +2273,7 @@ impl Storage for StorageContainer {
     }
 
     async fn txn_end(
-        &mut self,
+        &self,
         transaction_id: &str,
         producer_id: i64,
         producer_epoch: i16,
@@ -2341,6 +2336,54 @@ impl Storage for StorageContainer {
             debug!(?err);
             STORAGE_CONTAINER_ERRORS.add(1, &attributes);
         })
+    }
+
+    fn cluster_id(&self) -> Result<&str> {
+        match self {
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.cluster_id(),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.cluster_id(),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.cluster_id(),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.cluster_id(),
+        }
+    }
+
+    fn node(&self) -> Result<i32> {
+        match self {
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.node(),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.node(),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.node(),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.node(),
+        }
+    }
+
+    fn advertised_listener(&self) -> Result<&Url> {
+        match self {
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.advertised_listener(),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.advertised_listener(),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.advertised_listener(),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.advertised_listener(),
+        }
     }
 }
 

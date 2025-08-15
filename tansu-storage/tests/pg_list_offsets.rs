@@ -79,7 +79,7 @@ async fn list_offset() -> Result<()> {
     let broker_id = rng().random_range(0..i32::MAX);
     let incarnation_id = Uuid::now_v7();
 
-    let mut storage_container = storage_container(cluster_id, broker_id)?;
+    let storage_container = storage_container(cluster_id, broker_id)?;
 
     let broker_registration = BrokerRegistrationRequest {
         broker_id,

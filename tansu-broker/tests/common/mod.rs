@@ -478,7 +478,7 @@ pub(crate) async fn join(
 pub(crate) async fn register_broker<C>(
     cluster_id: C,
     broker_id: i32,
-    sc: &mut StorageContainer,
+    sc: &StorageContainer,
 ) -> Result<()>
 where
     C: Into<String>,

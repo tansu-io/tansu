@@ -12,12 +12,46 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use rama::{Context, Service};
 use tansu_sans_io::{
-    Body,
-    offset_fetch_request::{OffsetFetchRequestGroup, OffsetFetchRequestTopic},
+    ApiKey, Body,
+    offset_fetch_request::{self, OffsetFetchRequestGroup, OffsetFetchRequestTopic},
 };
 
-use crate::{Result, coordinator::group::Coordinator};
+use crate::{Error, Result, broker::group::Request, coordinator::group::Coordinator};
+
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct OffsetFetchService;
+
+impl ApiKey for OffsetFetchService {
+    const KEY: i16 = offset_fetch_request::OffsetFetchRequest::KEY;
+}
+
+impl<C, State> Service<State, Request<C>> for OffsetFetchService
+where
+    C: Coordinator,
+    State: Clone + Send + Sync + 'static,
+{
+    type Response = Body;
+    type Error = Error;
+
+    async fn serve(
+        &self,
+        _ctx: Context<State>,
+        mut request: Request<C>,
+    ) -> Result<Self::Response, Self::Error> {
+        let offset_fetch = offset_fetch_request::OffsetFetchRequest::try_from(request.frame.body)?;
+        request
+            .coordinator
+            .offset_fetch(
+                offset_fetch.group_id.as_deref(),
+                offset_fetch.topics.as_deref(),
+                offset_fetch.groups.as_deref(),
+                offset_fetch.require_stable,
+            )
+            .await
+    }
+}
 
 #[derive(Debug)]
 pub struct OffsetFetchRequest<C> {

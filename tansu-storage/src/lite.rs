@@ -190,7 +190,7 @@ impl Engine {
     {
         debug!(?connection, sql, ?params);
 
-        let mut statement = connection.prepare(sql).await?;
+        let statement = connection.prepare(sql).await?;
 
         let execute_start = SystemTime::now();
 
@@ -235,7 +235,7 @@ impl Engine {
     {
         debug!(?connection, sql, ?params);
 
-        let mut statement = connection.prepare(sql).await?;
+        let statement = connection.prepare(sql).await?;
 
         let execute_start = SystemTime::now();
 
@@ -276,7 +276,7 @@ impl Engine {
     {
         debug!(?connection, sql, ?params);
 
-        let mut statement = connection
+        let statement = connection
             .prepare(sql)
             .await
             .inspect_err(|err| error!(?err, sql))?;
@@ -462,10 +462,10 @@ impl Engine {
 
         let attributes = BatchAttribute::try_from(inflated.attributes)?;
 
-        if !attributes.control {
-            if let Some(ref schemas) = self.schemas {
-                schemas.validate(topition.topic(), &inflated).await?;
-            }
+        if !attributes.control
+            && let Some(ref schemas) = self.schemas
+        {
+            schemas.validate(topition.topic(), &inflated).await?;
         }
 
         let last_offset_delta = i64::from(inflated.last_offset_delta);
@@ -524,12 +524,13 @@ impl Engine {
             }
         }
 
-        if let Some(transaction_id) = transaction_id {
-            if attributes.transaction {
-                let offset_start = high.unwrap_or_default();
-                let offset_end = high.map_or(last_offset_delta, |high| high + last_offset_delta);
+        if let Some(transaction_id) = transaction_id
+            && attributes.transaction
+        {
+            let offset_start = high.unwrap_or_default();
+            let offset_end = high.map_or(last_offset_delta, |high| high + last_offset_delta);
 
-                _ = self
+            _ = self
                     .prepare_execute(tx,
                         &sql_lookup("txn_produce_offset_insert.sql")?,
                         (
@@ -546,7 +547,6 @@ impl Engine {
                     .await
                     .inspect(|n| debug!(cluster = ?self.cluster, ?transaction_id, ?inflated.producer_id, ?inflated.producer_epoch, ?topic, ?partition, ?offset_start, ?offset_end, ?n))
                     .inspect_err(|err| error!(?err))?;
-            }
         }
 
         _ = self
@@ -565,38 +565,35 @@ impl Engine {
             .inspect(|n| debug!(?n))
             .inspect_err(|err| error!(?err))?;
 
-        if !attributes.control {
-            if let Some(ref registry) = self.schemas {
-                if let Some(ref lake) = self.lake {
-                    let lake_type = lake.lake_type().await?;
+        if !attributes.control
+            && let Some(ref registry) = self.schemas
+            && let Some(ref lake) = self.lake
+        {
+            let lake_type = lake.lake_type().await?;
 
-                    if let Some(record_batch) = registry.as_arrow(
-                        topition.topic(),
-                        topition.partition(),
-                        &inflated,
-                        lake_type,
-                    )? {
-                        let config = self
-                            .describe_config(topition.topic(), ConfigResource::Topic, None)
-                            .await?;
+            if let Some(record_batch) =
+                registry.as_arrow(topition.topic(), topition.partition(), &inflated, lake_type)?
+            {
+                let config = self
+                    .describe_config(topition.topic(), ConfigResource::Topic, None)
+                    .await?;
 
-                        lake.store(
-                            topition.topic(),
-                            topition.partition(),
-                            high.unwrap_or_default(),
-                            record_batch,
-                            config,
-                        )
-                        .await?;
-                    }
-                }
+                lake.store(
+                    topition.topic(),
+                    topition.partition(),
+                    high.unwrap_or_default(),
+                    record_batch,
+                    config,
+                )
+                .await?;
             }
         }
+
         Ok(high.unwrap_or_default())
     }
 
     async fn end_in_tx(
-        &mut self,
+        &self,
         transaction_id: &str,
         producer_id: i64,
         producer_epoch: i16,
@@ -1037,10 +1034,7 @@ fn unique_constraint(error_code: ErrorCode) -> impl Fn(libsql::Error) -> Error {
 
 #[async_trait]
 impl Storage for Engine {
-    async fn register_broker(
-        &mut self,
-        broker_registration: BrokerRegistrationRequest,
-    ) -> Result<()> {
+    async fn register_broker(&self, broker_registration: BrokerRegistrationRequest) -> Result<()> {
         debug!(?broker_registration);
 
         let connection = self.connection().await?;
@@ -1055,7 +1049,7 @@ impl Storage for Engine {
         .and(Ok(()))
     }
 
-    async fn brokers(&mut self) -> Result<Vec<DescribeClusterBroker>> {
+    async fn brokers(&self) -> Result<Vec<DescribeClusterBroker>> {
         debug!(cluster = self.cluster);
 
         let broker_id = self.node;
@@ -1076,7 +1070,7 @@ impl Storage for Engine {
         ])
     }
 
-    async fn create_topic(&mut self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {
+    async fn create_topic(&self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {
         debug!(cluster = self.cluster, ?topic, validate_only);
 
         let connection = self.connection().await.inspect_err(|err| error!(?err))?;
@@ -1149,14 +1143,14 @@ impl Storage for Engine {
     }
 
     async fn delete_records(
-        &mut self,
+        &self,
         topics: &[DeleteRecordsTopic],
     ) -> Result<Vec<DeleteRecordsTopicResult>> {
         debug!(?topics);
         todo!()
     }
 
-    async fn delete_topic(&mut self, topic: &TopicId) -> Result<ErrorCode> {
+    async fn delete_topic(&self, topic: &TopicId) -> Result<ErrorCode> {
         debug!(cluster = self.cluster, ?topic);
 
         let connection = self.connection().await?;
@@ -1222,7 +1216,7 @@ impl Storage for Engine {
     }
 
     async fn incremental_alter_resource(
-        &mut self,
+        &self,
         resource: AlterConfigsResource,
     ) -> Result<AlterConfigsResourceResponse> {
         debug!(?resource);
@@ -1311,7 +1305,7 @@ impl Storage for Engine {
     }
 
     async fn produce(
-        &mut self,
+        &self,
         transaction_id: Option<&str>,
         topition: &Topition,
         deflated: deflated::Batch,
@@ -1331,7 +1325,7 @@ impl Storage for Engine {
     }
 
     async fn fetch(
-        &mut self,
+        &self,
         topition: &Topition,
         offset: i64,
         min_bytes: u32,
@@ -1591,7 +1585,7 @@ impl Storage for Engine {
         Ok(batches)
     }
 
-    async fn offset_stage(&mut self, topition: &Topition) -> Result<OffsetStage> {
+    async fn offset_stage(&self, topition: &Topition) -> Result<OffsetStage> {
         debug!(cluster = self.cluster, ?topition);
         let c = self.connection().await?;
 
@@ -1633,7 +1627,7 @@ impl Storage for Engine {
     }
 
     async fn offset_commit(
-        &mut self,
+        &self,
         group: &str,
         retention: Option<Duration>,
         offsets: &[(Topition, OffsetCommitRequest)],
@@ -1713,10 +1707,7 @@ impl Storage for Engine {
         Ok(responses)
     }
 
-    async fn committed_offset_topitions(
-        &mut self,
-        group_id: &str,
-    ) -> Result<BTreeMap<Topition, i64>> {
+    async fn committed_offset_topitions(&self, group_id: &str) -> Result<BTreeMap<Topition, i64>> {
         debug!(group_id);
 
         let mut results = BTreeMap::new();
@@ -1747,7 +1738,7 @@ impl Storage for Engine {
     }
 
     async fn offset_fetch(
-        &mut self,
+        &self,
         group_id: Option<&str>,
         topics: &[Topition],
         require_stable: Option<bool>,
@@ -1809,7 +1800,7 @@ impl Storage for Engine {
     }
 
     async fn list_offsets(
-        &mut self,
+        &self,
         isolation_level: IsolationLevel,
         offsets: &[(Topition, ListOffsetRequest)],
     ) -> Result<Vec<(Topition, ListOffsetResponse)>> {
@@ -1921,7 +1912,7 @@ impl Storage for Engine {
         Ok(responses).inspect(|r| debug!(?r))
     }
 
-    async fn metadata(&mut self, topics: Option<&[TopicId]>) -> Result<MetadataResponse> {
+    async fn metadata(&self, topics: Option<&[TopicId]>) -> Result<MetadataResponse> {
         debug!(cluster = self.cluster, ?topics);
 
         let c = self.connection().await.inspect_err(|err| error!(?err))?;
@@ -2294,7 +2285,7 @@ impl Storage for Engine {
     }
 
     async fn describe_topic_partitions(
-        &mut self,
+        &self,
         topics: Option<&[TopicId]>,
         partition_limit: i32,
         cursor: Option<Topition>,
@@ -2483,7 +2474,7 @@ impl Storage for Engine {
         Ok(responses)
     }
 
-    async fn list_groups(&mut self, states_filter: Option<&[String]>) -> Result<Vec<ListedGroup>> {
+    async fn list_groups(&self, states_filter: Option<&[String]>) -> Result<Vec<ListedGroup>> {
         debug!(?states_filter);
         let c = self.connection().await.inspect_err(|err| error!(?err))?;
 
@@ -2512,7 +2503,7 @@ impl Storage for Engine {
     }
 
     async fn delete_groups(
-        &mut self,
+        &self,
         group_ids: Option<&[String]>,
     ) -> Result<Vec<DeletableGroupResult>> {
         debug!(?group_ids);
@@ -2521,17 +2512,17 @@ impl Storage for Engine {
         if let Some(group_ids) = group_ids {
             let c = self.connection().await?;
 
-            let mut consumer_offset = c
+            let consumer_offset = c
                 .prepare(&sql_lookup("consumer_offset_delete_by_cg.sql")?)
                 .await
                 .inspect_err(|err| error!(?err))?;
 
-            let mut group_detail = c
+            let group_detail = c
                 .prepare(&sql_lookup("consumer_group_detail_delete_by_cg.sql")?)
                 .await
                 .inspect_err(|err| error!(?err))?;
 
-            let mut group = c
+            let group = c
                 .prepare(&sql_lookup("consumer_group_delete.sql")?)
                 .await
                 .inspect_err(|err| error!(?err))?;
@@ -2571,7 +2562,7 @@ impl Storage for Engine {
     }
 
     async fn describe_groups(
-        &mut self,
+        &self,
         group_ids: Option<&[String]>,
         include_authorized_operations: bool,
     ) -> Result<Vec<NamedGroupDetail>> {
@@ -2614,7 +2605,7 @@ impl Storage for Engine {
     }
 
     async fn update_group(
-        &mut self,
+        &self,
         group_id: &str,
         detail: GroupDetail,
         version: Option<Version>,
@@ -2718,7 +2709,7 @@ impl Storage for Engine {
     }
 
     async fn init_producer(
-        &mut self,
+        &self,
         transaction_id: Option<&str>,
         transaction_timeout_ms: i32,
         producer_id: Option<i64>,
@@ -2963,7 +2954,7 @@ impl Storage for Engine {
     }
 
     async fn txn_add_offsets(
-        &mut self,
+        &self,
         transaction_id: &str,
         producer_id: i64,
         producer_epoch: i16,
@@ -2978,7 +2969,7 @@ impl Storage for Engine {
     }
 
     async fn txn_add_partitions(
-        &mut self,
+        &self,
         partitions: TxnAddPartitionsRequest,
     ) -> Result<TxnAddPartitionsResponse> {
         debug!(cluster = self.cluster, ?partitions);
@@ -3073,7 +3064,7 @@ impl Storage for Engine {
     }
 
     async fn txn_offset_commit(
-        &mut self,
+        &self,
         offsets: TxnOffsetCommitRequest,
     ) -> Result<Vec<TxnOffsetCommitResponseTopic>> {
         debug!(cluster = self.cluster, ?offsets);
@@ -3197,7 +3188,7 @@ impl Storage for Engine {
     }
 
     async fn txn_end(
-        &mut self,
+        &self,
         transaction_id: &str,
         producer_id: i64,
         producer_epoch: i16,
@@ -3219,6 +3210,18 @@ impl Storage for Engine {
 
     async fn maintain(&self) -> Result<()> {
         Ok(())
+    }
+
+    fn cluster_id(&self) -> Result<&str> {
+        Ok(self.cluster.as_str())
+    }
+
+    fn node(&self) -> Result<i32> {
+        Ok(self.node)
+    }
+
+    fn advertised_listener(&self) -> Result<&Url> {
+        Ok(&self.advertised_listener)
     }
 }
 
@@ -3336,7 +3339,7 @@ mod tests {
 
         let sql = "insert into xyz (name) values (?1) returning xyz.name";
 
-        let mut statement = connection.prepare(sql).await?;
+        let statement = connection.prepare(sql).await?;
         let mut rows = statement.query(&["abc"]).await?;
         let row = rows.next().await.inspect(|row| debug!(?row))?.unwrap();
         let name = row.get_str(0).inspect(|name| debug!(name))?;
@@ -3362,7 +3365,7 @@ mod tests {
         _ = connection.execute(sql, ()).await?;
 
         let sql = "insert into pqr (name) values (?1)";
-        let mut statement = connection.prepare(sql).await?;
+        let statement = connection.prepare(sql).await?;
         assert_eq!(1, statement.execute(&["fgh"]).await?);
 
         let sql = "create table xyz (
@@ -3405,7 +3408,7 @@ mod tests {
         _ = connection.execute(sql, ()).await?;
 
         let sql = "insert into pqr (name) values (?1)";
-        let mut statement = connection.prepare(sql).await?;
+        let statement = connection.prepare(sql).await?;
         assert_eq!(1, statement.execute(&["fgh"]).await?);
 
         let sql = "create table xyz (
@@ -3622,7 +3625,7 @@ mod tests {
         let node = 12321;
 
         {
-            let mut engine = Engine::builder()
+            let engine = Engine::builder()
                 .advertised_listener(Url::parse("tcp://127.0.0.1:9092")?)
                 .cluster(cluster.to_owned())
                 .storage(storage)
@@ -3670,7 +3673,7 @@ mod tests {
         let replication_factor = 3;
 
         let uuid = {
-            let mut engine = Engine::builder()
+            let engine = Engine::builder()
                 .advertised_listener(Url::parse("tcp://127.0.0.1:9092")?)
                 .cluster(cluster.to_owned())
                 .storage(storage)
@@ -3738,7 +3741,7 @@ mod tests {
         let num_partitions = 5;
         let replication_factor = 3;
 
-        let mut engine = Engine::builder()
+        let engine = Engine::builder()
             .advertised_listener(Url::parse("tcp://127.0.0.1:9092")?)
             .cluster(cluster.to_owned())
             .storage(storage)

@@ -20,7 +20,7 @@ include = [
 ]
 
 [features]
-default = ["dynostore", "libsql", "postgres"]
+default = ["dynostore", "libsql", "postgres", "turso"]
 dynostore = ["dep:object_store"]
 libsql = ["dep:libsql"]
 postgres = ["dep:tokio-postgres", "dep:deadpool", "dep:deadpool-postgres"]
@@ -45,6 +45,7 @@ object_store = { workspace = true, optional = true }
 opentelemetry-semantic-conventions.workspace = true
 opentelemetry.workspace = true
 protobuf.workspace = true
+rama.workspace = true
 rand.workspace = true
 regex.workspace = true
 serde.workspace = true
@@ -61,7 +62,9 @@ url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+assert_matches.workspace = true
 criterion.workspace = true
+pretty_assertions.workspace = true
 tempfile.workspace = true
 time.workspace = true
 tracing-subscriber.workspace = true

@@ -12,6 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod add_offsets;
-pub mod add_partitions;
-pub mod offset_commit;
+pub(crate) mod add_offsets;
+pub(crate) mod add_partitions;
+pub(crate) mod offset_commit;

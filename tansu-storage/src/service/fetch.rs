@@ -14,37 +14,40 @@
 
 use std::time::{Duration, Instant};
 
+use rama::{Context, Service};
 use tansu_sans_io::{
-    Body, ErrorCode, IsolationLevel,
+    ApiKey, Body, ErrorCode, FetchRequest, FetchResponse, IsolationLevel,
     fetch_request::{FetchPartition, FetchTopic},
     fetch_response::{
-        EpochEndOffset, FetchResponse, FetchableTopicResponse, LeaderIdAndEpoch, PartitionData,
-        SnapshotId,
+        EpochEndOffset, FetchableTopicResponse, LeaderIdAndEpoch, PartitionData, SnapshotId,
     },
     metadata_response::MetadataResponseTopic,
-    record::{deflated::Batch, deflated::Frame},
+    record::deflated::{Batch, Frame},
 };
-use tansu_storage::{Storage, Topition};
 use tokio::time::sleep;
 use tracing::{debug, error};
 
-use crate::Result;
+use crate::{Error, Result, Storage, Topition};
 
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct FetchRequest<S> {
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct FetchService<S> {
     storage: S,
 }
 
-impl<S> FetchRequest<S>
+impl<S> ApiKey for FetchService<S> {
+    const KEY: i16 = FetchRequest::KEY;
+}
+
+impl<S> FetchService<S>
 where
     S: Storage,
 {
-    pub fn with_storage(storage: S) -> Self {
+    pub fn new(storage: S) -> Self {
         Self { storage }
     }
 
     async fn fetch_partition(
-        &mut self,
+        &self,
         max_wait_ms: Duration,
         min_bytes: u32,
         max_bytes: &mut u32,
@@ -154,7 +157,7 @@ where
 
     #[allow(clippy::too_many_arguments)]
     async fn fetch_topic(
-        &mut self,
+        &self,
         max_wait_ms: Duration,
         min_bytes: u32,
         max_bytes: &mut u32,
@@ -199,7 +202,7 @@ where
     }
 
     pub(crate) async fn fetch(
-        &mut self,
+        &self,
         max_wait: Duration,
         min_bytes: u32,
         max_bytes: &mut u32,
@@ -259,30 +262,33 @@ where
             Ok(responses)
         }
     }
+}
 
-    pub async fn response(
-        &mut self,
-        max_wait_ms: i32,
-        min_bytes: i32,
-        max_bytes: Option<i32>,
-        isolation_level: Option<i8>,
-        topics: Option<&[FetchTopic]>,
-    ) -> Result<Body> {
-        debug!(?max_wait_ms, ?min_bytes, ?max_bytes, ?topics);
+impl<S, State, Q> Service<State, Q> for FetchService<S>
+where
+    S: Storage,
+    State: Clone + Send + Sync + 'static,
+    Q: Into<Body> + Send + Sync + 'static,
+{
+    type Response = Body;
+    type Error = Error;
 
-        let responses = Some(if let Some(topics) = topics {
-            let isolation_level = isolation_level
+    async fn serve(&self, _ctx: Context<State>, request: Q) -> Result<Self::Response, Self::Error> {
+        let fetch = FetchRequest::try_from(request.into())?;
+        let responses = Some(if let Some(topics) = fetch.topics {
+            let isolation_level = fetch
+                .isolation_level
                 .map_or(Ok(IsolationLevel::ReadUncommitted), |isolation| {
                     IsolationLevel::try_from(isolation)
                 })?;
 
-            let max_wait_ms = u64::try_from(max_wait_ms).map(Duration::from_millis)?;
+            let max_wait_ms = u64::try_from(fetch.max_wait_ms).map(Duration::from_millis)?;
 
-            let min_bytes = u32::try_from(min_bytes)?;
+            let min_bytes = u32::try_from(fetch.min_bytes)?;
 
             const DEFAULT_MAX_BYTES: u32 = 5 * 1024 * 1024;
 
-            let mut max_bytes = max_bytes.map_or(Ok(DEFAULT_MAX_BYTES), |max_bytes| {
+            let mut max_bytes = fetch.max_bytes.map_or(Ok(DEFAULT_MAX_BYTES), |max_bytes| {
                 u32::try_from(max_bytes).map(|max_bytes| max_bytes.min(DEFAULT_MAX_BYTES))
             })?;
 
@@ -291,7 +297,7 @@ where
                 min_bytes,
                 &mut max_bytes,
                 isolation_level,
-                topics,
+                topics.as_ref(),
             )
             .await?
         } else {
@@ -354,3 +360,6 @@ impl ByteSize for FetchableTopicResponse {
         self.partitions.byte_size()
     }
 }
+
+#[cfg(test)]
+mod tests {}

@@ -135,16 +135,15 @@ impl From<JsonValue> for Schema {
                 .ok();
 
         let schema = {
-            if let Some(meta) = meta {
-                if let Some(fields) = schema.get_mut(FIELDS) {
-                    if let Some(array) = fields.as_array_mut() {
-                        array.push(JsonValue::Object(Map::from_iter([
-                            ("name".into(), MessageKind::Meta.as_ref().into()),
-                            ("type".into(), "record".into()),
-                            (FIELDS.into(), meta),
-                        ])))
-                    }
-                }
+            if let Some(meta) = meta
+                && let Some(fields) = schema.get_mut(FIELDS)
+                && let Some(array) = fields.as_array_mut()
+            {
+                array.push(JsonValue::Object(Map::from_iter([
+                    ("name".into(), MessageKind::Meta.as_ref().into()),
+                    ("type".into(), "record".into()),
+                    (FIELDS.into(), meta),
+                ])))
             }
 
             debug!(%schema);

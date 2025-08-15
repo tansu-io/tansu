@@ -12,21 +12,47 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use rama::{Context, Service};
 use tansu_sans_io::{
-    Body, ErrorCode, get_telemetry_subscriptions_response::GetTelemetrySubscriptionsResponse,
+    ApiKey, Body, ErrorCode, GetTelemetrySubscriptionsRequest, GetTelemetrySubscriptionsResponse,
 };
 use uuid::Uuid;
 
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct GetTelemetrySubscriptionsRequest;
+use crate::{Error, Result, Storage};
 
-impl GetTelemetrySubscriptionsRequest {
-    pub fn response(&self, client_instance_id: [u8; 16]) -> Body {
-        let _ = client_instance_id;
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct GetTelemetrySubscriptionsService<S> {
+    storage: S,
+}
+
+impl<S> ApiKey for GetTelemetrySubscriptionsService<S> {
+    const KEY: i16 = GetTelemetrySubscriptionsRequest::KEY;
+}
+
+impl<S> GetTelemetrySubscriptionsService<S>
+where
+    S: Storage,
+{
+    pub fn new(storage: S) -> Self {
+        Self { storage }
+    }
+}
+
+impl<S, State, Q> Service<State, Q> for GetTelemetrySubscriptionsService<S>
+where
+    S: Storage,
+    State: Clone + Send + Sync + 'static,
+    Q: Into<Body> + Send + Sync + 'static,
+{
+    type Response = Body;
+    type Error = Error;
+
+    async fn serve(&self, _ctx: Context<State>, request: Q) -> Result<Self::Response, Self::Error> {
+        let _telemetry = GetTelemetrySubscriptionsRequest::try_from(request.into())?;
 
         let client_instance_id = *Uuid::new_v4().as_bytes();
 
-        GetTelemetrySubscriptionsResponse::default()
+        Ok(GetTelemetrySubscriptionsResponse::default()
             .throttle_time_ms(0)
             .error_code(ErrorCode::None.into())
             .client_instance_id(client_instance_id)
@@ -36,6 +62,6 @@ impl GetTelemetrySubscriptionsRequest {
             .telemetry_max_bytes(1_024)
             .delta_temporality(false)
             .requested_metrics(Some([].into()))
-            .into()
+            .into())
     }
 }

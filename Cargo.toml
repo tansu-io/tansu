@@ -18,7 +18,7 @@ members = [
 
 [workspace.package]
 edition = "2024"
-version = "0.4.9"
+version = "0.4.10"
 license = "Apache-2.0"
 homepage = "https://tansu.io"
 repository = "https://github.com/tansu-io/tansu"
@@ -60,6 +60,7 @@ private_intra_doc_links = "deny"
 anyhow = "1.0.94"
 apache-avro = "0.17.0"
 arrow = { version = "55" }
+assert_matches = "1.5.0"
 async-trait = "0.1.86"
 bytes = { version = "1", features = ["serde"] }
 chrono = "0.4"
@@ -118,19 +119,19 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1"
 snap = "1.1.1"
 syn = { version = "2.0", features = ["full"] }
-tansu = { version = "0.4.9", path = "tansu" }
-tansu-broker = { version = "0.4.9", path = "tansu-broker" }
-tansu-cat = { version = "0.4.9", path = "tansu-cat" }
-tansu-cli = { version = "0.4.9", path = "tansu-cli" }
-tansu-generator = { version = "0.4.9", path = "tansu-generator" }
-tansu-model = { version = "0.4.8", path = "tansu-model" }
-tansu-otel = { version = "0.4.9", path = "tansu-otel" }
-tansu-proxy = { version = "0.4.9", path = "tansu-proxy" }
-tansu-sans-io = { version = "0.4.9", path = "tansu-sans-io" }
-tansu-schema = { version = "0.4.9", path = "tansu-schema" }
-tansu-service = { version = "0.4.9", path = "tansu-service" }
-tansu-storage = { version = "0.4.9", path = "tansu-storage" }
-tansu-topic = { version = "0.4.9", path = "tansu-topic" }
+tansu = { version = "0.4.10", path = "tansu" }
+tansu-broker = { version = "0.4.10", path = "tansu-broker" }
+tansu-cat = { version = "0.4.10", path = "tansu-cat" }
+tansu-cli = { version = "0.4.10", path = "tansu-cli" }
+tansu-generator = { version = "0.4.10", path = "tansu-generator" }
+tansu-model = { version = "0.4.10", path = "tansu-model" }
+tansu-otel = { version = "0.4.10", path = "tansu-otel" }
+tansu-proxy = { version = "0.4.10", path = "tansu-proxy" }
+tansu-sans-io = { version = "0.4.10", path = "tansu-sans-io" }
+tansu-schema = { version = "0.4.10", path = "tansu-schema" }
+tansu-service = { version = "0.4.10", path = "tansu-service" }
+tansu-storage = { version = "0.4.10", path = "tansu-storage" }
+tansu-topic = { version = "0.4.10", path = "tansu-topic" }
 tempfile = "3"
 thiserror = "2.0"
 time = { version = "0.3.37", features = ["formatting", "macros"] }
@@ -140,6 +141,7 @@ tokio-postgres = { version = "0.7.13", features = [
     "with-serde_json-1",
     "with-uuid-1",
 ] }
+tower = "0.5.2"
 tracing = "0.1"
 tracing-core = { version = "0.1" }
 tracing-opentelemetry = "0.29.0"

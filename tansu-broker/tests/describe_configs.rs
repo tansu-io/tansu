@@ -13,26 +13,30 @@
 // limitations under the License.
 
 use common::{alphanumeric_string, register_broker};
+use rama::{Context, Service};
 use rand::{prelude::*, rng};
-use tansu_broker::{Result, broker::describe_configs::DescribeConfigsRequest};
+use tansu_broker::Result;
 use tansu_sans_io::{
-    ConfigResource, ConfigSource, ErrorCode, OpType,
+    ConfigResource, ConfigSource, DescribeConfigsRequest, DescribeConfigsResponse, ErrorCode,
+    IncrementalAlterConfigsRequest, IncrementalAlterConfigsResponse, OpType,
     create_topics_request::{CreatableTopic, CreatableTopicConfig},
     describe_configs_request::DescribeConfigsResource,
     describe_configs_response::{DescribeConfigsResourceResult, DescribeConfigsResult},
     incremental_alter_configs_request::{AlterConfigsResource, AlterableConfig},
 };
-use tansu_storage::{Storage, StorageContainer};
+use tansu_storage::{
+    Storage, StorageContainer,
+    service::{DescribeConfigsService, IncrementalAlterConfigsService},
+};
 use tracing::debug;
 use uuid::Uuid;
 pub mod common;
 
-pub async fn single_topic(
-    cluster_id: impl Into<String>,
-    broker_id: i32,
-    mut sc: StorageContainer,
-) -> Result<()> {
-    register_broker(cluster_id, broker_id, &mut sc).await?;
+pub async fn single_topic<C>(cluster_id: C, broker_id: i32, sc: StorageContainer) -> Result<()>
+where
+    C: Into<String>,
+{
+    register_broker(cluster_id, broker_id, &sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -70,18 +74,20 @@ pub async fn single_topic(
     let include_synonyms = Some(false);
     let include_documentation = Some(false);
 
-    let results = DescribeConfigsRequest::with_storage(sc)
-        .response(
-            Some(&resources[..]),
-            include_synonyms,
-            include_documentation,
+    let results = DescribeConfigsService::new(sc.clone())
+        .serve(
+            Context::default(),
+            DescribeConfigsRequest::default()
+                .include_documentation(include_documentation)
+                .include_synonyms(include_synonyms)
+                .resources(Some(resources.into())),
         )
         .await
-        .inspect(|results| debug!(?results))?;
+        .and_then(|body| DescribeConfigsResponse::try_from(body).map_err(Into::into))?;
 
     assert_eq!(
         results,
-        vec![
+        DescribeConfigsResponse::default().results(Some(vec![
             DescribeConfigsResult::default()
                 .error_code(ErrorCode::None.into())
                 .error_message(Some(ErrorCode::None.to_string()))
@@ -100,7 +106,7 @@ pub async fn single_topic(
                         .documentation(Some("".into()))]
                     .into()
                 ))
-        ],
+        ],))
     );
 
     debug!(?topic_id);
@@ -144,59 +150,70 @@ pub async fn alter_single_topic(
     let include_synonyms = Some(false);
     let include_documentation = Some(false);
 
-    let results = DescribeConfigsRequest::with_storage(sc.clone())
-        .response(
-            Some(&resources[..]),
-            include_synonyms,
-            include_documentation,
+    let results = DescribeConfigsService::new(sc.clone())
+        .serve(
+            Context::default(),
+            DescribeConfigsRequest::default()
+                .include_documentation(include_documentation)
+                .include_synonyms(include_synonyms)
+                .resources(Some(resources.clone().into())),
         )
         .await
-        .inspect(|results| debug!(?results))?;
+        .and_then(|body| DescribeConfigsResponse::try_from(body).map_err(Into::into))?;
 
     let none = ErrorCode::None;
 
     assert_eq!(
         results,
-        vec![
+        DescribeConfigsResponse::default().results(Some(vec![
             DescribeConfigsResult::default()
                 .error_code(none.into())
                 .error_message(Some(none.to_string()))
                 .resource_type(ConfigResource::Topic.into())
                 .resource_name(topic_name.clone())
                 .configs(Some([].into()))
-        ],
+        ]))
     );
 
-    let response = sc
-        .incremental_alter_resource(
-            AlterConfigsResource::default()
-                .resource_type(ConfigResource::Topic.into())
-                .resource_name(topic_name.clone())
-                .configs(Some(vec![
-                    AlterableConfig::default()
-                        .name(cleanup_policy.into())
-                        .config_operation(OpType::Set.into())
-                        .value(Some(compact.into())),
-                ])),
-        )
-        .await?;
-
-    assert_eq!(i16::from(none), response.error_code);
-    assert_eq!(i8::from(ConfigResource::Topic), response.resource_type);
-    assert_eq!(topic_name, response.resource_name);
-
-    let results = DescribeConfigsRequest::with_storage(sc.clone())
-        .response(
-            Some(&resources[..]),
-            include_synonyms,
-            include_documentation,
+    let response = IncrementalAlterConfigsService::new(sc.clone())
+        .serve(
+            Context::default(),
+            IncrementalAlterConfigsRequest::default().resources(Some(
+                [AlterConfigsResource::default()
+                    .resource_type(ConfigResource::Topic.into())
+                    .resource_name(topic_name.clone())
+                    .configs(Some(vec![
+                        AlterableConfig::default()
+                            .name(cleanup_policy.into())
+                            .config_operation(OpType::Set.into())
+                            .value(Some(compact.into())),
+                    ]))]
+                .into(),
+            )),
         )
         .await
-        .inspect(|results| debug!(?results))?;
+        .and_then(|body| IncrementalAlterConfigsResponse::try_from(body).map_err(Into::into))?;
+
+    let responses = response.responses.unwrap_or_default();
+    assert_eq!(1, responses.len());
+    assert_eq!(i16::from(none), responses[0].error_code);
+    assert_eq!(i8::from(ConfigResource::Topic), responses[0].resource_type);
+    assert_eq!(topic_name, responses[0].resource_name);
+
+    let results = DescribeConfigsService::new(sc.clone())
+        .serve(
+            Context::default(),
+            DescribeConfigsRequest::default()
+                .include_documentation(include_documentation)
+                .include_synonyms(include_synonyms)
+                .resources(Some(resources.clone().into())),
+        )
+        .await
+        .and_then(|body| DescribeConfigsResponse::try_from(body).map_err(Into::into))?;
 
     assert_eq!(
         results,
-        vec![
+        DescribeConfigsResponse::default().results(Some(vec![
             DescribeConfigsResult::default()
                 .error_code(none.into())
                 .error_message(Some(none.to_string()))
@@ -215,39 +232,48 @@ pub async fn alter_single_topic(
                         .documentation(Some("".into()))]
                     .into(),
                 )),
-        ],
+        ],))
     );
 
-    let response = sc
-        .incremental_alter_resource(
-            AlterConfigsResource::default()
-                .resource_type(ConfigResource::Topic.into())
-                .resource_name(topic_name.clone())
-                .configs(Some(vec![
-                    AlterableConfig::default()
-                        .name(cleanup_policy.into())
-                        .config_operation(OpType::Set.into())
-                        .value(Some(delete.into())),
-                ])),
-        )
-        .await?;
-
-    assert_eq!(i16::from(none), response.error_code);
-    assert_eq!(i8::from(ConfigResource::Topic), response.resource_type);
-    assert_eq!(topic_name, response.resource_name);
-
-    let results = DescribeConfigsRequest::with_storage(sc.clone())
-        .response(
-            Some(&resources[..]),
-            include_synonyms,
-            include_documentation,
+    let response = IncrementalAlterConfigsService::new(sc.clone())
+        .serve(
+            Context::default(),
+            IncrementalAlterConfigsRequest::default().resources(Some(
+                [AlterConfigsResource::default()
+                    .resource_type(ConfigResource::Topic.into())
+                    .resource_name(topic_name.clone())
+                    .configs(Some(vec![
+                        AlterableConfig::default()
+                            .name(cleanup_policy.into())
+                            .config_operation(OpType::Set.into())
+                            .value(Some(delete.into())),
+                    ]))]
+                .into(),
+            )),
         )
         .await
-        .inspect(|results| debug!(?results))?;
+        .and_then(|body| IncrementalAlterConfigsResponse::try_from(body).map_err(Into::into))?;
+
+    let responses = response.responses.unwrap_or_default();
+    assert_eq!(1, responses.len());
+    assert_eq!(i16::from(none), responses[0].error_code);
+    assert_eq!(i8::from(ConfigResource::Topic), responses[0].resource_type);
+    assert_eq!(topic_name, responses[0].resource_name);
+
+    let results = DescribeConfigsService::new(sc.clone())
+        .serve(
+            Context::default(),
+            DescribeConfigsRequest::default()
+                .include_documentation(include_documentation)
+                .include_synonyms(include_synonyms)
+                .resources(Some(resources.clone().into())),
+        )
+        .await
+        .and_then(|body| DescribeConfigsResponse::try_from(body).map_err(Into::into))?;
 
     assert_eq!(
         results,
-        vec![
+        DescribeConfigsResponse::default().results(Some(vec![
             DescribeConfigsResult::default()
                 .error_code(none.into())
                 .error_message(Some(none.to_string()))
@@ -266,46 +292,55 @@ pub async fn alter_single_topic(
                         .documentation(Some("".into()))]
                     .into(),
                 )),
-        ],
+        ],))
     );
 
-    let response = sc
-        .incremental_alter_resource(
-            AlterConfigsResource::default()
-                .resource_type(ConfigResource::Topic.into())
-                .resource_name(topic_name.clone())
-                .configs(Some(vec![
-                    AlterableConfig::default()
-                        .name(cleanup_policy.into())
-                        .config_operation(OpType::Delete.into())
-                        .value(None),
-                ])),
-        )
-        .await?;
-
-    assert_eq!(i16::from(none), response.error_code);
-    assert_eq!(i8::from(ConfigResource::Topic), response.resource_type);
-    assert_eq!(topic_name, response.resource_name);
-
-    let results = DescribeConfigsRequest::with_storage(sc.clone())
-        .response(
-            Some(&resources[..]),
-            include_synonyms,
-            include_documentation,
+    let response = IncrementalAlterConfigsService::new(sc.clone())
+        .serve(
+            Context::default(),
+            IncrementalAlterConfigsRequest::default().resources(Some(
+                [AlterConfigsResource::default()
+                    .resource_type(ConfigResource::Topic.into())
+                    .resource_name(topic_name.clone())
+                    .configs(Some(vec![
+                        AlterableConfig::default()
+                            .name(cleanup_policy.into())
+                            .config_operation(OpType::Delete.into())
+                            .value(None),
+                    ]))]
+                .into(),
+            )),
         )
         .await
-        .inspect(|results| debug!(?results))?;
+        .and_then(|body| IncrementalAlterConfigsResponse::try_from(body).map_err(Into::into))?;
+
+    let responses = response.responses.unwrap_or_default();
+    assert_eq!(1, responses.len());
+    assert_eq!(i16::from(none), responses[0].error_code);
+    assert_eq!(i8::from(ConfigResource::Topic), responses[0].resource_type);
+    assert_eq!(topic_name, responses[0].resource_name);
+
+    let results = DescribeConfigsService::new(sc.clone())
+        .serve(
+            Context::default(),
+            DescribeConfigsRequest::default()
+                .include_documentation(include_documentation)
+                .include_synonyms(include_synonyms)
+                .resources(Some(resources.into())),
+        )
+        .await
+        .and_then(|body| DescribeConfigsResponse::try_from(body).map_err(Into::into))?;
 
     assert_eq!(
         results,
-        vec![
+        DescribeConfigsResponse::default().results(Some(vec![
             DescribeConfigsResult::default()
                 .error_code(none.into())
                 .error_message(Some(none.to_string()))
                 .resource_type(ConfigResource::Topic.into())
                 .resource_name(topic_name.clone())
                 .configs(Some([].into()))
-        ],
+        ],))
     );
 
     debug!(?topic_id);

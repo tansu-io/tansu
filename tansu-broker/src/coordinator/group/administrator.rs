@@ -275,14 +275,13 @@ where
                 protocol_name,
                 mut leader,
             } => {
-                if let Some(ref leader_id) = leader {
-                    if !gd
+                if let Some(ref leader_id) = leader
+                    && !gd
                         .members
                         .iter()
                         .any(|(member_id, _)| member_id == leader_id)
-                    {
-                        _ = leader.take();
-                    }
+                {
+                    _ = leader.take();
                 }
 
                 Self::Forming(Inner {

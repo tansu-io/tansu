@@ -13,11 +13,13 @@
 // limitations under the License.
 
 use common::register_broker;
-use tansu_broker::{Result, broker::describe_cluster::DescribeClusterRequest};
+use rama::{Context, Service};
+use tansu_broker::Result;
 use tansu_sans_io::{
-    Body, DescribeClusterResponse, ErrorCode, describe_cluster_response::DescribeClusterBroker,
+    Body, DescribeClusterRequest, DescribeClusterResponse, ErrorCode,
+    describe_cluster_response::DescribeClusterBroker,
 };
-use tansu_storage::StorageContainer;
+use tansu_storage::{StorageContainer, service::DescribeClusterService};
 use tracing::debug;
 use url::Url;
 use uuid::Uuid;
@@ -28,25 +30,24 @@ pub async fn describe<C>(
     cluster_id: C,
     broker_id: i32,
     advertised_listener: Url,
-    mut sc: StorageContainer,
+    sc: StorageContainer,
 ) -> Result<()>
 where
     C: Into<String>,
-    C: Clone,
 {
     debug!(broker_id, %advertised_listener);
-    register_broker(cluster_id.clone(), broker_id, &mut sc).await?;
-
-    let mut dc = DescribeClusterRequest {
-        cluster_id: cluster_id.into(),
-        storage: sc,
-    };
+    register_broker(cluster_id, broker_id, &sc).await?;
 
     let include_cluster_authorized_operations = true;
     let endpoint_type = Some(6);
 
-    let response = dc
-        .response(include_cluster_authorized_operations, endpoint_type)
+    let response = DescribeClusterService::new(sc)
+        .serve(
+            Context::default(),
+            DescribeClusterRequest::default()
+                .include_cluster_authorized_operations(include_cluster_authorized_operations)
+                .endpoint_type(endpoint_type),
+        )
         .await?;
 
     let host = advertised_listener.host_str().unwrap().to_string();
