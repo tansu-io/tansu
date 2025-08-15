@@ -61,7 +61,7 @@ anyhow = "1.0.94"
 apache-avro = "0.17.0"
 arrow = { version = "55" }
 assert_matches = "1.5.0"
-async-trait = "0.1.86"
+async-trait = "0.1.89"
 bytes = { version = "1", features = ["serde"] }
 chrono = "0.4"
 clap = { version = "4.5.32", features = ["derive", "env"] }
