@@ -146,7 +146,7 @@ tracing = "0.1"
 tracing-core = { version = "0.1" }
 tracing-opentelemetry = "0.29.0"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
-turso = { git = "https://github.com/tursodatabase/turso.git", rev = "43c1afe4b65bf662d1372f51b1e18304d6d26468" }
+turso = { git = "https://github.com/tursodatabase/turso.git", tag = "v0.1.4-pre.8" }
 url = { version = "2.5.4", features = ["serde"] }
 uuid = { version = "1.13.2", features = ["serde", "v4", "v7"] }
 zstd = "0.13.2"

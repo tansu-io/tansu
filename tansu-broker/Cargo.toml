@@ -54,7 +54,7 @@ uuid.workspace = true
 pretty_assertions.workspace = true
 
 [features]
-default = ["dynostore", "libsql", "postgres", "turso"]
+default = ["dynostore", "libsql", "postgres"]
 dynostore = ["dep:object_store"]
 libsql = ["dep:libsql"]
 postgres = ["dep:deadpool-postgres", "dep:tokio-postgres"]

@@ -3951,16 +3951,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9fbbcab51052fe104eb5e5d351cf728d30a5be1fe14d9be8a3b097481fb97de"
 
 [[package]]
-name = "libmimalloc-sys"
-version = "0.1.43"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf88cd67e9de251c1781dbe2f641a1a3ad66eaae831b8a2c38fbdc5ddae16d4d"
-dependencies = [
- "cc",
- "libc",
-]
-
-[[package]]
 name = "libredox"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4179,15 +4169,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.105",
-]
-
-[[package]]
-name = "mimalloc"
-version = "0.1.47"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b1791cbe101e95af5764f06f20f6760521f7158f69dbf9d6baf941ee1bf6bc40"
-dependencies = [
- "libmimalloc-sys",
 ]
 
 [[package]]
@@ -7237,8 +7218,8 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
 name = "turso"
-version = "0.1.4-pre.1"
-source = "git+https://github.com/tursodatabase/turso.git?rev=43c1afe4b65bf662d1372f51b1e18304d6d26468#43c1afe4b65bf662d1372f51b1e18304d6d26468"
+version = "0.1.4-pre.8"
+source = "git+https://github.com/tursodatabase/turso.git?tag=v0.1.4-pre.8#a6247e891fae92c140d6537f31885bdf6b6b9717"
 dependencies = [
  "thiserror 2.0.14",
  "turso_core",
@@ -7246,8 +7227,8 @@ dependencies = [
 
 [[package]]
 name = "turso_core"
-version = "0.1.4-pre.1"
-source = "git+https://github.com/tursodatabase/turso.git?rev=43c1afe4b65bf662d1372f51b1e18304d6d26468#43c1afe4b65bf662d1372f51b1e18304d6d26468"
+version = "0.1.4-pre.8"
+source = "git+https://github.com/tursodatabase/turso.git?tag=v0.1.4-pre.8#a6247e891fae92c140d6537f31885bdf6b6b9717"
 dependencies = [
  "bitflags",
  "built",
@@ -7264,7 +7245,6 @@ dependencies = [
  "libloading",
  "libm",
  "miette",
- "mimalloc",
  "pack1",
  "parking_lot",
  "paste",
@@ -7288,8 +7268,8 @@ dependencies = [
 
 [[package]]
 name = "turso_ext"
-version = "0.1.4-pre.1"
-source = "git+https://github.com/tursodatabase/turso.git?rev=43c1afe4b65bf662d1372f51b1e18304d6d26468#43c1afe4b65bf662d1372f51b1e18304d6d26468"
+version = "0.1.4-pre.8"
+source = "git+https://github.com/tursodatabase/turso.git?tag=v0.1.4-pre.8#a6247e891fae92c140d6537f31885bdf6b6b9717"
 dependencies = [
  "chrono",
  "getrandom 0.3.3",
@@ -7298,8 +7278,8 @@ dependencies = [
 
 [[package]]
 name = "turso_macros"
-version = "0.1.4-pre.1"
-source = "git+https://github.com/tursodatabase/turso.git?rev=43c1afe4b65bf662d1372f51b1e18304d6d26468#43c1afe4b65bf662d1372f51b1e18304d6d26468"
+version = "0.1.4-pre.8"
+source = "git+https://github.com/tursodatabase/turso.git?tag=v0.1.4-pre.8#a6247e891fae92c140d6537f31885bdf6b6b9717"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -7308,8 +7288,8 @@ dependencies = [
 
 [[package]]
 name = "turso_sqlite3_parser"
-version = "0.1.4-pre.1"
-source = "git+https://github.com/tursodatabase/turso.git?rev=43c1afe4b65bf662d1372f51b1e18304d6d26468#43c1afe4b65bf662d1372f51b1e18304d6d26468"
+version = "0.1.4-pre.8"
+source = "git+https://github.com/tursodatabase/turso.git?tag=v0.1.4-pre.8#a6247e891fae92c140d6537f31885bdf6b6b9717"
 dependencies = [
  "bitflags",
  "cc",
