@@ -12,38 +12,54 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::Result;
-use tansu_sans_io::{Body, ErrorCode, describe_cluster_response::DescribeClusterResponse};
-use tansu_storage::Storage;
+use rama::{Context, Service};
+use tansu_sans_io::{ApiKey, Body, DescribeClusterRequest, DescribeClusterResponse, ErrorCode};
 use tracing::debug;
 
+use crate::{Error, Result, Storage};
+
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct DescribeClusterRequest<S> {
-    pub cluster_id: String,
-    pub storage: S,
+pub struct DescribeClusterService<S> {
+    storage: S,
 }
 
-impl<S> DescribeClusterRequest<S>
+impl<S> ApiKey for DescribeClusterService<S> {
+    const KEY: i16 = DescribeClusterRequest::KEY;
+}
+
+impl<S> DescribeClusterService<S>
 where
     S: Storage,
 {
-    pub async fn response(
-        &mut self,
-        include_cluster_authorized_operations: bool,
-        endpoint_type: Option<i8>,
-    ) -> Result<Body> {
-        debug!(?include_cluster_authorized_operations, ?endpoint_type);
+    pub fn new(storage: S) -> Self {
+        Self { storage }
+    }
+}
+
+impl<S, State, Q> Service<State, Q> for DescribeClusterService<S>
+where
+    S: Storage,
+    State: Clone + Send + Sync + 'static,
+    Q: Into<Body> + Send + Sync + 'static,
+{
+    type Response = Body;
+    type Error = Error;
+
+    async fn serve(&self, _ctx: Context<State>, request: Q) -> Result<Self::Response, Self::Error> {
+        let describe_cluster = DescribeClusterRequest::try_from(request.into())?;
 
         let brokers = self.storage.brokers().await?;
         debug!(?brokers);
+
+        let cluster_id = self.storage.cluster_id()?;
 
         Ok(DescribeClusterResponse::default()
             .throttle_time_ms(0)
             .error_code(ErrorCode::None.into())
             .error_message(None)
-            .endpoint_type(endpoint_type)
-            .cluster_id(self.cluster_id.clone())
+            .endpoint_type(describe_cluster.endpoint_type)
             .controller_id(-1)
+            .cluster_id(cluster_id.to_owned())
             .brokers(Some(brokers))
             .cluster_authorized_operations(-2_147_483_648)
             .into())

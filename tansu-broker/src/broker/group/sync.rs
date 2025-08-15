@@ -12,9 +12,49 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use tansu_sans_io::{Body, sync_group_request::SyncGroupRequestAssignment};
+use rama::{Context, Service};
+use tansu_sans_io::{
+    ApiKey, Body,
+    sync_group_request::{self, SyncGroupRequestAssignment},
+};
 
-use crate::{Result, coordinator::group::Coordinator};
+use crate::{Error, Result, broker::group::Request, coordinator::group::Coordinator};
+
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct SyncGroupService;
+
+impl ApiKey for SyncGroupService {
+    const KEY: i16 = sync_group_request::SyncGroupRequest::KEY;
+}
+
+impl<C, State> Service<State, Request<C>> for SyncGroupService
+where
+    C: Coordinator,
+    State: Clone + Send + Sync + 'static,
+{
+    type Response = Body;
+    type Error = Error;
+
+    async fn serve(
+        &self,
+        _ctx: Context<State>,
+        mut request: Request<C>,
+    ) -> Result<Self::Response, Self::Error> {
+        let sync_group = sync_group_request::SyncGroupRequest::try_from(request.frame.body)?;
+        request
+            .coordinator
+            .sync(
+                sync_group.group_id.as_str(),
+                sync_group.generation_id,
+                sync_group.member_id.as_str(),
+                sync_group.group_instance_id.as_deref(),
+                sync_group.protocol_type.as_deref(),
+                sync_group.protocol_name.as_deref(),
+                sync_group.assignments.as_deref(),
+            )
+            .await
+    }
+}
 
 #[derive(Debug)]
 pub struct SyncGroupRequest<C> {

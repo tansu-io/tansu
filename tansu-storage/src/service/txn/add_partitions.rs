@@ -12,27 +12,42 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use tansu_sans_io::{Body, ErrorCode, add_partitions_to_txn_response::AddPartitionsToTxnResponse};
-use tansu_storage::{Storage, TxnAddPartitionsRequest, TxnAddPartitionsResponse};
-use tracing::debug;
+use rama::{Context, Service};
+use tansu_sans_io::{
+    AddPartitionsToTxnRequest, AddPartitionsToTxnResponse, ApiKey, Body, ErrorCode,
+};
 
-use crate::Result;
+use crate::{Error, Result, Storage, TxnAddPartitionsRequest, TxnAddPartitionsResponse};
 
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct AddPartitions<S> {
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct AddPartitionService<S> {
     storage: S,
 }
 
-impl<S> AddPartitions<S>
+impl<S> ApiKey for AddPartitionService<S> {
+    const KEY: i16 = AddPartitionsToTxnRequest::KEY;
+}
+
+impl<S> AddPartitionService<S>
 where
     S: Storage,
 {
-    pub fn with_storage(storage: S) -> Self {
+    pub fn new(storage: S) -> Self {
         Self { storage }
     }
+}
 
-    pub async fn response(&mut self, partitions: TxnAddPartitionsRequest) -> Result<Body> {
-        debug!(?partitions);
+impl<S, State, Q> Service<State, Q> for AddPartitionService<S>
+where
+    S: Storage,
+    State: Clone + Send + Sync + 'static,
+    Q: Into<Body> + Send + Sync + 'static,
+{
+    type Response = Body;
+    type Error = Error;
+
+    async fn serve(&self, _ctx: Context<State>, request: Q) -> Result<Self::Response, Self::Error> {
+        let partitions = TxnAddPartitionsRequest::try_from(request.into())?;
         match self.storage.txn_add_partitions(partitions).await? {
             TxnAddPartitionsResponse::VersionZeroToThree(results_by_topic_v_3_and_below) => {
                 Ok(AddPartitionsToTxnResponse::default()

@@ -12,9 +12,45 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use tansu_sans_io::{Body, leave_group_request::MemberIdentity};
+use rama::{Context, Service};
+use tansu_sans_io::{
+    ApiKey, Body,
+    leave_group_request::{self, MemberIdentity},
+};
 
-use crate::{Result, coordinator::group::Coordinator};
+use crate::{Error, Result, broker::group::Request, coordinator::group::Coordinator};
+
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct LeaveGroupService;
+
+impl ApiKey for LeaveGroupService {
+    const KEY: i16 = leave_group_request::LeaveGroupRequest::KEY;
+}
+
+impl<C, State> Service<State, Request<C>> for LeaveGroupService
+where
+    C: Coordinator,
+    State: Clone + Send + Sync + 'static,
+{
+    type Response = Body;
+    type Error = Error;
+
+    async fn serve(
+        &self,
+        _ctx: Context<State>,
+        mut request: Request<C>,
+    ) -> Result<Self::Response, Self::Error> {
+        let leave = leave_group_request::LeaveGroupRequest::try_from(request.frame.body)?;
+        request
+            .coordinator
+            .leave(
+                leave.group_id.as_str(),
+                leave.member_id.as_deref(),
+                leave.members.as_deref(),
+            )
+            .await
+    }
+}
 
 #[derive(Debug)]
 pub struct LeaveRequest<C> {

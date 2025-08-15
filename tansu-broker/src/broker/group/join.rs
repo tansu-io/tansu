@@ -12,9 +12,57 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use tansu_sans_io::{Body, join_group_request::JoinGroupRequestProtocol};
+use rama::{Context, Service};
+use tansu_sans_io::{
+    ApiKey, Body,
+    join_group_request::{self, JoinGroupRequestProtocol},
+};
 
-use crate::{Result, coordinator::group::Coordinator};
+use crate::{Error, Result, broker::group::Request, coordinator::group::Coordinator};
+
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct JoinGroupService;
+
+impl ApiKey for JoinGroupService {
+    const KEY: i16 = join_group_request::JoinGroupRequest::KEY;
+}
+
+impl<C, State> Service<State, Request<C>> for JoinGroupService
+where
+    C: Coordinator,
+    State: Clone + Send + Sync + 'static,
+{
+    type Response = Body;
+    type Error = Error;
+
+    async fn serve(
+        &self,
+        _ctx: Context<State>,
+        mut request: Request<C>,
+    ) -> Result<Self::Response, Self::Error> {
+        let client_id = request
+            .frame
+            .client_id()
+            .map(|client_id| client_id.map(|client_id| client_id.to_owned()))?;
+
+        let join_group = join_group_request::JoinGroupRequest::try_from(request.frame.body)?;
+
+        request
+            .coordinator
+            .join(
+                client_id.as_deref(),
+                join_group.group_id.as_str(),
+                join_group.session_timeout_ms,
+                join_group.rebalance_timeout_ms,
+                join_group.member_id.as_str(),
+                join_group.group_instance_id.as_deref(),
+                join_group.protocol_type.as_str(),
+                join_group.protocols.as_deref(),
+                join_group.reason.as_deref(),
+            )
+            .await
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct JoinRequest<C> {
