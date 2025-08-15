@@ -13,11 +13,15 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-insert into producer (id, epoch, cluster)
-select $2, $3, cluster.id
-from cluster where cluster.name = $1
-on conflict (id, epoch)
-do update set
-epoch = excluded.epoch + 1,
-last_updated = excluded.last_updated
-returning id, epoch;
+select tc.name, tc.value
+
+from
+
+cluster c
+join topic t on t.cluster = c.id
+join topic_configuration tc on tc.topic = t.id
+
+where
+
+c.name = $1
+and t.name = $2;

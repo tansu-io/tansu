@@ -14,10 +14,12 @@
 -- limitations under the License.
 
 delete from txn_produce_offset
-using cluster c, topic t, topition tp, txn_topition txn_tp
-where c.name = $1
-and t.name = $2
-and t.cluster = c.id
-and tp.topic = t.id
-and txn_tp.topition = tp.id
-and txn_produce_offset.txn_topition = txn_tp.id;
+where txn_produce_offset.txn_topition in (
+    select txn_tp.id
+    from cluster c
+    join topic t on t.cluster = c.id
+    join topition tp on tp.topic = t.id
+    join txn_topition txn_tp on txn_tp.topition = tp.id
+    where c.name = $1
+    and t.name = $2
+);

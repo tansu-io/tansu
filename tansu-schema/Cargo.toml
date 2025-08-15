@@ -70,6 +70,3 @@ uuid.workspace = true
 [dev-dependencies]
 pretty_assertions.workspace = true
 rand.workspace = true
-
-# [lints]
-# workspace = true

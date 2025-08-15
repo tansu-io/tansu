@@ -13,7 +13,7 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-insert into txn_detail (transaction, producer_epoch, transaction_timeout_ms)
+insert into txn_detail ("transaction", producer_epoch, transaction_timeout_ms)
 
 select txn.id, pe.id, $5
 

@@ -29,11 +29,11 @@ use uuid::Uuid;
 pub mod common;
 
 pub async fn person_valid(
-    cluster_id: Uuid,
+    cluster_id: impl Into<String>,
     broker_id: i32,
     mut sc: StorageContainer,
 ) -> Result<()> {
-    register_broker(&cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, &mut sc).await?;
 
     let topic_name = "person";
     debug!(?topic_name);
@@ -87,11 +87,11 @@ pub async fn person_valid(
 }
 
 pub async fn person_invalid(
-    cluster_id: Uuid,
+    cluster_id: impl Into<String>,
     broker_id: i32,
     mut sc: StorageContainer,
 ) -> Result<()> {
-    register_broker(&cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, &mut sc).await?;
 
     let topic_name = "person";
     debug!(?topic_name);
@@ -147,6 +147,7 @@ pub async fn person_invalid(
     Ok(())
 }
 
+#[cfg(feature = "postgres")]
 mod pg {
     use std::env;
 
@@ -157,7 +158,7 @@ mod pg {
 
     use super::*;
 
-    fn storage_container(cluster: impl Into<String>, node: i32) -> Result<StorageContainer> {
+    async fn storage_container(cluster: impl Into<String>, node: i32) -> Result<StorageContainer> {
         let current_dir = env::current_dir()?;
         debug!(?current_dir);
 
@@ -166,17 +167,14 @@ mod pg {
             .and_then(|url| Registry::try_from(url).map_err(Into::into))
             .map(Some)?;
 
-        Url::parse("tcp://127.0.0.1/")
-            .map_err(Into::into)
-            .and_then(|advertised_listener| {
-                common::storage_container(
-                    StorageType::Postgres,
-                    cluster,
-                    node,
-                    advertised_listener,
-                    schemas,
-                )
-            })
+        common::storage_container(
+            StorageType::Postgres,
+            cluster,
+            node,
+            Url::parse("tcp://127.0.0.1/")?,
+            schemas,
+        )
+        .await
     }
 
     #[tokio::test]
@@ -189,7 +187,7 @@ mod pg {
         super::person_valid(
             cluster_id,
             broker_id,
-            storage_container(cluster_id, broker_id)?,
+            storage_container(cluster_id, broker_id).await?,
         )
         .await
     }
@@ -204,7 +202,7 @@ mod pg {
         super::person_invalid(
             cluster_id,
             broker_id,
-            storage_container(cluster_id, broker_id)?,
+            storage_container(cluster_id, broker_id).await?,
         )
         .await
     }
@@ -220,7 +218,7 @@ mod in_memory {
 
     use super::*;
 
-    fn storage_container(cluster: impl Into<String>, node: i32) -> Result<StorageContainer> {
+    async fn storage_container(cluster: impl Into<String>, node: i32) -> Result<StorageContainer> {
         let current_dir = env::current_dir()?;
         debug!(?current_dir);
 
@@ -229,17 +227,14 @@ mod in_memory {
             .and_then(|url| Registry::try_from(url).map_err(Into::into))
             .map(Some)?;
 
-        Url::parse("tcp://127.0.0.1/")
-            .map_err(Into::into)
-            .and_then(|advertised_listener| {
-                common::storage_container(
-                    StorageType::InMemory,
-                    cluster,
-                    node,
-                    advertised_listener,
-                    schemas,
-                )
-            })
+        common::storage_container(
+            StorageType::InMemory,
+            cluster,
+            node,
+            Url::parse("tcp://127.0.0.1/")?,
+            schemas,
+        )
+        .await
     }
 
     #[tokio::test]
@@ -252,7 +247,7 @@ mod in_memory {
         super::person_valid(
             cluster_id,
             broker_id,
-            storage_container(cluster_id, broker_id)?,
+            storage_container(cluster_id, broker_id).await?,
         )
         .await
     }
@@ -267,7 +262,68 @@ mod in_memory {
         super::person_invalid(
             cluster_id,
             broker_id,
-            storage_container(cluster_id, broker_id)?,
+            storage_container(cluster_id, broker_id).await?,
+        )
+        .await
+    }
+}
+
+#[cfg(feature = "libsql")]
+mod lite {
+    use std::env;
+
+    use common::{StorageType, init_tracing};
+    use tansu_broker::Error;
+    use tansu_schema::Registry;
+    use url::Url;
+
+    use super::*;
+
+    async fn storage_container(cluster: impl Into<String>, node: i32) -> Result<StorageContainer> {
+        let current_dir = env::current_dir()?;
+        debug!(?current_dir);
+
+        let schemas = Url::parse("file://../etc/schema")
+            .map_err(Error::from)
+            .and_then(|url| Registry::try_from(url).map_err(Into::into))
+            .map(Some)?;
+
+        common::storage_container(
+            StorageType::Lite,
+            cluster,
+            node,
+            Url::parse("tcp://127.0.0.1/")?,
+            schemas,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn person_valid() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        super::person_valid(
+            cluster_id,
+            broker_id,
+            storage_container(cluster_id, broker_id).await?,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn person_invalid() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        super::person_invalid(
+            cluster_id,
+            broker_id,
+            storage_container(cluster_id, broker_id).await?,
         )
         .await
     }

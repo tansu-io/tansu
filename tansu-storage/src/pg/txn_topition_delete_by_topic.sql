@@ -14,9 +14,15 @@
 -- limitations under the License.
 
 delete from txn_topition
-using cluster c, topic t, topition tp
-where c.name = $1
-and t.name = $2
-and t.cluster = c.id
-and tp.topic = t.id
-and txn_topition.topition = tp.id;
+where txn_topition.topition in (
+    select tp.id
+
+    from cluster c
+    join topic t on t.cluster = c.id
+    join topition tp on tp.topic = t.id
+
+    where
+
+    c.name = $1
+    and t.name = $2
+);

@@ -837,11 +837,19 @@ where
 
                 Err(UpdateError::Error(error)) => return Err(error.into()),
 
+                #[cfg(feature = "dynostore")]
                 Err(UpdateError::ObjectStore(error)) => return Err(error.into()),
 
                 Err(UpdateError::SerdeJson(error)) => return Err(error.into()),
 
+                #[cfg(feature = "postgres")]
                 Err(UpdateError::TokioPostgres(error)) => return Err(error.into()),
+
+                #[cfg(feature = "libsql")]
+                Err(UpdateError::LibSql(error)) => return Err(error.into()),
+
+                #[cfg(feature = "turso")]
+                Err(UpdateError::Turso(error)) => return Err(error.into()),
 
                 Err(UpdateError::MissingEtag) => {
                     return Err(Error::Message(String::from("missing e-tag")));
@@ -966,11 +974,19 @@ where
 
                 Err(UpdateError::Error(error)) => return Err(error.into()),
 
+                #[cfg(feature = "dynostore")]
                 Err(UpdateError::ObjectStore(error)) => return Err(error.into()),
 
                 Err(UpdateError::SerdeJson(error)) => return Err(error.into()),
 
+                #[cfg(feature = "postgres")]
                 Err(UpdateError::TokioPostgres(error)) => return Err(error.into()),
+
+                #[cfg(feature = "libsql")]
+                Err(UpdateError::LibSql(error)) => return Err(error.into()),
+
+                #[cfg(feature = "turso")]
+                Err(UpdateError::Turso(error)) => return Err(error.into()),
 
                 Err(UpdateError::MissingEtag) => {
                     return Err(Error::Message(String::from("missing e-tag")));
@@ -1044,11 +1060,19 @@ where
 
                 Err(UpdateError::Error(error)) => return Err(error.into()),
 
+                #[cfg(feature = "dynostore")]
                 Err(UpdateError::ObjectStore(error)) => return Err(error.into()),
 
                 Err(UpdateError::SerdeJson(error)) => return Err(error.into()),
 
+                #[cfg(feature = "postgres")]
                 Err(UpdateError::TokioPostgres(error)) => return Err(error.into()),
+
+                #[cfg(feature = "libsql")]
+                Err(UpdateError::LibSql(error)) => return Err(error.into()),
+
+                #[cfg(feature = "turso")]
+                Err(UpdateError::Turso(error)) => return Err(error.into()),
 
                 Err(UpdateError::MissingEtag) => {
                     return Err(Error::Message(String::from("missing e-tag")));
@@ -1117,11 +1141,19 @@ where
 
                 Err(UpdateError::Error(error)) => return Err(error.into()),
 
+                #[cfg(feature = "dynostore")]
                 Err(UpdateError::ObjectStore(error)) => return Err(error.into()),
 
                 Err(UpdateError::SerdeJson(error)) => return Err(error.into()),
 
+                #[cfg(feature = "postgres")]
                 Err(UpdateError::TokioPostgres(error)) => return Err(error.into()),
+
+                #[cfg(feature = "libsql")]
+                Err(UpdateError::LibSql(error)) => return Err(error.into()),
+
+                #[cfg(feature = "turso")]
+                Err(UpdateError::Turso(error)) => return Err(error.into()),
 
                 Err(UpdateError::MissingEtag) => {
                     return Err(Error::Message(String::from("missing e-tag")));
@@ -1220,11 +1252,19 @@ where
 
                 Err(UpdateError::Error(error)) => return Err(error.into()),
 
+                #[cfg(feature = "dynostore")]
                 Err(UpdateError::ObjectStore(error)) => return Err(error.into()),
 
                 Err(UpdateError::SerdeJson(error)) => return Err(error.into()),
 
+                #[cfg(feature = "postgres")]
                 Err(UpdateError::TokioPostgres(error)) => return Err(error.into()),
+
+                #[cfg(feature = "libsql")]
+                Err(UpdateError::LibSql(error)) => return Err(error.into()),
+
+                #[cfg(feature = "turso")]
+                Err(UpdateError::Turso(error)) => return Err(error.into()),
 
                 Err(UpdateError::MissingEtag) => {
                     return Err(Error::Message(String::from("missing e-tag")));
@@ -2849,13 +2889,13 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use object_store::memory::InMemory;
     use pretty_assertions::assert_eq;
     use tansu_sans_io::offset_commit_request::{
         OffsetCommitRequestPartition, OffsetCommitRequestTopic,
     };
-    use tansu_storage::dynostore::DynoStore;
+    use tansu_storage::StorageContainer;
     use tracing::subscriber::DefaultGuard;
+    use url::Url;
 
     #[cfg(miri)]
     fn init_tracing() -> Result<()> {
@@ -2910,7 +2950,16 @@ mod tests {
 
         const PROTOCOL_TYPE: &str = "consumer";
 
-        let mut s = Controller::with_storage(DynoStore::new(cluster, node, InMemory::new()))?;
+        let storage = StorageContainer::builder()
+            .cluster_id(cluster)
+            .node_id(node)
+            .advertised_listener(Url::parse("tcp://127.0.0.1:9092/")?)
+            .schema_registry(None)
+            .storage(Url::parse("memory://")?)
+            .build()
+            .await?;
+
+        let mut s = Controller::with_storage(storage)?;
 
         let first_member_range_meta = Bytes::from_static(b"first_member_range_meta_01");
         let first_member_sticky_meta = Bytes::from_static(b"first_member_sticky_meta_01");
@@ -3485,7 +3534,16 @@ mod tests {
 
         const PROTOCOL_TYPE: &str = "consumer";
 
-        let mut s = Controller::with_storage(DynoStore::new(cluster, node, InMemory::new()))?;
+        let storage = StorageContainer::builder()
+            .cluster_id(cluster)
+            .node_id(node)
+            .advertised_listener(Url::parse("tcp://127.0.0.1:9092/")?)
+            .schema_registry(None)
+            .storage(Url::parse("memory://")?)
+            .build()
+            .await?;
+
+        let mut s = Controller::with_storage(storage)?;
 
         let first_member_range_meta = Bytes::from_static(b"first_member_range_meta_01");
         let first_member_sticky_meta = Bytes::from_static(b"first_member_sticky_meta_01");
@@ -3743,7 +3801,15 @@ mod tests {
 
         const PROTOCOL_TYPE: &str = "consumer";
 
-        let storage = DynoStore::new(cluster, node, InMemory::new());
+        let storage = StorageContainer::builder()
+            .cluster_id(cluster)
+            .node_id(node)
+            .advertised_listener(Url::parse("tcp://127.0.0.1:9092/")?)
+            .schema_registry(None)
+            .storage(Url::parse("memory://")?)
+            .build()
+            .await?;
+
         let s = Wrapper::with_storage_group_detail(
             storage,
             GroupDetail {
@@ -3833,7 +3899,15 @@ mod tests {
 
         const PROTOCOL_TYPE: &str = "consumer";
 
-        let storage = DynoStore::new(cluster, node, InMemory::new());
+        let storage = StorageContainer::builder()
+            .cluster_id(cluster)
+            .node_id(node)
+            .advertised_listener(Url::parse("tcp://127.0.0.1:9092/")?)
+            .schema_registry(None)
+            .storage(Url::parse("memory://")?)
+            .build()
+            .await?;
+
         let s = Wrapper::with_storage_group_detail(
             storage,
             GroupDetail {
@@ -3948,7 +4022,15 @@ mod tests {
 
         const PROTOCOL_TYPE: &str = "consumer";
 
-        let storage = DynoStore::new(cluster, node, InMemory::new());
+        let storage = StorageContainer::builder()
+            .cluster_id(cluster)
+            .node_id(node)
+            .advertised_listener(Url::parse("tcp://127.0.0.1:9092/")?)
+            .schema_registry(None)
+            .storage(Url::parse("memory://")?)
+            .build()
+            .await?;
+
         let s = Wrapper::with_storage_group_detail(
             storage,
             GroupDetail {
