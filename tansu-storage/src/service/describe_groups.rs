@@ -14,47 +14,34 @@
 
 use rama::{Context, Service};
 use tansu_sans_io::{
-    ApiKey, Body, DescribeGroupsRequest, DescribeGroupsResponse,
-    describe_groups_response::DescribedGroup,
+    ApiKey, DescribeGroupsRequest, DescribeGroupsResponse, describe_groups_response::DescribedGroup,
 };
 
 use crate::{Error, Result, Storage};
 
-#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct DescribeGroupsService<S> {
-    storage: S,
-}
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct DescribeGroupsService;
 
-impl<S> ApiKey for DescribeGroupsService<S> {
+impl ApiKey for DescribeGroupsService {
     const KEY: i16 = DescribeGroupsRequest::KEY;
 }
 
-impl<S> DescribeGroupsService<S>
+impl<G> Service<G, DescribeGroupsRequest> for DescribeGroupsService
 where
-    S: Storage,
+    G: Storage,
 {
-    pub fn new(storage: S) -> Self {
-        Self { storage }
-    }
-}
-
-impl<S, State, Q> Service<State, Q> for DescribeGroupsService<S>
-where
-    S: Storage,
-    State: Clone + Send + Sync + 'static,
-    Q: Into<Body> + Send + Sync + 'static,
-{
-    type Response = Body;
+    type Response = DescribeGroupsResponse;
     type Error = Error;
 
-    async fn serve(&self, _ctx: Context<State>, req: Q) -> Result<Self::Response, Self::Error> {
-        let describe_groups = DescribeGroupsRequest::try_from(req.into())?;
-        self.storage
+    async fn serve(
+        &self,
+        ctx: Context<G>,
+        req: DescribeGroupsRequest,
+    ) -> Result<Self::Response, Self::Error> {
+        ctx.state()
             .describe_groups(
-                describe_groups.groups.as_deref(),
-                describe_groups
-                    .include_authorized_operations
-                    .unwrap_or(false),
+                req.groups.as_deref(),
+                req.include_authorized_operations.unwrap_or(false),
             )
             .await
             .map(|described| {
@@ -68,7 +55,6 @@ where
                 DescribeGroupsResponse::default()
                     .throttle_time_ms(Some(0))
                     .groups(groups)
-                    .into()
             })
     }
 }

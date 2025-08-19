@@ -13,41 +13,31 @@
 // limitations under the License.
 
 use rama::{Context, Service};
-use tansu_sans_io::{ApiKey, Body, ErrorCode, ListGroupsRequest, ListGroupsResponse};
+use tansu_sans_io::{ApiKey, ErrorCode, ListGroupsRequest, ListGroupsResponse};
 
 use crate::{Error, Result, Storage};
 
-#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct ListGroupsService<S> {
-    storage: S,
-}
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ListGroupsService;
 
-impl<S> ApiKey for ListGroupsService<S> {
+impl ApiKey for ListGroupsService {
     const KEY: i16 = ListGroupsRequest::KEY;
 }
 
-impl<S> ListGroupsService<S>
+impl<G> Service<G, ListGroupsRequest> for ListGroupsService
 where
-    S: Storage,
+    G: Storage,
 {
-    pub fn new(storage: S) -> Self {
-        Self { storage }
-    }
-}
-
-impl<S, State, Q> Service<State, Q> for ListGroupsService<S>
-where
-    S: Storage,
-    State: Clone + Send + Sync + 'static,
-    Q: Into<Body> + Send + Sync + 'static,
-{
-    type Response = Body;
+    type Response = ListGroupsResponse;
     type Error = Error;
 
-    async fn serve(&self, _ctx: Context<State>, req: Q) -> Result<Self::Response, Self::Error> {
-        let list_groups = ListGroupsRequest::try_from(req.into())?;
-        self.storage
-            .list_groups(list_groups.states_filter.as_deref())
+    async fn serve(
+        &self,
+        ctx: Context<G>,
+        req: ListGroupsRequest,
+    ) -> Result<Self::Response, Self::Error> {
+        ctx.state()
+            .list_groups(req.states_filter.as_deref())
             .await
             .map(Some)
             .map(|groups| {
@@ -55,7 +45,6 @@ where
                     .throttle_time_ms(Some(0))
                     .error_code(ErrorCode::None.into())
                     .groups(groups)
-                    .into()
             })
     }
 }

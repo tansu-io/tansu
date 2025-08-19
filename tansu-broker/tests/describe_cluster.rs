@@ -16,7 +16,7 @@ use common::register_broker;
 use rama::{Context, Service};
 use tansu_broker::Result;
 use tansu_sans_io::{
-    Body, DescribeClusterRequest, DescribeClusterResponse, ErrorCode,
+    DescribeClusterRequest, DescribeClusterResponse, ErrorCode,
     describe_cluster_response::DescribeClusterBroker,
 };
 use tansu_storage::{StorageContainer, service::DescribeClusterService};
@@ -38,9 +38,12 @@ pub async fn describe(
     let include_cluster_authorized_operations = true;
     let endpoint_type = Some(6);
 
-    let response = DescribeClusterService::new(sc)
+    let ctx = Context::with_state(sc);
+    let service = DescribeClusterService;
+
+    let response = service
         .serve(
-            Context::default(),
+            ctx,
             DescribeClusterRequest::default()
                 .include_cluster_authorized_operations(include_cluster_authorized_operations)
                 .endpoint_type(endpoint_type),
@@ -53,7 +56,7 @@ pub async fn describe(
 
     assert!(matches!(
         response,
-        Body::DescribeClusterResponse (DescribeClusterResponse {
+        DescribeClusterResponse {
             throttle_time_ms: 0,
             error_code,
             error_message: None,
@@ -61,7 +64,7 @@ pub async fn describe(
             brokers,
             cluster_authorized_operations: -2_147_483_648,
             ..
-        }) if error_code == i16::from(ErrorCode::None)
+        } if error_code == i16::from(ErrorCode::None)
         && brokers == Some(vec![DescribeClusterBroker::default()
             .broker_id(broker_id)
             .host(host)

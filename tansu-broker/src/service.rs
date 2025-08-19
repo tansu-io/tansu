@@ -14,10 +14,16 @@
 
 use std::{collections::BTreeMap, fmt::Debug, sync::Arc};
 
-use rama::{Context, Service, service::BoxService};
+use rama::{Context, Layer, Service, service::BoxService};
 use tansu_sans_io::{
-    ApiKey, ApiVersionsRequest, ApiVersionsResponse, Body, ErrorCode, Frame, RootMessageMeta,
-    api_versions_response::ApiVersion,
+    AddOffsetsToTxnRequest, AddPartitionsToTxnRequest, ApiKey, ApiVersionsRequest,
+    ApiVersionsResponse, Body, ConsumerGroupDescribeRequest, CreateTopicsRequest,
+    DeleteGroupsRequest, DeleteRecordsRequest, DeleteTopicsRequest, DescribeClusterRequest,
+    DescribeConfigsRequest, DescribeGroupsRequest, DescribeTopicPartitionsRequest, ErrorCode,
+    FetchRequest, FindCoordinatorRequest, Frame, GetTelemetrySubscriptionsRequest,
+    IncrementalAlterConfigsRequest, InitProducerIdRequest, ListGroupsRequest, ListOffsetsRequest,
+    ListPartitionReassignmentsRequest, MetadataRequest, ProduceRequest, RootMessageMeta,
+    TxnOffsetCommitRequest, api_versions_response::ApiVersion,
 };
 use tansu_storage::{
     Storage,
@@ -27,8 +33,8 @@ use tansu_storage::{
         DescribeGroupsService, DescribeTopicPartitionsService, FetchService,
         FindCoordinatorService, GetTelemetrySubscriptionsService, IncrementalAlterConfigsService,
         InitProducerIdService, ListGroupsService, ListOffsetsService,
-        ListPartitionReassignmentsService, MetadataService, ProduceService, TxnAddOffsetsService,
-        TxnAddPartitionService, TxnOffsetCommitService,
+        ListPartitionReassignmentsService, MetadataService, ProduceService, StorageLayer,
+        TxnAddOffsetsService, TxnAddPartitionService, TxnOffsetCommitService,
     },
 };
 use tracing::debug;
@@ -41,7 +47,7 @@ use crate::{
         offset_fetch::OffsetFetchService, sync::SyncGroupService,
     },
     coordinator::group::Coordinator,
-    service::{frame::FramingService, storage::StorageService, tcp::TcpService},
+    service::{frame::FramingService, tcp::TcpService},
 };
 
 pub mod frame;
@@ -170,90 +176,174 @@ where
     S: Storage,
 {
     builder
-        .with_service(StorageService::new(ConsumerGroupDescribeService::new(
-            storage.clone(),
-        )))
+        .with_service(
+            (
+                ErrorAdapterLayer,
+                StorageLayer::<_, ConsumerGroupDescribeRequest>::new(storage.clone()),
+            )
+                .into_layer(ConsumerGroupDescribeService),
+        )
         .and_then(|builder| {
-            builder.with_service(StorageService::new(CreateTopicsService::new(
-                storage.clone(),
-            )))
+            builder.with_service(
+                (
+                    ErrorAdapterLayer,
+                    StorageLayer::<_, CreateTopicsRequest>::new(storage.clone()),
+                )
+                    .into_layer(CreateTopicsService),
+            )
         })
         .and_then(|builder| {
-            builder.with_service(StorageService::new(DeleteGroupsService::new(
-                storage.clone(),
-            )))
+            builder.with_service(
+                (
+                    ErrorAdapterLayer,
+                    StorageLayer::<_, DeleteGroupsRequest>::new(storage.clone()),
+                )
+                    .into_layer(DeleteGroupsService),
+            )
         })
         .and_then(|builder| {
-            builder.with_service(StorageService::new(DeleteRecordsService::new(
-                storage.clone(),
-            )))
+            builder.with_service(
+                (
+                    ErrorAdapterLayer,
+                    StorageLayer::<_, DeleteRecordsRequest>::new(storage.clone()),
+                )
+                    .into_layer(DeleteRecordsService),
+            )
         })
         .and_then(|builder| {
-            builder.with_service(StorageService::new(DeleteTopicsService::new(
-                storage.clone(),
-            )))
+            builder.with_service(
+                (
+                    ErrorAdapterLayer,
+                    StorageLayer::<_, DeleteTopicsRequest>::new(storage.clone()),
+                )
+                    .into_layer(DeleteTopicsService),
+            )
         })
         .and_then(|builder| {
-            builder.with_service(StorageService::new(DescribeClusterService::new(
-                storage.clone(),
-            )))
+            builder.with_service(
+                (
+                    ErrorAdapterLayer,
+                    StorageLayer::<_, DescribeClusterRequest>::new(storage.clone()),
+                )
+                    .into_layer(DescribeClusterService),
+            )
         })
         .and_then(|builder| {
-            builder.with_service(StorageService::new(DescribeConfigsService::new(
-                storage.clone(),
-            )))
+            builder.with_service(
+                (
+                    ErrorAdapterLayer,
+                    StorageLayer::<_, DescribeConfigsRequest>::new(storage.clone()),
+                )
+                    .into_layer(DescribeConfigsService),
+            )
         })
         .and_then(|builder| {
-            builder.with_service(StorageService::new(DescribeGroupsService::new(
-                storage.clone(),
-            )))
+            builder.with_service(
+                (
+                    ErrorAdapterLayer,
+                    StorageLayer::<_, DescribeGroupsRequest>::new(storage.clone()),
+                )
+                    .into_layer(DescribeGroupsService),
+            )
         })
         .and_then(|builder| {
-            builder.with_service(StorageService::new(DescribeTopicPartitionsService::new(
-                storage.clone(),
-            )))
+            builder.with_service(
+                (
+                    ErrorAdapterLayer,
+                    StorageLayer::<_, DescribeTopicPartitionsRequest>::new(storage.clone()),
+                )
+                    .into_layer(DescribeTopicPartitionsService),
+            )
         })
         .and_then(|builder| {
-            builder.with_service(StorageService::new(FetchService::new(storage.clone())))
+            builder.with_service(
+                (
+                    ErrorAdapterLayer,
+                    StorageLayer::<_, FetchRequest>::new(storage.clone()),
+                )
+                    .into_layer(FetchService),
+            )
         })
         .and_then(|builder| {
-            builder.with_service(StorageService::new(FindCoordinatorService::new(
-                storage.clone(),
-            )))
+            builder.with_service(
+                (
+                    ErrorAdapterLayer,
+                    StorageLayer::<_, FindCoordinatorRequest>::new(storage.clone()),
+                )
+                    .into_layer(FindCoordinatorService),
+            )
         })
         .and_then(|builder| {
-            builder.with_service(StorageService::new(IncrementalAlterConfigsService::new(
-                storage.clone(),
-            )))
+            builder.with_service(
+                (
+                    ErrorAdapterLayer,
+                    StorageLayer::<_, IncrementalAlterConfigsRequest>::new(storage.clone()),
+                )
+                    .into_layer(IncrementalAlterConfigsService),
+            )
         })
         .and_then(|builder| {
-            builder.with_service(StorageService::new(InitProducerIdService::new(
-                storage.clone(),
-            )))
+            builder.with_service(
+                (
+                    ErrorAdapterLayer,
+                    StorageLayer::<_, InitProducerIdRequest>::new(storage.clone()),
+                )
+                    .into_layer(InitProducerIdService),
+            )
         })
         .and_then(|builder| {
-            builder.with_service(StorageService::new(ListGroupsService::new(storage.clone())))
+            builder.with_service(
+                (
+                    ErrorAdapterLayer,
+                    StorageLayer::<_, ListGroupsRequest>::new(storage.clone()),
+                )
+                    .into_layer(ListGroupsService),
+            )
         })
         .and_then(|builder| {
-            builder.with_service(StorageService::new(ListOffsetsService::new(
-                storage.clone(),
-            )))
+            builder.with_service(
+                (
+                    ErrorAdapterLayer,
+                    StorageLayer::<_, ListOffsetsRequest>::new(storage.clone()),
+                )
+                    .into_layer(ListOffsetsService),
+            )
         })
         .and_then(|builder| {
-            builder.with_service(StorageService::new(ListPartitionReassignmentsService::new(
-                storage.clone(),
-            )))
+            builder.with_service(
+                (
+                    ErrorAdapterLayer,
+                    StorageLayer::<_, ListPartitionReassignmentsRequest>::new(storage.clone()),
+                )
+                    .into_layer(ListPartitionReassignmentsService),
+            )
         })
         .and_then(|builder| {
-            builder.with_service(StorageService::new(MetadataService::new(storage.clone())))
+            builder.with_service(
+                (
+                    ErrorAdapterLayer,
+                    StorageLayer::<_, MetadataRequest>::new(storage.clone()),
+                )
+                    .into_layer(MetadataService),
+            )
         })
         .and_then(|builder| {
-            builder.with_service(StorageService::new(ProduceService::new(storage.clone())))
+            builder.with_service(
+                (
+                    ErrorAdapterLayer,
+                    StorageLayer::<_, ProduceRequest>::new(storage.clone()),
+                )
+                    .into_layer(ProduceService),
+            )
         })
         .and_then(|builder| {
-            builder.with_service(StorageService::new(GetTelemetrySubscriptionsService::new(
-                storage.clone(),
-            )))
+            builder.with_service(
+                (
+                    ErrorAdapterLayer,
+                    StorageLayer::<_, GetTelemetrySubscriptionsRequest>::new(storage.clone()),
+                )
+                    .into_layer(GetTelemetrySubscriptionsService),
+            )
         })
 }
 
@@ -265,18 +355,30 @@ where
     S: Storage,
 {
     builder
-        .with_service(StorageService::new(TxnAddOffsetsService::new(
-            storage.clone(),
-        )))
+        .with_service(
+            (
+                ErrorAdapterLayer,
+                StorageLayer::<_, AddOffsetsToTxnRequest>::new(storage.clone()),
+            )
+                .into_layer(TxnAddOffsetsService),
+        )
         .and_then(|builder| {
-            builder.with_service(StorageService::new(TxnAddPartitionService::new(
-                storage.clone(),
-            )))
+            builder.with_service(
+                (
+                    ErrorAdapterLayer,
+                    StorageLayer::<_, AddPartitionsToTxnRequest>::new(storage.clone()),
+                )
+                    .into_layer(TxnAddPartitionService),
+            )
         })
         .and_then(|builder| {
-            builder.with_service(StorageService::new(TxnOffsetCommitService::new(
-                storage.clone(),
-            )))
+            builder.with_service(
+                (
+                    ErrorAdapterLayer,
+                    StorageLayer::<_, TxnOffsetCommitRequest>::new(storage.clone()),
+                )
+                    .into_layer(TxnOffsetCommitService),
+            )
         })
 }
 
@@ -333,4 +435,41 @@ where
         .and_then(|builder| storage_txn_services(builder, storage))
         .and_then(|builder| consumer_group_services(builder, coordinator))
         .and_then(|builder| builder.build())
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+struct ErrorAdapterService<S> {
+    inner: S,
+}
+
+impl<S> ApiKey for ErrorAdapterService<S>
+where
+    S: ApiKey,
+{
+    const KEY: i16 = S::KEY;
+}
+
+impl<State, S> Service<State, Frame> for ErrorAdapterService<S>
+where
+    S: Service<State, Frame>,
+    State: Send + Sync + 'static,
+    Error: From<S::Error>,
+{
+    type Response = S::Response;
+    type Error = Error;
+
+    async fn serve(&self, ctx: Context<State>, req: Frame) -> Result<Self::Response, Self::Error> {
+        self.inner.serve(ctx, req).await.map_err(Into::into)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+struct ErrorAdapterLayer;
+
+impl<S> Layer<S> for ErrorAdapterLayer {
+    type Service = ErrorAdapterService<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        Self::Service { inner }
+    }
 }

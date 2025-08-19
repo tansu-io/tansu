@@ -14,46 +14,35 @@
 
 use rama::{Context, Service};
 use tansu_sans_io::{
-    ApiKey, Body, CreateTopicsRequest, CreateTopicsResponse, ErrorCode, NULL_TOPIC_ID,
+    ApiKey, CreateTopicsRequest, CreateTopicsResponse, ErrorCode, NULL_TOPIC_ID,
     create_topics_response::CreatableTopicResult,
 };
 use tracing::debug;
 
 use crate::{Error, Result, Storage};
 
-#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct CreateTopicsService<S> {
-    storage: S,
-}
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct CreateTopicsService;
 
-impl<S> ApiKey for CreateTopicsService<S> {
+impl ApiKey for CreateTopicsService {
     const KEY: i16 = CreateTopicsRequest::KEY;
 }
 
-impl<S> CreateTopicsService<S>
+impl<G> Service<G, CreateTopicsRequest> for CreateTopicsService
 where
-    S: Storage,
+    G: Storage,
 {
-    pub fn new(storage: S) -> Self {
-        Self { storage }
-    }
-}
-
-impl<S, State, Q> Service<State, Q> for CreateTopicsService<S>
-where
-    S: Storage,
-    State: Clone + Send + Sync + 'static,
-    Q: Into<Body> + Send + Sync + 'static,
-{
-    type Response = Body;
+    type Response = CreateTopicsResponse;
     type Error = Error;
 
-    async fn serve(&self, _ctx: Context<State>, req: Q) -> Result<Self::Response, Self::Error> {
-        let create_topics = CreateTopicsRequest::try_from(req.into())?;
-
+    async fn serve(
+        &self,
+        ctx: Context<G>,
+        req: CreateTopicsRequest,
+    ) -> Result<Self::Response, Self::Error> {
         let mut topics = vec![];
 
-        for topic in create_topics.topics.unwrap_or_default() {
+        for topic in req.topics.unwrap_or_default() {
             let name = topic.name.clone();
 
             let num_partitions = Some(match topic.num_partitions {
@@ -66,9 +55,9 @@ where
                 otherwise => otherwise,
             });
 
-            match self
-                .storage
-                .create_topic(topic, create_topics.validate_only.unwrap_or_default())
+            match ctx
+                .state()
+                .create_topic(topic, req.validate_only.unwrap_or_default())
                 .await
             {
                 Ok(topic_id) => {
@@ -119,8 +108,7 @@ where
 
         Ok(CreateTopicsResponse::default()
             .topics(Some(topics))
-            .throttle_time_ms(Some(0))
-            .into())
+            .throttle_time_ms(Some(0)))
     }
 }
 
@@ -139,7 +127,8 @@ mod tests {
         let node = 12321;
 
         let storage = DynoStore::new(cluster, node, InMemory::new());
-        let service = CreateTopicsService::new(storage);
+        let service = CreateTopicsService;
+        let ctx = Context::with_state(storage);
 
         let name = "pqr";
         let num_partitions = 5;
@@ -149,7 +138,7 @@ mod tests {
 
         let response = service
             .serve(
-                Context::default(),
+                ctx,
                 CreateTopicsRequest::default()
                     .topics(Some(vec![
                         CreatableTopic::default()
@@ -161,8 +150,7 @@ mod tests {
                     ]))
                     .validate_only(Some(false)),
             )
-            .await
-            .and_then(|body| CreateTopicsResponse::try_from(body).map_err(Into::into))?;
+            .await?;
 
         let topics = response.topics.unwrap_or_default();
 
@@ -182,7 +170,8 @@ mod tests {
         let node = 12321;
 
         let storage = DynoStore::new(cluster, node, InMemory::new());
-        let service = CreateTopicsService::new(storage);
+        let service = CreateTopicsService;
+        let ctx = Context::with_state(storage);
 
         let name = "pqr";
         let num_partitions = -1;
@@ -192,7 +181,7 @@ mod tests {
 
         let response = service
             .serve(
-                Context::default(),
+                ctx,
                 CreateTopicsRequest::default()
                     .topics(Some(vec![
                         CreatableTopic::default()
@@ -204,8 +193,7 @@ mod tests {
                     ]))
                     .validate_only(Some(false)),
             )
-            .await
-            .and_then(|body| CreateTopicsResponse::try_from(body).map_err(Into::into))?;
+            .await?;
 
         let topics = response.topics.unwrap_or_default();
 
@@ -225,7 +213,8 @@ mod tests {
         let node = 12321;
 
         let storage = DynoStore::new(cluster, node, InMemory::new());
-        let service = CreateTopicsService::new(storage);
+        let service = CreateTopicsService;
+        let ctx = Context::with_state(storage);
 
         let name = "pqr";
         let num_partitions = 5;
@@ -235,7 +224,7 @@ mod tests {
 
         let response = service
             .serve(
-                Context::default(),
+                ctx.clone(),
                 CreateTopicsRequest::default()
                     .topics(Some(vec![
                         CreatableTopic::default()
@@ -247,8 +236,7 @@ mod tests {
                     ]))
                     .validate_only(Some(false)),
             )
-            .await
-            .and_then(|body| CreateTopicsResponse::try_from(body).map_err(Into::into))?;
+            .await?;
 
         let topics = response.topics.unwrap_or_default();
 
@@ -261,7 +249,7 @@ mod tests {
 
         let response = service
             .serve(
-                Context::default(),
+                ctx,
                 CreateTopicsRequest::default()
                     .topics(Some(vec![
                         CreatableTopic::default()
@@ -273,8 +261,7 @@ mod tests {
                     ]))
                     .validate_only(Some(false)),
             )
-            .await
-            .and_then(|body| CreateTopicsResponse::try_from(body).map_err(Into::into))?;
+            .await?;
 
         let topics = response.topics.unwrap_or_default();
 

@@ -28,6 +28,7 @@ pub type Result<T, E = Error> = result::Result<T, E>;
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
     Api(ErrorCode),
+    Client(#[from] tansu_client::Error),
     Io(Arc<io::Error>),
     Protocol(#[from] tansu_sans_io::Error),
 }

@@ -13,49 +13,37 @@
 // limitations under the License.
 
 use rama::{Context, Service};
-use tansu_sans_io::{ApiKey, Body, DeleteRecordsRequest, DeleteRecordsResponse};
+use tansu_sans_io::{ApiKey, DeleteRecordsRequest, DeleteRecordsResponse};
 
 use crate::{Error, Result, Storage};
 
-#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct DeleteRecordsService<S> {
-    storage: S,
-}
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct DeleteRecordsService;
 
-impl<S> ApiKey for DeleteRecordsService<S> {
+impl ApiKey for DeleteRecordsService {
     const KEY: i16 = DeleteRecordsRequest::KEY;
 }
 
-impl<S> DeleteRecordsService<S>
+impl<G> Service<G, DeleteRecordsRequest> for DeleteRecordsService
 where
-    S: Storage,
+    G: Storage,
 {
-    pub fn new(storage: S) -> Self {
-        Self { storage }
-    }
-}
-
-impl<S, State, Q> Service<State, Q> for DeleteRecordsService<S>
-where
-    S: Storage,
-    State: Clone + Send + Sync + 'static,
-    Q: Into<Body> + Send + Sync + 'static,
-{
-    type Response = Body;
+    type Response = DeleteRecordsResponse;
     type Error = Error;
 
-    async fn serve(&self, _ctx: Context<State>, req: Q) -> Result<Self::Response, Self::Error> {
-        let delete_records = DeleteRecordsRequest::try_from(req.into())?;
-
-        self.storage
-            .delete_records(delete_records.topics.as_deref().unwrap_or(&[]))
+    async fn serve(
+        &self,
+        ctx: Context<G>,
+        req: DeleteRecordsRequest,
+    ) -> Result<Self::Response, Self::Error> {
+        ctx.state()
+            .delete_records(req.topics.as_deref().unwrap_or(&[]))
             .await
             .map(Some)
             .map(|topics| {
                 DeleteRecordsResponse::default()
                     .throttle_time_ms(0)
                     .topics(topics)
-                    .into()
             })
     }
 }

@@ -14,14 +14,11 @@
 
 use std::collections::HashMap;
 
+use tansu_client::{Client, Manager};
 use tansu_sans_io::{
-    ApiKey as _, Body, CreateTopicsRequest, CreateTopicsResponse, ErrorCode, Frame, Header,
+    CreateTopicsRequest, CreateTopicsResponse, ErrorCode,
     create_topics_request::{CreatableTopic, CreatableTopicConfig},
     create_topics_response::CreatableTopicResult,
-};
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
 };
 use tracing::debug;
 use url::Url;
@@ -105,71 +102,26 @@ impl TryFrom<Configuration> for Create {
 
 impl Create {
     pub(crate) async fn main(self) -> Result<ErrorCode> {
-        let mut connection = Connection::open(&self.configuration.broker).await?;
-
-        connection
-            .create(
-                self.configuration.name.as_str(),
-                self.configuration.partitions,
-                self.configuration.configs,
-            )
+        let client = Manager::builder(self.configuration.broker.clone())
+            .client_id(Some(env!("CARGO_PKG_NAME").into()))
+            .build()
             .await
-    }
-}
-
-#[derive(Debug)]
-struct Connection {
-    broker: TcpStream,
-    correlation_id: i32,
-}
-
-impl Connection {
-    async fn open(broker: &Url) -> Result<Self> {
-        debug!(%broker);
-
-        TcpStream::connect(format!(
-            "{}:{}",
-            broker.host_str().unwrap(),
-            broker.port().unwrap()
-        ))
-        .await
-        .map(|broker| Self {
-            broker,
-            correlation_id: 0,
-        })
-        .map_err(Into::into)
-    }
-
-    async fn create(
-        &mut self,
-        topic: &str,
-        partitions: i32,
-        configs: HashMap<String, String>,
-    ) -> Result<ErrorCode> {
-        debug!(%topic, partitions);
-
-        let api_key = CreateTopicsRequest::KEY;
-        let api_version = 7;
-
-        let header = Header::Request {
-            api_key,
-            api_version,
-            correlation_id: self.correlation_id,
-            client_id: Some("tansu".into()),
-        };
+            .inspect(|pool| debug!(?pool))
+            .map(Client::new)?;
 
         let timeout_ms = 30_000;
         let validate_only = Some(false);
 
-        let create_topics_request = CreateTopicsRequest::default()
+        let req = CreateTopicsRequest::default()
             .topics(Some(
                 [CreatableTopic::default()
-                    .name(topic.into())
-                    .num_partitions(partitions)
+                    .name(self.configuration.name)
+                    .num_partitions(self.configuration.partitions)
                     .replication_factor(-1)
                     .assignments(Some([].into()))
                     .configs(Some(
-                        configs
+                        self.configuration
+                            .configs
                             .into_iter()
                             .map(|(name, value)| {
                                 CreatableTopicConfig::default()
@@ -183,47 +135,16 @@ impl Connection {
             .timeout_ms(timeout_ms)
             .validate_only(validate_only);
 
-        let encoded = Frame::request(header, create_topics_request.into())?;
-
-        self.broker
-            .write_all(&encoded[..])
+        let CreateTopicsResponse { topics, .. } = client
+            .call(req)
             .await
-            .inspect_err(|err| debug!(?err))?;
+            .inspect(|response| debug!(?response))?;
 
-        let mut size = [0u8; 4];
-        _ = self.broker.read_exact(&mut size).await?;
+        let topics = topics.unwrap_or_default();
+        assert_eq!(1, topics.len());
 
-        let mut response_buffer: Vec<u8> = vec![0u8; Self::frame_length(size)];
-        response_buffer[0..size.len()].copy_from_slice(&size[..]);
-        _ = self
-            .broker
-            .read_exact(&mut response_buffer[size.len()..])
-            .await
-            .inspect_err(|err| debug!(?err))?;
+        let CreatableTopicResult { error_code, .. } = topics.first().expect("topics: {topics:?}");
 
-        match Frame::response_from_bytes(&response_buffer[..], api_key, api_version)
-            .inspect(|response| debug!(?response))
-            .inspect_err(|err| debug!(?err))?
-        {
-            Frame {
-                body:
-                    Body::CreateTopicsResponse(CreateTopicsResponse {
-                        topics: Some(topics),
-                        ..
-                    }),
-                ..
-            } => match topics.as_slice() {
-                [CreatableTopicResult { error_code, .. }] => {
-                    ErrorCode::try_from(error_code).map_err(Into::into)
-                }
-                otherwise => unreachable!("{otherwise:?}"),
-            },
-
-            otherwise => unreachable!("{otherwise:?}"),
-        }
-    }
-
-    fn frame_length(encoded: [u8; 4]) -> usize {
-        i32::from_be_bytes(encoded) as usize + encoded.len()
+        ErrorCode::try_from(error_code).map_err(Into::into)
     }
 }
