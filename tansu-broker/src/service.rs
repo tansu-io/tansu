@@ -42,11 +42,11 @@ use tracing::debug;
 use crate::{
     Error, Result,
     broker::group::{
-        CoordinatorService, heartbeat::HeartbeatService, join::JoinGroupService,
-        leave::LeaveGroupService, offset_commit::OffsetCommitService,
-        offset_fetch::OffsetFetchService, sync::SyncGroupService,
+        heartbeat::HeartbeatService, join::JoinGroupService, leave::LeaveGroupService,
+        offset_commit::OffsetCommitService, offset_fetch::OffsetFetchService,
+        sync::SyncGroupService,
     },
-    coordinator::group::Coordinator,
+    coordinator::{CoordinatorLayer, group::Coordinator},
     service::{frame::FramingService, tcp::TcpService},
 };
 
@@ -390,39 +390,31 @@ where
     C: Coordinator,
 {
     builder
-        .with_service(CoordinatorService::new(
-            coordinator.clone(),
-            HeartbeatService,
-        ))
+        .with_service(CoordinatorLayer::new(coordinator.clone()).into_layer(HeartbeatService))
         .and_then(|builder| {
-            builder.with_service(CoordinatorService::new(
-                coordinator.clone(),
-                JoinGroupService,
-            ))
+            builder.with_service(
+                CoordinatorLayer::new(coordinator.clone()).into_layer(JoinGroupService),
+            )
         })
         .and_then(|builder| {
-            builder.with_service(CoordinatorService::new(
-                coordinator.clone(),
-                LeaveGroupService,
-            ))
+            builder.with_service(
+                CoordinatorLayer::new(coordinator.clone()).into_layer(LeaveGroupService),
+            )
         })
         .and_then(|builder| {
-            builder.with_service(CoordinatorService::new(
-                coordinator.clone(),
-                OffsetCommitService,
-            ))
+            builder.with_service(
+                CoordinatorLayer::new(coordinator.clone()).into_layer(OffsetCommitService),
+            )
         })
         .and_then(|builder| {
-            builder.with_service(CoordinatorService::new(
-                coordinator.clone(),
-                OffsetFetchService,
-            ))
+            builder.with_service(
+                CoordinatorLayer::new(coordinator.clone()).into_layer(OffsetFetchService),
+            )
         })
         .and_then(|builder| {
-            builder.with_service(CoordinatorService::new(
-                coordinator.clone(),
-                SyncGroupService,
-            ))
+            builder.with_service(
+                CoordinatorLayer::new(coordinator.clone()).into_layer(SyncGroupService),
+            )
         })
 }
 
