@@ -85,6 +85,7 @@ pub(crate) static METER: LazyLock<Meter> = LazyLock::new(|| {
     )
 });
 
+///  broker connection with a correlation id
 #[derive(Debug)]
 pub struct Connection {
     stream: TcpStream,
@@ -125,6 +126,7 @@ impl Connection {
         .await
     }
 
+    /// send a request to the broker
     async fn request<Q>(
         &mut self,
         req: Q,
@@ -168,6 +170,7 @@ impl Connection {
             .map_err(Into::into)
     }
 
+    /// demarshall a versioned response frame from the broker
     async fn response<Q>(
         &mut self,
         api_version: i16,
@@ -187,6 +190,7 @@ impl Connection {
             .inspect(|response| debug!(?response))
     }
 
+    /// marshall a request frame to the broker
     async fn read_frame(&mut self, attributes: &[KeyValue]) -> Result<Bytes, Error> {
         let start = SystemTime::now();
 
@@ -217,6 +221,7 @@ impl Connection {
     }
 }
 
+/// manager of supported API versions for a broker
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Manager {
     broker: Url,
@@ -225,14 +230,17 @@ pub struct Manager {
 }
 
 impl Manager {
+    /// build a manager with a broker endpoint
     pub fn builder(broker: Url) -> Builder {
         Builder::broker(broker)
     }
 
+    /// client id used in requests to the broker
     pub fn client_id(&self) -> Option<String> {
         self.client_id.clone()
     }
 
+    /// the version supported by the broker for a given api key
     pub fn api_version(&self, api_key: i16) -> Result<i16, Error> {
         self.versions
             .get(&api_key)
@@ -240,6 +248,7 @@ impl Manager {
             .ok_or(Error::UnknownApiKey(api_key))
     }
 
+    /// resolve a host into an IP socket address
     async fn host_port(&self) -> Result<SocketAddr, Error> {
         if let Some(host) = self.broker.host_str()
             && let Some(port) = self.broker.port()
@@ -310,6 +319,7 @@ impl managed::Manager for Manager {
     }
 }
 
+/// a managed pool of broker connections
 pub type Pool = managed::Pool<Manager>;
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -319,6 +329,7 @@ pub struct Builder {
 }
 
 impl Builder {
+    /// broker url
     pub fn broker(broker: Url) -> Self {
         Self {
             broker,
@@ -326,10 +337,12 @@ impl Builder {
         }
     }
 
+    /// client id used when making requests to the broker
     pub fn client_id(self, client_id: Option<String>) -> Self {
         Self { client_id, ..self }
     }
 
+    /// inquire with the broker supported api versions
     async fn bootstrap(&self) -> Result<BTreeMap<i16, i16>, Error> {
         let versions = BTreeMap::from([(ApiVersionsRequest::KEY, 0)]);
 
@@ -355,6 +368,7 @@ impl Builder {
         })
     }
 
+    /// establish the api versions supported by the broker
     pub async fn build(self) -> Result<Pool, Error> {
         self.bootstrap().await.and_then(|versions| {
             Pool::builder(Manager {
@@ -368,13 +382,14 @@ impl Builder {
     }
 }
 
+/// inject the pool into the service context of this layer
 #[derive(Clone, Debug)]
-pub struct PoolLayer {
+pub(crate) struct PoolLayer {
     pool: Pool,
 }
 
 impl PoolLayer {
-    pub fn new(pool: Pool) -> Self {
+    fn new(pool: Pool) -> Self {
         Self { pool }
     }
 }
@@ -390,8 +405,9 @@ impl<S> Layer<S> for PoolLayer {
     }
 }
 
+/// inject the pool into the inner service context
 #[derive(Clone, Debug)]
-pub struct PoolService<S> {
+pub(crate) struct PoolService<S> {
     pool: Pool,
     inner: S,
 }
@@ -406,24 +422,28 @@ where
     type Response = S::Response;
     type Error = Error;
 
+    /// serve the request, injecting the pool into the context of the inner service
     async fn serve(&self, _: Context<State>, req: Q) -> Result<Self::Response, Self::Error> {
         let ctx = Context::with_state(self.pool.clone());
         self.inner.serve(ctx, req).await.map_err(Into::into)
     }
 }
 
+/// API client using a connection pool
 #[derive(Clone, Debug)]
 pub struct Client {
     service: PoolService<ConnectionService>,
 }
 
 impl Client {
+    /// create a new client using the supplied pool
     pub fn new(pool: Pool) -> Self {
         Self {
             service: PoolLayer::new(pool).into_layer(ConnectionService),
         }
     }
 
+    /// make an API request using the connection from the pool
     pub async fn call<Q>(&self, req: Q) -> Result<Q::Response, Error>
     where
         Q: Request,
@@ -434,7 +454,7 @@ impl Client {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct ConnectionService;
+pub(crate) struct ConnectionService;
 
 impl<Q> Service<Pool, Q> for ConnectionService
 where

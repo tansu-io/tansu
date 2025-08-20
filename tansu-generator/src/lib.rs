@@ -160,13 +160,13 @@ static PRODUCE_REQUEST_RESPONSE_DURATION: LazyLock<Histogram<u64>> = LazyLock::n
 });
 
 pub async fn produce(
-    broker: Url,
+    client: Client,
     name: String,
     index: i32,
     schema: Schema,
     batch_size: i32,
 ) -> Result<()> {
-    debug!(%broker, %name, index, batch_size);
+    debug!(?client, %name, index, batch_size);
 
     let attributes = [
         KeyValue::new("topic", name.clone()),
@@ -213,13 +213,6 @@ pub async fn produce(
         ))]
         .into(),
     ));
-
-    let client = Manager::builder(broker)
-        .client_id(Some(env!("CARGO_PKG_NAME").into()))
-        .build()
-        .await
-        .inspect(|pool| debug!(?pool))
-        .map(Client::new)?;
 
     let start = SystemTime::now();
 
@@ -311,13 +304,20 @@ impl Generate {
 
         let token = CancellationToken::new();
 
+        let client = Manager::builder(self.configuration.broker)
+            .client_id(Some(env!("CARGO_PKG_NAME").into()))
+            .build()
+            .await
+            .inspect(|pool| debug!(?pool))
+            .map(Client::new)?;
+
         for producer in 0..self.configuration.producers {
             let rate_limiter = rate_limiter.clone();
             let schema = schema.clone();
-            let broker = self.configuration.broker.clone();
             let topic = self.configuration.topic.clone();
             let partition = self.configuration.partition;
             let token = token.clone();
+            let client = client.clone();
 
             _ = set.spawn(async move {
                     let span = span!(Level::DEBUG, "producer", producer);
@@ -326,7 +326,7 @@ impl Generate {
                         let attributes = [KeyValue::new("producer", producer.to_string())];
 
                         loop {
-                            debug!(%broker, %topic, partition);
+                            debug!(%topic, partition);
 
                             if let Some(ref rate_limiter) = rate_limiter {
                                 let rate_limit_start = SystemTime::now();
@@ -356,7 +356,7 @@ impl Generate {
                                     break
                                 },
 
-                                Ok(_) = produce(broker.clone(), topic.clone(), partition, schema.clone(), batch_size.get() as i32) => {
+                                Ok(_) = produce(client.clone(), topic.clone(), partition, schema.clone(), batch_size.get() as i32) => {
                                     PRODUCE_RECORD_COUNT.add(batch_size.get() as u64, &attributes);
                                     PRODUCE_API_DURATION.record(produce_start.elapsed().map_or(0, |duration| duration.as_millis() as u64), &attributes);
                                 },
