@@ -12,16 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{
-    collections::BTreeMap,
-    fmt::Debug,
-    sync::{Arc, LazyLock},
-    time::SystemTime,
-};
+use std::{fmt::Debug, sync::LazyLock, time::SystemTime};
 
 use crate::{
     METER, Result,
-    api::{ApiKey, ApiRequest, ApiResponse, read_api_request, read_api_response},
+    api::{ApiRequest, ApiResponse, read_api_request, read_api_response},
     read_frame,
 };
 use bytes::Bytes;
@@ -37,7 +32,6 @@ use rama::{
         client::{ConnectorService, EstablishedClientConnection},
         stream::Stream,
     },
-    service::BoxService,
     tcp::{TcpStream, client::default_tcp_connect},
 };
 use tokio::io::AsyncWriteExt;
@@ -170,32 +164,6 @@ impl<S> Layer<S> for ApiRequestLayer {
 
     fn layer(&self, inner: S) -> Self::Service {
         ApiRequestService { inner }
-    }
-}
-
-#[derive(Debug)]
-pub struct ApiRouteService<State, Request, Response, Error> {
-    routes: Arc<BTreeMap<ApiKey, BoxService<State, Request, Response, Error>>>,
-    otherwise: Arc<BoxService<State, Request, Response, Error>>,
-}
-
-impl<State> Service<State, ApiRequest> for ApiRouteService<State, ApiRequest, ApiResponse, BoxError>
-where
-    State: Send + Sync + 'static,
-{
-    type Response = ApiResponse;
-    type Error = BoxError;
-
-    async fn serve(
-        &self,
-        ctx: Context<State>,
-        req: ApiRequest,
-    ) -> Result<Self::Response, Self::Error> {
-        if let Some(service) = self.routes.get(&req.api_key) {
-            service.serve(ctx, req).await
-        } else {
-            self.otherwise.serve(ctx, req).await
-        }
     }
 }
 
@@ -406,7 +374,10 @@ where
 mod tests {
     use std::{fs::File, sync::Arc, thread};
 
-    use crate::api::produce::{ProduceRequest, ProduceResponse};
+    use crate::api::{
+        ApiKey,
+        produce::{ProduceRequest, ProduceResponse},
+    };
 
     use super::*;
     use rama::{error::OpaqueError, service::service_fn};
