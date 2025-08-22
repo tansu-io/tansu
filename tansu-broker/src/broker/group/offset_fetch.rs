@@ -13,68 +13,35 @@
 // limitations under the License.
 
 use rama::{Context, Service};
-use tansu_sans_io::{
-    ApiKey, Body,
-    offset_fetch_request::{self, OffsetFetchRequestGroup, OffsetFetchRequestTopic},
-};
+use tansu_sans_io::{ApiKey, Body, Frame, OffsetFetchRequest};
 
-use crate::{Error, Result, broker::group::Request, coordinator::group::Coordinator};
+use crate::{Error, Result, coordinator::group::Coordinator};
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct OffsetFetchService;
 
 impl ApiKey for OffsetFetchService {
-    const KEY: i16 = offset_fetch_request::OffsetFetchRequest::KEY;
+    const KEY: i16 = OffsetFetchRequest::KEY;
 }
 
-impl<C, State> Service<State, Request<C>> for OffsetFetchService
+impl<C> Service<C, Frame> for OffsetFetchService
 where
     C: Coordinator,
-    State: Clone + Send + Sync + 'static,
 {
     type Response = Body;
     type Error = Error;
 
-    async fn serve(
-        &self,
-        _ctx: Context<State>,
-        mut request: Request<C>,
-    ) -> Result<Self::Response, Self::Error> {
-        let offset_fetch = offset_fetch_request::OffsetFetchRequest::try_from(request.frame.body)?;
-        request
-            .coordinator
+    async fn serve(&self, mut ctx: Context<C>, req: Frame) -> Result<Self::Response, Self::Error> {
+        let coordinator = ctx.state_mut();
+        let offset_fetch = OffsetFetchRequest::try_from(req.body)?;
+
+        coordinator
             .offset_fetch(
                 offset_fetch.group_id.as_deref(),
                 offset_fetch.topics.as_deref(),
                 offset_fetch.groups.as_deref(),
                 offset_fetch.require_stable,
             )
-            .await
-    }
-}
-
-#[derive(Debug)]
-pub struct OffsetFetchRequest<C> {
-    coordinator: C,
-}
-
-impl<C> OffsetFetchRequest<C>
-where
-    C: Coordinator,
-{
-    pub fn with_coordinator(coordinator: C) -> Self {
-        Self { coordinator }
-    }
-
-    pub async fn response(
-        &mut self,
-        group_id: Option<&str>,
-        topics: Option<&[OffsetFetchRequestTopic]>,
-        groups: Option<&[OffsetFetchRequestGroup]>,
-        require_stable: Option<bool>,
-    ) -> Result<Body> {
-        self.coordinator
-            .offset_fetch(group_id, topics, groups, require_stable)
             .await
     }
 }

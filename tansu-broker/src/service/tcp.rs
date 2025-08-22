@@ -125,17 +125,18 @@ impl From<(TcpStream, SocketAddr)> for TcpRequest {
     }
 }
 
-impl<S> Service<(), TcpRequest> for TcpService<S>
+impl<S, State> Service<State, TcpRequest> for TcpService<S>
 where
-    S: Service<(), Bytes, Response = Bytes>,
+    S: Service<State, Bytes, Response = Bytes>,
     S::Error: Into<Error> + Debug,
+    State: Clone + Send + Sync + 'static,
 {
     type Response = ();
     type Error = Error;
 
     async fn serve(
         &self,
-        ctx: Context<()>,
+        ctx: Context<State>,
         mut req: TcpRequest,
     ) -> Result<Self::Response, Self::Error> {
         let span = span!(

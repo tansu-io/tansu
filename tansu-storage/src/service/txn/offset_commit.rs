@@ -13,56 +13,45 @@
 // limitations under the License.
 
 use rama::{Context, Service};
-use tansu_sans_io::{ApiKey, Body, TxnOffsetCommitResponse, txn_offset_commit_request};
+use tansu_sans_io::{ApiKey, TxnOffsetCommitResponse};
 
 use crate::{Error, Result, Storage};
 
-#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct OffsetCommitService<S> {
-    storage: S,
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct OffsetCommitService;
+
+impl ApiKey for OffsetCommitService {
+    const KEY: i16 = tansu_sans_io::TxnOffsetCommitRequest::KEY;
 }
 
-impl<S> ApiKey for OffsetCommitService<S> {
-    const KEY: i16 = txn_offset_commit_request::TxnOffsetCommitRequest::KEY;
-}
-
-impl<S> OffsetCommitService<S>
+impl<G> Service<G, tansu_sans_io::TxnOffsetCommitRequest> for OffsetCommitService
 where
-    S: Storage,
+    G: Storage,
 {
-    pub fn new(storage: S) -> Self {
-        Self { storage }
-    }
-}
-
-impl<S, State, Q> Service<State, Q> for OffsetCommitService<S>
-where
-    S: Storage,
-    State: Clone + Send + Sync + 'static,
-    Q: Into<Body> + Send + Sync + 'static,
-{
-    type Response = Body;
+    type Response = TxnOffsetCommitResponse;
     type Error = Error;
 
-    async fn serve(&self, _ctx: Context<State>, request: Q) -> Result<Self::Response, Self::Error> {
-        let txn = txn_offset_commit_request::TxnOffsetCommitRequest::try_from(request.into())?;
-        let responses = self
-            .storage
+    async fn serve(
+        &self,
+        ctx: Context<G>,
+        req: tansu_sans_io::TxnOffsetCommitRequest,
+    ) -> Result<Self::Response, Self::Error> {
+        let responses = ctx
+            .state()
             .txn_offset_commit(crate::TxnOffsetCommitRequest {
-                transaction_id: txn.transactional_id.to_owned(),
-                group_id: txn.group_id.to_owned(),
-                producer_id: txn.producer_id,
-                producer_epoch: txn.producer_epoch,
-                generation_id: txn.generation_id,
-                member_id: txn.member_id,
-                group_instance_id: txn.group_instance_id,
-                topics: txn.topics.unwrap_or_default(),
+                transaction_id: req.transactional_id.to_owned(),
+                group_id: req.group_id.to_owned(),
+                producer_id: req.producer_id,
+                producer_epoch: req.producer_epoch,
+                generation_id: req.generation_id,
+                member_id: req.member_id,
+                group_instance_id: req.group_instance_id,
+                topics: req.topics.unwrap_or_default(),
             })
             .await?;
 
         Ok(TxnOffsetCommitResponse::default()
             .throttle_time_ms(0)
-            .topics(Some(responses))
-            .into())
+            .topics(Some(responses)))
     }
 }

@@ -21,7 +21,9 @@ use rama::{error::BoxError, tcp::TcpStream};
 use tokio::io::AsyncReadExt as _;
 
 pub mod api;
+pub mod client;
 pub mod service;
+pub mod stream;
 
 pub type Result<T, E = BoxError> = result::Result<T, E>;
 

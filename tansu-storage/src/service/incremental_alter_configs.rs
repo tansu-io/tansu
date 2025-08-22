@@ -13,50 +13,37 @@
 // limitations under the License.
 
 use rama::{Context, Service};
-use tansu_sans_io::{
-    ApiKey, Body, IncrementalAlterConfigsRequest, IncrementalAlterConfigsResponse,
-};
+use tansu_sans_io::{ApiKey, IncrementalAlterConfigsRequest, IncrementalAlterConfigsResponse};
 
 use crate::{Error, Result, Storage};
 
-#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct IncrementalAlterConfigsService<S> {
-    storage: S,
-}
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct IncrementalAlterConfigsService;
 
-impl<S> ApiKey for IncrementalAlterConfigsService<S> {
+impl ApiKey for IncrementalAlterConfigsService {
     const KEY: i16 = IncrementalAlterConfigsRequest::KEY;
 }
 
-impl<S> IncrementalAlterConfigsService<S>
+impl<G> Service<G, IncrementalAlterConfigsRequest> for IncrementalAlterConfigsService
 where
-    S: Storage,
+    G: Storage,
 {
-    pub fn new(storage: S) -> Self {
-        Self { storage }
-    }
-}
-
-impl<S, State, Q> Service<State, Q> for IncrementalAlterConfigsService<S>
-where
-    S: Storage,
-    State: Clone + Send + Sync + 'static,
-    Q: Into<Body> + Send + Sync + 'static,
-{
-    type Response = Body;
+    type Response = IncrementalAlterConfigsResponse;
     type Error = Error;
 
-    async fn serve(&self, _ctx: Context<State>, req: Q) -> Result<Self::Response, Self::Error> {
-        let alter_configs = IncrementalAlterConfigsRequest::try_from(req.into())?;
+    async fn serve(
+        &self,
+        ctx: Context<G>,
+        req: IncrementalAlterConfigsRequest,
+    ) -> Result<Self::Response, Self::Error> {
         let mut responses = vec![];
 
-        for resource in alter_configs.resources.unwrap_or_default() {
-            responses.push(self.storage.incremental_alter_resource(resource).await?);
+        for resource in req.resources.unwrap_or_default() {
+            responses.push(ctx.state().incremental_alter_resource(resource).await?);
         }
 
         Ok(IncrementalAlterConfigsResponse::default()
             .throttle_time_ms(0)
-            .responses(Some(responses))
-            .into())
+            .responses(Some(responses)))
     }
 }

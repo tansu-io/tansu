@@ -17,7 +17,7 @@ use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
 use serde_json::Value;
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     env, error,
     fmt::{self, Display},
     fs,
@@ -25,7 +25,7 @@ use std::{
     path::Path,
 };
 use syn::{Expr, Type};
-use tansu_model::{CommonStruct, Field, Listener, Message, wv::Wv};
+use tansu_model::{CommonStruct, Field, Listener, Message, MessageKind, wv::Wv};
 
 #[derive(Debug)]
 #[allow(dead_code)]
@@ -981,6 +981,83 @@ fn process(messages: &[Message], include_tag: bool) -> TokenStream {
             })
             .collect::<Vec<_>>();
 
+        let request_responses = {
+            let mapping = {
+                let mut mapping: BTreeMap<i16, (Option<Type>, Option<Type>)> = BTreeMap::new();
+
+                for message in messages.iter() {
+                    _ = mapping
+                        .entry(message.api_key())
+                        .and_modify(|entry| match message.kind() {
+                            MessageKind::Request => {
+                                assert_eq!(entry.0.replace(message.type_name()), None)
+                            }
+                            MessageKind::Response => {
+                                assert_eq!(entry.1.replace(message.type_name()), None)
+                            }
+                        })
+                        .or_insert(match message.kind() {
+                            MessageKind::Request => (Some(message.type_name()), None),
+
+                            MessageKind::Response => (None, Some(message.type_name())),
+                        });
+                }
+
+                mapping
+            };
+
+            mapping
+                .into_iter()
+                .filter(|(_, (request, response))| request.is_some() && response.is_some())
+                .map(|(_, (request, response))| {
+                    quote! {
+                        impl Request for #request {
+                            type Response = #response;
+                        }
+
+                        impl Response for #response {
+                            type Request = #request;
+                        }
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let matchers = messages
+            .iter()
+            .filter(|message| message.kind() == MessageKind::Request)
+            .map(|message| {
+                let name = message.type_name();
+
+                quote! {
+                    impl<State> rama::matcher::Matcher<State, Frame> for #name {
+                        fn matches(
+                            &self,
+                            ext: Option<&mut rama::context::Extensions>,
+                            ctx: &rama::Context<State>,
+                            req: &Frame,
+                        ) -> bool {
+                            req.api_key().is_ok_and(|api_key| api_key == Self::KEY)
+                        }
+                    }
+
+                    impl<State, T> rama::matcher::Matcher<State, T> for #name
+                    where
+                        T: ApiKey,
+                    {
+                        fn matches(
+                            &self,
+                            ext: Option<&mut rama::context::Extensions>,
+                            ctx: &rama::Context<State>,
+                            req: &T,
+                        ) -> bool {
+                            T::KEY == Self::KEY
+                        }
+                    }
+                }
+            })
+            .collect::<Vec<_>>();
+
         let api_keys = messages
             .iter()
             .map(|message| {
@@ -1007,6 +1084,10 @@ fn process(messages: &[Message], include_tag: bool) -> TokenStream {
             #(#root)*
 
             #body_enum
+
+            #(#request_responses)*
+
+            #(#matchers)*
 
             impl Body {
                 #(#as_names)*

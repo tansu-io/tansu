@@ -14,45 +14,34 @@
 
 use rama::{Context, Service};
 use tansu_sans_io::{
-    ApiKey, Body, ErrorCode, FindCoordinatorRequest, FindCoordinatorResponse,
+    ApiKey, ErrorCode, FindCoordinatorRequest, FindCoordinatorResponse,
     find_coordinator_response::Coordinator,
 };
 
 use crate::{Error, Result, Storage};
 
-#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct FindCoordinatorService<S> {
-    storage: S,
-}
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct FindCoordinatorService;
 
-impl<S> ApiKey for FindCoordinatorService<S> {
+impl ApiKey for FindCoordinatorService {
     const KEY: i16 = FindCoordinatorRequest::KEY;
 }
 
-impl<S> FindCoordinatorService<S>
+impl<G> Service<G, FindCoordinatorRequest> for FindCoordinatorService
 where
-    S: Storage,
+    G: Storage,
 {
-    pub fn new(storage: S) -> Self {
-        Self { storage }
-    }
-}
-
-impl<S, State, Q> Service<State, Q> for FindCoordinatorService<S>
-where
-    S: Storage,
-    State: Clone + Send + Sync + 'static,
-    Q: Into<Body> + Send + Sync + 'static,
-{
-    type Response = Body;
+    type Response = FindCoordinatorResponse;
     type Error = Error;
 
-    async fn serve(&self, _ctx: Context<State>, req: Q) -> Result<Self::Response, Self::Error> {
-        let find_coordinator = FindCoordinatorRequest::try_from(req.into())?;
+    async fn serve(
+        &self,
+        ctx: Context<G>,
+        req: FindCoordinatorRequest,
+    ) -> Result<Self::Response, Self::Error> {
+        let node_id = ctx.state().node()?;
 
-        let node_id = self.storage.node()?;
-
-        let listener = self.storage.advertised_listener()?;
+        let listener = ctx.state().advertised_listener()?;
         let host = listener.host_str().unwrap_or("localhost");
         let port = i32::from(listener.port().unwrap_or(9092));
 
@@ -63,7 +52,7 @@ where
             .node_id(Some(node_id))
             .host(Some(host.into()))
             .port(Some(port))
-            .coordinators(find_coordinator.coordinator_keys.map(|keys| {
+            .coordinators(req.coordinator_keys.map(|keys| {
                 keys.iter()
                     .map(|key| {
                         Coordinator::default()
@@ -75,7 +64,6 @@ where
                             .error_message(None)
                     })
                     .collect()
-            }))
-            .into())
+            })))
     }
 }

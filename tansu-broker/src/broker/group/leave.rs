@@ -13,60 +13,34 @@
 // limitations under the License.
 
 use rama::{Context, Service};
-use tansu_sans_io::{
-    ApiKey, Body,
-    leave_group_request::{self, MemberIdentity},
-};
+use tansu_sans_io::{ApiKey, Body, Frame, LeaveGroupRequest};
 
-use crate::{Error, Result, broker::group::Request, coordinator::group::Coordinator};
+use crate::{Error, Result, coordinator::group::Coordinator};
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct LeaveGroupService;
 
 impl ApiKey for LeaveGroupService {
-    const KEY: i16 = leave_group_request::LeaveGroupRequest::KEY;
+    const KEY: i16 = LeaveGroupRequest::KEY;
 }
 
-impl<C, State> Service<State, Request<C>> for LeaveGroupService
+impl<C> Service<C, Frame> for LeaveGroupService
 where
     C: Coordinator,
-    State: Clone + Send + Sync + 'static,
 {
     type Response = Body;
     type Error = Error;
 
-    async fn serve(
-        &self,
-        _ctx: Context<State>,
-        mut request: Request<C>,
-    ) -> Result<Self::Response, Self::Error> {
-        let leave = leave_group_request::LeaveGroupRequest::try_from(request.frame.body)?;
-        request
-            .coordinator
+    async fn serve(&self, mut ctx: Context<C>, req: Frame) -> Result<Self::Response, Self::Error> {
+        let coordinator = ctx.state_mut();
+        let leave = LeaveGroupRequest::try_from(req.body)?;
+
+        coordinator
             .leave(
                 leave.group_id.as_str(),
                 leave.member_id.as_deref(),
                 leave.members.as_deref(),
             )
             .await
-    }
-}
-
-#[derive(Debug)]
-pub struct LeaveRequest<C> {
-    coordinator: C,
-}
-
-impl<C> LeaveRequest<C>
-where
-    C: Coordinator,
-{
-    pub async fn response(
-        &mut self,
-        group_id: &str,
-        member_id: Option<&str>,
-        members: Option<&[MemberIdentity]>,
-    ) -> Result<Body> {
-        self.coordinator.leave(group_id, member_id, members).await
     }
 }

@@ -50,6 +50,7 @@ clap.workspace = true
 crc.workspace = true
 flate2.workspace = true
 lz4.workspace = true
+rama.workspace = true
 serde.workspace = true
 snap.workspace = true
 tansu-model.workspace = true

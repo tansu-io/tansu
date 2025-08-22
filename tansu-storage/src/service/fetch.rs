@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use rama::{Context, Service};
 use tansu_sans_io::{
-    ApiKey, Body, ErrorCode, FetchRequest, FetchResponse, IsolationLevel,
+    ApiKey, ErrorCode, FetchRequest, FetchResponse, IsolationLevel,
     fetch_request::{FetchPartition, FetchTopic},
     fetch_response::{
         EpochEndOffset, FetchableTopicResponse, LeaderIdAndEpoch, PartitionData, SnapshotId,
@@ -29,32 +29,28 @@ use tracing::{debug, error};
 
 use crate::{Error, Result, Storage, Topition};
 
-#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct FetchService<S> {
-    storage: S,
-}
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct FetchService;
 
-impl<S> ApiKey for FetchService<S> {
+impl ApiKey for FetchService {
     const KEY: i16 = FetchRequest::KEY;
 }
 
-impl<S> FetchService<S>
-where
-    S: Storage,
-{
-    pub fn new(storage: S) -> Self {
-        Self { storage }
-    }
-
-    async fn fetch_partition(
+impl FetchService {
+    #[allow(clippy::too_many_arguments)]
+    async fn fetch_partition<G>(
         &self,
+        ctx: Context<G>,
         max_wait_ms: Duration,
         min_bytes: u32,
         max_bytes: &mut u32,
         isolation: IsolationLevel,
         topic: &str,
         fetch_partition: &FetchPartition,
-    ) -> Result<PartitionData> {
+    ) -> Result<PartitionData>
+    where
+        G: Storage,
+    {
         debug!(
             ?max_wait_ms,
             ?min_bytes,
@@ -77,8 +73,8 @@ where
 
             debug!(offset);
 
-            let mut fetched = self
-                .storage
+            let mut fetched = ctx
+                .state()
                 .fetch(&tp, offset, min_bytes, *max_bytes, isolation)
                 .await
                 .inspect(|r| debug!(?tp, ?offset, ?r))
@@ -101,8 +97,8 @@ where
             }
         }
 
-        let offset_stage = self
-            .storage
+        let offset_stage = ctx
+            .state()
             .offset_stage(&tp)
             .await
             .inspect_err(|error| error!(?error, ?tp))?;
@@ -156,18 +152,22 @@ where
     }
 
     #[allow(clippy::too_many_arguments)]
-    async fn fetch_topic(
+    async fn fetch_topic<G>(
         &self,
+        ctx: Context<G>,
         max_wait_ms: Duration,
         min_bytes: u32,
         max_bytes: &mut u32,
         isolation: IsolationLevel,
         fetch: &FetchTopic,
         _is_first: bool,
-    ) -> Result<FetchableTopicResponse> {
+    ) -> Result<FetchableTopicResponse>
+    where
+        G: Storage,
+    {
         debug!(?max_wait_ms, ?min_bytes, ?isolation, ?fetch);
 
-        let metadata = self.storage.metadata(Some(&[fetch.into()])).await?;
+        let metadata = ctx.state().metadata(Some(&[fetch.into()])).await?;
 
         if let Some(MetadataResponseTopic {
             topic_id,
@@ -180,6 +180,7 @@ where
             for fetch_partition in fetch.partitions.as_ref().unwrap_or(&Vec::new()) {
                 let partition = self
                     .fetch_partition(
+                        ctx.clone(),
                         max_wait_ms,
                         min_bytes,
                         max_bytes,
@@ -201,14 +202,18 @@ where
         }
     }
 
-    pub(crate) async fn fetch(
+    pub(crate) async fn fetch<G>(
         &self,
+        ctx: Context<G>,
         max_wait: Duration,
         min_bytes: u32,
         max_bytes: &mut u32,
         isolation: IsolationLevel,
         topics: &[FetchTopic],
-    ) -> Result<Vec<FetchableTopicResponse>> {
+    ) -> Result<Vec<FetchableTopicResponse>>
+    where
+        G: Storage,
+    {
         debug!(?max_wait, ?min_bytes, ?isolation, ?topics);
 
         if topics.is_empty() {
@@ -220,7 +225,7 @@ where
             let mut elapsed = Duration::from_millis(0);
             let mut bytes = 0;
 
-            while elapsed < max_wait && bytes < min_bytes {
+            while elapsed <= max_wait && bytes <= min_bytes {
                 debug!(?elapsed, ?max_wait, ?bytes, ?min_bytes);
 
                 let enumerate = topics.iter().enumerate();
@@ -228,7 +233,15 @@ where
 
                 for (i, fetch) in enumerate {
                     let fetch_response = self
-                        .fetch_topic(max_wait, min_bytes, max_bytes, isolation, fetch, i == 0)
+                        .fetch_topic(
+                            ctx.clone(),
+                            max_wait,
+                            min_bytes,
+                            max_bytes,
+                            isolation,
+                            fetch,
+                            i == 0,
+                        )
                         .await?;
 
                     responses.push(fetch_response);
@@ -264,35 +277,39 @@ where
     }
 }
 
-impl<S, State, Q> Service<State, Q> for FetchService<S>
+impl<G> Service<G, FetchRequest> for FetchService
 where
-    S: Storage,
-    State: Clone + Send + Sync + 'static,
-    Q: Into<Body> + Send + Sync + 'static,
+    G: Storage,
 {
-    type Response = Body;
+    type Response = FetchResponse;
     type Error = Error;
 
-    async fn serve(&self, _ctx: Context<State>, request: Q) -> Result<Self::Response, Self::Error> {
-        let fetch = FetchRequest::try_from(request.into())?;
-        let responses = Some(if let Some(topics) = fetch.topics {
-            let isolation_level = fetch
+    async fn serve(
+        &self,
+        ctx: Context<G>,
+        req: FetchRequest,
+    ) -> Result<Self::Response, Self::Error> {
+        debug!(?req);
+
+        let responses = Some(if let Some(topics) = req.topics {
+            let isolation_level = req
                 .isolation_level
                 .map_or(Ok(IsolationLevel::ReadUncommitted), |isolation| {
                     IsolationLevel::try_from(isolation)
                 })?;
 
-            let max_wait_ms = u64::try_from(fetch.max_wait_ms).map(Duration::from_millis)?;
+            let max_wait_ms = u64::try_from(req.max_wait_ms).map(Duration::from_millis)?;
 
-            let min_bytes = u32::try_from(fetch.min_bytes)?;
+            let min_bytes = u32::try_from(req.min_bytes)?;
 
             const DEFAULT_MAX_BYTES: u32 = 5 * 1024 * 1024;
 
-            let mut max_bytes = fetch.max_bytes.map_or(Ok(DEFAULT_MAX_BYTES), |max_bytes| {
+            let mut max_bytes = req.max_bytes.map_or(Ok(DEFAULT_MAX_BYTES), |max_bytes| {
                 u32::try_from(max_bytes).map(|max_bytes| max_bytes.min(DEFAULT_MAX_BYTES))
             })?;
 
             self.fetch(
+                ctx,
                 max_wait_ms,
                 min_bytes,
                 &mut max_bytes,
@@ -309,8 +326,7 @@ where
             .error_code(Some(ErrorCode::None.into()))
             .session_id(Some(0))
             .node_endpoints(Some([].into()))
-            .responses(responses)
-            .into())
+            .responses(responses))
         .inspect(|r| debug!(?r))
     }
 }

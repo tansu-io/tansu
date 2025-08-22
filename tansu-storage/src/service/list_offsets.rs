@@ -16,52 +16,41 @@ use std::{collections::BTreeSet, ops::Deref as _};
 
 use rama::{Context, Service};
 use tansu_sans_io::{
-    ApiKey, Body, IsolationLevel, ListOffsetsRequest, ListOffsetsResponse,
+    ApiKey, IsolationLevel, ListOffsetsRequest, ListOffsetsResponse,
     list_offsets_response::{ListOffsetsPartitionResponse, ListOffsetsTopicResponse},
 };
 use tracing::{debug, error};
 
 use crate::{Error, ListOffsetRequest, Result, Storage, Topition};
 
-#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct ListOffsetsService<S> {
-    storage: S,
-}
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ListOffsetsService;
 
-impl<S> ApiKey for ListOffsetsService<S> {
+impl ApiKey for ListOffsetsService {
     const KEY: i16 = ListOffsetsRequest::KEY;
 }
 
-impl<S> ListOffsetsService<S>
+impl<G> Service<G, ListOffsetsRequest> for ListOffsetsService
 where
-    S: Storage,
+    G: Storage,
 {
-    pub fn new(storage: S) -> Self {
-        Self { storage }
-    }
-}
-
-impl<S, State, Q> Service<State, Q> for ListOffsetsService<S>
-where
-    S: Storage,
-    State: Clone + Send + Sync + 'static,
-    Q: Into<Body> + Send + Sync + 'static,
-{
-    type Response = Body;
+    type Response = ListOffsetsResponse;
     type Error = Error;
 
-    async fn serve(&self, _ctx: Context<State>, request: Q) -> Result<Self::Response, Self::Error> {
-        let list_offsets = ListOffsetsRequest::try_from(request.into())?;
-
+    async fn serve(
+        &self,
+        ctx: Context<G>,
+        req: ListOffsetsRequest,
+    ) -> Result<Self::Response, Self::Error> {
         let throttle_time_ms = Some(0);
 
-        let isolation_level = list_offsets
+        let isolation_level = req
             .isolation_level
             .map_or(Ok(IsolationLevel::ReadUncommitted), |isolation_level| {
                 IsolationLevel::try_from(isolation_level)
             })?;
 
-        let topics = if let Some(topics) = list_offsets.topics {
+        let topics = if let Some(topics) = req.topics {
             let mut offsets = vec![];
 
             for topic in topics {
@@ -75,60 +64,58 @@ where
                 }
             }
 
-            Some(
-                self.storage
-                    .list_offsets(isolation_level, offsets.deref())
-                    .await
-                    .inspect(|r| debug!(?r, ?offsets))
-                    .inspect_err(|err| error!(?err, ?offsets))
-                    .map(|offsets| {
-                        offsets
-                            .iter()
-                            .fold(BTreeSet::new(), |mut topics, (topition, _)| {
-                                _ = topics.insert(topition.topic());
-                                topics
-                            })
-                            .iter()
-                            .map(|topic_name| {
-                                ListOffsetsTopicResponse::default()
-                                    .name((*topic_name).into())
-                                    .partitions(Some(
-                                        offsets
-                                            .iter()
-                                            .filter_map(|(topition, offset)| {
-                                                if topition.topic() == *topic_name {
-                                                    Some(
-                                                        ListOffsetsPartitionResponse::default()
-                                                            .partition_index(topition.partition())
-                                                            .error_code(offset.error_code().into())
-                                                            .old_style_offsets(None)
-                                                            .timestamp(
-                                                                offset
-                                                                    .timestamp()
-                                                                    .unwrap_or(Some(-1))
-                                                                    .or(Some(-1)),
-                                                            )
-                                                            .offset(offset.offset().or(Some(0)))
-                                                            .leader_epoch(Some(0)),
-                                                    )
-                                                } else {
-                                                    None
-                                                }
-                                            })
-                                            .collect(),
-                                    ))
-                            })
-                            .collect()
-                    })?,
-            )
+            ctx.state()
+                .list_offsets(isolation_level, offsets.deref())
+                .await
+                .inspect(|r| debug!(?r, ?offsets))
+                .inspect_err(|err| error!(?err, ?offsets))
+                .map(|offsets| {
+                    offsets
+                        .iter()
+                        .fold(BTreeSet::new(), |mut topics, (topition, _)| {
+                            _ = topics.insert(topition.topic());
+                            topics
+                        })
+                        .iter()
+                        .map(|topic_name| {
+                            ListOffsetsTopicResponse::default()
+                                .name((*topic_name).into())
+                                .partitions(Some(
+                                    offsets
+                                        .iter()
+                                        .filter_map(|(topition, offset)| {
+                                            if topition.topic() == *topic_name {
+                                                Some(
+                                                    ListOffsetsPartitionResponse::default()
+                                                        .partition_index(topition.partition())
+                                                        .error_code(offset.error_code().into())
+                                                        .old_style_offsets(None)
+                                                        .timestamp(
+                                                            offset
+                                                                .timestamp()
+                                                                .unwrap_or(Some(-1))
+                                                                .or(Some(-1)),
+                                                        )
+                                                        .offset(offset.offset().or(Some(0)))
+                                                        .leader_epoch(Some(0)),
+                                                )
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                        .collect(),
+                                ))
+                        })
+                        .collect()
+                })
+                .map(Some)?
         } else {
             None
         };
 
         Ok(ListOffsetsResponse::default()
             .throttle_time_ms(throttle_time_ms)
-            .topics(topics)
-            .into())
+            .topics(topics))
         .inspect(|r| debug!(?r))
     }
 }

@@ -13,50 +13,37 @@
 // limitations under the License.
 
 use rama::{Context, Service};
-use tansu_sans_io::{
-    ApiKey, Body, DescribeTopicPartitionsRequest, DescribeTopicPartitionsResponse,
-};
+use tansu_sans_io::{ApiKey, DescribeTopicPartitionsRequest, DescribeTopicPartitionsResponse};
 
 use crate::{Error, Result, Storage, TopicId};
 
-#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct DescribeTopicPartitionsService<S> {
-    storage: S,
-}
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct DescribeTopicPartitionsService;
 
-impl<S> ApiKey for DescribeTopicPartitionsService<S> {
+impl ApiKey for DescribeTopicPartitionsService {
     const KEY: i16 = DescribeTopicPartitionsRequest::KEY;
 }
 
-impl<S> DescribeTopicPartitionsService<S>
+impl<G> Service<G, DescribeTopicPartitionsRequest> for DescribeTopicPartitionsService
 where
-    S: Storage,
+    G: Storage,
 {
-    pub fn new(storage: S) -> Self {
-        Self { storage }
-    }
-}
-
-impl<S, State, Q> Service<State, Q> for DescribeTopicPartitionsService<S>
-where
-    S: Storage,
-    State: Clone + Send + Sync + 'static,
-    Q: Into<Body> + Send + Sync + 'static,
-{
-    type Response = Body;
+    type Response = DescribeTopicPartitionsResponse;
     type Error = Error;
 
-    async fn serve(&self, _ctx: Context<State>, req: Q) -> Result<Self::Response, Self::Error> {
-        let describe_topitions = DescribeTopicPartitionsRequest::try_from(req.into())?;
-        self.storage
+    async fn serve(
+        &self,
+        ctx: Context<G>,
+        req: DescribeTopicPartitionsRequest,
+    ) -> Result<Self::Response, Self::Error> {
+        ctx.state()
             .describe_topic_partitions(
-                describe_topitions
-                    .topics
+                req.topics
                     .as_ref()
                     .map(|topics| topics.iter().map(TopicId::from).collect::<Vec<_>>())
                     .as_deref(),
-                describe_topitions.response_partition_limit,
-                describe_topitions.cursor.map(Into::into),
+                req.response_partition_limit,
+                req.cursor.map(Into::into),
             )
             .await
             .map(|topics| {
@@ -64,7 +51,6 @@ where
                     .throttle_time_ms(0)
                     .topics(Some(topics))
                     .next_cursor(None)
-                    .into()
             })
     }
 }

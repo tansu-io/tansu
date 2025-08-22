@@ -13,48 +13,35 @@
 // limitations under the License.
 
 use rama::{Context, Service};
-use tansu_sans_io::{
-    ApiKey, Body, ConfigResource, DescribeConfigsRequest, DescribeConfigsResponse,
-};
+use tansu_sans_io::{ApiKey, ConfigResource, DescribeConfigsRequest, DescribeConfigsResponse};
 use tracing::error;
 
 use crate::{Error, Result, Storage};
 
-#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct DescribeConfigsService<S> {
-    storage: S,
-}
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct DescribeConfigsService;
 
-impl<S> ApiKey for DescribeConfigsService<S> {
+impl ApiKey for DescribeConfigsService {
     const KEY: i16 = DescribeConfigsRequest::KEY;
 }
 
-impl<S> DescribeConfigsService<S>
+impl<G> Service<G, DescribeConfigsRequest> for DescribeConfigsService
 where
-    S: Storage,
+    G: Storage,
 {
-    pub fn new(storage: S) -> Self {
-        Self { storage }
-    }
-}
-
-impl<S, State, Q> Service<State, Q> for DescribeConfigsService<S>
-where
-    S: Storage,
-    State: Clone + Send + Sync + 'static,
-    Q: Into<Body> + Send + Sync + 'static,
-{
-    type Response = Body;
+    type Response = DescribeConfigsResponse;
     type Error = Error;
 
-    async fn serve(&self, _ctx: Context<State>, request: Q) -> Result<Self::Response, Self::Error> {
-        let describe_configs = DescribeConfigsRequest::try_from(request.into())?;
-
+    async fn serve(
+        &self,
+        ctx: Context<G>,
+        req: DescribeConfigsRequest,
+    ) -> Result<Self::Response, Self::Error> {
         let mut results = vec![];
 
-        for resource in describe_configs.resources.unwrap_or_default() {
+        for resource in req.resources.unwrap_or_default() {
             results.push(
-                self.storage
+                ctx.state()
                     .describe_config(
                         resource.resource_name.as_str(),
                         ConfigResource::from(resource.resource_type),
@@ -65,8 +52,6 @@ where
             );
         }
 
-        Ok(DescribeConfigsResponse::default()
-            .results(Some(results))
-            .into())
+        Ok(DescribeConfigsResponse::default().results(Some(results)))
     }
 }

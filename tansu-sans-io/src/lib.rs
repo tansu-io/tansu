@@ -203,6 +203,20 @@ pub trait ApiName {
     const NAME: &'static str;
 }
 
+/// All Kafka API requests implement this trait
+pub trait Request:
+    ApiKey + ApiName + fmt::Debug + Default + Into<Body> + Send + Sync + TryFrom<Body> + 'static
+{
+    type Response: Response;
+}
+
+/// All Kafka API responses implement this trait
+pub trait Response:
+    ApiKey + ApiName + fmt::Debug + Default + Into<Body> + Send + Sync + TryFrom<Body> + 'static
+{
+    type Request: Request;
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     ApiError(ErrorCode),

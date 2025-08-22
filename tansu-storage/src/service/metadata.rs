@@ -14,46 +14,37 @@
 
 use rama::{Context, Service};
 use tansu_sans_io::{ApiKey, Body, MetadataRequest, MetadataResponse};
-use tracing::error;
+use tracing::{debug, error};
 
 use crate::{Error, Result, Storage, TopicId};
 
-#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct MetadataService<S> {
-    storage: S,
-}
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct MetadataService;
 
-impl<S> ApiKey for MetadataService<S> {
+impl ApiKey for MetadataService {
     const KEY: i16 = MetadataRequest::KEY;
 }
 
-impl<S> MetadataService<S>
+impl<G> Service<G, MetadataRequest> for MetadataService
 where
-    S: Storage,
-{
-    pub fn new(storage: S) -> Self {
-        Self { storage }
-    }
-}
-
-impl<S, State, Q> Service<State, Q> for MetadataService<S>
-where
-    S: Storage,
-    State: Clone + Send + Sync + 'static,
-    Q: Into<Body> + Send + Sync + 'static,
+    G: Storage,
 {
     type Response = Body;
     type Error = Error;
 
-    async fn serve(&self, _ctx: Context<State>, request: Q) -> Result<Self::Response, Self::Error> {
-        let metadata = MetadataRequest::try_from(request.into())?;
+    async fn serve(
+        &self,
+        ctx: Context<G>,
+        req: MetadataRequest,
+    ) -> Result<Self::Response, Self::Error> {
+        debug!(?req);
 
-        let topics = metadata
+        let topics = req
             .topics
             .map(|topics| topics.iter().map(TopicId::from).collect::<Vec<_>>());
 
-        let response = self
-            .storage
+        let response = ctx
+            .state()
             .metadata(topics.as_deref())
             .await
             .inspect_err(|err| error!(?err))?;
@@ -61,7 +52,7 @@ where
         let cluster_id = response.cluster().map(|s| s.into());
         let controller_id = response.controller();
         let topics = Some(response.topics().to_owned());
-        let cluster_authorized_operations = None;
+        let cluster_authorized_operations = Some(-1);
 
         let throttle_time_ms = Some(0);
 
@@ -73,5 +64,6 @@ where
             .topics(topics)
             .cluster_authorized_operations(cluster_authorized_operations)
             .into())
+        .inspect(|response| debug!(?response))
     }
 }

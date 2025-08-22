@@ -18,16 +18,17 @@ use crate::{Error, Result};
 
 use futures::StreamExt;
 use serde_json::Value;
+use tansu_client::{Client, Manager};
 use tansu_sans_io::{
-    ErrorCode, Frame, Header,
-    produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
+    ErrorCode, ProduceRequest, ProduceResponse,
+    produce_request::{PartitionProduceData, TopicProduceData},
+    produce_response::{PartitionProduceResponse, TopicProduceResponse},
     record::{deflated, inflated},
 };
 use tansu_schema::{AsKafkaRecord, Registry};
 use tokio::{
     fs::File,
-    io::{self, AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
+    io::{self, AsyncReadExt},
 };
 use tokio_util::codec::{FramedRead, LinesCodec};
 use tracing::debug;
@@ -222,102 +223,44 @@ impl Produce {
 
         debug!(?frame);
 
-        let mut connection = Connection::open(&self.configuration.broker).await?;
-
-        connection
-            .produce(
-                self.configuration.topic.as_str(),
-                self.configuration.partition,
-                frame,
-            )
-            .await
-    }
-}
-
-#[derive(Debug)]
-struct Connection {
-    broker: TcpStream,
-    correlation_id: i32,
-}
-
-impl Connection {
-    async fn open(broker: &Url) -> Result<Self> {
-        debug!(%broker);
-
-        TcpStream::connect(format!(
-            "{}:{}",
-            broker.host_str().unwrap(),
-            broker.port().unwrap()
-        ))
-        .await
-        .map(|broker| Self {
-            broker,
-            correlation_id: 0,
-        })
-        .map_err(Into::into)
-    }
-
-    async fn produce(
-        &mut self,
-        topic: &str,
-        partition: i32,
-        frame: deflated::Frame,
-    ) -> Result<ErrorCode> {
-        debug!(%topic, partition, ?frame);
-
-        let api_key = 0;
-        let api_version = 9;
-
-        let header = Header::Request {
-            api_key,
-            api_version,
-            correlation_id: self.correlation_id,
-            client_id: Some("tansu".into()),
-        };
-
-        let produce_request = ProduceRequest::default()
+        let req = ProduceRequest::default()
             .transactional_id(None)
             .acks(-1)
             .timeout_ms(1_500)
             .topic_data(Some(
                 [TopicProduceData::default()
-                    .name(topic.into())
+                    .name(self.configuration.topic)
                     .partition_data(Some(
                         [PartitionProduceData::default()
-                            .index(partition)
+                            .index(self.configuration.partition)
                             .records(Some(frame))]
                         .into(),
                     ))]
                 .into(),
             ));
 
-        let encoded = Frame::request(header, produce_request.into())?;
-
-        self.broker
-            .write_all(&encoded[..])
+        let client = Manager::builder(self.configuration.broker.clone())
+            .client_id(Some(env!("CARGO_PKG_NAME").into()))
+            .build()
             .await
-            .inspect_err(|err| debug!(?err))?;
+            .inspect(|pool| debug!(?pool))
+            .map(Client::new)?;
 
-        let mut size = [0u8; 4];
-        _ = self.broker.read_exact(&mut size).await?;
+        let ProduceResponse { responses, .. } = client.call(req).await?;
+        let responses = responses.unwrap_or_default();
+        assert_eq!(1, responses.len());
 
-        let mut response_buffer: Vec<u8> = vec![0u8; Self::frame_length(size)];
-        response_buffer[0..size.len()].copy_from_slice(&size[..]);
-        _ = self
-            .broker
-            .read_exact(&mut response_buffer[size.len()..])
-            .await
-            .inspect_err(|err| debug!(?err))?;
+        let TopicProduceResponse {
+            partition_responses,
+            ..
+        } = responses.first().expect("responses: {responses:?}");
+        let partition_responses = partition_responses.as_deref().unwrap_or_default();
+        assert_eq!(1, partition_responses.len());
 
-        let response = Frame::response_from_bytes(&response_buffer[..], api_key, api_version)
-            .inspect_err(|err| debug!(?err))?;
+        let PartitionProduceResponse { error_code, .. } = partition_responses
+            .first()
+            .expect("partition_responses: {partition_responses:?}");
 
-        debug!(?response);
-
-        Ok(ErrorCode::None)
-    }
-
-    fn frame_length(encoded: [u8; 4]) -> usize {
-        i32::from_be_bytes(encoded) as usize + encoded.len()
+        ErrorCode::try_from(*error_code).map_err(Into::into)
     }
 }
