@@ -14,6 +14,7 @@
 
 use std::{
     collections::BTreeMap,
+    error,
     fmt::{self, Debug},
     io,
     marker::PhantomData,
@@ -67,71 +68,6 @@ impl From<io::Error> for Error {
     }
 }
 
-#[derive(Debug, Default)]
-pub struct BodyRouteService<State> {
-    routes: Arc<BTreeMap<i16, BoxService<State, Body, Body, Error>>>,
-}
-
-impl<State> BodyRouteService<State>
-where
-    State: Default,
-{
-    pub fn new(routes: Arc<BTreeMap<i16, BoxService<State, Body, Body, Error>>>) -> Self {
-        Self { routes }
-    }
-}
-
-impl<State> Service<State, Body> for BodyRouteService<State>
-where
-    State: Send + Sync + 'static,
-{
-    type Response = Body;
-    type Error = Error;
-
-    async fn serve(&self, ctx: Context<State>, req: Body) -> Result<Self::Response, Self::Error> {
-        debug!(?req);
-
-        let api_key = req.api_key();
-
-        if let Some(service) = self.routes.get(&api_key) {
-            service.serve(ctx, req).await
-        } else {
-            Err(Error::UnknownServiceBody(Box::new(req)))
-        }
-    }
-}
-
-#[derive(Debug, Default)]
-pub struct BodyRouteBuilder<State> {
-    routes: BTreeMap<i16, BoxService<State, Body, Body, Error>>,
-}
-
-impl<State> BodyRouteBuilder<State>
-where
-    State: Send + Sync + 'static,
-{
-    pub fn with_route(
-        mut self,
-        api_key: i16,
-        service: BoxService<State, Body, Body, Error>,
-    ) -> Result<Self, Error> {
-        self.routes
-            .insert(api_key, service)
-            .map_or(Ok(self), |_existing| Err(Error::DuplicateRoute(api_key)))
-    }
-
-    pub fn build(self) -> Result<BodyRouteService<State>, Error> {
-        let api_key = ApiVersionsRequest::KEY;
-        let mut supported = self.routes.keys().copied().collect::<Vec<_>>();
-        supported.push(api_key);
-
-        self.with_route(api_key, ApiVersionsService { supported }.boxed())
-            .map(|builder| BodyRouteService {
-                routes: Arc::new(builder.routes),
-            })
-    }
-}
-
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct RequestService<S, Q> {
     inner: S,
@@ -142,15 +78,20 @@ impl<State, S, Q> Service<State, Q> for RequestService<S, Q>
 where
     S: Service<State, Q>,
     Q: Request,
-    Error: From<<Q as TryFrom<Body>>::Error> + From<<S as Service<State, Q>>::Error>,
+    S::Error: From<<Q as TryFrom<Body>>::Error> + From<<S as Service<State, Q>>::Error>,
+    S::Response: Response,
     Body: From<<S as Service<State, Q>>::Response>,
     State: Send + Sync + 'static,
 {
     type Response = S::Response;
-    type Error = Error;
+    type Error = S::Error;
 
     async fn serve(&self, ctx: Context<State>, req: Q) -> Result<Self::Response, Self::Error> {
-        self.inner.serve(ctx, req).await.map_err(Error::from)
+        debug!(?req);
+        self.inner
+            .serve(ctx, req)
+            .await
+            .inspect(|response| debug!(?response))
     }
 }
 
@@ -159,34 +100,6 @@ where
     Q: Request,
 {
     const KEY: i16 = Q::KEY;
-}
-
-impl<S, State, Q> From<RequestService<S, Q>> for BoxService<State, Body, Body, Error>
-where
-    S: Service<State, Q>,
-    Q: Request,
-    Error: From<<Q as TryFrom<Body>>::Error> + From<<S as Service<State, Q>>::Error>,
-    Body: From<<S as Service<State, Q>>::Response>,
-    State: Send + Sync + 'static,
-{
-    fn from(value: RequestService<S, Q>) -> Self {
-        BodyRequestLayer::<Q>::new().into_layer(value).boxed()
-    }
-}
-
-impl<S, State, Q> From<RequestService<S, Q>> for BoxService<State, Frame, Frame, Error>
-where
-    S: Service<State, Q>,
-    Q: Request,
-    Error: From<<Q as TryFrom<Body>>::Error> + From<<S as Service<State, Q>>::Error>,
-    Body: From<<S as Service<State, Q>>::Response>,
-    State: Send + Sync + 'static,
-{
-    fn from(value: RequestService<S, Q>) -> Self {
-        (FrameBodyLayer, BodyRequestLayer::<Q>::new())
-            .into_layer(value)
-            .boxed()
-    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -279,11 +192,11 @@ impl<S> Layer<S> for TcpContextLayer {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct TcpService<S> {
+pub struct TcpBytesService<S> {
     inner: S,
 }
 
-impl<S> Service<TcpContext, TcpStream> for TcpService<S>
+impl<S> Service<TcpContext, TcpStream> for TcpBytesService<S>
 where
     S: Service<(), Bytes, Response = Bytes>,
     S::Error: From<Error> + From<io::Error> + Debug,
@@ -367,10 +280,10 @@ where
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct TcpLayer;
+pub struct TcpBytesLayer;
 
-impl<S> Layer<S> for TcpLayer {
-    type Service = TcpService<S>;
+impl<S> Layer<S> for TcpBytesLayer {
+    type Service = TcpBytesService<S>;
 
     fn layer(&self, inner: S) -> Self::Service {
         Self::Service { inner }
@@ -499,29 +412,31 @@ static API_ERRORS: LazyLock<Counter<u64>> = LazyLock::new(|| {
 
 /// Route frames to a service based via the API key
 #[derive(Debug, Default)]
-pub struct FrameRouteService<State> {
-    routes: Arc<BTreeMap<i16, BoxService<State, Frame, Frame, Error>>>,
+pub struct FrameRouteService<State = (), E = Error> {
+    routes: Arc<BTreeMap<i16, BoxService<State, Frame, Frame, E>>>,
 }
 
-impl<State> FrameRouteService<State>
+impl<State, E> FrameRouteService<State, E>
 where
-    State: Default,
+    State: Send + Sync + 'static,
+    E: error::Error + From<tansu_sans_io::Error> + From<Error> + Send + Sync + 'static,
 {
-    pub fn new(routes: Arc<BTreeMap<i16, BoxService<State, Frame, Frame, Error>>>) -> Self {
+    pub fn new(routes: Arc<BTreeMap<i16, BoxService<State, Frame, Frame, E>>>) -> Self {
         Self { routes }
     }
 
-    pub fn builder() -> FrameRouteBuilder<State> {
-        FrameRouteBuilder::default()
+    pub fn builder() -> FrameRouteBuilder<State, E> {
+        FrameRouteBuilder::<State, E>::new()
     }
 }
 
-impl<State> Service<State, Frame> for FrameRouteService<State>
+impl<State, E> Service<State, Frame> for FrameRouteService<State, E>
 where
     State: Send + Sync + 'static,
+    E: error::Error + From<tansu_sans_io::Error> + From<Error> + Send + Sync + 'static,
 {
     type Response = Frame;
-    type Error = Error;
+    type Error = E;
 
     async fn serve(&self, ctx: Context<State>, req: Frame) -> Result<Self::Response, Self::Error> {
         debug!(?req);
@@ -531,24 +446,31 @@ where
         if let Some(service) = self.routes.get(&api_key) {
             service.serve(ctx, req).await
         } else {
-            Err(Error::UnknownServiceFrame(Box::new(req)))
+            Err(E::from(Error::UnknownServiceFrame(Box::new(req))))
         }
     }
 }
 
 /// A frame route builder providing an API versions response with the available routes
-#[derive(Debug, Default)]
-pub struct FrameRouteBuilder<State> {
-    routes: BTreeMap<i16, BoxService<State, Frame, Frame, Error>>,
+#[derive(Debug)]
+pub struct FrameRouteBuilder<State, E> {
+    routes: BTreeMap<i16, BoxService<State, Frame, Frame, E>>,
 }
 
-impl<State> FrameRouteBuilder<State>
+impl<State, E> FrameRouteBuilder<State, E>
 where
     State: Send + Sync + 'static,
+    E: error::Error + From<tansu_sans_io::Error> + Send + Sync + 'static,
 {
+    fn new() -> Self {
+        Self {
+            routes: BTreeMap::new(),
+        }
+    }
+
     pub fn with_service<S>(self, service: S) -> Result<Self, Error>
     where
-        S: Into<BoxService<State, Frame, Frame, Error>> + ApiKey,
+        S: Into<BoxService<State, Frame, Frame, E>> + ApiKey,
     {
         self.with_route(S::KEY, service.into())
     }
@@ -556,72 +478,84 @@ where
     pub fn with_route(
         mut self,
         api_key: i16,
-        service: BoxService<State, Frame, Frame, Error>,
+        service: BoxService<State, Frame, Frame, E>,
     ) -> Result<Self, Error> {
         self.routes
             .insert(api_key, service)
             .map_or(Ok(self), |_existing| Err(Error::DuplicateRoute(api_key)))
     }
 
-    pub fn build(self) -> Result<FrameRouteService<State>, Error> {
+    pub fn build(self) -> Result<FrameRouteService<State, E>, Error> {
         let api_key = ApiVersionsRequest::KEY;
         let mut supported = self.routes.keys().copied().collect::<Vec<_>>();
         supported.push(api_key);
 
-        self.with_route(api_key, ApiVersionsService { supported }.boxed())
-            .map(|builder| FrameRouteService {
-                routes: Arc::new(builder.routes),
-            })
+        self.with_route(
+            api_key,
+            ApiVersionsService {
+                supported,
+                error: PhantomData,
+            }
+            .boxed(),
+        )
+        .map(|builder| FrameRouteService {
+            routes: Arc::new(builder.routes),
+        })
     }
 }
 
 // An versions service with a supported set of APIs
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct ApiVersionsService {
+pub struct ApiVersionsService<E> {
     supported: Vec<i16>,
+    error: PhantomData<E>,
 }
 
-impl<State> Service<State, ApiVersionsRequest> for ApiVersionsService
+impl<State, E> Service<State, ApiVersionsRequest> for ApiVersionsService<E>
 where
     State: Send + Sync + 'static,
+    E: error::Error + Send + Sync + 'static,
 {
     type Response = ApiVersionsResponse;
-    type Error = Error;
+    type Error = E;
 
     async fn serve(
         &self,
         _ctx: Context<State>,
         _req: ApiVersionsRequest,
     ) -> Result<Self::Response, Self::Error> {
-        Ok(ApiVersionsResponse::default()
-            .finalized_features(Some([].into()))
-            .finalized_features_epoch(Some(-1))
-            .supported_features(Some([].into()))
-            .zk_migration_ready(Some(false))
-            .error_code(ErrorCode::None.into())
-            .api_keys(Some(
-                RootMessageMeta::messages()
-                    .requests()
-                    .iter()
-                    .filter(|(api_key, _)| self.supported.contains(api_key))
-                    .map(|(_, meta)| {
-                        ApiVersion::default()
-                            .api_key(meta.api_key)
-                            .min_version(meta.version.valid.start)
-                            .max_version(meta.version.valid.end)
-                    })
-                    .collect(),
-            ))
-            .throttle_time_ms(Some(0)))
+        Ok::<_, E>(
+            ApiVersionsResponse::default()
+                .finalized_features(Some([].into()))
+                .finalized_features_epoch(Some(-1))
+                .supported_features(Some([].into()))
+                .zk_migration_ready(Some(false))
+                .error_code(ErrorCode::None.into())
+                .api_keys(Some(
+                    RootMessageMeta::messages()
+                        .requests()
+                        .iter()
+                        .filter(|(api_key, _)| self.supported.contains(api_key))
+                        .map(|(_, meta)| {
+                            ApiVersion::default()
+                                .api_key(meta.api_key)
+                                .min_version(meta.version.valid.start)
+                                .max_version(meta.version.valid.end)
+                        })
+                        .collect(),
+                ))
+                .throttle_time_ms(Some(0)),
+        )
     }
 }
 
-impl<State> Service<State, Body> for ApiVersionsService
+impl<State, E> Service<State, Body> for ApiVersionsService<E>
 where
     State: Send + Sync + 'static,
+    E: error::Error + From<tansu_sans_io::Error> + Send + Sync + 'static,
 {
     type Response = Body;
-    type Error = Error;
+    type Error = E;
 
     async fn serve(&self, ctx: Context<State>, req: Body) -> Result<Self::Response, Self::Error> {
         let req = ApiVersionsRequest::try_from(req)?;
@@ -629,12 +563,13 @@ where
     }
 }
 
-impl<State> Service<State, Frame> for ApiVersionsService
+impl<State, E> Service<State, Frame> for ApiVersionsService<E>
 where
     State: Send + Sync + 'static,
+    E: error::Error + From<tansu_sans_io::Error> + Send + Sync + 'static,
 {
     type Response = Frame;
-    type Error = Error;
+    type Error = E;
 
     async fn serve(&self, ctx: Context<State>, req: Frame) -> Result<Self::Response, Self::Error> {
         let correlation_id = req.correlation_id()?;
@@ -714,11 +649,11 @@ pub struct BytesService<S> {
 
 impl<S, State> Service<State, Bytes> for BytesService<S>
 where
-    S: Service<State, Bytes, Response = Bytes, Error = Error>,
+    S: Service<State, Bytes, Response = Bytes>,
     State: Send + Sync + 'static,
 {
     type Response = Bytes;
-    type Error = Error;
+    type Error = S::Error;
 
     async fn serve(&self, ctx: Context<State>, req: Bytes) -> Result<Self::Response, Self::Error> {
         debug!(?req);
@@ -822,11 +757,12 @@ pub struct FrameBytesService<S> {
 
 impl<S, State> Service<State, Frame> for FrameBytesService<S>
 where
-    S: Service<State, Bytes, Response = Bytes, Error = Error>,
+    S: Service<State, Bytes, Response = Bytes>,
+    S::Error: From<tansu_sans_io::Error>,
     State: Send + Sync + 'static,
 {
     type Response = Frame;
-    type Error = Error;
+    type Error = S::Error;
 
     async fn serve(&self, ctx: Context<State>, req: Frame) -> Result<Self::Response, Self::Error> {
         debug!(?req);
@@ -865,12 +801,13 @@ pub struct FrameBodyService<S> {
 
 impl<S, State> Service<State, Frame> for FrameBodyService<S>
 where
-    S: Service<State, Body, Response = Body, Error = Error>,
+    S: Service<State, Body, Response = Body>,
+    S::Error: From<tansu_sans_io::Error>,
     State: Send + Sync + 'static,
 {
     type Response = Frame;
 
-    type Error = Error;
+    type Error = S::Error;
 
     async fn serve(&self, ctx: Context<State>, req: Frame) -> Result<Self::Response, Self::Error> {
         let correlation_id = req.correlation_id()?;
@@ -911,33 +848,16 @@ impl<S, State, Q> Service<State, Body> for BodyRequestService<S, Q>
 where
     S: Service<State, Q>,
     Q: Request,
-    Error: From<<Q as TryFrom<Body>>::Error> + From<<S as Service<State, Q>>::Error>,
+    S::Error: From<<Q as TryFrom<Body>>::Error> + From<<S as Service<State, Q>>::Error>,
     Body: From<<S as Service<State, Q>>::Response>,
     State: Send + Sync + 'static,
 {
     type Response = Body;
-    type Error = Error;
+    type Error = S::Error;
 
     async fn serve(&self, ctx: Context<State>, req: Body) -> Result<Self::Response, Self::Error> {
         let req = Q::try_from(req)?;
-        self.inner
-            .serve(ctx, req)
-            .await
-            .map(Body::from)
-            .map_err(Error::from)
-    }
-}
-
-impl<S, State, Q> From<BodyRequestService<S, Q>> for BoxService<State, Frame, Frame, Error>
-where
-    S: Service<State, Q>,
-    Q: Request,
-    Error: From<<Q as TryFrom<Body>>::Error> + From<<S as Service<State, Q>>::Error>,
-    Body: From<<S as Service<State, Q>>::Response>,
-    State: Send + Sync + 'static,
-{
-    fn from(value: BodyRequestService<S, Q>) -> Self {
-        FrameBodyLayer.into_layer(value).boxed()
+        self.inner.serve(ctx, req).await.map(Body::from)
     }
 }
 
@@ -1040,12 +960,12 @@ pub struct RequestFrameService<S> {
 impl<S, State, Q> Service<State, Q> for RequestFrameService<S>
 where
     Q: Request,
-    S: Service<State, Frame, Response = Frame, Error = Error>,
-    Error: From<<<Q as Request>::Response as TryFrom<Body>>::Error>,
+    S: Service<State, Frame, Response = Frame>,
+    S::Error: From<<<Q as Request>::Response as TryFrom<Body>>::Error>,
     State: Send + Sync + 'static,
 {
     type Response = Q::Response;
-    type Error = Error;
+    type Error = S::Error;
 
     async fn serve(&self, ctx: Context<State>, req: Q) -> Result<Self::Response, Self::Error> {
         debug!(?req);
@@ -1090,11 +1010,92 @@ impl<S> Layer<S> for RequestFrameLayer {
     }
 }
 
+impl<S, State, Q, E> From<RequestService<S, Q>> for BoxService<State, Body, Body, E>
+where
+    S: Service<State, Q, Error = E>,
+    Q: Request,
+    <S as Service<State, Q>>::Response: Response,
+    E: From<<Q as TryFrom<Body>>::Error> + From<<S as Service<State, Q>>::Error>,
+    Body: From<<S as Service<State, Q>>::Response>,
+    State: Send + Sync + 'static,
+{
+    fn from(value: RequestService<S, Q>) -> Self {
+        BodyRequestLayer::<Q>::new().into_layer(value).boxed()
+    }
+}
+
+impl<S, State, Q, E> From<RequestService<S, Q>> for BoxService<State, Frame, Frame, E>
+where
+    S: Service<State, Q, Error = E>,
+    Q: Request,
+    <S as Service<State, Q>>::Response: Response,
+    E: From<tansu_sans_io::Error>
+        + From<<Q as TryFrom<Body>>::Error>
+        + From<<S as Service<State, Q>>::Error>,
+    Body: From<<S as Service<State, Q>>::Response>,
+    State: Send + Sync + 'static,
+{
+    fn from(value: RequestService<S, Q>) -> Self {
+        (FrameBodyLayer, BodyRequestLayer::<Q>::new())
+            .into_layer(value)
+            .boxed()
+    }
+}
+
+impl<S, State, Q, E> From<BodyRequestService<S, Q>> for BoxService<State, Frame, Frame, E>
+where
+    S: Service<State, Q, Error = E>,
+    Q: Request,
+    E: From<tansu_sans_io::Error>
+        + From<<Q as TryFrom<Body>>::Error>
+        + From<<S as Service<State, Q>>::Error>,
+    Body: From<<S as Service<State, Q>>::Response>,
+    State: Send + Sync + 'static,
+{
+    fn from(value: BodyRequestService<S, Q>) -> Self {
+        FrameBodyLayer.into_layer(value).boxed()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Hash)]
+pub struct ResponseService<F> {
+    response: F,
+}
+
+impl<State, Q, E, F> Service<State, Q> for ResponseService<F>
+where
+    F: Fn(Context<State>, Q) -> Result<Q::Response, E> + Clone + Send + Sync + 'static,
+    Q: Request,
+    E: Send + Sync + 'static,
+    State: Send + Sync + 'static,
+{
+    type Response = Q::Response;
+    type Error = E;
+
+    async fn serve(&self, ctx: Context<State>, req: Q) -> Result<Self::Response, Self::Error> {
+        (self.response)(ctx, req)
+    }
+}
+
+impl<F> ResponseService<F> {
+    pub fn new<State, Q, E>(response: F) -> Self
+    where
+        F: Fn(Context<State>, Q) -> Result<Q::Response, E> + Clone,
+        Q: Request,
+        E: Send + Sync + 'static,
+    {
+        Self { response }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{fs::File, sync::Arc, thread};
 
-    use tansu_sans_io::{ApiKey, MetadataRequest, MetadataResponse};
+    use rama::layer::MapResponseLayer;
+    use tansu_sans_io::{
+        ApiKey, MetadataRequest, MetadataResponse, metadata_response::MetadataResponseBroker,
+    };
     use tracing::subscriber::DefaultGuard;
     use tracing_subscriber::EnvFilter;
 
@@ -1124,53 +1125,13 @@ mod tests {
         ))
     }
 
-    #[derive(Clone, Debug, PartialEq, PartialOrd)]
-    struct FrameResponseService {
-        response: Frame,
-    }
-
-    impl<State> Service<State, Frame> for FrameResponseService
-    where
-        State: Send + Sync + 'static,
-    {
-        type Response = Frame;
-
-        type Error = Error;
-
-        async fn serve(
-            &self,
-            _ctx: Context<State>,
-            _req: Frame,
-        ) -> Result<Self::Response, Self::Error> {
-            Ok(self.response.clone())
-        }
-    }
-
-    #[derive(Clone, Debug, PartialEq, PartialOrd)]
-    struct ResponseService<P> {
-        response: P,
-    }
-
-    impl<P, State, Q> Service<State, Q> for ResponseService<P>
-    where
-        Q: Request,
-        P: Response + Clone,
-        State: Send + Sync + 'static,
-    {
-        type Response = P;
-        type Error = Error;
-
-        async fn serve(&self, _ctx: Context<State>, req: Q) -> Result<Self::Response, Self::Error> {
-            debug!(?req);
-            Ok(self.response.clone())
-        }
-    }
-
     #[tokio::test]
     async fn simple_layers() -> Result<(), Error> {
         let _guard = init_tracing()?;
 
         let cluster_id = "abc";
+
+        type State = ();
 
         let service = (
             RequestFrameLayer,
@@ -1178,20 +1139,23 @@ mod tests {
             BytesLayer,
             BytesFrameLayer,
         )
-            .into_layer(FrameResponseService {
-                response: Frame {
-                    size: 0,
-                    header: Header::Response { correlation_id: 0 },
-                    body: MetadataResponse::default()
-                        .brokers(Some([].into()))
-                        .topics(Some([].into()))
-                        .cluster_id(Some(cluster_id.into()))
-                        .controller_id(Some(111))
-                        .throttle_time_ms(Some(0))
-                        .cluster_authorized_operations(Some(-1))
-                        .into(),
-                },
-            });
+            .into_layer(
+                FrameRouteService::builder()
+                    .with_service(RequestLayer::<MetadataRequest>::new().into_layer(
+                        ResponseService::new(|_ctx: Context<State>, _req: MetadataRequest| {
+                            Ok::<_, Error>(
+                                MetadataResponse::default()
+                                    .brokers(Some([].into()))
+                                    .topics(Some([].into()))
+                                    .cluster_id(Some(cluster_id.into()))
+                                    .controller_id(Some(111))
+                                    .throttle_time_ms(Some(0))
+                                    .cluster_authorized_operations(Some(-1)),
+                            )
+                        }),
+                    ))
+                    .and_then(|builder| builder.build())?,
+            );
 
         let ctx = Context::default();
 
@@ -1213,6 +1177,8 @@ mod tests {
 
         let cluster_id = "abc";
 
+        type State = ();
+
         let service = (
             RequestFrameLayer,
             FrameBytesLayer,
@@ -1220,25 +1186,20 @@ mod tests {
             BytesFrameLayer,
         )
             .into_layer(
-                FrameRouteService::<()>::builder()
-                    .with_route(
-                        MetadataRequest::KEY,
-                        FrameResponseService {
-                            response: Frame {
-                                size: 0,
-                                header: Header::Response { correlation_id: 0 },
-                                body: MetadataResponse::default()
+                FrameRouteService::builder()
+                    .with_service(RequestLayer::<MetadataRequest>::new().into_layer(
+                        ResponseService::new(|_ctx: Context<State>, _req: MetadataRequest| {
+                            Ok::<_, Error>(
+                                MetadataResponse::default()
                                     .brokers(Some([].into()))
                                     .topics(Some([].into()))
                                     .cluster_id(Some(cluster_id.into()))
                                     .controller_id(Some(111))
                                     .throttle_time_ms(Some(0))
-                                    .cluster_authorized_operations(Some(-1))
-                                    .into(),
-                            },
-                        }
-                        .boxed(),
-                    )
+                                    .cluster_authorized_operations(Some(-1)),
+                            )
+                        }),
+                    ))
                     .and_then(|builder| builder.build())?,
             );
 
@@ -1281,20 +1242,42 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn route_request() -> Result<(), Error> {
+    async fn route_request_map_response() -> Result<(), Error> {
         let _guard = init_tracing()?;
 
         let cluster_id = "abc";
 
-        let rl = RequestLayer::<MetadataRequest>::new().into_layer(ResponseService {
-            response: MetadataResponse::default()
-                .brokers(Some([].into()))
-                .topics(Some([].into()))
-                .cluster_id(Some(cluster_id.into()))
-                .controller_id(Some(111))
-                .throttle_time_ms(Some(0))
-                .cluster_authorized_operations(Some(-1)),
-        });
+        let node_id = 12321;
+        let host = "defgfed";
+        let port = 32123;
+
+        type State = ();
+
+        let rl = (
+            RequestLayer::<MetadataRequest>::new(),
+            MapResponseLayer::new(move |response: MetadataResponse| {
+                response.brokers(Some(vec![
+                    MetadataResponseBroker::default()
+                        .node_id(node_id)
+                        .host(host.into())
+                        .port(port)
+                        .rack(None),
+                ]))
+            }),
+        )
+            .into_layer(ResponseService::new(
+                |_ctx: Context<State>, _req: MetadataRequest| {
+                    Ok::<_, Error>(
+                        MetadataResponse::default()
+                            .brokers(Some([].into()))
+                            .topics(Some([].into()))
+                            .cluster_id(Some(cluster_id.into()))
+                            .controller_id(Some(111))
+                            .throttle_time_ms(Some(0))
+                            .cluster_authorized_operations(Some(-1)),
+                    )
+                },
+            ));
 
         let service = (
             RequestFrameLayer,
@@ -1303,7 +1286,7 @@ mod tests {
             BytesFrameLayer,
         )
             .into_layer(
-                FrameRouteService::<()>::builder()
+                FrameRouteService::<(), Error>::builder()
                     .with_service(rl)
                     .and_then(|builder| builder.build())?,
             );
@@ -1342,6 +1325,14 @@ mod tests {
 
         let response = service.serve(ctx, request).await?;
         assert_eq!(Some(cluster_id.into()), response.cluster_id);
+        assert_eq!(Some(111), response.controller_id);
+
+        let brokers = response.brokers.unwrap_or_default();
+        assert_eq!(1, brokers.len());
+
+        assert_eq!(node_id, brokers[0].node_id);
+        assert_eq!(host, brokers[0].host);
+        assert_eq!(port, brokers[0].port);
 
         Ok(())
     }

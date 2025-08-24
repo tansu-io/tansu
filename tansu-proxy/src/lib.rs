@@ -39,6 +39,8 @@ use url::Url;
 use crate::batch::BatchProduceLayer;
 
 mod batch;
+mod prod_uce;
+mod topic_config;
 
 pub type Result<T, E = BoxError> = result::Result<T, E>;
 
