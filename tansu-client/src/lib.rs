@@ -18,14 +18,14 @@
 
 use std::{
     collections::BTreeMap,
-    fmt, io,
+    error, fmt, io,
     net::SocketAddr,
     sync::{Arc, LazyLock},
     time::SystemTime,
 };
 
 use bytes::Bytes;
-use deadpool::managed::{self, BuildError, PoolError};
+use deadpool::managed::{self, BuildError, Object, PoolError};
 use opentelemetry::{
     InstrumentationScope, KeyValue, global,
     metrics::{Counter, Histogram, Meter},
@@ -33,6 +33,7 @@ use opentelemetry::{
 use opentelemetry_semantic_conventions::SCHEMA_URL;
 use rama::{Context, Layer, Service};
 use tansu_sans_io::{ApiKey, ApiVersionsRequest, Body, Frame, Header, Request};
+use tansu_service::stream::{FrameBytesLayer, FrameBytesService};
 use tokio::{
     io::{AsyncReadExt as _, AsyncWriteExt as _},
     net::{TcpStream, lookup_host},
@@ -44,26 +45,22 @@ use url::Url;
 pub enum Error {
     DeadPoolBuild(#[from] BuildError),
     Io(Arc<io::Error>),
-    KafkaProtocol(#[from] tansu_sans_io::Error),
     Message(String),
-    Otherwise,
-    Pool(Box<dyn std::error::Error + Send + Sync>),
+    Pool(Box<dyn error::Error + Send + Sync>),
+    Protocol(#[from] tansu_sans_io::Error),
     UnknownApiKey(i16),
     UnknownHost(Url),
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Message(msg) => write!(f, "{msg}"),
-            error => write!(f, "{error:?}"),
-        }
+        write!(f, "{self:?}")
     }
 }
 
 impl<E> From<PoolError<E>> for Error
 where
-    E: std::error::Error + Send + Sync + 'static,
+    E: error::Error + Send + Sync + 'static,
 {
     fn from(value: PoolError<E>) -> Self {
         Self::Pool(Box::new(value))
@@ -90,135 +87,6 @@ pub(crate) static METER: LazyLock<Meter> = LazyLock::new(|| {
 pub struct Connection {
     stream: TcpStream,
     correlation_id: i32,
-}
-
-impl Connection {
-    async fn request_response<Q>(
-        &mut self,
-        req: Q,
-        api_version: i16,
-        client_id: Option<String>,
-    ) -> Result<Q::Response, Error>
-    where
-        Q: Request,
-        <Q::Response as TryFrom<Body>>::Error: Into<Error>,
-    {
-        let api_key = Q::KEY;
-        let local = self.stream.local_addr().inspect(|local| debug!(%local))?;
-        let peer = self.stream.peer_addr().inspect(|peer| debug!(%peer))?;
-
-        let attributes = [
-            KeyValue::new("api_key", api_key.to_string()),
-            KeyValue::new("peer", peer.to_string()),
-        ];
-
-        let span = span!(Level::DEBUG, "client", local = %local, peer = %peer);
-
-        async move {
-            self.request(req, api_version, client_id, &attributes)
-                .await?;
-
-            self.correlation_id += 1;
-
-            self.response::<Q>(api_version, &attributes).await
-        }
-        .instrument(span)
-        .await
-    }
-
-    /// send a request to the broker
-    async fn request<Q>(
-        &mut self,
-        req: Q,
-        api_version: i16,
-        client_id: Option<String>,
-        attributes: &[KeyValue],
-    ) -> Result<(), Error>
-    where
-        Q: Request,
-    {
-        let api_key = Q::KEY;
-
-        let payload = Frame::request(
-            Header::Request {
-                api_key,
-                api_version,
-                correlation_id: self.correlation_id,
-                client_id,
-            },
-            req.into(),
-        )?;
-
-        let start = SystemTime::now();
-
-        self.stream
-            .write_all(&payload[..])
-            .await
-            .inspect(|_| {
-                TCP_SEND_DURATION.record(
-                    start
-                        .elapsed()
-                        .map_or(0, |duration| duration.as_millis() as u64),
-                    attributes,
-                );
-
-                TCP_BYTES_SENT.add(payload.len() as u64, attributes);
-            })
-            .inspect_err(|_| {
-                TCP_SEND_ERRORS.add(1, attributes);
-            })
-            .map_err(Into::into)
-    }
-
-    /// demarshall a versioned response frame from the broker
-    async fn response<Q>(
-        &mut self,
-        api_version: i16,
-        attributes: &[KeyValue],
-    ) -> Result<Q::Response, Error>
-    where
-        Q: Request,
-        <Q::Response as TryFrom<Body>>::Error: Into<Error>,
-    {
-        self.read_frame(attributes)
-            .await
-            .and_then(|response| {
-                Frame::response_from_bytes(response, Q::KEY, api_version).map_err(Into::into)
-            })
-            .map(|frame| frame.body)
-            .and_then(|body| Q::Response::try_from(body).map_err(Into::into))
-            .inspect(|response| debug!(?response))
-    }
-
-    /// marshall a request frame to the broker
-    async fn read_frame(&mut self, attributes: &[KeyValue]) -> Result<Bytes, Error> {
-        let start = SystemTime::now();
-
-        let mut size = [0u8; 4];
-        _ = self.stream.read_exact(&mut size).await?;
-
-        let mut buffer: Vec<u8> = vec![0u8; frame_length(size)];
-        buffer[0..size.len()].copy_from_slice(&size[..]);
-        _ = self
-            .stream
-            .read_exact(&mut buffer[4..])
-            .await
-            .inspect(|_| {
-                TCP_RECEIVE_DURATION.record(
-                    start
-                        .elapsed()
-                        .map_or(0, |duration| duration.as_millis() as u64),
-                    attributes,
-                );
-
-                TCP_BYTES_RECEIVED.add(buffer.len() as u64, attributes);
-            })
-            .inspect_err(|_| {
-                TCP_RECEIVE_ERRORS.add(1, attributes);
-            })?;
-
-        Ok(Bytes::from(buffer))
-    }
 }
 
 /// manager of supported API versions for a broker
@@ -416,15 +284,14 @@ impl<State, S, Q> Service<State, Q> for PoolService<S>
 where
     Q: Request,
     S: Service<Pool, Q>,
-    S::Error: Into<Error>,
     State: Send + Sync + 'static,
 {
     type Response = S::Response;
-    type Error = Error;
+    type Error = S::Error;
 
     /// serve the request, injecting the pool into the context of the inner service
-    async fn serve(&self, _: Context<State>, req: Q) -> Result<Self::Response, Self::Error> {
-        let ctx = Context::with_state(self.pool.clone());
+    async fn serve(&self, ctx: Context<State>, req: Q) -> Result<Self::Response, Self::Error> {
+        let (ctx, _) = ctx.swap_state(self.pool.clone());
         self.inner.serve(ctx, req).await.map_err(Into::into)
     }
 }
@@ -432,37 +299,58 @@ where
 /// API client using a connection pool
 #[derive(Clone, Debug)]
 pub struct Client {
-    service: PoolService<ConnectionService>,
+    service: PoolService<ConnectionService<FrameBytesService<BytesConnectionService>>>,
 }
 
 impl Client {
     /// create a new client using the supplied pool
     pub fn new(pool: Pool) -> Self {
-        Self {
-            service: PoolLayer::new(pool).into_layer(ConnectionService),
-        }
+        let service = (PoolLayer::new(pool), ConnectionLayer, FrameBytesLayer)
+            .into_layer(BytesConnectionService);
+
+        Self { service }
     }
 
     /// make an API request using the connection from the pool
     pub async fn call<Q>(&self, req: Q) -> Result<Q::Response, Error>
     where
         Q: Request,
-        <Q::Response as TryFrom<Body>>::Error: Into<Error>,
+        Error: From<<<Q as Request>::Response as TryFrom<Body>>::Error>,
     {
-        self.service.serve(Context::default(), req).await
+        self.service
+            .serve(Context::default(), req)
+            .await
+            .map_err(Into::into)
     }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub(crate) struct ConnectionService;
+pub struct ConnectionLayer;
 
-impl<Q> Service<Pool, Q> for ConnectionService
+impl<S> Layer<S> for ConnectionLayer {
+    type Service = ConnectionService<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        Self::Service { inner }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ConnectionService<S> {
+    inner: S,
+}
+
+impl<Q, S> Service<Pool, Q> for ConnectionService<S>
 where
     Q: Request,
-    <Q::Response as TryFrom<Body>>::Error: Into<Error>,
+    S: Service<Object<Manager>, Frame, Response = Frame>,
+    S::Error: From<Error>
+        + From<PoolError<Error>>
+        + From<tansu_sans_io::Error>
+        + From<<Q::Response as TryFrom<Body>>::Error>,
 {
     type Response = Q::Response;
-    type Error = Error;
+    type Error = S::Error;
 
     async fn serve(&self, ctx: Context<Pool>, req: Q) -> Result<Self::Response, Self::Error> {
         debug!(?ctx, ?req);
@@ -470,11 +358,118 @@ where
         let api_key = Q::KEY;
         let api_version = pool.manager().api_version(api_key)?;
         let client_id = pool.manager().client_id();
-        let mut connection = pool.get().await?;
+        let connection = pool.get().await?;
+        let correlation_id = connection.correlation_id;
 
-        connection
-            .request_response(req, api_version, client_id)
+        let frame = Frame {
+            size: 0,
+            header: Header::Request {
+                api_key,
+                api_version,
+                correlation_id,
+                client_id,
+            },
+            body: req.into(),
+        };
+
+        let (ctx, _) = ctx.swap_state(connection);
+
+        let frame = self.inner.serve(ctx, frame).await?;
+
+        Q::Response::try_from(frame.body).map_err(Into::into)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+struct BytesConnectionService;
+
+impl BytesConnectionService {
+    async fn write(
+        &self,
+        stream: &mut TcpStream,
+        payload: Bytes,
+        attributes: &[KeyValue],
+    ) -> Result<(), Error> {
+        let start = SystemTime::now();
+
+        stream
+            .write_all(&payload[..])
             .await
+            .inspect(|_| {
+                TCP_SEND_DURATION.record(
+                    start
+                        .elapsed()
+                        .map_or(0, |duration| duration.as_millis() as u64),
+                    attributes,
+                );
+
+                TCP_BYTES_SENT.add(payload.len() as u64, attributes);
+            })
+            .inspect_err(|_| {
+                TCP_SEND_ERRORS.add(1, attributes);
+            })
+            .map_err(Into::into)
+    }
+
+    async fn read(&self, stream: &mut TcpStream, attributes: &[KeyValue]) -> Result<Bytes, Error> {
+        let start = SystemTime::now();
+
+        let mut size = [0u8; 4];
+        _ = stream.read_exact(&mut size).await?;
+
+        let mut buffer: Vec<u8> = vec![0u8; frame_length(size)];
+        buffer[0..size.len()].copy_from_slice(&size[..]);
+        _ = stream
+            .read_exact(&mut buffer[4..])
+            .await
+            .inspect(|_| {
+                TCP_RECEIVE_DURATION.record(
+                    start
+                        .elapsed()
+                        .map_or(0, |duration| duration.as_millis() as u64),
+                    attributes,
+                );
+
+                TCP_BYTES_RECEIVED.add(buffer.len() as u64, attributes);
+            })
+            .inspect_err(|_| {
+                TCP_RECEIVE_ERRORS.add(1, attributes);
+            })?;
+
+        Ok(Bytes::from(buffer))
+    }
+}
+
+impl Service<Object<Manager>, Bytes> for BytesConnectionService {
+    type Response = Bytes;
+    type Error = Error;
+
+    async fn serve(
+        &self,
+        mut ctx: Context<Object<Manager>>,
+        req: Bytes,
+    ) -> Result<Self::Response, Self::Error> {
+        let c = ctx.state_mut();
+
+        let local = c.stream.local_addr().inspect(|local| debug!(%local))?;
+        let peer = c.stream.peer_addr().inspect(|peer| debug!(%peer))?;
+
+        let attributes = [
+            KeyValue::new("correlation_id", c.correlation_id.to_string()),
+            KeyValue::new("peer", peer.to_string()),
+        ];
+
+        let span = span!(Level::DEBUG, "client", local = %local, peer = %peer);
+
+        async move {
+            self.write(&mut c.stream, req, &attributes).await?;
+
+            c.correlation_id += 1;
+
+            self.read(&mut c.stream, &attributes).await
+        }
+        .instrument(span)
+        .await
     }
 }
 

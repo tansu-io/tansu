@@ -6515,6 +6515,7 @@ dependencies = [
  "opentelemetry-semantic-conventions",
  "rama",
  "tansu-sans-io",
+ "tansu-service",
  "thiserror 2.0.14",
  "tokio",
  "tokio-util",
