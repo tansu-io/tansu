@@ -39,10 +39,7 @@ use tokio::time::sleep;
 use tracing::debug;
 use uuid::Uuid;
 
-use crate::{
-    METER,
-    topic_config::{Error, ResourceConfig},
-};
+use crate::{Error, METER, topic::ResourceConfig};
 
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 struct Topition {
@@ -67,7 +64,7 @@ enum BatchResponse {
     Response(ProduceResponse),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Default)]
 pub(crate) struct BatchProduceService<S> {
     service: S,
     requests: Arc<Mutex<Vec<BatchRequest>>>,
@@ -151,6 +148,7 @@ pub(crate) fn number_of_records(req: &ProduceRequest) -> usize {
     size_of(req, |batch| batch.record_count as usize)
 }
 
+#[allow(dead_code)]
 pub(crate) fn number_of_bytes(req: &ProduceRequest) -> usize {
     size_of(req, |batch| batch.record_data.len())
 }
@@ -278,7 +276,7 @@ static TICKET_READY_COUNTER: LazyLock<Counter<u64>> = LazyLock::new(|| {
 impl<S, State> Service<State, ProduceRequest> for BatchProduceService<S>
 where
     S: Service<State, ProduceRequest, Response = ProduceResponse> + Clone + Debug,
-    S::Error: Into<Error> + Send + Debug + 'static,
+    S::Error: Clone + Into<Error> + Send + Debug + 'static,
     State: Clone + Send + Sync + 'static,
 {
     type Response = ProduceResponse;
@@ -327,7 +325,6 @@ where
                 });
                 ticket
             })
-            .inspect(|ticket| debug!(?ticket))
             .expect("poison");
 
         loop {
@@ -385,10 +382,7 @@ where
     }
 }
 
-impl<S> BatchProduceService<S>
-where
-    S: Service<(), ProduceRequest, Response = ProduceResponse> + Clone + Debug,
-{
+impl<S> BatchProduceService<S> {
     fn new(resource_config: ResourceConfig, service: S) -> Self {
         Self {
             service,
@@ -417,12 +411,7 @@ where
     type Service = BatchProduceService<S>;
 
     fn layer(&self, inner: S) -> Self::Service {
-        BatchProduceService {
-            service: inner,
-            requests: Arc::new(Mutex::new(Vec::new())),
-            responses: Arc::new(Mutex::new(BTreeMap::new())),
-            resource_config: self.resource_config.clone(),
-        }
+        Self::Service::new(self.resource_config.clone(), inner)
     }
 }
 
@@ -436,16 +425,6 @@ struct BatchProduction {
     timeout_ms: i32,
     run: TopicPartitionBatch,
     owners: BTreeMap<Uuid, BTreeSet<Topition>>,
-}
-
-impl BatchProduction {
-    fn into_produce_request(self) -> ProduceRequest {
-        ProduceRequest::default()
-            .transactional_id(self.transaction_id)
-            .acks(self.acks)
-            .timeout_ms(self.timeout_ms)
-            .topic_data(Some(self.run.into_iter().collect::<Vec<_>>()))
-    }
 }
 
 struct Owner {
@@ -737,7 +716,7 @@ fn combine(batches: Vec<deflated::Batch>) -> Result<Vec<deflated::Batch>, Error>
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 struct Ticket<S: Clone + Debug> {
     id: Uuid,
     batch: BatchProduceService<S>,
@@ -799,7 +778,6 @@ mod tests {
     use std::{fs::File, thread};
 
     use bytes::Bytes;
-    use rama::error::OpaqueError;
     use tansu_sans_io::{
         ErrorCode,
         produce_response::{LeaderIdAndEpoch, PartitionProduceResponse, TopicProduceResponse},
@@ -942,11 +920,8 @@ mod tests {
 
         let bp = (BatchProduceLayer::new(configuration)).into_layer(mock.clone());
 
-        let correlation_id_a = 67876;
-
         let batch_a = {
             let bp = bp.clone();
-            debug!(?bp);
 
             tokio::spawn(async move {
                 let span = span!(Level::DEBUG, "batch", topic_a);
@@ -1067,11 +1042,8 @@ mod tests {
 
         let bp = (BatchProduceLayer::new(configuration)).into_layer(mock.clone());
 
-        let correlation_id_a = 67876;
-
         let batch_a = {
             let bp = bp.clone();
-            debug!(?bp);
 
             tokio::spawn(async move {
                 let span = span!(Level::DEBUG, "batch", topic_a);
@@ -1094,11 +1066,8 @@ mod tests {
         let len = mock.reqs.lock().map(|guard| guard.len()).expect("poison");
         assert_eq!(0, len);
 
-        let correlation_id_b = 78987;
-
         let batch_b = {
             let bp = bp.clone();
-            debug!(?bp);
 
             tokio::spawn(async move {
                 let span = span!(Level::DEBUG, "batch", topic_b);
@@ -1277,11 +1246,8 @@ mod tests {
 
         let bp = (BatchProduceLayer::new(configuration)).into_layer(produce_service.clone());
 
-        let correlation_id_a = 67876;
-
         let batch_a = {
             let bp = bp.clone();
-            debug!(?bp);
 
             tokio::spawn(async move {
                 let span = span!(Level::DEBUG, "batch", topic_a);
@@ -1308,11 +1274,8 @@ mod tests {
             .expect("poison");
         assert_eq!(0, len);
 
-        let correlation_id_b = 78987;
-
         let batch_b = {
             let bp = bp.clone();
-            debug!(?bp);
 
             tokio::spawn(async move {
                 let span = span!(Level::DEBUG, "batch", topic_a);

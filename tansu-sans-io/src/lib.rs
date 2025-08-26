@@ -138,7 +138,7 @@ use std::{
     num,
     process::{ExitCode, Termination},
     str, string,
-    sync::OnceLock,
+    sync::{Arc, OnceLock},
     time::{Duration, SystemTime, SystemTimeError},
 };
 use tansu_model::{MessageKind, MessageMeta};
@@ -217,7 +217,7 @@ pub trait Response:
     type Request: Request;
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Clone, Debug, thiserror::Error)]
 pub enum Error {
     ApiError(ErrorCode),
     EnvVar(VarError),
@@ -226,12 +226,12 @@ pub enum Error {
     InvalidCoordinatorType(i8),
     InvalidIsolationLevel(i8),
     InvalidOpType(i8),
-    Io(io::Error),
+    Io(Arc<io::Error>),
     Message(String),
     NoSuchField(&'static str),
     NoSuchMessage(&'static str),
     NoSuchRequest(i16),
-    ParseFilter(#[from] ParseError),
+    ParseFilter(Arc<ParseError>),
     ResponseFrame,
     Snap(#[from] snap::Error),
     StringWithoutApiVersion,
@@ -271,7 +271,13 @@ impl serde::de::Error for Error {
 
 impl From<io::Error> for Error {
     fn from(value: io::Error) -> Self {
-        Self::Io(value)
+        Self::Io(Arc::new(value))
+    }
+}
+
+impl From<ParseError> for Error {
+    fn from(value: ParseError) -> Self {
+        Self::ParseFilter(Arc::new(value))
     }
 }
 

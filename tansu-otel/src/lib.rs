@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt::{self, Display, Formatter};
+use std::{
+    fmt::{self, Display, Formatter},
+    sync::Arc,
+};
 
 use opentelemetry::{KeyValue, global};
 use opentelemetry_otlp::{ExporterBuildError, Protocol, WithExportConfig as _};
@@ -21,10 +24,16 @@ use opentelemetry_semantic_conventions::resource::SERVICE_NAME;
 use tracing::debug;
 use url::{ParseError, Url};
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Clone, Debug, thiserror::Error)]
 pub enum Error {
-    ExporterBuild(#[from] ExporterBuildError),
+    ExporterBuild(Arc<ExporterBuildError>),
     Parse(#[from] ParseError),
+}
+
+impl From<ExporterBuildError> for Error {
+    fn from(value: ExporterBuildError) -> Self {
+        Self::ExporterBuild(Arc::new(value))
+    }
 }
 
 impl Display for Error {

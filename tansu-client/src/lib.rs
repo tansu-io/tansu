@@ -39,15 +39,19 @@ use tokio::{
     net::{TcpStream, lookup_host},
 };
 use tracing::{Instrument, Level, debug, error, span};
+use tracing_subscriber::filter::ParseError;
 use url::Url;
 
-#[derive(thiserror::Error, Debug)]
+#[derive(thiserror::Error, Clone, Debug)]
 pub enum Error {
     DeadPoolBuild(#[from] BuildError),
     Io(Arc<io::Error>),
     Message(String),
-    Pool(Box<dyn error::Error + Send + Sync>),
+    ParseFilter(Arc<ParseError>),
+    ParseUrl(#[from] url::ParseError),
+    Pool(Arc<Box<dyn error::Error + Send + Sync>>),
     Protocol(#[from] tansu_sans_io::Error),
+    Service(#[from] tansu_service::stream::Error),
     UnknownApiKey(i16),
     UnknownHost(Url),
 }
@@ -63,13 +67,19 @@ where
     E: error::Error + Send + Sync + 'static,
 {
     fn from(value: PoolError<E>) -> Self {
-        Self::Pool(Box::new(value))
+        Self::Pool(Arc::new(Box::new(value)))
     }
 }
 
 impl From<io::Error> for Error {
     fn from(value: io::Error) -> Self {
         Self::Io(Arc::new(value))
+    }
+}
+
+impl From<ParseError> for Error {
+    fn from(value: ParseError) -> Self {
+        Self::ParseFilter(Arc::new(value))
     }
 }
 
@@ -250,23 +260,46 @@ impl Builder {
     }
 }
 
-/// inject the pool into the service context of this layer
+/// inject the pool into the service context of this frame layer
 #[derive(Clone, Debug)]
-pub(crate) struct PoolLayer {
+pub struct FramePoolLayer {
     pool: Pool,
 }
 
-impl PoolLayer {
-    fn new(pool: Pool) -> Self {
+impl FramePoolLayer {
+    pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 }
 
-impl<S> Layer<S> for PoolLayer {
-    type Service = PoolService<S>;
+impl<S> Layer<S> for FramePoolLayer {
+    type Service = FramePoolService<S>;
 
     fn layer(&self, inner: S) -> Self::Service {
-        PoolService {
+        FramePoolService {
+            pool: self.pool.clone(),
+            inner,
+        }
+    }
+}
+
+/// inject the pool into the service context of this request layer
+#[derive(Clone, Debug)]
+pub struct RequestPoolLayer {
+    pool: Pool,
+}
+
+impl RequestPoolLayer {
+    pub fn new(pool: Pool) -> Self {
+        Self { pool }
+    }
+}
+
+impl<S> Layer<S> for RequestPoolLayer {
+    type Service = RequestPoolService<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        RequestPoolService {
             pool: self.pool.clone(),
             inner,
         }
@@ -275,12 +308,12 @@ impl<S> Layer<S> for PoolLayer {
 
 /// inject the pool into the inner service context
 #[derive(Clone, Debug)]
-pub(crate) struct PoolService<S> {
+pub struct RequestPoolService<S> {
     pool: Pool,
     inner: S,
 }
 
-impl<State, S, Q> Service<State, Q> for PoolService<S>
+impl<State, S, Q> Service<State, Q> for RequestPoolService<S>
 where
     Q: Request,
     S: Service<Pool, Q>,
@@ -292,20 +325,45 @@ where
     /// serve the request, injecting the pool into the context of the inner service
     async fn serve(&self, ctx: Context<State>, req: Q) -> Result<Self::Response, Self::Error> {
         let (ctx, _) = ctx.swap_state(self.pool.clone());
-        self.inner.serve(ctx, req).await.map_err(Into::into)
+        self.inner.serve(ctx, req).await
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct FramePoolService<S> {
+    pool: Pool,
+    inner: S,
+}
+
+impl<State, S> Service<State, Frame> for FramePoolService<S>
+where
+    S: Service<Pool, Frame, Response = Frame>,
+    State: Send + Sync + 'static,
+{
+    type Response = Frame;
+    type Error = S::Error;
+
+    async fn serve(&self, ctx: Context<State>, req: Frame) -> Result<Self::Response, Self::Error> {
+        let (ctx, _) = ctx.swap_state(self.pool.clone());
+        self.inner.serve(ctx, req).await
     }
 }
 
 /// API client using a connection pool
 #[derive(Clone, Debug)]
 pub struct Client {
-    service: PoolService<ConnectionService<FrameBytesService<BytesConnectionService>>>,
+    service:
+        RequestPoolService<RequestConnectionService<FrameBytesService<BytesConnectionService>>>,
 }
 
 impl Client {
     /// create a new client using the supplied pool
     pub fn new(pool: Pool) -> Self {
-        let service = (PoolLayer::new(pool), ConnectionLayer, FrameBytesLayer)
+        let service = (
+            RequestPoolLayer::new(pool),
+            RequestConnectionLayer,
+            FrameBytesLayer,
+        )
             .into_layer(BytesConnectionService);
 
         Self { service }
@@ -317,18 +375,15 @@ impl Client {
         Q: Request,
         Error: From<<<Q as Request>::Response as TryFrom<Body>>::Error>,
     {
-        self.service
-            .serve(Context::default(), req)
-            .await
-            .map_err(Into::into)
+        self.service.serve(Context::default(), req).await
     }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct ConnectionLayer;
+pub struct FrameConnectionLayer;
 
-impl<S> Layer<S> for ConnectionLayer {
-    type Service = ConnectionService<S>;
+impl<S> Layer<S> for FrameConnectionLayer {
+    type Service = FrameConnectionService<S>;
 
     fn layer(&self, inner: S) -> Self::Service {
         Self::Service { inner }
@@ -336,11 +391,64 @@ impl<S> Layer<S> for ConnectionLayer {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct ConnectionService<S> {
+pub struct FrameConnectionService<S> {
     inner: S,
 }
 
-impl<Q, S> Service<Pool, Q> for ConnectionService<S>
+impl<S> Service<Pool, Frame> for FrameConnectionService<S>
+where
+    S: Service<Object<Manager>, Frame, Response = Frame>,
+    S::Error: From<Error> + From<PoolError<Error>> + From<tansu_sans_io::Error>,
+{
+    type Response = Frame;
+    type Error = S::Error;
+
+    async fn serve(&self, ctx: Context<Pool>, req: Frame) -> Result<Self::Response, Self::Error> {
+        debug!(?ctx, ?req);
+
+        let api_key = req.api_key()?;
+        let api_version = req.api_version()?;
+        let client_id = req
+            .client_id()
+            .map(|client_id| client_id.map(|client_id| client_id.to_string()))?;
+
+        let connection = ctx.state().get().await?;
+        let correlation_id = connection.correlation_id;
+
+        let frame = Frame {
+            size: 0,
+            header: Header::Request {
+                api_key,
+                api_version,
+                correlation_id,
+                client_id,
+            },
+            body: req.body,
+        };
+
+        let (ctx, _) = ctx.swap_state(connection);
+
+        self.inner.serve(ctx, frame).await
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct RequestConnectionLayer;
+
+impl<S> Layer<S> for RequestConnectionLayer {
+    type Service = RequestConnectionService<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        Self::Service { inner }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct RequestConnectionService<S> {
+    inner: S,
+}
+
+impl<Q, S> Service<Pool, Q> for RequestConnectionService<S>
 where
     Q: Request,
     S: Service<Object<Manager>, Frame, Response = Frame>,
@@ -381,19 +489,21 @@ where
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-struct BytesConnectionService;
+pub struct BytesConnectionService;
 
 impl BytesConnectionService {
     async fn write(
         &self,
         stream: &mut TcpStream,
-        payload: Bytes,
+        frame: Bytes,
         attributes: &[KeyValue],
     ) -> Result<(), Error> {
+        debug!(?frame);
+
         let start = SystemTime::now();
 
         stream
-            .write_all(&payload[..])
+            .write_all(&frame[..])
             .await
             .inspect(|_| {
                 TCP_SEND_DURATION.record(
@@ -403,7 +513,7 @@ impl BytesConnectionService {
                     attributes,
                 );
 
-                TCP_BYTES_SENT.add(payload.len() as u64, attributes);
+                TCP_BYTES_SENT.add(frame.len() as u64, attributes);
             })
             .inspect_err(|_| {
                 TCP_SEND_ERRORS.add(1, attributes);
@@ -436,7 +546,7 @@ impl BytesConnectionService {
                 TCP_RECEIVE_ERRORS.add(1, attributes);
             })?;
 
-        Ok(Bytes::from(buffer))
+        Ok(Bytes::from(buffer)).inspect(|frame| debug!(?frame))
     }
 }
 
@@ -451,8 +561,8 @@ impl Service<Object<Manager>, Bytes> for BytesConnectionService {
     ) -> Result<Self::Response, Self::Error> {
         let c = ctx.state_mut();
 
-        let local = c.stream.local_addr().inspect(|local| debug!(%local))?;
-        let peer = c.stream.peer_addr().inspect(|peer| debug!(%peer))?;
+        let local = c.stream.local_addr()?;
+        let peer = c.stream.peer_addr()?;
 
         let attributes = [
             KeyValue::new("correlation_id", c.correlation_id.to_string()),
@@ -543,3 +653,127 @@ static TCP_BYTES_RECEIVED: LazyLock<Counter<u64>> = LazyLock::new(|| {
         .with_description("TCP bytes received")
         .build()
 });
+
+#[cfg(test)]
+mod tests {
+    use std::{fs::File, thread};
+
+    use tansu_sans_io::{MetadataRequest, MetadataResponse};
+    use tansu_service::stream::{
+        BytesFrameLayer, FrameRouteService, RequestLayer, ResponseService, TcpBytesLayer,
+        TcpContextLayer, TcpListenerLayer,
+    };
+    use tokio::{net::TcpListener, task::JoinSet};
+    use tokio_util::sync::CancellationToken;
+    use tracing::subscriber::DefaultGuard;
+    use tracing_subscriber::EnvFilter;
+
+    use super::*;
+
+    fn init_tracing() -> Result<DefaultGuard, Error> {
+        Ok(tracing::subscriber::set_default(
+            tracing_subscriber::fmt()
+                .with_level(true)
+                .with_line_number(true)
+                .with_thread_names(false)
+                .with_env_filter(
+                    EnvFilter::from_default_env()
+                        .add_directive(format!("{}=debug", env!("CARGO_CRATE_NAME")).parse()?),
+                )
+                .with_writer(
+                    thread::current()
+                        .name()
+                        .ok_or(Error::Message(String::from("unnamed thread")))
+                        .and_then(|name| {
+                            File::create(format!("../logs/{}/{name}.log", env!("CARGO_PKG_NAME"),))
+                                .map_err(Into::into)
+                        })
+                        .map(Arc::new)?,
+                )
+                .finish(),
+        ))
+    }
+
+    async fn server(cancellation: CancellationToken, listener: TcpListener) -> Result<(), Error> {
+        let server = (
+            TcpListenerLayer::new(cancellation),
+            TcpContextLayer::default(),
+            TcpBytesLayer::default(),
+            BytesFrameLayer,
+        )
+            .into_layer(
+                FrameRouteService::builder()
+                    .with_service(RequestLayer::<MetadataRequest>::new().into_layer(
+                        ResponseService::new(|_ctx: Context<()>, _req: MetadataRequest| {
+                            Ok::<_, Error>(
+                                MetadataResponse::default()
+                                    .brokers(Some([].into()))
+                                    .topics(Some([].into()))
+                                    .cluster_id(Some("abc".into()))
+                                    .controller_id(Some(111))
+                                    .throttle_time_ms(Some(0))
+                                    .cluster_authorized_operations(Some(-1)),
+                            )
+                        }),
+                    ))
+                    .and_then(|builder| builder.build())?,
+            );
+
+        server
+            .serve(Context::default(), listener)
+            .await
+            .map_err(Into::into)
+    }
+
+    #[tokio::test]
+    async fn tcp_client_server() -> Result<(), Error> {
+        let _guard = init_tracing()?;
+
+        let cancellation = CancellationToken::new();
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let local_addr = listener.local_addr()?;
+
+        let mut join = JoinSet::new();
+
+        let _server = {
+            let cancellation = cancellation.clone();
+            join.spawn(async move { server(cancellation, listener).await })
+        };
+
+        let origin = (
+            RequestPoolLayer::new(
+                Manager::builder(
+                    Url::parse(&format!("tcp://{local_addr}")).inspect(|url| debug!(%url))?,
+                )
+                .client_id(Some(env!("CARGO_PKG_NAME").into()))
+                .build()
+                .await
+                .inspect(|pool| debug!(?pool))?,
+            ),
+            RequestConnectionLayer,
+            FrameBytesLayer,
+        )
+            .into_layer(BytesConnectionService);
+
+        let response = origin
+            .serve(
+                Context::default(),
+                MetadataRequest::default()
+                    .topics(Some([].into()))
+                    .allow_auto_topic_creation(Some(false))
+                    .include_cluster_authorized_operations(Some(false))
+                    .include_topic_authorized_operations(Some(false)),
+            )
+            .await?;
+
+        assert_eq!(Some("abc"), response.cluster_id.as_deref());
+        assert_eq!(Some(111), response.controller_id);
+
+        cancellation.cancel();
+
+        let joined = join.join_all().await;
+        debug!(?joined);
+
+        Ok(())
+    }
+}

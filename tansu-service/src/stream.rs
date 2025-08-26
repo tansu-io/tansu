@@ -18,6 +18,7 @@ use std::{
     fmt::{self, Debug},
     io,
     marker::PhantomData,
+    net::SocketAddr,
     sync::{Arc, LazyLock},
     time::SystemTime,
 };
@@ -34,26 +35,30 @@ use tansu_sans_io::{
 };
 use tokio::{
     io::{AsyncReadExt as _, AsyncWriteExt as _},
-    net::TcpStream,
+    net::{TcpListener, TcpStream, lookup_host},
     sync::{mpsc, oneshot},
+    task::JoinSet,
 };
+use tokio_util::sync::CancellationToken;
 use tracing::{Instrument as _, Level, debug, error, span};
 use tracing_subscriber::filter::ParseError;
+use url::Url;
 
 use crate::{METER, frame_length};
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Clone, Debug, thiserror::Error)]
 pub enum Error {
     FrameTooBig(usize),
-    Io(io::Error),
+    Io(Arc<io::Error>),
     Message(String),
-    ParseFilter(#[from] ParseError),
+    ParseFilter(Arc<ParseError>),
     Protocol(#[from] tansu_sans_io::Error),
     UnknownServiceFrame(Box<Frame>),
     DuplicateRoute(i16),
     UnableToSend(Box<Frame>),
     OneshotRecv(oneshot::error::RecvError),
     UnknownServiceBody(Box<Body>),
+    UnknownHost(Url),
 }
 
 impl fmt::Display for Error {
@@ -64,7 +69,64 @@ impl fmt::Display for Error {
 
 impl From<io::Error> for Error {
     fn from(value: io::Error) -> Self {
-        Self::Io(value)
+        Self::Io(Arc::new(value))
+    }
+}
+
+impl From<ParseError> for Error {
+    fn from(value: ParseError) -> Self {
+        Self::ParseFilter(Arc::new(value))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct RequestApiKeyMatcher(pub i16);
+
+impl<State, Q> Matcher<State, Q> for RequestApiKeyMatcher
+where
+    Q: Request,
+    State: Clone + Debug,
+{
+    fn matches(&self, ext: Option<&mut Extensions>, ctx: &Context<State>, req: &Q) -> bool {
+        debug!(?ext, ?ctx, ?req);
+        Q::KEY == self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct FrameApiKeyMatcher(pub i16);
+
+impl<State> Matcher<State, Frame> for FrameApiKeyMatcher
+where
+    State: Clone + Debug,
+{
+    fn matches(&self, ext: Option<&mut Extensions>, ctx: &Context<State>, req: &Frame) -> bool {
+        debug!(?ext, ?ctx, ?req);
+        req.api_key().is_ok_and(|api_key| api_key == self.0)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct RequestLayer<Q> {
+    request: PhantomData<Q>,
+}
+
+impl<Q> RequestLayer<Q> {
+    pub fn new() -> Self {
+        Self {
+            request: PhantomData,
+        }
+    }
+}
+
+impl<S, Q> Layer<S> for RequestLayer<Q> {
+    type Service = RequestService<S, Q>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        Self::Service {
+            inner,
+            request: PhantomData,
+        }
     }
 }
 
@@ -102,34 +164,123 @@ where
     const KEY: i16 = Q::KEY;
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct RequestLayer<Q> {
-    request: PhantomData<Q>,
+pub async fn host_port(url: Url) -> Result<SocketAddr, Error> {
+    if let Some(host) = url.host_str()
+        && let Some(port) = url.port()
+    {
+        let attributes = [KeyValue::new("url", url.to_string())];
+        let start = SystemTime::now();
+
+        let mut addresses = lookup_host(format!("{host}:{port}"))
+            .await
+            .inspect(|_| {
+                DNS_LOOKUP_DURATION.record(
+                    start
+                        .elapsed()
+                        .map_or(0, |duration| duration.as_millis() as u64),
+                    &attributes,
+                )
+            })?
+            .filter(|socket_addr| matches!(socket_addr, SocketAddr::V4(_)));
+
+        if let Some(socket_addr) = addresses.next().inspect(|socket_addr| debug!(?socket_addr)) {
+            return Ok(socket_addr);
+        }
+    }
+
+    Err(Error::UnknownHost(url))
 }
 
-impl<Q> RequestLayer<Q> {
-    pub fn new() -> Self {
-        Self {
-            request: PhantomData,
-        }
+static DNS_LOOKUP_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
+    METER
+        .u64_histogram("dns_lookup_duration")
+        .with_unit("ms")
+        .with_description("DNS lookup latencies")
+        .build()
+});
+
+#[derive(Clone, Debug, Default)]
+pub struct TcpListenerLayer {
+    cancellation: CancellationToken,
+}
+
+impl TcpListenerLayer {
+    pub fn new(cancellation: CancellationToken) -> Self {
+        Self { cancellation }
     }
 }
 
-impl<S, Q> Layer<S> for RequestLayer<Q> {
-    type Service = RequestService<S, Q>;
+impl<S> Layer<S> for TcpListenerLayer {
+    type Service = TcpListenerService<S>;
 
     fn layer(&self, inner: S) -> Self::Service {
         Self::Service {
+            cancellation: self.cancellation.clone(),
             inner,
-            request: PhantomData,
         }
     }
 }
 
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct TcpContextService<S> {
+#[derive(Clone, Debug, Default)]
+pub struct TcpListenerService<S> {
+    cancellation: CancellationToken,
     inner: S,
-    state: TcpContext,
+}
+
+impl<State, S> Service<State, TcpListener> for TcpListenerService<S>
+where
+    S: Service<State, TcpStream> + Clone,
+    S::Response: Debug,
+    S::Error: error::Error,
+    State: Clone + Send + Sync + 'static,
+{
+    type Response = ();
+    type Error = S::Error;
+
+    async fn serve(
+        &self,
+        ctx: Context<State>,
+        req: TcpListener,
+    ) -> Result<Self::Response, Self::Error> {
+        let mut set = JoinSet::new();
+
+        loop {
+            tokio::select! {
+                Ok((stream, addr)) = req.accept() => {
+                    debug!(?req, ?stream, %addr);
+
+                    let service = self.inner.clone();
+                    let ctx = ctx.clone();
+
+                    let handle = set.spawn(async move {
+                            match service.serve(ctx, stream).await {
+                                Err(error) => {
+                                    debug!(%error);
+                                },
+
+                                Ok(response) => {
+                                    debug!(?response)
+                                }
+                        }
+                    });
+
+                    debug!(?handle);
+                    continue;
+                }
+
+                v = set.join_next(), if !set.is_empty() => {
+                    debug!(?v);
+                }
+
+                cancelled = self.cancellation.cancelled() => {
+                    debug!(?cancelled);
+                    break;
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -148,24 +299,6 @@ impl TcpContext {
             maximum_frame_size,
             ..self
         }
-    }
-}
-
-impl<State, S> Service<State, TcpStream> for TcpContextService<S>
-where
-    S: Service<TcpContext, TcpStream>,
-    State: Send + Sync + 'static,
-{
-    type Response = S::Response;
-    type Error = S::Error;
-
-    async fn serve(
-        &self,
-        ctx: Context<State>,
-        req: TcpStream,
-    ) -> Result<Self::Response, Self::Error> {
-        let (ctx, _) = ctx.swap_state(self.state.clone());
-        self.inner.serve(ctx, req).await
     }
 }
 
@@ -191,15 +324,85 @@ impl<S> Layer<S> for TcpContextLayer {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct TcpBytesService<S> {
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct TcpContextService<S> {
     inner: S,
+    state: TcpContext,
 }
 
-impl<S> Service<TcpContext, TcpStream> for TcpBytesService<S>
+impl<State, S> Service<State, TcpStream> for TcpContextService<S>
 where
-    S: Service<(), Bytes, Response = Bytes>,
+    S: Service<TcpContext, TcpStream>,
+    State: Clone + Send + Sync + 'static,
+{
+    type Response = S::Response;
+    type Error = S::Error;
+
+    async fn serve(
+        &self,
+        ctx: Context<State>,
+        req: TcpStream,
+    ) -> Result<Self::Response, Self::Error> {
+        debug!(?req);
+        let (ctx, _) = ctx.swap_state(self.state.clone());
+        self.inner.serve(ctx, req).await
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct BytesTcpService;
+
+impl Service<TcpStream, Bytes> for BytesTcpService {
+    type Response = Bytes;
+    type Error = Error;
+
+    async fn serve(
+        &self,
+        mut ctx: Context<TcpStream>,
+        req: Bytes,
+    ) -> Result<Self::Response, Self::Error> {
+        let stream = ctx.state_mut();
+
+        stream.write_all(&req[..]).await?;
+
+        let mut size = [0u8; 4];
+        _ = stream.read_exact(&mut size).await?;
+
+        let mut buffer: Vec<u8> = vec![0u8; frame_length(size)];
+        buffer[0..size.len()].copy_from_slice(&size[..]);
+        _ = stream.read_exact(&mut buffer[4..]).await?;
+
+        Ok(Bytes::from(buffer))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct TcpBytesLayer<State = ()> {
+    _state: PhantomData<State>,
+}
+
+impl<S, State> Layer<S> for TcpBytesLayer<State> {
+    type Service = TcpBytesService<S, State>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        Self::Service {
+            inner,
+            _state: PhantomData,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct TcpBytesService<S, State> {
+    inner: S,
+    _state: PhantomData<State>,
+}
+
+impl<S, State> Service<TcpContext, TcpStream> for TcpBytesService<S, State>
+where
+    S: Service<State, Bytes, Response = Bytes>,
     S::Error: From<Error> + From<io::Error> + Debug,
+    State: Clone + Default + Send + Sync + 'static,
 {
     type Response = ();
 
@@ -220,9 +423,9 @@ where
 
         let mut size = [0u8; 4];
 
-        let state = ctx.state();
-
         let attributes = {
+            let state = ctx.state();
+
             let mut attributes = vec![KeyValue::new(
                 "local_addr",
                 req.local_addr().map(|local_addr| local_addr.to_string())?,
@@ -237,9 +440,12 @@ where
 
         async move {
             loop {
+                let ctx = ctx.clone();
+
                 _ = req.read_exact(&mut size).await?;
 
-                if state
+                if ctx
+                    .state()
                     .maximum_frame_size
                     .is_some_and(|maximum_frame_size| maximum_frame_size > frame_length(size))
                 {
@@ -252,7 +458,7 @@ where
 
                 REQUEST_SIZE.record(request.len() as u64, &attributes);
 
-                let ctx = Context::default();
+                let (ctx, _) = ctx.swap_state(State::default());
                 let request_start = SystemTime::now();
 
                 let response = self
@@ -276,17 +482,6 @@ where
         }
         .instrument(span)
         .await
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct TcpBytesLayer;
-
-impl<S> Layer<S> for TcpBytesLayer {
-    type Service = TcpBytesService<S>;
-
-    fn layer(&self, inner: S) -> Self::Service {
-        Self::Service { inner }
     }
 }
 
@@ -314,87 +509,87 @@ static REQUEST_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
         .build()
 });
 
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct FramingService<S> {
-    inner: S,
-}
+// #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+// pub struct FramingService<S> {
+//     inner: S,
+// }
 
-impl<S> FramingService<S> {
-    pub fn new(inner: S) -> Self {
-        Self { inner }
-    }
-}
+// impl<S> FramingService<S> {
+//     pub fn new(inner: S) -> Self {
+//         Self { inner }
+//     }
+// }
 
-impl<S, State> Service<State, Bytes> for FramingService<S>
-where
-    S: Service<State, Frame>,
-    S::Response: Into<Body>,
-    S::Error: From<tansu_sans_io::Error>,
-    State: Send + Sync + 'static,
-{
-    type Response = Bytes;
-    type Error = S::Error;
+// impl<S, State> Service<State, Bytes> for FramingService<S>
+// where
+//     S: Service<State, Frame>,
+//     S::Response: Into<Body>,
+//     S::Error: From<tansu_sans_io::Error>,
+//     State: Send + Sync + 'static,
+// {
+//     type Response = Bytes;
+//     type Error = S::Error;
 
-    async fn serve(
-        &self,
-        ctx: Context<State>,
-        request: Bytes,
-    ) -> Result<Self::Response, Self::Error> {
-        let request = Frame::request_from_bytes(&request[..])?;
+//     async fn serve(
+//         &self,
+//         ctx: Context<State>,
+//         request: Bytes,
+//     ) -> Result<Self::Response, Self::Error> {
+//         let request = Frame::request_from_bytes(&request[..])?;
 
-        let api_key = request.api_key()?;
-        let api_version = request.api_version()?;
-        let correlation_id = request.correlation_id()?;
+//         let api_key = request.api_key()?;
+//         let api_version = request.api_version()?;
+//         let correlation_id = request.correlation_id()?;
 
-        let span = span!(
-            Level::DEBUG,
-            "frame",
-            api_name = request.api_name(),
-            api_version,
-            correlation_id
-        );
+//         let span = span!(
+//             Level::DEBUG,
+//             "frame",
+//             api_name = request.api_name(),
+//             api_version,
+//             correlation_id
+//         );
 
-        debug!(?request);
+//         debug!(?request);
 
-        async move {
-            let body = self.inner.serve(ctx, request).await.map(Into::into)?;
+//         async move {
+//             let body = self.inner.serve(ctx, request).await.map(Into::into)?;
 
-            let attributes = vec![
-                KeyValue::new("api_key", api_key as i64),
-                KeyValue::new("api_version", api_version as i64),
-            ];
+//             let attributes = vec![
+//                 KeyValue::new("api_key", api_key as i64),
+//                 KeyValue::new("api_version", api_version as i64),
+//             ];
 
-            Frame::response(
-                Header::Response { correlation_id },
-                body,
-                api_key,
-                api_version,
-            )
-            .inspect(|response| {
-                debug!(?response);
-                API_REQUESTS.add(1, &attributes);
-            })
-            .inspect_err(|err| {
-                error!(api_key, api_version, ?err);
-                API_ERRORS.add(1, &attributes);
-            })
-            .map_err(Into::into)
-        }
-        .instrument(span)
-        .await
-    }
-}
+//             Frame::response(
+//                 Header::Response { correlation_id },
+//                 body,
+//                 api_key,
+//                 api_version,
+//             )
+//             .inspect(|response| {
+//                 debug!(?response);
+//                 API_REQUESTS.add(1, &attributes);
+//             })
+//             .inspect_err(|err| {
+//                 error!(api_key, api_version, ?err);
+//                 API_ERRORS.add(1, &attributes);
+//             })
+//             .map_err(Into::into)
+//         }
+//         .instrument(span)
+//         .await
+//     }
+// }
 
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct FramingLayer;
+// #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+// pub struct FramingLayer;
 
-impl<S> Layer<S> for FramingLayer {
-    type Service = FramingService<S>;
+// impl<S> Layer<S> for FramingLayer {
+//     type Service = FramingService<S>;
 
-    fn layer(&self, inner: S) -> Self::Service {
-        Self::Service { inner }
-    }
-}
+//     fn layer(&self, inner: S) -> Self::Service {
+//         Self::Service { inner }
+//     }
+// }
 
 static API_REQUESTS: LazyLock<Counter<u64>> = LazyLock::new(|| {
     METER
@@ -411,14 +606,14 @@ static API_ERRORS: LazyLock<Counter<u64>> = LazyLock::new(|| {
 });
 
 /// Route frames to a service based via the API key
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct FrameRouteService<State = (), E = Error> {
     routes: Arc<BTreeMap<i16, BoxService<State, Frame, Frame, E>>>,
 }
 
 impl<State, E> FrameRouteService<State, E>
 where
-    State: Send + Sync + 'static,
+    State: Clone + Send + Sync + 'static,
     E: error::Error + From<tansu_sans_io::Error> + From<Error> + Send + Sync + 'static,
 {
     pub fn new(routes: Arc<BTreeMap<i16, BoxService<State, Frame, Frame, E>>>) -> Self {
@@ -432,7 +627,7 @@ where
 
 impl<State, E> Service<State, Frame> for FrameRouteService<State, E>
 where
-    State: Send + Sync + 'static,
+    State: Clone + Send + Sync + 'static,
     E: error::Error + From<tansu_sans_io::Error> + From<Error> + Send + Sync + 'static,
 {
     type Response = Frame;
@@ -459,7 +654,7 @@ pub struct FrameRouteBuilder<State, E> {
 
 impl<State, E> FrameRouteBuilder<State, E>
 where
-    State: Send + Sync + 'static,
+    State: Clone + Send + Sync + 'static,
     E: error::Error + From<tansu_sans_io::Error> + Send + Sync + 'static,
 {
     fn new() -> Self {
@@ -513,7 +708,7 @@ pub struct ApiVersionsService<E> {
 
 impl<State, E> Service<State, ApiVersionsRequest> for ApiVersionsService<E>
 where
-    State: Send + Sync + 'static,
+    State: Clone + Send + Sync + 'static,
     E: error::Error + Send + Sync + 'static,
 {
     type Response = ApiVersionsResponse;
@@ -551,7 +746,7 @@ where
 
 impl<State, E> Service<State, Body> for ApiVersionsService<E>
 where
-    State: Send + Sync + 'static,
+    State: Clone + Send + Sync + 'static,
     E: error::Error + From<tansu_sans_io::Error> + Send + Sync + 'static,
 {
     type Response = Body;
@@ -565,7 +760,7 @@ where
 
 impl<State, E> Service<State, Frame> for ApiVersionsService<E>
 where
-    State: Send + Sync + 'static,
+    State: Clone + Send + Sync + 'static,
     E: error::Error + From<tansu_sans_io::Error> + Send + Sync + 'static,
 {
     type Response = Frame;
@@ -578,6 +773,31 @@ where
             header: Header::Response { correlation_id },
             body,
         })
+    }
+}
+
+/// A layer that transforms Frames into Requests
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct FrameRequestLayer<Q> {
+    request: PhantomData<Q>,
+}
+
+impl<Q> FrameRequestLayer<Q> {
+    pub fn new() -> Self {
+        Self {
+            request: PhantomData,
+        }
+    }
+}
+
+impl<S, Q> Layer<S> for FrameRequestLayer<Q> {
+    type Service = FrameRequestService<S, Q>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        Self::Service {
+            inner,
+            request: PhantomData,
+        }
     }
 }
 
@@ -601,6 +821,7 @@ where
     type Error = S::Error;
 
     async fn serve(&self, ctx: Context<State>, req: Frame) -> Result<Self::Response, Self::Error> {
+        debug!(?req);
         let correlation_id = req.correlation_id()?;
 
         let req = Q::try_from(req.body).map_err(Into::into)?;
@@ -615,9 +836,9 @@ where
 
 impl<S, Q, State> Matcher<State, Frame> for FrameRequestService<S, Q>
 where
-    S: Send + Sync + 'static,
+    S: Clone + Send + Sync + 'static,
     Q: Request,
-    State: Debug,
+    State: Clone + Debug,
 {
     fn matches(&self, ext: Option<&mut Extensions>, ctx: &Context<State>, req: &Frame) -> bool {
         debug!(?ext, ?ctx, ?req);
@@ -625,20 +846,14 @@ where
     }
 }
 
-/// A layer that transforms Frames into Requests
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct FrameRequestLayer<Q> {
-    request: PhantomData<Q>,
-}
+pub struct BytesLayer;
 
-impl<S, Q> Layer<S> for FrameRequestLayer<Q> {
-    type Service = FrameRequestService<S, Q>;
+impl<S> Layer<S> for BytesLayer {
+    type Service = BytesService<S>;
 
     fn layer(&self, inner: S) -> Self::Service {
-        Self::Service {
-            inner,
-            request: PhantomData,
-        }
+        Self::Service { inner }
     }
 }
 
@@ -650,7 +865,7 @@ pub struct BytesService<S> {
 impl<S, State> Service<State, Bytes> for BytesService<S>
 where
     S: Service<State, Bytes, Response = Bytes>,
-    State: Send + Sync + 'static,
+    State: Clone + Send + Sync + 'static,
 {
     type Response = Bytes;
     type Error = S::Error;
@@ -664,11 +879,12 @@ where
     }
 }
 
+/// A layer that transforms Bytes into Frames
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct BytesLayer;
+pub struct BytesFrameLayer;
 
-impl<S> Layer<S> for BytesLayer {
-    type Service = BytesService<S>;
+impl<S> Layer<S> for BytesFrameLayer {
+    type Service = BytesFrameService<S>;
 
     fn layer(&self, inner: S) -> Self::Service {
         Self::Service { inner }
@@ -684,7 +900,7 @@ pub struct BytesFrameService<S> {
 impl<S, State> Service<State, Bytes> for BytesFrameService<S>
 where
     S: Service<State, Frame, Response = Frame>,
-    State: Send + Sync + 'static,
+    State: Clone + Send + Sync + 'static,
     S::Error: From<tansu_sans_io::Error> + Debug,
 {
     type Response = Bytes;
@@ -737,12 +953,12 @@ where
     }
 }
 
-/// A layer that transforms Bytes into Frames
+/// A layer that transforms Frames into Bytes
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct BytesFrameLayer;
+pub struct FrameBytesLayer;
 
-impl<S> Layer<S> for BytesFrameLayer {
-    type Service = BytesFrameService<S>;
+impl<S> Layer<S> for FrameBytesLayer {
+    type Service = FrameBytesService<S>;
 
     fn layer(&self, inner: S) -> Self::Service {
         Self::Service { inner }
@@ -782,12 +998,11 @@ where
     }
 }
 
-/// A layer that transforms Frames into Bytes
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct FrameBytesLayer;
+pub struct FrameBodyLayer;
 
-impl<S> Layer<S> for FrameBytesLayer {
-    type Service = FrameBytesService<S>;
+impl<S> Layer<S> for FrameBodyLayer {
+    type Service = FrameBodyService<S>;
 
     fn layer(&self, inner: S) -> Self::Service {
         Self::Service { inner }
@@ -821,13 +1036,26 @@ where
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct FrameBodyLayer;
+pub struct BodyRequestLayer<Q> {
+    request: PhantomData<Q>,
+}
 
-impl<S> Layer<S> for FrameBodyLayer {
-    type Service = FrameBodyService<S>;
+impl<Q> BodyRequestLayer<Q> {
+    pub fn new() -> Self {
+        Self {
+            request: PhantomData,
+        }
+    }
+}
+
+impl<S, Q> Layer<S> for BodyRequestLayer<Q> {
+    type Service = BodyRequestService<S, Q>;
 
     fn layer(&self, inner: S) -> Self::Service {
-        Self::Service { inner }
+        Self::Service {
+            inner,
+            request: PhantomData,
+        }
     }
 }
 
@@ -858,30 +1086,6 @@ where
     async fn serve(&self, ctx: Context<State>, req: Body) -> Result<Self::Response, Self::Error> {
         let req = Q::try_from(req)?;
         self.inner.serve(ctx, req).await.map(Body::from)
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct BodyRequestLayer<Q> {
-    request: PhantomData<Q>,
-}
-
-impl<Q> BodyRequestLayer<Q> {
-    pub fn new() -> Self {
-        Self {
-            request: PhantomData,
-        }
-    }
-}
-
-impl<S, Q> Layer<S> for BodyRequestLayer<Q> {
-    type Service = BodyRequestService<S, Q>;
-
-    fn layer(&self, inner: S) -> Self::Service {
-        Self::Service {
-            inner,
-            request: PhantomData,
-        }
     }
 }
 
@@ -951,6 +1155,18 @@ async fn pqr() {
     let (_tx, mut _rx) = mpsc::channel::<(Frame, oneshot::Sender<Frame>)>(100);
 }
 
+/// A layer that transforms Requests into Frames
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct RequestFrameLayer;
+
+impl<S> Layer<S> for RequestFrameLayer {
+    type Service = RequestFrameService<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        Self::Service { inner }
+    }
+}
+
 /// A service that transforms Requests into Frames
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct RequestFrameService<S> {
@@ -995,18 +1211,6 @@ where
             .await
             .and_then(|response| Q::Response::try_from(response.body).map_err(Into::into))
             .inspect(|response| debug!(?response))
-    }
-}
-
-/// A layer that transforms Requests into Frames
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct RequestFrameLayer;
-
-impl<S> Layer<S> for RequestFrameLayer {
-    type Service = RequestFrameService<S>;
-
-    fn layer(&self, inner: S) -> Self::Service {
-        Self::Service { inner }
     }
 }
 
@@ -1058,8 +1262,43 @@ where
 }
 
 #[derive(Clone, Copy, Debug, Hash)]
+pub struct FrameService<F> {
+    response: F,
+}
+
+impl<State, E, F> Service<State, Frame> for FrameService<F>
+where
+    F: Fn(Context<State>, Frame) -> Result<Frame, E> + Clone + Send + Sync + 'static,
+    E: Send + Sync + 'static,
+    State: Send + Sync + 'static,
+{
+    type Response = Frame;
+    type Error = E;
+
+    async fn serve(&self, ctx: Context<State>, req: Frame) -> Result<Self::Response, Self::Error> {
+        (self.response)(ctx, req)
+    }
+}
+
+impl<F> FrameService<F> {
+    pub fn new<State, E>(response: F) -> Self
+    where
+        F: Fn(Context<State>, Frame) -> Result<Frame, E> + Clone,
+        E: Send + Sync + 'static,
+    {
+        Self { response }
+    }
+}
+
+#[derive(Clone, Copy, Hash)]
 pub struct ResponseService<F> {
     response: F,
+}
+
+impl<F> Debug for ResponseService<F> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ResponseService").finish()
+    }
 }
 
 impl<State, Q, E, F> Service<State, Q> for ResponseService<F>
@@ -1092,7 +1331,7 @@ impl<F> ResponseService<F> {
 mod tests {
     use std::{fs::File, sync::Arc, thread};
 
-    use rama::layer::MapResponseLayer;
+    use rama::layer::{HijackLayer, MapResponseLayer};
     use tansu_sans_io::{
         ApiKey, MetadataRequest, MetadataResponse, metadata_response::MetadataResponseBroker,
     };
@@ -1333,6 +1572,152 @@ mod tests {
         assert_eq!(node_id, brokers[0].node_id);
         assert_eq!(host, brokers[0].host);
         assert_eq!(port, brokers[0].port);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn api_key_hijack() -> Result<(), Error> {
+        let _guard = init_tracing()?;
+
+        const CLUSTER_ID: &str = "abc";
+        const NODE_ID: i32 = 111;
+        const HOST: &str = "localhost";
+        const PORT: i32 = 9092;
+
+        let service = (
+            FrameRequestLayer::<MetadataRequest>::new(),
+            MapResponseLayer::new(move |response: MetadataResponse| {
+                response.brokers(Some(vec![
+                    MetadataResponseBroker::default()
+                        .node_id(NODE_ID)
+                        .host(HOST.into())
+                        .port(PORT)
+                        .rack(None),
+                ]))
+            }),
+        )
+            .into_layer(ResponseService::new(|_, _req: MetadataRequest| {
+                Ok::<_, Error>(
+                    MetadataResponse::default()
+                        .brokers(Some([].into()))
+                        .topics(Some([].into()))
+                        .cluster_id(Some(CLUSTER_ID.into()))
+                        .controller_id(Some(NODE_ID))
+                        .throttle_time_ms(Some(0))
+                        .cluster_authorized_operations(Some(-1)),
+                )
+            }));
+
+        let hijack = HijackLayer::new(FrameApiKeyMatcher(MetadataRequest::KEY), service.clone())
+            .into_layer(FrameService::new(|_, req: Frame| {
+                debug!(?req);
+                Err(Error::Message("unmapped".into()))
+            }));
+
+        let frame = hijack
+            .serve(
+                Context::default(),
+                Frame {
+                    header: Header::Request {
+                        api_key: MetadataRequest::KEY,
+                        api_version: 12,
+                        correlation_id: 0,
+                        client_id: Some("tansu".into()),
+                    },
+                    body: MetadataRequest::default().into(),
+                    size: 0,
+                },
+            )
+            .await?;
+
+        let response: MetadataResponse = frame.body.try_into()?;
+        assert_eq!(Some(111), response.controller_id);
+
+        let brokers = response.brokers.unwrap_or_default();
+        assert_eq!(1, brokers.len());
+        assert_eq!(111, brokers[0].node_id);
+
+        Ok(())
+    }
+
+    async fn server(cancellation: CancellationToken, listener: TcpListener) -> Result<(), Error> {
+        let server = (
+            TcpListenerLayer::new(cancellation),
+            TcpContextLayer::default(),
+            TcpBytesLayer::<()>::default(),
+            BytesFrameLayer,
+        )
+            .into_layer(FrameService::new(|_, req: Frame| {
+                debug!(?req);
+
+                req.correlation_id()
+                    .map(|correlation_id| Frame {
+                        size: 0,
+                        header: Header::Response { correlation_id },
+                        body: MetadataResponse::default()
+                            .brokers(Some([].into()))
+                            .topics(Some([].into()))
+                            .cluster_id(Some("abc".into()))
+                            .controller_id(Some(111))
+                            .throttle_time_ms(Some(0))
+                            .cluster_authorized_operations(Some(-1))
+                            .into(),
+                    })
+                    .map_err(Error::from)
+            }));
+
+        server.serve(Context::default(), listener).await
+    }
+
+    #[tokio::test]
+    async fn tcp_client_server() -> Result<(), Error> {
+        let _guard = init_tracing()?;
+
+        let cancellation = CancellationToken::new();
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let local_addr = listener.local_addr()?;
+
+        let mut join = JoinSet::new();
+
+        let _server = {
+            let cancellation = cancellation.clone();
+            join.spawn(async move { server(cancellation, listener).await })
+        };
+
+        let stream = TcpStream::connect(local_addr).await?;
+
+        let client = FrameBytesLayer.into_layer(BytesTcpService);
+
+        let frame = client
+            .serve(
+                Context::with_state(stream),
+                Frame {
+                    header: Header::Request {
+                        api_key: MetadataRequest::KEY,
+                        api_version: 12,
+                        correlation_id: 0,
+                        client_id: Some(env!("CARGO_PKG_NAME").into()),
+                    },
+                    body: MetadataRequest::default()
+                        .topics(Some([].into()))
+                        .allow_auto_topic_creation(Some(false))
+                        .include_cluster_authorized_operations(Some(false))
+                        .include_topic_authorized_operations(Some(false))
+                        .into(),
+                    size: 0,
+                },
+            )
+            .await?;
+
+        let response = MetadataResponse::try_from(frame.body)?;
+        assert_eq!(Some("abc"), response.cluster_id.as_deref());
+        assert_eq!(Some(111), response.controller_id);
+
+        cancellation.cancel();
+
+        let joined = join.join_all().await;
+        debug!(?joined);
 
         Ok(())
     }

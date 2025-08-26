@@ -14,7 +14,6 @@
 
 use std::{
     collections::BTreeMap,
-    fmt, io,
     sync::{Arc, Mutex},
 };
 
@@ -23,39 +22,11 @@ use tansu_sans_io::{
     ConfigResource, ConfigType, DescribeConfigsRequest, DescribeConfigsResponse, ErrorCode,
     ProduceRequest, ProduceResponse, describe_configs_request::DescribeConfigsResource,
 };
-use tokio::task::JoinError;
 use tracing::{debug, error};
-use tracing_subscriber::filter::ParseError;
 
-use crate::prod_uce::topic_names;
+use crate::{Error, produce::topic_names};
 
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    Io(io::Error),
-    Join(#[from] JoinError),
-    Message(String),
-    ParseFilter(#[from] ParseError),
-    ResourceLock {
-        name: String,
-        key: Option<String>,
-        value: Option<ResourceConfigValue>,
-    },
-    SansIo(#[from] tansu_sans_io::Error),
-    Stream(#[from] tansu_service::stream::Error),
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{self:?}")
-    }
-}
-
-impl From<io::Error> for Error {
-    fn from(value: io::Error) -> Self {
-        Self::Io(value)
-    }
-}
-
+#[allow(dead_code)]
 fn with_topics(
     req: &mut DescribeConfigsRequest,
     topics: impl IntoIterator<Item = impl Into<String>>,
@@ -70,6 +41,7 @@ fn with_topics(
     }));
 }
 
+#[allow(dead_code)]
 fn with_topic(req: &mut DescribeConfigsRequest, resource_name: impl Into<String>) {
     let resources = req.resources.get_or_insert_default();
     resources.push(
@@ -145,14 +117,14 @@ impl From<&str> for ResourceConfigValue {
 }
 
 #[derive(Clone, Debug)]
-pub struct ResourceConfigValueMatcher {
+pub(crate) struct ResourceConfigValueMatcher {
     resource_config: ResourceConfig,
     key: String,
     value: ResourceConfigValue,
 }
 
 impl ResourceConfigValueMatcher {
-    pub fn new(
+    pub(crate) fn new(
         resource_config: ResourceConfig,
         key: impl Into<String>,
         value: impl Into<ResourceConfigValue>,
@@ -188,7 +160,8 @@ impl<State> Matcher<State, ProduceRequest> for ResourceConfigValueMatcher {
 }
 
 impl ResourceConfigValue {
-    pub fn as_bool(&self) -> Option<bool> {
+    #[allow(dead_code)]
+    pub(crate) fn as_bool(&self) -> Option<bool> {
         match self {
             Self::Boolean(value) => Some(*value),
             Self::String(value) => value.parse().ok(),
@@ -196,14 +169,15 @@ impl ResourceConfigValue {
         }
     }
 
-    pub fn as_string(&self) -> Option<&str> {
+    #[allow(dead_code)]
+    pub(crate) fn as_string(&self) -> Option<&str> {
         match self {
             Self::String(value) => Some(value),
             _ => None,
         }
     }
 
-    pub fn as_u64(&self) -> Option<u64> {
+    pub(crate) fn as_u64(&self) -> Option<u64> {
         match self {
             Self::Short(value) if !value.is_negative() => Some(*value as u64),
             Self::Int(value) if !value.is_negative() => Some(*value as u64),
@@ -213,7 +187,7 @@ impl ResourceConfigValue {
         }
     }
 
-    pub fn as_usize(&self) -> Option<usize> {
+    pub(crate) fn as_usize(&self) -> Option<usize> {
         match self {
             Self::Short(value) if !value.is_negative() => Some(*value as usize),
             Self::Int(value) if !value.is_negative() => Some(*value as usize),
@@ -223,7 +197,8 @@ impl ResourceConfigValue {
         }
     }
 
-    pub fn as_i16(&self) -> Option<i16> {
+    #[allow(dead_code)]
+    pub(crate) fn as_i16(&self) -> Option<i16> {
         match self {
             Self::Short(value) => Some(*value),
             Self::String(value) => value.parse().ok(),
@@ -231,7 +206,8 @@ impl ResourceConfigValue {
         }
     }
 
-    pub fn as_i32(&self) -> Option<i32> {
+    #[allow(dead_code)]
+    pub(crate) fn as_i32(&self) -> Option<i32> {
         match self {
             Self::Int(value) => Some(*value),
             Self::String(value) => value.parse().ok(),
@@ -240,7 +216,7 @@ impl ResourceConfigValue {
     }
 
     #[allow(dead_code)]
-    pub fn as_i64(&self) -> Option<i64> {
+    pub(crate) fn as_i64(&self) -> Option<i64> {
         match self {
             Self::Long(value) => Some(*value),
             Self::String(value) => value.parse().ok(),
@@ -250,12 +226,12 @@ impl ResourceConfigValue {
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct ResourceConfig {
+pub(crate) struct ResourceConfig {
     configuration: Arc<Mutex<BTreeMap<String, BTreeMap<String, ResourceConfigValue>>>>,
 }
 
 impl ResourceConfig {
-    pub fn has_resource(&self, resource_name: &str) -> bool {
+    pub(crate) fn has_resource(&self, resource_name: &str) -> bool {
         debug!(?self, resource_name);
         self.configuration
             .lock()
@@ -264,7 +240,7 @@ impl ResourceConfig {
             .unwrap_or_default()
     }
 
-    pub fn get(&self, resource_name: &str, key: &str) -> Option<ResourceConfigValue> {
+    pub(crate) fn get(&self, resource_name: &str, key: &str) -> Option<ResourceConfigValue> {
         debug!(resource_name, key);
 
         self.configuration
@@ -280,7 +256,7 @@ impl ResourceConfig {
             .flatten()
     }
 
-    pub fn put(
+    pub(crate) fn put(
         &self,
         resource_name: impl Into<String>,
         key: impl Into<String>,
@@ -310,7 +286,8 @@ impl ResourceConfig {
     }
 }
 
-pub struct TopicConfigService<I, O> {
+#[derive(Clone, Debug, Default)]
+pub(crate) struct TopicConfigService<I, O> {
     resource_config: ResourceConfig,
     inner: I,
     outer: O,
@@ -359,19 +336,21 @@ impl<I, O> TopicConfigService<I, O> {
 
 impl<I, O, State> Service<State, ProduceRequest> for TopicConfigService<I, O>
 where
-    I: Service<State, ProduceRequest, Response = ProduceResponse, Error = Error>,
-    O: Service<State, DescribeConfigsRequest, Response = DescribeConfigsResponse, Error = Error>,
+    I: Service<State, ProduceRequest, Response = ProduceResponse>,
+    O: Service<State, DescribeConfigsRequest, Response = DescribeConfigsResponse>,
     State: Clone + Send + Sync + 'static,
+    I::Error: From<Error> + From<O::Error>,
 {
     type Response = ProduceResponse;
-
-    type Error = Error;
+    type Error = I::Error;
 
     async fn serve(
         &self,
         ctx: Context<State>,
         req: ProduceRequest,
     ) -> Result<Self::Response, Self::Error> {
+        debug!(?req);
+
         if !topic_names(&req)
             .iter()
             .all(|topic| self.resource_config.has_resource(topic))
@@ -395,7 +374,11 @@ where
                         )),
                 )
                 .await
-                .and_then(|config_response| self.add_topic_configuration(config_response))?;
+                .map_err(I::Error::from)
+                .and_then(|config_response| {
+                    self.add_topic_configuration(config_response)
+                        .map_err(Into::into)
+                })?;
         }
 
         self.inner.serve(ctx, req).await
@@ -403,13 +386,13 @@ where
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct TopicConfigLayer<O> {
+pub(crate) struct TopicConfigLayer<O> {
     resource_config: ResourceConfig,
     outer: O,
 }
 
 impl<O> TopicConfigLayer<O> {
-    pub fn new(resource_config: ResourceConfig, outer: O) -> Self {
+    pub(crate) fn new(resource_config: ResourceConfig, outer: O) -> Self {
         Self {
             resource_config,
             outer,
