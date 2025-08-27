@@ -428,7 +428,7 @@ mod tests {
         produce_response::{PartitionProduceResponse, TopicProduceResponse},
         record::{Record, deflated, inflated},
     };
-    use tansu_service::stream::{
+    use tansu_service::{
         BytesFrameLayer, FrameBytesLayer, FrameRouteService, RequestFrameLayer, RequestLayer,
         ResponseService,
     };

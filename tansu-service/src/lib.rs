@@ -12,32 +12,84 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{result, sync::LazyLock};
+use std::{
+    fmt, io,
+    net::SocketAddr,
+    sync::{Arc, LazyLock},
+    time::SystemTime,
+};
 
 use bytes::Bytes;
-use opentelemetry::{InstrumentationScope, global, metrics::Meter};
+use opentelemetry::{
+    InstrumentationScope, KeyValue, global,
+    metrics::{Counter, Histogram, Meter},
+};
 use opentelemetry_semantic_conventions::SCHEMA_URL;
-use rama::{error::BoxError, tcp::TcpStream};
-use tokio::io::AsyncReadExt as _;
+use tansu_sans_io::{Body, Frame};
+use tokio::{
+    io::AsyncReadExt as _,
+    net::{TcpStream, lookup_host},
+    sync::oneshot,
+};
+use tracing::debug;
+use url::Url;
 
-pub mod api;
-pub mod client;
-pub mod service;
-pub mod stream;
+mod api;
+mod channel;
+mod frame;
+mod stream;
 
-pub type Result<T, E = BoxError> = result::Result<T, E>;
+pub use api::{ApiVersionsService, FrameRouteService};
+
+pub use channel::{
+    ChannelFrameLayer, ChannelFrameService, FrameChannelService, FrameReceiver, FrameSender,
+};
+
+pub use frame::{
+    BodyRequestLayer, BytesFrameLayer, FrameApiKeyMatcher, FrameBodyLayer, FrameBytesLayer,
+    FrameBytesService, FrameRequestLayer, FrameService, RequestApiKeyMatcher, RequestFrameLayer,
+    RequestLayer, ResponseService,
+};
+
+pub use stream::{BytesLayer, BytesTcpService, TcpBytesLayer, TcpContextLayer, TcpListenerLayer};
+
+#[derive(Clone, Debug, thiserror::Error)]
+pub enum Error {
+    DuplicateRoute(i16),
+    FrameTooBig(usize),
+    Io(Arc<io::Error>),
+    Message(String),
+    OneshotRecv(oneshot::error::RecvError),
+    Protocol(#[from] tansu_sans_io::Error),
+    UnableToSend(Box<Frame>),
+    UnknownHost(Url),
+    UnknownServiceBody(Box<Body>),
+    UnknownServiceFrame(Box<Frame>),
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{self:?}")
+    }
+}
+
+impl From<io::Error> for Error {
+    fn from(value: io::Error) -> Self {
+        Self::Io(Arc::new(value))
+    }
+}
 
 fn frame_length(encoded: [u8; 4]) -> usize {
     i32::from_be_bytes(encoded) as usize + encoded.len()
 }
 
-pub async fn read_frame(tcp_stream: &mut TcpStream) -> Result<Bytes> {
+pub async fn read_frame(stream: &mut TcpStream) -> Result<Bytes, Error> {
     let mut size = [0u8; 4];
-    _ = tcp_stream.read_exact(&mut size).await?;
+    _ = stream.read_exact(&mut size).await?;
 
     let mut buffer: Vec<u8> = vec![0u8; frame_length(size)];
     buffer[0..size.len()].copy_from_slice(&size[..]);
-    _ = tcp_stream.read_exact(&mut buffer[4..]).await?;
+    _ = stream.read_exact(&mut buffer[4..]).await?;
     Ok(Bytes::from(buffer))
 }
 
@@ -48,4 +100,77 @@ pub(crate) static METER: LazyLock<Meter> = LazyLock::new(|| {
             .with_schema_url(SCHEMA_URL)
             .build(),
     )
+});
+
+pub async fn host_port(url: Url) -> Result<SocketAddr, Error> {
+    if let Some(host) = url.host_str()
+        && let Some(port) = url.port()
+    {
+        let attributes = [KeyValue::new("url", url.to_string())];
+        let start = SystemTime::now();
+
+        let mut addresses = lookup_host(format!("{host}:{port}"))
+            .await
+            .inspect(|_| {
+                DNS_LOOKUP_DURATION.record(
+                    start
+                        .elapsed()
+                        .map_or(0, |duration| duration.as_millis() as u64),
+                    &attributes,
+                )
+            })?
+            .filter(|socket_addr| matches!(socket_addr, SocketAddr::V4(_)));
+
+        if let Some(socket_addr) = addresses.next().inspect(|socket_addr| debug!(?socket_addr)) {
+            return Ok(socket_addr);
+        }
+    }
+
+    Err(Error::UnknownHost(url))
+}
+
+pub(crate) static DNS_LOOKUP_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
+    METER
+        .u64_histogram("dns_lookup_duration")
+        .with_unit("ms")
+        .with_description("DNS lookup latencies")
+        .build()
+});
+
+pub(crate) static REQUEST_SIZE: LazyLock<Histogram<u64>> = LazyLock::new(|| {
+    METER
+        .u64_histogram("tansu_request_size")
+        .with_unit("By")
+        .with_description("The API request size in bytes")
+        .build()
+});
+
+pub(crate) static RESPONSE_SIZE: LazyLock<Histogram<u64>> = LazyLock::new(|| {
+    METER
+        .u64_histogram("tansu_response_size")
+        .with_unit("By")
+        .with_description("The API response size in bytes")
+        .build()
+});
+
+pub(crate) static REQUEST_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
+    METER
+        .u64_histogram("tansu_request_duration")
+        .with_unit("ms")
+        .with_description("The API request latencies in milliseconds")
+        .build()
+});
+
+pub(crate) static API_REQUESTS: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    METER
+        .u64_counter("tansu_api_requests")
+        .with_description("The number of API requests made")
+        .build()
+});
+
+pub(crate) static API_ERRORS: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    METER
+        .u64_counter("tansu_api_errors")
+        .with_description("The number of API errors")
+        .build()
 });

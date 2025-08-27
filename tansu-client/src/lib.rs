@@ -33,7 +33,7 @@ use opentelemetry::{
 use opentelemetry_semantic_conventions::SCHEMA_URL;
 use rama::{Context, Layer, Service};
 use tansu_sans_io::{ApiKey, ApiVersionsRequest, Body, Frame, Header, Request};
-use tansu_service::stream::{FrameBytesLayer, FrameBytesService};
+use tansu_service::{FrameBytesLayer, FrameBytesService};
 use tokio::{
     io::{AsyncReadExt as _, AsyncWriteExt as _},
     net::{TcpStream, lookup_host},
@@ -51,7 +51,7 @@ pub enum Error {
     ParseUrl(#[from] url::ParseError),
     Pool(Arc<Box<dyn error::Error + Send + Sync>>),
     Protocol(#[from] tansu_sans_io::Error),
-    Service(#[from] tansu_service::stream::Error),
+    Service(#[from] tansu_service::Error),
     UnknownApiKey(i16),
     UnknownHost(Url),
 }
@@ -659,7 +659,7 @@ mod tests {
     use std::{fs::File, thread};
 
     use tansu_sans_io::{MetadataRequest, MetadataResponse};
-    use tansu_service::stream::{
+    use tansu_service::{
         BytesFrameLayer, FrameRouteService, RequestLayer, ResponseService, TcpBytesLayer,
         TcpContextLayer, TcpListenerLayer,
     };

@@ -33,7 +33,7 @@ use tansu_sans_io::{
     ApiKey, ErrorCode, MetadataRequest, MetadataResponse, ProduceRequest,
     metadata_response::MetadataResponseBroker,
 };
-use tansu_service::stream::{
+use tansu_service::{
     BytesFrameLayer, FrameApiKeyMatcher, FrameBytesLayer, FrameRequestLayer, TcpBytesLayer,
     TcpContextLayer, TcpListenerLayer, host_port,
 };
@@ -70,7 +70,7 @@ pub enum Error {
         key: Option<String>,
         value: Option<ResourceConfigValue>,
     },
-    Service(#[from] tansu_service::stream::Error),
+    Service(#[from] tansu_service::Error),
     UnknownHost(Url),
     Message(String),
 }
@@ -262,7 +262,7 @@ mod tests {
     use tansu_sans_io::{
         DescribeConfigsRequest, DescribeConfigsResponse, Frame, Header, ProduceResponse,
     };
-    use tansu_service::stream::{FrameService, RequestApiKeyMatcher, ResponseService};
+    use tansu_service::{FrameService, RequestApiKeyMatcher, ResponseService};
     use tracing::subscriber::DefaultGuard;
     use tracing_subscriber::EnvFilter;
 
