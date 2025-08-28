@@ -418,15 +418,6 @@ where
 type Topic = String;
 type Partition = i32;
 
-#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-struct BatchProduction {
-    transaction_id: Option<String>,
-    acks: i16,
-    timeout_ms: i32,
-    run: TopicPartitionBatch,
-    owners: BTreeMap<Uuid, BTreeSet<Topition>>,
-}
-
 struct Owner {
     topition: BTreeMap<Topition, BTreeSet<Uuid>>,
 }
@@ -584,50 +575,6 @@ fn produce_request(requests: Vec<BatchRequest>) -> ProduceRequest {
     ProduceRequest::default()
         .topic_data(Some(run.into_iter().collect::<Vec<_>>()))
         .timeout_ms(5_000)
-}
-
-impl From<Vec<BatchRequest>> for BatchProduction {
-    fn from(requests: Vec<BatchRequest>) -> Self {
-        debug!(?requests);
-
-        let mut run = TopicPartitionBatch::default();
-        let mut owners = BTreeMap::<Uuid, BTreeSet<Topition>>::new();
-
-        for request in requests {
-            debug!(?request);
-
-            for topic in request.request.topic_data.unwrap_or_default() {
-                debug!(?topic);
-
-                for partition in topic.partition_data.unwrap_or_default() {
-                    debug!(?partition);
-
-                    _ = owners.entry(request.id).or_default().insert(Topition {
-                        topic: topic.name.clone(),
-                        partition: partition.index,
-                    });
-
-                    if let Some(mut records) = partition.records {
-                        run.topics
-                            .entry(topic.name.clone())
-                            .or_default()
-                            .partitions
-                            .entry(partition.index)
-                            .or_default()
-                            .append(&mut records.batches);
-                    }
-                }
-            }
-        }
-
-        debug!(?run, ?owners);
-
-        Self {
-            run,
-            owners,
-            ..Default::default()
-        }
-    }
 }
 
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
