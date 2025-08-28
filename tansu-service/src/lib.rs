@@ -11,8 +11,8 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-//
-//! Common service layers used in other Tansu crates
+
+//! Common service layers used in other Tansu crates.
 //!
 //! ## Overview
 //!
@@ -68,7 +68,7 @@
 //! A "client" [`Frame`] is marshalled into bytes using [`FrameBytesLayer`], with [`BytesLayer`] connecting
 //! to a "server" that demarshalls using [`BytesFrameLayer`] back into frames,
 //! routing into `frame_route` (above) to [`MetadataRequest`][`tansu_sans_io::MetadataRequest`]
-//! or [`ApiVersionsRequest`][`tansu_sans_io::ApiVersionsRequest`] depending the
+//! or [`ApiVersionsRequest`][`tansu_sans_io::ApiVersionsRequest`] depending on the
 //! [API key][`Frame#method.api_key`]:
 //!
 //! ```
@@ -111,7 +111,7 @@
 //! # }
 //! ```
 //!
-//! In the broker, proxy and CLI clients the [`BytesLayer`] is replaced with
+//! In the broker, proxy and CLI clients, [`BytesLayer`] is replaced with
 //! [`TcpBytesLayer`] (server side) or [`BytesTcpService`] (client/initiator side).
 //!
 //! ### Servicing
