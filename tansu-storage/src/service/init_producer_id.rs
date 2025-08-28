@@ -13,46 +13,35 @@
 // limitations under the License.
 
 use rama::{Context, Service};
-use tansu_sans_io::{ApiKey, Body, InitProducerIdRequest, InitProducerIdResponse};
+use tansu_sans_io::{ApiKey, InitProducerIdRequest, InitProducerIdResponse};
 
 use crate::{Error, Result, Storage};
 
-#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct InitProducerIdService<S> {
-    storage: S,
-}
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct InitProducerIdService;
 
-impl<S> ApiKey for InitProducerIdService<S> {
+impl ApiKey for InitProducerIdService {
     const KEY: i16 = InitProducerIdRequest::KEY;
 }
 
-impl<S> InitProducerIdService<S>
+impl<G> Service<G, InitProducerIdRequest> for InitProducerIdService
 where
-    S: Storage,
+    G: Storage,
 {
-    pub fn new(storage: S) -> Self {
-        Self { storage }
-    }
-}
-
-impl<S, State, Q> Service<State, Q> for InitProducerIdService<S>
-where
-    S: Storage,
-    State: Clone + Send + Sync + 'static,
-    Q: Into<Body> + Send + Sync + 'static,
-{
-    type Response = Body;
+    type Response = InitProducerIdResponse;
     type Error = Error;
 
-    async fn serve(&self, _ctx: Context<State>, request: Q) -> Result<Self::Response, Self::Error> {
-        let init_producer_id = InitProducerIdRequest::try_from(request.into())?;
-
-        self.storage
+    async fn serve(
+        &self,
+        ctx: Context<G>,
+        req: InitProducerIdRequest,
+    ) -> Result<Self::Response, Self::Error> {
+        ctx.state()
             .init_producer(
-                init_producer_id.transactional_id.as_deref(),
-                init_producer_id.transaction_timeout_ms,
-                init_producer_id.producer_id,
-                init_producer_id.producer_epoch,
+                req.transactional_id.as_deref(),
+                req.transaction_timeout_ms,
+                req.producer_id,
+                req.producer_epoch,
             )
             .await
             .map(|response| {
@@ -61,7 +50,6 @@ where
                     .error_code(response.error.into())
                     .producer_id(response.id)
                     .producer_epoch(response.epoch)
-                    .into()
             })
     }
 }
@@ -120,12 +108,14 @@ mod tests {
         let producer_id = Some(-1);
         let producer_epoch = Some(-1);
 
-        let service = InitProducerIdService::new(DynoStore::new(cluster, node, InMemory::new()));
+        let storage = DynoStore::new(cluster, node, InMemory::new());
+        let ctx = Context::with_state(storage);
+        let service = InitProducerIdService;
 
         assert_eq!(
             service
                 .serve(
-                    Context::default(),
+                    ctx.clone(),
                     InitProducerIdRequest::default()
                         .transactional_id(transactional_id.clone())
                         .transaction_timeout_ms(transaction_timeout_ms)
@@ -137,13 +127,12 @@ mod tests {
                 .error_code(ErrorCode::None.into())
                 .producer_id(1)
                 .producer_epoch(0)
-                .into()
         );
 
         assert_eq!(
             service
                 .serve(
-                    Context::default(),
+                    ctx,
                     InitProducerIdRequest::default()
                         .transactional_id(transactional_id)
                         .transaction_timeout_ms(transaction_timeout_ms)
@@ -155,7 +144,6 @@ mod tests {
                 .error_code(ErrorCode::None.into())
                 .producer_id(2)
                 .producer_epoch(0)
-                .into()
         );
 
         Ok(())

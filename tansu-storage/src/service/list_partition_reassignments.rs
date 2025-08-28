@@ -14,7 +14,7 @@
 
 use rama::{Context, Service};
 use tansu_sans_io::{
-    ApiKey, Body, ErrorCode, ListPartitionReassignmentsRequest, ListPartitionReassignmentsResponse,
+    ApiKey, ErrorCode, ListPartitionReassignmentsRequest, ListPartitionReassignmentsResponse,
     list_partition_reassignments_response::{
         OngoingPartitionReassignment, OngoingTopicReassignment,
     },
@@ -22,45 +22,33 @@ use tansu_sans_io::{
 
 use crate::{Error, Result, Storage, TopicId};
 
-#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct ListPartitionReassignmentsService<S> {
-    storage: S,
-}
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ListPartitionReassignmentsService;
 
-impl<S> ApiKey for ListPartitionReassignmentsService<S> {
+impl ApiKey for ListPartitionReassignmentsService {
     const KEY: i16 = ListPartitionReassignmentsRequest::KEY;
 }
 
-impl<S> ListPartitionReassignmentsService<S>
+impl<G> Service<G, ListPartitionReassignmentsRequest> for ListPartitionReassignmentsService
 where
-    S: Storage,
+    G: Storage,
 {
-    pub fn new(storage: S) -> Self {
-        Self { storage }
-    }
-}
-
-impl<S, State, Q> Service<State, Q> for ListPartitionReassignmentsService<S>
-where
-    S: Storage,
-    State: Clone + Send + Sync + 'static,
-    Q: Into<Body> + Send + Sync + 'static,
-{
-    type Response = Body;
+    type Response = ListPartitionReassignmentsResponse;
     type Error = Error;
 
-    async fn serve(&self, _ctx: Context<State>, request: Q) -> Result<Self::Response, Self::Error> {
-        let list_partition_reassignments =
-            ListPartitionReassignmentsRequest::try_from(request.into())?;
-
-        let topics = list_partition_reassignments.topics.map(|topics| {
+    async fn serve(
+        &self,
+        ctx: Context<G>,
+        req: ListPartitionReassignmentsRequest,
+    ) -> Result<Self::Response, Self::Error> {
+        let topics = req.topics.map(|topics| {
             topics
                 .iter()
                 .map(|topic| TopicId::Name(topic.name.as_str().into()))
                 .collect::<Vec<_>>()
         });
 
-        let metadata = self.storage.metadata(topics.as_deref()).await?;
+        let metadata = ctx.state().metadata(topics.as_deref()).await?;
 
         let mut ongoing = vec![];
 
@@ -89,7 +77,6 @@ where
             .throttle_time_ms(0)
             .error_code(ErrorCode::None.into())
             .error_message(None)
-            .topics(Some(ongoing))
-            .into())
+            .topics(Some(ongoing)))
     }
 }

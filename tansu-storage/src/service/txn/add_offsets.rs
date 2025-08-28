@@ -13,52 +13,41 @@
 // limitations under the License.
 
 use rama::{Context, Service};
-use tansu_sans_io::{AddOffsetsToTxnRequest, AddOffsetsToTxnResponse, ApiKey, Body};
+use tansu_sans_io::{AddOffsetsToTxnRequest, AddOffsetsToTxnResponse, ApiKey};
 
 use crate::{Error, Result, Storage};
 
-#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct AddOffsetsService<S> {
-    storage: S,
-}
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct AddOffsetsService;
 
-impl<S> ApiKey for AddOffsetsService<S> {
+impl ApiKey for AddOffsetsService {
     const KEY: i16 = AddOffsetsToTxnRequest::KEY;
 }
 
-impl<S> AddOffsetsService<S>
+impl<G> Service<G, AddOffsetsToTxnRequest> for AddOffsetsService
 where
-    S: Storage,
+    G: Storage,
 {
-    pub fn new(storage: S) -> Self {
-        Self { storage }
-    }
-}
-
-impl<S, State, Q> Service<State, Q> for AddOffsetsService<S>
-where
-    S: Storage,
-    State: Clone + Send + Sync + 'static,
-    Q: Into<Body> + Send + Sync + 'static,
-{
-    type Response = Body;
+    type Response = AddOffsetsToTxnResponse;
     type Error = Error;
 
-    async fn serve(&self, _ctx: Context<State>, request: Q) -> Result<Self::Response, Self::Error> {
-        let txn = AddOffsetsToTxnRequest::try_from(request.into())?;
-        self.storage
+    async fn serve(
+        &self,
+        ctx: Context<G>,
+        req: AddOffsetsToTxnRequest,
+    ) -> Result<Self::Response, Self::Error> {
+        ctx.state()
             .txn_add_offsets(
-                txn.transactional_id.as_str(),
-                txn.producer_id,
-                txn.producer_epoch,
-                txn.group_id.as_str(),
+                req.transactional_id.as_str(),
+                req.producer_id,
+                req.producer_epoch,
+                req.group_id.as_str(),
             )
             .await
             .map(|error_code| {
                 AddOffsetsToTxnResponse::default()
                     .throttle_time_ms(0)
                     .error_code(error_code.into())
-                    .into()
             })
     }
 }

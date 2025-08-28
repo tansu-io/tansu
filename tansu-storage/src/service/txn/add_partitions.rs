@@ -13,49 +13,38 @@
 // limitations under the License.
 
 use rama::{Context, Service};
-use tansu_sans_io::{
-    AddPartitionsToTxnRequest, AddPartitionsToTxnResponse, ApiKey, Body, ErrorCode,
-};
+use tansu_sans_io::{AddPartitionsToTxnRequest, AddPartitionsToTxnResponse, ApiKey, ErrorCode};
 
 use crate::{Error, Result, Storage, TxnAddPartitionsRequest, TxnAddPartitionsResponse};
 
-#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct AddPartitionService<S> {
-    storage: S,
-}
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct AddPartitionService;
 
-impl<S> ApiKey for AddPartitionService<S> {
+impl ApiKey for AddPartitionService {
     const KEY: i16 = AddPartitionsToTxnRequest::KEY;
 }
 
-impl<S> AddPartitionService<S>
+impl<G> Service<G, AddPartitionsToTxnRequest> for AddPartitionService
 where
-    S: Storage,
+    G: Storage,
 {
-    pub fn new(storage: S) -> Self {
-        Self { storage }
-    }
-}
-
-impl<S, State, Q> Service<State, Q> for AddPartitionService<S>
-where
-    S: Storage,
-    State: Clone + Send + Sync + 'static,
-    Q: Into<Body> + Send + Sync + 'static,
-{
-    type Response = Body;
+    type Response = AddPartitionsToTxnResponse;
     type Error = Error;
 
-    async fn serve(&self, _ctx: Context<State>, request: Q) -> Result<Self::Response, Self::Error> {
-        let partitions = TxnAddPartitionsRequest::try_from(request.into())?;
-        match self.storage.txn_add_partitions(partitions).await? {
+    async fn serve(
+        &self,
+        ctx: Context<G>,
+        req: AddPartitionsToTxnRequest,
+    ) -> Result<Self::Response, Self::Error> {
+        let req = TxnAddPartitionsRequest::try_from(req)?;
+
+        match ctx.state().txn_add_partitions(req).await? {
             TxnAddPartitionsResponse::VersionZeroToThree(results_by_topic_v_3_and_below) => {
                 Ok(AddPartitionsToTxnResponse::default()
                     .throttle_time_ms(0)
                     .error_code(Some(ErrorCode::None.into()))
                     .results_by_transaction(Some([].into()))
-                    .results_by_topic_v_3_and_below(Some(results_by_topic_v_3_and_below))
-                    .into())
+                    .results_by_topic_v_3_and_below(Some(results_by_topic_v_3_and_below)))
             }
 
             TxnAddPartitionsResponse::VersionFourPlus(results_by_transaction) => {
@@ -63,8 +52,7 @@ where
                     .throttle_time_ms(0)
                     .error_code(Some(ErrorCode::None.into()))
                     .results_by_transaction(Some(results_by_transaction))
-                    .results_by_topic_v_3_and_below(Some([].into()))
-                    .into())
+                    .results_by_topic_v_3_and_below(Some([].into())))
             }
         }
     }

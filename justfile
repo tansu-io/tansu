@@ -18,7 +18,7 @@ test-doc:
     cargo test --workspace --doc
 
 doc:
-    cargo doc
+    cargo doc --open
 
 clippy:
     cargo clippy -- -D warnings
@@ -283,7 +283,7 @@ broker *args: (cargo-build "--bin" "tansu") docker-compose-down prometheus-up gr
 
 # run a proxy with configuration from .env
 proxy *args:
-    target/debug/tansu proxy {{args}} 2>&1 >proxy.log
+    target/debug/tansu proxy {{args}} 2>&1 | tee proxy.log
 
 
 # teardown compose, rebuild: minio, db, tansu and lake buckets

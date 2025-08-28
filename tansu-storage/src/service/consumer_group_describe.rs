@@ -14,46 +14,33 @@
 
 use rama::{Context, Service};
 use tansu_sans_io::{
-    ApiKey, Body, ConsumerGroupDescribeRequest,
+    ApiKey, ConsumerGroupDescribeRequest,
     consumer_group_describe_response::{ConsumerGroupDescribeResponse, DescribedGroup},
 };
 
 use crate::{Error, Result, Storage};
 
-#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct ConsumerGroupDescribeService<S> {
-    storage: S,
-}
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ConsumerGroupDescribeService;
 
-impl<S> ApiKey for ConsumerGroupDescribeService<S> {
+impl ApiKey for ConsumerGroupDescribeService {
     const KEY: i16 = ConsumerGroupDescribeRequest::KEY;
 }
 
-impl<S> ConsumerGroupDescribeService<S>
+impl<G> Service<G, ConsumerGroupDescribeRequest> for ConsumerGroupDescribeService
 where
-    S: Storage,
+    G: Storage,
 {
-    pub fn new(storage: S) -> Self {
-        Self { storage }
-    }
-}
-
-impl<S, State, Q> Service<State, Q> for ConsumerGroupDescribeService<S>
-where
-    S: Storage,
-    State: Clone + Send + Sync + 'static,
-    Q: Into<Body> + Send + Sync + 'static,
-{
-    type Response = Body;
+    type Response = ConsumerGroupDescribeResponse;
     type Error = Error;
 
-    async fn serve(&self, _ctx: Context<State>, req: Q) -> Result<Self::Response, Self::Error> {
-        let describe = ConsumerGroupDescribeRequest::try_from(req.into())?;
-        self.storage
-            .describe_groups(
-                describe.group_ids.as_deref(),
-                describe.include_authorized_operations,
-            )
+    async fn serve(
+        &self,
+        ctx: Context<G>,
+        req: ConsumerGroupDescribeRequest,
+    ) -> Result<Self::Response, Self::Error> {
+        ctx.state()
+            .describe_groups(req.group_ids.as_deref(), req.include_authorized_operations)
             .await
             .map(|described| {
                 described
@@ -66,7 +53,6 @@ where
                 ConsumerGroupDescribeResponse::default()
                     .throttle_time_ms(0)
                     .groups(groups)
-                    .into()
             })
     }
 }

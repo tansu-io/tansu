@@ -14,46 +14,34 @@
 
 use rama::{Context, Service};
 use tansu_sans_io::{
-    ApiKey, Body, DeleteTopicsRequest, DeleteTopicsResponse,
-    delete_topics_response::DeletableTopicResult,
+    ApiKey, DeleteTopicsRequest, DeleteTopicsResponse, delete_topics_response::DeletableTopicResult,
 };
 
 use crate::{Error, Result, Storage};
 
-#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct DeleteTopicsService<S> {
-    storage: S,
-}
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct DeleteTopicsService;
 
-impl<S> ApiKey for DeleteTopicsService<S> {
+impl ApiKey for DeleteTopicsService {
     const KEY: i16 = DeleteTopicsRequest::KEY;
 }
 
-impl<S> DeleteTopicsService<S>
+impl<G> Service<G, DeleteTopicsRequest> for DeleteTopicsService
 where
-    S: Storage,
+    G: Storage,
 {
-    pub fn new(storage: S) -> Self {
-        Self { storage }
-    }
-}
-
-impl<S, State, Q> Service<State, Q> for DeleteTopicsService<S>
-where
-    S: Storage,
-    State: Clone + Send + Sync + 'static,
-    Q: Into<Body> + Send + Sync + 'static,
-{
-    type Response = Body;
+    type Response = DeleteTopicsResponse;
     type Error = Error;
 
-    async fn serve(&self, _ctx: Context<State>, req: Q) -> Result<Self::Response, Self::Error> {
-        let delete_topics = DeleteTopicsRequest::try_from(req.into())?;
-
+    async fn serve(
+        &self,
+        ctx: Context<G>,
+        req: DeleteTopicsRequest,
+    ) -> Result<Self::Response, Self::Error> {
         let mut responses = vec![];
 
-        for topic in delete_topics.topics.unwrap_or_default() {
-            let error_code = self.storage.delete_topic(&topic.clone().into()).await?;
+        for topic in req.topics.unwrap_or_default() {
+            let error_code = ctx.state().delete_topic(&topic.clone().into()).await?;
             responses.push(
                 DeletableTopicResult::default()
                     .name(topic.name.clone())
@@ -63,8 +51,8 @@ where
             );
         }
 
-        for topic in delete_topics.topic_names.unwrap_or_default() {
-            let error_code = self.storage.delete_topic(&topic.clone().into()).await?;
+        for topic in req.topic_names.unwrap_or_default() {
+            let error_code = ctx.state().delete_topic(&topic.clone().into()).await?;
 
             responses.push(
                 DeletableTopicResult::default()
@@ -77,8 +65,7 @@ where
 
         Ok(DeleteTopicsResponse::default()
             .throttle_time_ms(Some(0))
-            .responses(Some(responses))
-            .into())
+            .responses(Some(responses)))
     }
 }
 
@@ -100,26 +87,26 @@ mod tests {
         let cluster = "abc";
         let node = 12321;
 
-        let service = DeleteTopicsService::new(DynoStore::new(cluster, node, InMemory::new()));
+        let storage = DynoStore::new(cluster, node, InMemory::new());
+        let service = DeleteTopicsService;
+        let ctx = Context::with_state(storage);
 
         let topic = "pqr";
 
         let error_code = ErrorCode::UnknownTopicOrPartition;
 
         assert_eq!(
-            Body::from(
-                DeleteTopicsResponse::default()
-                    .throttle_time_ms(Some(0))
-                    .responses(Some(vec![
-                        DeletableTopicResult::default()
-                            .error_code(error_code.into())
-                            .error_message(Some(error_code.to_string()))
-                            .name(Some(topic.into())),
-                    ]))
-            ),
+            DeleteTopicsResponse::default()
+                .throttle_time_ms(Some(0))
+                .responses(Some(vec![
+                    DeletableTopicResult::default()
+                        .error_code(error_code.into())
+                        .error_message(Some(error_code.to_string()))
+                        .name(Some(topic.into())),
+                ])),
             service
                 .serve(
-                    Context::default(),
+                    ctx,
                     DeleteTopicsRequest::default().topic_names(Some(vec![topic.into()]))
                 )
                 .await?
@@ -133,26 +120,26 @@ mod tests {
         let cluster = "abc";
         let node = 12321;
 
-        let service = DeleteTopicsService::new(DynoStore::new(cluster, node, InMemory::new()));
+        let storage = DynoStore::new(cluster, node, InMemory::new());
+        let service = DeleteTopicsService;
+        let ctx = Context::with_state(storage);
 
         let topic = Uuid::new_v4();
 
         let error_code = ErrorCode::UnknownTopicOrPartition;
 
         assert_eq!(
-            Body::from(
-                DeleteTopicsResponse::default()
-                    .throttle_time_ms(Some(0))
-                    .responses(Some(vec![
-                        DeletableTopicResult::default()
-                            .error_code(error_code.into())
-                            .error_message(Some(error_code.to_string()))
-                            .topic_id(Some(topic.into_bytes()))
-                    ]))
-            ),
+            DeleteTopicsResponse::default()
+                .throttle_time_ms(Some(0))
+                .responses(Some(vec![
+                    DeletableTopicResult::default()
+                        .error_code(error_code.into())
+                        .error_message(Some(error_code.to_string()))
+                        .topic_id(Some(topic.into_bytes()))
+                ])),
             service
                 .serve(
-                    Context::default(),
+                    ctx,
                     DeleteTopicsRequest::default().topics(Some(vec![
                         DeleteTopicState::default().topic_id(topic.into_bytes())
                     ]))
@@ -169,6 +156,8 @@ mod tests {
         let node = 12321;
 
         let storage = DynoStore::new(cluster, node, InMemory::new());
+        let create_topics = CreateTopicsService;
+        let ctx = Context::with_state(storage);
 
         let name = "pqr";
         let num_partitions = 5;
@@ -178,14 +167,12 @@ mod tests {
 
         let topic = "pqr";
 
-        let create_topics = CreateTopicsService::new(storage.clone());
-
         let error_code = ErrorCode::None;
 
         assert_matches!(
             create_topics
                 .serve(
-                    Context::default(),
+                    ctx.clone(),
                     CreateTopicsRequest::default()
                         .topics(Some(
                             [CreatableTopic::default()
@@ -199,7 +186,7 @@ mod tests {
                         .validate_only(Some(false))
                 )
                 .await?,
-            Body::CreateTopicsResponse(CreateTopicsResponse { topics: Some(topics), ..}) => {
+            CreateTopicsResponse { topics: Some(topics), ..} => {
                 assert_eq!(topics.len(), 1);
                 assert_eq!(topic, topics[0].name.as_str());
                 assert_matches!(topics[0].configs.as_ref(), Some(configs) if configs.len() == 0);
@@ -210,25 +197,23 @@ mod tests {
             }
         );
 
-        let delete_topics = DeleteTopicsService::new(storage.clone());
+        let delete_topics = DeleteTopicsService;
 
         let error_code = ErrorCode::None;
 
         assert_eq!(
-            Body::from(
-                DeleteTopicsResponse::default()
-                    .throttle_time_ms(Some(0))
-                    .responses(Some(vec![
-                        DeletableTopicResult::default()
-                            .error_code(error_code.into())
-                            .error_message(Some(error_code.to_string()))
-                            .name(Some(name.into()))
-                            .topic_id(Some(NULL_TOPIC_ID)),
-                    ]))
-            ),
+            DeleteTopicsResponse::default()
+                .throttle_time_ms(Some(0))
+                .responses(Some(vec![
+                    DeletableTopicResult::default()
+                        .error_code(error_code.into())
+                        .error_message(Some(error_code.to_string()))
+                        .name(Some(name.into()))
+                        .topic_id(Some(NULL_TOPIC_ID)),
+                ])),
             delete_topics
                 .serve(
-                    Context::default(),
+                    ctx.clone(),
                     DeleteTopicsRequest::default().topics(Some(vec![
                         DeleteTopicState::default()
                             .name(Some(name.into()))
@@ -241,7 +226,7 @@ mod tests {
         assert_matches!(
             create_topics
                 .serve(
-                    Context::default(),
+                    ctx.clone(),
                     CreateTopicsRequest::default()
                         .topics(Some(
                             [CreatableTopic::default()
@@ -255,7 +240,7 @@ mod tests {
                         .validate_only(Some(false))
                 )
                 .await?,
-            Body::CreateTopicsResponse(CreateTopicsResponse { topics: Some(topics), ..}) => {
+            CreateTopicsResponse { topics: Some(topics), ..} => {
                 assert_eq!(topics.len(), 1);
                 assert_eq!(topic, topics[0].name.as_str());
                 assert_matches!(topics[0].configs.as_ref(), Some(configs) if configs.len() == 0);

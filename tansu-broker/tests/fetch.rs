@@ -20,7 +20,7 @@ use rama::{Context, Service};
 use rand::{prelude::*, rng};
 use tansu_broker::Result;
 use tansu_sans_io::{
-    ErrorCode, FetchRequest, FetchResponse, IsolationLevel, NULL_TOPIC_ID,
+    ErrorCode, FetchRequest, IsolationLevel, NULL_TOPIC_ID,
     create_topics_request::CreatableTopic,
     fetch_request::{FetchPartition, FetchTopic},
     record::{Record, inflated},
@@ -82,9 +82,11 @@ pub async fn empty_topic(cluster_id: Uuid, broker_id: i32, sc: StorageContainer)
                 .replica_directory_id(None),
         ]))];
 
-    let fetch = FetchService::new(sc.clone())
+    let ctx = Context::with_state(sc);
+
+    let fetch = FetchService
         .serve(
-            Context::default(),
+            ctx,
             FetchRequest::default()
                 .max_wait_ms(max_wait_ms)
                 .min_bytes(min_bytes)
@@ -92,8 +94,7 @@ pub async fn empty_topic(cluster_id: Uuid, broker_id: i32, sc: StorageContainer)
                 .isolation_level(Some(isolation_level.into()))
                 .topics(Some(topics.into())),
         )
-        .await
-        .and_then(|body| FetchResponse::try_from(body).map_err(Into::into))?;
+        .await?;
 
     assert_eq!(
         ErrorCode::None,
@@ -257,9 +258,11 @@ pub async fn simple_non_txn(cluster_id: Uuid, broker_id: i32, sc: StorageContain
                 .replica_directory_id(None),
         ]))];
 
-    let fetch = FetchService::new(sc.clone())
+    let ctx = Context::with_state(sc);
+
+    let fetch = FetchService
         .serve(
-            Context::default(),
+            ctx,
             FetchRequest::default()
                 .max_wait_ms(max_wait_ms)
                 .min_bytes(min_bytes)
@@ -267,8 +270,7 @@ pub async fn simple_non_txn(cluster_id: Uuid, broker_id: i32, sc: StorageContain
                 .isolation_level(Some(isolation_level.into()))
                 .topics(Some(topics.into())),
         )
-        .await
-        .and_then(|body| FetchResponse::try_from(body).map_err(Into::into))?;
+        .await?;
 
     assert_eq!(
         ErrorCode::None,

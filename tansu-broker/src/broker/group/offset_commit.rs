@@ -13,14 +13,10 @@
 // limitations under the License.
 
 use rama::{Context, Service};
-use tansu_sans_io::{
-    ApiKey, Body,
-    offset_commit_request::{self, OffsetCommitRequestTopic},
-};
+use tansu_sans_io::{ApiKey, Body, Frame, OffsetCommitRequest};
 
 use crate::{
     Error, Result,
-    broker::group::Request,
     coordinator::group::{Coordinator, OffsetCommit},
 };
 
@@ -28,26 +24,22 @@ use crate::{
 pub struct OffsetCommitService;
 
 impl ApiKey for OffsetCommitService {
-    const KEY: i16 = offset_commit_request::OffsetCommitRequest::KEY;
+    const KEY: i16 = OffsetCommitRequest::KEY;
 }
 
-impl<C, State> Service<State, Request<C>> for OffsetCommitService
+impl<C> Service<C, Frame> for OffsetCommitService
 where
     C: Coordinator,
-    State: Clone + Send + Sync + 'static,
 {
     type Response = Body;
     type Error = Error;
 
-    async fn serve(
-        &self,
-        _ctx: Context<State>,
-        mut request: Request<C>,
-    ) -> Result<Self::Response, Self::Error> {
-        let offset_commit =
-            offset_commit_request::OffsetCommitRequest::try_from(request.frame.body)?;
-        request
-            .coordinator
+    async fn serve(&self, mut ctx: Context<C>, req: Frame) -> Result<Self::Response, Self::Error> {
+        let coordinator = ctx.state_mut();
+
+        let offset_commit = OffsetCommitRequest::try_from(req.body)?;
+
+        coordinator
             .offset_commit(OffsetCommit {
                 group_id: offset_commit.group_id.as_str(),
                 generation_id_or_member_epoch: offset_commit.generation_id_or_member_epoch,
@@ -55,37 +47,6 @@ where
                 group_instance_id: offset_commit.group_instance_id.as_deref(),
                 retention_time_ms: offset_commit.retention_time_ms,
                 topics: offset_commit.topics.as_deref(),
-            })
-            .await
-    }
-}
-
-#[derive(Debug)]
-pub struct OffsetCommitRequest<C> {
-    coordinator: C,
-}
-
-impl<C> OffsetCommitRequest<C>
-where
-    C: Coordinator,
-{
-    pub async fn response(
-        &mut self,
-        group_id: &str,
-        generation_id_or_member_epoch: Option<i32>,
-        member_id: Option<&str>,
-        group_instance_id: Option<&str>,
-        retention_time_ms: Option<i64>,
-        topics: Option<&[OffsetCommitRequestTopic]>,
-    ) -> Result<Body> {
-        self.coordinator
-            .offset_commit(OffsetCommit {
-                group_id,
-                generation_id_or_member_epoch,
-                member_id,
-                group_instance_id,
-                retention_time_ms,
-                topics,
             })
             .await
     }

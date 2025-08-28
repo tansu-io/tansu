@@ -13,48 +13,37 @@
 // limitations under the License.
 
 use rama::{Context, Service};
-use tansu_sans_io::{ApiKey, Body, DeleteGroupsRequest, DeleteGroupsResponse};
+use tansu_sans_io::{ApiKey, DeleteGroupsRequest, DeleteGroupsResponse};
 
 use crate::{Error, Result, Storage};
 
-#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct DeleteGroupsService<S> {
-    storage: S,
-}
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct DeleteGroupsService;
 
-impl<S> ApiKey for DeleteGroupsService<S> {
+impl ApiKey for DeleteGroupsService {
     const KEY: i16 = DeleteGroupsRequest::KEY;
 }
 
-impl<S> DeleteGroupsService<S>
+impl<G> Service<G, DeleteGroupsRequest> for DeleteGroupsService
 where
-    S: Storage,
+    G: Storage,
 {
-    pub fn new(storage: S) -> Self {
-        Self { storage }
-    }
-}
-
-impl<S, State, Q> Service<State, Q> for DeleteGroupsService<S>
-where
-    S: Storage,
-    State: Clone + Send + Sync + 'static,
-    Q: Into<Body> + Send + Sync + 'static,
-{
-    type Response = Body;
+    type Response = DeleteGroupsResponse;
     type Error = Error;
 
-    async fn serve(&self, _ctx: Context<State>, req: Q) -> Result<Self::Response, Self::Error> {
-        let delete_groups = DeleteGroupsRequest::try_from(req.into())?;
-        self.storage
-            .delete_groups(delete_groups.groups_names.as_deref())
+    async fn serve(
+        &self,
+        ctx: Context<G>,
+        req: DeleteGroupsRequest,
+    ) -> Result<Self::Response, Self::Error> {
+        ctx.state()
+            .delete_groups(req.groups_names.as_deref())
             .await
             .map(Some)
             .map(|results| {
                 DeleteGroupsResponse::default()
                     .throttle_time_ms(0)
                     .results(results)
-                    .into()
             })
     }
 }
