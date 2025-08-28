@@ -16,12 +16,9 @@ use rama::{Context, Layer as _, Service as _};
 use tansu_sans_io::{ApiKey as _, Frame, Header, MetadataRequest, MetadataResponse};
 use tansu_service::{
     ChannelFrameLayer, FrameChannelService, FrameReceiver, FrameRouteService, RequestLayer,
-    ResponseService,
+    ResponseService, bounded_channel,
 };
-use tokio::{
-    sync::{mpsc, oneshot},
-    task::JoinSet,
-};
+use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
@@ -56,7 +53,7 @@ async fn server(cancellation: CancellationToken, rx: FrameReceiver) -> Result<()
 async fn client_server() -> Result<(), Error> {
     let _guard = init_tracing()?;
 
-    let (tx, rx) = mpsc::channel::<(Frame, oneshot::Sender<Frame>)>(100);
+    let (tx, rx) = bounded_channel(100);
 
     let cancellation = CancellationToken::new();
 

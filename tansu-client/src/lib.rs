@@ -19,7 +19,6 @@
 use std::{
     collections::BTreeMap,
     error, fmt, io,
-    net::SocketAddr,
     sync::{Arc, LazyLock},
     time::SystemTime,
 };
@@ -33,10 +32,10 @@ use opentelemetry::{
 use opentelemetry_semantic_conventions::SCHEMA_URL;
 use rama::{Context, Layer, Service};
 use tansu_sans_io::{ApiKey, ApiVersionsRequest, Body, Frame, Header, Request};
-use tansu_service::{FrameBytesLayer, FrameBytesService};
+use tansu_service::{FrameBytesLayer, FrameBytesService, host_port};
 use tokio::{
     io::{AsyncReadExt as _, AsyncWriteExt as _},
-    net::{TcpStream, lookup_host},
+    net::TcpStream,
 };
 use tracing::{Instrument, Level, debug, error, span};
 use tracing_subscriber::filter::ParseError;
@@ -92,14 +91,14 @@ pub(crate) static METER: LazyLock<Meter> = LazyLock::new(|| {
     )
 });
 
-///  broker connection with a correlation id
+///  Broker connection with a correlation id
 #[derive(Debug)]
 pub struct Connection {
     stream: TcpStream,
     correlation_id: i32,
 }
 
-/// manager of supported API versions for a broker
+/// Manager of supported API versions for a broker
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Manager {
     broker: Url,
@@ -108,51 +107,22 @@ pub struct Manager {
 }
 
 impl Manager {
-    /// build a manager with a broker endpoint
+    /// Build a manager with a broker endpoint
     pub fn builder(broker: Url) -> Builder {
         Builder::broker(broker)
     }
 
-    /// client id used in requests to the broker
+    /// Client id used in requests to the broker
     pub fn client_id(&self) -> Option<String> {
         self.client_id.clone()
     }
 
-    /// the version supported by the broker for a given api key
+    /// The version supported by the broker for a given api key
     pub fn api_version(&self, api_key: i16) -> Result<i16, Error> {
         self.versions
             .get(&api_key)
             .copied()
             .ok_or(Error::UnknownApiKey(api_key))
-    }
-
-    /// resolve a host into an IP socket address
-    async fn host_port(&self) -> Result<SocketAddr, Error> {
-        if let Some(host) = self.broker.host_str()
-            && let Some(port) = self.broker.port()
-        {
-            let attributes = [KeyValue::new("url", self.broker.to_string())];
-            let start = SystemTime::now();
-
-            let mut addresses = lookup_host(format!("{host}:{port}"))
-                .await
-                .inspect(|_| {
-                    DNS_LOOKUP_DURATION.record(
-                        start
-                            .elapsed()
-                            .map_or(0, |duration| duration.as_millis() as u64),
-                        &attributes,
-                    )
-                })?
-                .filter(|socket_addr| matches!(socket_addr, SocketAddr::V4(_)));
-
-            if let Some(socket_addr) = addresses.next().inspect(|socket_addr| debug!(?socket_addr))
-            {
-                return Ok(socket_addr);
-            }
-        }
-
-        Err(Error::UnknownHost(self.broker.clone()))
     }
 }
 
@@ -166,7 +136,7 @@ impl managed::Manager for Manager {
         let attributes = [KeyValue::new("broker", self.broker.to_string())];
         let start = SystemTime::now();
 
-        TcpStream::connect(self.host_port().await?)
+        TcpStream::connect(host_port(self.broker.clone()).await?)
             .await
             .inspect(|_| {
                 TCP_CONNECT_DURATION.record(
@@ -357,7 +327,7 @@ pub struct Client {
 }
 
 impl Client {
-    /// create a new client using the supplied pool
+    /// Create a new client using the supplied pool
     pub fn new(pool: Pool) -> Self {
         let service = (
             RequestPoolLayer::new(pool),
@@ -369,7 +339,7 @@ impl Client {
         Self { service }
     }
 
-    /// make an API request using the connection from the pool
+    /// Make an API request using the connection from the pool
     pub async fn call<Q>(&self, req: Q) -> Result<Q::Response, Error>
     where
         Q: Request,
@@ -586,14 +556,6 @@ impl Service<Object<Manager>, Bytes> for BytesConnectionService {
 fn frame_length(encoded: [u8; 4]) -> usize {
     i32::from_be_bytes(encoded) as usize + encoded.len()
 }
-
-static DNS_LOOKUP_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
-    METER
-        .u64_histogram("dns_lookup_duration")
-        .with_unit("ms")
-        .with_description("DNS lookup latencies")
-        .build()
-});
 
 static TCP_CONNECT_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
     METER

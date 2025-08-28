@@ -23,7 +23,7 @@ use tracing::debug;
 
 use crate::Error;
 
-// An versions service with a supported set of APIs
+/// An [`ApiVersionsResponse`] [`Service`] with a supported set of API and versions from [`RootMessageMeta`].
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ApiVersionsService<E> {
     supported: Vec<i16>,
@@ -100,7 +100,45 @@ where
     }
 }
 
-/// Route frames to a service based via the API key
+/// Route [`Frame`] to a [`Service`] via [API key][`Frame#method.api_key`]
+///
+/// A simple example that routes [`MetadataRequest`][`tansu_sans_io::MetadataRequest`]
+/// and [`CreateTopicsRequest`][`tansu_sans_io::CreateTopicsRequest`].
+/// [`ApiVersionsRequest`][`tansu_sans_io::ApiVersionsRequest`] is created by the
+///  builder including both of the implemented services using the version ranges
+///  from [`RootMessageMeta`][`tansu_sans_io::RootMessageMeta`].
+///
+/// ```
+/// # use rama::Layer as _;
+/// # use tansu_sans_io::{CreateTopicsRequest, CreateTopicsResponse, MetadataRequest, MetadataResponse};
+/// # use tansu_service::{Error, FrameRouteService, RequestLayer, ResponseService};
+/// # #[tokio::main]
+/// # async fn main() -> Result<(), Error> {
+/// let router = FrameRouteService::<(), Error>::builder()
+///     .with_service(
+///         RequestLayer::<MetadataRequest>::new().into_layer(ResponseService::new(|_, _| {
+///             Ok(MetadataResponse::default()
+///                 .brokers(Some([].into()))
+///                 .topics(Some([].into()))
+///                 .cluster_id(Some("tansu".into()))
+///                 .controller_id(Some(111))
+///                 .throttle_time_ms(Some(0))
+///                 .cluster_authorized_operations(Some(-1)))
+///         })),
+///     )
+///     .and_then(|builder| {
+///         builder.with_service(RequestLayer::<CreateTopicsRequest>::new().into_layer(
+///             ResponseService::new(|_, _| {
+///                 Ok(CreateTopicsResponse::default()
+///                     .throttle_time_ms(Some(0))
+///                     .topics(Some([].into())))
+///             }),
+///         ))
+///     })
+///     .and_then(|builder| builder.build())?;
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone, Debug, Default)]
 pub struct FrameRouteService<State = (), E = Error> {
     routes: Arc<BTreeMap<i16, BoxService<State, Frame, Frame, E>>>,
@@ -141,7 +179,7 @@ where
     }
 }
 
-/// A frame route builder providing an API versions response with the available routes
+/// A [`Frame`] route builder providing an [`ApiVersionsResponse`] for all available routes
 #[derive(Debug)]
 pub struct FrameRouteBuilder<State, E> {
     routes: BTreeMap<i16, BoxService<State, Frame, Frame, E>>,

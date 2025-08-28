@@ -20,6 +20,7 @@ use tracing::debug;
 
 use crate::Error;
 
+/// A [`Layer`] receiving [`Frame`]s from a [`FrameReceiver`] channel
 #[derive(Clone, Debug, Default)]
 pub struct ChannelFrameLayer {
     cancellation: CancellationToken,
@@ -42,12 +43,14 @@ impl<S> Layer<S> for ChannelFrameLayer {
     }
 }
 
+/// A [`Service`] receiving [`Frame`]s from a [`FrameReceiver`] channel
 #[derive(Clone, Debug, Default)]
 pub struct ChannelFrameService<S> {
     inner: S,
     cancellation: CancellationToken,
 }
 
+/// A channel frame receiver
 pub type FrameReceiver = mpsc::Receiver<(Frame, oneshot::Sender<Frame>)>;
 
 impl<S, State> Service<State, FrameReceiver> for ChannelFrameService<S>
@@ -90,8 +93,10 @@ where
     }
 }
 
+/// A channel frame sender
 pub type FrameSender = mpsc::Sender<(Frame, oneshot::Sender<Frame>)>;
 
+/// A [`Service`] sending [`Frame`]s over a [`FrameSender`] channel
 #[derive(Clone, Debug)]
 pub struct FrameChannelService {
     tx: FrameSender,
@@ -121,4 +126,9 @@ where
 
         resp_rx.await.map_err(Error::OneshotRecv)
     }
+}
+
+/// A bounded channel for sending and receiving frames
+pub fn bounded_channel(buffer: usize) -> (FrameSender, FrameReceiver) {
+    mpsc::channel::<(Frame, oneshot::Sender<Frame>)>(buffer)
 }

@@ -27,6 +27,7 @@ use tracing::{Instrument as _, Level, debug, error, span};
 
 use crate::{Error, REQUEST_DURATION, REQUEST_SIZE, RESPONSE_SIZE, frame_length};
 
+/// A [`Layer`] that listens for TCP connections
 #[derive(Clone, Debug, Default)]
 pub struct TcpListenerLayer {
     cancellation: CancellationToken,
@@ -49,6 +50,7 @@ impl<S> Layer<S> for TcpListenerLayer {
     }
 }
 
+/// A [`Service`] that listens for TCP connections
 #[derive(Clone, Debug, Default)]
 pub struct TcpListenerService<S> {
     cancellation: CancellationToken,
@@ -111,6 +113,8 @@ where
     }
 }
 
+/// A [context state][`Context#method.state`] state used by [`TcpContextLayer`] and [`TcpContextService`]
+#[non_exhaustive]
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct TcpContext {
     cluster_id: Option<String>,
@@ -130,6 +134,7 @@ impl TcpContext {
     }
 }
 
+/// A [`Layer`] that injects the [`TcpContext`] into the service [`Context`] state
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct TcpContextLayer {
     state: TcpContext,
@@ -152,6 +157,7 @@ impl<S> Layer<S> for TcpContextLayer {
     }
 }
 
+/// A [`Service`] that requires the [`TcpContext`] as the service [`Context`] state
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct TcpContextService<S> {
     inner: S,
@@ -177,6 +183,7 @@ where
     }
 }
 
+/// A [`Service`] writing [`Bytes`] into a [`TcpStream`], responding with a length delimited frame of [`Bytes`]
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct BytesTcpService;
 
@@ -204,6 +211,7 @@ impl Service<TcpStream, Bytes> for BytesTcpService {
     }
 }
 
+/// A [`Layer`] receiving [`Bytes`] from a [`TcpStream`]
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct TcpBytesLayer<State = ()> {
     _state: PhantomData<State>,
@@ -220,6 +228,7 @@ impl<S, State> Layer<S> for TcpBytesLayer<State> {
     }
 }
 
+/// A [`Service`] receiving [`Bytes`] from a [`TcpStream`], calling an inner [`Service`] and sending [`Bytes`] into the [`TcpStream`]
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct TcpBytesService<S, State> {
     inner: S,
@@ -313,6 +322,7 @@ where
     }
 }
 
+/// A [`Layer`] that handles and responds with [`Bytes`]
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct BytesLayer;
 
@@ -324,6 +334,7 @@ impl<S> Layer<S> for BytesLayer {
     }
 }
 
+/// A [`Service`] that handles and responds with [`Bytes`]
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct BytesService<S> {
     inner: S,

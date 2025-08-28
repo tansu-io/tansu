@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use rama::{
-    Context, Layer as _, Service as _,
+    Context, Layer, Service,
     layer::{HijackLayer, MapResponseLayer},
 };
 use tansu_sans_io::{
@@ -29,6 +29,103 @@ use tracing::debug;
 use crate::common::{Error, init_tracing};
 
 mod common;
+
+mod doctest_code_a {
+    use rama::{Context, Layer as _, Service as _};
+    use tansu_sans_io::{ApiKey as _, ApiVersionsRequest, MetadataRequest, MetadataResponse};
+    use tansu_service::{
+        BytesFrameLayer, BytesFrameService, BytesLayer, BytesService, FrameBytesLayer,
+        FrameBytesService, FrameRouteService, RequestFrameLayer, RequestFrameService, RequestLayer,
+        ResponseService,
+    };
+
+    use crate::common::Error;
+
+    async fn frame_route() -> Result<FrameRouteService<(), Error>, Error> {
+        let frame_route = FrameRouteService::<(), Error>::builder()
+            .with_service(
+                RequestLayer::<MetadataRequest>::new().into_layer(ResponseService::new(|_, _| {
+                    Ok(MetadataResponse::default()
+                        .brokers(Some([].into()))
+                        .topics(Some([].into()))
+                        .cluster_id(Some("tansu".into()))
+                        .controller_id(Some(111))
+                        .throttle_time_ms(Some(0))
+                        .cluster_authorized_operations(Some(-1)))
+                })),
+            )
+            .and_then(|builder| builder.build())?;
+
+        Ok(frame_route)
+    }
+
+    async fn layers() -> Result<
+        RequestFrameService<
+            FrameBytesService<BytesService<BytesFrameService<FrameRouteService<(), Error>>>>,
+        >,
+        Error,
+    > {
+        let frame_route = frame_route().await?;
+
+        let layers = (
+            RequestFrameLayer,
+            FrameBytesLayer,
+            BytesLayer,
+            BytesFrameLayer,
+        )
+            .into_layer(frame_route);
+
+        Ok(layers)
+    }
+
+    #[tokio::test]
+    async fn metadata_request() -> Result<(), Error> {
+        let service = layers().await?;
+
+        let ctx = Context::default();
+
+        let request = MetadataRequest::default()
+            .topics(Some([].into()))
+            .allow_auto_topic_creation(Some(false))
+            .include_cluster_authorized_operations(Some(false))
+            .include_topic_authorized_operations(Some(false));
+
+        let response = service.serve(ctx, request).await?;
+        assert_eq!(Some("tansu".into()), response.cluster_id);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn api_versions_request() -> Result<(), Error> {
+        let service = layers().await?;
+
+        let client_software_name = "abcba";
+        let client_software_version = "12321";
+
+        let response = service
+            .serve(
+                Context::default(),
+                ApiVersionsRequest::default()
+                    .client_software_name(Some(client_software_name.into()))
+                    .client_software_version(Some(client_software_version.into())),
+            )
+            .await?;
+
+        let api_versions = response
+            .api_keys
+            .unwrap_or_default()
+            .into_iter()
+            .map(|api_version| api_version.api_key)
+            .collect::<Vec<_>>();
+
+        assert_eq!(2, api_versions.len());
+        assert!(api_versions.contains(&ApiVersionsRequest::KEY));
+        assert!(api_versions.contains(&MetadataRequest::KEY));
+
+        Ok(())
+    }
+}
 
 #[tokio::test]
 async fn simple_routes() -> Result<(), Error> {

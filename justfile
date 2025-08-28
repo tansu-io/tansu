@@ -18,7 +18,7 @@ test-doc:
     cargo test --workspace --doc
 
 doc:
-    cargo doc
+    cargo doc --open
 
 clippy:
     cargo clippy -- -D warnings

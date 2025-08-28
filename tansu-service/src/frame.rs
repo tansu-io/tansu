@@ -25,6 +25,7 @@ use tracing::{Instrument as _, Level, debug, error, span};
 
 use crate::{API_ERRORS, API_REQUESTS};
 
+/// A [Matcher] of [`Request`]s using their [API key][`ApiKey`].
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct RequestApiKeyMatcher(pub i16);
 
@@ -39,6 +40,7 @@ where
     }
 }
 
+/// A [`Matcher`] of [`Frame`]s using their [API key][`Frame#method.api_key`]
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct FrameApiKeyMatcher(pub i16);
 
@@ -52,6 +54,7 @@ where
     }
 }
 
+/// A [`Layer`] for handling API [`Request`]s responding with an API [`Response`]
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct RequestLayer<Q> {
     request: PhantomData<Q>,
@@ -76,6 +79,7 @@ impl<S, Q> Layer<S> for RequestLayer<Q> {
     }
 }
 
+/// A [`Service`] that handles API [`Request`]s responding with an API [`Response`]
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct RequestService<S, Q> {
     inner: S,
@@ -110,7 +114,7 @@ where
     const KEY: i16 = Q::KEY;
 }
 
-/// A layer that transforms Frames into Requests
+/// A [`Layer`] that transforms [`Frame`] into [`Request`]
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct FrameRequestLayer<Q> {
     request: PhantomData<Q>,
@@ -135,7 +139,7 @@ impl<S, Q> Layer<S> for FrameRequestLayer<Q> {
     }
 }
 
-/// Transform a Frame into a Request
+/// A [`Service`] that transforms a [`Frame`] into a [`Request`]
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct FrameRequestService<S, Q> {
     inner: S,
@@ -180,7 +184,7 @@ where
     }
 }
 
-/// A layer that transforms Bytes into Frames
+/// A [`Layer`] that transforms [`Bytes`] into [`Frame`]s
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct BytesFrameLayer;
 
@@ -192,7 +196,7 @@ impl<S> Layer<S> for BytesFrameLayer {
     }
 }
 
-/// A service transforming Bytes into Frames
+/// A [`Service`] transforming [`Bytes`]s into [`Frame`]s
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct BytesFrameService<S> {
     inner: S,
@@ -254,7 +258,7 @@ where
     }
 }
 
-/// A layer that transforms Frames into Bytes
+/// A [`Layer`] that transforms [`Frame`]s into [`Bytes`]
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct FrameBytesLayer;
 
@@ -266,7 +270,7 @@ impl<S> Layer<S> for FrameBytesLayer {
     }
 }
 
-/// A service that transforms Frames into Bytes
+/// A [`Service`] that transforms [`Frame`]s into [`Bytes`]
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct FrameBytesService<S> {
     inner: S,
@@ -299,6 +303,7 @@ where
     }
 }
 
+/// A [`Layer`] that transforms [`Frame`] into [`Body`]
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct FrameBodyLayer;
 
@@ -310,6 +315,7 @@ impl<S> Layer<S> for FrameBodyLayer {
     }
 }
 
+/// A [`Service`] that transforms [`Frame`] into [`Body`]
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct FrameBodyService<S> {
     inner: S,
@@ -336,6 +342,7 @@ where
     }
 }
 
+/// A [`Layer`] that transforms [`Body`] into [`Request`]
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct BodyRequestLayer<Q> {
     request: PhantomData<Q>,
@@ -360,6 +367,7 @@ impl<S, Q> Layer<S> for BodyRequestLayer<Q> {
     }
 }
 
+/// A [`Layer`] that transforms [`Body`] into [`Request`]
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct BodyRequestService<S, Q> {
     inner: S,
@@ -390,7 +398,7 @@ where
     }
 }
 
-/// A layer that transforms Requests into Frames
+/// A [`Layer`] that transforms [`Request`] into [`Frame`]
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct RequestFrameLayer;
 
@@ -402,7 +410,7 @@ impl<S> Layer<S> for RequestFrameLayer {
     }
 }
 
-/// A service that transforms Requests into Frames
+/// A [`Service`] that transforms [`Request`] into [`Frame`]
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct RequestFrameService<S> {
     inner: S,
@@ -496,6 +504,7 @@ where
     }
 }
 
+/// A [`Service`] that transforms [`Frame`] into a [`Frame`] using a closure.
 #[derive(Clone, Copy, Debug, Hash)]
 pub struct FrameService<F> {
     response: F,
@@ -525,6 +534,7 @@ impl<F> FrameService<F> {
     }
 }
 
+/// A [`Service`] that transforms [`Request`] into a [`Response`] using a closure.
 #[derive(Clone, Copy, Hash)]
 pub struct ResponseService<F> {
     response: F,
