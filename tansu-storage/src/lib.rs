@@ -24,14 +24,27 @@
 
 use async_trait::async_trait;
 use bytes::Bytes;
+
+#[cfg(feature = "dynostore")]
 use dynostore::DynoStore;
+
 use glob::{GlobError, PatternError};
+
+#[cfg(feature = "dynostore")]
+use object_store::{
+    aws::{AmazonS3Builder, S3ConditionalPut},
+    memory::InMemory,
+};
+
 use opentelemetry::{
     InstrumentationScope, KeyValue, global,
     metrics::{Counter, Meter},
 };
 use opentelemetry_semantic_conventions::SCHEMA_URL;
+
+#[cfg(feature = "postgres")]
 use pg::Postgres;
+
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -41,6 +54,7 @@ use std::{
     fmt::{self, Debug, Display, Formatter},
     fs::DirEntry,
     io,
+    marker::PhantomData,
     num::{ParseIntError, TryFromIntError},
     path::PathBuf,
     result,
@@ -78,22 +92,41 @@ use tansu_sans_io::{
     txn_offset_commit_request::TxnOffsetCommitRequestTopic,
     txn_offset_commit_response::TxnOffsetCommitResponseTopic,
 };
+use tansu_schema::{Registry, lake::House};
 use tracing::{Instrument, debug, debug_span};
 use tracing_subscriber::filter::ParseError;
 use url::Url;
 use uuid::Uuid;
 
+#[cfg(feature = "dynostore")]
 pub mod dynostore;
+
+#[cfg(feature = "postgres")]
 pub mod pg;
 pub mod service;
 
+#[cfg(any(feature = "libsql", feature = "postgres", feature = "turso"))]
+pub(crate) mod sql;
+
+#[cfg(feature = "libsql")]
+mod lite;
+
+#[cfg(feature = "dynostore")]
 mod os;
+
+#[cfg(feature = "turso")]
+mod limbo;
 
 /// Storage Errors
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum Error {
     Api(ErrorCode),
+
+    ChronoParse(#[from] chrono::ParseError),
+
+    #[cfg(feature = "postgres")]
     DeadPoolBuild(#[from] deadpool::managed::BuildError),
+
     Glob(Arc<GlobError>),
     Io(Arc<io::Error>),
     KafkaSansIo(#[from] tansu_sans_io::Error),
@@ -105,6 +138,9 @@ pub enum Error {
         offset: i64,
         last_offset: Option<i64>,
     },
+
+    #[cfg(feature = "libsql")]
+    LibSql(Arc<libsql::Error>),
 
     LessThanMaxTime {
         time: i64,
@@ -120,13 +156,19 @@ pub enum Error {
     },
     NoSuchOffset(i64),
     OsString(OsString),
+
+    #[cfg(feature = "dynostore")]
     ObjectStore(Arc<object_store::Error>),
+
     ParseFilter(Arc<ParseError>),
     Pattern(Arc<PatternError>),
     ParseInt(#[from] ParseIntError),
     PhantomCached(),
     Poison,
+
+    #[cfg(feature = "postgres")]
     Pool(Arc<deadpool_postgres::PoolError>),
+
     Regex(#[from] regex::Error),
     Schema(Arc<tansu_schema::Error>),
 
@@ -139,13 +181,28 @@ pub enum Error {
 
     SerdeJson(Arc<serde_json::Error>),
     SystemTime(#[from] SystemTimeError),
+
+    #[cfg(feature = "postgres")]
     TokioPostgres(Arc<tokio_postgres::error::Error>),
     TryFromInt(#[from] TryFromIntError),
     TryFromSlice(#[from] TryFromSliceError),
+
+    #[cfg(feature = "turso")]
+    Turso(Arc<turso::Error>),
+
     UnexpectedBody(Box<Body>),
+
+    #[cfg(feature = "turso")]
+    UnexpectedValue(turso::Value),
+
+    UnknownCacheKey(String),
+
+    UnsupportedStorageUrl(Url),
     UnexpectedAddPartitionsToTxnRequest(Box<AddPartitionsToTxnRequest>),
     Url(#[from] url::ParseError),
     UnknownTxnState(String),
+
+    Uuid(#[from] uuid::Error),
 }
 
 impl Display for Error {
@@ -157,6 +214,20 @@ impl Display for Error {
 impl<T> From<PoisonError<T>> for Error {
     fn from(_value: PoisonError<T>) -> Self {
         Self::Poison
+    }
+}
+
+#[cfg(feature = "libsql")]
+impl From<libsql::Error> for Error {
+    fn from(value: libsql::Error) -> Self {
+        Self::LibSql(Arc::new(value))
+    }
+}
+
+#[cfg(feature = "turso")]
+impl From<turso::Error> for Error {
+    fn from(value: turso::Error) -> Self {
+        Self::Turso(Arc::new(value))
     }
 }
 
@@ -172,6 +243,7 @@ impl From<io::Error> for Error {
     }
 }
 
+#[cfg(feature = "dynostore")]
 impl From<object_store::Error> for Error {
     fn from(value: object_store::Error) -> Self {
         Self::ObjectStore(Arc::new(value))
@@ -190,6 +262,7 @@ impl From<PatternError> for Error {
     }
 }
 
+#[cfg(feature = "postgres")]
 impl From<deadpool_postgres::PoolError> for Error {
     fn from(value: deadpool_postgres::PoolError) -> Self {
         Self::Pool(Arc::new(value))
@@ -202,6 +275,7 @@ impl From<serde_json::Error> for Error {
     }
 }
 
+#[cfg(feature = "postgres")]
 impl From<tokio_postgres::error::Error> for Error {
     fn from(value: tokio_postgres::error::Error) -> Self {
         Self::TokioPostgres(Arc::new(value))
@@ -1277,23 +1351,216 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
 #[derive(Debug, thiserror::Error)]
 pub enum UpdateError<T> {
     Error(#[from] Error),
-    ObjectStore(#[from] object_store::Error),
-    Outdated { current: T, version: Version },
-    SerdeJson(#[from] serde_json::Error),
-    TokioPostgres(#[from] tokio_postgres::error::Error),
+
+    #[cfg(feature = "libsql")]
+    LibSql(#[from] libsql::Error),
+
     MissingEtag,
+
+    #[cfg(feature = "dynostore")]
+    ObjectStore(#[from] object_store::Error),
+
+    Outdated {
+        current: T,
+        version: Version,
+    },
+
+    SerdeJson(#[from] serde_json::Error),
+
+    #[cfg(feature = "postgres")]
+    TokioPostgres(#[from] tokio_postgres::error::Error),
+
+    #[cfg(feature = "turso")]
+    Turso(#[from] turso::Error),
+
     Uuid(#[from] uuid::Error),
 }
 
 /// Storage Container
 ///
 /// An enumeration of available storage implementations.
-/// - [`Postgres`]
 /// - [`DynoStore`]
+/// - [`Postgres`]
+/// - [`limbo::Engine`]
+/// - [`lite::Engine`]
 #[derive(Clone, Debug)]
 pub enum StorageContainer {
+    #[cfg(feature = "postgres")]
     Postgres(Postgres),
+
+    #[cfg(feature = "dynostore")]
     DynoStore(DynoStore),
+
+    #[cfg(feature = "libsql")]
+    Lite(lite::Engine),
+
+    #[cfg(feature = "turso")]
+    Turso(limbo::Engine),
+}
+
+impl StorageContainer {
+    pub fn builder() -> PhantomBuilder {
+        PhantomBuilder::default()
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct Builder<N, C, A, S> {
+    node_id: N,
+    cluster_id: C,
+    advertised_listener: A,
+    storage: S,
+    schema_registry: Option<Registry>,
+    lake_house: Option<House>,
+}
+
+type PhantomBuilder =
+    Builder<PhantomData<i32>, PhantomData<String>, PhantomData<Url>, PhantomData<Url>>;
+
+impl<N, C, A, S> Builder<N, C, A, S> {
+    pub fn node_id(self, node_id: i32) -> Builder<i32, C, A, S> {
+        Builder {
+            node_id,
+            cluster_id: self.cluster_id,
+            advertised_listener: self.advertised_listener,
+            storage: self.storage,
+            schema_registry: self.schema_registry,
+            lake_house: self.lake_house,
+        }
+    }
+
+    pub fn cluster_id(self, cluster_id: impl Into<String>) -> Builder<N, String, A, S> {
+        Builder {
+            node_id: self.node_id,
+            cluster_id: cluster_id.into(),
+            advertised_listener: self.advertised_listener,
+            storage: self.storage,
+            schema_registry: self.schema_registry,
+            lake_house: self.lake_house,
+        }
+    }
+
+    pub fn advertised_listener(self, advertised_listener: impl Into<Url>) -> Builder<N, C, Url, S> {
+        Builder {
+            node_id: self.node_id,
+            cluster_id: self.cluster_id,
+            advertised_listener: advertised_listener.into(),
+            storage: self.storage,
+            schema_registry: self.schema_registry,
+            lake_house: self.lake_house,
+        }
+    }
+
+    pub fn storage(self, storage: Url) -> Builder<N, C, A, Url> {
+        debug!(%storage);
+
+        Builder {
+            node_id: self.node_id,
+            cluster_id: self.cluster_id,
+            advertised_listener: self.advertised_listener,
+            storage,
+            schema_registry: self.schema_registry,
+            lake_house: self.lake_house,
+        }
+    }
+
+    pub fn schema_registry(self, schema_registry: Option<Registry>) -> Builder<N, C, A, S> {
+        _ = schema_registry
+            .as_ref()
+            .inspect(|schema_registry| debug!(?schema_registry));
+
+        Builder {
+            node_id: self.node_id,
+            cluster_id: self.cluster_id,
+            advertised_listener: self.advertised_listener,
+            storage: self.storage,
+            schema_registry,
+            lake_house: self.lake_house,
+        }
+    }
+
+    pub fn lake_house(self, lake_house: Option<House>) -> Builder<N, C, A, S> {
+        _ = lake_house
+            .as_ref()
+            .inspect(|lake_house| debug!(?lake_house));
+
+        Builder {
+            node_id: self.node_id,
+            cluster_id: self.cluster_id,
+            advertised_listener: self.advertised_listener,
+            storage: self.storage,
+            schema_registry: self.schema_registry,
+            lake_house,
+        }
+    }
+}
+
+impl Builder<i32, String, Url, Url> {
+    pub async fn build(self) -> Result<StorageContainer> {
+        match self.storage.scheme() {
+            #[cfg(feature = "postgres")]
+            "postgres" | "postgresql" => Postgres::builder(self.storage.to_string().as_str())
+                .map(|builder| builder.cluster(self.cluster_id.as_str()))
+                .map(|builder| builder.node(self.node_id))
+                .map(|builder| builder.advertised_listener(self.advertised_listener.clone()))
+                .map(|builder| builder.schemas(self.schema_registry))
+                .map(|builder| builder.lake(self.lake_house.clone()))
+                .map(|builder| builder.build())
+                .map(StorageContainer::Postgres),
+
+            #[cfg(feature = "dynostore")]
+            "s3" => {
+                let bucket_name = self.storage.host_str().unwrap_or("tansu");
+
+                AmazonS3Builder::from_env()
+                    .with_bucket_name(bucket_name)
+                    .with_conditional_put(S3ConditionalPut::ETagMatch)
+                    .build()
+                    .map(|object_store| {
+                        DynoStore::new(self.cluster_id.as_str(), self.node_id, object_store)
+                            .advertised_listener(self.advertised_listener.clone())
+                            .schemas(self.schema_registry)
+                            .lake(self.lake_house.clone())
+                    })
+                    .map(StorageContainer::DynoStore)
+                    .map_err(Into::into)
+            }
+
+            #[cfg(feature = "dynostore")]
+            "memory" => Ok(StorageContainer::DynoStore(
+                DynoStore::new(self.cluster_id.as_str(), self.node_id, InMemory::new())
+                    .advertised_listener(self.advertised_listener.clone())
+                    .schemas(self.schema_registry)
+                    .lake(self.lake_house.clone()),
+            )),
+
+            #[cfg(feature = "libsql")]
+            "sqlite" => lite::Engine::builder()
+                .storage(self.storage.clone())
+                .node(self.node_id)
+                .cluster(self.cluster_id.clone())
+                .advertised_listener(self.advertised_listener.clone())
+                .schemas(self.schema_registry)
+                .lake(self.lake_house.clone())
+                .build()
+                .await
+                .map(StorageContainer::Lite),
+
+            #[cfg(feature = "turso")]
+            "turso" => limbo::Engine::builder()
+                .storage(self.storage.clone())
+                .node(self.node_id)
+                .cluster(self.cluster_id.clone())
+                .advertised_listener(self.advertised_listener.clone())
+                .schemas(self.schema_registry)
+                .lake(self.lake_house.clone())
+                .build()
+                .await
+                .map(StorageContainer::Turso),
+
+            _unsupported => Err(Error::UnsupportedStorageUrl(self.storage.clone())),
+        }
+    }
 }
 
 pub(crate) static METER: LazyLock<Meter> = LazyLock::new(|| {
@@ -1325,9 +1592,19 @@ impl Storage for StorageContainer {
         let attributes = [KeyValue::new("method", "register_broker")];
 
         match self {
-            Self::Postgres(pg) => pg.register_broker(broker_registration).await,
-            Self::DynoStore(dyn_store) => dyn_store.register_broker(broker_registration).await,
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.register_broker(broker_registration),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.register_broker(broker_registration),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.register_broker(broker_registration),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.register_broker(broker_registration),
         }
+        .await
         .inspect(|_| {
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
         })
@@ -1343,9 +1620,19 @@ impl Storage for StorageContainer {
         let attributes = [KeyValue::new("method", "incremental_alter_resource")];
 
         match self {
-            Self::Postgres(pg) => pg.incremental_alter_resource(resource).await,
-            Self::DynoStore(dyn_store) => dyn_store.incremental_alter_resource(resource).await,
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.incremental_alter_resource(resource),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.incremental_alter_resource(resource),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.incremental_alter_resource(resource),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.incremental_alter_resource(resource),
         }
+        .await
         .inspect(|_| {
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
         })
@@ -1360,8 +1647,17 @@ impl Storage for StorageContainer {
 
         async move {
             match self {
-                Self::Postgres(pg) => pg.create_topic(topic, validate_only),
-                Self::DynoStore(dyn_store) => dyn_store.create_topic(topic, validate_only),
+                #[cfg(feature = "dynostore")]
+                Self::DynoStore(engine) => engine.create_topic(topic, validate_only),
+
+                #[cfg(feature = "libsql")]
+                Self::Lite(engine) => engine.create_topic(topic, validate_only),
+
+                #[cfg(feature = "postgres")]
+                Self::Postgres(engine) => engine.create_topic(topic, validate_only),
+
+                #[cfg(feature = "turso")]
+                Self::Turso(engine) => engine.create_topic(topic, validate_only),
             }
             .await
         }
@@ -1382,9 +1678,19 @@ impl Storage for StorageContainer {
         let attributes = [KeyValue::new("method", "delete_records")];
 
         match self {
-            Self::Postgres(pg) => pg.delete_records(topics).await,
-            Self::DynoStore(dyn_store) => dyn_store.delete_records(topics).await,
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.delete_records(topics),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.delete_records(topics),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.delete_records(topics),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.delete_records(topics),
         }
+        .await
         .inspect(|_| {
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
         })
@@ -1397,9 +1703,19 @@ impl Storage for StorageContainer {
         let attributes = [KeyValue::new("method", "delete_topic")];
 
         match self {
-            Self::Postgres(pg) => pg.delete_topic(topic).await,
-            Self::DynoStore(dyn_store) => dyn_store.delete_topic(topic).await,
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.delete_topic(topic),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.delete_topic(topic),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.delete_topic(topic),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.delete_topic(topic),
         }
+        .await
         .inspect(|_| {
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
         })
@@ -1412,9 +1728,19 @@ impl Storage for StorageContainer {
         let attributes = [KeyValue::new("method", "brokers")];
 
         match self {
-            Self::Postgres(pg) => pg.brokers().await,
-            Self::DynoStore(dyn_store) => dyn_store.brokers().await,
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.brokers(),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.brokers(),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.brokers(),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.brokers(),
         }
+        .await
         .inspect(|_| {
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
         })
@@ -1432,9 +1758,19 @@ impl Storage for StorageContainer {
         let attributes = [KeyValue::new("method", "produce")];
 
         match self {
-            Self::Postgres(pg) => pg.produce(transaction_id, topition, batch).await,
-            Self::DynoStore(dyn_store) => dyn_store.produce(transaction_id, topition, batch).await,
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.produce(transaction_id, topition, batch),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.produce(transaction_id, topition, batch),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.produce(transaction_id, topition, batch),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.produce(transaction_id, topition, batch),
         }
+        .await
         .inspect(|_| {
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
         })
@@ -1454,16 +1790,23 @@ impl Storage for StorageContainer {
         let attributes = [KeyValue::new("method", "fetch")];
 
         match self {
-            Self::Postgres(pg) => {
-                pg.fetch(topition, offset, min_bytes, max_bytes, isolation)
-                    .await
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => {
+                engine.fetch(topition, offset, min_bytes, max_bytes, isolation)
             }
-            Self::DynoStore(dyn_store) => {
-                dyn_store
-                    .fetch(topition, offset, min_bytes, max_bytes, isolation)
-                    .await
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.fetch(topition, offset, min_bytes, max_bytes, isolation),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => {
+                engine.fetch(topition, offset, min_bytes, max_bytes, isolation)
             }
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.fetch(topition, offset, min_bytes, max_bytes, isolation),
         }
+        .await
         .inspect(|_| {
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
         })
@@ -1476,9 +1819,19 @@ impl Storage for StorageContainer {
         let attributes = [KeyValue::new("method", "offset_stage")];
 
         match self {
-            Self::Postgres(pg) => pg.offset_stage(topition).await,
-            Self::DynoStore(dyn_store) => dyn_store.offset_stage(topition).await,
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.offset_stage(topition),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.offset_stage(topition),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.offset_stage(topition),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.offset_stage(topition),
         }
+        .await
         .inspect(|_| {
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
         })
@@ -1495,9 +1848,19 @@ impl Storage for StorageContainer {
         let attributes = [KeyValue::new("method", "list_offsets")];
 
         match self {
-            Self::Postgres(pg) => pg.list_offsets(isolation_level, offsets).await,
-            Self::DynoStore(dyn_store) => dyn_store.list_offsets(isolation_level, offsets).await,
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.list_offsets(isolation_level, offsets),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.list_offsets(isolation_level, offsets),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.list_offsets(isolation_level, offsets),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.list_offsets(isolation_level, offsets),
         }
+        .await
         .inspect(|_| {
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
         })
@@ -1515,13 +1878,19 @@ impl Storage for StorageContainer {
         let attributes = [KeyValue::new("method", "offset_commit")];
 
         match self {
-            Self::Postgres(pg) => pg.offset_commit(group_id, retention_time_ms, offsets).await,
-            Self::DynoStore(dyn_store) => {
-                dyn_store
-                    .offset_commit(group_id, retention_time_ms, offsets)
-                    .await
-            }
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.offset_commit(group_id, retention_time_ms, offsets),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.offset_commit(group_id, retention_time_ms, offsets),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.offset_commit(group_id, retention_time_ms, offsets),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.offset_commit(group_id, retention_time_ms, offsets),
         }
+        .await
         .inspect(|_| {
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
         })
@@ -1534,9 +1903,19 @@ impl Storage for StorageContainer {
         let attributes = [KeyValue::new("method", "committed_offset_topitions")];
 
         match self {
-            Self::Postgres(inner) => inner.committed_offset_topitions(group_id).await,
-            Self::DynoStore(inner) => inner.committed_offset_topitions(group_id).await,
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.committed_offset_topitions(group_id),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.committed_offset_topitions(group_id),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.committed_offset_topitions(group_id),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.committed_offset_topitions(group_id),
         }
+        .await
         .inspect(|_| {
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
         })
@@ -1554,13 +1933,19 @@ impl Storage for StorageContainer {
         let attributes = [KeyValue::new("method", "offset_fetch")];
 
         match self {
-            Self::Postgres(pg) => pg.offset_fetch(group_id, topics, require_stable).await,
-            Self::DynoStore(dyn_store) => {
-                dyn_store
-                    .offset_fetch(group_id, topics, require_stable)
-                    .await
-            }
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.offset_fetch(group_id, topics, require_stable),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.offset_fetch(group_id, topics, require_stable),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.offset_fetch(group_id, topics, require_stable),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.offset_fetch(group_id, topics, require_stable),
         }
+        .await
         .inspect(|_| {
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
         })
@@ -1573,9 +1958,19 @@ impl Storage for StorageContainer {
         let attributes = [KeyValue::new("method", "metadata")];
 
         match self {
-            Self::Postgres(pg) => pg.metadata(topics).await,
-            Self::DynoStore(dyn_store) => dyn_store.metadata(topics).await,
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.metadata(topics),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.metadata(topics),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.metadata(topics),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.metadata(topics),
         }
+        .await
         .inspect(|_| {
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
         })
@@ -1593,9 +1988,19 @@ impl Storage for StorageContainer {
         let attributes = [KeyValue::new("method", "describe_config")];
 
         match self {
-            Self::Postgres(pg) => pg.describe_config(name, resource, keys).await,
-            Self::DynoStore(dyn_store) => dyn_store.describe_config(name, resource, keys).await,
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.describe_config(name, resource, keys),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.describe_config(name, resource, keys),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.describe_config(name, resource, keys),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.describe_config(name, resource, keys),
         }
+        .await
         .inspect(|_| {
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
         })
@@ -1613,16 +2018,25 @@ impl Storage for StorageContainer {
         let attributes = [KeyValue::new("method", "describe_topic_partitions")];
 
         match self {
-            Self::Postgres(pg) => {
-                pg.describe_topic_partitions(topics, partition_limit, cursor)
-                    .await
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => {
+                engine.describe_topic_partitions(topics, partition_limit, cursor)
             }
-            Self::DynoStore(dyn_store) => {
-                dyn_store
-                    .describe_topic_partitions(topics, partition_limit, cursor)
-                    .await
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.describe_topic_partitions(topics, partition_limit, cursor),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => {
+                engine.describe_topic_partitions(topics, partition_limit, cursor)
+            }
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => {
+                engine.describe_topic_partitions(topics, partition_limit, cursor)
             }
         }
+        .await
         .inspect(|_| {
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
         })
@@ -1635,9 +2049,19 @@ impl Storage for StorageContainer {
         let attributes = [KeyValue::new("method", "list_groups")];
 
         match self {
-            Self::Postgres(pg) => pg.list_groups(states_filter).await,
-            Self::DynoStore(dyn_store) => dyn_store.list_groups(states_filter).await,
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.list_groups(states_filter),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.list_groups(states_filter),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.list_groups(states_filter),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.list_groups(states_filter),
         }
+        .await
         .inspect(|_| {
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
         })
@@ -1653,9 +2077,19 @@ impl Storage for StorageContainer {
         let attributes = [KeyValue::new("method", "delete_groups")];
 
         match self {
-            Self::Postgres(inner) => inner.delete_groups(group_ids).await,
-            Self::DynoStore(inner) => inner.delete_groups(group_ids).await,
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.delete_groups(group_ids),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.delete_groups(group_ids),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.delete_groups(group_ids),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.delete_groups(group_ids),
         }
+        .await
         .inspect(|_| {
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
         })
@@ -1672,17 +2106,23 @@ impl Storage for StorageContainer {
         let attributes = [KeyValue::new("method", "describe_groups")];
 
         match self {
-            Self::Postgres(inner) => {
-                inner
-                    .describe_groups(group_ids, include_authorized_operations)
-                    .await
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => {
+                engine.describe_groups(group_ids, include_authorized_operations)
             }
-            Self::DynoStore(inner) => {
-                inner
-                    .describe_groups(group_ids, include_authorized_operations)
-                    .await
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.describe_groups(group_ids, include_authorized_operations),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => {
+                engine.describe_groups(group_ids, include_authorized_operations)
             }
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.describe_groups(group_ids, include_authorized_operations),
         }
+        .await
         .inspect(|_| {
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
         })
@@ -1700,9 +2140,19 @@ impl Storage for StorageContainer {
         let attributes = [KeyValue::new("method", "update_group")];
 
         match self {
-            Self::Postgres(pg) => pg.update_group(group_id, detail, version).await,
-            Self::DynoStore(dyn_store) => dyn_store.update_group(group_id, detail, version).await,
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.update_group(group_id, detail, version),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.update_group(group_id, detail, version),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.update_group(group_id, detail, version),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.update_group(group_id, detail, version),
         }
+        .await
         .inspect(|_| {
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
         })
@@ -1728,26 +2178,39 @@ impl Storage for StorageContainer {
         let attributes = [KeyValue::new("method", "init_producer")];
 
         match self {
-            Self::Postgres(pg) => {
-                pg.init_producer(
-                    transaction_id,
-                    transaction_timeout_ms,
-                    producer_id,
-                    producer_epoch,
-                )
-                .await
-            }
-            Self::DynoStore(dyn_store) => {
-                dyn_store
-                    .init_producer(
-                        transaction_id,
-                        transaction_timeout_ms,
-                        producer_id,
-                        producer_epoch,
-                    )
-                    .await
-            }
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.init_producer(
+                transaction_id,
+                transaction_timeout_ms,
+                producer_id,
+                producer_epoch,
+            ),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.init_producer(
+                transaction_id,
+                transaction_timeout_ms,
+                producer_id,
+                producer_epoch,
+            ),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.init_producer(
+                transaction_id,
+                transaction_timeout_ms,
+                producer_id,
+                producer_epoch,
+            ),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.init_producer(
+                transaction_id,
+                transaction_timeout_ms,
+                producer_id,
+                producer_epoch,
+            ),
         }
+        .await
         .inspect(|_| {
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
         })
@@ -1766,16 +2229,27 @@ impl Storage for StorageContainer {
         let attributes = [KeyValue::new("method", "txn_add_offsets")];
 
         match self {
-            Self::Postgres(pg) => {
-                pg.txn_add_offsets(transaction_id, producer_id, producer_epoch, group_id)
-                    .await
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => {
+                engine.txn_add_offsets(transaction_id, producer_id, producer_epoch, group_id)
             }
-            Self::DynoStore(dyn_store) => {
-                dyn_store
-                    .txn_add_offsets(transaction_id, producer_id, producer_epoch, group_id)
-                    .await
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => {
+                engine.txn_add_offsets(transaction_id, producer_id, producer_epoch, group_id)
+            }
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => {
+                engine.txn_add_offsets(transaction_id, producer_id, producer_epoch, group_id)
+            }
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => {
+                engine.txn_add_offsets(transaction_id, producer_id, producer_epoch, group_id)
             }
         }
+        .await
         .inspect(|_| {
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
         })
@@ -1791,9 +2265,19 @@ impl Storage for StorageContainer {
         let attributes = [KeyValue::new("method", "txn_add_partitions")];
 
         match self {
-            Self::Postgres(pg) => pg.txn_add_partitions(partitions).await,
-            Self::DynoStore(dyn_store) => dyn_store.txn_add_partitions(partitions).await,
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.txn_add_partitions(partitions),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.txn_add_partitions(partitions),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.txn_add_partitions(partitions),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.txn_add_partitions(partitions),
         }
+        .await
         .inspect(|_| {
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
         })
@@ -1809,9 +2293,19 @@ impl Storage for StorageContainer {
         let attributes = [KeyValue::new("method", "txn_offset_commit")];
 
         match self {
-            Self::Postgres(pg) => pg.txn_offset_commit(offsets).await,
-            Self::DynoStore(dyn_store) => dyn_store.txn_offset_commit(offsets).await,
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.txn_offset_commit(offsets),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.txn_offset_commit(offsets),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.txn_offset_commit(offsets),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.txn_offset_commit(offsets),
         }
+        .await
         .inspect(|_| {
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
         })
@@ -1830,16 +2324,27 @@ impl Storage for StorageContainer {
         let attributes = [KeyValue::new("method", "txn_end")];
 
         match self {
-            Self::Postgres(pg) => {
-                pg.txn_end(transaction_id, producer_id, producer_epoch, committed)
-                    .await
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => {
+                engine.txn_end(transaction_id, producer_id, producer_epoch, committed)
             }
-            Self::DynoStore(dyn_store) => {
-                dyn_store
-                    .txn_end(transaction_id, producer_id, producer_epoch, committed)
-                    .await
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => {
+                engine.txn_end(transaction_id, producer_id, producer_epoch, committed)
+            }
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => {
+                engine.txn_end(transaction_id, producer_id, producer_epoch, committed)
+            }
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => {
+                engine.txn_end(transaction_id, producer_id, producer_epoch, committed)
             }
         }
+        .await
         .inspect(|_| {
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
         })
@@ -1852,9 +2357,19 @@ impl Storage for StorageContainer {
         let attributes = [KeyValue::new("method", "maintain")];
 
         match self {
-            Self::Postgres(pg) => pg.maintain().await,
-            Self::DynoStore(dyn_store) => dyn_store.maintain().await,
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.maintain(),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.maintain(),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.maintain(),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.maintain(),
         }
+        .await
         .inspect(|maintain| {
             debug!(?maintain);
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
@@ -1867,22 +2382,49 @@ impl Storage for StorageContainer {
 
     fn cluster_id(&self) -> Result<&str> {
         match self {
-            Self::Postgres(inner) => inner.cluster_id(),
-            Self::DynoStore(inner) => inner.cluster_id(),
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.cluster_id(),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.cluster_id(),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.cluster_id(),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.cluster_id(),
         }
     }
 
     fn node(&self) -> Result<i32> {
         match self {
-            Self::Postgres(inner) => inner.node(),
-            Self::DynoStore(inner) => inner.node(),
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.node(),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.node(),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.node(),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.node(),
         }
     }
 
     fn advertised_listener(&self) -> Result<&Url> {
         match self {
-            Self::Postgres(inner) => inner.advertised_listener(),
-            Self::DynoStore(inner) => inner.advertised_listener(),
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.advertised_listener(),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.advertised_listener(),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.advertised_listener(),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.advertised_listener(),
         }
     }
 }

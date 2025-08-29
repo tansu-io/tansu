@@ -13,7 +13,7 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-update watermark w
+update watermark
 
 set
 
@@ -31,6 +31,4 @@ where
 c.name = $1
 and t.name = $2
 and tp.partition = $3
-and t.cluster = c.id
-and tp.topic = t.id
-and w.topition = tp.id;
+and watermark.topition = tp.id;

@@ -25,6 +25,7 @@ use std::{
     time::Duration,
 };
 
+use glob::PatternError;
 use jsonschema::ValidationError;
 use opentelemetry::{InstrumentationScope, global, metrics::Meter};
 use opentelemetry_otlp::ExporterBuildError;
@@ -77,25 +78,42 @@ pub enum Error {
     EmptyJoinGroupRequestProtocol,
     ExpectedJoinGroupRequestProtocol(&'static str),
     ExporterBuild(Arc<ExporterBuildError>),
+
     Hyper(Arc<hyper::http::Error>),
     Io(Arc<io::Error>),
     Join(Arc<JoinError>),
     Json(Arc<serde_json::Error>),
     KafkaProtocol(#[from] tansu_sans_io::Error),
+
+    #[cfg(feature = "libsql")]
+    LibSql(Arc<libsql::Error>),
+
     Message(String),
     Model(#[from] tansu_model::Error),
+
+    #[cfg(feature = "dynostore")]
     ObjectStore(Arc<object_store::Error>),
+
     ParseFilter(Arc<ParseError>),
     ParseInt(#[from] std::num::ParseIntError),
+    Pattern(Arc<PatternError>),
     Poison,
+
+    #[cfg(feature = "postgres")]
     Pool(Arc<deadpool_postgres::PoolError>),
     SchemaRegistry(Arc<tansu_schema::Error>),
     Service(#[from] tansu_service::Error),
     Storage(#[from] tansu_storage::Error),
     StringUtf8(#[from] FromUtf8Error),
     Regex(#[from] regex::Error),
+
+    #[cfg(feature = "postgres")]
     TokioPostgres(Arc<tokio_postgres::error::Error>),
     TryFromInt(#[from] TryFromIntError),
+
+    #[cfg(feature = "turso")]
+    Turso(Arc<turso::Error>),
+
     UnsupportedApiService(i16),
     UnsupportedStorageUrl(Url),
     UnsupportedTracingFormat(String),
@@ -104,6 +122,26 @@ pub enum Error {
     Uuid(#[from] uuid::Error),
     SchemaValidation,
     Send(Arc<SendError<CancelKind>>),
+}
+
+#[cfg(feature = "libsql")]
+impl From<libsql::Error> for Error {
+    fn from(value: libsql::Error) -> Self {
+        Self::LibSql(Arc::new(value))
+    }
+}
+
+#[cfg(feature = "turso")]
+impl From<turso::Error> for Error {
+    fn from(value: turso::Error) -> Self {
+        Self::Turso(Arc::new(value))
+    }
+}
+
+impl From<PatternError> for Error {
+    fn from(value: PatternError) -> Self {
+        Self::Pattern(Arc::new(value))
+    }
 }
 
 impl From<ExporterBuildError> for Error {

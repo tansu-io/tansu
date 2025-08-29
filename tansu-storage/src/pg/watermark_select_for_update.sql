@@ -19,18 +19,15 @@ w.low, w.high
 
 from
 
-cluster c,
-topic t,
-topition tp,
-watermark w
+cluster c
+join topic t on t.cluster = c.id
+join topition tp on tp.topic = t.id
+join watermark w on w.topition = tp.id
 
 where
 
 c.name = $1
 and t.name = $2
 and tp.partition = $3
-and t.cluster = c.id
-and tp.topic = t.id
-and w.topition = tp.id
 
 for no key update;

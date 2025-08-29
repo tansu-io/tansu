@@ -14,8 +14,8 @@
 -- limitations under the License.
 
 insert into topic
-(cluster, name, partitions, replication_factor, is_internal)
-select c.id, $2, $3, $4, false
+(cluster, name, uuid, partitions, replication_factor, is_internal)
+select c.id, $2, $3, $4, $5, false
 from cluster c
 where c.name = $1
-returning topic.uuid;
+returning topic.uuid

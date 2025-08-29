@@ -22,7 +22,7 @@ from
 cluster c
 join producer p on p.cluster = c.id
 join txn on txn.cluster = c.id and txn.producer = p.id
-join txn_detail on txn_detail.transaction = txn.id
+join txn_detail on txn_detail."transaction" = txn.id
 
 where
 

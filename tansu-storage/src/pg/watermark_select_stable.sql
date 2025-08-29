@@ -27,7 +27,7 @@ from cluster c
 
 join topic t on t.cluster = c.id
 join txn on txn.cluster = c.id
-join txn_topition txn_tp on txn_tp.transaction = txn.id
+join txn_topition txn_tp on txn_tp.txn = txn.id
 join txn_produce_offset txn_po on txn_po.txn_topition = txn_tp.id
 join topition tp on tp.topic = t.id and txn_tp.topition = tp.id
 join watermark w on w.topition = tp.id

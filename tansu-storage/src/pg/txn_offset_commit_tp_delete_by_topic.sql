@@ -14,9 +14,11 @@
 -- limitations under the License.
 
 delete from txn_offset_commit_tp
-using cluster c, topic t, topition tp
-where c.name = $1
-and t.name = $2
-and t.cluster = c.id
-and tp.topic = t.id
-and txn_offset_commit_tp.topition = tp.id;
+where txn_offset_commit_tp.topition in (
+    select tp.id
+    from cluster c
+    join topic t on t.cluster = c.id
+    join topition tp on tp.topic = t.id
+    where c.name = $1
+    and t.name = $2
+);
