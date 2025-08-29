@@ -6455,6 +6455,7 @@ dependencies = [
  "tansu-model",
  "tansu-sans-io",
  "tansu-schema",
+ "tansu-service",
  "tansu-storage",
  "thiserror 2.0.16",
  "tokio",
