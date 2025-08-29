@@ -18,7 +18,7 @@ use crate::{
     CancelKind, Error, Result,
     coordinator::group::{Coordinator, administrator::Controller},
     otel,
-    service::{services, tcp::TcpRequest},
+    service::services,
 };
 use rama::{Context, Service};
 use std::{
@@ -208,13 +208,12 @@ where
 
         loop {
             tokio::select! {
-                Ok(stream_addr) = listener.accept() => {
+                Ok((stream, _addr)) = listener.accept() => {
 
-                    let request = TcpRequest::from(stream_addr);
                     let service = service.clone();
 
                     let handle = set.spawn(async move {
-                            match service.serve(Context::default(), request).await {
+                            match service.serve(Context::default(), stream).await {
                                 Err(Error::Io(ref io))
                                     if io.kind() == ErrorKind::UnexpectedEof
                                         || io.kind() == ErrorKind::BrokenPipe

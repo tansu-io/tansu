@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use rama::{Context, Service};
-use tansu_sans_io::{ApiKey, Body, MetadataRequest, MetadataResponse};
+use tansu_sans_io::{ApiKey, MetadataRequest, MetadataResponse};
 use tracing::{debug, error};
 
 use crate::{Error, Result, Storage, TopicId};
@@ -29,7 +29,7 @@ impl<G> Service<G, MetadataRequest> for MetadataService
 where
     G: Storage,
 {
-    type Response = Body;
+    type Response = MetadataResponse;
     type Error = Error;
 
     async fn serve(
@@ -62,8 +62,6 @@ where
             .cluster_id(cluster_id)
             .controller_id(controller_id)
             .topics(topics)
-            .cluster_authorized_operations(cluster_authorized_operations)
-            .into())
-        .inspect(|response| debug!(?response))
+            .cluster_authorized_operations(cluster_authorized_operations))
     }
 }

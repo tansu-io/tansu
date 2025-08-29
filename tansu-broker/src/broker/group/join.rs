@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use rama::{Context, Service};
-use tansu_sans_io::{ApiKey, Body, Frame, JoinGroupRequest};
+use tansu_sans_io::{ApiKey, Frame, Header, JoinGroupRequest};
 
 use crate::{Error, Result, coordinator::group::Coordinator};
 
@@ -28,10 +28,11 @@ impl<C> Service<C, Frame> for JoinGroupService
 where
     C: Coordinator,
 {
-    type Response = Body;
+    type Response = Frame;
     type Error = Error;
 
     async fn serve(&self, mut ctx: Context<C>, req: Frame) -> Result<Self::Response, Self::Error> {
+        let correlation_id = req.correlation_id()?;
         let coordinator = ctx.state_mut();
 
         let client_id = req
@@ -53,5 +54,10 @@ where
                 join_group.reason.as_deref(),
             )
             .await
+            .map(|body| Frame {
+                size: 0,
+                header: Header::Response { correlation_id },
+                body,
+            })
     }
 }

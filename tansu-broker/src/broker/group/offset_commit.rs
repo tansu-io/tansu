@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use rama::{Context, Service};
-use tansu_sans_io::{ApiKey, Body, Frame, OffsetCommitRequest};
+use tansu_sans_io::{ApiKey, Frame, Header, OffsetCommitRequest};
 
 use crate::{
     Error, Result,
@@ -31,10 +31,11 @@ impl<C> Service<C, Frame> for OffsetCommitService
 where
     C: Coordinator,
 {
-    type Response = Body;
+    type Response = Frame;
     type Error = Error;
 
     async fn serve(&self, mut ctx: Context<C>, req: Frame) -> Result<Self::Response, Self::Error> {
+        let correlation_id = req.correlation_id()?;
         let coordinator = ctx.state_mut();
 
         let offset_commit = OffsetCommitRequest::try_from(req.body)?;
@@ -49,5 +50,10 @@ where
                 topics: offset_commit.topics.as_deref(),
             })
             .await
+            .map(|body| Frame {
+                size: 0,
+                header: Header::Response { correlation_id },
+                body,
+            })
     }
 }
