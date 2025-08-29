@@ -1364,6 +1364,7 @@ pub enum UpdateError<T> {
         current: T,
         version: Version,
     },
+
     SerdeJson(#[from] serde_json::Error),
 
     #[cfg(feature = "postgres")]

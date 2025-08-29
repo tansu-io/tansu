@@ -134,6 +134,7 @@ jobs:
         storage:
           - s3://tansu/
           - postgres://postgres:postgres@db
+          - sqlite://tansu.db
         kafka:
           - apache/kafka:3.9.0
           - apache/kafka:3.8.1

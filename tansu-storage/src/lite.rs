@@ -2694,9 +2694,16 @@ impl Storage for Engine {
                 })
                 .inspect(|version| debug!(?version))?;
 
-            let value = row.get_str(1).map(serde_json::Value::from)?;
-            let current =
-                serde_json::from_value::<GroupDetail>(value).inspect(|current| debug!(?current))?;
+            let value = row
+                .get_str(1)
+                .map_err(Error::from)
+                .inspect(|value| debug!(%value))
+                .and_then(|value| serde_json::from_str(value).map_err(Into::into))
+                .inspect(|value| debug!(%value))?;
+
+            let current = serde_json::from_value::<GroupDetail>(value)
+                .inspect(|current| debug!(?current))
+                .inspect_err(|err| error!(?err))?;
 
             Err(UpdateError::Outdated { current, version })
         };
