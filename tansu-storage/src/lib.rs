@@ -240,6 +240,8 @@ pub enum Error {
 
     #[error("unsupported storage url: {0}")]
     UnsupportedStorageUrl(Url),
+    #[error("body: {0:?}")]
+    UnexpectedAddPartitionsToTxnRequest(Box<AddPartitionsToTxnRequest>),
 
     #[error("url: {0}")]
     Url(#[from] url::ParseError),
@@ -1011,33 +1013,49 @@ pub enum TxnAddPartitionsRequest {
     },
 }
 
-impl TryFrom<Body> for TxnAddPartitionsRequest {
+impl TryFrom<AddPartitionsToTxnRequest> for TxnAddPartitionsRequest {
     type Error = Error;
 
-    fn try_from(value: Body) -> result::Result<Self, Self::Error> {
+    fn try_from(value: AddPartitionsToTxnRequest) -> result::Result<Self, Self::Error> {
         match value {
-            Body::AddPartitionsToTxnRequest(AddPartitionsToTxnRequest {
+            AddPartitionsToTxnRequest {
                 transactions: None,
                 v_3_and_below_transactional_id: Some(transactional_id),
                 v_3_and_below_producer_id: Some(producer_id),
                 v_3_and_below_producer_epoch: Some(producer_epoch),
                 v_3_and_below_topics: Some(topics),
                 ..
-            }) => Ok(Self::VersionZeroToThree {
+            } => Ok(Self::VersionZeroToThree {
                 transaction_id: transactional_id,
                 producer_id,
                 producer_epoch,
                 topics,
             }),
 
-            Body::AddPartitionsToTxnRequest(AddPartitionsToTxnRequest {
+            AddPartitionsToTxnRequest {
                 transactions: Some(transactions),
                 v_3_and_below_transactional_id: None,
                 v_3_and_below_producer_id: None,
                 v_3_and_below_producer_epoch: None,
                 v_3_and_below_topics: None,
                 ..
-            }) => Ok(Self::VersionFourPlus { transactions }),
+            } => Ok(Self::VersionFourPlus { transactions }),
+
+            unexpected => Err(Error::UnexpectedAddPartitionsToTxnRequest(Box::new(
+                unexpected,
+            ))),
+        }
+    }
+}
+
+impl TryFrom<Body> for TxnAddPartitionsRequest {
+    type Error = Error;
+
+    fn try_from(value: Body) -> result::Result<Self, Self::Error> {
+        match value {
+            Body::AddPartitionsToTxnRequest(add_partitions_to_txn) => {
+                TxnAddPartitionsRequest::try_from(add_partitions_to_txn)
+            }
 
             unexpected => Err(Error::UnexpectedBody(Box::new(unexpected))),
         }

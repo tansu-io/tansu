@@ -16,12 +16,13 @@ workspace = true
 [dependencies]
 async-trait.workspace = true
 bytes.workspace = true
-clap.workspace = true
+deadpool.workspace = true
 opentelemetry-semantic-conventions.workspace = true
 opentelemetry.workspace = true
 rama.workspace = true
 tansu-sans-io.workspace = true
 thiserror.workspace = true
+tokio-util.workspace = true
 tokio.workspace = true
 tracing-subscriber.workspace = true
 tracing.workspace = true

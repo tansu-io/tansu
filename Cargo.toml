@@ -14,6 +14,7 @@ members = [
     "tansu-storage",
     "tansu-topic",
     "tansu",
+    "tansu-client",
 ]
 
 [workspace.package]
@@ -110,7 +111,7 @@ protobuf-json-mapping = "3.7.1"
 protobuf-parse = "3.7.1"
 protobuf = { version = "3.7.1", features = ["with-bytes"] }
 quote = "1.0"
-rama = { version = "0.2.0", features = ["tcp"] }
+rama = { version = "0.2.0", features = ["http", "tcp"] }
 rand = "0.9"
 regex = "1.11.1"
 rhai = { version = "1.22.2", features = ["sync"] }
@@ -123,6 +124,7 @@ tansu = { version = "0.4.10", path = "tansu" }
 tansu-broker = { version = "0.4.10", path = "tansu-broker" }
 tansu-cat = { version = "0.4.10", path = "tansu-cat" }
 tansu-cli = { version = "0.4.10", path = "tansu-cli" }
+tansu-client = { version = "0.4.10", path = "tansu-client" }
 tansu-generator = { version = "0.4.10", path = "tansu-generator" }
 tansu-model = { version = "0.4.10", path = "tansu-model" }
 tansu-otel = { version = "0.4.10", path = "tansu-otel" }

@@ -13,42 +13,34 @@
 // limitations under the License.
 
 use rama::{Context, Service};
-use tansu_sans_io::{
-    ApiKey, Body,
-    join_group_request::{self, JoinGroupRequestProtocol},
-};
+use tansu_sans_io::{ApiKey, Body, Frame, JoinGroupRequest};
 
-use crate::{Error, Result, broker::group::Request, coordinator::group::Coordinator};
+use crate::{Error, Result, coordinator::group::Coordinator};
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct JoinGroupService;
 
 impl ApiKey for JoinGroupService {
-    const KEY: i16 = join_group_request::JoinGroupRequest::KEY;
+    const KEY: i16 = JoinGroupRequest::KEY;
 }
 
-impl<C, State> Service<State, Request<C>> for JoinGroupService
+impl<C> Service<C, Frame> for JoinGroupService
 where
     C: Coordinator,
-    State: Clone + Send + Sync + 'static,
 {
     type Response = Body;
     type Error = Error;
 
-    async fn serve(
-        &self,
-        _ctx: Context<State>,
-        mut request: Request<C>,
-    ) -> Result<Self::Response, Self::Error> {
-        let client_id = request
-            .frame
+    async fn serve(&self, mut ctx: Context<C>, req: Frame) -> Result<Self::Response, Self::Error> {
+        let coordinator = ctx.state_mut();
+
+        let client_id = req
             .client_id()
             .map(|client_id| client_id.map(|client_id| client_id.to_owned()))?;
 
-        let join_group = join_group_request::JoinGroupRequest::try_from(request.frame.body)?;
+        let join_group = JoinGroupRequest::try_from(req.body)?;
 
-        request
-            .coordinator
+        coordinator
             .join(
                 client_id.as_deref(),
                 join_group.group_id.as_str(),
@@ -59,48 +51,6 @@ where
                 join_group.protocol_type.as_str(),
                 join_group.protocols.as_deref(),
                 join_group.reason.as_deref(),
-            )
-            .await
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct JoinRequest<C> {
-    coordinator: C,
-}
-
-impl<C> JoinRequest<C>
-where
-    C: Coordinator,
-{
-    pub fn with_coordinator(coordinator: C) -> Self {
-        Self { coordinator }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub async fn response(
-        &mut self,
-        client_id: Option<&str>,
-        group_id: &str,
-        session_timeout_ms: i32,
-        rebalance_timeout_ms: Option<i32>,
-        member_id: &str,
-        group_instance_id: Option<&str>,
-        protocol_type: &str,
-        protocols: Option<&[JoinGroupRequestProtocol]>,
-        reason: Option<&str>,
-    ) -> Result<Body> {
-        self.coordinator
-            .join(
-                client_id,
-                group_id,
-                session_timeout_ms,
-                rebalance_timeout_ms,
-                member_id,
-                group_instance_id,
-                protocol_type,
-                protocols,
-                reason,
             )
             .await
     }

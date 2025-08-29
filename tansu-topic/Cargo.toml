@@ -17,6 +17,7 @@ workspace = true
 futures-core.workspace = true
 futures-util.workspace = true
 futures.workspace = true
+tansu-client.workspace = true
 tansu-sans-io.workspace = true
 thiserror.workspace = true
 tokio-util.workspace = true

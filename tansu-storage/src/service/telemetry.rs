@@ -14,42 +14,31 @@
 
 use rama::{Context, Service};
 use tansu_sans_io::{
-    ApiKey, Body, ErrorCode, GetTelemetrySubscriptionsRequest, GetTelemetrySubscriptionsResponse,
+    ApiKey, ErrorCode, GetTelemetrySubscriptionsRequest, GetTelemetrySubscriptionsResponse,
 };
 use uuid::Uuid;
 
 use crate::{Error, Result, Storage};
 
-#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct GetTelemetrySubscriptionsService<S> {
-    storage: S,
-}
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct GetTelemetrySubscriptionsService;
 
-impl<S> ApiKey for GetTelemetrySubscriptionsService<S> {
+impl ApiKey for GetTelemetrySubscriptionsService {
     const KEY: i16 = GetTelemetrySubscriptionsRequest::KEY;
 }
 
-impl<S> GetTelemetrySubscriptionsService<S>
+impl<G> Service<G, GetTelemetrySubscriptionsRequest> for GetTelemetrySubscriptionsService
 where
-    S: Storage,
+    G: Storage,
 {
-    pub fn new(storage: S) -> Self {
-        Self { storage }
-    }
-}
-
-impl<S, State, Q> Service<State, Q> for GetTelemetrySubscriptionsService<S>
-where
-    S: Storage,
-    State: Clone + Send + Sync + 'static,
-    Q: Into<Body> + Send + Sync + 'static,
-{
-    type Response = Body;
+    type Response = GetTelemetrySubscriptionsResponse;
     type Error = Error;
 
-    async fn serve(&self, _ctx: Context<State>, request: Q) -> Result<Self::Response, Self::Error> {
-        let _telemetry = GetTelemetrySubscriptionsRequest::try_from(request.into())?;
-
+    async fn serve(
+        &self,
+        _ctx: Context<G>,
+        _req: GetTelemetrySubscriptionsRequest,
+    ) -> Result<Self::Response, Self::Error> {
         let client_instance_id = *Uuid::new_v4().as_bytes();
 
         Ok(GetTelemetrySubscriptionsResponse::default()
@@ -61,7 +50,6 @@ where
             .push_interval_ms(5_000)
             .telemetry_max_bytes(1_024)
             .delta_temporality(false)
-            .requested_metrics(Some([].into()))
-            .into())
+            .requested_metrics(Some([].into())))
     }
 }
