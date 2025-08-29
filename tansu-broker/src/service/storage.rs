@@ -18,22 +18,24 @@ use rama::{
 };
 use tansu_sans_io::{
     AddOffsetsToTxnRequest, AddPartitionsToTxnRequest, ApiKey as _, ConsumerGroupDescribeRequest,
-    DeleteGroupsRequest, DeleteRecordsRequest, DeleteTopicsRequest, DescribeClusterRequest,
-    DescribeConfigsRequest, DescribeGroupsRequest, DescribeTopicPartitionsRequest, FetchRequest,
-    FindCoordinatorRequest, GetTelemetrySubscriptionsRequest, IncrementalAlterConfigsRequest,
-    InitProducerIdRequest, ListGroupsRequest, ListOffsetsRequest,
-    ListPartitionReassignmentsRequest, MetadataRequest, ProduceRequest, TxnOffsetCommitRequest,
+    CreateTopicsRequest, DeleteGroupsRequest, DeleteRecordsRequest, DeleteTopicsRequest,
+    DescribeClusterRequest, DescribeConfigsRequest, DescribeGroupsRequest,
+    DescribeTopicPartitionsRequest, FetchRequest, FindCoordinatorRequest,
+    GetTelemetrySubscriptionsRequest, IncrementalAlterConfigsRequest, InitProducerIdRequest,
+    ListGroupsRequest, ListOffsetsRequest, ListPartitionReassignmentsRequest, MetadataRequest,
+    ProduceRequest, TxnOffsetCommitRequest,
 };
 use tansu_service::{FrameRequestLayer, FrameRouteBuilder};
 use tansu_storage::{
     Storage,
     service::{
-        ConsumerGroupDescribeService, DeleteGroupsService, DeleteRecordsService,
-        DeleteTopicsService, DescribeClusterService, DescribeConfigsService, DescribeGroupsService,
-        DescribeTopicPartitionsService, FetchService, FindCoordinatorService,
-        GetTelemetrySubscriptionsService, IncrementalAlterConfigsService, InitProducerIdService,
-        ListGroupsService, ListOffsetsService, ListPartitionReassignmentsService, MetadataService,
-        ProduceService, TxnAddOffsetsService, TxnAddPartitionService, TxnOffsetCommitService,
+        ConsumerGroupDescribeService, CreateTopicsService, DeleteGroupsService,
+        DeleteRecordsService, DeleteTopicsService, DescribeClusterService, DescribeConfigsService,
+        DescribeGroupsService, DescribeTopicPartitionsService, FetchService,
+        FindCoordinatorService, GetTelemetrySubscriptionsService, IncrementalAlterConfigsService,
+        InitProducerIdService, ListGroupsService, ListOffsetsService,
+        ListPartitionReassignmentsService, MetadataService, ProduceService, TxnAddOffsetsService,
+        TxnAddPartitionService, TxnOffsetCommitService,
     },
 };
 
@@ -50,6 +52,7 @@ where
         add_offsets_to_txn,
         add_partitions_to_txn,
         consumer_group_describe,
+        create_topics,
         delete_groups,
         delete_records,
         delete_topics,
@@ -91,6 +94,27 @@ where
                 FrameRequestLayer::<ConsumerGroupDescribeRequest>::new(),
             )
                 .into_layer(ConsumerGroupDescribeService)
+                .boxed(),
+        )
+        .map_err(Into::into)
+}
+
+fn create_topics<S>(
+    builder: FrameRouteBuilder<(), Error>,
+    storage: S,
+) -> Result<FrameRouteBuilder<(), Error>, Error>
+where
+    S: Storage,
+{
+    builder
+        .with_route(
+            CreateTopicsRequest::KEY,
+            (
+                MapErrLayer::new(Error::from),
+                MapStateLayer::new(|_| storage),
+                FrameRequestLayer::<CreateTopicsRequest>::new(),
+            )
+                .into_layer(CreateTopicsService)
                 .boxed(),
         )
         .map_err(Into::into)

@@ -18,6 +18,7 @@ use tansu_service::{
     TcpContext, TcpContextLayer, TcpContextService,
 };
 use tansu_storage::Storage;
+use tracing::debug;
 
 use crate::{Error, Result, coordinator::group::Coordinator};
 
@@ -33,7 +34,10 @@ where
     C: Coordinator,
 {
     storage::services(FrameRouteService::<(), Error>::builder(), storage)
-        .and_then(|builder| coordinator::services(builder, coordinator))
+        .inspect(|builder| debug!(?builder))
+        .and_then(|builder| {
+            coordinator::services(builder, coordinator).inspect(|builder| debug!(?builder))
+        })
         .and_then(|builder| builder.build().map_err(Into::into))
         .map(|route| {
             (
