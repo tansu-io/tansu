@@ -67,7 +67,7 @@ pub(crate) static METER: LazyLock<Meter> = LazyLock::new(|| {
     )
 });
 
-#[derive(Error, Debug)]
+#[derive(Clone, Debug, Error)]
 pub enum Error {
     AddrParse(#[from] AddrParseError),
     Api(ErrorCode),
@@ -76,24 +76,25 @@ pub enum Error {
     EmptyCoordinatorWrapper,
     EmptyJoinGroupRequestProtocol,
     ExpectedJoinGroupRequestProtocol(&'static str),
-    ExporterBuild(#[from] ExporterBuildError),
-    Hyper(#[from] hyper::http::Error),
+    ExporterBuild(Arc<ExporterBuildError>),
+    Hyper(Arc<hyper::http::Error>),
     Io(Arc<io::Error>),
-    Join(#[from] JoinError),
-    Json(#[from] serde_json::Error),
+    Join(Arc<JoinError>),
+    Json(Arc<serde_json::Error>),
     KafkaProtocol(#[from] tansu_sans_io::Error),
     Message(String),
     Model(#[from] tansu_model::Error),
-    ObjectStore(#[from] object_store::Error),
-    ParseFilter(#[from] ParseError),
+    ObjectStore(Arc<object_store::Error>),
+    ParseFilter(Arc<ParseError>),
     ParseInt(#[from] std::num::ParseIntError),
     Poison,
-    Pool(#[from] deadpool_postgres::PoolError),
-    SchemaRegistry(Box<tansu_schema::Error>),
+    Pool(Arc<deadpool_postgres::PoolError>),
+    SchemaRegistry(Arc<tansu_schema::Error>),
+    Service(#[from] tansu_service::Error),
     Storage(#[from] tansu_storage::Error),
     StringUtf8(#[from] FromUtf8Error),
     Regex(#[from] regex::Error),
-    TokioPostgres(#[from] tokio_postgres::error::Error),
+    TokioPostgres(Arc<tokio_postgres::error::Error>),
     TryFromInt(#[from] TryFromIntError),
     UnsupportedApiService(i16),
     UnsupportedStorageUrl(Url),
@@ -102,12 +103,66 @@ pub enum Error {
     Utf8(#[from] Utf8Error),
     Uuid(#[from] uuid::Error),
     SchemaValidation,
-    Send(#[from] SendError<CancelKind>),
+    Send(Arc<SendError<CancelKind>>),
+}
+
+impl From<ExporterBuildError> for Error {
+    fn from(value: ExporterBuildError) -> Self {
+        Self::ExporterBuild(Arc::new(value))
+    }
+}
+
+impl From<SendError<CancelKind>> for Error {
+    fn from(value: SendError<CancelKind>) -> Self {
+        Self::Send(Arc::new(value))
+    }
+}
+
+impl From<tokio_postgres::error::Error> for Error {
+    fn from(value: tokio_postgres::error::Error) -> Self {
+        Self::TokioPostgres(Arc::new(value))
+    }
+}
+
+impl From<hyper::http::Error> for Error {
+    fn from(value: hyper::http::Error) -> Self {
+        Self::Hyper(Arc::new(value))
+    }
+}
+
+impl From<JoinError> for Error {
+    fn from(value: JoinError) -> Self {
+        Self::Join(Arc::new(value))
+    }
+}
+
+impl From<serde_json::Error> for Error {
+    fn from(value: serde_json::Error) -> Self {
+        Self::Json(Arc::new(value))
+    }
+}
+
+impl From<object_store::Error> for Error {
+    fn from(value: object_store::Error) -> Self {
+        Self::ObjectStore(Arc::new(value))
+    }
+}
+
+impl From<ParseError> for Error {
+    fn from(value: ParseError) -> Self {
+        Self::ParseFilter(Arc::new(value))
+    }
+}
+
+impl From<deadpool_postgres::PoolError> for Error {
+    fn from(value: deadpool_postgres::PoolError) -> Self {
+        Self::Pool(Arc::new(value))
+    }
 }
 
 impl From<tansu_schema::Error> for Error {
     fn from(value: tansu_schema::Error) -> Self {
-        Self::SchemaRegistry(Box::new(value))
+        Self::SchemaRegistry(Arc::new(value))
     }
 }
 
@@ -131,10 +186,7 @@ impl From<ValidationError<'_>> for Error {
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Message(msg) => write!(f, "{msg}"),
-            error => write!(f, "{error:?}"),
-        }
+        write!(f, "{self:?}")
     }
 }
 

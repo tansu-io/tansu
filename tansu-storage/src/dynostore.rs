@@ -1858,7 +1858,23 @@ impl Storage for DynoStore {
                         results.push(NamedGroupDetail::found(group_id.into(), group_detail));
                     }
 
-                    Err(Error::ObjectStore(object_store::Error::NotFound { .. })) => {
+                    Err(Error::ObjectStore(error)) => {
+                        match error.as_ref() {
+                            object_store::Error::NotFound { .. } => {
+                                results.push(NamedGroupDetail::found(
+                                    group_id.into(),
+                                    GroupDetail::default(),
+                                ));
+                            }
+
+                            _otherwise => {
+                                results.push(NamedGroupDetail::found(
+                                    group_id.into(),
+                                    GroupDetail::default(),
+                                ));
+                            }
+                        }
+
                         results.push(NamedGroupDetail::found(
                             group_id.into(),
                             GroupDetail::default(),

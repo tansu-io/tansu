@@ -45,7 +45,7 @@ use std::{
     path::PathBuf,
     result,
     str::FromStr,
-    sync::{LazyLock, PoisonError},
+    sync::{Arc, LazyLock, PoisonError},
     time::{Duration, SystemTime, SystemTimeError},
 };
 use tansu_sans_io::{
@@ -90,112 +90,68 @@ pub mod service;
 mod os;
 
 /// Storage Errors
-#[derive(thiserror::Error, Debug)]
+#[derive(Clone, Debug, thiserror::Error)]
 pub enum Error {
-    #[error("api")]
     Api(ErrorCode),
-
-    #[error("build")]
     DeadPoolBuild(#[from] deadpool::managed::BuildError),
-
-    #[error("glob")]
-    Glob(#[from] GlobError),
-
-    #[error("io")]
-    Io(#[from] io::Error),
-
-    #[error("kafka sans io")]
+    Glob(Arc<GlobError>),
+    Io(Arc<io::Error>),
     KafkaSansIo(#[from] tansu_sans_io::Error),
-
-    #[error("offset: {offset}, is less than base offset: {base_offset}")]
-    LessThanBaseOffset { offset: i64, base_offset: i64 },
-
-    #[error("offset: {offset}, is less than last offset: {last_offset:?}")]
+    LessThanBaseOffset {
+        offset: i64,
+        base_offset: i64,
+    },
     LessThanLastOffset {
         offset: i64,
         last_offset: Option<i64>,
     },
 
-    #[error("time: {time}, is less than max time: {max_time:?}")]
-    LessThanMaxTime { time: i64, max_time: Option<i64> },
-
-    #[error("time: {time}, is less than min time: {min_time:?}")]
-    LessThanMinTime { time: i64, min_time: Option<i64> },
-
-    #[error("message: {0}")]
+    LessThanMaxTime {
+        time: i64,
+        max_time: Option<i64>,
+    },
+    LessThanMinTime {
+        time: i64,
+        min_time: Option<i64>,
+    },
     Message(String),
-
-    #[error("no such entry nth: {nth}")]
-    NoSuchEntry { nth: u32 },
-
-    #[error("no such offset: {0}")]
+    NoSuchEntry {
+        nth: u32,
+    },
     NoSuchOffset(i64),
-
-    #[error("os string {0:?}")]
     OsString(OsString),
-
-    #[error("object store: {0:?}")]
-    ObjectStore(#[from] object_store::Error),
-
-    #[error("parse filter: {0:?}")]
-    ParseFilter(#[from] ParseError),
-
-    #[error("pattern")]
-    Pattern(#[from] PatternError),
-
-    #[error("parse int: {0}")]
+    ObjectStore(Arc<object_store::Error>),
+    ParseFilter(Arc<ParseError>),
+    Pattern(Arc<PatternError>),
     ParseInt(#[from] ParseIntError),
-
-    #[error("phantom cached")]
     PhantomCached(),
-
-    #[error("poision")]
     Poison,
-
-    #[error("pool")]
-    Pool(#[from] deadpool_postgres::PoolError),
-
-    #[error("regex")]
+    Pool(Arc<deadpool_postgres::PoolError>),
     Regex(#[from] regex::Error),
+    Schema(Arc<tansu_schema::Error>),
 
-    #[error("schema")]
-    Schema(Box<tansu_schema::Error>),
-
-    #[error("segment empty: {0:?}")]
     SegmentEmpty(Topition),
 
-    #[error("segment missing: {topition:?}, at offset: {offset:?}")]
     SegmentMissing {
         topition: Topition,
         offset: Option<i64>,
     },
 
-    #[error("json: {0}")]
-    SerdeJson(#[from] serde_json::Error),
-
-    #[error("system time: {0}")]
+    SerdeJson(Arc<serde_json::Error>),
     SystemTime(#[from] SystemTimeError),
-
-    #[error("postgres")]
-    TokioPostgres(#[from] tokio_postgres::error::Error),
-
-    #[error("try from int: {0}")]
+    TokioPostgres(Arc<tokio_postgres::error::Error>),
     TryFromInt(#[from] TryFromIntError),
-
-    #[error("try from slice: {0}")]
     TryFromSlice(#[from] TryFromSliceError),
-
-    #[error("body: {0:?}")]
     UnexpectedBody(Box<Body>),
-
-    #[error("body: {0:?}")]
     UnexpectedAddPartitionsToTxnRequest(Box<AddPartitionsToTxnRequest>),
-
-    #[error("url: {0}")]
     Url(#[from] url::ParseError),
-
-    #[error("state: {0}")]
     UnknownTxnState(String),
+}
+
+impl Display for Error {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{self:?}")
+    }
 }
 
 impl<T> From<PoisonError<T>> for Error {
@@ -204,12 +160,60 @@ impl<T> From<PoisonError<T>> for Error {
     }
 }
 
+impl From<GlobError> for Error {
+    fn from(value: GlobError) -> Self {
+        Self::Glob(Arc::new(value))
+    }
+}
+
+impl From<io::Error> for Error {
+    fn from(value: io::Error) -> Self {
+        Self::Io(Arc::new(value))
+    }
+}
+
+impl From<object_store::Error> for Error {
+    fn from(value: object_store::Error) -> Self {
+        Self::ObjectStore(Arc::new(value))
+    }
+}
+
+impl From<ParseError> for Error {
+    fn from(value: ParseError) -> Self {
+        Self::ParseFilter(Arc::new(value))
+    }
+}
+
+impl From<PatternError> for Error {
+    fn from(value: PatternError) -> Self {
+        Self::Pattern(Arc::new(value))
+    }
+}
+
+impl From<deadpool_postgres::PoolError> for Error {
+    fn from(value: deadpool_postgres::PoolError) -> Self {
+        Self::Pool(Arc::new(value))
+    }
+}
+
+impl From<serde_json::Error> for Error {
+    fn from(value: serde_json::Error) -> Self {
+        Self::SerdeJson(Arc::new(value))
+    }
+}
+
+impl From<tokio_postgres::error::Error> for Error {
+    fn from(value: tokio_postgres::error::Error) -> Self {
+        Self::TokioPostgres(Arc::new(value))
+    }
+}
+
 impl From<tansu_schema::Error> for Error {
     fn from(value: tansu_schema::Error) -> Self {
         if let tansu_schema::Error::Api(error_code) = value {
             Self::Api(error_code)
         } else {
-            Self::Schema(Box::new(value))
+            Self::Schema(Arc::new(value))
         }
     }
 }

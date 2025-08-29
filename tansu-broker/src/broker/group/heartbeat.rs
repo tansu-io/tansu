@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use rama::{Context, Service};
-use tansu_sans_io::{ApiKey, Body, Frame, HeartbeatRequest};
+use tansu_sans_io::{ApiKey, Frame, Header, HeartbeatRequest};
 
 use crate::{Error, Result, coordinator::group::Coordinator};
 
@@ -28,10 +28,12 @@ impl<C> Service<C, Frame> for HeartbeatService
 where
     C: Coordinator,
 {
-    type Response = Body;
+    type Response = Frame;
     type Error = Error;
 
     async fn serve(&self, mut ctx: Context<C>, req: Frame) -> Result<Self::Response, Self::Error> {
+        let correlation_id = req.correlation_id()?;
+
         let coordinator = ctx.state_mut();
 
         let req = HeartbeatRequest::try_from(req.body)?;
@@ -44,5 +46,10 @@ where
                 req.group_instance_id.as_deref(),
             )
             .await
+            .map(|body| Frame {
+                size: 0,
+                header: Header::Response { correlation_id },
+                body,
+            })
     }
 }
