@@ -19,7 +19,6 @@
 use std::{
     fmt, io,
     marker::PhantomData,
-    net::SocketAddr,
     num::NonZeroU32,
     pin::Pin,
     result,
@@ -36,23 +35,15 @@ use opentelemetry::{
 use opentelemetry_otlp::ExporterBuildError;
 use opentelemetry_sdk::error::OTelSdkError;
 use opentelemetry_semantic_conventions::SCHEMA_URL;
-use rama::{
-    Context, Service,
-    error::{BoxError, OpaqueError},
-};
+use tansu_client::{Client, Manager};
 use tansu_otel::meter_provider;
 use tansu_sans_io::{
-    ErrorCode,
+    ErrorCode, ProduceRequest,
     produce_request::{PartitionProduceData, TopicProduceData},
     record::{deflated, inflated},
 };
 use tansu_schema::{Generator as _, Registry, Schema};
-use tansu_service::{
-    api::produce::{ProduceRequest, ProduceResponse},
-    service::ApiClient,
-};
 use tokio::{
-    net::lookup_host,
     signal::unix::{SignalKind, signal},
     task::JoinSet,
     time::sleep,
@@ -75,11 +66,10 @@ pub type Result<T, E = Error> = result::Result<T, E>;
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
     Api(ErrorCode),
-    Box(#[from] BoxError),
+    Client(#[from] tansu_client::Error),
     ExporterBuild(#[from] ExporterBuildError),
     InsufficientCapacity(#[from] InsufficientCapacity),
     Io(Arc<io::Error>),
-    Opaque(#[from] OpaqueError),
     Otel(#[from] tansu_otel::Error),
     OtelSdk(#[from] OTelSdkError),
     Poison,
@@ -154,41 +144,6 @@ impl TryFrom<Configuration> for Generate {
     }
 }
 
-static DNS_LOOKUP_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
-    METER
-        .u64_histogram("dns_lookup_duration")
-        .with_unit("ms")
-        .with_description("DNS lookup latencies")
-        .build()
-});
-
-async fn host_port(url: &Url) -> Result<SocketAddr> {
-    if let Some(host) = url.host_str()
-        && let Some(port) = url.port()
-    {
-        let attributes = [KeyValue::new("url", url.to_string())];
-        let start = SystemTime::now();
-
-        let mut addresses = lookup_host(format!("{host}:{port}"))
-            .await
-            .inspect(|_| {
-                DNS_LOOKUP_DURATION.record(
-                    start
-                        .elapsed()
-                        .map_or(0, |duration| duration.as_millis() as u64),
-                    &attributes,
-                )
-            })?
-            .filter(|socket_addr| matches!(socket_addr, SocketAddr::V4(_)));
-
-        if let Some(socket_addr) = addresses.next().inspect(|socket_addr| debug!(?socket_addr)) {
-            return Ok(socket_addr);
-        }
-    }
-
-    Err(Error::UnknownHost(url.to_string()))
-}
-
 static GENERATE_PRODUCE_BATCH_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
     METER
         .u64_histogram("generate_produce_batch_duration")
@@ -206,13 +161,13 @@ static PRODUCE_REQUEST_RESPONSE_DURATION: LazyLock<Histogram<u64>> = LazyLock::n
 });
 
 pub async fn produce(
-    broker: Url,
+    client: Client,
     name: String,
     index: i32,
     schema: Schema,
     batch_size: i32,
 ) -> Result<()> {
-    debug!(%broker, %name, index, batch_size);
+    debug!(?client, %name, index, batch_size);
 
     let attributes = [
         KeyValue::new("topic", name.clone()),
@@ -250,44 +205,26 @@ pub async fn produce(
             })?
     };
 
-    let request = ProduceRequest {
-        topic_data: Some(
-            [TopicProduceData::default().name(name).partition_data(Some(
-                [PartitionProduceData::default()
-                    .index(index)
-                    .records(Some(frame))]
-                .into(),
-            ))]
+    let req = ProduceRequest::default().topic_data(Some(
+        [TopicProduceData::default().name(name).partition_data(Some(
+            [PartitionProduceData::default()
+                .index(index)
+                .records(Some(frame))]
             .into(),
-        ),
-        ..Default::default()
-    };
+        ))]
+        .into(),
+    ));
 
-    let origin = host_port(&broker)
-        .await
-        .map(Into::into)
-        .map(ApiClient::new)
-        .inspect(|client| debug!(?client))?;
+    let start = SystemTime::now();
 
-    let response = {
-        let start = SystemTime::now();
-
-        let attributes = [];
-
-        origin
-            .serve(Context::default(), request.into())
-            .await
-            .and_then(|response| ProduceResponse::try_from(response).map_err(Into::into))
-            .inspect(|response| debug!(?response))
-            .inspect(|_| {
-                PRODUCE_REQUEST_RESPONSE_DURATION.record(
-                    start
-                        .elapsed()
-                        .map_or(0, |duration| duration.as_millis() as u64),
-                    &attributes,
-                )
-            })
-    }?;
+    let response = client.call(req).await.inspect(|_| {
+        PRODUCE_REQUEST_RESPONSE_DURATION.record(
+            start
+                .elapsed()
+                .map_or(0, |duration| duration.as_millis() as u64),
+            &attributes,
+        )
+    })?;
 
     assert!(
         response
@@ -368,30 +305,32 @@ impl Generate {
 
         let token = CancellationToken::new();
 
+        let client = Manager::builder(self.configuration.broker)
+            .client_id(Some(env!("CARGO_PKG_NAME").into()))
+            .build()
+            .await
+            .inspect(|pool| debug!(?pool))
+            .map(Client::new)?;
+
         for producer in 0..self.configuration.producers {
             let rate_limiter = rate_limiter.clone();
             let schema = schema.clone();
-            let broker = self.configuration.broker.clone();
             let topic = self.configuration.topic.clone();
             let partition = self.configuration.partition;
             let token = token.clone();
+            let client = client.clone();
 
             _ = set.spawn(async move {
                     let span = span!(Level::DEBUG, "producer", producer);
-
 
                     async move {
                         let attributes = [KeyValue::new("producer", producer.to_string())];
 
                         loop {
-                            debug!(%broker, %topic, partition);
+                            debug!(%topic, partition);
 
                             if let Some(ref rate_limiter) = rate_limiter {
                                 let rate_limit_start = SystemTime::now();
-
-
-
-
 
                                 tokio::select! {
                                     cancelled = token.cancelled() => {
@@ -418,7 +357,7 @@ impl Generate {
                                     break
                                 },
 
-                                Ok(_) = produce(broker.clone(), topic.clone(), partition, schema.clone(), batch_size.get() as i32) => {
+                                Ok(_) = produce(client.clone(), topic.clone(), partition, schema.clone(), batch_size.get() as i32) => {
                                     PRODUCE_RECORD_COUNT.add(batch_size.get() as u64, &attributes);
                                     PRODUCE_API_DURATION.record(produce_start.elapsed().map_or(0, |duration| duration.as_millis() as u64), &attributes);
                                 },

@@ -16,23 +16,27 @@ use std::collections::BTreeMap;
 
 use bytes::Bytes;
 use common::{StorageType, alphanumeric_string, init_tracing, register_broker};
+use rama::{Context, Service};
 use rand::{prelude::*, rng};
-use tansu_broker::{Result, broker::fetch::FetchRequest};
+use tansu_broker::Result;
 use tansu_sans_io::{
-    ErrorCode, FetchResponse, IsolationLevel, NULL_TOPIC_ID,
+    ErrorCode, FetchRequest, IsolationLevel, NULL_TOPIC_ID,
     create_topics_request::CreatableTopic,
     fetch_request::{FetchPartition, FetchTopic},
     record::{Record, inflated},
 };
-use tansu_storage::{ListOffsetRequest, ListOffsetResponse, Storage, StorageContainer, Topition};
+use tansu_storage::{
+    ListOffsetRequest, ListOffsetResponse, Storage, StorageContainer, Topition,
+    service::FetchService,
+};
 use tracing::{debug, error};
 use url::Url;
 use uuid::Uuid;
 
 pub mod common;
 
-pub async fn empty_topic(cluster_id: Uuid, broker_id: i32, mut sc: StorageContainer) -> Result<()> {
-    register_broker(&cluster_id, broker_id, &mut sc).await?;
+pub async fn empty_topic(cluster_id: Uuid, broker_id: i32, sc: StorageContainer) -> Result<()> {
+    register_broker(&cluster_id, broker_id, &sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -78,16 +82,19 @@ pub async fn empty_topic(cluster_id: Uuid, broker_id: i32, mut sc: StorageContai
                 .replica_directory_id(None),
         ]))];
 
-    let fetch: FetchResponse = FetchRequest::with_storage(sc.clone())
-        .response(
-            max_wait_ms,
-            min_bytes,
-            max_bytes,
-            Some(isolation_level.into()),
-            Some(&topics[..]),
+    let ctx = Context::with_state(sc);
+
+    let fetch = FetchService
+        .serve(
+            ctx,
+            FetchRequest::default()
+                .max_wait_ms(max_wait_ms)
+                .min_bytes(min_bytes)
+                .max_bytes(max_bytes)
+                .isolation_level(Some(isolation_level.into()))
+                .topics(Some(topics.into())),
         )
-        .await
-        .and_then(|body| TryInto::try_into(body).map_err(Into::into))?;
+        .await?;
 
     assert_eq!(
         ErrorCode::None,
@@ -133,12 +140,8 @@ pub async fn empty_topic(cluster_id: Uuid, broker_id: i32, mut sc: StorageContai
     Ok(())
 }
 
-pub async fn simple_non_txn(
-    cluster_id: Uuid,
-    broker_id: i32,
-    mut sc: StorageContainer,
-) -> Result<()> {
-    register_broker(&cluster_id, broker_id, &mut sc).await?;
+pub async fn simple_non_txn(cluster_id: Uuid, broker_id: i32, sc: StorageContainer) -> Result<()> {
+    register_broker(&cluster_id, broker_id, &sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -255,16 +258,19 @@ pub async fn simple_non_txn(
                 .replica_directory_id(None),
         ]))];
 
-    let fetch: FetchResponse = FetchRequest::with_storage(sc.clone())
-        .response(
-            max_wait_ms,
-            min_bytes,
-            max_bytes,
-            Some(isolation_level.into()),
-            Some(&topics[..]),
+    let ctx = Context::with_state(sc);
+
+    let fetch = FetchService
+        .serve(
+            ctx,
+            FetchRequest::default()
+                .max_wait_ms(max_wait_ms)
+                .min_bytes(min_bytes)
+                .max_bytes(max_bytes)
+                .isolation_level(Some(isolation_level.into()))
+                .topics(Some(topics.into())),
         )
-        .await
-        .and_then(|body| TryInto::try_into(body).map_err(Into::into))?;
+        .await?;
 
     assert_eq!(
         ErrorCode::None,

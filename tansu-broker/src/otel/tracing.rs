@@ -25,10 +25,10 @@ pub(super) struct Guard {
 
 impl Drop for Guard {
     fn drop(&mut self) {
-        if let Some(tracer) = self.tracer.as_ref() {
-            if let Err(err) = tracer.shutdown() {
-                eprintln!("{err:?}")
-            }
+        if let Some(tracer) = self.tracer.as_ref()
+            && let Err(err) = tracer.shutdown()
+        {
+            eprintln!("{err:?}")
         }
     }
 }

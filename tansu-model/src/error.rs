@@ -15,17 +15,18 @@
 use std::{
     fmt::{self, Display},
     io, num, str, string,
+    sync::Arc,
 };
 
 use serde::{de, ser};
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum Error {
     DryPop,
     EmptyStack,
     FromUtf8(string::FromUtf8Error),
-    Io(io::Error),
-    Json(serde_json::Error),
+    Io(Arc<io::Error>),
+    Json(Arc<serde_json::Error>),
     Message(String),
     NoCurrentFieldMeta,
     NoMessageMeta,
@@ -54,7 +55,7 @@ impl de::Error for Error {
 
 impl From<io::Error> for Error {
     fn from(value: io::Error) -> Self {
-        Self::Io(value)
+        Self::Io(Arc::new(value))
     }
 }
 
@@ -90,7 +91,7 @@ impl From<num::ParseIntError> for Error {
 
 impl From<serde_json::Error> for Error {
     fn from(value: serde_json::Error) -> Self {
-        Self::Json(value)
+        Self::Json(Arc::new(value))
     }
 }
 

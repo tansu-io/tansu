@@ -12,47 +12,45 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use tansu_sans_io::{Body, join_group_request::JoinGroupRequestProtocol};
+use rama::{Context, Service};
+use tansu_sans_io::{ApiKey, Body, Frame, JoinGroupRequest};
 
-use crate::{Result, coordinator::group::Coordinator};
+use crate::{Error, Result, coordinator::group::Coordinator};
 
-#[derive(Clone, Debug)]
-pub struct JoinRequest<C> {
-    coordinator: C,
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct JoinGroupService;
+
+impl ApiKey for JoinGroupService {
+    const KEY: i16 = JoinGroupRequest::KEY;
 }
 
-impl<C> JoinRequest<C>
+impl<C> Service<C, Frame> for JoinGroupService
 where
     C: Coordinator,
 {
-    pub fn with_coordinator(coordinator: C) -> Self {
-        Self { coordinator }
-    }
+    type Response = Body;
+    type Error = Error;
 
-    #[allow(clippy::too_many_arguments)]
-    pub async fn response(
-        &mut self,
-        client_id: Option<&str>,
-        group_id: &str,
-        session_timeout_ms: i32,
-        rebalance_timeout_ms: Option<i32>,
-        member_id: &str,
-        group_instance_id: Option<&str>,
-        protocol_type: &str,
-        protocols: Option<&[JoinGroupRequestProtocol]>,
-        reason: Option<&str>,
-    ) -> Result<Body> {
-        self.coordinator
+    async fn serve(&self, mut ctx: Context<C>, req: Frame) -> Result<Self::Response, Self::Error> {
+        let coordinator = ctx.state_mut();
+
+        let client_id = req
+            .client_id()
+            .map(|client_id| client_id.map(|client_id| client_id.to_owned()))?;
+
+        let join_group = JoinGroupRequest::try_from(req.body)?;
+
+        coordinator
             .join(
-                client_id,
-                group_id,
-                session_timeout_ms,
-                rebalance_timeout_ms,
-                member_id,
-                group_instance_id,
-                protocol_type,
-                protocols,
-                reason,
+                client_id.as_deref(),
+                join_group.group_id.as_str(),
+                join_group.session_timeout_ms,
+                join_group.rebalance_timeout_ms,
+                join_group.member_id.as_str(),
+                join_group.group_instance_id.as_deref(),
+                join_group.protocol_type.as_str(),
+                join_group.protocols.as_deref(),
+                join_group.reason.as_deref(),
             )
             .await
     }

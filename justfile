@@ -18,7 +18,7 @@ test-doc:
     cargo test --workspace --doc
 
 doc:
-    cargo doc
+    cargo doc --open
 
 clippy:
     cargo clippy -- -D warnings
@@ -275,7 +275,7 @@ otel: build docker-compose-down db-up minio-up minio-ready-local minio-local-ali
 otel-up: docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up tansu-up
 
 tansu-broker *args:
-    target/debug/tansu broker {{args}} 2>&1 >broker.log
+    target/debug/tansu broker {{args}} 2>&1 |tee broker.log
 
 # run a broker with configuration from .env
 broker *args: (cargo-build "--bin" "tansu") docker-compose-down prometheus-up grafana-up db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket lakehouse-catalog-up (tansu-broker args)
@@ -283,7 +283,7 @@ broker *args: (cargo-build "--bin" "tansu") docker-compose-down prometheus-up gr
 
 # run a proxy with configuration from .env
 proxy *args:
-    target/debug/tansu proxy {{args}} 2>&1 >proxy.log
+    target/debug/tansu proxy {{args}} 2>&1 | tee proxy.log
 
 
 # teardown compose, rebuild: minio, db, tansu and lake buckets

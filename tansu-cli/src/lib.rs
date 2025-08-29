@@ -25,6 +25,7 @@ pub enum Error {
     Cat(Box<tansu_cat::Error>),
     DotEnv(#[from] dotenv::Error),
     Generate(#[from] tansu_generator::Error),
+    Proxy(#[from] tansu_proxy::Error),
     Regex(#[from] regex::Error),
     Schema(Box<tansu_schema::Error>),
     Server(Box<tansu_broker::Error>),
@@ -77,10 +78,10 @@ impl VarRep {
 
 impl Replacer for &VarRep {
     fn replace_append(&mut self, caps: &regex::Captures<'_>, dst: &mut String) {
-        if let Some(variable) = caps.name("var") {
-            if let Some(value) = self.0.get(variable.as_str()) {
-                dst.push_str(value);
-            }
+        if let Some(variable) = caps.name("var")
+            && let Some(value) = self.0.get(variable.as_str())
+        {
+            dst.push_str(value);
         }
     }
 }

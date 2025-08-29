@@ -17,17 +17,14 @@ use std::marker::PhantomData;
 use crate::{Error, Result};
 
 use futures::SinkExt;
+use tansu_client::{Client, Manager};
 use tansu_sans_io::{
-    Body, ErrorCode, Frame, Header,
+    ErrorCode,
     fetch_request::{FetchPartition, FetchRequest, FetchTopic},
-    fetch_response::{FetchResponse, FetchableTopicResponse},
     record::inflated,
 };
 use tansu_schema::{AsJsonValue, Registry};
-use tokio::{
-    io::{self, AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
-};
+use tokio::io::stdout;
 use tokio_util::codec::{FramedWrite, LinesCodec};
 use tracing::debug;
 use url::Url;
@@ -195,7 +192,7 @@ impl TryFrom<Configuration> for Consume {
 
 impl Consume {
     pub(crate) async fn main(self) -> Result<ErrorCode> {
-        let stdout = io::stdout();
+        let stdout = stdout();
 
         let mut writer = FramedWrite::new(stdout, LinesCodec::new());
 
@@ -208,19 +205,35 @@ impl Consume {
             None
         };
 
-        let mut connection = Connection::open(&self.configuration.broker).await?;
+        let client = Manager::builder(self.configuration.broker.clone())
+            .client_id(Some(env!("CARGO_PKG_NAME").into()))
+            .build()
+            .await
+            .inspect(|pool| debug!(?pool))
+            .map(Client::new)?;
 
-        for response in connection
-            .consume(
-                self.configuration.topic.as_str(),
-                self.configuration.partition,
-                self.configuration.fetch_offset,
-                self.configuration.max_wait_time_ms,
-                self.configuration.min_bytes,
-                self.configuration.max_bytes,
+        let response = client
+            .call(
+                FetchRequest::default()
+                    .replica_id(Some(-1))
+                    .max_wait_ms(self.configuration.max_wait_time_ms)
+                    .min_bytes(self.configuration.min_bytes)
+                    .max_bytes(self.configuration.max_bytes)
+                    .isolation_level(Some(1))
+                    .topics(Some(vec![
+                        FetchTopic::default()
+                            .topic(Some(self.configuration.topic))
+                            .partitions(Some(vec![
+                                FetchPartition::default()
+                                    .partition(self.configuration.partition)
+                                    .log_start_offset(Some(self.configuration.fetch_offset))
+                                    .partition_max_bytes(4096),
+                            ])),
+                    ])),
             )
-            .await?
-        {
+            .await?;
+
+        for response in response.responses.unwrap_or_default() {
             debug!(?response);
 
             for partition in response.partitions.unwrap_or_default() {
@@ -244,122 +257,5 @@ impl Consume {
         }
 
         Ok(ErrorCode::None)
-    }
-}
-
-#[derive(Debug)]
-struct Connection {
-    broker: TcpStream,
-    correlation_id: i32,
-}
-
-impl Connection {
-    async fn open(broker: &Url) -> Result<Self> {
-        debug!(%broker);
-
-        TcpStream::connect(format!(
-            "{}:{}",
-            broker.host_str().unwrap(),
-            broker.port().unwrap()
-        ))
-        .await
-        .map(|broker| Self {
-            broker,
-            correlation_id: 0,
-        })
-        .map_err(Into::into)
-    }
-
-    async fn consume(
-        &mut self,
-        topic: &str,
-        partition: i32,
-        fetch_offset: i64,
-        max_wait_ms: i32,
-        min_bytes: i32,
-        max_bytes: Option<i32>,
-    ) -> Result<Vec<FetchableTopicResponse>> {
-        let _ = (fetch_offset, max_wait_ms, min_bytes, max_bytes);
-
-        debug!(%topic, partition);
-
-        let api_key = 1;
-        let api_version = 6;
-
-        let header = Header::Request {
-            api_key,
-            api_version,
-            correlation_id: self.correlation_id,
-            client_id: None,
-        };
-
-        let body = Body::FetchRequest(
-            FetchRequest::default()
-                .replica_id(Some(-1))
-                .max_wait_ms(max_wait_ms)
-                .min_bytes(min_bytes)
-                .max_bytes(max_bytes)
-                .isolation_level(Some(1))
-                .topics(Some(vec![
-                    FetchTopic::default()
-                        .topic(Some(topic.into()))
-                        .partitions(Some(vec![
-                            FetchPartition::default()
-                                .log_start_offset(Some(0))
-                                .partition_max_bytes(4096),
-                        ])),
-                ])),
-        );
-
-        debug!(?header, ?body);
-
-        let encoded = Frame::request(header, body)?;
-
-        self.broker
-            .write_all(&encoded[..])
-            .await
-            .inspect_err(|err| debug!(?err))?;
-
-        let mut size = [0u8; 4];
-        _ = self.broker.read_exact(&mut size).await?;
-
-        let mut response_buffer: Vec<u8> = vec![0u8; Self::frame_length(size)];
-        response_buffer[0..size.len()].copy_from_slice(&size[..]);
-        _ = self
-            .broker
-            .read_exact(&mut response_buffer[size.len()..])
-            .await
-            .inspect_err(|err| debug!(?err))?;
-
-        let response = Frame::response_from_bytes(&response_buffer[..], api_key, api_version)
-            .inspect_err(|err| debug!(?err))?;
-
-        debug!(?response);
-
-        match response {
-            Frame {
-                body:
-                    Body::FetchResponse(FetchResponse {
-                        responses: Some(responses),
-                        ..
-                    }),
-                ..
-            } => Ok(responses),
-
-            Frame {
-                body:
-                    Body::FetchResponse(FetchResponse {
-                        error_code: Some(error_code),
-                        ..
-                    }),
-                ..
-            } => Err(Error::Api(ErrorCode::try_from(error_code)?)),
-
-            frame @ Frame { .. } => unreachable!("{frame:?}"),
-        }
-    }
-
-    fn frame_length(encoded: [u8; 4]) -> usize {
-        i32::from_be_bytes(encoded) as usize + encoded.len()
     }
 }

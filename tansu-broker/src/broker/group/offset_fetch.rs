@@ -12,35 +12,36 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use tansu_sans_io::{
-    Body,
-    offset_fetch_request::{OffsetFetchRequestGroup, OffsetFetchRequestTopic},
-};
+use rama::{Context, Service};
+use tansu_sans_io::{ApiKey, Body, Frame, OffsetFetchRequest};
 
-use crate::{Result, coordinator::group::Coordinator};
+use crate::{Error, Result, coordinator::group::Coordinator};
 
-#[derive(Debug)]
-pub struct OffsetFetchRequest<C> {
-    coordinator: C,
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct OffsetFetchService;
+
+impl ApiKey for OffsetFetchService {
+    const KEY: i16 = OffsetFetchRequest::KEY;
 }
 
-impl<C> OffsetFetchRequest<C>
+impl<C> Service<C, Frame> for OffsetFetchService
 where
     C: Coordinator,
 {
-    pub fn with_coordinator(coordinator: C) -> Self {
-        Self { coordinator }
-    }
+    type Response = Body;
+    type Error = Error;
 
-    pub async fn response(
-        &mut self,
-        group_id: Option<&str>,
-        topics: Option<&[OffsetFetchRequestTopic]>,
-        groups: Option<&[OffsetFetchRequestGroup]>,
-        require_stable: Option<bool>,
-    ) -> Result<Body> {
-        self.coordinator
-            .offset_fetch(group_id, topics, groups, require_stable)
+    async fn serve(&self, mut ctx: Context<C>, req: Frame) -> Result<Self::Response, Self::Error> {
+        let coordinator = ctx.state_mut();
+        let offset_fetch = OffsetFetchRequest::try_from(req.body)?;
+
+        coordinator
+            .offset_fetch(
+                offset_fetch.group_id.as_deref(),
+                offset_fetch.topics.as_deref(),
+                offset_fetch.groups.as_deref(),
+                offset_fetch.require_stable,
+            )
             .await
     }
 }

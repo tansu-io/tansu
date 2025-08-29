@@ -138,7 +138,7 @@ use std::{
     num,
     process::{ExitCode, Termination},
     str, string,
-    sync::OnceLock,
+    sync::{Arc, OnceLock},
     time::{Duration, SystemTime, SystemTimeError},
 };
 use tansu_model::{MessageKind, MessageMeta};
@@ -199,7 +199,25 @@ pub trait ApiKey {
     const KEY: i16;
 }
 
-#[derive(Debug, thiserror::Error)]
+pub trait ApiName {
+    const NAME: &'static str;
+}
+
+/// All Kafka API requests implement this trait
+pub trait Request:
+    ApiKey + ApiName + fmt::Debug + Default + Into<Body> + Send + Sync + TryFrom<Body> + 'static
+{
+    type Response: Response;
+}
+
+/// All Kafka API responses implement this trait
+pub trait Response:
+    ApiKey + ApiName + fmt::Debug + Default + Into<Body> + Send + Sync + TryFrom<Body> + 'static
+{
+    type Request: Request;
+}
+
+#[derive(Clone, Debug, thiserror::Error)]
 pub enum Error {
     ApiError(ErrorCode),
     EnvVar(VarError),
@@ -208,12 +226,13 @@ pub enum Error {
     InvalidCoordinatorType(i8),
     InvalidIsolationLevel(i8),
     InvalidOpType(i8),
-    Io(io::Error),
+    Io(Arc<io::Error>),
     Message(String),
     NoSuchField(&'static str),
     NoSuchMessage(&'static str),
     NoSuchRequest(i16),
-    ParseFilter(#[from] ParseError),
+    ParseFilter(Arc<ParseError>),
+    ResponseFrame,
     Snap(#[from] snap::Error),
     StringWithoutApiVersion,
     StringWithoutLength,
@@ -252,7 +271,13 @@ impl serde::de::Error for Error {
 
 impl From<io::Error> for Error {
     fn from(value: io::Error) -> Self {
-        Self::Io(value)
+        Self::Io(Arc::new(value))
+    }
+}
+
+impl From<ParseError> for Error {
+    fn from(value: ParseError) -> Self {
+        Self::ParseFilter(Arc::new(value))
     }
 }
 
@@ -433,6 +458,47 @@ impl Frame {
         let mut reader = bytes.reader();
         let mut deserializer = Decoder::response(&mut reader, api_key, api_version);
         Frame::deserialize(&mut deserializer)
+    }
+
+    /// API request key
+    pub fn api_key(&self) -> Result<i16> {
+        if let Header::Request { api_key, .. } = self.header {
+            Ok(api_key)
+        } else {
+            Err(Error::ResponseFrame)
+        }
+    }
+
+    /// API name
+    pub fn api_name(&self) -> &str {
+        self.body.api_name()
+    }
+
+    /// API request version
+    pub fn api_version(&self) -> Result<i16> {
+        if let Header::Request { api_version, .. } = self.header {
+            Ok(api_version)
+        } else {
+            Err(Error::ResponseFrame)
+        }
+    }
+
+    /// API request/response correlation ID
+    pub fn correlation_id(&self) -> Result<i32> {
+        match self.header {
+            Header::Request { correlation_id, .. } | Header::Response { correlation_id } => {
+                Ok(correlation_id)
+            }
+        }
+    }
+
+    /// API request client ID
+    pub fn client_id(&self) -> Result<Option<&str>> {
+        if let Header::Request { ref client_id, .. } = self.header {
+            Ok(client_id.as_deref())
+        } else {
+            Err(Error::ResponseFrame)
+        }
     }
 }
 

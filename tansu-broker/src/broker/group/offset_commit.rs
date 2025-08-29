@@ -12,39 +12,41 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use tansu_sans_io::{Body, offset_commit_request::OffsetCommitRequestTopic};
+use rama::{Context, Service};
+use tansu_sans_io::{ApiKey, Body, Frame, OffsetCommitRequest};
 
 use crate::{
-    Result,
+    Error, Result,
     coordinator::group::{Coordinator, OffsetCommit},
 };
 
-#[derive(Debug)]
-pub struct OffsetCommitRequest<C> {
-    coordinator: C,
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct OffsetCommitService;
+
+impl ApiKey for OffsetCommitService {
+    const KEY: i16 = OffsetCommitRequest::KEY;
 }
 
-impl<C> OffsetCommitRequest<C>
+impl<C> Service<C, Frame> for OffsetCommitService
 where
     C: Coordinator,
 {
-    pub async fn response(
-        &mut self,
-        group_id: &str,
-        generation_id_or_member_epoch: Option<i32>,
-        member_id: Option<&str>,
-        group_instance_id: Option<&str>,
-        retention_time_ms: Option<i64>,
-        topics: Option<&[OffsetCommitRequestTopic]>,
-    ) -> Result<Body> {
-        self.coordinator
+    type Response = Body;
+    type Error = Error;
+
+    async fn serve(&self, mut ctx: Context<C>, req: Frame) -> Result<Self::Response, Self::Error> {
+        let coordinator = ctx.state_mut();
+
+        let offset_commit = OffsetCommitRequest::try_from(req.body)?;
+
+        coordinator
             .offset_commit(OffsetCommit {
-                group_id,
-                generation_id_or_member_epoch,
-                member_id,
-                group_instance_id,
-                retention_time_ms,
-                topics,
+                group_id: offset_commit.group_id.as_str(),
+                generation_id_or_member_epoch: offset_commit.generation_id_or_member_epoch,
+                member_id: offset_commit.member_id.as_deref(),
+                group_instance_id: offset_commit.group_instance_id.as_deref(),
+                retention_time_ms: offset_commit.retention_time_ms,
+                topics: offset_commit.topics.as_deref(),
             })
             .await
     }

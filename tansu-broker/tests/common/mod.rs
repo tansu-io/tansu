@@ -522,7 +522,7 @@ pub(crate) async fn join(
 pub(crate) async fn register_broker(
     cluster_id: &Uuid,
     broker_id: i32,
-    sc: &mut StorageContainer,
+    sc: &StorageContainer,
 ) -> Result<()> {
     let incarnation_id = Uuid::now_v7();
 

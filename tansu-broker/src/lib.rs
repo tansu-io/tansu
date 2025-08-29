@@ -39,6 +39,7 @@ use url::Url;
 pub mod broker;
 pub mod coordinator;
 pub mod otel;
+pub mod service;
 
 #[derive(Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum CancelKind {
@@ -71,6 +72,7 @@ pub enum Error {
     AddrParse(#[from] AddrParseError),
     Api(ErrorCode),
     Custom(String),
+    DuplicateApiService(i16),
     EmptyCoordinatorWrapper,
     EmptyJoinGroupRequestProtocol,
     ExpectedJoinGroupRequestProtocol(&'static str),
@@ -93,6 +95,7 @@ pub enum Error {
     Regex(#[from] regex::Error),
     TokioPostgres(#[from] tokio_postgres::error::Error),
     TryFromInt(#[from] TryFromIntError),
+    UnsupportedApiService(i16),
     UnsupportedStorageUrl(Url),
     UnsupportedTracingFormat(String),
     Url(#[from] url::ParseError),
@@ -174,10 +177,10 @@ impl VarRep {
 
 impl Replacer for &VarRep {
     fn replace_append(&mut self, caps: &regex::Captures<'_>, dst: &mut String) {
-        if let Some(variable) = caps.name("var") {
-            if let Some(value) = self.0.get(variable.as_str()) {
-                dst.push_str(value);
-            }
+        if let Some(variable) = caps.name("var")
+            && let Some(value) = self.0.get(variable.as_str())
+        {
+            dst.push_str(value);
         }
     }
 }

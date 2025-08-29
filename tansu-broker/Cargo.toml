@@ -28,6 +28,7 @@ opentelemetry-otlp.workspace = true
 opentelemetry-semantic-conventions.workspace = true
 opentelemetry.workspace = true
 opentelemetry_sdk.workspace = true
+rama.workspace = true
 rand.workspace = true
 regex.workspace = true
 serde.workspace = true

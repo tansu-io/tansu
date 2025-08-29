@@ -617,18 +617,18 @@ impl Serializer for &mut Encoder<'_> {
     fn serialize_seq(self, len: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
         debug!(?len);
 
-        if self.is_valid() {
-            if let Some(len) = len {
-                if self.is_flexible() {
-                    (len + 1)
-                        .try_into()
-                        .map_err(Into::into)
-                        .and_then(|l| self.unsigned_varint(l))?;
-                } else {
-                    len.try_into()
-                        .map_err(Into::into)
-                        .and_then(|l| self.serialize_i32(l))?;
-                }
+        if self.is_valid()
+            && let Some(len) = len
+        {
+            if self.is_flexible() {
+                (len + 1)
+                    .try_into()
+                    .map_err(Into::into)
+                    .and_then(|l| self.unsigned_varint(l))?;
+            } else {
+                len.try_into()
+                    .map_err(Into::into)
+                    .and_then(|l| self.serialize_i32(l))?;
             }
         }
 

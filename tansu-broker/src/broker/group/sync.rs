@@ -12,43 +12,38 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use tansu_sans_io::{Body, sync_group_request::SyncGroupRequestAssignment};
+use rama::{Context, Service};
+use tansu_sans_io::{ApiKey, Body, Frame, SyncGroupRequest};
 
-use crate::{Result, coordinator::group::Coordinator};
+use crate::{Error, Result, coordinator::group::Coordinator};
 
-#[derive(Debug)]
-pub struct SyncGroupRequest<C> {
-    coordinator: C,
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct SyncGroupService;
+
+impl ApiKey for SyncGroupService {
+    const KEY: i16 = SyncGroupRequest::KEY;
 }
 
-impl<C> SyncGroupRequest<C>
+impl<C> Service<C, Frame> for SyncGroupService
 where
     C: Coordinator,
 {
-    pub fn with_coordinator(coordinator: C) -> Self {
-        Self { coordinator }
-    }
+    type Response = Body;
+    type Error = Error;
 
-    #[allow(clippy::too_many_arguments)]
-    pub async fn response(
-        &mut self,
-        group_id: &str,
-        generation_id: i32,
-        member_id: &str,
-        group_instance_id: Option<&str>,
-        protocol_type: Option<&str>,
-        protocol_name: Option<&str>,
-        assignments: Option<&[SyncGroupRequestAssignment]>,
-    ) -> Result<Body> {
-        self.coordinator
+    async fn serve(&self, mut ctx: Context<C>, req: Frame) -> Result<Self::Response, Self::Error> {
+        let coordinator = ctx.state_mut();
+        let sync_group = SyncGroupRequest::try_from(req.body)?;
+
+        coordinator
             .sync(
-                group_id,
-                generation_id,
-                member_id,
-                group_instance_id,
-                protocol_type,
-                protocol_name,
-                assignments,
+                sync_group.group_id.as_str(),
+                sync_group.generation_id,
+                sync_group.member_id.as_str(),
+                sync_group.group_instance_id.as_deref(),
+                sync_group.protocol_type.as_deref(),
+                sync_group.protocol_name.as_deref(),
+                sync_group.assignments.as_deref(),
             )
             .await
     }

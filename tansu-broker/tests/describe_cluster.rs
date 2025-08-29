@@ -13,11 +13,13 @@
 // limitations under the License.
 
 use common::register_broker;
-use tansu_broker::{Result, broker::describe_cluster::DescribeClusterRequest};
+use rama::{Context, Service};
+use tansu_broker::Result;
 use tansu_sans_io::{
-    Body, DescribeClusterResponse, ErrorCode, describe_cluster_response::DescribeClusterBroker,
+    DescribeClusterRequest, DescribeClusterResponse, ErrorCode,
+    describe_cluster_response::DescribeClusterBroker,
 };
-use tansu_storage::StorageContainer;
+use tansu_storage::{StorageContainer, service::DescribeClusterService};
 use tracing::debug;
 use url::Url;
 use uuid::Uuid;
@@ -28,21 +30,24 @@ pub async fn describe(
     cluster_id: Uuid,
     broker_id: i32,
     advertised_listener: Url,
-    mut sc: StorageContainer,
+    sc: StorageContainer,
 ) -> Result<()> {
     debug!(%cluster_id, broker_id, %advertised_listener);
-    register_broker(&cluster_id, broker_id, &mut sc).await?;
-
-    let mut dc = DescribeClusterRequest {
-        cluster_id: cluster_id.to_string(),
-        storage: sc,
-    };
+    register_broker(&cluster_id, broker_id, &sc).await?;
 
     let include_cluster_authorized_operations = true;
     let endpoint_type = Some(6);
 
-    let response = dc
-        .response(include_cluster_authorized_operations, endpoint_type)
+    let ctx = Context::with_state(sc);
+    let service = DescribeClusterService;
+
+    let response = service
+        .serve(
+            ctx,
+            DescribeClusterRequest::default()
+                .include_cluster_authorized_operations(include_cluster_authorized_operations)
+                .endpoint_type(endpoint_type),
+        )
         .await?;
 
     let host = advertised_listener.host_str().unwrap().to_string();
@@ -51,7 +56,7 @@ pub async fn describe(
 
     assert!(matches!(
         response,
-        Body::DescribeClusterResponse (DescribeClusterResponse {
+        DescribeClusterResponse {
             throttle_time_ms: 0,
             error_code,
             error_message: None,
@@ -59,7 +64,7 @@ pub async fn describe(
             brokers,
             cluster_authorized_operations: -2_147_483_648,
             ..
-        }) if error_code == i16::from(ErrorCode::None)
+        } if error_code == i16::from(ErrorCode::None)
         && brokers == Some(vec![DescribeClusterBroker::default()
             .broker_id(broker_id)
             .host(host)
