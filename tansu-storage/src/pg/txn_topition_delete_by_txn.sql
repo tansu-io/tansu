@@ -14,19 +14,19 @@
 -- limitations under the License.
 
 delete from txn_topition
+where txn_topition.txn_detail in (
+    select txn_d.id
 
-using cluster c, producer p, producer_epoch pe, txn, txn_detail txn_d
+    from cluster c
+    join producer p on p.cluster = c.id
+    join producer_epoch pe on pe.producer = p.id
+    join txn on txn.cluster = c.id and txn.producer = p.id
+    join txn_detail txn_d on txn_d."transaction" = txn.id
 
-where
+    where
 
-c.name = $1
-and txn.name = $2
-and p.id = $3
-and pe.epoch = $4
-
-and p.cluster = c.id
-and pe.producer = p.id
-and txn.cluster = c.id
-and txn.producer = p.id
-and txn_d.transaction = txn.id and txn_d.producer_epoch = pe.id
-and txn_topition.txn_detail = txn_d.id;
+    c.name = $1
+    and txn.name = $2
+    and p.id = $3
+    and pe.epoch = $4
+);

@@ -14,7 +14,7 @@
 
 use std::time::Duration;
 
-use crate::{EnvVarExp, Error, Result};
+use crate::{EnvVarExp, Result};
 
 use super::DEFAULT_BROKER;
 use clap::{Parser, Subcommand};
@@ -124,41 +124,38 @@ pub(super) enum Command {
 
 impl Arg {
     pub(super) async fn main(self) -> Result<ErrorCode> {
-        Broker::<Controller<StorageContainer>, StorageContainer>::try_from(self)?
+        self.build()
+            .await?
             .main()
             .await
             .inspect(|result| debug!(?result))
             .inspect_err(|err| debug!(?err))
             .map_err(Into::into)
     }
-}
 
-impl TryFrom<Arg> for Broker<Controller<StorageContainer>, StorageContainer> {
-    type Error = Error;
-
-    fn try_from(args: Arg) -> Result<Self, Self::Error> {
-        let cluster_id = args.cluster_id;
+    async fn build(self) -> Result<Broker<Controller<StorageContainer>, StorageContainer>> {
+        let cluster_id = self.cluster_id;
         let incarnation_id = Uuid::now_v7();
-        let otlp_endpoint_url = args
+        let otlp_endpoint_url = self
             .otlp_endpoint_url
             .map(|env_var_exp| env_var_exp.into_inner());
 
-        let storage_engine = args.storage_engine.into_inner();
-        let advertised_listener = args.advertised_listener_url.into_inner();
-        let listener = args.listener_url.into_inner();
-        let schema_registry = args
+        let storage_engine = self.storage_engine.into_inner();
+        let advertised_listener = self.advertised_listener_url.into_inner();
+        let listener = self.listener_url.into_inner();
+        let schema_registry = self
             .schema_registry
             .map(|env_var_exp| env_var_exp.into_inner())
             .map(|object_store| {
                 Registry::builder_try_from_url(&object_store).map(|registry| {
                     registry
-                        .with_cache_expiry_after(args.schema_registry_cache_expiry)
+                        .with_cache_expiry_after(self.schema_registry_cache_expiry)
                         .build()
                 })
             })
             .transpose()?;
 
-        let lake_house = args
+        let lake_house = self
             .command
             .map(|command| match command {
                 Command::Iceberg {
@@ -198,6 +195,7 @@ impl TryFrom<Arg> for Broker<Controller<StorageContainer>, StorageContainer> {
             .storage(storage_engine)
             .listener(listener)
             .build()
+            .await
             .map_err(Into::into)
     }
 }

@@ -18,11 +18,7 @@ use crate::{
     CancelKind, Error, Result,
     coordinator::group::{Coordinator, administrator::Controller},
     otel,
-    service::{services, tcp::TcpRequest},
-};
-use object_store::{
-    aws::{AmazonS3Builder, S3ConditionalPut},
-    memory::InMemory,
+    service::services,
 };
 use rama::{Context, Service};
 use std::{
@@ -34,9 +30,7 @@ use std::{
 };
 use tansu_sans_io::ErrorCode;
 use tansu_schema::{Registry, lake::House};
-use tansu_storage::{
-    BrokerRegistrationRequest, Storage, StorageContainer, dynostore::DynoStore, pg::Postgres,
-};
+use tansu_storage::{BrokerRegistrationRequest, Storage, StorageContainer};
 use tokio::{
     net::TcpListener,
     signal::unix::{SignalKind, signal},
@@ -214,13 +208,12 @@ where
 
         loop {
             tokio::select! {
-                Ok(stream_addr) = listener.accept() => {
+                Ok((stream, _addr)) = listener.accept() => {
 
-                    let request = TcpRequest::from(stream_addr);
                     let service = service.clone();
 
                     let handle = set.spawn(async move {
-                            match service.serve(Context::default(), request).await {
+                            match service.serve(Context::default(), stream).await {
                                 Err(Error::Io(ref io))
                                     if io.kind() == ErrorKind::UnexpectedEof
                                         || io.kind() == ErrorKind::BrokenPipe
@@ -441,47 +434,7 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
 }
 
 impl Builder<i32, String, Uuid, Url, Url, Url> {
-    fn storage_engine(&self) -> Result<StorageContainer> {
-        match self.storage.scheme() {
-            "postgres" | "postgresql" => Postgres::builder(self.storage.to_string().as_str())
-                .map(|builder| builder.cluster(self.cluster_id.as_str()))
-                .map(|builder| builder.node(self.node_id))
-                .map(|builder| builder.advertised_listener(self.advertised_listener.clone()))
-                .map(|builder| builder.schemas(self.schema_registry.clone()))
-                .map(|builder| builder.lake(self.lake_house.clone()))
-                .map(|builder| builder.build())
-                .map(StorageContainer::Postgres)
-                .map_err(Into::into),
-
-            "s3" => {
-                let bucket_name = self.storage.host_str().unwrap_or("tansu");
-
-                AmazonS3Builder::from_env()
-                    .with_bucket_name(bucket_name)
-                    .with_conditional_put(S3ConditionalPut::ETagMatch)
-                    .build()
-                    .map(|object_store| {
-                        DynoStore::new(self.cluster_id.as_str(), self.node_id, object_store)
-                            .advertised_listener(self.advertised_listener.clone())
-                            .schemas(self.schema_registry.clone())
-                            .lake(self.lake_house.clone())
-                    })
-                    .map(StorageContainer::DynoStore)
-                    .map_err(Into::into)
-            }
-
-            "memory" => Ok(StorageContainer::DynoStore(
-                DynoStore::new(self.cluster_id.as_str(), self.node_id, InMemory::new())
-                    .advertised_listener(self.advertised_listener.clone())
-                    .schemas(self.schema_registry.clone())
-                    .lake(self.lake_house.clone()),
-            )),
-
-            _unsupported => Err(Error::UnsupportedStorageUrl(self.storage.clone())),
-        }
-    }
-
-    pub fn build(self) -> Result<Broker<Controller<StorageContainer>, StorageContainer>> {
+    pub async fn build(self) -> Result<Broker<Controller<StorageContainer>, StorageContainer>> {
         if let Some(otlp_endpoint_url) = self
             .otlp_endpoint_url
             .clone()
@@ -490,7 +443,16 @@ impl Builder<i32, String, Uuid, Url, Url, Url> {
             otel::metric_exporter(otlp_endpoint_url)?;
         }
 
-        let storage = self.storage_engine()?;
+        let storage = StorageContainer::builder()
+            .cluster_id(self.cluster_id.clone())
+            .node_id(self.node_id)
+            .advertised_listener(self.advertised_listener.clone())
+            .schema_registry(self.schema_registry.clone())
+            .lake_house(self.lake_house.clone())
+            .storage(self.storage.clone())
+            .build()
+            .await?;
+
         let groups = Controller::with_storage(storage.clone())?;
 
         Ok(Broker {

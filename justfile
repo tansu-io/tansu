@@ -2,6 +2,9 @@ set dotenv-load
 
 default: fmt build test clippy
 
+about:
+    cargo about generate about.hbs > license.html
+
 cargo-build +args:
     cargo build {{args}}
 
@@ -12,7 +15,7 @@ release: (cargo-build "--release" "--workspace" "--all-targets")
 test: test-workspace test-doc
 
 test-workspace:
-    cargo test --workspace --all-targets
+    cargo test --workspace --all-targets --all-features
 
 test-doc:
     cargo test --workspace --doc
@@ -30,6 +33,9 @@ miri:
     cargo +nightly miri test --no-fail-fast --all-features
 
 docker-build:
+    docker build --tag ghcr.io/tansu-io/tansu --no-cache --progress plain --debug .
+
+docker-build-cross:
     docker build --tag ghcr.io/tansu-io/tansu --no-cache --progress plain --platform linux/amd64,linux/arm64 --debug .
 
 minio-up: (docker-compose-up "minio")
@@ -275,7 +281,7 @@ otel: build docker-compose-down db-up minio-up minio-ready-local minio-local-ali
 otel-up: docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up tansu-up
 
 tansu-broker *args:
-    target/debug/tansu broker {{args}} 2>&1 |tee broker.log
+    target/debug/tansu broker {{args}} 2>&1 | tee broker.log
 
 # run a broker with configuration from .env
 broker *args: (cargo-build "--bin" "tansu") docker-compose-down prometheus-up grafana-up db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket lakehouse-catalog-up (tansu-broker args)

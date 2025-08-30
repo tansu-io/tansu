@@ -31,4 +31,4 @@ and pe.producer = p.id
 and txn.cluster = c.id
 and txn.producer = p.id
 and txn_detail.producer_epoch = pe.id
-and txn_detail.transaction = txn.id;
+and txn_detail."transaction" = txn.id;

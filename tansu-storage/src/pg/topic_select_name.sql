@@ -20,5 +20,7 @@ from
 cluster c
 join topic t on t.cluster = c.id
 
-where c.name = $1
+where
+
+c.name = $1
 and t.name = $2;

@@ -250,7 +250,7 @@ mod channel;
 mod frame;
 mod stream;
 
-pub use api::{ApiVersionsService, FrameRouteService};
+pub use api::{ApiVersionsService, FrameRouteBuilder, FrameRouteService};
 
 pub use channel::{
     ChannelFrameLayer, ChannelFrameService, FrameChannelService, FrameReceiver, FrameSender,
@@ -264,8 +264,8 @@ pub use frame::{
 };
 
 pub use stream::{
-    BytesLayer, BytesService, BytesTcpService, TcpBytesLayer, TcpContext, TcpContextLayer,
-    TcpContextService, TcpListenerLayer,
+    BytesLayer, BytesService, BytesTcpService, TcpBytesLayer, TcpBytesService, TcpContext,
+    TcpContextLayer, TcpContextService, TcpListenerLayer,
 };
 
 #[derive(Clone, Debug, thiserror::Error)]

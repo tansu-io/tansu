@@ -21,7 +21,7 @@ cluster c
 join topic t on t.cluster = c.id
 join topition tp on tp.topic = t.id
 join txn on txn.cluster = c.id
-join txn_detail on txn_detail.transaction = txn.id
+join txn_detail on txn_detail."transaction" = txn.id
 join txn_topition txn_tp on txn_tp.txn_detail = txn_detail.id and txn_tp.topition = tp.id
 
 where

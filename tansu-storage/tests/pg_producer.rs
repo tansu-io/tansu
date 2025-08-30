@@ -12,20 +12,35 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[cfg(feature = "postgres")]
 use bytes::Bytes;
+
+#[cfg(feature = "postgres")]
 use rand::{distr::Alphanumeric, prelude::*, rng};
+
+#[cfg(feature = "postgres")]
 use tansu_sans_io::{
     ErrorCode, IsolationLevel,
     create_topics_request::CreatableTopic,
     record::{Record, inflated},
 };
+
+#[cfg(feature = "postgres")]
 use tansu_storage::{
     BrokerRegistrationRequest, Error, ListOffsetRequest, Result, Storage, StorageContainer,
-    TopicId, Topition, pg::Postgres,
+    TopicId, Topition,
 };
+
+#[cfg(feature = "postgres")]
+use tansu_storage::pg::Postgres;
+
+#[cfg(feature = "postgres")]
 use tracing::{debug, subscriber::DefaultGuard};
+
+#[cfg(feature = "postgres")]
 use uuid::Uuid;
 
+#[cfg(feature = "postgres")]
 fn init_tracing() -> Result<DefaultGuard> {
     use std::{fs::File, sync::Arc, thread};
 
@@ -53,6 +68,7 @@ fn init_tracing() -> Result<DefaultGuard> {
     ))
 }
 
+#[cfg(feature = "postgres")]
 fn storage_container(cluster: impl Into<String>, node: i32) -> Result<StorageContainer> {
     Postgres::builder("postgres://postgres:postgres@localhost")
         .map(|builder| builder.cluster(cluster))
@@ -61,6 +77,7 @@ fn storage_container(cluster: impl Into<String>, node: i32) -> Result<StorageCon
         .map(StorageContainer::Postgres)
 }
 
+#[cfg(feature = "postgres")]
 #[tokio::test]
 async fn produce() -> Result<()> {
     let _guard = init_tracing()?;

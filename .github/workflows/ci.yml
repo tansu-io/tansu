@@ -50,10 +50,10 @@ jobs:
         with:
           components: clippy, rustfmt
           cache: false
-      - run: cargo build
+      - run: cargo build --all-features
       - run: cargo fmt --all --check
       - run: cargo clippy -- -D warnings
-      - run: cargo test
+      - run: cargo test --all-features
   typos:
     runs-on: ubuntu-latest
     steps:
@@ -134,6 +134,7 @@ jobs:
         storage:
           - s3://tansu/
           - postgres://postgres:postgres@db
+          - sqlite://tansu.db
         kafka:
           - apache/kafka:3.9.0
           - apache/kafka:3.8.1
