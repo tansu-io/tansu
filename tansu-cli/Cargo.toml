@@ -16,6 +16,7 @@ workspace = true
 [dependencies]
 clap.workspace = true
 dotenv.workspace = true
+humantime.workspace = true
 regex.workspace = true
 tansu-broker.workspace = true
 tansu-cat.workspace = true

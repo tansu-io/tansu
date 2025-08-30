@@ -164,7 +164,11 @@ mod pg {
 
         let schemas = Url::parse("file://../etc/schema")
             .map_err(Error::from)
-            .and_then(|url| Registry::try_from(url).map_err(Into::into))
+            .and_then(|url| {
+                Registry::builder_try_from_url(&url)
+                    .map(|builder| builder.build())
+                    .map_err(Into::into)
+            })
             .map(Some)?;
 
         common::storage_container(
@@ -224,7 +228,11 @@ mod in_memory {
 
         let schemas = Url::parse("file://../etc/schema")
             .map_err(Error::from)
-            .and_then(|url| Registry::try_from(url).map_err(Into::into))
+            .and_then(|url| {
+                Registry::builder_try_from_url(&url)
+                    .map(|builder| builder.build())
+                    .map_err(Into::into)
+            })
             .map(Some)?;
 
         common::storage_container(
@@ -285,7 +293,11 @@ mod lite {
 
         let schemas = Url::parse("file://../etc/schema")
             .map_err(Error::from)
-            .and_then(|url| Registry::try_from(url).map_err(Into::into))
+            .and_then(|url| {
+                Registry::builder_try_from_url(&url)
+                    .map(|builder| builder.build())
+                    .map_err(Into::into)
+            })
             .map(Some)?;
 
         common::storage_container(

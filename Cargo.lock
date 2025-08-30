@@ -6706,6 +6706,7 @@ version = "0.4.10"
 dependencies = [
  "clap",
  "dotenv",
+ "humantime",
  "regex",
  "tansu-broker",
  "tansu-cat",

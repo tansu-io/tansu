@@ -281,7 +281,7 @@ pub struct Builder<N, C, I, A, S, L> {
     storage: S,
     listener: L,
     otlp_endpoint_url: Option<Url>,
-    schema_registry: Option<Url>,
+    schema_registry: Option<Registry>,
     lake_house: Option<House>,
 }
 
@@ -386,11 +386,7 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
         }
     }
 
-    pub fn schema_registry(self, schema_registry: Option<Url>) -> Builder<N, C, I, A, S, L> {
-        _ = schema_registry
-            .as_ref()
-            .inspect(|schema_registry| debug!(%schema_registry));
-
+    pub fn schema_registry(self, schema_registry: Option<Registry>) -> Builder<N, C, I, A, S, L> {
         Builder {
             node_id: self.node_id,
             cluster_id: self.cluster_id,
@@ -451,11 +447,7 @@ impl Builder<i32, String, Uuid, Url, Url, Url> {
             .cluster_id(self.cluster_id.clone())
             .node_id(self.node_id)
             .advertised_listener(self.advertised_listener.clone())
-            .schema_registry(
-                self.schema_registry
-                    .as_ref()
-                    .map_or(Ok(None), |schema| Registry::try_from(schema).map(Some))?,
-            )
+            .schema_registry(self.schema_registry.clone())
             .lake_house(self.lake_house.clone())
             .storage(self.storage.clone())
             .build()
