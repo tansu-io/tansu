@@ -15,6 +15,89 @@
 //! Tansu Client
 //!
 //! Tansu API client.
+//!
+//! # Simple [`Request`] client
+//!
+//! ```no_run
+//! use tansu_client::{Client, ConnectionManager, Error};
+//! use tansu_sans_io::MetadataRequest;
+//! use rama::{Service as _, Context};
+//! use url::Url;
+//!
+//! # #[tokio::main]
+//! # async fn main() -> Result<(), Error> {
+//! let origin = ConnectionManager::builder(Url::parse("tcp://localhost:9092")?)
+//!     .client_id(Some(env!("CARGO_PKG_NAME").into()))
+//!     .build()
+//!     .await
+//!     .map(Client::new)?;
+//!
+//! let response = origin
+//!     .call(
+//!         MetadataRequest::default()
+//!             .topics(Some([].into()))
+//!             .allow_auto_topic_creation(Some(false))
+//!             .include_cluster_authorized_operations(Some(false))
+//!             .include_topic_authorized_operations(Some(false)),
+//!     )
+//!     .await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # Proxy: [`Layer`] Composition
+//!
+//! An example API proxy listening for requests on `tcp://localhost:9092` that
+//! forwards each [`Frame`] to an origin broker on `tcp://example.com:9092`:
+//!
+//! ```no_run
+//! use rama::{Context, Layer as _, Service as _};
+//! use tansu_client::{
+//!     BytesConnectionService, ConnectionManager, Error, FrameConnectionLayer,
+//!     FramePoolLayer,
+//! };
+//! use tansu_service::{
+//!     BytesFrameLayer, FrameBytesLayer, TcpBytesLayer, TcpContextLayer, TcpListenerLayer,
+//!     host_port,
+//! };
+//! use tokio::net::TcpListener;
+//! use tokio_util::sync::CancellationToken;
+//! use url::Url;
+//!
+//! # #[tokio::main]
+//! # async fn main() -> Result<(), Error> {
+//! // forward protocol frames to the origin using a connection pool:
+//! let origin = ConnectionManager::builder(Url::parse("tcp://example.com:9092")?)
+//!     .client_id(Some(env!("CARGO_PKG_NAME").into()))
+//!     .build()
+//!     .await?;
+//!
+//! // a tcp listener used by the proxy
+//! let listener =
+//!     TcpListener::bind(host_port(Url::parse("tcp://localhost:9092")?).await?).await?;
+//!
+//! // listen for requests until cancelled
+//! let token = CancellationToken::new();
+//!
+//! let stack = (
+//!     // server layers: reading tcp -> bytes -> frames:
+//!     TcpListenerLayer::new(token),
+//!     TcpContextLayer::default(),
+//!     TcpBytesLayer::<()>::default(),
+//!     BytesFrameLayer,
+//!
+//!     // client layers: writing frames -> connection pool -> bytes -> origin:
+//!     FramePoolLayer::new(origin),
+//!     FrameConnectionLayer,
+//!     FrameBytesLayer,
+//! )
+//!     .into_layer(BytesConnectionService);
+//!
+//! stack.serve(Context::default(), listener).await?;
+//!
+//! # Ok(())
+//! # }
+//! ```
 
 use std::{
     collections::BTreeMap,
@@ -41,6 +124,7 @@ use tracing::{Instrument, Level, debug, error, span};
 use tracing_subscriber::filter::ParseError;
 use url::Url;
 
+/// Client Errors
 #[derive(thiserror::Error, Clone, Debug)]
 pub enum Error {
     DeadPoolBuild(#[from] BuildError),
@@ -91,7 +175,7 @@ pub(crate) static METER: LazyLock<Meter> = LazyLock::new(|| {
     )
 });
 
-///  Broker connection with a correlation id
+///  Broker connection stream with [`correlation id`][`Header#variant.Request.field.correlation_id`]
 #[derive(Debug)]
 pub struct Connection {
     stream: TcpStream,
@@ -100,13 +184,13 @@ pub struct Connection {
 
 /// Manager of supported API versions for a broker
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct Manager {
+pub struct ConnectionManager {
     broker: Url,
     client_id: Option<String>,
     versions: BTreeMap<i16, i16>,
 }
 
-impl Manager {
+impl ConnectionManager {
     /// Build a manager with a broker endpoint
     pub fn builder(broker: Url) -> Builder {
         Builder::broker(broker)
@@ -126,7 +210,7 @@ impl Manager {
     }
 }
 
-impl managed::Manager for Manager {
+impl managed::Manager for ConnectionManager {
     type Type = Connection;
     type Error = Error;
 
@@ -167,9 +251,10 @@ impl managed::Manager for Manager {
     }
 }
 
-/// a managed pool of broker connections
-pub type Pool = managed::Pool<Manager>;
+/// A managed [`Pool`] of broker [`Connection`]s
+pub type Pool = managed::Pool<ConnectionManager>;
 
+/// [Build][`Builder#method.build`] a [`Connection`] [`Pool`] to a [broker][`Builder#method.broker`]
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Builder {
     broker: Url,
@@ -177,7 +262,7 @@ pub struct Builder {
 }
 
 impl Builder {
-    /// broker url
+    /// Broker URL
     pub fn broker(broker: Url) -> Self {
         Self {
             broker,
@@ -185,20 +270,22 @@ impl Builder {
         }
     }
 
-    /// client id used when making requests to the broker
+    /// Client id used when making requests to the broker
     pub fn client_id(self, client_id: Option<String>) -> Self {
         Self { client_id, ..self }
     }
 
-    /// inquire with the broker supported api versions
+    /// Inquire with the broker supported api versions
     async fn bootstrap(&self) -> Result<BTreeMap<i16, i16>, Error> {
+        // Create a temporary pool to establish the API requests
+        // and versions supported by the broker
         let versions = BTreeMap::from([(ApiVersionsRequest::KEY, 0)]);
 
         let req = ApiVersionsRequest::default()
             .client_software_name(Some(env!("CARGO_PKG_NAME").into()))
             .client_software_version(Some(env!("CARGO_PKG_VERSION").into()));
 
-        let client = Pool::builder(Manager {
+        let client = Pool::builder(ConnectionManager {
             broker: self.broker.clone(),
             client_id: self.client_id.clone(),
             versions,
@@ -216,10 +303,10 @@ impl Builder {
         })
     }
 
-    /// establish the api versions supported by the broker
+    /// Establish the API versions supported by the broker returning a [`Pool`]
     pub async fn build(self) -> Result<Pool, Error> {
         self.bootstrap().await.and_then(|versions| {
-            Pool::builder(Manager {
+            Pool::builder(ConnectionManager {
                 broker: self.broker,
                 client_id: self.client_id,
                 versions,
@@ -230,7 +317,7 @@ impl Builder {
     }
 }
 
-/// inject the pool into the service context of this frame layer
+/// Inject the [`Pool`][`Pool`] into the [`Service`] [`Context`] of this [`Layer`] using [`FramePoolService`]
 #[derive(Clone, Debug)]
 pub struct FramePoolLayer {
     pool: Pool,
@@ -253,7 +340,28 @@ impl<S> Layer<S> for FramePoolLayer {
     }
 }
 
-/// inject the pool into the service context of this request layer
+/// Inject the [`Pool`][`Pool`] into the [`Service`] [`Context`] of the inner [`Service`]
+#[derive(Clone, Debug)]
+pub struct FramePoolService<S> {
+    pool: Pool,
+    inner: S,
+}
+
+impl<State, S> Service<State, Frame> for FramePoolService<S>
+where
+    S: Service<Pool, Frame, Response = Frame>,
+    State: Send + Sync + 'static,
+{
+    type Response = Frame;
+    type Error = S::Error;
+
+    async fn serve(&self, ctx: Context<State>, req: Frame) -> Result<Self::Response, Self::Error> {
+        let (ctx, _) = ctx.swap_state(self.pool.clone());
+        self.inner.serve(ctx, req).await
+    }
+}
+
+/// Inject the [`Pool`][`Pool`] into the [`Service`] [`Context`] of this [`Layer`] using [`RequestPoolService`]
 #[derive(Clone, Debug)]
 pub struct RequestPoolLayer {
     pool: Pool,
@@ -276,7 +384,7 @@ impl<S> Layer<S> for RequestPoolLayer {
     }
 }
 
-/// inject the pool into the inner service context
+/// Inject the [`Pool`][`Pool`] into the [`Service`] [`Context`] of the inner [`Service`]
 #[derive(Clone, Debug)]
 pub struct RequestPoolService<S> {
     pool: Pool,
@@ -299,27 +407,7 @@ where
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct FramePoolService<S> {
-    pool: Pool,
-    inner: S,
-}
-
-impl<State, S> Service<State, Frame> for FramePoolService<S>
-where
-    S: Service<Pool, Frame, Response = Frame>,
-    State: Send + Sync + 'static,
-{
-    type Response = Frame;
-    type Error = S::Error;
-
-    async fn serve(&self, ctx: Context<State>, req: Frame) -> Result<Self::Response, Self::Error> {
-        let (ctx, _) = ctx.swap_state(self.pool.clone());
-        self.inner.serve(ctx, req).await
-    }
-}
-
-/// API client using a connection pool
+/// API client using a [`Connection`] [`Pool`]
 #[derive(Clone, Debug)]
 pub struct Client {
     service:
@@ -349,6 +437,7 @@ impl Client {
     }
 }
 
+/// A [`Layer`] that takes a [`Connection`] from the [`Pool`] calling an inner [`Service`] with that [`Connection`] as [`Context`]
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct FrameConnectionLayer;
 
@@ -360,6 +449,7 @@ impl<S> Layer<S> for FrameConnectionLayer {
     }
 }
 
+/// A [`Service`] that takes a [`Connection`] from the [`Pool`] calling an inner [`Service`] with that [`Connection`] as [`Context`]
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct FrameConnectionService<S> {
     inner: S,
@@ -367,7 +457,7 @@ pub struct FrameConnectionService<S> {
 
 impl<S> Service<Pool, Frame> for FrameConnectionService<S>
 where
-    S: Service<Object<Manager>, Frame, Response = Frame>,
+    S: Service<Object<ConnectionManager>, Frame, Response = Frame>,
     S::Error: From<Error> + From<PoolError<Error>> + From<tansu_sans_io::Error>,
 {
     type Response = Frame;
@@ -402,6 +492,7 @@ where
     }
 }
 
+/// A [`Layer`] of [`RequestConnectionService`]
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct RequestConnectionLayer;
 
@@ -413,6 +504,9 @@ impl<S> Layer<S> for RequestConnectionLayer {
     }
 }
 
+/// Take a [`Connection`] from the [`Pool`]. Enclose the [`Request`]
+/// in a [`Frame`] using latest API version supported by the broker. Call the
+/// inner service with the [`Frame`] using the [`Connection`] as [`Context`].
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct RequestConnectionService<S> {
     inner: S,
@@ -421,7 +515,7 @@ pub struct RequestConnectionService<S> {
 impl<Q, S> Service<Pool, Q> for RequestConnectionService<S>
 where
     Q: Request,
-    S: Service<Object<Manager>, Frame, Response = Frame>,
+    S: Service<Object<ConnectionManager>, Frame, Response = Frame>,
     S::Error: From<Error>
         + From<PoolError<Error>>
         + From<tansu_sans_io::Error>
@@ -458,6 +552,7 @@ where
     }
 }
 
+/// A [`Service`] that writes a frame represented by [`Bytes`] to a [`Connection`] [`Context`], returning the [`Bytes`] frame response.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct BytesConnectionService;
 
@@ -520,13 +615,13 @@ impl BytesConnectionService {
     }
 }
 
-impl Service<Object<Manager>, Bytes> for BytesConnectionService {
+impl Service<Object<ConnectionManager>, Bytes> for BytesConnectionService {
     type Response = Bytes;
     type Error = Error;
 
     async fn serve(
         &self,
-        mut ctx: Context<Object<Manager>>,
+        mut ctx: Context<Object<ConnectionManager>>,
         req: Bytes,
     ) -> Result<Self::Response, Self::Error> {
         let c = ctx.state_mut();
@@ -704,7 +799,7 @@ mod tests {
 
         let origin = (
             RequestPoolLayer::new(
-                Manager::builder(
+                ConnectionManager::builder(
                     Url::parse(&format!("tcp://{local_addr}")).inspect(|url| debug!(%url))?,
                 )
                 .client_id(Some(env!("CARGO_PKG_NAME").into()))

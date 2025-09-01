@@ -44,9 +44,7 @@ use tansu_sans_io::{
 };
 
 #[cfg(feature = "postgres")]
-use tansu_storage::{
-    ListOffsetRequest, Storage, Topition, TxnAddPartitionsRequest, TxnOffsetCommitRequest,
-};
+use tansu_storage::{Storage, Topition, TxnAddPartitionsRequest, TxnOffsetCommitRequest};
 
 #[cfg(feature = "postgres")]
 use tracing::debug;
@@ -62,6 +60,8 @@ mod common;
 #[cfg(feature = "postgres")]
 #[tokio::test]
 async fn simple_txn_commit() -> Result<()> {
+    use tansu_sans_io::ListOffset;
+
     let _guard = init_tracing()?;
 
     let mut rng = rng();
@@ -401,7 +401,7 @@ async fn simple_txn_commit() -> Result<()> {
     let list_offsets_before_produce = sc
         .list_offsets(
             IsolationLevel::ReadUncommitted,
-            &[(output_topition.clone(), ListOffsetRequest::Latest)],
+            &[(output_topition.clone(), ListOffset::Latest)],
         )
         .await?;
     assert_eq!(1, list_offsets_before_produce.len());
@@ -438,7 +438,7 @@ async fn simple_txn_commit() -> Result<()> {
     let list_offsets_after_produce = sc
         .list_offsets(
             IsolationLevel::ReadUncommitted,
-            &[(output_topition.clone(), ListOffsetRequest::Latest)],
+            &[(output_topition.clone(), ListOffset::Latest)],
         )
         .await?;
     assert_eq!(1, list_offsets_after_produce.len());
@@ -455,7 +455,7 @@ async fn simple_txn_commit() -> Result<()> {
     let list_offsets_after_produce = sc
         .list_offsets(
             IsolationLevel::ReadCommitted,
-            &[(output_topition.clone(), ListOffsetRequest::Latest)],
+            &[(output_topition.clone(), ListOffset::Latest)],
         )
         .await?;
     assert_eq!(1, list_offsets_after_produce.len());
@@ -514,7 +514,7 @@ async fn simple_txn_commit() -> Result<()> {
     let list_offsets_after_produce = sc
         .list_offsets(
             IsolationLevel::ReadUncommitted,
-            &[(output_topition.clone(), ListOffsetRequest::Latest)],
+            &[(output_topition.clone(), ListOffset::Latest)],
         )
         .await?;
     assert_eq!(1, list_offsets_after_produce.len());
@@ -532,7 +532,7 @@ async fn simple_txn_commit() -> Result<()> {
     let list_offsets_after_produce = sc
         .list_offsets(
             IsolationLevel::ReadCommitted,
-            &[(output_topition.clone(), ListOffsetRequest::Latest)],
+            &[(output_topition.clone(), ListOffset::Latest)],
         )
         .await?;
     assert_eq!(1, list_offsets_after_produce.len());

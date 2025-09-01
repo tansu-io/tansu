@@ -17,6 +17,7 @@ use tansu_sans_io::{ApiKey, TxnOffsetCommitResponse};
 
 use crate::{Error, Result, Storage};
 
+/// A [`Service`] using [`Storage`] as [`Context`] taking [`tansu_sans_io::TxnOffsetCommitRequest`] returning [`TxnOffsetCommitResponse`].
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct OffsetCommitService;
 

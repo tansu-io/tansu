@@ -27,16 +27,12 @@ use tansu_sans_io::{
 };
 use tansu_service::{FrameRequestLayer, FrameRouteBuilder};
 use tansu_storage::{
-    Storage,
-    service::{
-        ConsumerGroupDescribeService, CreateTopicsService, DeleteGroupsService,
-        DeleteRecordsService, DeleteTopicsService, DescribeClusterService, DescribeConfigsService,
-        DescribeGroupsService, DescribeTopicPartitionsService, FetchService,
-        FindCoordinatorService, GetTelemetrySubscriptionsService, IncrementalAlterConfigsService,
-        InitProducerIdService, ListGroupsService, ListOffsetsService,
-        ListPartitionReassignmentsService, MetadataService, ProduceService, TxnAddOffsetsService,
-        TxnAddPartitionService, TxnOffsetCommitService,
-    },
+    ConsumerGroupDescribeService, CreateTopicsService, DeleteGroupsService, DeleteRecordsService,
+    DeleteTopicsService, DescribeClusterService, DescribeConfigsService, DescribeGroupsService,
+    DescribeTopicPartitionsService, FetchService, FindCoordinatorService,
+    GetTelemetrySubscriptionsService, IncrementalAlterConfigsService, InitProducerIdService,
+    ListGroupsService, ListOffsetsService, ListPartitionReassignmentsService, MetadataService,
+    ProduceService, Storage, TxnAddOffsetsService, TxnAddPartitionService, TxnOffsetCommitService,
 };
 
 use crate::Error;

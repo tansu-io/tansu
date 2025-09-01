@@ -14,9 +14,52 @@
 
 use rama::{Context, Service};
 use tansu_sans_io::{ApiKey, DescribeTopicPartitionsRequest, DescribeTopicPartitionsResponse};
+use tracing::instrument;
 
 use crate::{Error, Result, Storage, TopicId};
 
+/// A [`Service`] using [`Storage`] as [`Context`] taking [`DescribeTopicPartitionsRequest`] returning [`DescribeTopicPartitionsResponse`].
+/// ```
+/// use rama::{Context, Layer as _, Service, layer::MapStateLayer};
+/// use tansu_sans_io::{
+///     DescribeTopicPartitionsRequest, ErrorCode,
+///     describe_topic_partitions_request::TopicRequest,
+/// };
+/// use tansu_storage::{DescribeTopicPartitionsService, Error, StorageContainer};
+/// use url::Url;
+///
+/// # #[tokio::main]
+/// # async fn main() -> Result<(), Error> {
+/// let storage = StorageContainer::builder()
+///     .cluster_id("tansu")
+///     .node_id(111)
+///     .advertised_listener(Url::parse("tcp://localhost:9092")?)
+///     .storage(Url::parse("memory://tansu/")?)
+///     .build()
+///     .await?;
+///
+/// let service = MapStateLayer::new(|_| storage).into_layer(DescribeTopicPartitionsService);
+///
+/// let topic = "abcba";
+///
+/// let response = service
+///     .serve(
+///         Context::default(),
+///         DescribeTopicPartitionsRequest::default()
+///             .topics(Some([TopicRequest::default().name(topic.into())].into())),
+///     )
+///     .await?;
+///
+/// let topics = response.topics.unwrap_or_default();
+/// assert_eq!(1, topics.len());
+/// assert_eq!(
+///     ErrorCode::UnknownTopicOrPartition,
+///     ErrorCode::try_from(topics[0].error_code)?
+/// );
+/// assert_eq!(Some(topic), topics[0].name.as_deref());
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct DescribeTopicPartitionsService;
 
@@ -31,6 +74,7 @@ where
     type Response = DescribeTopicPartitionsResponse;
     type Error = Error;
 
+    #[instrument(skip(ctx), ret)]
     async fn serve(
         &self,
         ctx: Context<G>,

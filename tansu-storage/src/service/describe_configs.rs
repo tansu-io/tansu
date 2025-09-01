@@ -14,10 +14,53 @@
 
 use rama::{Context, Service};
 use tansu_sans_io::{ApiKey, ConfigResource, DescribeConfigsRequest, DescribeConfigsResponse};
-use tracing::error;
+use tracing::{error, instrument};
 
 use crate::{Error, Result, Storage};
 
+/// A [`Service`] using [`Storage`] as [`Context`] taking [`DescribeConfigsRequest`] returning [`DescribeConfigsResponse`].
+/// ```
+/// use rama::{Context, Layer, Service as _, layer::MapStateLayer};
+/// use tansu_sans_io::{ConfigResource, DescribeConfigsRequest,
+///     EndpointType, ErrorCode, describe_configs_request::DescribeConfigsResource};
+/// use tansu_storage::{DescribeConfigsService, Error, StorageContainer};
+/// use url::Url;
+///
+/// # #[tokio::main]
+/// # async fn main() -> Result<(), Error> {
+/// let storage = StorageContainer::builder()
+///     .cluster_id("tansu")
+///     .node_id(111)
+///     .advertised_listener(Url::parse("tcp://localhost:9092")?)
+///     .storage(Url::parse("memory://tansu/")?)
+///     .build()
+///     .await?;
+///
+/// let service = MapStateLayer::new(|_| storage).into_layer(DescribeConfigsService);
+///
+/// let response = service
+///     .serve(
+///         Context::default(),
+///         DescribeConfigsRequest::default()
+///             .include_documentation(Some(false))
+///             .include_synonyms(Some(false))
+///             .resources(Some(
+///                 [DescribeConfigsResource::default()
+///                     .resource_name("abcba".into())
+///                     .resource_type(ConfigResource::Topic.into())
+///                     .configuration_keys(Some([].into()))]
+///                 .into(),
+///             )),
+///     )
+///     .await?;
+///
+/// let results = response.results.unwrap_or_default();
+/// assert_eq!(1, results.len());
+/// assert_eq!(ErrorCode::None, ErrorCode::try_from(results[0].error_code)?);
+/// assert!(results[0].configs.as_deref().unwrap_or_default().is_empty());
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct DescribeConfigsService;
 
@@ -32,6 +75,7 @@ where
     type Response = DescribeConfigsResponse;
     type Error = Error;
 
+    #[instrument(skip(ctx), ret)]
     async fn serve(
         &self,
         ctx: Context<G>,

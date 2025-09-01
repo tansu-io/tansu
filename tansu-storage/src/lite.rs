@@ -25,10 +25,10 @@ use std::{
 };
 
 use crate::{
-    BrokerRegistrationRequest, Error, GroupDetail, ListOffsetRequest, ListOffsetResponse, METER,
-    MetadataResponse, NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse,
-    Result, Storage, TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse,
-    TxnOffsetCommitRequest, TxnState, UpdateError, Version,
+    BrokerRegistrationRequest, Error, GroupDetail, ListOffsetResponse, METER, MetadataResponse,
+    NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse, Result, Storage,
+    TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse, TxnOffsetCommitRequest,
+    TxnState, UpdateError, Version,
     sql::{Cache, default_hash, idempotent_sequence_check, remove_comments},
 };
 use async_trait::async_trait;
@@ -45,7 +45,7 @@ use rand::{rng, seq::SliceRandom as _};
 use regex::Regex;
 use tansu_sans_io::{
     BatchAttribute, ConfigResource, ConfigSource, ConfigType, ControlBatch, EndTransactionMarker,
-    ErrorCode, IsolationLevel, NULL_TOPIC_ID, OpType,
+    ErrorCode, IsolationLevel, ListOffset, NULL_TOPIC_ID, OpType,
     add_partitions_to_txn_response::{
         AddPartitionsToTxnPartitionResult, AddPartitionsToTxnTopicResult,
     },
@@ -1802,7 +1802,7 @@ impl Storage for Engine {
     async fn list_offsets(
         &self,
         isolation_level: IsolationLevel,
-        offsets: &[(Topition, ListOffsetRequest)],
+        offsets: &[(Topition, ListOffset)],
     ) -> Result<Vec<(Topition, ListOffsetResponse)>> {
         debug!(cluster = self.cluster, ?isolation_level, ?offsets);
         let c = self.connection().await?;
@@ -1811,22 +1811,20 @@ impl Storage for Engine {
 
         for (topition, offset_type) in offsets {
             let query = match (offset_type, isolation_level) {
-                (ListOffsetRequest::Earliest, _) => sql_lookup("list_earliest_offset.sql")?,
-                (ListOffsetRequest::Latest, IsolationLevel::ReadCommitted) => {
+                (ListOffset::Earliest, _) => sql_lookup("list_earliest_offset.sql")?,
+                (ListOffset::Latest, IsolationLevel::ReadCommitted) => {
                     sql_lookup("list_latest_offset_committed.sql")?
                 }
-                (ListOffsetRequest::Latest, IsolationLevel::ReadUncommitted) => {
+                (ListOffset::Latest, IsolationLevel::ReadUncommitted) => {
                     sql_lookup("list_latest_offset_uncommitted.sql")?
                 }
-                (ListOffsetRequest::Timestamp(_), _) => {
-                    sql_lookup("list_latest_offset_timestamp.sql")?
-                }
+                (ListOffset::Timestamp(_), _) => sql_lookup("list_latest_offset_timestamp.sql")?,
             };
 
             debug!(?query);
 
             let list_offset = match offset_type {
-                ListOffsetRequest::Earliest | ListOffsetRequest::Latest => self
+                ListOffset::Earliest | ListOffset::Latest => self
                     .prepare_query_opt(
                         &c,
                         query.as_str(),
@@ -1839,7 +1837,7 @@ impl Storage for Engine {
                     .await
                     .inspect_err(|err| error!(?err, cluster = self.cluster, ?topition)),
 
-                ListOffsetRequest::Timestamp(timestamp) => self
+                ListOffset::Timestamp(timestamp) => self
                     .prepare_query_opt(
                         &c,
                         query.as_str(),

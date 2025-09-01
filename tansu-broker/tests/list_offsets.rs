@@ -17,11 +17,11 @@ use common::{StorageType, alphanumeric_string, init_tracing, register_broker};
 use rand::{prelude::*, rng};
 use tansu_broker::Result;
 use tansu_sans_io::{
-    IsolationLevel,
+    IsolationLevel, ListOffset,
     create_topics_request::CreatableTopic,
     record::{Record, inflated},
 };
-use tansu_storage::{ListOffsetRequest, Storage, StorageContainer, Topition};
+use tansu_storage::{Storage, StorageContainer, Topition};
 use tracing::debug;
 use url::Url;
 use uuid::Uuid;
@@ -60,7 +60,7 @@ pub async fn new_topic(
         .map(|partition| {
             (
                 Topition::new(topic_name.clone(), partition),
-                ListOffsetRequest::Latest,
+                ListOffset::Latest,
             )
         })
         .collect::<Vec<_>>();
@@ -125,7 +125,7 @@ pub async fn single_record(
             .inspect(|offset| debug!(?offset))?
     );
 
-    let offsets = [(topition.clone(), ListOffsetRequest::Latest)];
+    let offsets = [(topition.clone(), ListOffset::Latest)];
 
     let responses = sc
         .list_offsets(IsolationLevel::ReadUncommitted, &offsets[..])

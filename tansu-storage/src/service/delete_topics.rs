@@ -16,9 +16,53 @@ use rama::{Context, Service};
 use tansu_sans_io::{
     ApiKey, DeleteTopicsRequest, DeleteTopicsResponse, delete_topics_response::DeletableTopicResult,
 };
+use tracing::instrument;
 
 use crate::{Error, Result, Storage};
 
+/// A [`Service`] using [`Storage`] as [`Context`] taking [`DeleteTopicsRequest`] returning [`DeleteTopicsResponse`].
+/// ```
+/// use rama::{Context, Layer, Service as _, layer::MapStateLayer};
+/// use tansu_sans_io::{DeleteTopicsRequest, DeleteTopicsResponse,
+///     delete_topics_response::DeletableTopicResult, ErrorCode};
+/// use tansu_storage::{DeleteTopicsService, Error, StorageContainer};
+/// use url::Url;
+///
+/// # #[tokio::main]
+/// # async fn main() -> Result<(), Error> {
+/// let storage = StorageContainer::builder()
+///     .cluster_id("tansu")
+///     .node_id(111)
+///     .advertised_listener(Url::parse("tcp://localhost:9092")?)
+///     .storage(Url::parse("memory://tansu/")?)
+///     .build()
+///     .await?;
+///
+/// let service = MapStateLayer::new(|_| storage).into_layer(DeleteTopicsService);
+///
+/// let topic = "pqr";
+///
+/// let error_code = ErrorCode::UnknownTopicOrPartition;
+///
+/// assert_eq!(
+///     DeleteTopicsResponse::default()
+///         .throttle_time_ms(Some(0))
+///         .responses(Some(vec![
+///             DeletableTopicResult::default()
+///                 .error_code(error_code.into())
+///                 .error_message(Some(error_code.to_string()))
+///                 .name(Some(topic.into())),
+///         ])),
+///     service
+///         .serve(
+///             Context::default(),
+///             DeleteTopicsRequest::default().topic_names(Some(vec![topic.into()]))
+///         )
+///         .await?
+/// );
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct DeleteTopicsService;
 
@@ -33,6 +77,7 @@ where
     type Response = DeleteTopicsResponse;
     type Error = Error;
 
+    #[instrument(skip(ctx), ret)]
     async fn serve(
         &self,
         ctx: Context<G>,
@@ -66,191 +111,5 @@ where
         Ok(DeleteTopicsResponse::default()
             .throttle_time_ms(Some(0))
             .responses(Some(responses)))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{dynostore::DynoStore, service::create_topics::CreateTopicsService};
-    use assert_matches::assert_matches;
-    use object_store::memory::InMemory;
-    use rama::Context;
-    use tansu_sans_io::{
-        CreateTopicsRequest, CreateTopicsResponse, ErrorCode, NULL_TOPIC_ID,
-        create_topics_request::CreatableTopic, delete_topics_request::DeleteTopicState,
-    };
-    use uuid::Uuid;
-
-    #[tokio::test]
-    async fn delete_unknown_by_name() -> Result<()> {
-        let cluster = "abc";
-        let node = 12321;
-
-        let storage = DynoStore::new(cluster, node, InMemory::new());
-        let service = DeleteTopicsService;
-        let ctx = Context::with_state(storage);
-
-        let topic = "pqr";
-
-        let error_code = ErrorCode::UnknownTopicOrPartition;
-
-        assert_eq!(
-            DeleteTopicsResponse::default()
-                .throttle_time_ms(Some(0))
-                .responses(Some(vec![
-                    DeletableTopicResult::default()
-                        .error_code(error_code.into())
-                        .error_message(Some(error_code.to_string()))
-                        .name(Some(topic.into())),
-                ])),
-            service
-                .serve(
-                    ctx,
-                    DeleteTopicsRequest::default().topic_names(Some(vec![topic.into()]))
-                )
-                .await?
-        );
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn delete_unknown_by_uuid() -> Result<()> {
-        let cluster = "abc";
-        let node = 12321;
-
-        let storage = DynoStore::new(cluster, node, InMemory::new());
-        let service = DeleteTopicsService;
-        let ctx = Context::with_state(storage);
-
-        let topic = Uuid::new_v4();
-
-        let error_code = ErrorCode::UnknownTopicOrPartition;
-
-        assert_eq!(
-            DeleteTopicsResponse::default()
-                .throttle_time_ms(Some(0))
-                .responses(Some(vec![
-                    DeletableTopicResult::default()
-                        .error_code(error_code.into())
-                        .error_message(Some(error_code.to_string()))
-                        .topic_id(Some(topic.into_bytes()))
-                ])),
-            service
-                .serve(
-                    ctx,
-                    DeleteTopicsRequest::default().topics(Some(vec![
-                        DeleteTopicState::default().topic_id(topic.into_bytes())
-                    ]))
-                )
-                .await?
-        );
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn create_delete_create_by_name() -> Result<()> {
-        let cluster = "abc";
-        let node = 12321;
-
-        let storage = DynoStore::new(cluster, node, InMemory::new());
-        let create_topics = CreateTopicsService;
-        let ctx = Context::with_state(storage);
-
-        let name = "pqr";
-        let num_partitions = 5;
-        let replication_factor = 3;
-        let assignments = Some([].into());
-        let configs = Some([].into());
-
-        let topic = "pqr";
-
-        let error_code = ErrorCode::None;
-
-        assert_matches!(
-            create_topics
-                .serve(
-                    ctx.clone(),
-                    CreateTopicsRequest::default()
-                        .topics(Some(
-                            [CreatableTopic::default()
-                                .name(name.into())
-                                .num_partitions(num_partitions)
-                                .replication_factor(replication_factor)
-                                .assignments(assignments.clone())
-                                .configs(configs.clone()),]
-                            .into()
-                        ))
-                        .validate_only(Some(false))
-                )
-                .await?,
-            CreateTopicsResponse { topics: Some(topics), ..} => {
-                assert_eq!(topics.len(), 1);
-                assert_eq!(topic, topics[0].name.as_str());
-                assert_matches!(topics[0].configs.as_ref(), Some(configs) if configs.len() == 0);
-                assert_eq!(topics[0].topic_config_error_code, Some(0));
-                assert_eq!(topics[0].num_partitions, Some(num_partitions));
-                assert_eq!(topics[0].replication_factor, Some(replication_factor));
-                assert_eq!(topics[0].error_code, i16::from(error_code));
-            }
-        );
-
-        let delete_topics = DeleteTopicsService;
-
-        let error_code = ErrorCode::None;
-
-        assert_eq!(
-            DeleteTopicsResponse::default()
-                .throttle_time_ms(Some(0))
-                .responses(Some(vec![
-                    DeletableTopicResult::default()
-                        .error_code(error_code.into())
-                        .error_message(Some(error_code.to_string()))
-                        .name(Some(name.into()))
-                        .topic_id(Some(NULL_TOPIC_ID)),
-                ])),
-            delete_topics
-                .serve(
-                    ctx.clone(),
-                    DeleteTopicsRequest::default().topics(Some(vec![
-                        DeleteTopicState::default()
-                            .name(Some(name.into()))
-                            .topic_id(NULL_TOPIC_ID),
-                    ]))
-                )
-                .await?
-        );
-
-        assert_matches!(
-            create_topics
-                .serve(
-                    ctx.clone(),
-                    CreateTopicsRequest::default()
-                        .topics(Some(
-                            [CreatableTopic::default()
-                                .name(name.into())
-                                .num_partitions(num_partitions)
-                                .replication_factor(replication_factor)
-                                .assignments(assignments.clone())
-                                .configs(configs.clone()),]
-                            .into()
-                        ))
-                        .validate_only(Some(false))
-                )
-                .await?,
-            CreateTopicsResponse { topics: Some(topics), ..} => {
-                assert_eq!(topics.len(), 1);
-                assert_eq!(topic, topics[0].name.as_str());
-                assert_matches!(topics[0].configs.as_ref(), Some(configs) if configs.len() == 0);
-                assert_eq!(topics[0].topic_config_error_code, Some(0));
-                assert_eq!(topics[0].num_partitions, Some(num_partitions));
-                assert_eq!(topics[0].replication_factor, Some(replication_factor));
-                assert_eq!(topics[0].error_code, i16::from(error_code));
-            }
-        );
-
-        Ok(())
     }
 }

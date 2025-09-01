@@ -16,9 +16,48 @@ use rama::{Context, Service};
 use tansu_sans_io::{
     ApiKey, DescribeGroupsRequest, DescribeGroupsResponse, describe_groups_response::DescribedGroup,
 };
+use tracing::instrument;
 
 use crate::{Error, Result, Storage};
 
+/// A [`Service`] using [`Storage`] as [`Context`] taking [`DescribeGroupsRequest`] returning [`DescribeGroupsResponse`].
+/// ```
+/// use rama::{Context, Layer as _, Service, layer::MapStateLayer};
+/// use tansu_sans_io::{DescribeGroupsRequest, ErrorCode};
+/// use tansu_storage::{DescribeGroupsService, Error, StorageContainer};
+/// use url::Url;
+///
+/// # #[tokio::main]
+/// # async fn main() -> Result<(), Error> {
+/// let storage = StorageContainer::builder()
+///     .cluster_id("tansu")
+///     .node_id(111)
+///     .advertised_listener(Url::parse("tcp://localhost:9092")?)
+///     .storage(Url::parse("memory://tansu/")?)
+///     .build()
+///     .await?;
+///
+/// let service = MapStateLayer::new(|_| storage).into_layer(DescribeGroupsService);
+///
+/// let group_id = "abcba";
+///
+/// let response = service
+///     .serve(
+///         Context::default(),
+///         DescribeGroupsRequest::default()
+///             .groups(Some([group_id.into()].into()))
+///             .include_authorized_operations(Some(false)),
+///     )
+///     .await?;
+///
+/// let groups = response.groups.unwrap_or_default();
+/// assert_eq!(1, groups.len());
+/// assert_eq!(ErrorCode::None, ErrorCode::try_from(groups[0].error_code)?);
+/// assert_eq!(group_id, groups[0].group_id.as_str());
+/// assert_eq!("Empty", groups[0].group_state.as_str());
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct DescribeGroupsService;
 
@@ -33,6 +72,7 @@ where
     type Response = DescribeGroupsResponse;
     type Error = Error;
 
+    #[instrument(skip(ctx), ret)]
     async fn serve(
         &self,
         ctx: Context<G>,

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::{Error, Result, Storage, TopicId};
 use rama::{Context, Service};
 use tansu_sans_io::{
     ApiKey, ErrorCode, ListPartitionReassignmentsRequest, ListPartitionReassignmentsResponse,
@@ -20,8 +21,7 @@ use tansu_sans_io::{
     },
 };
 
-use crate::{Error, Result, Storage, TopicId};
-
+/// A [`Service`] using [`Storage`] as [`Context`] taking [`ListPartitionReassignmentsRequest`] returning [`ListPartitionReassignmentsResponse`].
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ListPartitionReassignmentsService;
 

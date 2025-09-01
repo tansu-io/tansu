@@ -16,13 +16,81 @@ use std::{collections::BTreeSet, ops::Deref as _};
 
 use rama::{Context, Service};
 use tansu_sans_io::{
-    ApiKey, IsolationLevel, ListOffsetsRequest, ListOffsetsResponse,
+    ApiKey, IsolationLevel, ListOffset, ListOffsetsRequest, ListOffsetsResponse,
     list_offsets_response::{ListOffsetsPartitionResponse, ListOffsetsTopicResponse},
 };
-use tracing::{debug, error};
+use tracing::{debug, error, instrument};
 
-use crate::{Error, ListOffsetRequest, Result, Storage, Topition};
+use crate::{Error, Result, Storage, Topition};
 
+/// A [`Service`] using [`Storage`] as [`Context`] taking [`ListOffsetsRequest`] returning [`ListOffsetsResponse`].
+/// ```
+/// use rama::{Context, Layer as _, Service, layer::MapStateLayer};
+/// use tansu_sans_io::{
+///     ErrorCode, IsolationLevel, ListOffset, ListOffsetsRequest,
+///     list_offsets_request::{ListOffsetsPartition, ListOffsetsTopic},
+/// };
+/// use tansu_storage::{Error, ListOffsetsService, StorageContainer};
+/// use url::Url;
+///
+/// # #[tokio::main]
+/// # async fn main() -> Result<(), Error> {
+/// const HOST: &str = "localhost";
+/// const PORT: i32 = 9092;
+/// const NODE_ID: i32 = 111;
+///
+/// let storage = StorageContainer::builder()
+///     .cluster_id("tansu")
+///     .node_id(NODE_ID)
+///     .advertised_listener(Url::parse(&format!("tcp://{HOST}:{PORT}"))?)
+///     .storage(Url::parse("memory://tansu/")?)
+///     .build()
+///     .await?;
+///
+/// let service = MapStateLayer::new(|_| storage).into_layer(ListOffsetsService);
+///
+/// let topic = "abcba";
+///
+/// let response = service
+///     .serve(
+///         Context::default(),
+///         ListOffsetsRequest::default()
+///             .isolation_level(Some(IsolationLevel::ReadUncommitted.into()))
+///             .replica_id(NODE_ID)
+///             .topics(Some(
+///                 [ListOffsetsTopic::default()
+///                     .name(topic.into())
+///                     .partitions(Some(
+///                         [ListOffsetsPartition::default()
+///                             .current_leader_epoch(Some(-1))
+///                             .max_num_offsets(Some(3))
+///                             .partition_index(0)
+///                             .timestamp(ListOffset::Earliest.try_into()?)]
+///                         .into(),
+///                     ))]
+///                 .into(),
+///             )),
+///     )
+///     .await?;
+///
+/// let topics = response.topics.as_deref().unwrap_or_default();
+/// assert_eq!(1, topics.len());
+/// assert_eq!(topic, topics[0].name);
+///
+/// let partitions = topics[0].partitions.as_deref().unwrap_or_default();
+/// assert_eq!(1, partitions.len());
+/// assert_eq!(0, partitions[0].partition_index);
+/// assert!(partitions[0].old_style_offsets.is_none());
+/// assert_eq!(
+///     ErrorCode::None,
+///     ErrorCode::try_from(partitions[0].error_code)?
+/// );
+/// assert_eq!(Some(-1), partitions[0].timestamp);
+/// assert_eq!(Some(0), partitions[0].offset);
+/// assert_eq!(Some(0), partitions[0].leader_epoch);
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ListOffsetsService;
 
@@ -37,6 +105,7 @@ where
     type Response = ListOffsetsResponse;
     type Error = Error;
 
+    #[instrument(skip(ctx), ret)]
     async fn serve(
         &self,
         ctx: Context<G>,
@@ -57,7 +126,7 @@ where
                 if let Some(ref partitions) = topic.partitions {
                     for partition in partitions {
                         let tp = Topition::new(topic.name.clone(), partition.partition_index);
-                        let offset = ListOffsetRequest::try_from(partition.timestamp)?;
+                        let offset = ListOffset::try_from(partition.timestamp)?;
 
                         offsets.push((tp, offset));
                     }

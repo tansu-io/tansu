@@ -18,7 +18,7 @@ use crate::{Error, Result};
 
 use futures::StreamExt;
 use serde_json::Value;
-use tansu_client::{Client, Manager};
+use tansu_client::{Client, ConnectionManager};
 use tansu_sans_io::{
     ErrorCode, ProduceRequest, ProduceResponse,
     produce_request::{PartitionProduceData, TopicProduceData},
@@ -239,7 +239,7 @@ impl Produce {
                 .into(),
             ));
 
-        let client = Manager::builder(self.configuration.broker.clone())
+        let client = ConnectionManager::builder(self.configuration.broker.clone())
             .client_id(Some(env!("CARGO_PKG_NAME").into()))
             .build()
             .await

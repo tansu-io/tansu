@@ -22,6 +22,110 @@ use tracing::{debug, error, warn};
 
 use crate::{Error, Result, Storage, Topition};
 
+/// A [`Service`] using [`Storage`] as [`Context`] taking [`ProduceRequest`] returning [`ProduceResponse`].
+/// ```
+/// use bytes::Bytes;
+/// use rama::{Context, Layer as _, Service as _, layer::MapStateLayer};
+/// use tansu_sans_io::{
+///     CreateTopicsRequest, ErrorCode, ProduceRequest,
+///     create_topics_request::CreatableTopic,
+///     produce_request::{PartitionProduceData, TopicProduceData},
+///     record::{Record, deflated::Frame, inflated},
+/// };
+/// use tansu_storage::{CreateTopicsService, Error, ProduceService, StorageContainer};
+/// use url::Url;
+///
+/// # #[tokio::main]
+/// # async fn main() -> Result<(), Error> {
+/// const CLUSTER_ID: &str = "tansu";
+/// const NODE_ID: i32 = 111;
+/// const HOST: &str = "localhost";
+/// const PORT: i32 = 9092;
+///
+/// let storage = StorageContainer::builder()
+///     .cluster_id(CLUSTER_ID)
+///     .node_id(NODE_ID)
+///     .advertised_listener(Url::parse(&format!("tcp://{HOST}:{PORT}"))?)
+///     .storage(Url::parse("memory://tansu/")?)
+///     .build()
+///     .await?;
+///
+/// let create_topic = {
+///     let storage = storage.clone();
+///     MapStateLayer::new(|_| storage).into_layer(CreateTopicsService)
+/// };
+///
+/// let name = "abcba";
+///
+/// let response = create_topic
+///     .serve(
+///         Context::default(),
+///         CreateTopicsRequest::default()
+///             .topics(Some(vec![
+///                 CreatableTopic::default()
+///                     .name(name.into())
+///                     .num_partitions(5)
+///                     .replication_factor(3)
+///                     .assignments(Some([].into()))
+///                     .configs(Some([].into())),
+///             ]))
+///             .validate_only(Some(false)),
+///     )
+///     .await?;
+///
+/// let topics = response.topics.unwrap_or_default();
+/// assert_eq!(1, topics.len());
+/// assert_eq!(ErrorCode::None, ErrorCode::try_from(topics[0].error_code)?);
+///
+/// let produce = {
+///     let storage = storage.clone();
+///     MapStateLayer::new(|_| storage).into_layer(ProduceService)
+/// };
+///
+/// let partition = 0;
+///
+/// let response = produce
+///     .serve(
+///         Context::default(),
+///         ProduceRequest::default().topic_data(Some(
+///             [TopicProduceData::default()
+///                 .name(name.into())
+///                 .partition_data(Some(
+///                     [PartitionProduceData::default()
+///                         .index(partition)
+///                         .records(Some(Frame {
+///                             batches: vec![
+///                                 inflated::Batch::builder()
+///                                     .record(
+///                                         Record::builder().value(
+///                                             Bytes::from_static(
+///                                                 b"Lorem ipsum dolor sit amet",
+///                                             )
+///                                             .into(),
+///                                         ),
+///                                     )
+///                                     .build()
+///                                     .and_then(TryInto::try_into)?,
+///                             ],
+///                         }))]
+///                     .into(),
+///                 ))]
+///             .into(),
+///         )),
+///     )
+///     .await?;
+///
+/// let topics = response.responses.as_deref().unwrap_or_default();
+/// assert_eq!(1, topics.len());
+/// let partitions = topics[0].partition_responses.as_deref().unwrap_or_default();
+/// assert_eq!(1, partitions.len());
+/// assert_eq!(
+///     ErrorCode::None,
+///     ErrorCode::try_from(partitions[0].error_code)?
+/// );
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ProduceService;
 

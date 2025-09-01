@@ -35,7 +35,7 @@ use opentelemetry::{
 use opentelemetry_otlp::ExporterBuildError;
 use opentelemetry_sdk::error::OTelSdkError;
 use opentelemetry_semantic_conventions::SCHEMA_URL;
-use tansu_client::{Client, Manager};
+use tansu_client::{Client, ConnectionManager};
 use tansu_otel::meter_provider;
 use tansu_sans_io::{
     ErrorCode, ProduceRequest,
@@ -305,7 +305,7 @@ impl Generate {
 
         let token = CancellationToken::new();
 
-        let client = Manager::builder(self.configuration.broker)
+        let client = ConnectionManager::builder(self.configuration.broker)
             .client_id(Some(env!("CARGO_PKG_NAME").into()))
             .build()
             .await

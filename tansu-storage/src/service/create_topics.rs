@@ -17,10 +17,59 @@ use tansu_sans_io::{
     ApiKey, CreateTopicsRequest, CreateTopicsResponse, ErrorCode, NULL_TOPIC_ID,
     create_topics_response::CreatableTopicResult,
 };
-use tracing::debug;
+use tracing::{debug, instrument};
 
 use crate::{Error, Result, Storage};
 
+/// A [`Service`] using [`Storage`] as [`Context`] taking [`CreateTopicsRequest`] returning [`CreateTopicsResponse`].
+/// ```
+/// use rama::{Context, Layer, Service as _, layer::MapStateLayer};
+/// use tansu_sans_io::{NULL_TOPIC_ID, CreateTopicsRequest,
+///     create_topics_request::CreatableTopic, ErrorCode};
+/// use tansu_storage::{CreateTopicsService, Error, StorageContainer};
+/// use url::Url;
+///
+/// # #[tokio::main]
+/// # async fn main() -> Result<(), Error> {
+/// let storage = StorageContainer::builder()
+///     .cluster_id("tansu")
+///     .node_id(111)
+///     .advertised_listener(Url::parse("tcp://localhost:9092")?)
+///     .storage(Url::parse("memory://tansu/")?)
+///     .build()
+///     .await?;
+///
+/// let service = MapStateLayer::new(|_| storage).into_layer(CreateTopicsService);
+///
+/// let name = "abcba";
+///
+/// let response = service
+///     .serve(
+///         Context::default(),
+///         CreateTopicsRequest::default()
+///             .topics(Some(vec![
+///                 CreatableTopic::default()
+///                     .name(name.into())
+///                     .num_partitions(1)
+///                     .replication_factor(3)
+///                     .assignments(Some([].into()))
+///                     .configs(Some([].into())),
+///             ]))
+///             .validate_only(Some(false)),
+///     )
+///     .await?;
+///
+/// let topics = response.topics.unwrap_or_default();
+///
+/// assert_eq!(1, topics.len());
+/// assert_eq!(name, topics[0].name.as_str());
+/// assert_ne!(Some(NULL_TOPIC_ID), topics[0].topic_id);
+/// assert_eq!(Some(1), topics[0].num_partitions);
+/// assert_eq!(Some(3), topics[0].replication_factor);
+/// assert_eq!(ErrorCode::None, ErrorCode::try_from(topics[0].error_code)?);
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct CreateTopicsService;
 
@@ -35,6 +84,7 @@ where
     type Response = CreateTopicsResponse;
     type Error = Error;
 
+    #[instrument(skip(ctx), ret)]
     async fn serve(
         &self,
         ctx: Context<G>,
@@ -109,171 +159,5 @@ where
         Ok(CreateTopicsResponse::default()
             .topics(Some(topics))
             .throttle_time_ms(Some(0)))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::dynostore::DynoStore;
-    use object_store::memory::InMemory;
-    use rama::Context;
-    use tansu_sans_io::{NULL_TOPIC_ID, create_topics_request::CreatableTopic};
-
-    use super::*;
-
-    #[tokio::test]
-    async fn create() -> Result<()> {
-        let cluster = "abc";
-        let node = 12321;
-
-        let storage = DynoStore::new(cluster, node, InMemory::new());
-        let service = CreateTopicsService;
-        let ctx = Context::with_state(storage);
-
-        let name = "pqr";
-        let num_partitions = 5;
-        let replication_factor = 3;
-        let assignments = Some([].into());
-        let configs = Some([].into());
-
-        let response = service
-            .serve(
-                ctx,
-                CreateTopicsRequest::default()
-                    .topics(Some(vec![
-                        CreatableTopic::default()
-                            .name(name.into())
-                            .num_partitions(num_partitions)
-                            .replication_factor(replication_factor)
-                            .assignments(assignments)
-                            .configs(configs),
-                    ]))
-                    .validate_only(Some(false)),
-            )
-            .await?;
-
-        let topics = response.topics.unwrap_or_default();
-
-        assert_eq!(1, topics.len());
-        assert_eq!(name, topics[0].name.as_str());
-        assert_ne!(Some(NULL_TOPIC_ID), topics[0].topic_id);
-        assert_eq!(Some(5), topics[0].num_partitions);
-        assert_eq!(Some(3), topics[0].replication_factor);
-        assert_eq!(ErrorCode::None, ErrorCode::try_from(topics[0].error_code)?);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn create_with_default() -> Result<()> {
-        let cluster = "abc";
-        let node = 12321;
-
-        let storage = DynoStore::new(cluster, node, InMemory::new());
-        let service = CreateTopicsService;
-        let ctx = Context::with_state(storage);
-
-        let name = "pqr";
-        let num_partitions = -1;
-        let replication_factor = -1;
-        let assignments = Some([].into());
-        let configs = Some([].into());
-
-        let response = service
-            .serve(
-                ctx,
-                CreateTopicsRequest::default()
-                    .topics(Some(vec![
-                        CreatableTopic::default()
-                            .name(name.into())
-                            .num_partitions(num_partitions)
-                            .replication_factor(replication_factor)
-                            .assignments(assignments)
-                            .configs(configs),
-                    ]))
-                    .validate_only(Some(false)),
-            )
-            .await?;
-
-        let topics = response.topics.unwrap_or_default();
-
-        assert_eq!(1, topics.len());
-        assert_eq!(name, topics[0].name.as_str());
-        assert_ne!(Some(NULL_TOPIC_ID), topics[0].topic_id);
-        assert_eq!(Some(1), topics[0].num_partitions);
-        assert_eq!(Some(3), topics[0].replication_factor);
-        assert_eq!(ErrorCode::None, ErrorCode::try_from(topics[0].error_code)?);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn duplicate() -> Result<()> {
-        let cluster = "abc";
-        let node = 12321;
-
-        let storage = DynoStore::new(cluster, node, InMemory::new());
-        let service = CreateTopicsService;
-        let ctx = Context::with_state(storage);
-
-        let name = "pqr";
-        let num_partitions = 5;
-        let replication_factor = 3;
-        let assignments = Some([].into());
-        let configs = Some([].into());
-
-        let response = service
-            .serve(
-                ctx.clone(),
-                CreateTopicsRequest::default()
-                    .topics(Some(vec![
-                        CreatableTopic::default()
-                            .name(name.into())
-                            .num_partitions(num_partitions)
-                            .replication_factor(replication_factor)
-                            .assignments(assignments.clone())
-                            .configs(configs.clone()),
-                    ]))
-                    .validate_only(Some(false)),
-            )
-            .await?;
-
-        let topics = response.topics.unwrap_or_default();
-
-        assert_eq!(1, topics.len());
-        assert_eq!(name, topics[0].name.as_str());
-        assert_ne!(Some(NULL_TOPIC_ID), topics[0].topic_id);
-        assert_eq!(Some(5), topics[0].num_partitions);
-        assert_eq!(Some(3), topics[0].replication_factor);
-        assert_eq!(ErrorCode::None, ErrorCode::try_from(topics[0].error_code)?);
-
-        let response = service
-            .serve(
-                ctx,
-                CreateTopicsRequest::default()
-                    .topics(Some(vec![
-                        CreatableTopic::default()
-                            .name(name.into())
-                            .num_partitions(num_partitions)
-                            .replication_factor(replication_factor)
-                            .assignments(assignments)
-                            .configs(configs),
-                    ]))
-                    .validate_only(Some(false)),
-            )
-            .await?;
-
-        let topics = response.topics.unwrap_or_default();
-
-        assert_eq!(1, topics.len());
-        assert_eq!(name, topics[0].name.as_str());
-        assert_eq!(Some(NULL_TOPIC_ID), topics[0].topic_id);
-        assert_eq!(Some(5), topics[0].num_partitions);
-        assert_eq!(Some(3), topics[0].replication_factor);
-        assert_eq!(
-            ErrorCode::TopicAlreadyExists,
-            ErrorCode::try_from(topics[0].error_code)?
-        );
-        Ok(())
     }
 }

@@ -14,10 +14,50 @@
 
 use rama::{Context, Service};
 use tansu_sans_io::{ApiKey, DescribeClusterRequest, DescribeClusterResponse, ErrorCode};
-use tracing::debug;
+use tracing::{debug, instrument};
 
 use crate::{Error, Result, Storage};
 
+/// A [`Service`] using [`Storage`] as [`Context`] taking [`DescribeClusterRequest`] returning [`DescribeClusterResponse`].
+/// ```
+/// use rama::{Context, Layer, Service as _, layer::MapStateLayer};
+/// use tansu_sans_io::{DescribeClusterRequest, EndpointType, ErrorCode};
+/// use tansu_storage::{DescribeClusterService, Error, StorageContainer};
+/// use url::Url;
+///
+/// # #[tokio::main]
+/// # async fn main() -> Result<(), Error> {
+/// const HOST: &str = "localhost";
+/// const PORT: i32 = 9092;
+/// const NODE_ID: i32 = 111;
+///
+/// let storage = StorageContainer::builder()
+///     .cluster_id("tansu")
+///     .node_id(NODE_ID)
+///     .advertised_listener(Url::parse(&format!("tcp://{HOST}:{PORT}"))?)
+///     .storage(Url::parse("memory://tansu/")?)
+///     .build()
+///     .await?;
+///
+/// let service = MapStateLayer::new(|_| storage).into_layer(DescribeClusterService);
+///
+/// let response = service
+///     .serve(
+///         Context::default(),
+///         DescribeClusterRequest::default()
+///             .endpoint_type(Some(EndpointType::Broker.into()))
+///             .include_cluster_authorized_operations(false),
+///     )
+///     .await?;
+///
+/// let brokers = response.brokers.unwrap_or_default();
+/// assert_eq!(1, brokers.len());
+/// assert_eq!(NODE_ID, brokers[0].broker_id);
+/// assert_eq!(HOST, brokers[0].host.as_str());
+/// assert_eq!(PORT, brokers[0].port);
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct DescribeClusterService;
 
@@ -32,6 +72,7 @@ where
     type Response = DescribeClusterResponse;
     type Error = Error;
 
+    #[instrument(skip(ctx), ret)]
     async fn serve(
         &self,
         ctx: Context<G>,

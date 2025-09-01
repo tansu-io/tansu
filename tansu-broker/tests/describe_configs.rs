@@ -25,8 +25,7 @@ use tansu_sans_io::{
     incremental_alter_configs_request::{AlterConfigsResource, AlterableConfig},
 };
 use tansu_storage::{
-    Storage, StorageContainer,
-    service::{DescribeConfigsService, IncrementalAlterConfigsService},
+    DescribeConfigsService, IncrementalAlterConfigsService, Storage, StorageContainer,
 };
 use tracing::debug;
 use uuid::Uuid;

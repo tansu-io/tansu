@@ -44,7 +44,7 @@ use rand::{prelude::*, rng};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tansu_sans_io::{
     BatchAttribute, ConfigResource, ConfigSource, ConfigType, ControlBatch, Decoder, Encoder,
-    EndTransactionMarker, ErrorCode, IsolationLevel, NULL_TOPIC_ID, OpType,
+    EndTransactionMarker, ErrorCode, IsolationLevel, ListOffset, NULL_TOPIC_ID, OpType,
     add_partitions_to_txn_response::{
         AddPartitionsToTxnPartitionResult, AddPartitionsToTxnTopicResult,
     },
@@ -76,10 +76,10 @@ mod metadata;
 mod opticon;
 
 use crate::{
-    BrokerRegistrationRequest, Error, GroupDetail, ListOffsetRequest, ListOffsetResponse, METER,
-    MetadataResponse, NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse,
-    Result, Storage, TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse,
-    TxnOffsetCommitRequest, TxnState, UpdateError, Version,
+    BrokerRegistrationRequest, Error, GroupDetail, ListOffsetResponse, METER, MetadataResponse,
+    NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse, Result, Storage,
+    TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse, TxnOffsetCommitRequest,
+    TxnState, UpdateError, Version,
 };
 
 const APPLICATION_JSON: &str = "application/json";
@@ -1157,7 +1157,7 @@ impl Storage for DynoStore {
     async fn list_offsets(
         &self,
         isolation_level: IsolationLevel,
-        offsets: &[(Topition, ListOffsetRequest)],
+        offsets: &[(Topition, ListOffset)],
     ) -> Result<Vec<(Topition, ListOffsetResponse)>> {
         debug!(?offsets, ?isolation_level);
 
@@ -1206,7 +1206,7 @@ impl Storage for DynoStore {
             responses.push((
                 topition.to_owned(),
                 match offset_request {
-                    ListOffsetRequest::Earliest => {
+                    ListOffset::Earliest => {
                         let watermark = self.watermarks.lock().map(|mut locked| {
                             locked
                                 .entry(topition.to_owned())
@@ -1227,7 +1227,7 @@ impl Storage for DynoStore {
                             })
                             .await?
                     }
-                    ListOffsetRequest::Latest => {
+                    ListOffset::Latest => {
                         if let Some(offset) = stable.get(topition) {
                             ListOffsetResponse {
                                 error_code: ErrorCode::None,
@@ -1256,7 +1256,7 @@ impl Storage for DynoStore {
                                 .await?
                         }
                     }
-                    ListOffsetRequest::Timestamp(..) => todo!(),
+                    ListOffset::Timestamp(..) => todo!(),
                 },
             ));
         }
@@ -1858,28 +1858,21 @@ impl Storage for DynoStore {
                         results.push(NamedGroupDetail::found(group_id.into(), group_detail));
                     }
 
-                    Err(Error::ObjectStore(error)) => {
-                        match error.as_ref() {
-                            object_store::Error::NotFound { .. } => {
-                                results.push(NamedGroupDetail::found(
-                                    group_id.into(),
-                                    GroupDetail::default(),
-                                ));
-                            }
-
-                            _otherwise => {
-                                results.push(NamedGroupDetail::found(
-                                    group_id.into(),
-                                    GroupDetail::default(),
-                                ));
-                            }
+                    Err(Error::ObjectStore(error)) => match error.as_ref() {
+                        object_store::Error::NotFound { .. } => {
+                            results.push(NamedGroupDetail::found(
+                                group_id.into(),
+                                GroupDetail::default(),
+                            ));
                         }
 
-                        results.push(NamedGroupDetail::found(
-                            group_id.into(),
-                            GroupDetail::default(),
-                        ));
-                    }
+                        _otherwise => {
+                            results.push(NamedGroupDetail::found(
+                                group_id.into(),
+                                GroupDetail::default(),
+                            ));
+                        }
+                    },
 
                     Err(_) => {
                         results.push(NamedGroupDetail::error_code(
