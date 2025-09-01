@@ -14,9 +14,74 @@
 
 use rama::{Context, Service};
 use tansu_sans_io::{ApiKey, InitProducerIdRequest, InitProducerIdResponse};
+use tracing::instrument;
 
 use crate::{Error, Result, Storage};
 
+/// A [`Service`] using [`Storage`] as [`Context`] taking [`InitProducerIdRequest`] returning [`InitProducerIdResponse`].
+/// ```
+/// use rama::{Context, Layer as _, Service as _, layer::MapStateLayer};
+/// use tansu_sans_io::{ErrorCode, InitProducerIdRequest, InitProducerIdResponse};
+/// use tansu_storage::{Error, InitProducerIdService, StorageContainer};
+/// use url::Url;
+///
+/// # #[tokio::main]
+/// # async fn main() -> Result<(), Error> {
+/// const HOST: &str = "localhost";
+/// const PORT: i32 = 9092;
+/// const NODE_ID: i32 = 111;
+///
+/// let storage = StorageContainer::builder()
+///     .cluster_id("tansu")
+///     .node_id(NODE_ID)
+///     .advertised_listener(Url::parse(&format!("tcp://{HOST}:{PORT}"))?)
+///     .storage(Url::parse("memory://tansu/")?)
+///     .build()
+///     .await?;
+///
+/// let service = MapStateLayer::new(|_| storage).into_layer(InitProducerIdService);
+///
+/// let transactional_id = None;
+/// let transaction_timeout_ms = 0;
+/// let producer_id = Some(-1);
+/// let producer_epoch = Some(-1);
+///
+/// assert_eq!(
+///     service
+///         .serve(
+///             Context::default(),
+///             InitProducerIdRequest::default()
+///                 .transactional_id(transactional_id.clone())
+///                 .transaction_timeout_ms(transaction_timeout_ms)
+///                 .producer_id(producer_id)
+///                 .producer_epoch(producer_epoch)
+///         )
+///         .await?,
+///     InitProducerIdResponse::default()
+///         .error_code(ErrorCode::None.into())
+///         .producer_id(1)
+///         .producer_epoch(0)
+/// );
+///
+/// assert_eq!(
+///     service
+///         .serve(
+///             Context::default(),
+///             InitProducerIdRequest::default()
+///                 .transactional_id(transactional_id)
+///                 .transaction_timeout_ms(transaction_timeout_ms)
+///                 .producer_id(producer_id)
+///                 .producer_epoch(producer_epoch)
+///         )
+///         .await?,
+///     InitProducerIdResponse::default()
+///         .error_code(ErrorCode::None.into())
+///         .producer_id(2)
+///         .producer_epoch(0)
+/// );
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct InitProducerIdService;
 
@@ -31,6 +96,7 @@ where
     type Response = InitProducerIdResponse;
     type Error = Error;
 
+    #[instrument(skip(ctx), ret)]
     async fn serve(
         &self,
         ctx: Context<G>,
@@ -51,101 +117,5 @@ where
                     .producer_id(response.id)
                     .producer_epoch(response.epoch)
             })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{Error, dynostore::DynoStore};
-    use object_store::memory::InMemory;
-    use rama::Context;
-    use tansu_sans_io::ErrorCode;
-    use tracing::subscriber::DefaultGuard;
-
-    #[cfg(miri)]
-    fn init_tracing() -> Result<()> {
-        Ok(())
-    }
-
-    #[cfg(not(miri))]
-    fn init_tracing() -> Result<DefaultGuard> {
-        use std::{fs::File, sync::Arc, thread};
-
-        use tracing::Level;
-        use tracing_subscriber::fmt::format::FmtSpan;
-
-        Ok(tracing::subscriber::set_default(
-            tracing_subscriber::fmt()
-                .with_level(true)
-                .with_line_number(true)
-                .with_thread_names(false)
-                .with_max_level(Level::DEBUG)
-                .with_span_events(FmtSpan::ACTIVE)
-                .with_writer(
-                    thread::current()
-                        .name()
-                        .ok_or(Error::Message(String::from("unnamed thread")))
-                        .and_then(|name| {
-                            File::create(format!("../logs/{}/{name}.log", env!("CARGO_PKG_NAME")))
-                                .map_err(Into::into)
-                        })
-                        .map(Arc::new)?,
-                )
-                .finish(),
-        ))
-    }
-
-    #[tokio::test]
-    async fn no_txn_init_producer_id() -> Result<()> {
-        let _guard = init_tracing()?;
-
-        let cluster = "abc";
-        let node = 12321;
-
-        let transactional_id = None;
-        let transaction_timeout_ms = 0;
-        let producer_id = Some(-1);
-        let producer_epoch = Some(-1);
-
-        let storage = DynoStore::new(cluster, node, InMemory::new());
-        let ctx = Context::with_state(storage);
-        let service = InitProducerIdService;
-
-        assert_eq!(
-            service
-                .serve(
-                    ctx.clone(),
-                    InitProducerIdRequest::default()
-                        .transactional_id(transactional_id.clone())
-                        .transaction_timeout_ms(transaction_timeout_ms)
-                        .producer_id(producer_id)
-                        .producer_epoch(producer_epoch)
-                )
-                .await?,
-            InitProducerIdResponse::default()
-                .error_code(ErrorCode::None.into())
-                .producer_id(1)
-                .producer_epoch(0)
-        );
-
-        assert_eq!(
-            service
-                .serve(
-                    ctx,
-                    InitProducerIdRequest::default()
-                        .transactional_id(transactional_id)
-                        .transaction_timeout_ms(transaction_timeout_ms)
-                        .producer_id(producer_id)
-                        .producer_epoch(producer_epoch)
-                )
-                .await?,
-            InitProducerIdResponse::default()
-                .error_code(ErrorCode::None.into())
-                .producer_id(2)
-                .producer_epoch(0)
-        );
-
-        Ok(())
     }
 }

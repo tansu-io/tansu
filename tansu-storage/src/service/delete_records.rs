@@ -14,6 +14,7 @@
 
 use rama::{Context, Service};
 use tansu_sans_io::{ApiKey, DeleteRecordsRequest, DeleteRecordsResponse};
+use tracing::instrument;
 
 use crate::{Error, Result, Storage};
 
@@ -31,6 +32,7 @@ where
     type Response = DeleteRecordsResponse;
     type Error = Error;
 
+    #[instrument(skip(ctx), ret)]
     async fn serve(
         &self,
         ctx: Context<G>,

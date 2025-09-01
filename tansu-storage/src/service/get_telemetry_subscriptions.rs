@@ -16,10 +16,48 @@ use rama::{Context, Service};
 use tansu_sans_io::{
     ApiKey, ErrorCode, GetTelemetrySubscriptionsRequest, GetTelemetrySubscriptionsResponse,
 };
+use tracing::instrument;
 use uuid::Uuid;
 
 use crate::{Error, Result, Storage};
 
+/// A [`Service`] using [`Storage`] as [`Context`] taking [`GetTelemetrySubscriptionsRequest`] returning [`GetTelemetrySubscriptionsResponse`].
+/// ```
+/// use rama::{Context, Layer as _, Service, layer::MapStateLayer};
+/// use tansu_sans_io::{ErrorCode, GetTelemetrySubscriptionsRequest};
+/// use tansu_storage::{Error, GetTelemetrySubscriptionsService, StorageContainer};
+/// use url::Url;
+///
+/// # #[tokio::main]
+/// # async fn main() -> Result<(), Error> {
+///
+/// const HOST: &str = "localhost";
+/// const PORT: i32 = 9092;
+/// const NODE_ID: i32 = 111;
+///
+/// let storage = StorageContainer::builder()
+///     .cluster_id("tansu")
+///     .node_id(NODE_ID)
+///     .advertised_listener(Url::parse(&format!("tcp://{HOST}:{PORT}"))?)
+///     .storage(Url::parse("memory://tansu/")?)
+///     .build()
+///     .await?;
+///
+/// let service = MapStateLayer::new(|_| storage).into_layer(GetTelemetrySubscriptionsService);
+///
+/// let client_instance_id = [0; 16];
+///
+/// let response = service
+///     .serve(
+///         Context::default(),
+///         GetTelemetrySubscriptionsRequest::default().client_instance_id(client_instance_id),
+///     )
+///     .await?;
+///
+/// assert_eq!(ErrorCode::None, ErrorCode::try_from(response.error_code)?);
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct GetTelemetrySubscriptionsService;
 
@@ -34,11 +72,14 @@ where
     type Response = GetTelemetrySubscriptionsResponse;
     type Error = Error;
 
+    #[instrument(skip(ctx), ret)]
     async fn serve(
         &self,
-        _ctx: Context<G>,
-        _req: GetTelemetrySubscriptionsRequest,
+        ctx: Context<G>,
+        req: GetTelemetrySubscriptionsRequest,
     ) -> Result<Self::Response, Self::Error> {
+        let _ = ctx;
+
         let client_instance_id = *Uuid::new_v4().as_bytes();
 
         Ok(GetTelemetrySubscriptionsResponse::default()

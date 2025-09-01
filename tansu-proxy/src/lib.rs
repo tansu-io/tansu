@@ -25,8 +25,8 @@ use std::{
     sync::{Arc, LazyLock},
 };
 use tansu_client::{
-    BytesConnectionService, FrameConnectionLayer, FramePoolLayer, Manager, RequestConnectionLayer,
-    RequestPoolLayer,
+    BytesConnectionService, ConnectionManager, FrameConnectionLayer, FramePoolLayer,
+    RequestConnectionLayer, RequestPoolLayer,
 };
 use tansu_otel::meter_provider;
 use tansu_sans_io::{
@@ -142,7 +142,7 @@ impl Proxy {
 
         let token = CancellationToken::new();
 
-        let pool = Manager::builder(self.origin.clone())
+        let pool = ConnectionManager::builder(self.origin.clone())
             .client_id(Some(env!("CARGO_PKG_NAME").into()))
             .build()
             .await

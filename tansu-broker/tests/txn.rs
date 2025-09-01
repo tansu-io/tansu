@@ -19,7 +19,7 @@ use common::{StorageType, alphanumeric_string, init_tracing, register_broker};
 use rand::{prelude::*, rng};
 use tansu_broker::Result;
 use tansu_sans_io::{
-    BatchAttribute, ControlBatch, EndTransactionMarker, ErrorCode, IsolationLevel,
+    BatchAttribute, ControlBatch, EndTransactionMarker, ErrorCode, IsolationLevel, ListOffset,
     add_partitions_to_txn_request::AddPartitionsToTxnTopic,
     add_partitions_to_txn_response::{
         AddPartitionsToTxnPartitionResult, AddPartitionsToTxnTopicResult,
@@ -29,8 +29,7 @@ use tansu_sans_io::{
     txn_offset_commit_request::{TxnOffsetCommitRequestPartition, TxnOffsetCommitRequestTopic},
 };
 use tansu_storage::{
-    ListOffsetRequest, Storage, StorageContainer, TopicId, Topition, TxnAddPartitionsRequest,
-    TxnOffsetCommitRequest,
+    Storage, StorageContainer, TopicId, Topition, TxnAddPartitionsRequest, TxnOffsetCommitRequest,
 };
 use tracing::{debug, error};
 use url::Url;
@@ -324,7 +323,7 @@ pub async fn simple_txn_produce_commit(
     let list_offsets_before = sc
         .list_offsets(
             IsolationLevel::ReadUncommitted,
-            &[(topition.clone(), ListOffsetRequest::Latest)],
+            &[(topition.clone(), ListOffset::Latest)],
         )
         .await?;
     assert_eq!(1, list_offsets_before.len());
@@ -425,7 +424,7 @@ pub async fn simple_txn_produce_commit(
     };
 
     {
-        let list_offset_type = ListOffsetRequest::Latest;
+        let list_offset_type = ListOffset::Latest;
         let isolation_level = IsolationLevel::ReadUncommitted;
 
         let list_offsets_after = sc
@@ -452,7 +451,7 @@ pub async fn simple_txn_produce_commit(
     }
 
     {
-        let list_offset_type = ListOffsetRequest::Latest;
+        let list_offset_type = ListOffset::Latest;
         let isolation_level = IsolationLevel::ReadCommitted;
 
         let list_offsets_after = sc
@@ -503,7 +502,7 @@ pub async fn simple_txn_produce_commit(
 
     {
         let isolation_level = IsolationLevel::ReadUncommitted;
-        let list_offset_type = ListOffsetRequest::Latest;
+        let list_offset_type = ListOffset::Latest;
 
         let list_offsets_after = sc
             .list_offsets(isolation_level, &[(topition.clone(), list_offset_type)])
@@ -534,7 +533,7 @@ pub async fn simple_txn_produce_commit(
         // txn 1 is committed
         //
         let isolation_level = IsolationLevel::ReadCommitted;
-        let list_offset_type = ListOffsetRequest::Latest;
+        let list_offset_type = ListOffset::Latest;
 
         let list_offsets_after = sc
             .list_offsets(isolation_level, &[(topition.clone(), list_offset_type)])
@@ -608,7 +607,7 @@ pub async fn simple_txn_produce_abort(
     let list_offsets_before = sc
         .list_offsets(
             IsolationLevel::ReadUncommitted,
-            &[(topition.clone(), ListOffsetRequest::Latest)],
+            &[(topition.clone(), ListOffset::Latest)],
         )
         .await?;
     assert_eq!(1, list_offsets_before.len());
@@ -709,7 +708,7 @@ pub async fn simple_txn_produce_abort(
     };
 
     {
-        let list_offset_type = ListOffsetRequest::Latest;
+        let list_offset_type = ListOffset::Latest;
         let isolation_level = IsolationLevel::ReadUncommitted;
 
         let list_offsets_after = sc
@@ -736,7 +735,7 @@ pub async fn simple_txn_produce_abort(
     }
 
     {
-        let list_offset_type = ListOffsetRequest::Latest;
+        let list_offset_type = ListOffset::Latest;
         let isolation_level = IsolationLevel::ReadCommitted;
 
         let list_offsets_after = sc
@@ -787,7 +786,7 @@ pub async fn simple_txn_produce_abort(
 
     {
         let isolation_level = IsolationLevel::ReadUncommitted;
-        let list_offset_type = ListOffsetRequest::Latest;
+        let list_offset_type = ListOffset::Latest;
 
         let list_offsets_after = sc
             .list_offsets(isolation_level, &[(topition.clone(), list_offset_type)])
@@ -817,7 +816,7 @@ pub async fn simple_txn_produce_abort(
         // txn 1 is committed
         //
         let isolation_level = IsolationLevel::ReadCommitted;
-        let list_offset_type = ListOffsetRequest::Latest;
+        let list_offset_type = ListOffset::Latest;
 
         let list_offsets_after = sc
             .list_offsets(isolation_level, &[(topition.clone(), list_offset_type)])
@@ -893,7 +892,7 @@ pub async fn with_overlap(
     let list_offsets_before = sc
         .list_offsets(
             IsolationLevel::ReadUncommitted,
-            &[(topition.clone(), ListOffsetRequest::Latest)],
+            &[(topition.clone(), ListOffset::Latest)],
         )
         .await?;
     assert_eq!(1, list_offsets_before.len());
@@ -994,7 +993,7 @@ pub async fn with_overlap(
     };
 
     {
-        let list_offset_type = ListOffsetRequest::Latest;
+        let list_offset_type = ListOffset::Latest;
         let isolation_level = IsolationLevel::ReadUncommitted;
 
         let list_offsets_after = sc
@@ -1021,7 +1020,7 @@ pub async fn with_overlap(
     }
 
     {
-        let list_offset_type = ListOffsetRequest::Latest;
+        let list_offset_type = ListOffset::Latest;
         let isolation_level = IsolationLevel::ReadCommitted;
 
         let list_offsets_after = sc
@@ -1072,7 +1071,7 @@ pub async fn with_overlap(
 
     {
         let isolation_level = IsolationLevel::ReadUncommitted;
-        let list_offset_type = ListOffsetRequest::Latest;
+        let list_offset_type = ListOffset::Latest;
 
         let list_offsets_after = sc
             .list_offsets(isolation_level, &[(topition.clone(), list_offset_type)])
@@ -1103,7 +1102,7 @@ pub async fn with_overlap(
         // txn 1 is committed, but isn't visible at read committed because it overlaps with txn 2
         //
         let isolation_level = IsolationLevel::ReadCommitted;
-        let list_offset_type = ListOffsetRequest::Latest;
+        let list_offset_type = ListOffset::Latest;
 
         let list_offsets_after = sc
             .list_offsets(isolation_level, &[(topition.clone(), list_offset_type)])
@@ -1153,7 +1152,7 @@ pub async fn with_overlap(
 
     {
         let isolation_level = IsolationLevel::ReadUncommitted;
-        let list_offset_type = ListOffsetRequest::Latest;
+        let list_offset_type = ListOffset::Latest;
 
         let list_offsets_after = sc
             .list_offsets(isolation_level, &[(topition.clone(), list_offset_type)])
@@ -1182,7 +1181,7 @@ pub async fn with_overlap(
 
     {
         let isolation_level = IsolationLevel::ReadCommitted;
-        let list_offset_type = ListOffsetRequest::Latest;
+        let list_offset_type = ListOffset::Latest;
 
         let list_offsets_after = sc
             .list_offsets(isolation_level, &[(topition.clone(), list_offset_type)])
@@ -1339,7 +1338,7 @@ pub async fn init_producer_twice(
         let list_offsets_after = sc
             .list_offsets(
                 IsolationLevel::ReadUncommitted,
-                &[(topition.clone(), ListOffsetRequest::Latest)],
+                &[(topition.clone(), ListOffset::Latest)],
             )
             .await
             .inspect_err(|err| error!(?err))?;
@@ -1356,7 +1355,7 @@ pub async fn init_producer_twice(
         let list_offsets_after = sc
             .list_offsets(
                 IsolationLevel::ReadCommitted,
-                &[(topition.clone(), ListOffsetRequest::Latest)],
+                &[(topition.clone(), ListOffset::Latest)],
             )
             .await
             .inspect_err(|err| error!(?err))?;
@@ -1385,7 +1384,7 @@ pub async fn init_producer_twice(
         let list_offsets = sc
             .list_offsets(
                 IsolationLevel::ReadUncommitted,
-                &[(topition.clone(), ListOffsetRequest::Latest)],
+                &[(topition.clone(), ListOffset::Latest)],
             )
             .await
             .inspect_err(|err| error!(?err))?;
@@ -1467,7 +1466,7 @@ pub async fn init_producer_twice(
         let list_offsets = sc
             .list_offsets(
                 IsolationLevel::ReadUncommitted,
-                &[(topition.clone(), ListOffsetRequest::Latest)],
+                &[(topition.clone(), ListOffset::Latest)],
             )
             .await
             .inspect_err(|err| error!(?err))?;

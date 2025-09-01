@@ -14,12 +14,101 @@
 //
 //! Tansu Storage Abstraction
 //!
-//! Provides an abstraction over Storage. Currently implemented as:
-//! - [`StorageContainer`], which implements [`Storage`] and can be configured to either use [`Postgres`] or [`DynoStore`].
+//! [`StorageContainer`] provides an abstraction over [`Storage`] and can
+//! be configured to use memory, [S3](https://en.wikipedia.org/wiki/Amazon_S3),
+//! [PostgreSQL](https://postgresql.org/),
+//! [libSQL](https://github.com/tursodatabase/libsql) and
+//! [Turso](https://github.com/tursodatabase/turso) (alpha: currently feature locked).
 //!
-//! The underlying storage implementations of [`Storage`]:
-//! - [`Postgres`]
-//! - [`DynoStore`]
+//! ## Memory
+//!
+//! ```
+//! # use tansu_storage::{Error, StorageContainer};
+//! # use url::Url;
+//! # #[tokio::main]
+//! # async fn main() -> Result<(), Error> {
+//! let storage = StorageContainer::builder()
+//!     .cluster_id("tansu")
+//!     .node_id(111)
+//!     .advertised_listener(Url::parse("tcp://localhost:9092")?)
+//!     .storage(Url::parse("memory://tansu/")?)
+//!     .build()
+//!     .await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## S3
+//!
+//! ```no_run
+//! # use tansu_storage::{Error, StorageContainer};
+//! # use url::Url;
+//! # #[tokio::main]
+//! # async fn main() -> Result<(), Error> {
+//! let storage = StorageContainer::builder()
+//!     .cluster_id("tansu")
+//!     .node_id(111)
+//!     .advertised_listener(Url::parse("tcp://localhost:9092")?)
+//!     .storage(Url::parse("s3://tansu/")?)
+//!     .build()
+//!     .await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## PostgreSQL
+//!
+//! ```no_run
+//! # use tansu_storage::{Error, StorageContainer};
+//! # use url::Url;
+//! # #[tokio::main]
+//! # async fn main() -> Result<(), Error> {
+//! let storage = StorageContainer::builder()
+//!     .cluster_id("tansu")
+//!     .node_id(111)
+//!     .advertised_listener(Url::parse("tcp://localhost:9092")?)
+//!     .storage(Url::parse("postgres://postgres:postgres@localhost")?)
+//!     .build()
+//!     .await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## libSQL (SQLite)
+//!
+//! ```no_run
+//! # use tansu_storage::{Error, StorageContainer};
+//! # use url::Url;
+//! # #[tokio::main]
+//! # async fn main() -> Result<(), Error> {
+//! let storage = StorageContainer::builder()
+//!     .cluster_id("tansu")
+//!     .node_id(111)
+//!     .advertised_listener(Url::parse("tcp://localhost:9092")?)
+//!     .storage(Url::parse("sqlite://tansu.db")?)
+//!     .build()
+//!     .await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## Turso
+//!
+//! ```no_run
+//! # use tansu_storage::{Error, StorageContainer};
+//! # use url::Url;
+//! # #[tokio::main]
+//! # async fn main() -> Result<(), Error> {
+//! let storage = StorageContainer::builder()
+//!     .cluster_id("tansu")
+//!     .node_id(111)
+//!     .advertised_listener(Url::parse("tcp://localhost:9092")?)
+//!     .storage(Url::parse("turso://tansu.db")?)
+//!     .build()
+//!     .await?;
+//! # Ok(())
+//! # }
+//! ```
 //!
 
 use async_trait::async_trait;
@@ -63,7 +152,7 @@ use std::{
     time::{Duration, SystemTime, SystemTimeError},
 };
 use tansu_sans_io::{
-    Body, ConfigResource, ErrorCode, IsolationLevel, NULL_TOPIC_ID,
+    Body, ConfigResource, ErrorCode, IsolationLevel, ListOffset, NULL_TOPIC_ID,
     add_partitions_to_txn_request::{
         AddPartitionsToTxnRequest, AddPartitionsToTxnTopic, AddPartitionsToTxnTransaction,
     },
@@ -99,11 +188,20 @@ use url::Url;
 use uuid::Uuid;
 
 #[cfg(feature = "dynostore")]
-pub mod dynostore;
+mod dynostore;
 
 #[cfg(feature = "postgres")]
-pub mod pg;
-pub mod service;
+mod pg;
+mod service;
+
+pub use service::{
+    ConsumerGroupDescribeService, CreateTopicsService, DeleteGroupsService, DeleteRecordsService,
+    DeleteTopicsService, DescribeClusterService, DescribeConfigsService, DescribeGroupsService,
+    DescribeTopicPartitionsService, FetchService, FindCoordinatorService,
+    GetTelemetrySubscriptionsService, IncrementalAlterConfigsService, InitProducerIdService,
+    ListGroupsService, ListOffsetsService, ListPartitionReassignmentsService, MetadataService,
+    ProduceService, TxnAddOffsetsService, TxnAddPartitionService, TxnOffsetCommitService,
+};
 
 #[cfg(any(feature = "libsql", feature = "postgres", feature = "turso"))]
 pub(crate) mod sql;
@@ -414,17 +512,7 @@ impl From<&TopitionOffset> for PathBuf {
     }
 }
 
-/// List Offset Request
-///
-/// An enumeration of offset request types, with conversion from/to an i64 protocol representation.
-///
-#[derive(Copy, Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub enum ListOffsetRequest {
-    #[default]
-    Earliest,
-    Latest,
-    Timestamp(SystemTime),
-}
+pub type ListOffsetRequest = ListOffset;
 
 #[derive(Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ListOffsetResponse {
@@ -456,32 +544,6 @@ impl ListOffsetResponse {
 
     pub fn error_code(&self) -> ErrorCode {
         self.error_code
-    }
-}
-
-impl TryFrom<ListOffsetRequest> for i64 {
-    type Error = Error;
-
-    fn try_from(value: ListOffsetRequest) -> Result<Self, Self::Error> {
-        match value {
-            ListOffsetRequest::Earliest => Ok(-2),
-            ListOffsetRequest::Latest => Ok(-1),
-            ListOffsetRequest::Timestamp(timestamp) => to_timestamp(timestamp).map_err(Into::into),
-        }
-    }
-}
-
-impl TryFrom<i64> for ListOffsetRequest {
-    type Error = Error;
-
-    fn try_from(value: i64) -> Result<Self, Self::Error> {
-        match value {
-            -2 => Ok(ListOffsetRequest::Earliest),
-            -1 => Ok(ListOffsetRequest::Latest),
-            timestamp => to_system_time(timestamp)
-                .map(ListOffsetRequest::Timestamp)
-                .map_err(Into::into),
-        }
     }
 }
 
@@ -1071,20 +1133,6 @@ impl TryFrom<AddPartitionsToTxnRequest> for TxnAddPartitionsRequest {
     }
 }
 
-impl TryFrom<Body> for TxnAddPartitionsRequest {
-    type Error = Error;
-
-    fn try_from(value: Body) -> result::Result<Self, Self::Error> {
-        match value {
-            Body::AddPartitionsToTxnRequest(add_partitions_to_txn) => {
-                TxnAddPartitionsRequest::try_from(add_partitions_to_txn)
-            }
-
-            unexpected => Err(Error::UnexpectedBody(Box::new(unexpected))),
-        }
-    }
-}
-
 /// Transaction Add Partitions Response
 ///
 /// For protocol versions 0..=3 using `AddPartitionsToTxnTopic`, thereafter using `AddPartitionsToTxnTransaction`.
@@ -1231,7 +1279,7 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
     async fn list_offsets(
         &self,
         isolation_level: IsolationLevel,
-        offsets: &[(Topition, ListOffsetRequest)],
+        offsets: &[(Topition, ListOffset)],
     ) -> Result<Vec<(Topition, ListOffsetResponse)>>;
 
     /// Commit offsets for one or more topic partitions in a consumer group.
@@ -1377,12 +1425,6 @@ pub enum UpdateError<T> {
 }
 
 /// Storage Container
-///
-/// An enumeration of available storage implementations.
-/// - [`DynoStore`]
-/// - [`Postgres`]
-/// - [`limbo::Engine`]
-/// - [`lite::Engine`]
 #[derive(Clone, Debug)]
 pub enum StorageContainer {
     #[cfg(feature = "postgres")]
@@ -1404,6 +1446,7 @@ impl StorageContainer {
     }
 }
 
+/// A [`StorageContainer`] builder
 #[derive(Clone, Debug, Default)]
 pub struct Builder<N, C, A, S> {
     node_id: N,
@@ -1843,7 +1886,7 @@ impl Storage for StorageContainer {
     async fn list_offsets(
         &self,
         isolation_level: IsolationLevel,
-        offsets: &[(Topition, ListOffsetRequest)],
+        offsets: &[(Topition, ListOffset)],
     ) -> Result<Vec<(Topition, ListOffsetResponse)>> {
         let attributes = [KeyValue::new("method", "list_offsets")];
 

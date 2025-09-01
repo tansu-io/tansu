@@ -18,10 +18,10 @@ test-workspace:
     cargo test --workspace --all-targets --all-features
 
 test-doc:
-    cargo test --workspace --doc
+    cargo test --workspace --doc --all-features
 
 doc:
-    cargo doc --open
+    cargo doc --all-features --open
 
 clippy:
     cargo clippy -- -D warnings

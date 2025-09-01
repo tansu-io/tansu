@@ -17,7 +17,7 @@ use std::marker::PhantomData;
 use crate::{Error, Result};
 
 use futures::SinkExt;
-use tansu_client::{Client, Manager};
+use tansu_client::{Client, ConnectionManager};
 use tansu_sans_io::{
     ErrorCode,
     fetch_request::{FetchPartition, FetchRequest, FetchTopic},
@@ -205,7 +205,7 @@ impl Consume {
             None
         };
 
-        let client = Manager::builder(self.configuration.broker.clone())
+        let client = ConnectionManager::builder(self.configuration.broker.clone())
             .client_id(Some(env!("CARGO_PKG_NAME").into()))
             .build()
             .await

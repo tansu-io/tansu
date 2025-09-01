@@ -19,7 +19,7 @@ use tansu_sans_io::{
     DescribeClusterRequest, DescribeClusterResponse, ErrorCode,
     describe_cluster_response::DescribeClusterBroker,
 };
-use tansu_storage::{StorageContainer, service::DescribeClusterService};
+use tansu_storage::{DescribeClusterService, StorageContainer};
 use tracing::debug;
 use url::Url;
 use uuid::Uuid;

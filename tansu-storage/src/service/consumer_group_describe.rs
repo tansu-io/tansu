@@ -17,9 +17,48 @@ use tansu_sans_io::{
     ApiKey, ConsumerGroupDescribeRequest,
     consumer_group_describe_response::{ConsumerGroupDescribeResponse, DescribedGroup},
 };
+use tracing::{debug, instrument};
 
 use crate::{Error, Result, Storage};
 
+/// A [`Service`] using [`Storage`] as [`Context`] taking [`ConsumerGroupDescribeRequest`] returning [`ConsumerGroupDescribeResponse`].
+/// ```
+/// use rama::{Context, Layer, Service as _, layer::MapStateLayer};
+/// use tansu_sans_io::{ConsumerGroupDescribeRequest, ErrorCode};
+/// use tansu_storage::{ConsumerGroupDescribeService, Error, StorageContainer};
+/// use url::Url;
+///
+/// # #[tokio::main]
+/// # async fn main() -> Result<(), Error> {
+/// let storage = StorageContainer::builder()
+///     .cluster_id("tansu")
+///     .node_id(111)
+///     .advertised_listener(Url::parse("tcp://localhost:9092")?)
+///     .storage(Url::parse("memory://tansu/")?)
+///     .build()
+///     .await?;
+///
+/// let service = MapStateLayer::new(|_| storage).into_layer(ConsumerGroupDescribeService);
+///
+/// let group_id = "abc";
+///
+/// let response = service
+///     .serve(
+///         Context::default(),
+///         ConsumerGroupDescribeRequest::default()
+///             .group_ids(Some([group_id.into()].into()))
+///             .include_authorized_operations(false),
+///     )
+///     .await?;
+///
+/// let groups = response.groups.unwrap_or_default();
+/// assert_eq!(1, groups.len());
+/// assert_eq!(ErrorCode::None, ErrorCode::try_from(groups[0].error_code)?);
+/// assert_eq!(group_id, groups[0].group_id.as_str());
+/// assert_eq!("Empty", groups[0].group_state.as_str());
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ConsumerGroupDescribeService;
 
@@ -34,6 +73,7 @@ where
     type Response = ConsumerGroupDescribeResponse;
     type Error = Error;
 
+    #[instrument(skip(ctx), ret)]
     async fn serve(
         &self,
         ctx: Context<G>,
@@ -42,6 +82,7 @@ where
         ctx.state()
             .describe_groups(req.group_ids.as_deref(), req.include_authorized_operations)
             .await
+            .inspect(|described| debug!(?described))
             .map(|described| {
                 described
                     .iter()

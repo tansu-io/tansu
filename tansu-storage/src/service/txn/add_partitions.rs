@@ -17,6 +17,7 @@ use tansu_sans_io::{AddPartitionsToTxnRequest, AddPartitionsToTxnResponse, ApiKe
 
 use crate::{Error, Result, Storage, TxnAddPartitionsRequest, TxnAddPartitionsResponse};
 
+/// A [`Service`] using [`Storage`] as [`Context`] taking [`AddPartitionsToTxnRequest`] returning [`AddPartitionsToTxnResponse`].
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct AddPartitionService;
 

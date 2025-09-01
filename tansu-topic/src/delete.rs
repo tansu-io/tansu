@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use tansu_client::{Client, Manager};
+use tansu_client::{Client, ConnectionManager};
 use tansu_sans_io::{
     DeleteTopicsRequest, DeleteTopicsResponse, ErrorCode, NULL_TOPIC_ID,
     delete_topics_request::DeleteTopicState, delete_topics_response::DeletableTopicResult,
@@ -76,7 +76,7 @@ impl TryFrom<Configuration> for Delete {
 
 impl Delete {
     pub(crate) async fn main(self) -> Result<ErrorCode> {
-        let client = Manager::builder(self.configuration.broker.clone())
+        let client = ConnectionManager::builder(self.configuration.broker.clone())
             .client_id(Some(env!("CARGO_PKG_NAME").into()))
             .build()
             .await

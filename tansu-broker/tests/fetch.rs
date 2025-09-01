@@ -20,15 +20,12 @@ use rama::{Context, Service};
 use rand::{prelude::*, rng};
 use tansu_broker::Result;
 use tansu_sans_io::{
-    ErrorCode, FetchRequest, IsolationLevel, NULL_TOPIC_ID,
+    ErrorCode, FetchRequest, IsolationLevel, ListOffset, NULL_TOPIC_ID,
     create_topics_request::CreatableTopic,
     fetch_request::{FetchPartition, FetchTopic},
     record::{Record, inflated},
 };
-use tansu_storage::{
-    ListOffsetRequest, ListOffsetResponse, Storage, StorageContainer, Topition,
-    service::FetchService,
-};
+use tansu_storage::{FetchService, ListOffsetResponse, Storage, StorageContainer, Topition};
 use tracing::{debug, error};
 use url::Url;
 use uuid::Uuid;
@@ -178,7 +175,7 @@ where
     let list_offsets = sc
         .list_offsets(
             IsolationLevel::ReadUncommitted,
-            &[(topition.clone(), ListOffsetRequest::Latest)],
+            &[(topition.clone(), ListOffset::Latest)],
         )
         .await
         .inspect_err(|err| error!(?err))
@@ -230,7 +227,7 @@ where
     let list_offsets = sc
         .list_offsets(
             IsolationLevel::ReadUncommitted,
-            &[(topition.clone(), ListOffsetRequest::Latest)],
+            &[(topition.clone(), ListOffset::Latest)],
         )
         .await
         .inspect_err(|err| error!(?err))

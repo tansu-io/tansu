@@ -17,9 +17,58 @@ use tansu_sans_io::{
     ApiKey, ErrorCode, FindCoordinatorRequest, FindCoordinatorResponse,
     find_coordinator_response::Coordinator,
 };
+use tracing::instrument;
 
 use crate::{Error, Result, Storage};
 
+/// A [`Service`] using [`Storage`] as [`Context`] taking [`FindCoordinatorRequest`] returning [`FindCoordinatorResponse`].
+/// ```
+/// use rama::{Context, Layer as _, Service, layer::MapStateLayer};
+/// use tansu_sans_io::{ErrorCode, FindCoordinatorRequest};
+/// use tansu_storage::{Error, FindCoordinatorService, StorageContainer};
+/// use url::Url;
+///
+/// # #[tokio::main]
+/// # async fn main() -> Result<(), Error> {
+/// const HOST: &str = "localhost";
+/// const PORT: i32 = 9092;
+/// const NODE_ID: i32 = 111;
+///
+/// let storage = StorageContainer::builder()
+///     .cluster_id("tansu")
+///     .node_id(NODE_ID)
+///     .advertised_listener(Url::parse(&format!("tcp://{HOST}:{PORT}"))?)
+///     .storage(Url::parse("memory://tansu/")?)
+///     .build()
+///     .await?;
+///
+/// let service = MapStateLayer::new(|_| storage).into_layer(FindCoordinatorService);
+///
+/// let response = service
+///     .serve(
+///         Context::default(),
+///         FindCoordinatorRequest::default()
+///             .key(Some("abcba".into()))
+///             .key_type(Some(0))
+///             .coordinator_keys(Some(["xyzyx".into()].into())),
+///     )
+///     .await?;
+///
+/// assert_eq!(
+///     Some(ErrorCode::None.into()),
+///     if let Some(error_code) = response.error_code {
+///         ErrorCode::try_from(error_code).map(Some)?
+///     } else {
+///         None
+///     }
+/// );
+///
+/// assert_eq!(Some(NODE_ID), response.node_id);
+/// assert_eq!(Some(HOST), response.host.as_deref());
+/// assert_eq!(Some(PORT), response.port);
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct FindCoordinatorService;
 
@@ -34,6 +83,7 @@ where
     type Response = FindCoordinatorResponse;
     type Error = Error;
 
+    #[instrument(skip(ctx), ret)]
     async fn serve(
         &self,
         ctx: Context<G>,
