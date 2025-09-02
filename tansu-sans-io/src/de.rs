@@ -187,7 +187,7 @@ impl<'de> Decoder<'de> {
     }
 
     #[must_use]
-    pub fn field_name(&self) -> String {
+    fn field_name(&self) -> String {
         self.path.iter().fold(String::new(), |acc, step| {
             if acc.is_empty() {
                 (*step).to_string()
@@ -336,10 +336,6 @@ impl<'de> Decoder<'de> {
         }
 
         Ok(accumulator)
-    }
-
-    pub fn position(&self) -> u64 {
-        self.reader.position
     }
 }
 

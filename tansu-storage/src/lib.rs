@@ -1054,9 +1054,7 @@ pub struct PartitionDetail {
     partition_index: i32,
 }
 
-/// Version
-///
-/// Representing an `e_tag` and `version` used in conditional writes to an object store.
+/// Version representing an `e_tag` and `version` used in conditional writes to an object store.
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct Version {
     e_tag: Option<String>,
@@ -1081,9 +1079,8 @@ impl Default for ProducerIdResponse {
     }
 }
 
-/// Transaction Add Partitions Request
-///
-/// For protocol versions 0..=3 using `AddPartitionsToTxnTopic`, thereafter using `AddPartitionsToTxnTransaction`.
+/// For protocol versions 0..=3 using [`AddPartitionsToTxnTopic`],
+/// thereafter using [`AddPartitionsToTxnTransaction`].
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum TxnAddPartitionsRequest {
     VersionZeroToThree {
