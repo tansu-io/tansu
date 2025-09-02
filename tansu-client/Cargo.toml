@@ -1,5 +1,6 @@
 [package]
 name = "tansu-client"
+description = "A Service/Layer based Kafka client"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
