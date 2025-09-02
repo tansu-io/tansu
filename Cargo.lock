@@ -6628,7 +6628,7 @@ checksum = "7b2093cf4c8eb1e67749a6762251bc9cd836b6fc171623bd0a9d324d37af2417"
 
 [[package]]
 name = "tansu"
-version = "0.4.10"
+version = "0.5.0"
 dependencies = [
  "dotenv",
  "tansu-broker",
@@ -6640,7 +6640,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-broker"
-version = "0.4.10"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "bytes",
@@ -6682,7 +6682,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-cat"
-version = "0.4.10"
+version = "0.5.0"
 dependencies = [
  "bytes",
  "futures",
@@ -6702,7 +6702,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-cli"
-version = "0.4.10"
+version = "0.5.0"
 dependencies = [
  "clap",
  "dotenv",
@@ -6726,7 +6726,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-client"
-version = "0.4.10"
+version = "0.5.0"
 dependencies = [
  "bytes",
  "deadpool",
@@ -6745,7 +6745,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-generator"
-version = "0.4.10"
+version = "0.5.0"
 dependencies = [
  "futures",
  "futures-core",
@@ -6772,7 +6772,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-model"
-version = "0.4.10"
+version = "0.5.0"
 dependencies = [
  "convert_case",
  "lazy_static",
@@ -6787,7 +6787,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-otel"
-version = "0.4.10"
+version = "0.5.0"
 dependencies = [
  "opentelemetry 0.30.0",
  "opentelemetry-otlp",
@@ -6800,7 +6800,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-proxy"
-version = "0.4.10"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "bytes",
@@ -6825,7 +6825,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-sans-io"
-version = "0.4.10"
+version = "0.5.0"
 dependencies = [
  "bytes",
  "clap",
@@ -6853,7 +6853,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-schema"
-version = "0.4.10"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "apache-avro",
@@ -6900,7 +6900,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-service"
-version = "0.4.10"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "bytes",
@@ -6920,7 +6920,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-storage"
-version = "0.4.10"
+version = "0.5.0"
 dependencies = [
  "assert_matches",
  "async-trait",
@@ -6960,7 +6960,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-topic"
-version = "0.4.10"
+version = "0.5.0"
 dependencies = [
  "futures",
  "futures-core",
@@ -7454,8 +7454,9 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
 name = "turso"
-version = "0.1.4-pre.8"
-source = "git+https://github.com/tursodatabase/turso.git?tag=v0.1.4-pre.8#a6247e891fae92c140d6537f31885bdf6b6b9717"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4e78e2e4f7d698982f5f4659bb6f20cb275d06823982f775d8228149222c4dca"
 dependencies = [
  "thiserror 2.0.16",
  "turso_core",
@@ -7463,8 +7464,9 @@ dependencies = [
 
 [[package]]
 name = "turso_core"
-version = "0.1.4-pre.8"
-source = "git+https://github.com/tursodatabase/turso.git?tag=v0.1.4-pre.8#a6247e891fae92c140d6537f31885bdf6b6b9717"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "78722c600198ac7a0d804857c12dbf37e99164125641c1e55eeedfdc92019105"
 dependencies = [
  "bitflags",
  "built",
@@ -7504,8 +7506,9 @@ dependencies = [
 
 [[package]]
 name = "turso_ext"
-version = "0.1.4-pre.8"
-source = "git+https://github.com/tursodatabase/turso.git?tag=v0.1.4-pre.8#a6247e891fae92c140d6537f31885bdf6b6b9717"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d050a8577d82b7318270adb06bdaa36d4903ec2ecca39c4a6a150ff624c6b48a"
 dependencies = [
  "chrono",
  "getrandom 0.3.3",
@@ -7514,8 +7517,9 @@ dependencies = [
 
 [[package]]
 name = "turso_macros"
-version = "0.1.4-pre.8"
-source = "git+https://github.com/tursodatabase/turso.git?tag=v0.1.4-pre.8#a6247e891fae92c140d6537f31885bdf6b6b9717"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2575c06e7208206e92ea21b752fc493c2dd457e12ad4d1a0afc431991dd3190f"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -7524,8 +7528,9 @@ dependencies = [
 
 [[package]]
 name = "turso_sqlite3_parser"
-version = "0.1.4-pre.8"
-source = "git+https://github.com/tursodatabase/turso.git?tag=v0.1.4-pre.8#a6247e891fae92c140d6537f31885bdf6b6b9717"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "788b1f76b209074abbacc8ddc06500719d36388414ab8201202eff855eaf2ed2"
 dependencies = [
  "bitflags",
  "cc",
