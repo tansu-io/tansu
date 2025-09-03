@@ -94,7 +94,7 @@ iceberg-catalog-rest = "0.5"
 iceberg-datafusion = "0.5"
 jsonschema = "0.26.2"
 lazy_static = "1.4.0"
-libsql = { version = "0.9.18", default-features = false, features = ["core"] }
+libsql = { version = "0.9.23", default-features = false, features = ["core"] }
 lz4 = "1.28.1"
 nonzero_ext = "0.3.0"
 num-bigint = "0.4"
