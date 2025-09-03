@@ -71,7 +71,7 @@ convert_case = "0.8.0"
 crc = "3.0.1"
 criterion = { version = "0.5.1", features = ["html_reports"] }
 datafusion = "47"
-deadpool = "0.12.2"
+deadpool = "0.12.3"
 deadpool-postgres = "0.14.1"
 delta_kernel = "0.10.0"
 deltalake = { version = "0.26", features = ["datafusion", "s3"] }
