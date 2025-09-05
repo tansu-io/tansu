@@ -88,10 +88,9 @@ http-body-util = "0.1"
 humantime = "2.2.0"
 hyper = { version = "1.3", features = ["full"] }
 hyper-util = { version = "0.1", features = ["full"] }
-iceberg = "0.5"
-iceberg-catalog-memory = "0.5"
-iceberg-catalog-rest = "0.5"
-iceberg-datafusion = "0.5"
+iceberg = "0.6"
+iceberg-catalog-rest = "0.6"
+iceberg-datafusion = "0.6"
 jsonschema = "0.26.2"
 lazy_static = "1.4.0"
 libsql = { version = "0.9.18", default-features = false, features = ["core"] }

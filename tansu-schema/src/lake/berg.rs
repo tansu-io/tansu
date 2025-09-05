@@ -26,11 +26,11 @@ use crate::{
 use arrow::array::RecordBatch;
 use async_trait::async_trait;
 use iceberg::{
-    Catalog, NamespaceIdent, TableCreation, TableIdent,
+    Catalog, MemoryCatalog, NamespaceIdent, TableCreation, TableIdent,
     io::{FileIOBuilder, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY},
     spec::{DataFileFormat, Schema, TableMetadataBuilder},
     table::Table,
-    transaction::Transaction,
+    transaction::{ApplyTransactionAction, Transaction},
     writer::{
         IcebergWriter, IcebergWriterBuilder,
         base_writer::data_file_writer::DataFileWriterBuilder,
@@ -40,7 +40,6 @@ use iceberg::{
         },
     },
 };
-use iceberg_catalog_memory::MemoryCatalog;
 use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
 use parquet::file::properties::WriterProperties;
 use tansu_sans_io::describe_configs_response::DescribeConfigsResult;
@@ -312,15 +311,12 @@ impl LakeHouse for Iceberg {
 
         let tx = Transaction::new(&table);
 
-        let mut fast_append = tx
-            .fast_append(Some(commit_uuid), vec![])
-            .inspect_err(|err| debug!(?err))?;
-
-        _ = fast_append
+        let tx = tx
+            .fast_append()
+            .set_commit_uuid(commit_uuid)
             .add_data_files(data_files)
+            .apply(tx)
             .inspect_err(|err| debug!(?err))?;
-
-        let tx = fast_append.apply().await.inspect_err(|err| debug!(?err))?;
 
         tx.commit(self.catalog.as_ref())
             .await
