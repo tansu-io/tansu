@@ -192,6 +192,8 @@ mod dynostore;
 
 #[cfg(feature = "postgres")]
 mod pg;
+
+mod proxy;
 mod service;
 
 pub use service::{
@@ -301,6 +303,9 @@ pub enum Error {
     UnknownTxnState(String),
 
     Uuid(#[from] uuid::Error),
+
+    UnableToSend,
+    OneshotRecv,
 }
 
 impl Display for Error {
