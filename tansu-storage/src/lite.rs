@@ -190,14 +190,6 @@ impl Engine {
 
         connection.busy_timeout(Duration::from_millis(60_000))?;
 
-        // {
-        //     let mut rows = connection.query("PRAGMA busy_timeout = 5000", ()).await?;
-
-        //     if let Some(row) = rows.next().await.inspect_err(|err| error!(?err))? {
-        //         debug!(busy_timeout = row.get_str(0)?);
-        //     }
-        // }
-
         self.prepare_execute(&connection, "PRAGMA foreign_keys = ON", ())
             .await
             .and(Ok(connection))
