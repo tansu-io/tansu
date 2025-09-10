@@ -35,7 +35,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::NaiveDateTime;
 use libsql::{
-    Connection, Database, Row, Transaction, TransactionBehavior, Value, params::IntoParams,
+    Connection, Database, Row, Rows, Transaction, TransactionBehavior, Value, params::IntoParams,
 };
 use opentelemetry::{
     KeyValue,
@@ -85,6 +85,22 @@ static SQL_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
         .u64_histogram("tansu_sqlite_duration")
         .with_unit("ms")
         .with_description("The SQL request latencies in milliseconds")
+        .build()
+});
+
+static TRANSACTION_WITH_BEHAVIOR_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
+    METER
+        .u64_histogram("tansu_sqlite_transaction_with_behavior_duration")
+        .with_unit("ms")
+        .with_description("The transaction with behavior latencies in milliseconds")
+        .build()
+});
+
+static TRANSACTION_COMMIT_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
+    METER
+        .u64_histogram("tansu_sqlite_transaction_commit_duration")
+        .with_unit("ms")
+        .with_description("The transaction commit latencies in milliseconds")
         .build()
 });
 
@@ -152,24 +168,45 @@ impl Engine {
         Builder::default()
     }
 
+    fn elapsed_millis(&self, start: SystemTime) -> u64 {
+        start
+            .elapsed()
+            .map_or(0, |duration| duration.as_millis() as u64)
+    }
+
     async fn connection(&self) -> Result<Connection> {
         let connection = {
             let db = self.db.lock()?;
             db.connect()
         }?;
+
+        {
+            let mut rows = connection.query("PRAGMA journal_mode = WAL", ()).await?;
+
+            if let Some(row) = rows.next().await.inspect_err(|err| error!(?err))? {
+                debug!(journal_mode = row.get_str(0)?);
+            }
+        }
+
+        connection.busy_timeout(Duration::from_millis(60_000))?;
+
         self.prepare_execute(&connection, "PRAGMA foreign_keys = ON", ())
             .await
             .and(Ok(connection))
             .map_err(Into::into)
     }
 
-    fn attributes_for_error(&self, sql: &str, error: &libsql::Error) -> Vec<KeyValue> {
+    fn attributes_for_error(&self, sql: Option<&str>, error: &libsql::Error) -> Vec<KeyValue> {
         debug!(sql, ?error);
 
-        let mut attributes = vec![
-            KeyValue::new("sql", sql.to_owned()),
-            KeyValue::new("cluster_id", self.cluster.clone()),
-        ];
+        let mut attributes = if let Some(sql) = sql {
+            vec![
+                KeyValue::new("sql", sql.to_owned()),
+                KeyValue::new("cluster_id", self.cluster.clone()),
+            ]
+        } else {
+            vec![KeyValue::new("cluster_id", self.cluster.clone())]
+        };
 
         if let libsql::Error::SqliteFailure(code, _) = error {
             attributes.push(KeyValue::new("code", format!("{code}")));
@@ -178,32 +215,68 @@ impl Engine {
         attributes
     }
 
-    async fn prepare_execute<P>(
+    async fn commit(&self, tx: Transaction) -> Result<()> {
+        let start = SystemTime::now();
+
+        tx.commit()
+            .await
+            .inspect(|_| {
+                TRANSACTION_COMMIT_DURATION.record(
+                    self.elapsed_millis(start),
+                    &[KeyValue::new("cluster_id", self.cluster.clone())],
+                )
+            })
+            .inspect_err(|err| {
+                error!(?err, elapsed_millis = self.elapsed_millis(start));
+                SQL_ERROR.add(1, &self.attributes_for_error(None, err)[..]);
+            })
+            .map_err(Into::into)
+    }
+
+    async fn transaction(&self) -> Result<Transaction> {
+        let start = SystemTime::now();
+
+        let connection = self.connection().await?;
+
+        connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .await
+            .inspect(|_tx| {
+                TRANSACTION_WITH_BEHAVIOR_DURATION.record(
+                    self.elapsed_millis(start),
+                    &[KeyValue::new("cluster_id", self.cluster.clone())],
+                )
+            })
+            .inspect_err(|err| {
+                error!(?err, elapsed_millis = self.elapsed_millis(start));
+
+                SQL_ERROR.add(1, &self.attributes_for_error(None, err)[..]);
+            })
+            .map_err(Into::into)
+    }
+
+    async fn query<P>(
         &self,
         connection: &Connection,
         sql: &str,
         params: P,
-    ) -> result::Result<usize, libsql::Error>
+    ) -> result::Result<Rows, libsql::Error>
     where
         P: IntoParams,
         P: Debug,
     {
         debug!(?connection, sql, ?params);
 
-        let statement = connection.prepare(sql).await?;
+        let start = SystemTime::now();
 
-        let execute_start = SystemTime::now();
-
-        statement
-            .execute(params)
+        connection
+            .query(sql, params)
             .await
             .inspect(|rows| {
-                debug!(rows);
+                debug!(?rows);
 
                 SQL_DURATION.record(
-                    execute_start
-                        .elapsed()
-                        .map_or(0, |duration| duration.as_millis() as u64),
+                    self.elapsed_millis(start),
                     &[
                         KeyValue::new("sql", sql.to_owned()),
                         KeyValue::new("cluster_id", self.cluster.clone()),
@@ -219,7 +292,57 @@ impl Engine {
                 );
             })
             .inspect_err(|err| {
-                SQL_ERROR.add(1, &self.attributes_for_error(sql, err)[..]);
+                error!(?err, elapsed_millis = self.elapsed_millis(start));
+
+                SQL_ERROR.add(1, &self.attributes_for_error(Some(sql), err)[..]);
+            })
+    }
+
+    async fn prepare_execute<P>(
+        &self,
+        connection: &Connection,
+        sql: &str,
+        params: P,
+    ) -> result::Result<usize, libsql::Error>
+    where
+        P: IntoParams,
+        P: Debug,
+    {
+        debug!(?connection, sql, ?params);
+        let start = SystemTime::now();
+
+        let statement = connection.prepare(sql).await.inspect_err(|err| {
+            error!(?err, sql, elapsed_millis = self.elapsed_millis(start));
+
+            SQL_ERROR.add(1, &self.attributes_for_error(Some(sql), err)[..]);
+        })?;
+
+        statement
+            .execute(params)
+            .await
+            .inspect(|rows| {
+                debug!(rows);
+
+                SQL_DURATION.record(
+                    self.elapsed_millis(start),
+                    &[
+                        KeyValue::new("sql", sql.to_owned()),
+                        KeyValue::new("cluster_id", self.cluster.clone()),
+                    ],
+                );
+
+                SQL_REQUESTS.add(
+                    1,
+                    &[
+                        KeyValue::new("sql", sql.to_owned()),
+                        KeyValue::new("cluster_id", self.cluster.clone()),
+                    ],
+                );
+            })
+            .inspect_err(|err| {
+                error!(?err, sql, elapsed_millis = self.elapsed_millis(start));
+
+                SQL_ERROR.add(1, &self.attributes_for_error(Some(sql), err)[..]);
             })
     }
 
@@ -235,16 +358,21 @@ impl Engine {
     {
         debug!(?connection, sql, ?params);
 
-        let statement = connection.prepare(sql).await?;
+        let start = SystemTime::now();
 
-        let execute_start = SystemTime::now();
+        let statement = connection.prepare(sql).await.inspect_err(|err| {
+            error!(?err, elapsed_millis = self.elapsed_millis(start));
+            SQL_ERROR.add(1, &self.attributes_for_error(Some(sql), err)[..]);
+        })?;
 
         let mut rows = statement.query(params).await.inspect_err(|err| {
-            SQL_ERROR.add(1, &self.attributes_for_error(sql, err)[..]);
+            error!(?err, elapsed_millis = self.elapsed_millis(start));
+            SQL_ERROR.add(1, &self.attributes_for_error(Some(sql), err)[..]);
         })?;
 
         let row = rows.next().await.inspect_err(|err| {
-            SQL_ERROR.add(1, &self.attributes_for_error(sql, err)[..]);
+            error!(?err, elapsed_millis = self.elapsed_millis(start));
+            SQL_ERROR.add(1, &self.attributes_for_error(Some(sql), err)[..]);
         })?;
 
         let attributes = [
@@ -252,12 +380,7 @@ impl Engine {
             KeyValue::new("cluster_id", self.cluster.clone()),
         ];
 
-        SQL_DURATION.record(
-            execute_start
-                .elapsed()
-                .map_or(0, |duration| duration.as_millis() as u64),
-            &attributes,
-        );
+        SQL_DURATION.record(self.elapsed_millis(start), &attributes);
 
         SQL_REQUESTS.add(1, &attributes);
 
@@ -276,20 +399,20 @@ impl Engine {
     {
         debug!(?connection, sql, ?params);
 
-        let statement = connection
-            .prepare(sql)
-            .await
-            .inspect_err(|err| error!(?err, sql))?;
+        let start = SystemTime::now();
 
-        let execute_start = SystemTime::now();
+        let statement = connection.prepare(sql).await.inspect_err(|err| {
+            error!(?err, elapsed_millis = self.elapsed_millis(start));
+            SQL_ERROR.add(1, &self.attributes_for_error(Some(sql), err)[..]);
+        })?;
 
         let mut rows = statement
             .query(params)
             .await
             .inspect(|rows| debug!(?rows))
             .inspect_err(|err| {
-                error!(?err, sql);
-                SQL_ERROR.add(1, &self.attributes_for_error(sql, err)[..]);
+                error!(?err, elapsed_millis = self.elapsed_millis(start));
+                SQL_ERROR.add(1, &self.attributes_for_error(Some(sql), err)[..]);
             })?;
 
         if let Some(row) = rows
@@ -297,8 +420,8 @@ impl Engine {
             .await
             .inspect(|row| debug!(?row))
             .inspect_err(|err| {
-                error!(?err, sql);
-                SQL_ERROR.add(1, &self.attributes_for_error(sql, err)[..]);
+                error!(?err, elapsed_millis = self.elapsed_millis(start));
+                SQL_ERROR.add(1, &self.attributes_for_error(Some(sql), err)[..]);
             })?
         {
             let attributes = [
@@ -306,12 +429,7 @@ impl Engine {
                 KeyValue::new("cluster_id", self.cluster.clone()),
             ];
 
-            SQL_DURATION.record(
-                execute_start
-                    .elapsed()
-                    .map_or(0, |duration| duration.as_millis() as u64),
-                &attributes,
-            );
+            SQL_DURATION.record(self.elapsed_millis(start), &attributes);
 
             SQL_REQUESTS.add(1, &attributes);
 
@@ -454,7 +572,10 @@ impl Engine {
                 .inspect_err(|err| error!(?err))?;
         }
 
-        let (low, high) = self.watermark_select_for_update(topition, tx).await?;
+        let (low, high) = self
+            .watermark_select_for_update(topition, tx)
+            .await
+            .inspect_err(|err| error!(?err))?;
 
         debug!(?low, ?high);
 
@@ -571,12 +692,14 @@ impl Engine {
         {
             let lake_type = lake.lake_type().await?;
 
-            if let Some(record_batch) =
-                registry.as_arrow(topition.topic(), topition.partition(), &inflated, lake_type)?
+            if let Some(record_batch) = registry
+                .as_arrow(topition.topic(), topition.partition(), &inflated, lake_type)
+                .inspect_err(|err| error!(?err))?
             {
                 let config = self
                     .describe_config(topition.topic(), ConfigResource::Topic, None)
-                    .await?;
+                    .await
+                    .inspect_err(|err| error!(?err))?;
 
                 lake.store(
                     topition.topic(),
@@ -585,7 +708,8 @@ impl Engine {
                     record_batch,
                     config,
                 )
-                .await?;
+                .await
+                .inspect_err(|err| error!(?err))?;
             }
         }
 
@@ -1073,9 +1197,7 @@ impl Storage for Engine {
     async fn create_topic(&self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {
         debug!(cluster = self.cluster, ?topic, validate_only);
 
-        let connection = self.connection().await.inspect_err(|err| error!(?err))?;
-
-        let tx = connection.transaction().await?;
+        let tx = self.transaction().await?;
 
         let uuid = {
             let uuid = Uuid::new_v4();
@@ -1139,7 +1261,7 @@ impl Storage for Engine {
             }
         }
 
-        tx.commit().await.map_err(Into::into).and(Ok(uuid))
+        self.commit(tx).await.and(Ok(uuid))
     }
 
     async fn delete_records(
@@ -1153,14 +1275,12 @@ impl Storage for Engine {
     async fn delete_topic(&self, topic: &TopicId) -> Result<ErrorCode> {
         debug!(cluster = self.cluster, ?topic);
 
-        let connection = self.connection().await?;
-        let tx = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .await?;
+        let tx = self.transaction().await?;
 
         let mut rows = match topic {
             TopicId::Id(id) => {
-                tx.query(
+                self.query(
+                    &tx,
                     &sql_lookup("topic_select_uuid.sql")?,
                     (self.cluster.as_str(), id.to_string().as_str()),
                 )
@@ -1168,7 +1288,8 @@ impl Storage for Engine {
             }
 
             TopicId::Name(name) => {
-                tx.query(
+                self.query(
+                    &tx,
                     &sql_lookup("topic_select_name.sql")?,
                     (self.cluster.as_str(), name.as_str()),
                 )
@@ -1209,10 +1330,7 @@ impl Storage for Engine {
             )
             .await?;
 
-        tx.commit()
-            .await
-            .map_err(Into::into)
-            .and(Ok(ErrorCode::None))
+        self.commit(tx).await.and(Ok(ErrorCode::None))
     }
 
     async fn incremental_alter_resource(
@@ -1312,16 +1430,22 @@ impl Storage for Engine {
     ) -> Result<i64> {
         debug!(cluster = self.cluster, transaction_id, ?topition, ?deflated);
 
-        let connection = self.connection().await?;
-        let tx = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .await?;
+        let start = SystemTime::now();
+
+        let tx = self
+            .transaction()
+            .await
+            .inspect_err(|err| error!(?err, elapsed_millis = self.elapsed_millis(start)))?;
 
         let high = self
             .produce_in_tx(transaction_id, topition, deflated, &tx)
-            .await?;
+            .await
+            .inspect_err(|err| error!(?err))?;
 
-        tx.commit().await.map_err(Into::into).and(Ok(high))
+        self.commit(tx)
+            .await
+            .and(Ok(high))
+            .inspect_err(|err| error!(?err))
     }
 
     async fn fetch(
@@ -1353,8 +1477,9 @@ impl Storage for Engine {
 
         let c = self.connection().await?;
 
-        let mut records = c
+        let mut records = self
             .query(
+                &c,
                 &sql_lookup("record_fetch.sql")?,
                 (
                     self.cluster.as_str(),
@@ -1391,8 +1516,9 @@ impl Storage for Engine {
                             .inspect_err(|err| error!(?err))?,
                     );
 
-                let mut headers = c
+                let mut headers = self
                     .query(
+                        &c,
                         &sql_lookup("header_fetch.sql")?,
                         (
                             self.cluster.as_str(),
@@ -1533,8 +1659,9 @@ impl Storage for Engine {
                                 .inspect_err(|err| error!(?err))?,
                         );
 
-                    let mut headers = c
+                    let mut headers = self
                         .query(
+                            &c,
                             &sql_lookup("header_fetch.sql")?,
                             (
                                 self.cluster.as_str(),
@@ -1714,8 +1841,9 @@ impl Storage for Engine {
 
         let c = self.connection().await?;
 
-        let mut rows = c
+        let mut rows = self
             .query(
+                &c,
                 &sql_lookup("consumer_offset_select_by_group.sql")?,
                 (self.cluster.as_str(), group_id),
             )
@@ -1749,8 +1877,9 @@ impl Storage for Engine {
         let mut offsets = BTreeMap::new();
 
         for topic in topics {
-            let mut rows = c
+            let mut rows = self
                 .query(
+                    &c,
                     &sql_lookup("consumer_offset_select.sql")?,
                     (
                         self.cluster.as_str(),
@@ -1937,8 +2066,9 @@ impl Storage for Engine {
                 for topic in topics {
                     responses.push(match topic {
                         TopicId::Name(name) => {
-                            let mut rows = c
+                            let mut rows = self
                                 .query(
+                                    &c,
                                     &sql_lookup("topic_select_name.sql")?,
                                     (self.cluster.as_str(), name.as_str()),
                                 )
@@ -2031,8 +2161,9 @@ impl Storage for Engine {
                         }
                         TopicId::Id(id) => {
                             debug!(?id);
-                            let mut rows = c
+                            let mut rows = self
                                 .query(
+                                    &c,
                                     &sql_lookup("topic_select_uuid.sql")?,
                                     (self.cluster.as_str(), id.to_string().as_str()),
                                 )
@@ -2130,8 +2261,9 @@ impl Storage for Engine {
             _ => {
                 let mut responses = vec![];
 
-                let mut rows = c
+                let mut rows = self
                     .query(
+                        &c,
                         &sql_lookup("topic_by_cluster.sql")?,
                         &[self.cluster.as_str()],
                     )
@@ -2221,18 +2353,20 @@ impl Storage for Engine {
     ) -> Result<DescribeConfigsResult> {
         debug!(cluster = self.cluster, name, ?resource, ?keys);
 
-        let c = self.connection().await.inspect_err(|err| error!(?err))?;
+        let c = self.connection().await?;
 
-        let mut rows = c
+        let mut rows = self
             .query(
+                &c,
                 &sql_lookup("topic_select.sql")?,
                 (self.cluster.as_str(), name),
             )
             .await?;
 
         if rows.next().await?.is_some() {
-            let mut rows = c
+            let mut rows = self
                 .query(
+                    &c,
                     &sql_lookup("topic_configuration_select.sql")?,
                     (self.cluster.as_str(), name),
                 )
@@ -2289,7 +2423,7 @@ impl Storage for Engine {
         cursor: Option<Topition>,
     ) -> Result<Vec<DescribeTopicPartitionsResponseTopic>> {
         debug!(?topics, partition_limit, ?cursor);
-        let c = self.connection().await.inspect_err(|err| error!(?err))?;
+        let c = self.connection().await?;
 
         let mut responses =
             Vec::with_capacity(topics.map(|topics| topics.len()).unwrap_or_default());
@@ -2474,12 +2608,13 @@ impl Storage for Engine {
 
     async fn list_groups(&self, states_filter: Option<&[String]>) -> Result<Vec<ListedGroup>> {
         debug!(?states_filter);
-        let c = self.connection().await.inspect_err(|err| error!(?err))?;
+        let c = self.connection().await?;
 
         let mut listed_groups = vec![];
 
-        let mut rows = c
+        let mut rows = self
             .query(
+                &c,
                 &sql_lookup("consumer_group_select.sql")?,
                 &[self.cluster.as_str()],
             )
@@ -2567,7 +2702,7 @@ impl Storage for Engine {
         debug!(?group_ids, include_authorized_operations);
 
         let mut results = vec![];
-        let c = self.connection().await.inspect_err(|err| error!(?err))?;
+        let c = self.connection().await?;
 
         if let Some(group_ids) = group_ids {
             for group_id in group_ids {
@@ -2611,8 +2746,7 @@ impl Storage for Engine {
         debug!(cluster = self.cluster, group_id, ?detail, ?version);
         debug!(cluster = self.cluster, group_id, ?detail, ?version);
 
-        let c = self.connection().await?;
-        let tx = c.transaction().await?;
+        let tx = self.transaction().await?;
 
         _ = self
             .prepare_execute(
@@ -2706,7 +2840,7 @@ impl Storage for Engine {
             Err(UpdateError::Outdated { current, version })
         };
 
-        tx.commit().await.inspect_err(|err| error!(?err))?;
+        self.commit(tx).await?;
 
         debug!(?outcome);
 
@@ -2726,8 +2860,7 @@ impl Storage for Engine {
         );
         match (producer_id, producer_epoch, transaction_id) {
             (Some(-1), Some(-1), Some(transaction_id)) => {
-                let c = self.connection().await.inspect_err(|err| error!(?err))?;
-                let tx = c.transaction().await.inspect_err(|err| error!(?err))?;
+                let tx = self.transaction().await?;
 
                 if let Some(row) = self
                     .prepare_query_opt(
@@ -2862,7 +2995,7 @@ impl Storage for Engine {
                     ))?
                 );
 
-                let error = match tx.commit().await.inspect_err(|err| {
+                let error = match self.commit(tx).await.inspect_err(|err| {
                     error!(
                         ?err,
                         cluster = self.cluster,
@@ -2883,15 +3016,11 @@ impl Storage for Engine {
             }
 
             (Some(-1), Some(-1), None) => {
-                let connection = self.connection().await.inspect_err(|err| error!(?err))?;
-                // let tx = connection
-                //     .transaction_with_behavior(TransactionBehavior::Immediate)
-                //     .await?;
+                let tx = self.transaction().await?;
 
-                let tx = connection.transaction().await?;
-
-                let mut rows = tx
+                let mut rows = self
                     .query(
+                        &tx,
                         &sql_lookup("producer_insert.sql")?,
                         &[self.cluster.as_str()],
                     )
@@ -2904,8 +3033,9 @@ impl Storage for Engine {
                         debug!(?row)
                     }
 
-                    let mut rows = tx
+                    let mut rows = self
                         .query(
+                            &tx,
                             &sql_lookup("producer_epoch_insert.sql")?,
                             (self.cluster.as_str(), producer),
                         )
@@ -2921,8 +3051,8 @@ impl Storage for Engine {
                             debug!(?row)
                         }
 
-                        let error = match tx
-                            .commit()
+                        let error = match self
+                            .commit(tx)
                             .await
                             .inspect_err(|err| error!(?err, ?transaction_id, producer, epoch))
                         {
@@ -2988,8 +3118,7 @@ impl Storage for Engine {
             } => {
                 debug!(?transaction_id, ?producer_id, ?producer_epoch, ?topics);
 
-                let c = self.connection().await.inspect_err(|err| error!(?err))?;
-                let tx = c.transaction().await.inspect_err(|err| error!(?err))?;
+                let tx = self.transaction().await?;
 
                 let mut results = vec![];
 
@@ -3057,7 +3186,7 @@ impl Storage for Engine {
                         )
                     })?;
 
-                tx.commit().await?;
+                self.commit(tx).await?;
 
                 Ok(TxnAddPartitionsResponse::VersionZeroToThree(results))
             }
@@ -3074,8 +3203,7 @@ impl Storage for Engine {
     ) -> Result<Vec<TxnOffsetCommitResponseTopic>> {
         debug!(cluster = self.cluster, ?offsets);
 
-        let c = self.connection().await.inspect_err(|err| error!(?err))?;
-        let tx = c.transaction().await.inspect_err(|err| error!(?err))?;
+        let tx = self.transaction().await?;
 
         let (producer_id, producer_epoch) = if let Some(row) = self
             .prepare_query_opt(
@@ -3187,7 +3315,7 @@ impl Storage for Engine {
             );
         }
 
-        tx.commit().await?;
+        self.commit(tx).await?;
 
         Ok(topics)
     }
@@ -3201,16 +3329,13 @@ impl Storage for Engine {
     ) -> Result<ErrorCode> {
         debug!(cluster = ?self.cluster, transaction_id, producer_id, producer_epoch, committed);
 
-        let c = self.connection().await.inspect_err(|err| error!(?err))?;
-        let tx = c.transaction().await.inspect_err(|err| error!(?err))?;
+        let tx = self.transaction().await?;
 
         let error_code = self
             .end_in_tx(transaction_id, producer_id, producer_epoch, committed, &tx)
             .await?;
 
-        tx.commit().await?;
-
-        Ok(error_code)
+        self.commit(tx).await.and(Ok(error_code))
     }
 
     async fn maintain(&self) -> Result<()> {
