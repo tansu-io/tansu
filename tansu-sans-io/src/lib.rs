@@ -243,6 +243,7 @@ pub enum Error {
     TryFromSlice(#[from] TryFromSliceError),
     UnexpectedType(String),
     UnknownApiErrorCode(i16),
+    UnknownAssignor(String),
     UnknownCompressionType(i16),
     Utf8(str::Utf8Error),
 }

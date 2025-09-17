@@ -47,7 +47,7 @@ fn decode_range_metadata_001() -> Result<()> {
     assert_eq!(Some(-1), decoded.subscription.generation_id);
     assert_eq!(Some(""), decoded.subscription.rack_id.as_deref());
 
-    assert_eq!(encoded, Bytes::try_from(decoded)?);
+    assert_eq!(encoded, Bytes::try_from(&decoded)?);
 
     Ok(())
 }
@@ -76,7 +76,7 @@ fn decode_range_metadata_002() -> Result<()> {
     assert_eq!(Some(-1), decoded.subscription.generation_id);
     assert_eq!(None, decoded.subscription.rack_id.as_deref());
 
-    assert_eq!(encoded, Bytes::try_from(decoded)?);
+    assert_eq!(encoded, Bytes::try_from(&decoded)?);
 
     Ok(())
 }
@@ -108,7 +108,7 @@ fn cooperative_sticky_001() -> Result<()> {
     assert_eq!(Some(-1), decoded.subscription.generation_id);
     assert_eq!(None, decoded.subscription.rack_id.as_deref());
 
-    assert_eq!(encoded, Bytes::try_from(decoded)?);
+    assert_eq!(encoded, Bytes::try_from(&decoded)?);
 
     Ok(())
 }
@@ -134,7 +134,7 @@ fn member_assignment_001() -> Result<()> {
     );
     assert!(decoded.assignment.user_data.is_none());
 
-    assert_eq!(encoded, Bytes::try_from(decoded)?);
+    assert_eq!(encoded, Bytes::try_from(&decoded)?);
 
     Ok(())
 }
