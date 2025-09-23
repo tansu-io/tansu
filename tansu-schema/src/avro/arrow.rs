@@ -3004,7 +3004,7 @@ mod tests {
 
     #[ignore]
     #[tokio::test]
-    #[cfg(any(feature = "parquet"))]
+    #[cfg(feature = "parquet")]
     async fn decimal_fixed_logical_type() -> Result<()> {
         let _guard = init_tracing()?;
 
@@ -3079,7 +3079,7 @@ mod tests {
 
     #[ignore]
     #[tokio::test]
-    #[cfg(any(feature = "parquet"))]
+    #[cfg(feature = "parquet")]
     async fn decimal_variable_logical_type() -> Result<()> {
         let _guard = init_tracing()?;
 

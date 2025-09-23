@@ -22,7 +22,7 @@ include = [
 ]
 
 [features]
-default = []
+default = ["delta", "iceberg", "parquet"]
 delta = ["dep:arrow", "dep:delta_kernel", "dep:deltalake", "dep:datafusion", "dep:parquet"]
 iceberg = ["dep:arrow", "dep:iceberg-catalog-rest", "dep:iceberg-datafusion", "dep:iceberg", "dep:datafusion", "dep:parquet"]
 parquet = ["dep:arrow", "dep:parquet"]

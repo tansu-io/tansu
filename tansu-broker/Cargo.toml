@@ -11,7 +11,7 @@ repository.workspace = true
 version.workspace = true
 
 [features]
-default = []
+default = ["delta", "dynostore", "iceberg", "libsql", "postgres"]
 delta = []
 dynostore = ["dep:object_store"]
 iceberg = []
