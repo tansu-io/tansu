@@ -21,6 +21,12 @@ include = [
     "LICENSE",
 ]
 
+[features]
+default = []
+delta = ["dep:arrow", "dep:delta_kernel", "dep:deltalake", "dep:datafusion", "dep:parquet"]
+iceberg = ["dep:arrow", "dep:iceberg-catalog-rest", "dep:iceberg-datafusion", "dep:iceberg", "dep:datafusion", "dep:parquet"]
+parquet = ["dep:arrow", "dep:parquet"]
+
 
 [lints]
 workspace = true
@@ -28,27 +34,27 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 apache-avro.workspace = true
-arrow.workspace = true
+arrow = { workspace = true, optional = true }
 async-trait.workspace = true
 bytes.workspace = true
 chrono.workspace = true
-datafusion.workspace = true
-delta_kernel.workspace = true
-deltalake.workspace = true
+datafusion = { workspace = true, optional = true }
+delta_kernel = { workspace = true, optional = true }
+deltalake = { workspace = true, optional = true }
 dotenv.workspace = true
 fake.workspace = true
 futures.workspace = true
 governor.workspace = true
-iceberg-catalog-rest.workspace = true
-iceberg-datafusion.workspace = true
-iceberg.workspace = true
+iceberg-catalog-rest = { workspace = true, optional = true }
+iceberg-datafusion = { workspace = true, optional = true }
+iceberg = { workspace = true, optional = true }
 jsonschema.workspace = true
 num-bigint.workspace = true
 object_store.workspace = true
 opentelemetry-semantic-conventions.workspace = true
 opentelemetry.workspace = true
 ordered-float.workspace = true
-parquet.workspace = true
+parquet = { workspace = true, optional = true }
 protobuf-json-mapping.workspace = true
 protobuf-parse.workspace = true
 protobuf.workspace = true
@@ -69,3 +75,7 @@ uuid.workspace = true
 [dev-dependencies]
 pretty_assertions.workspace = true
 rand.workspace = true
+
+[[test]]
+name = "berg"
+required-features = ["iceberg"]

@@ -181,7 +181,7 @@ use tansu_sans_io::{
     txn_offset_commit_request::TxnOffsetCommitRequestTopic,
     txn_offset_commit_response::TxnOffsetCommitResponseTopic,
 };
-use tansu_schema::{Registry, lake::House};
+use tansu_schema::Registry;
 use tracing::{Instrument, debug, debug_span};
 use tracing_subscriber::filter::ParseError;
 use url::Url;
@@ -1451,7 +1451,8 @@ pub struct Builder<N, C, A, S> {
     advertised_listener: A,
     storage: S,
     schema_registry: Option<Registry>,
-    lake_house: Option<House>,
+    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
+    lake_house: Option<tansu_schema::lake::House>,
 }
 
 type PhantomBuilder =
@@ -1465,6 +1466,7 @@ impl<N, C, A, S> Builder<N, C, A, S> {
             advertised_listener: self.advertised_listener,
             storage: self.storage,
             schema_registry: self.schema_registry,
+            #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
             lake_house: self.lake_house,
         }
     }
@@ -1476,6 +1478,7 @@ impl<N, C, A, S> Builder<N, C, A, S> {
             advertised_listener: self.advertised_listener,
             storage: self.storage,
             schema_registry: self.schema_registry,
+            #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
             lake_house: self.lake_house,
         }
     }
@@ -1487,6 +1490,7 @@ impl<N, C, A, S> Builder<N, C, A, S> {
             advertised_listener: advertised_listener.into(),
             storage: self.storage,
             schema_registry: self.schema_registry,
+            #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
             lake_house: self.lake_house,
         }
     }
@@ -1500,6 +1504,7 @@ impl<N, C, A, S> Builder<N, C, A, S> {
             advertised_listener: self.advertised_listener,
             storage,
             schema_registry: self.schema_registry,
+            #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
             lake_house: self.lake_house,
         }
     }
@@ -1515,11 +1520,13 @@ impl<N, C, A, S> Builder<N, C, A, S> {
             advertised_listener: self.advertised_listener,
             storage: self.storage,
             schema_registry,
+            #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
             lake_house: self.lake_house,
         }
     }
 
-    pub fn lake_house(self, lake_house: Option<House>) -> Builder<N, C, A, S> {
+    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
+    pub fn lake_house(self, lake_house: Option<tansu_schema::lake::House>) -> Builder<N, C, A, S> {
         _ = lake_house
             .as_ref()
             .inspect(|lake_house| debug!(?lake_house));
@@ -1538,7 +1545,10 @@ impl<N, C, A, S> Builder<N, C, A, S> {
 impl Builder<i32, String, Url, Url> {
     pub async fn build(self) -> Result<StorageContainer> {
         match self.storage.scheme() {
-            #[cfg(feature = "postgres")]
+            #[cfg(all(
+                feature = "postgres",
+                any(feature = "parquet", feature = "iceberg", feature = "delta")
+            ))]
             "postgres" | "postgresql" => Postgres::builder(self.storage.to_string().as_str())
                 .map(|builder| builder.cluster(self.cluster_id.as_str()))
                 .map(|builder| builder.node(self.node_id))
@@ -1548,7 +1558,22 @@ impl Builder<i32, String, Url, Url> {
                 .map(|builder| builder.build())
                 .map(StorageContainer::Postgres),
 
-            #[cfg(feature = "dynostore")]
+            #[cfg(all(
+                feature = "postgres",
+                not(any(feature = "parquet", feature = "iceberg", feature = "delta"))
+            ))]
+            "postgres" | "postgresql" => Postgres::builder(self.storage.to_string().as_str())
+                .map(|builder| builder.cluster(self.cluster_id.as_str()))
+                .map(|builder| builder.node(self.node_id))
+                .map(|builder| builder.advertised_listener(self.advertised_listener.clone()))
+                .map(|builder| builder.schemas(self.schema_registry))
+                .map(|builder| builder.build())
+                .map(StorageContainer::Postgres),
+
+            #[cfg(all(
+                feature = "dynostore",
+                any(feature = "parquet", feature = "iceberg", feature = "delta")
+            ))]
             "s3" => {
                 let bucket_name = self.storage.host_str().unwrap_or("tansu");
 
@@ -1566,7 +1591,30 @@ impl Builder<i32, String, Url, Url> {
                     .map_err(Into::into)
             }
 
-            #[cfg(feature = "dynostore")]
+            #[cfg(all(
+                feature = "dynostore",
+                not(any(feature = "parquet", feature = "iceberg", feature = "delta"))
+            ))]
+            "s3" => {
+                let bucket_name = self.storage.host_str().unwrap_or("tansu");
+
+                AmazonS3Builder::from_env()
+                    .with_bucket_name(bucket_name)
+                    .with_conditional_put(S3ConditionalPut::ETagMatch)
+                    .build()
+                    .map(|object_store| {
+                        DynoStore::new(self.cluster_id.as_str(), self.node_id, object_store)
+                            .advertised_listener(self.advertised_listener.clone())
+                            .schemas(self.schema_registry)
+                    })
+                    .map(StorageContainer::DynoStore)
+                    .map_err(Into::into)
+            }
+
+            #[cfg(all(
+                feature = "dynostore",
+                any(feature = "parquet", feature = "iceberg", feature = "delta")
+            ))]
             "memory" => Ok(StorageContainer::DynoStore(
                 DynoStore::new(self.cluster_id.as_str(), self.node_id, InMemory::new())
                     .advertised_listener(self.advertised_listener.clone())
@@ -1574,7 +1622,20 @@ impl Builder<i32, String, Url, Url> {
                     .lake(self.lake_house.clone()),
             )),
 
-            #[cfg(feature = "libsql")]
+            #[cfg(all(
+                feature = "dynostore",
+                not(any(feature = "parquet", feature = "iceberg", feature = "delta"))
+            ))]
+            "memory" => Ok(StorageContainer::DynoStore(
+                DynoStore::new(self.cluster_id.as_str(), self.node_id, InMemory::new())
+                    .advertised_listener(self.advertised_listener.clone())
+                    .schemas(self.schema_registry),
+            )),
+
+            #[cfg(all(
+                feature = "libsql",
+                any(feature = "parquet", feature = "iceberg", feature = "delta")
+            ))]
             "sqlite" => lite::Engine::builder()
                 .storage(self.storage.clone())
                 .node(self.node_id)
@@ -1586,7 +1647,24 @@ impl Builder<i32, String, Url, Url> {
                 .await
                 .map(StorageContainer::Lite),
 
-            #[cfg(feature = "turso")]
+            #[cfg(all(
+                feature = "libsql",
+                not(any(feature = "parquet", feature = "iceberg", feature = "delta"))
+            ))]
+            "sqlite" => lite::Engine::builder()
+                .storage(self.storage.clone())
+                .node(self.node_id)
+                .cluster(self.cluster_id.clone())
+                .advertised_listener(self.advertised_listener.clone())
+                .schemas(self.schema_registry)
+                .build()
+                .await
+                .map(StorageContainer::Lite),
+
+            #[cfg(all(
+                feature = "turso",
+                any(feature = "parquet", feature = "iceberg", feature = "delta")
+            ))]
             "turso" => limbo::Engine::builder()
                 .storage(self.storage.clone())
                 .node(self.node_id)
@@ -1594,6 +1672,20 @@ impl Builder<i32, String, Url, Url> {
                 .advertised_listener(self.advertised_listener.clone())
                 .schemas(self.schema_registry)
                 .lake(self.lake_house.clone())
+                .build()
+                .await
+                .map(StorageContainer::Turso),
+
+            #[cfg(all(
+                feature = "turso",
+                not(any(feature = "parquet", feature = "iceberg", feature = "delta"))
+            ))]
+            "turso" => limbo::Engine::builder()
+                .storage(self.storage.clone())
+                .node(self.node_id)
+                .cluster(self.cluster_id.clone())
+                .advertised_listener(self.advertised_listener.clone())
+                .schemas(self.schema_registry)
                 .build()
                 .await
                 .map(StorageContainer::Turso),
@@ -1627,6 +1719,12 @@ static STORAGE_CONTAINER_ERRORS: LazyLock<Counter<u64>> = LazyLock::new(|| {
 });
 
 #[async_trait]
+#[cfg(any(
+    feature = "dynostore",
+    feature = "libsql",
+    feature = "postgres",
+    feature = "turso"
+))]
 impl Storage for StorageContainer {
     async fn register_broker(&self, broker_registration: BrokerRegistrationRequest) -> Result<()> {
         let attributes = [KeyValue::new("method", "register_broker")];

@@ -272,7 +272,7 @@ where
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "dynostore"))]
 mod tests {
     use super::*;
     use crate::{Error, dynostore::DynoStore, service::init_producer_id::InitProducerIdService};

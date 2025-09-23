@@ -10,6 +10,15 @@ license.workspace = true
 repository.workspace = true
 version.workspace = true
 
+[features]
+default = []
+delta = []
+dynostore = ["dep:object_store"]
+iceberg = []
+libsql = ["dep:libsql"]
+parquet = []
+postgres = ["dep:deadpool-postgres", "dep:tokio-postgres"]
+turso = ["dep:turso"]
 
 [lints]
 workspace = true
@@ -53,10 +62,3 @@ uuid.workspace = true
 
 [dev-dependencies]
 pretty_assertions.workspace = true
-
-[features]
-default = ["dynostore", "libsql", "postgres"]
-dynostore = ["dep:object_store"]
-libsql = ["dep:libsql"]
-postgres = ["dep:deadpool-postgres", "dep:tokio-postgres"]
-turso = ["dep:turso"]

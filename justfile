@@ -8,7 +8,7 @@ about:
 cargo-build +args:
     cargo build {{args}}
 
-build: (cargo-build "--bin" "tansu")
+build *args: (cargo-build "--bin" "tansu" {{args}})
 
 release: (cargo-build "--release" "--workspace" "--all-targets")
 

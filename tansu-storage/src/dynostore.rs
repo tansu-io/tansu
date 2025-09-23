@@ -64,10 +64,7 @@ use tansu_sans_io::{
     record::{Record, deflated, inflated},
     txn_offset_commit_response::{TxnOffsetCommitResponsePartition, TxnOffsetCommitResponseTopic},
 };
-use tansu_schema::{
-    Registry,
-    lake::{House, LakeHouse},
-};
+use tansu_schema::Registry;
 use tracing::{debug, error, warn};
 use url::Url;
 use uuid::Uuid;
@@ -90,7 +87,12 @@ pub struct DynoStore {
     node: i32,
     advertised_listener: Url,
     schemas: Option<Registry>,
-    lake: Option<House>,
+
+    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
+    lake: Option<tansu_schema::lake::House>,
+
+    #[cfg(not(any(feature = "parquet", feature = "iceberg", feature = "delta")))]
+    lake: Option<()>,
 
     watermarks: Arc<Mutex<BTreeMap<Topition, OptiCon<Watermark>>>>,
     meta: OptiCon<Meta>,
@@ -368,7 +370,9 @@ impl DynoStore {
             node,
             advertised_listener: Url::parse("tcp://127.0.0.1/").unwrap(),
             schemas: None,
+
             lake: None,
+
             watermarks: Arc::new(Mutex::new(BTreeMap::new())),
             meta: OptiCon::<Meta>::new(cluster),
             object_store: Arc::new(Cache::new(
@@ -389,7 +393,8 @@ impl DynoStore {
         Self { schemas, ..self }
     }
 
-    pub fn lake(self, lake: Option<House>) -> Self {
+    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
+    pub fn lake(self, lake: Option<tansu_schema::lake::House>) -> Self {
         Self { lake, ..self }
     }
 
@@ -773,7 +778,10 @@ impl Storage for DynoStore {
                         .inspect(|validation| debug!(?validation))
                         .inspect_err(|err| debug!(?err))?;
 
+                    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
                     if let Some(ref lake) = self.lake {
+                        use tansu_schema::lake::LakeHouse as _;
+
                         let lake_type = lake.lake_type().await?;
 
                         if let Some(record_batch) = registry
@@ -891,6 +899,7 @@ impl Storage for DynoStore {
                 .inspect(|offset| debug!(offset, transaction_id, ?topition))
                 .inspect_err(|err| error!(?err, transaction_id, ?topition))?;
 
+            #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
             if let Some(ref registry) = self.schemas {
                 let batch_attribute = BatchAttribute::try_from(deflated.attributes)
                     .inspect_err(|err| debug!(?err))?;
@@ -898,6 +907,8 @@ impl Storage for DynoStore {
                 if !batch_attribute.control
                     && let Some(ref lake) = self.lake
                 {
+                    use tansu_schema::lake::LakeHouse as _;
+
                     let lake_type = lake.lake_type().await.inspect_err(|err| debug!(?err))?;
                     let inflated =
                         inflated::Batch::try_from(&deflated).inspect_err(|err| debug!(?err))?;
@@ -2599,13 +2610,19 @@ impl Storage for DynoStore {
     async fn maintain(&self) -> Result<()> {
         debug!(?self);
 
+        #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
         if let Some(ref lake) = self.lake {
-            lake.maintain().await.map_err(Into::into)
-        } else {
-            Ok(())
+            use tansu_schema::lake::LakeHouse as _;
+
+            return lake
+                .maintain()
+                .await
+                .inspect(|maintain| debug!(?maintain))
+                .inspect_err(|err| debug!(?err))
+                .map_err(Into::into);
         }
-        .inspect(|maintain| debug!(?maintain))
-        .inspect_err(|err| debug!(?err))
+
+        Ok(())
     }
 
     fn cluster_id(&self) -> Result<&str> {

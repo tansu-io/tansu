@@ -53,10 +53,7 @@ use tansu_sans_io::{
     to_system_time, to_timestamp,
     txn_offset_commit_response::{TxnOffsetCommitResponsePartition, TxnOffsetCommitResponseTopic},
 };
-use tansu_schema::{
-    Registry,
-    lake::{House, LakeHouse},
-};
+use tansu_schema::Registry;
 use tokio_postgres::{Config, NoTls, Row, Transaction, error::SqlState, types::ToSql};
 use tracing::{debug, error};
 use url::Url;
@@ -84,7 +81,13 @@ pub struct Postgres {
     advertised_listener: Url,
     pool: Pool,
     schemas: Option<Registry>,
-    lake: Option<House>,
+
+    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
+    lake: Option<tansu_schema::lake::House>,
+
+    #[allow(dead_code)]
+    #[cfg(not(any(feature = "parquet", feature = "iceberg", feature = "delta")))]
+    lake: Option<()>,
 }
 
 /// PostgreSQL Storage Builder
@@ -95,7 +98,11 @@ pub struct Builder<C, N, L, P> {
     advertised_listener: L,
     pool: P,
     schemas: Option<Registry>,
-    lake: Option<House>,
+    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
+    lake: Option<tansu_schema::lake::House>,
+
+    #[cfg(not(any(feature = "parquet", feature = "iceberg", feature = "delta")))]
+    lake: Option<()>,
 }
 
 impl<C, N, L, P> Builder<C, N, L, P> {
@@ -136,7 +143,8 @@ impl<C, N, L, P> Builder<C, N, L, P> {
         Self { schemas, ..self }
     }
 
-    pub fn lake(self, lake: Option<House>) -> Self {
+    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
+    pub fn lake(self, lake: Option<tansu_schema::lake::House>) -> Self {
         Self { lake, ..self }
     }
 }
@@ -828,10 +836,13 @@ impl Postgres {
             .inspect(|n| debug!(?n))
             .inspect_err(|err| error!(?err))?;
 
+        #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
         if !attributes.control
             && let Some(ref registry) = self.schemas
             && let Some(ref lake) = self.lake
         {
+            use tansu_schema::lake::LakeHouse as _;
+
             let lake_type = lake.lake_type().await?;
 
             if let Some(record_batch) =
@@ -3407,11 +3418,14 @@ impl Storage for Postgres {
     }
 
     async fn maintain(&self) -> Result<()> {
+        #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
         if let Some(ref lake) = self.lake {
-            lake.maintain().await.map_err(Into::into)
-        } else {
-            Ok(())
+            use tansu_schema::lake::LakeHouse as _;
+
+            return lake.maintain().await.map_err(Into::into);
         }
+
+        Ok(())
     }
 
     fn cluster_id(&self) -> Result<&str> {
