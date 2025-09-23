@@ -151,3 +151,7 @@ turso = "0.1.4"
 url = { version = "2.5.4", features = ["serde"] }
 uuid = { version = "1.13.2", features = ["serde", "v4", "v7"] }
 zstd = "0.13.2"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
