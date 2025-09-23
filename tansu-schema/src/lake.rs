@@ -23,8 +23,13 @@ use tansu_sans_io::describe_configs_response::DescribeConfigsResult;
 use tracing::{debug, warn};
 use url::Url;
 
+#[cfg(feature = "iceberg")]
 pub mod berg;
+
+#[cfg(feature = "delta")]
 pub mod delta;
+
+#[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
 pub mod quet;
 
 /// House
@@ -32,8 +37,13 @@ pub mod quet;
 /// Wrapper enum for the each Data Lake implementation
 #[derive(Clone, Debug)]
 pub enum House {
+    #[cfg(feature = "delta")]
     Delta(delta::Delta),
+
+    #[cfg(feature = "iceberg")]
     Iceberg(berg::Iceberg),
+
+    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
     Parquet(quet::Parquet),
 }
 
@@ -43,32 +53,60 @@ pub enum House {
 /// there are some minor differences.
 #[derive(Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum LakeHouseType {
+    #[cfg(feature = "delta")]
     Delta,
+
+    #[cfg(feature = "iceberg")]
     Iceberg,
+
+    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
     Parquet,
 }
 
 impl From<&House> for LakeHouseType {
     fn from(house: &House) -> Self {
         match house {
+            #[cfg(feature = "delta")]
             House::Delta(_) => Self::Delta,
+
+            #[cfg(feature = "iceberg")]
             House::Iceberg(_) => Self::Iceberg,
+
+            #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
             House::Parquet(_) => Self::Parquet,
         }
     }
 }
 
 impl LakeHouseType {
+    #[cfg(feature = "delta")]
     pub fn is_delta(&self) -> bool {
         matches!(self, Self::Delta)
     }
 
+    #[cfg(not(feature = "delta"))]
+    pub fn is_delta(&self) -> bool {
+        false
+    }
+
+    #[cfg(feature = "iceberg")]
     pub fn is_iceberg(&self) -> bool {
         matches!(self, Self::Iceberg)
     }
 
+    #[cfg(not(feature = "iceberg"))]
+    pub fn is_iceberg(&self) -> bool {
+        false
+    }
+
+    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
     pub fn is_parquet(&self) -> bool {
         matches!(self, Self::Parquet)
+    }
+
+    #[cfg(not(any(feature = "parquet", feature = "iceberg", feature = "delta")))]
+    pub fn is_parquet(&self) -> bool {
+        false
     }
 }
 
@@ -93,6 +131,14 @@ pub trait LakeHouse: Clone + Debug + Send + Sync + 'static {
     /// Query the underlying type of this lake house
     async fn lake_type(&self) -> Result<LakeHouseType>;
 }
+
+pub(crate) static AS_ARROW_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
+    METER
+        .u64_histogram("registry_as_arrow_duration")
+        .with_unit("ms")
+        .with_description("The registry as Apache Arrow latencies in milliseconds")
+        .build()
+});
 
 static STORE_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
     METER
@@ -176,16 +222,21 @@ impl LakeHouse for House {
         };
 
         match self {
+            #[cfg(feature = "delta")]
             House::Delta(inner) => {
                 inner
                     .store(topic, partition, offset, record_batch, configs)
                     .await
             }
+
+            #[cfg(feature = "iceberg")]
             House::Iceberg(inner) => {
                 inner
                     .store(topic, partition, offset, record_batch, configs)
                     .await
             }
+
+            #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
             House::Parquet(inner) => {
                 inner
                     .store(topic, partition, offset, record_batch, configs)
@@ -208,8 +259,13 @@ impl LakeHouse for House {
         let start = SystemTime::now();
 
         match self {
+            #[cfg(feature = "delta")]
             House::Delta(inner) => inner.maintain().await,
+
+            #[cfg(feature = "iceberg")]
             House::Iceberg(inner) => inner.maintain().await,
+
+            #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
             House::Parquet(inner) => inner.maintain().await,
         }
         .inspect(|_| {
@@ -228,14 +284,17 @@ impl LakeHouse for House {
 }
 
 impl House {
+    #[cfg(feature = "iceberg")]
     pub fn iceberg() -> berg::Builder<PhantomData<Url>, PhantomData<Url>> {
         berg::Builder::default()
     }
 
+    #[cfg(feature = "delta")]
     pub fn delta() -> delta::Builder<PhantomData<Url>> {
         delta::Builder::default()
     }
 
+    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
     pub fn parquet() -> quet::Builder<PhantomData<Url>> {
         quet::Builder::default()
     }

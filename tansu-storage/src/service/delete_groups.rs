@@ -85,7 +85,7 @@ where
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "dynostore"))]
 mod tests {
     use rama::{Context, Layer as _, Service, layer::MapStateLayer};
     use tansu_sans_io::{DeleteGroupsRequest, ErrorCode};
