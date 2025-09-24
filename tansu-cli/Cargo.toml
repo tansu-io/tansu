@@ -14,10 +14,14 @@ version.workspace = true
 workspace = true
 
 [features]
-default = ["delta", "iceberg", "parquet"]
+default = ["delta", "dynostore", "iceberg", "libsql", "parquet", "postgres"]
 delta = []
+dynostore = []
+libsql = []
 parquet = []
+postgres = []
 iceberg = []
+turso = []
 
 [dependencies]
 clap.workspace = true
