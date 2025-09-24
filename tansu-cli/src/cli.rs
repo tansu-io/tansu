@@ -36,8 +36,53 @@ mod topic;
 
 const DEFAULT_BROKER: &str = "tcp://localhost:9092";
 
+fn storage_engines() -> String {
+    let mut engines = Vec::new();
+
+    #[cfg(feature = "dynostore")]
+    engines.push("dynostore");
+
+    #[cfg(feature = "libsql")]
+    engines.push("libsql");
+
+    #[cfg(feature = "postgres")]
+    engines.push("postgres");
+
+    #[cfg(feature = "turso")]
+    engines.push("turso");
+
+    format!("Storage engines: {}", engines.join(", "))
+}
+
+fn lakes() -> String {
+    let mut lakes = Vec::new();
+
+    #[cfg(feature = "delta")]
+    lakes.push("delta");
+
+    #[cfg(feature = "iceberg")]
+    lakes.push("iceberg");
+
+    format!("Data lakes: {}", lakes.join(", "))
+}
+
+fn after_help() -> String {
+    let mut after = Vec::new();
+    after.push(storage_engines());
+    after.push(lakes());
+
+    after.join("\n")
+}
+
 #[derive(Clone, Debug, Parser)]
-#[command(name = "tansu", version, about, long_about = None, args_conflicts_with_subcommands = true)]
+#[command(
+    name = "tansu",
+    version,
+    about,
+    long_about = None,
+    after_help = after_help(),
+    args_conflicts_with_subcommands = true
+)]
 pub struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
