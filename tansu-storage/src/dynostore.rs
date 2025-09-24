@@ -337,23 +337,6 @@ impl OptiCon<Watermark> {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
-struct WatermarkSequence {
-    epoch: i16,
-    sequence: i32,
-    updated: SystemTime,
-}
-
-impl Default for WatermarkSequence {
-    fn default() -> Self {
-        Self {
-            epoch: 0,
-            sequence: 0,
-            updated: SystemTime::now(),
-        }
-    }
-}
-
 fn json_content_type() -> Attributes {
     let mut attributes = Attributes::new();
     _ = attributes.insert(
