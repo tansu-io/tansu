@@ -8,7 +8,7 @@ about:
 cargo-build +args:
     cargo build {{args}}
 
-build: (cargo-build "--bin" "tansu")
+build: (cargo-build "--bin" "tansu" "--features" "delta,dynostore,parquet,postgres,libsql")
 
 release: (cargo-build "--release" "--workspace" "--all-targets")
 

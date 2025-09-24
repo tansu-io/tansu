@@ -19,8 +19,9 @@ use crate::{Error, Result};
 use futures::SinkExt;
 use tansu_client::{Client, ConnectionManager};
 use tansu_sans_io::{
-    ErrorCode,
-    fetch_request::{FetchPartition, FetchRequest, FetchTopic},
+    ErrorCode, MetadataRequest, NULL_TOPIC_ID,
+    fetch_request::{FetchPartition, FetchRequest, FetchTopic, ReplicaState},
+    metadata_request::MetadataRequestTopic,
     record::inflated,
 };
 use tansu_schema::{AsJsonValue, Registry};
@@ -212,24 +213,57 @@ impl Consume {
             .inspect(|pool| debug!(?pool))
             .map(Client::new)?;
 
+        let metadata = client
+            .call(
+                MetadataRequest::default()
+                    .allow_auto_topic_creation(Some(false))
+                    .include_cluster_authorized_operations(Some(false))
+                    .include_topic_authorized_operations(Some(false))
+                    .topics(Some(
+                        [MetadataRequestTopic::default()
+                            .name(Some(self.configuration.topic.clone()))
+                            .topic_id(Some(NULL_TOPIC_ID))]
+                        .into(),
+                    )),
+            )
+            .await?;
+
         let response = client
             .call(
                 FetchRequest::default()
+                    .cluster_id(Some("".into()))
                     .replica_id(Some(-1))
+                    .replica_state(Some(ReplicaState::default()))
                     .max_wait_ms(self.configuration.max_wait_time_ms)
                     .min_bytes(self.configuration.min_bytes)
                     .max_bytes(self.configuration.max_bytes)
                     .isolation_level(Some(1))
+                    .session_id(Some(-1))
+                    .session_epoch(Some(-1))
                     .topics(Some(vec![
                         FetchTopic::default()
-                            .topic(Some(self.configuration.topic))
+                            .topic(Some(self.configuration.topic.clone()))
+                            .topic_id(
+                                metadata
+                                    .topics
+                                    .unwrap_or_default()
+                                    .into_iter()
+                                    .find(|topic| {
+                                        topic.name.as_ref().is_some_and(|name| {
+                                            self.configuration.topic.as_str() == name
+                                        })
+                                    })
+                                    .and_then(|topic| topic.topic_id),
+                            )
                             .partitions(Some(vec![
                                 FetchPartition::default()
                                     .partition(self.configuration.partition)
                                     .log_start_offset(Some(self.configuration.fetch_offset))
                                     .partition_max_bytes(4096),
                             ])),
-                    ])),
+                    ]))
+                    .forgotten_topics_data(Some([].into()))
+                    .rack_id(Some("".into())),
             )
             .await?;
 

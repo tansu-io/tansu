@@ -101,6 +101,7 @@ pub enum Error {
 
     #[cfg(feature = "postgres")]
     Pool(Arc<deadpool_postgres::PoolError>),
+
     SchemaRegistry(Arc<tansu_schema::Error>),
     Service(#[from] tansu_service::Error),
     Storage(#[from] tansu_storage::Error),
@@ -156,6 +157,7 @@ impl From<SendError<CancelKind>> for Error {
     }
 }
 
+#[cfg(feature = "postgres")]
 impl From<tokio_postgres::error::Error> for Error {
     fn from(value: tokio_postgres::error::Error) -> Self {
         Self::TokioPostgres(Arc::new(value))
@@ -180,6 +182,7 @@ impl From<serde_json::Error> for Error {
     }
 }
 
+#[cfg(feature = "dynostore")]
 impl From<object_store::Error> for Error {
     fn from(value: object_store::Error) -> Self {
         Self::ObjectStore(Arc::new(value))
@@ -192,6 +195,7 @@ impl From<ParseError> for Error {
     }
 }
 
+#[cfg(feature = "postgres")]
 impl From<deadpool_postgres::PoolError> for Error {
     fn from(value: deadpool_postgres::PoolError) -> Self {
         Self::Pool(Arc::new(value))

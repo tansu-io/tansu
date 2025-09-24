@@ -13,6 +13,12 @@ version.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = ["delta", "iceberg", "parquet"]
+delta = []
+parquet = []
+iceberg = []
+
 [dependencies]
 clap.workspace = true
 dotenv.workspace = true

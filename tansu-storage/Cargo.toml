@@ -20,9 +20,12 @@ include = [
 ]
 
 [features]
-default = ["dynostore", "libsql", "postgres"]
+default = ["delta", "dynostore", "iceberg", "libsql", "postgres"]
+delta = []
 dynostore = ["dep:object_store"]
+iceberg = []
 libsql = ["dep:libsql"]
+parquet = []
 postgres = ["dep:tokio-postgres", "dep:deadpool", "dep:deadpool-postgres"]
 turso = ["dep:turso"]
 
