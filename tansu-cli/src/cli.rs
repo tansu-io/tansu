@@ -67,11 +67,7 @@ fn lakes() -> String {
 }
 
 fn after_help() -> String {
-    let mut after = Vec::new();
-    after.push(storage_engines());
-    after.push(lakes());
-
-    after.join("\n")
+    [storage_engines(), lakes()].join("\n")
 }
 
 #[derive(Clone, Debug, Parser)]
