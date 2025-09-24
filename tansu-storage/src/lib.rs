@@ -225,6 +225,11 @@ pub enum Error {
     #[cfg(feature = "postgres")]
     DeadPoolBuild(#[from] deadpool::managed::BuildError),
 
+    FeatureNotEnabled {
+        feature: String,
+        message: String,
+    },
+
     Glob(Arc<GlobError>),
     Io(Arc<io::Error>),
     KafkaSansIo(#[from] tansu_sans_io::Error),
@@ -1570,6 +1575,12 @@ impl Builder<i32, String, Url, Url> {
                 .map(|builder| builder.build())
                 .map(StorageContainer::Postgres),
 
+            #[cfg(not(feature = "postgres"))]
+            "postgres" | "postgresql" => Err(Error::FeatureNotEnabled {
+                feature: "postgres".into(),
+                message: self.storage.to_string(),
+            }),
+
             #[cfg(all(
                 feature = "dynostore",
                 any(feature = "parquet", feature = "iceberg", feature = "delta")
@@ -1632,6 +1643,12 @@ impl Builder<i32, String, Url, Url> {
                     .schemas(self.schema_registry),
             )),
 
+            #[cfg(not(feature = "dynostore"))]
+            "s3" | "memory" => Err(Error::FeatureNotEnabled {
+                feature: "dynostore".into(),
+                message: self.storage.to_string(),
+            }),
+
             #[cfg(all(
                 feature = "libsql",
                 any(feature = "parquet", feature = "iceberg", feature = "delta")
@@ -1661,6 +1678,12 @@ impl Builder<i32, String, Url, Url> {
                 .await
                 .map(StorageContainer::Lite),
 
+            #[cfg(not(feature = "libsql"))]
+            "sqlite" => Err(Error::FeatureNotEnabled {
+                feature: "libsql".into(),
+                message: self.storage.to_string(),
+            }),
+
             #[cfg(all(
                 feature = "turso",
                 any(feature = "parquet", feature = "iceberg", feature = "delta")
@@ -1689,6 +1712,12 @@ impl Builder<i32, String, Url, Url> {
                 .build()
                 .await
                 .map(StorageContainer::Turso),
+
+            #[cfg(not(feature = "turso"))]
+            "turso" => Err(Error::FeatureNotEnabled {
+                feature: "turso".into(),
+                message: self.storage.to_string(),
+            }),
 
             _unsupported => Err(Error::UnsupportedStorageUrl(self.storage.clone())),
         }
