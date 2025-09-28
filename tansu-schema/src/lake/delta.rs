@@ -1566,8 +1566,7 @@ mod tests {
 
             let offset = 543212345;
 
-            let not_found_in_schema =
-                String::from("Partition column value.vendor_id not found in schema");
+            let not_found_in_schema = "Partition column value.vendor_id not found in schema";
 
             assert!(matches!(
                 lake_house
@@ -1575,9 +1574,7 @@ mod tests {
                     .await
                     .inspect(|result| debug!(?result))
                     .inspect_err(|err| debug!(?err)),
-                Err(Error::DeltaTable(
-                    deltalake::errors::DeltaTableError::Generic(error)
-                )) if error == not_found_in_schema
+                Err(Error::DeltaTable(ref boxed)) if matches!(&**boxed, deltalake::errors::DeltaTableError::Generic(error) if error == not_found_in_schema)
             ));
 
             Ok(())

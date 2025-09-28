@@ -20,7 +20,7 @@ include = [
 ]
 
 [features]
-default = ["delta", "dynostore", "iceberg", "libsql", "postgres"]
+default = []
 delta = []
 dynostore = ["dep:object_store"]
 iceberg = []

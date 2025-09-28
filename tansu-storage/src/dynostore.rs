@@ -2608,16 +2608,16 @@ impl Storage for DynoStore {
         Ok(())
     }
 
-    fn cluster_id(&self) -> Result<&str> {
-        Ok(self.cluster.as_str())
+    async fn cluster_id(&self) -> Result<String> {
+        Ok(self.cluster.clone())
     }
 
-    fn node(&self) -> Result<i32> {
+    async fn node(&self) -> Result<i32> {
         Ok(self.node)
     }
 
-    fn advertised_listener(&self) -> Result<&Url> {
-        Ok(&self.advertised_listener)
+    async fn advertised_listener(&self) -> Result<Url> {
+        Ok(self.advertised_listener.clone())
     }
 }
 

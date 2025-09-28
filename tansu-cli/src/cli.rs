@@ -54,6 +54,7 @@ fn storage_engines() -> String {
     format!("Storage engines: {}", engines.join(", "))
 }
 
+#[cfg(any(feature = "delta", feature = "iceberg"))]
 fn lakes() -> String {
     let mut lakes = Vec::new();
 
@@ -64,6 +65,11 @@ fn lakes() -> String {
     lakes.push("iceberg");
 
     format!("Data lakes: {}", lakes.join(", "))
+}
+
+#[cfg(not(any(feature = "delta", feature = "iceberg")))]
+fn lakes() -> String {
+    "Data lakes:\n".into()
 }
 
 fn after_help() -> String {

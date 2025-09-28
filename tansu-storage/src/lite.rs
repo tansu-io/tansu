@@ -3353,16 +3353,16 @@ impl Storage for Engine {
         Ok(())
     }
 
-    fn cluster_id(&self) -> Result<&str> {
-        Ok(self.cluster.as_str())
+    async fn cluster_id(&self) -> Result<String> {
+        Ok(self.cluster.clone())
     }
 
-    fn node(&self) -> Result<i32> {
+    async fn node(&self) -> Result<i32> {
         Ok(self.node)
     }
 
-    fn advertised_listener(&self) -> Result<&Url> {
-        Ok(&self.advertised_listener)
+    async fn advertised_listener(&self) -> Result<Url> {
+        Ok(self.advertised_listener.clone())
     }
 }
 
@@ -3926,12 +3926,10 @@ mod tests {
 
             let paths = glob::glob(pattern)?;
 
-            for path in paths {
-                if let Ok(path) = path {
-                    debug!(?path);
+            for path in paths.flatten() {
+                debug!(?path);
 
-                    remove_file(path).await?;
-                }
+                remove_file(path).await?;
             }
         }
 

@@ -31,9 +31,9 @@ pub mod common;
 pub async fn new_topic(
     cluster_id: impl Into<String>,
     broker_id: i32,
-    mut sc: StorageContainer,
+    sc: StorageContainer,
 ) -> Result<()> {
-    register_broker(cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, &sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -82,9 +82,9 @@ pub async fn new_topic(
 pub async fn single_record(
     cluster_id: impl Into<String>,
     broker_id: i32,
-    mut sc: StorageContainer,
+    sc: StorageContainer,
 ) -> Result<()> {
-    register_broker(cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, &sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);

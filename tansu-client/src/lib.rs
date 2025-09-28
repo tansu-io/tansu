@@ -776,10 +776,7 @@ mod tests {
                     .and_then(|builder| builder.build())?,
             );
 
-        server
-            .serve(Context::default(), listener)
-            .await
-            .map_err(Into::into)
+        server.serve(Context::default(), listener).await
     }
 
     #[tokio::test]

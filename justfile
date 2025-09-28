@@ -8,7 +8,7 @@ about:
 cargo-build +args:
     cargo build {{args}}
 
-build: (cargo-build "--bin" "tansu" "--features" "delta,dynostore,iceberg,libsql,parquet,postgres")
+build: (cargo-build "--bin" "tansu" "--no-default-features" "--features" "delta,dynostore,iceberg,libsql,parquet,postgres")
 
 release: (cargo-build "--release" "--workspace" "--all-targets")
 
@@ -23,11 +23,14 @@ test-doc:
 doc:
     cargo doc --all-features --open
 
+check:
+    cargo check --workspace --all-features --all-targets
+
 clippy:
-    cargo clippy -- -D warnings
+    cargo clippy --workspace --all-features --all-targets -- -D warnings
 
 fmt:
-    cargo fmt --all
+    cargo fmt --all --check
 
 miri:
     cargo +nightly miri test --no-fail-fast --all-features

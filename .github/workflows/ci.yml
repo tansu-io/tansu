@@ -50,10 +50,11 @@ jobs:
         with:
           components: clippy, rustfmt
           cache: false
-      - run: cargo build --all-features
-      - run: cargo fmt --all --check
-      - run: cargo clippy -- -D warnings
-      - run: cargo test --all-features
+      - run: just check
+      - run: just build
+      - run: just fmt
+      - run: just clippy
+      - run: just test
   typos:
     runs-on: ubuntu-latest
     steps:

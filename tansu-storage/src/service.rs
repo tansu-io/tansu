@@ -33,7 +33,11 @@ mod metadata;
 mod produce;
 mod txn;
 
-use std::{collections::BTreeMap, fmt::Debug, time::Duration};
+use std::{
+    collections::BTreeMap,
+    fmt::{self, Debug, Display, Formatter},
+    time::Duration,
+};
 
 use async_trait::async_trait;
 pub use consumer_group_describe::ConsumerGroupDescribeService;
@@ -55,27 +59,18 @@ pub use list_offsets::ListOffsetsService;
 pub use list_partition_reassignments::ListPartitionReassignmentsService;
 pub use metadata::MetadataService;
 pub use produce::ProduceService;
-use rama::{Context, Layer, Service, service::BoxService};
+use rama::{Context, Layer, Service};
 use tansu_sans_io::{
-    AddOffsetsToTxnRequest, AddOffsetsToTxnResponse, AddPartitionsToTxnRequest,
-    AddPartitionsToTxnResponse, ConsumerGroupDescribeRequest, ConsumerGroupDescribeResponse,
-    CreateTopicsRequest, CreateTopicsResponse, DeleteGroupsRequest, DeleteGroupsResponse,
-    DeleteRecordsRequest, DeleteRecordsResponse, DeleteTopicsRequest, DeleteTopicsResponse,
-    DescribeClusterRequest, DescribeClusterResponse, DescribeConfigsRequest,
-    DescribeConfigsResponse, DescribeGroupsRequest, DescribeGroupsResponse,
-    DescribeTopicPartitionsRequest, DescribeTopicPartitionsResponse, ErrorCode, FetchRequest,
-    FetchResponse, FindCoordinatorRequest, FindCoordinatorResponse,
-    GetTelemetrySubscriptionsRequest, GetTelemetrySubscriptionsResponse,
-    IncrementalAlterConfigsRequest, IncrementalAlterConfigsResponse, InitProducerIdRequest,
-    InitProducerIdResponse, IsolationLevel, ListGroupsRequest, ListGroupsResponse, ListOffset,
-    ListOffsetsRequest, ListOffsetsResponse, ListPartitionReassignmentsRequest,
-    ListPartitionReassignmentsResponse, MetadataRequest, ProduceRequest, ProduceResponse,
-    TxnOffsetCommitResponse, consumer_group_describe_response::DescribedGroup,
-    create_topics_request::CreatableTopic, delete_records_request::DeleteRecordsTopic,
+    ConfigResource, ErrorCode, IsolationLevel, ListOffset, create_topics_request::CreatableTopic,
+    delete_groups_response::DeletableGroupResult, delete_records_request::DeleteRecordsTopic,
     delete_records_response::DeleteRecordsTopicResult,
     describe_cluster_response::DescribeClusterBroker,
+    describe_configs_response::DescribeConfigsResult,
+    describe_topic_partitions_response::DescribeTopicPartitionsResponseTopic,
     incremental_alter_configs_request::AlterConfigsResource,
-    incremental_alter_configs_response::AlterConfigsResourceResponse, record::deflated,
+    incremental_alter_configs_response::AlterConfigsResourceResponse,
+    list_groups_response::ListedGroup, record::deflated,
+    txn_offset_commit_response::TxnOffsetCommitResponseTopic,
 };
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
@@ -83,76 +78,209 @@ use tracing::debug;
 pub use txn::add_offsets::AddOffsetsService as TxnAddOffsetsService;
 pub use txn::add_partitions::AddPartitionService as TxnAddPartitionService;
 pub use txn::offset_commit::OffsetCommitService as TxnOffsetCommitService;
+use url::Url;
 use uuid::Uuid;
 
 use crate::{
-    BrokerRegistrationRequest, Error, ListOffsetResponse, MetadataResponse, OffsetCommitRequest,
-    OffsetStage, Result, Storage, TopicId, Topition, TxnOffsetCommitRequest,
+    BrokerRegistrationRequest, Error, GroupDetail, ListOffsetResponse, MetadataResponse,
+    NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse, Result, Storage,
+    TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse, TxnOffsetCommitRequest,
+    UpdateError, Version,
 };
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum Request {
-    AddOffsetsToTxn(AddOffsetsToTxnRequest),
-    AddPartitionsToTxn(AddPartitionsToTxnRequest),
-    ConsumerGroupDescribe(ConsumerGroupDescribeRequest),
-    CreateTopics(CreateTopicsRequest),
-    DeleteGroups(DeleteGroupsRequest),
-    DeleteRecords(DeleteRecordsRequest),
-    DeleteTopics(DeleteTopicsRequest),
-    DescribeCluster(DescribeClusterRequest),
-    DescribeConfigs(DescribeConfigsRequest),
-    DescribeGroups(DescribeGroupsRequest),
-    DescribeTopicPartitions(DescribeTopicPartitionsRequest),
-    Fetch(FetchRequest),
-    FindCoordinator(FindCoordinatorRequest),
-    GetTelemetrySubscriptions(GetTelemetrySubscriptionsRequest),
-    IncrementalAlterConfigs(IncrementalAlterConfigsRequest),
-    InitProducerId(InitProducerIdRequest),
-    ListGroups(ListGroupsRequest),
-    ListOffsets(ListOffsetsRequest),
-    ListPartitionReassignments(ListPartitionReassignmentsRequest),
-    Metadata(MetadataRequest),
-    Produce(ProduceRequest),
+    RegisterBroker(BrokerRegistrationRequest),
+    IncrementalAlterResource(AlterConfigsResource),
+    CreateTopic {
+        topic: CreatableTopic,
+        validate_only: bool,
+    },
+    DeleteRecords(Vec<DeleteRecordsTopic>),
+    DeleteTopic(TopicId),
+    Brokers,
+    Produce {
+        transaction_id: Option<String>,
+        topition: Topition,
+        batch: deflated::Batch,
+    },
+    Fetch {
+        topition: Topition,
+        offset: i64,
+        min_bytes: u32,
+        max_bytes: u32,
+        isolation: IsolationLevel,
+    },
+    OffsetStage(Topition),
+    ListOffsets {
+        isolation_level: IsolationLevel,
+        offsets: Vec<(Topition, ListOffset)>,
+    },
+    OffsetCommit {
+        group_id: String,
+        retention_time_ms: Option<Duration>,
+        offsets: Vec<(Topition, OffsetCommitRequest)>,
+    },
+    CommittedOffsetTopitions(String),
+    OffsetFetch {
+        group_id: Option<String>,
+        topics: Vec<Topition>,
+        require_stable: Option<bool>,
+    },
+    Metadata(Option<Vec<TopicId>>),
+    DescribeConfig {
+        name: String,
+        resource: ConfigResource,
+        keys: Option<Vec<String>>,
+    },
+    DescribeTopicPartitions {
+        topics: Option<Vec<TopicId>>,
+        partition_limit: i32,
+        cursor: Option<Topition>,
+    },
+    ListGroups(Option<Vec<String>>),
+    DeleteGroups(Option<Vec<String>>),
+    DescribeGroups {
+        group_ids: Option<Vec<String>>,
+        include_authorized_operations: bool,
+    },
+    UpdateGroup {
+        group_id: String,
+        detail: GroupDetail,
+        version: Option<Version>,
+    },
+    InitProducer {
+        transaction_id: Option<String>,
+        transaction_timeout_ms: i32,
+        producer_id: Option<i64>,
+        producer_epoch: Option<i16>,
+    },
+    TxnAddOffsets {
+        transaction_id: String,
+        producer_id: i64,
+        producer_epoch: i16,
+        group_id: String,
+    },
+    TxnAddPartitions(TxnAddPartitionsRequest),
     TxnOffsetCommit(TxnOffsetCommitRequest),
+    TxnEnd {
+        transaction_id: String,
+        producer_id: i64,
+        producer_epoch: i16,
+        committed: bool,
+    },
+    Maintain,
+    ClusterId,
+    Node,
+    AdvertisedLister,
 }
 
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug)]
 pub enum Response {
-    AddOffsetsToTxn(AddOffsetsToTxnResponse),
-    AddPartitionsToTxn(AddPartitionsToTxnResponse),
-    ConsumerGroupDescribe(ConsumerGroupDescribeResponse),
-    CreateTopics(CreateTopicsResponse),
-    DeleteGroups(DeleteGroupsResponse),
-    DeleteRecords(DeleteRecordsResponse),
-    DeleteTopics(DeleteTopicsResponse),
-    DescribeCluster(DescribeClusterResponse),
-    DescribeConfigs(DescribeConfigsResponse),
-    DescribeGroups(DescribeGroupsResponse),
-    DescribeTopicPartitions(DescribeTopicPartitionsResponse),
-    Fetch(FetchResponse),
-    FindCoordinator(FindCoordinatorResponse),
-    GetTelemetrySubscriptions(GetTelemetrySubscriptionsResponse),
-    IncrementalAlterConfigs(IncrementalAlterConfigsResponse),
-    InitProducerId(InitProducerIdResponse),
-    ListGroups(ListGroupsResponse),
-    ListOffsets(ListOffsetsResponse),
-    ListPartitionReassignments(ListPartitionReassignmentsResponse),
-    Metadata(MetadataResponse),
-    Produce(ProduceResponse),
-    TxnOffsetCommit(TxnOffsetCommitResponse),
+    RegisterBroker(Result<()>),
+    IncrementalAlterResponse(Result<AlterConfigsResourceResponse>),
+    CreateTopic(Result<Uuid>),
+    DeleteRecords(Result<Vec<DeleteRecordsTopicResult>>),
+    DeleteTopic(Result<ErrorCode>),
+    Brokers(Result<Vec<DescribeClusterBroker>>),
+    Produce(Result<i64>),
+    Fetch(Result<Vec<deflated::Batch>>),
+    OffsetStage(Result<OffsetStage>),
+    ListOffsets(Result<Vec<(Topition, ListOffsetResponse)>>),
+    OffsetCommit(Result<Vec<(Topition, ErrorCode)>>),
+    CommittedOffsetTopitions(Result<BTreeMap<Topition, i64>>),
+    OffsetFetch(Result<BTreeMap<Topition, i64>>),
+    Metadata(Result<MetadataResponse>),
+    DescribeConfig(Result<DescribeConfigsResult>),
+    DescribeTopicPartitions(Result<Vec<DescribeTopicPartitionsResponseTopic>>),
+    ListGroups(Result<Vec<ListedGroup>>),
+    DeleteGroups(Result<Vec<DeletableGroupResult>>),
+    DescribeGroups(Result<Vec<NamedGroupDetail>>),
+    UpdateGroup(Result<Version, UpdateError<GroupDetail>>),
+    InitProducer(Result<ProducerIdResponse>),
+    TxnAddOffsets(Result<ErrorCode>),
+    TxnAddPartitions(Result<TxnAddPartitionsResponse>),
+    TxnOffsetCommit(Result<Vec<TxnOffsetCommitResponseTopic>>),
+    TxnEnd(Result<ErrorCode>),
+    Maintain(Result<()>),
+    ClusterId(Result<String>),
+    Node(Result<i32>),
+    AdvertisedListener(Result<Url>),
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct StorageService<S> {
+pub type RequestSender = mpsc::Sender<(Request, oneshot::Sender<Response>)>;
+pub type RequestReceiver = mpsc::Receiver<(Request, oneshot::Sender<Response>)>;
+
+pub fn bounded_channel(buffer: usize) -> (RequestSender, RequestReceiver) {
+    mpsc::channel::<(Request, oneshot::Sender<Response>)>(buffer)
+}
+
+#[derive(Clone, Debug, thiserror::Error)]
+pub enum ServiceError {
+    Storage(Error),
+    UpdateGroupDetail(UpdateError<GroupDetail>),
+}
+
+impl Display for ServiceError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{self:?}")
+    }
+}
+
+impl From<Error> for ServiceError {
+    fn from(value: Error) -> Self {
+        Self::Storage(value)
+    }
+}
+
+impl From<UpdateError<GroupDetail>> for ServiceError {
+    fn from(value: UpdateError<GroupDetail>) -> Self {
+        Self::UpdateGroupDetail(value)
+    }
+}
+
+impl From<ServiceError> for Error {
+    fn from(value: ServiceError) -> Self {
+        if let ServiceError::Storage(error) = value {
+            error
+        } else {
+            unreachable!()
+        }
+    }
+}
+
+impl From<ServiceError> for UpdateError<GroupDetail> {
+    fn from(value: ServiceError) -> Self {
+        if let ServiceError::UpdateGroupDetail(error) = value {
+            error
+        } else {
+            unreachable!()
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct RequestLayer;
+
+impl<S> Layer<S> for RequestLayer {
+    type Service = RequestService<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        Self::Service { inner }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct RequestService<S> {
     inner: S,
 }
 
-impl<State, S> Service<State, Request> for StorageService<S>
+impl<State, S> Service<State, Request> for RequestService<S>
 where
-    S: Service<State, Request, Response = Response>,
+    S: Service<State, Request>,
     State: Send + Sync + 'static,
 {
-    type Response = Response;
+    type Response = S::Response;
     type Error = S::Error;
 
     async fn serve(
@@ -160,26 +288,671 @@ where
         ctx: Context<State>,
         req: Request,
     ) -> Result<Self::Response, Self::Error> {
+        debug!(?req);
         self.inner.serve(ctx, req).await
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct StorageLayer;
+/// A [`Service`] sending [`Request`]s over a [`RequestSender`] channel
+#[derive(Clone, Debug)]
+pub struct RequestChannelService {
+    tx: RequestSender,
+}
 
-impl<S> Layer<S> for StorageLayer {
-    type Service = StorageService<S>;
-
-    fn layer(&self, inner: S) -> Self::Service {
-        Self::Service { inner }
+impl RequestChannelService {
+    pub fn new(tx: RequestSender) -> Self {
+        Self { tx }
     }
 }
 
-type RequestSender = mpsc::Sender<(Request, oneshot::Sender<Response>)>;
-type RequestReceiver = mpsc::Receiver<(Request, oneshot::Sender<Response>)>;
+impl<State> Service<State, Request> for RequestChannelService
+where
+    State: Send + Sync + 'static,
+{
+    type Response = Response;
+    type Error = ServiceError;
 
-fn bounded_channel(buffer: usize) -> (RequestSender, RequestReceiver) {
-    mpsc::channel::<(Request, oneshot::Sender<Response>)>(buffer)
+    async fn serve(
+        &self,
+        _ctx: Context<State>,
+        req: Request,
+    ) -> Result<Self::Response, Self::Error> {
+        debug!(?req);
+
+        let (resp_tx, resp_rx) = oneshot::channel();
+
+        self.tx
+            .send((req, resp_tx))
+            .await
+            .map_err(|_send_error| ServiceError::Storage(Error::UnableToSend))?;
+
+        resp_rx.await.map_err(|_| Error::OneshotRecv.into())
+    }
+}
+
+#[async_trait]
+impl Storage for RequestChannelService {
+    async fn register_broker(&self, broker_registration: BrokerRegistrationRequest) -> Result<()> {
+        self.serve(
+            Context::default(),
+            Request::RegisterBroker(broker_registration),
+        )
+        .await
+        .and_then(|response| {
+            if let Response::RegisterBroker(inner) = response {
+                inner.map_err(Into::into)
+            } else {
+                Err(Error::UnexpectedServiceResponse(Box::new(response)).into())
+            }
+        })
+        .map_err(Into::into)
+    }
+
+    async fn incremental_alter_resource(
+        &self,
+        resource: AlterConfigsResource,
+    ) -> Result<AlterConfigsResourceResponse> {
+        self.serve(
+            Context::default(),
+            Request::IncrementalAlterResource(resource),
+        )
+        .await
+        .and_then(|response| {
+            if let Response::IncrementalAlterResponse(inner) = response {
+                inner.map_err(Into::into)
+            } else {
+                Err(Error::UnexpectedServiceResponse(Box::new(response)).into())
+            }
+        })
+        .map_err(Into::into)
+    }
+
+    async fn create_topic(&self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {
+        self.serve(
+            Context::default(),
+            Request::CreateTopic {
+                topic,
+                validate_only,
+            },
+        )
+        .await
+        .and_then(|response| {
+            if let Response::CreateTopic(inner) = response {
+                inner.map_err(Into::into)
+            } else {
+                Err(Error::UnexpectedServiceResponse(Box::new(response)).into())
+            }
+        })
+        .map_err(Into::into)
+    }
+
+    async fn delete_records(
+        &self,
+        topics: &[DeleteRecordsTopic],
+    ) -> Result<Vec<DeleteRecordsTopicResult>> {
+        self.serve(
+            Context::default(),
+            Request::DeleteRecords(Vec::from(topics)),
+        )
+        .await
+        .and_then(|response| {
+            if let Response::DeleteRecords(inner) = response {
+                inner.map_err(Into::into)
+            } else {
+                Err(Error::UnexpectedServiceResponse(Box::new(response)).into())
+            }
+        })
+        .map_err(Into::into)
+    }
+
+    async fn delete_topic(&self, topic: &TopicId) -> Result<ErrorCode> {
+        self.serve(Context::default(), Request::DeleteTopic(topic.to_owned()))
+            .await
+            .and_then(|response| {
+                if let Response::DeleteTopic(inner) = response {
+                    inner.map_err(Into::into)
+                } else {
+                    Err(Error::UnexpectedServiceResponse(Box::new(response)).into())
+                }
+            })
+            .map_err(Into::into)
+    }
+
+    async fn brokers(&self) -> Result<Vec<DescribeClusterBroker>> {
+        self.serve(Context::default(), Request::Brokers)
+            .await
+            .and_then(|response| {
+                if let Response::Brokers(inner) = response {
+                    inner.map_err(Into::into)
+                } else {
+                    Err(Error::UnexpectedServiceResponse(Box::new(response)).into())
+                }
+            })
+            .map_err(Into::into)
+    }
+
+    async fn produce(
+        &self,
+        transaction_id: Option<&str>,
+        topition: &Topition,
+        batch: deflated::Batch,
+    ) -> Result<i64> {
+        let transaction_id = transaction_id.map(|s| s.to_string());
+        let topition = topition.to_owned();
+
+        self.serve(
+            Context::default(),
+            Request::Produce {
+                transaction_id,
+                topition,
+                batch,
+            },
+        )
+        .await
+        .and_then(|response| {
+            if let Response::Produce(inner) = response {
+                inner.map_err(Into::into)
+            } else {
+                Err(Error::UnexpectedServiceResponse(Box::new(response)).into())
+            }
+        })
+        .map_err(Into::into)
+    }
+
+    async fn fetch(
+        &self,
+        topition: &'_ Topition,
+        offset: i64,
+        min_bytes: u32,
+        max_bytes: u32,
+        isolation: IsolationLevel,
+    ) -> Result<Vec<deflated::Batch>> {
+        let topition = topition.to_owned();
+
+        self.serve(
+            Context::default(),
+            Request::Fetch {
+                topition,
+                offset,
+                min_bytes,
+                max_bytes,
+                isolation,
+            },
+        )
+        .await
+        .and_then(|response| {
+            if let Response::Fetch(inner) = response {
+                inner.map_err(Into::into)
+            } else {
+                Err(Error::UnexpectedServiceResponse(Box::new(response)).into())
+            }
+        })
+        .map_err(Into::into)
+    }
+
+    async fn offset_stage(&self, topition: &Topition) -> Result<OffsetStage> {
+        self.serve(
+            Context::default(),
+            Request::OffsetStage(topition.to_owned()),
+        )
+        .await
+        .and_then(|response| {
+            if let Response::OffsetStage(inner) = response {
+                inner.map_err(Into::into)
+            } else {
+                Err(Error::UnexpectedServiceResponse(Box::new(response)).into())
+            }
+        })
+        .map_err(Into::into)
+    }
+
+    async fn list_offsets(
+        &self,
+        isolation_level: IsolationLevel,
+        offsets: &[(Topition, ListOffset)],
+    ) -> Result<Vec<(Topition, ListOffsetResponse)>> {
+        let offsets = Vec::from(offsets);
+
+        self.serve(
+            Context::default(),
+            Request::ListOffsets {
+                isolation_level,
+                offsets,
+            },
+        )
+        .await
+        .and_then(|response| {
+            if let Response::ListOffsets(inner) = response {
+                inner.map_err(Into::into)
+            } else {
+                Err(Error::UnexpectedServiceResponse(Box::new(response)).into())
+            }
+        })
+        .map_err(Into::into)
+    }
+
+    async fn offset_commit(
+        &self,
+        group_id: &str,
+        retention_time_ms: Option<Duration>,
+        offsets: &[(Topition, OffsetCommitRequest)],
+    ) -> Result<Vec<(Topition, ErrorCode)>> {
+        let group_id = group_id.to_string();
+        let offsets = Vec::from(offsets);
+
+        self.serve(
+            Context::default(),
+            Request::OffsetCommit {
+                group_id,
+                retention_time_ms,
+                offsets,
+            },
+        )
+        .await
+        .and_then(|response| {
+            if let Response::OffsetCommit(inner) = response {
+                inner.map_err(Into::into)
+            } else {
+                Err(Error::UnexpectedServiceResponse(Box::new(response)).into())
+            }
+        })
+        .map_err(Into::into)
+    }
+
+    async fn committed_offset_topitions(&self, group_id: &str) -> Result<BTreeMap<Topition, i64>> {
+        let group_id = group_id.to_string();
+
+        self.serve(
+            Context::default(),
+            Request::CommittedOffsetTopitions(group_id),
+        )
+        .await
+        .and_then(|response| {
+            if let Response::CommittedOffsetTopitions(inner) = response {
+                inner.map_err(Into::into)
+            } else {
+                Err(Error::UnexpectedServiceResponse(Box::new(response)).into())
+            }
+        })
+        .map_err(Into::into)
+    }
+
+    async fn offset_fetch(
+        &self,
+        group_id: Option<&str>,
+        topics: &[Topition],
+        require_stable: Option<bool>,
+    ) -> Result<BTreeMap<Topition, i64>> {
+        let group_id = group_id.map(|s| s.to_string());
+        let topics = Vec::from(topics);
+
+        self.serve(
+            Context::default(),
+            Request::OffsetFetch {
+                group_id,
+                topics,
+                require_stable,
+            },
+        )
+        .await
+        .and_then(|response| {
+            if let Response::OffsetFetch(inner) = response {
+                inner.map_err(Into::into)
+            } else {
+                Err(Error::UnexpectedServiceResponse(Box::new(response)).into())
+            }
+        })
+        .map_err(Into::into)
+    }
+
+    async fn metadata(&self, topics: Option<&[TopicId]>) -> Result<MetadataResponse> {
+        let topics = topics.map(Vec::from);
+
+        self.serve(Context::default(), Request::Metadata(topics))
+            .await
+            .and_then(|response| {
+                if let Response::Metadata(inner) = response {
+                    inner.map_err(Into::into)
+                } else {
+                    Err(Error::UnexpectedServiceResponse(Box::new(response)).into())
+                }
+            })
+            .map_err(Into::into)
+    }
+
+    async fn describe_config(
+        &self,
+        name: &str,
+        resource: ConfigResource,
+        keys: Option<&[String]>,
+    ) -> Result<DescribeConfigsResult> {
+        let name = name.to_string();
+        let keys = keys.map(Vec::from);
+
+        self.serve(
+            Context::default(),
+            Request::DescribeConfig {
+                name,
+                resource,
+                keys,
+            },
+        )
+        .await
+        .and_then(|response| {
+            if let Response::DescribeConfig(inner) = response {
+                inner.map_err(Into::into)
+            } else {
+                Err(Error::UnexpectedServiceResponse(Box::new(response)).into())
+            }
+        })
+        .map_err(Into::into)
+    }
+
+    async fn describe_topic_partitions(
+        &self,
+        topics: Option<&[TopicId]>,
+        partition_limit: i32,
+        cursor: Option<Topition>,
+    ) -> Result<Vec<DescribeTopicPartitionsResponseTopic>> {
+        let topics = topics.map(Vec::from);
+
+        self.serve(
+            Context::default(),
+            Request::DescribeTopicPartitions {
+                topics,
+                partition_limit,
+                cursor,
+            },
+        )
+        .await
+        .and_then(|response| {
+            if let Response::DescribeTopicPartitions(inner) = response {
+                inner.map_err(Into::into)
+            } else {
+                Err(Error::UnexpectedServiceResponse(Box::new(response)).into())
+            }
+        })
+        .map_err(Into::into)
+    }
+
+    async fn list_groups(&self, states_filter: Option<&[String]>) -> Result<Vec<ListedGroup>> {
+        let states_filter = states_filter.map(Vec::from);
+
+        self.serve(Context::default(), Request::ListGroups(states_filter))
+            .await
+            .and_then(|response| {
+                if let Response::ListGroups(inner) = response {
+                    inner.map_err(Into::into)
+                } else {
+                    Err(Error::UnexpectedServiceResponse(Box::new(response)).into())
+                }
+            })
+            .map_err(Into::into)
+    }
+
+    async fn delete_groups(
+        &self,
+        group_ids: Option<&[String]>,
+    ) -> Result<Vec<DeletableGroupResult>> {
+        let group_ids = group_ids.map(Vec::from);
+
+        self.serve(Context::default(), Request::DeleteGroups(group_ids))
+            .await
+            .and_then(|response| {
+                if let Response::DeleteGroups(inner) = response {
+                    inner.map_err(Into::into)
+                } else {
+                    Err(Error::UnexpectedServiceResponse(Box::new(response)).into())
+                }
+            })
+            .map_err(Into::into)
+    }
+
+    async fn describe_groups(
+        &self,
+        group_ids: Option<&[String]>,
+        include_authorized_operations: bool,
+    ) -> Result<Vec<NamedGroupDetail>> {
+        let group_ids = group_ids.map(Vec::from);
+
+        self.serve(
+            Context::default(),
+            Request::DescribeGroups {
+                group_ids,
+                include_authorized_operations,
+            },
+        )
+        .await
+        .and_then(|response| {
+            if let Response::DescribeGroups(inner) = response {
+                inner.map_err(Into::into)
+            } else {
+                Err(Error::UnexpectedServiceResponse(Box::new(response)).into())
+            }
+        })
+        .map_err(Into::into)
+    }
+
+    async fn update_group(
+        &self,
+        group_id: &str,
+        detail: GroupDetail,
+        version: Option<Version>,
+    ) -> Result<Version, UpdateError<GroupDetail>> {
+        let group_id = group_id.to_string();
+
+        self.serve(
+            Context::default(),
+            Request::UpdateGroup {
+                group_id,
+                detail,
+                version,
+            },
+        )
+        .await
+        .and_then(|response| {
+            if let Response::UpdateGroup(inner) = response {
+                inner.map_err(Into::into)
+            } else {
+                Err(Error::UnexpectedServiceResponse(Box::new(response)).into())
+            }
+        })
+        .map_err(Into::into)
+    }
+
+    async fn init_producer(
+        &self,
+        transaction_id: Option<&str>,
+        transaction_timeout_ms: i32,
+        producer_id: Option<i64>,
+        producer_epoch: Option<i16>,
+    ) -> Result<ProducerIdResponse> {
+        let transaction_id = transaction_id.map(|transaction_id| transaction_id.to_owned());
+
+        self.serve(
+            Context::default(),
+            Request::InitProducer {
+                transaction_id,
+                transaction_timeout_ms,
+                producer_id,
+                producer_epoch,
+            },
+        )
+        .await
+        .and_then(|response| {
+            if let Response::InitProducer(inner) = response {
+                inner.map_err(Into::into)
+            } else {
+                Err(Error::UnexpectedServiceResponse(Box::new(response)).into())
+            }
+        })
+        .map_err(Into::into)
+    }
+
+    async fn txn_add_offsets(
+        &self,
+        transaction_id: &str,
+        producer_id: i64,
+        producer_epoch: i16,
+        group_id: &str,
+    ) -> Result<ErrorCode> {
+        let transaction_id = transaction_id.to_string();
+        let group_id = group_id.to_string();
+
+        self.serve(
+            Context::default(),
+            Request::TxnAddOffsets {
+                transaction_id,
+                producer_id,
+                producer_epoch,
+                group_id,
+            },
+        )
+        .await
+        .and_then(|response| {
+            if let Response::TxnAddOffsets(inner) = response {
+                inner.map_err(Into::into)
+            } else {
+                Err(Error::UnexpectedServiceResponse(Box::new(response)).into())
+            }
+        })
+        .map_err(Into::into)
+    }
+
+    async fn txn_add_partitions(
+        &self,
+        partitions: TxnAddPartitionsRequest,
+    ) -> Result<TxnAddPartitionsResponse> {
+        self.serve(Context::default(), Request::TxnAddPartitions(partitions))
+            .await
+            .and_then(|response| {
+                if let Response::TxnAddPartitions(inner) = response {
+                    inner.map_err(Into::into)
+                } else {
+                    Err(Error::UnexpectedServiceResponse(Box::new(response)).into())
+                }
+            })
+            .map_err(Into::into)
+    }
+
+    async fn txn_offset_commit(
+        &self,
+        offsets: TxnOffsetCommitRequest,
+    ) -> Result<Vec<TxnOffsetCommitResponseTopic>> {
+        self.serve(Context::default(), Request::TxnOffsetCommit(offsets))
+            .await
+            .and_then(|response| {
+                if let Response::TxnOffsetCommit(inner) = response {
+                    inner.map_err(Into::into)
+                } else {
+                    Err(Error::UnexpectedServiceResponse(Box::new(response)).into())
+                }
+            })
+            .map_err(Into::into)
+    }
+
+    async fn txn_end(
+        &self,
+        transaction_id: &str,
+        producer_id: i64,
+        producer_epoch: i16,
+        committed: bool,
+    ) -> Result<ErrorCode> {
+        let transaction_id = transaction_id.to_string();
+
+        self.serve(
+            Context::default(),
+            Request::TxnEnd {
+                transaction_id,
+                producer_id,
+                producer_epoch,
+                committed,
+            },
+        )
+        .await
+        .and_then(|response| {
+            if let Response::TxnEnd(inner) = response {
+                inner.map_err(Into::into)
+            } else {
+                Err(Error::UnexpectedServiceResponse(Box::new(response)).into())
+            }
+        })
+        .map_err(Into::into)
+    }
+
+    async fn maintain(&self) -> Result<()> {
+        self.serve(Context::default(), Request::Maintain)
+            .await
+            .and_then(|response| {
+                if let Response::Maintain(inner) = response {
+                    inner.map_err(Into::into)
+                } else {
+                    Err(Error::UnexpectedServiceResponse(Box::new(response)).into())
+                }
+            })
+            .map_err(Into::into)
+    }
+
+    async fn cluster_id(&self) -> Result<String> {
+        self.serve(Context::default(), Request::ClusterId)
+            .await
+            .and_then(|response| {
+                if let Response::ClusterId(inner) = response {
+                    inner.map_err(Into::into)
+                } else {
+                    Err(Error::UnexpectedServiceResponse(Box::new(response)).into())
+                }
+            })
+            .map_err(Into::into)
+    }
+
+    async fn node(&self) -> Result<i32> {
+        self.serve(Context::default(), Request::Node)
+            .await
+            .and_then(|response| {
+                if let Response::Node(inner) = response {
+                    inner.map_err(Into::into)
+                } else {
+                    Err(Error::UnexpectedServiceResponse(Box::new(response)).into())
+                }
+            })
+            .map_err(Into::into)
+    }
+
+    async fn advertised_listener(&self) -> Result<Url> {
+        self.serve(Context::default(), Request::AdvertisedLister)
+            .await
+            .and_then(|response| {
+                if let Response::AdvertisedListener(inner) = response {
+                    inner.map_err(Into::into)
+                } else {
+                    Err(Error::UnexpectedServiceResponse(Box::new(response)).into())
+                }
+            })
+            .map_err(Into::into)
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ChannelRequestLayer {
+    cancellation: CancellationToken,
+}
+
+impl ChannelRequestLayer {
+    pub fn new(cancellation: CancellationToken) -> Self {
+        Self { cancellation }
+    }
+}
+
+impl<S> Layer<S> for ChannelRequestLayer {
+    type Service = ChannelRequestService<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        Self::Service {
+            inner,
+            cancellation: self.cancellation.clone(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -190,12 +963,11 @@ pub struct ChannelRequestService<S> {
 
 impl<S, State> Service<State, RequestReceiver> for ChannelRequestService<S>
 where
-    S: Service<State, Request, Response = Response>,
+    S: Service<State, Request, Response = Response, Error = Error>,
     State: Clone + Send + Sync + 'static,
-    S::Error: From<Error>,
 {
     type Response = ();
-    type Error = S::Error;
+    type Error = Error;
 
     async fn serve(
         &self,
@@ -204,17 +976,15 @@ where
     ) -> Result<Self::Response, Self::Error> {
         loop {
             tokio::select! {
-                Some((req, tx)) = req.recv() => {
-                    debug!(?req, ?tx);
+                Some((request, tx)) = req.recv() => {
+                    debug!(?request, ?tx);
 
                     self.inner
-                        .serve(ctx.clone(), req)
-                        .await
-                        .and_then(|response| {
-                            tx.send(response)
-                                .map_err(|_unsent| Error::UnableToSend)
-                                .map_err(Into::into)
-                        })?
+                    .serve(ctx.clone(), request)
+                    .await
+                    .and_then(|response| {
+                        tx.send(response).map_err(|_unsent| Error::UnableToSend)
+                    })?
                 }
 
                 cancelled = self.cancellation.cancelled() => {
@@ -228,17 +998,26 @@ where
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct RequestChannelService {
-    tx: RequestSender,
+#[derive(Copy, Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct RequestStorageService<G> {
+    storage: G,
 }
 
-impl<State> Service<State, Request> for RequestChannelService
+impl<G> RequestStorageService<G>
 where
-    State: Send + Sync + 'static,
+    G: Storage,
+{
+    pub fn new(storage: G) -> Self {
+        Self { storage }
+    }
+}
+
+impl<G, State> Service<State, Request> for RequestStorageService<G>
+where
+    G: Storage,
+    State: Clone + Send + Sync + 'static,
 {
     type Response = Response;
-
     type Error = Error;
 
     async fn serve(
@@ -246,207 +1025,179 @@ where
         _ctx: Context<State>,
         req: Request,
     ) -> Result<Self::Response, Self::Error> {
-        let (resp_tx, resp_rx) = oneshot::channel();
-
-        self.tx
-            .send((req, resp_tx))
-            .await
-            .map_err(|_send_error| Error::UnableToSend)?;
-
-        resp_rx.await.map_err(|_| Error::OneshotRecv)
-    }
-}
-
-pub struct RequestRouteService<State> {
-    add_offsets_to_txn:
-        Option<BoxService<State, AddOffsetsToTxnRequest, AddOffsetsToTxnResponse, Error>>,
-    add_partitions_to_txn:
-        Option<BoxService<State, AddPartitionsToTxnRequest, AddPartitionsToTxnResponse, Error>>,
-    consumer_group_describe: Option<
-        BoxService<State, ConsumerGroupDescribeRequest, ConsumerGroupDescribeResponse, Error>,
-    >,
-    create_topics: BoxService<State, CreateTopicsRequest, CreateTopicsResponse, Error>,
-    delete_groups: BoxService<State, DeleteGroupsRequest, DeleteGroupsResponse, Error>,
-    delete_records: BoxService<State, DeleteRecordsRequest, DeleteRecordsResponse, Error>,
-    delete_topics: BoxService<State, DeleteTopicsRequest, DeleteTopicsResponse, Error>,
-    describe_cluster: BoxService<State, DescribeClusterRequest, DescribeClusterResponse, Error>,
-    describe_configs: BoxService<State, DescribeConfigsRequest, DescribeConfigsResponse, Error>,
-    describe_groups: BoxService<State, DescribeGroupsRequest, DescribeGroupsResponse, Error>,
-    describe_topic_partitions:
-        BoxService<State, DescribeTopicPartitionsRequest, DescribeTopicPartitionsResponse, Error>,
-    fetch: BoxService<State, FetchRequest, FetchResponse, Error>,
-    find_coordinator: BoxService<State, FindCoordinatorRequest, FindCoordinatorResponse, Error>,
-    get_telemetry_subscriptions: BoxService<
-        State,
-        GetTelemetrySubscriptionsRequest,
-        GetTelemetrySubscriptionsResponse,
-        Error,
-    >,
-    incremental_alter_configs:
-        BoxService<State, IncrementalAlterConfigsRequest, IncrementalAlterConfigsResponse, Error>,
-    init_producer_id: BoxService<State, InitProducerIdRequest, InitProducerIdResponse, Error>,
-    list_groups: BoxService<State, ListGroupsRequest, ListGroupsResponse, Error>,
-    list_offsets: BoxService<State, ListOffsetsRequest, ListOffsetsResponse, Error>,
-    list_partition_reassignments: BoxService<
-        State,
-        ListPartitionReassignmentsRequest,
-        ListPartitionReassignmentsResponse,
-        Error,
-    >,
-    metadata: BoxService<State, MetadataRequest, MetadataResponse, Error>,
-    produce: BoxService<State, ProduceRequest, ProduceResponse, Error>,
-    txn_offset_commit: BoxService<State, TxnOffsetCommitRequest, TxnOffsetCommitResponse, Error>,
-}
-
-impl<State> Service<State, Request> for RequestRouteService<State>
-where
-    State: Send + Sync + 'static,
-{
-    type Response = Response;
-    type Error = Error;
-
-    async fn serve(
-        &self,
-        ctx: Context<State>,
-        req: Request,
-    ) -> Result<Self::Response, Self::Error> {
         match req {
-            Request::AddOffsetsToTxn(req) => {
-                if let Some(ref service) = self.add_offsets_to_txn {
-                    service.serve(ctx, req).await.map(Response::AddOffsetsToTxn)
-                } else {
-                    Ok(Response::AddOffsetsToTxn(
-                        AddOffsetsToTxnResponse::default()
-                            .error_code(ErrorCode::UnknownServerError.into()),
-                    ))
-                }
+            Request::RegisterBroker(broker_registration) => Ok(Response::RegisterBroker(
+                self.storage.register_broker(broker_registration).await,
+            )),
+            Request::IncrementalAlterResource(alter_configs_resource) => {
+                Ok(Response::IncrementalAlterResponse(
+                    self.storage
+                        .incremental_alter_resource(alter_configs_resource)
+                        .await,
+                ))
             }
-            Request::AddPartitionsToTxn(req) => {
-                if let Some(ref service) = self.add_partitions_to_txn {
-                    service
-                        .serve(ctx, req)
-                        .await
-                        .map(Response::AddPartitionsToTxn)
-                } else {
-                    Ok(Response::AddPartitionsToTxn(
-                        AddPartitionsToTxnResponse::default()
-                            .error_code(Some(ErrorCode::UnknownServerError.into())),
-                    ))
-                }
+            Request::CreateTopic {
+                topic,
+                validate_only,
+            } => Ok(Response::CreateTopic(
+                self.storage.create_topic(topic, validate_only).await,
+            )),
+            Request::DeleteRecords(delete_records_topics) => Ok(Response::DeleteRecords(
+                self.storage
+                    .delete_records(&delete_records_topics[..])
+                    .await,
+            )),
+            Request::DeleteTopic(topic_id) => Ok(Response::DeleteTopic(
+                self.storage.delete_topic(&topic_id).await,
+            )),
+            Request::Brokers => Ok(Response::Brokers(self.storage.brokers().await)),
+            Request::Produce {
+                transaction_id,
+                topition,
+                batch,
+            } => Ok(Response::Produce(
+                self.storage
+                    .produce(transaction_id.as_deref(), &topition, batch)
+                    .await,
+            )),
+            Request::Fetch {
+                topition,
+                offset,
+                min_bytes,
+                max_bytes,
+                isolation,
+            } => Ok(Response::Fetch(
+                self.storage
+                    .fetch(&topition, offset, min_bytes, max_bytes, isolation)
+                    .await,
+            )),
+            Request::OffsetStage(topition) => Ok(Response::OffsetStage(
+                self.storage.offset_stage(&topition).await,
+            )),
+            Request::ListOffsets {
+                isolation_level,
+                offsets,
+            } => Ok(Response::ListOffsets(
+                self.storage
+                    .list_offsets(isolation_level, &offsets[..])
+                    .await,
+            )),
+            Request::OffsetCommit {
+                group_id,
+                retention_time_ms,
+                offsets,
+            } => Ok(Response::OffsetCommit(
+                self.storage
+                    .offset_commit(&group_id, retention_time_ms, &offsets[..])
+                    .await,
+            )),
+            Request::CommittedOffsetTopitions(group_id) => Ok(Response::CommittedOffsetTopitions(
+                self.storage.committed_offset_topitions(&group_id).await,
+            )),
+            Request::OffsetFetch {
+                group_id,
+                topics,
+                require_stable,
+            } => Ok(Response::OffsetFetch(
+                self.storage
+                    .offset_fetch(group_id.as_deref(), &topics[..], require_stable)
+                    .await,
+            )),
+            Request::Metadata(topic_ids) => Ok(Response::Metadata(
+                self.storage.metadata(topic_ids.as_deref()).await,
+            )),
+            Request::DescribeConfig {
+                name,
+                resource,
+                keys,
+            } => Ok(Response::DescribeConfig(
+                self.storage
+                    .describe_config(&name, resource, keys.as_deref())
+                    .await,
+            )),
+            Request::DescribeTopicPartitions {
+                topics,
+                partition_limit,
+                cursor,
+            } => Ok(Response::DescribeTopicPartitions(
+                self.storage
+                    .describe_topic_partitions(topics.as_deref(), partition_limit, cursor)
+                    .await,
+            )),
+            Request::ListGroups(items) => Ok(Response::ListGroups(
+                self.storage.list_groups(items.as_deref()).await,
+            )),
+            Request::DeleteGroups(items) => Ok(Response::DeleteGroups(
+                self.storage.delete_groups(items.as_deref()).await,
+            )),
+            Request::DescribeGroups {
+                group_ids,
+                include_authorized_operations,
+            } => Ok(Response::DescribeGroups(
+                self.storage
+                    .describe_groups(group_ids.as_deref(), include_authorized_operations)
+                    .await,
+            )),
+            Request::UpdateGroup {
+                group_id,
+                detail,
+                version,
+            } => Ok(Response::UpdateGroup(
+                self.storage.update_group(&group_id, detail, version).await,
+            )),
+            Request::InitProducer {
+                transaction_id,
+                transaction_timeout_ms,
+                producer_id,
+                producer_epoch,
+            } => Ok(Response::InitProducer(
+                self.storage
+                    .init_producer(
+                        transaction_id.as_deref(),
+                        transaction_timeout_ms,
+                        producer_id,
+                        producer_epoch,
+                    )
+                    .await,
+            )),
+            Request::TxnAddOffsets {
+                transaction_id,
+                producer_id,
+                producer_epoch,
+                group_id,
+            } => Ok(Response::TxnAddOffsets(
+                self.storage
+                    .txn_add_offsets(&transaction_id, producer_id, producer_epoch, &group_id)
+                    .await,
+            )),
+            Request::TxnAddPartitions(txn_add_partitions_request) => {
+                Ok(Response::TxnAddPartitions(
+                    self.storage
+                        .txn_add_partitions(txn_add_partitions_request)
+                        .await,
+                ))
             }
-            Request::ConsumerGroupDescribe(req) => {
-                if let Some(ref service) = self.consumer_group_describe {
-                    service
-                        .serve(ctx, req)
-                        .await
-                        .map(Response::ConsumerGroupDescribe)
-                } else {
-                    Ok(Response::ConsumerGroupDescribe(
-                        ConsumerGroupDescribeResponse::default().groups(Some(
-                            req.group_ids
-                                .unwrap_or_default()
-                                .iter()
-                                .map(|group_id| DescribedGroup::default())
-                                .collect::<Vec<_>>(),
-                        )),
-                    ))
-                }
-            }
-            Request::CreateTopics(create_topics_request) => self
-                .create_topics
-                .serve(ctx, create_topics_request)
-                .await
-                .map(Response::CreateTopics),
-            Request::DeleteGroups(delete_groups_request) => self
-                .delete_groups
-                .serve(ctx, delete_groups_request)
-                .await
-                .map(Response::DeleteGroups),
-            Request::DeleteRecords(delete_records_request) => self
-                .delete_records
-                .serve(ctx, delete_records_request)
-                .await
-                .map(Response::DeleteRecords),
-            Request::DeleteTopics(delete_topics_request) => self
-                .delete_topics
-                .serve(ctx, delete_topics_request)
-                .await
-                .map(Response::DeleteTopics),
-            Request::DescribeCluster(describe_cluster_request) => self
-                .describe_cluster
-                .serve(ctx, describe_cluster_request)
-                .await
-                .map(Response::DescribeCluster),
-            Request::DescribeConfigs(describe_configs_request) => self
-                .describe_configs
-                .serve(ctx, describe_configs_request)
-                .await
-                .map(Response::DescribeConfigs),
-            Request::DescribeGroups(describe_groups_request) => self
-                .describe_groups
-                .serve(ctx, describe_groups_request)
-                .await
-                .map(Response::DescribeGroups),
-            Request::DescribeTopicPartitions(describe_topic_partitions_request) => self
-                .describe_topic_partitions
-                .serve(ctx, describe_topic_partitions_request)
-                .await
-                .map(Response::DescribeTopicPartitions),
-            Request::Fetch(fetch_request) => self
-                .fetch
-                .serve(ctx, fetch_request)
-                .await
-                .map(Response::Fetch),
-            Request::FindCoordinator(find_coordinator_request) => self
-                .find_coordinator
-                .serve(ctx, find_coordinator_request)
-                .await
-                .map(Response::FindCoordinator),
-            Request::GetTelemetrySubscriptions(get_telemetry_subscriptions_request) => self
-                .get_telemetry_subscriptions
-                .serve(ctx, get_telemetry_subscriptions_request)
-                .await
-                .map(Response::GetTelemetrySubscriptions),
-            Request::IncrementalAlterConfigs(incremental_alter_configs_request) => self
-                .incremental_alter_configs
-                .serve(ctx, incremental_alter_configs_request)
-                .await
-                .map(Response::IncrementalAlterConfigs),
-            Request::InitProducerId(init_producer_id_request) => self
-                .init_producer_id
-                .serve(ctx, init_producer_id_request)
-                .await
-                .map(Response::InitProducerId),
-            Request::ListGroups(list_groups_request) => self
-                .list_groups
-                .serve(ctx, list_groups_request)
-                .await
-                .map(Response::ListGroups),
-            Request::ListOffsets(list_offsets_request) => self
-                .list_offsets
-                .serve(ctx, list_offsets_request)
-                .await
-                .map(Response::ListOffsets),
-            Request::ListPartitionReassignments(list_partition_reassignments_request) => self
-                .list_partition_reassignments
-                .serve(ctx, list_partition_reassignments_request)
-                .await
-                .map(Response::ListPartitionReassignments),
-            Request::Metadata(metadata_request) => self
-                .metadata
-                .serve(ctx, metadata_request)
-                .await
-                .map(Response::Metadata),
-            Request::Produce(produce_request) => self
-                .produce
-                .serve(ctx, produce_request)
-                .await
-                .map(Response::Produce),
-            Request::TxnOffsetCommit(txn_offset_commit_request) => self
-                .txn_offset_commit
-                .serve(ctx, txn_offset_commit_request)
-                .await
-                .map(Response::TxnOffsetCommit),
+            Request::TxnOffsetCommit(txn_offset_commit_request) => Ok(Response::TxnOffsetCommit(
+                self.storage
+                    .txn_offset_commit(txn_offset_commit_request)
+                    .await,
+            )),
+            Request::TxnEnd {
+                transaction_id,
+                producer_id,
+                producer_epoch,
+                committed,
+            } => Ok(Response::TxnEnd(
+                self.storage
+                    .txn_end(&transaction_id, producer_id, producer_epoch, committed)
+                    .await,
+            )),
+            Request::Maintain => Ok(Response::Maintain(self.storage.maintain().await)),
+            Request::ClusterId => Ok(Response::ClusterId(self.storage.cluster_id().await)),
+            Request::Node => Ok(Response::Node(self.storage.node().await)),
+            Request::AdvertisedLister => Ok(Response::AdvertisedListener(
+                self.storage.advertised_listener().await,
+            )),
         }
     }
 }
