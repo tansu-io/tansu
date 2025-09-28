@@ -62,3 +62,5 @@ uuid.workspace = true
 
 [dev-dependencies]
 pretty_assertions.workspace = true
+tansu-schema = { workspace = true, features = ["delta", "iceberg", "parquet"] }
+tansu-storage = { workspace = true, features = ["delta", "dynostore", "iceberg", "libsql", "parquet", "parquet", "postgres", "turso"] }

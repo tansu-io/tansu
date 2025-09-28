@@ -74,7 +74,7 @@ use tansu_sans_io::{
 };
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
-use tracing::debug;
+use tracing::{debug, instrument};
 pub use txn::add_offsets::AddOffsetsService as TxnAddOffsetsService;
 pub use txn::add_partitions::AddPartitionService as TxnAddPartitionService;
 pub use txn::offset_commit::OffsetCommitService as TxnOffsetCommitService;
@@ -312,13 +312,13 @@ where
     type Response = Response;
     type Error = ServiceError;
 
+    #[instrument(skip(ctx), ret)]
     async fn serve(
         &self,
-        _ctx: Context<State>,
+        ctx: Context<State>,
         req: Request,
     ) -> Result<Self::Response, Self::Error> {
-        debug!(?req);
-
+        let _ = ctx;
         let (resp_tx, resp_rx) = oneshot::channel();
 
         self.tx
@@ -332,6 +332,7 @@ where
 
 #[async_trait]
 impl Storage for RequestChannelService {
+    #[instrument(ret)]
     async fn register_broker(&self, broker_registration: BrokerRegistrationRequest) -> Result<()> {
         self.serve(
             Context::default(),
@@ -348,6 +349,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
+    #[instrument(ret)]
     async fn incremental_alter_resource(
         &self,
         resource: AlterConfigsResource,
@@ -367,6 +369,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
+    #[instrument(ret)]
     async fn create_topic(&self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {
         self.serve(
             Context::default(),
@@ -386,6 +389,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
+    #[instrument(ret)]
     async fn delete_records(
         &self,
         topics: &[DeleteRecordsTopic],
@@ -405,6 +409,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
+    #[instrument(ret)]
     async fn delete_topic(&self, topic: &TopicId) -> Result<ErrorCode> {
         self.serve(Context::default(), Request::DeleteTopic(topic.to_owned()))
             .await
@@ -418,6 +423,7 @@ impl Storage for RequestChannelService {
             .map_err(Into::into)
     }
 
+    #[instrument(ret)]
     async fn brokers(&self) -> Result<Vec<DescribeClusterBroker>> {
         self.serve(Context::default(), Request::Brokers)
             .await
@@ -431,6 +437,7 @@ impl Storage for RequestChannelService {
             .map_err(Into::into)
     }
 
+    #[instrument(ret)]
     async fn produce(
         &self,
         transaction_id: Option<&str>,
@@ -459,6 +466,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
+    #[instrument(ret)]
     async fn fetch(
         &self,
         topition: &'_ Topition,
@@ -490,6 +498,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
+    #[instrument(ret)]
     async fn offset_stage(&self, topition: &Topition) -> Result<OffsetStage> {
         self.serve(
             Context::default(),
@@ -506,6 +515,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
+    #[instrument(ret)]
     async fn list_offsets(
         &self,
         isolation_level: IsolationLevel,
@@ -531,6 +541,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
+    #[instrument(ret)]
     async fn offset_commit(
         &self,
         group_id: &str,
@@ -559,6 +570,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
+    #[instrument(ret)]
     async fn committed_offset_topitions(&self, group_id: &str) -> Result<BTreeMap<Topition, i64>> {
         let group_id = group_id.to_string();
 
@@ -577,6 +589,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
+    #[instrument(ret)]
     async fn offset_fetch(
         &self,
         group_id: Option<&str>,
@@ -605,6 +618,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
+    #[instrument(ret)]
     async fn metadata(&self, topics: Option<&[TopicId]>) -> Result<MetadataResponse> {
         let topics = topics.map(Vec::from);
 
@@ -620,6 +634,7 @@ impl Storage for RequestChannelService {
             .map_err(Into::into)
     }
 
+    #[instrument(ret)]
     async fn describe_config(
         &self,
         name: &str,
@@ -648,6 +663,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
+    #[instrument(ret)]
     async fn describe_topic_partitions(
         &self,
         topics: Option<&[TopicId]>,
@@ -675,6 +691,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
+    #[instrument(ret)]
     async fn list_groups(&self, states_filter: Option<&[String]>) -> Result<Vec<ListedGroup>> {
         let states_filter = states_filter.map(Vec::from);
 
@@ -690,6 +707,7 @@ impl Storage for RequestChannelService {
             .map_err(Into::into)
     }
 
+    #[instrument(ret)]
     async fn delete_groups(
         &self,
         group_ids: Option<&[String]>,
@@ -708,6 +726,7 @@ impl Storage for RequestChannelService {
             .map_err(Into::into)
     }
 
+    #[instrument(ret)]
     async fn describe_groups(
         &self,
         group_ids: Option<&[String]>,
@@ -733,6 +752,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
+    #[instrument(ret)]
     async fn update_group(
         &self,
         group_id: &str,
@@ -760,6 +780,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
+    #[instrument(ret)]
     async fn init_producer(
         &self,
         transaction_id: Option<&str>,
@@ -789,6 +810,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
+    #[instrument(ret)]
     async fn txn_add_offsets(
         &self,
         transaction_id: &str,
@@ -819,6 +841,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
+    #[instrument(ret)]
     async fn txn_add_partitions(
         &self,
         partitions: TxnAddPartitionsRequest,
@@ -835,6 +858,7 @@ impl Storage for RequestChannelService {
             .map_err(Into::into)
     }
 
+    #[instrument(ret)]
     async fn txn_offset_commit(
         &self,
         offsets: TxnOffsetCommitRequest,
@@ -851,6 +875,7 @@ impl Storage for RequestChannelService {
             .map_err(Into::into)
     }
 
+    #[instrument(ret)]
     async fn txn_end(
         &self,
         transaction_id: &str,
@@ -880,6 +905,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
+    #[instrument(ret)]
     async fn maintain(&self) -> Result<()> {
         self.serve(Context::default(), Request::Maintain)
             .await
@@ -893,6 +919,7 @@ impl Storage for RequestChannelService {
             .map_err(Into::into)
     }
 
+    #[instrument(ret)]
     async fn cluster_id(&self) -> Result<String> {
         self.serve(Context::default(), Request::ClusterId)
             .await
@@ -906,6 +933,7 @@ impl Storage for RequestChannelService {
             .map_err(Into::into)
     }
 
+    #[instrument(ret)]
     async fn node(&self) -> Result<i32> {
         self.serve(Context::default(), Request::Node)
             .await
@@ -919,6 +947,7 @@ impl Storage for RequestChannelService {
             .map_err(Into::into)
     }
 
+    #[instrument(ret)]
     async fn advertised_listener(&self) -> Result<Url> {
         self.serve(Context::default(), Request::AdvertisedLister)
             .await
