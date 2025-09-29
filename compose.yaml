@@ -64,6 +64,7 @@ services:
       AWS_ALLOW_HTTP: ${AWS_ALLOW_HTTP}
     volumes:
       - ./etc/schema/:/schema/
+      - ./data:/data/
     command: |
       --kafka-cluster-id ${CLUSTER_ID}
       --kafka-listener-url tcp://0.0.0.0:9092/

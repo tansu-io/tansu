@@ -80,7 +80,7 @@ pub async fn lake_store(
     ));
 
     let table = catalog
-        .load_table(&TableIdent::from_strs([&namespace, topic])?)
+        .load_table(&TableIdent::from_strs([namespace, topic])?)
         .await?;
 
     let table_provider = IcebergTableProvider::try_new_from_table(table)

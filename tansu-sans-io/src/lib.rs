@@ -1367,7 +1367,9 @@ pub enum ErrorCode {
     InvalidRegistration,
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Copy, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize,
+)]
 /// The fetch isolation level.
 pub enum IsolationLevel {
     #[default]

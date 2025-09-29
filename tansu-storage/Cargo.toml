@@ -20,7 +20,7 @@ include = [
 ]
 
 [features]
-default = ["delta", "dynostore", "iceberg", "libsql", "postgres"]
+default = []
 delta = []
 dynostore = ["dep:object_store"]
 iceberg = []
@@ -57,6 +57,7 @@ tansu-sans-io.workspace = true
 tansu-schema.workspace = true
 thiserror.workspace = true
 tokio-postgres = { workspace = true, optional = true }
+tokio-util.workspace = true
 tokio.workspace = true
 tracing-subscriber.workspace = true
 tracing.workspace = true
@@ -68,6 +69,7 @@ uuid.workspace = true
 assert_matches.workspace = true
 criterion.workspace = true
 pretty_assertions.workspace = true
+tansu-schema = { workspace = true, features = ["delta", "iceberg", "parquet"] }
 tempfile.workspace = true
 time.workspace = true
 tracing-subscriber.workspace = true

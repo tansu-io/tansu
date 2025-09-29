@@ -69,7 +69,7 @@ async fn simple_txn_commit() -> Result<()> {
     let cluster_id = Uuid::now_v7();
     let broker_id = rng.random_range(0..i32::MAX);
 
-    let mut sc = storage_container(
+    let sc = storage_container(
         StorageType::Postgres,
         cluster_id,
         broker_id,
@@ -78,7 +78,7 @@ async fn simple_txn_commit() -> Result<()> {
     )
     .await?;
 
-    register_broker(cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, &sc).await?;
 
     let input_topic_name: String = alphanumeric_string(15);
     debug!(?input_topic_name);

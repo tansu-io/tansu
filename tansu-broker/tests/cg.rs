@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::slice;
+
 use common::{StorageType, alphanumeric_string, init_tracing, register_broker};
 use rand::{prelude::*, rng};
 use tansu_broker::Result;
@@ -26,9 +28,9 @@ pub mod common;
 pub async fn offset_commit(
     cluster_id: impl Into<String>,
     broker_id: i32,
-    mut sc: StorageContainer,
+    sc: StorageContainer,
 ) -> Result<()> {
-    register_broker(cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, &sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -73,7 +75,7 @@ pub async fn offset_commit(
     assert_eq!(ErrorCode::None, commit[0].1);
 
     let offset_fetch = sc
-        .offset_fetch(Some(&group_id), &[topition.clone()], None)
+        .offset_fetch(Some(&group_id), slice::from_ref(&topition), None)
         .await?;
     assert!(offset_fetch.contains_key(&topition));
     assert_eq!(Some(&offset), offset_fetch.get(&topition));
@@ -92,9 +94,9 @@ pub async fn offset_commit(
 pub async fn topic_delete_cascade_to_offset_commit(
     cluster_id: impl Into<String>,
     broker_id: i32,
-    mut sc: StorageContainer,
+    sc: StorageContainer,
 ) -> Result<()> {
-    register_broker(cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, &sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -139,7 +141,7 @@ pub async fn topic_delete_cascade_to_offset_commit(
     assert_eq!(ErrorCode::None, commit[0].1);
 
     let offset_fetch = sc
-        .offset_fetch(Some(&group_id), &[topition.clone()], None)
+        .offset_fetch(Some(&group_id), slice::from_ref(&topition), None)
         .await?;
     assert!(offset_fetch.contains_key(&topition));
     assert_eq!(Some(&offset), offset_fetch.get(&topition));
@@ -147,7 +149,7 @@ pub async fn topic_delete_cascade_to_offset_commit(
     assert_eq!(ErrorCode::None, sc.delete_topic(&topic_name.into()).await?);
 
     let offset_fetch = sc
-        .offset_fetch(Some(&group_id), &[topition.clone()], None)
+        .offset_fetch(Some(&group_id), slice::from_ref(&topition), None)
         .await?;
     assert!(offset_fetch.contains_key(&topition));
     assert_eq!(Some(&-1), offset_fetch.get(&topition));
@@ -158,9 +160,9 @@ pub async fn topic_delete_cascade_to_offset_commit(
 pub async fn consumer_group_delete_cascade_to_offset_commit(
     cluster_id: impl Into<String>,
     broker_id: i32,
-    mut sc: StorageContainer,
+    sc: StorageContainer,
 ) -> Result<()> {
-    register_broker(cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, &sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -205,18 +207,18 @@ pub async fn consumer_group_delete_cascade_to_offset_commit(
     assert_eq!(ErrorCode::None, commit[0].1);
 
     let offset_fetch = sc
-        .offset_fetch(Some(&group_id), &[topition.clone()], None)
+        .offset_fetch(Some(&group_id), slice::from_ref(&topition), None)
         .await?;
     assert!(offset_fetch.contains_key(&topition));
     assert_eq!(Some(&offset), offset_fetch.get(&topition));
 
-    let deleted = sc.delete_groups(Some(&[group_id.clone()])).await?;
+    let deleted = sc.delete_groups(Some(slice::from_ref(&group_id))).await?;
     assert_eq!(1, deleted.len());
     assert_eq!(group_id, deleted[0].group_id);
     assert_eq!(ErrorCode::None, ErrorCode::try_from(deleted[0].error_code)?);
 
     let offset_fetch = sc
-        .offset_fetch(Some(&group_id), &[topition.clone()], None)
+        .offset_fetch(Some(&group_id), slice::from_ref(&topition), None)
         .await?;
     assert!(offset_fetch.contains_key(&topition));
     assert_eq!(Some(&-1), offset_fetch.get(&topition));
@@ -227,13 +229,13 @@ pub async fn consumer_group_delete_cascade_to_offset_commit(
 pub async fn delete_unknown_consumer_group(
     cluster_id: impl Into<String>,
     broker_id: i32,
-    mut sc: StorageContainer,
+    sc: StorageContainer,
 ) -> Result<()> {
-    register_broker(cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, &sc).await?;
 
     let group_id: String = alphanumeric_string(15);
 
-    let deleted = sc.delete_groups(Some(&[group_id.clone()])).await?;
+    let deleted = sc.delete_groups(Some(slice::from_ref(&group_id))).await?;
     assert_eq!(1, deleted.len());
     assert_eq!(group_id, deleted[0].group_id);
     assert_eq!(
@@ -247,9 +249,9 @@ pub async fn delete_unknown_consumer_group(
 pub async fn offset_commit_unknown_topition(
     cluster_id: impl Into<String>,
     broker_id: i32,
-    mut sc: StorageContainer,
+    sc: StorageContainer,
 ) -> Result<()> {
-    register_broker(cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, &sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -278,7 +280,7 @@ pub async fn offset_commit_unknown_topition(
     assert_eq!(ErrorCode::UnknownTopicOrPartition, commit[0].1);
 
     let offset_fetch = sc
-        .offset_fetch(Some(&group_id), &[topition.clone()], None)
+        .offset_fetch(Some(&group_id), slice::from_ref(&topition), None)
         .await?;
     assert!(offset_fetch.contains_key(&topition));
     assert_eq!(Some(&-1), offset_fetch.get(&topition));
@@ -292,9 +294,9 @@ pub async fn offset_commit_unknown_topition(
 pub async fn offset_fetch_unknown_topition(
     cluster_id: impl Into<String>,
     broker_id: i32,
-    mut sc: StorageContainer,
+    sc: StorageContainer,
 ) -> Result<()> {
-    register_broker(cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, &sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -307,7 +309,7 @@ pub async fn offset_fetch_unknown_topition(
     let group_id: String = alphanumeric_string(15);
 
     let offset_fetch = sc
-        .offset_fetch(Some(&group_id), &[topition.clone()], None)
+        .offset_fetch(Some(&group_id), slice::from_ref(&topition), None)
         .await?;
     assert!(offset_fetch.contains_key(&topition));
     assert_eq!(Some(&-1), offset_fetch.get(&topition));
@@ -321,9 +323,9 @@ pub async fn offset_fetch_unknown_topition(
 pub async fn list_groups_none(
     cluster_id: impl Into<String>,
     broker_id: i32,
-    mut sc: StorageContainer,
+    sc: StorageContainer,
 ) -> Result<()> {
-    register_broker(cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, &sc).await?;
 
     let groups = sc.list_groups(None).await?;
     assert_eq!(0, groups.len());

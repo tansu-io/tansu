@@ -81,7 +81,7 @@ where
         let brokers = ctx.state().brokers().await?;
         debug!(?brokers);
 
-        let cluster_id = ctx.state().cluster_id()?;
+        let cluster_id = ctx.state().cluster_id().await?;
 
         Ok(DescribeClusterResponse::default()
             .throttle_time_ms(0)

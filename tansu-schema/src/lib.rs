@@ -66,9 +66,6 @@ use tracing::debug;
 use tracing_subscriber::filter::ParseError;
 use url::Url;
 
-#[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
-use crate::lake::LakeHouseType;
-
 pub mod avro;
 pub mod json;
 
@@ -110,17 +107,17 @@ pub enum Error {
     DataFileBuilder(#[from] DataFileBuilderError),
 
     #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
-    DataFusion(#[from] DataFusionError),
+    DataFusion(Box<DataFusionError>),
 
     #[cfg(feature = "delta")]
-    DeltaTable(#[from] DeltaTableError),
+    DeltaTable(Box<DeltaTableError>),
 
     Downcast,
 
     FromUtf8(#[from] FromUtf8Error),
 
     #[cfg(feature = "iceberg")]
-    Iceberg(#[from] ::iceberg::Error),
+    Iceberg(Box<::iceberg::Error>),
 
     InvalidValue(apache_avro::types::Value),
 
@@ -189,6 +186,27 @@ impl Display for Error {
     }
 }
 
+#[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
+impl From<DataFusionError> for Error {
+    fn from(value: DataFusionError) -> Self {
+        Self::DataFusion(Box::new(value))
+    }
+}
+
+#[cfg(feature = "iceberg")]
+impl From<::iceberg::Error> for Error {
+    fn from(value: ::iceberg::Error) -> Self {
+        Self::Iceberg(Box::new(value))
+    }
+}
+
+#[cfg(feature = "delta")]
+impl From<DeltaTableError> for Error {
+    fn from(value: DeltaTableError) -> Self {
+        Self::DeltaTable(Box::new(value))
+    }
+}
+
 impl From<apache_avro::Error> for Error {
     fn from(value: apache_avro::Error) -> Self {
         Self::Avro(Box::new(value))
@@ -221,7 +239,7 @@ pub trait AsArrow {
         &self,
         partition: i32,
         batch: &Batch,
-        lake_type: LakeHouseType,
+        lake_type: lake::LakeHouseType,
     ) -> Result<RecordBatch>;
 }
 
@@ -295,7 +313,7 @@ impl AsArrow for Schema {
         &self,
         partition: i32,
         batch: &Batch,
-        lake_type: LakeHouseType,
+        lake_type: lake::LakeHouseType,
     ) -> Result<RecordBatch> {
         debug!(?batch);
 
@@ -463,7 +481,7 @@ impl Registry {
         topic: &str,
         partition: i32,
         batch: &Batch,
-        lake_type: LakeHouseType,
+        lake_type: lake::LakeHouseType,
     ) -> Result<Option<RecordBatch>> {
         debug!(topic, partition, ?batch);
 
@@ -752,6 +770,37 @@ mod tests {
 
         registry.validate("pqr", &batch).await?;
 
+        Ok(())
+    }
+
+    #[test]
+    fn error_size_of() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        debug!(error = size_of::<Error>());
+        debug!(anyhow = size_of::<anyhow::Error>());
+        debug!(arrow = size_of::<ArrowError>());
+        debug!(avro_to_json = size_of::<apache_avro::types::Value>());
+        debug!(data_file_builder = size_of::<DataFileBuilderError>());
+        debug!(data_fusion = size_of::<Box<DataFusionError>>());
+        debug!(delta_table = size_of::<Box<DeltaTableError>>());
+        debug!(iceberg = size_of::<Box<::iceberg::Error>>());
+        debug!(sans_io = size_of::<tansu_sans_io::Error>());
+        debug!(object_store = size_of::<object_store::Error>());
+
+        #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
+        debug!(parquet = size_of::<ParquetError>());
+
+        debug!(parse_filter = size_of::<ParseError>());
+        debug!(protobuf_json_mapping = size_of::<protobuf_json_mapping::ParseError>());
+        debug!(protobuf_json_mapping_print = size_of::<protobuf_json_mapping::PrintError>());
+        debug!(protobuf = size_of::<protobuf::Error>());
+        debug!(serde_json = size_of::<serde_json::Error>());
+        debug!(sql_parser = size_of::<datafusion::logical_expr::sqlparser::parser::ParserError>());
+        debug!(try_from_int = size_of::<TryFromIntError>());
+        debug!(url = size_of::<Url>());
+        debug!(unsupported_schema_runtime_value = size_of::<(DataType, serde_json::Value)>());
+        debug!(uuid = size_of::<uuid::Error>());
         Ok(())
     }
 }

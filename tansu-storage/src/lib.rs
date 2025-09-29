@@ -182,6 +182,7 @@ use tansu_sans_io::{
     txn_offset_commit_response::TxnOffsetCommitResponseTopic,
 };
 use tansu_schema::Registry;
+use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, debug, debug_span};
 use tracing_subscriber::filter::ParseError;
 use url::Url;
@@ -192,15 +193,20 @@ mod dynostore;
 
 #[cfg(feature = "postgres")]
 mod pg;
+
+mod proxy;
 mod service;
 
 pub use service::{
-    ConsumerGroupDescribeService, CreateTopicsService, DeleteGroupsService, DeleteRecordsService,
-    DeleteTopicsService, DescribeClusterService, DescribeConfigsService, DescribeGroupsService,
-    DescribeTopicPartitionsService, FetchService, FindCoordinatorService,
-    GetTelemetrySubscriptionsService, IncrementalAlterConfigsService, InitProducerIdService,
-    ListGroupsService, ListOffsetsService, ListPartitionReassignmentsService, MetadataService,
-    ProduceService, TxnAddOffsetsService, TxnAddPartitionService, TxnOffsetCommitService,
+    ChannelRequestLayer, ChannelRequestService, ConsumerGroupDescribeService, CreateTopicsService,
+    DeleteGroupsService, DeleteRecordsService, DeleteTopicsService, DescribeClusterService,
+    DescribeConfigsService, DescribeGroupsService, DescribeTopicPartitionsService, FetchService,
+    FindCoordinatorService, GetTelemetrySubscriptionsService, IncrementalAlterConfigsService,
+    InitProducerIdService, ListGroupsService, ListOffsetsService,
+    ListPartitionReassignmentsService, MetadataService, ProduceService, Request,
+    RequestChannelService, RequestLayer, RequestReceiver, RequestSender, RequestService,
+    RequestStorageService, Response, TxnAddOffsetsService, TxnAddPartitionService,
+    TxnOffsetCommitService, bounded_channel,
 };
 
 #[cfg(any(feature = "libsql", feature = "postgres", feature = "turso"))]
@@ -295,6 +301,8 @@ pub enum Error {
 
     UnexpectedBody(Box<Body>),
 
+    UnexpectedServiceResponse(Box<Response>),
+
     #[cfg(feature = "turso")]
     UnexpectedValue(turso::Value),
 
@@ -306,6 +314,9 @@ pub enum Error {
     UnknownTxnState(String),
 
     Uuid(#[from] uuid::Error),
+
+    UnableToSend,
+    OneshotRecv,
 }
 
 impl Display for Error {
@@ -347,9 +358,16 @@ impl From<io::Error> for Error {
 }
 
 #[cfg(feature = "dynostore")]
+impl From<Arc<object_store::Error>> for Error {
+    fn from(value: Arc<object_store::Error>) -> Self {
+        Self::ObjectStore(value)
+    }
+}
+
+#[cfg(feature = "dynostore")]
 impl From<object_store::Error> for Error {
     fn from(value: object_store::Error) -> Self {
-        Self::ObjectStore(Arc::new(value))
+        Self::from(Arc::new(value))
     }
 }
 
@@ -372,16 +390,36 @@ impl From<deadpool_postgres::PoolError> for Error {
     }
 }
 
+#[cfg(feature = "postgres")]
+impl From<Arc<deadpool_postgres::PoolError>> for Error {
+    fn from(value: Arc<deadpool_postgres::PoolError>) -> Self {
+        Self::Pool(value)
+    }
+}
+
 impl From<serde_json::Error> for Error {
     fn from(value: serde_json::Error) -> Self {
-        Self::SerdeJson(Arc::new(value))
+        Self::from(Arc::new(value))
+    }
+}
+
+impl From<Arc<serde_json::Error>> for Error {
+    fn from(value: Arc<serde_json::Error>) -> Self {
+        Self::SerdeJson(value)
     }
 }
 
 #[cfg(feature = "postgres")]
 impl From<tokio_postgres::error::Error> for Error {
     fn from(value: tokio_postgres::error::Error) -> Self {
-        Self::TokioPostgres(Arc::new(value))
+        Self::from(Arc::new(value))
+    }
+}
+
+#[cfg(feature = "postgres")]
+impl From<Arc<tokio_postgres::error::Error>> for Error {
+    fn from(value: Arc<tokio_postgres::error::Error>) -> Self {
+        Self::TokioPostgres(value)
     }
 }
 
@@ -1390,40 +1428,74 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
         Ok(())
     }
 
-    fn cluster_id(&self) -> Result<&str>;
+    async fn cluster_id(&self) -> Result<String>;
 
-    fn node(&self) -> Result<i32>;
+    async fn node(&self) -> Result<i32>;
 
-    fn advertised_listener(&self) -> Result<&Url>;
+    async fn advertised_listener(&self) -> Result<Url>;
 }
 
 /// Conditional Update Errors
-#[derive(Debug, thiserror::Error)]
+#[derive(Clone, Debug, thiserror::Error)]
 pub enum UpdateError<T> {
     Error(#[from] Error),
 
     #[cfg(feature = "libsql")]
-    LibSql(#[from] libsql::Error),
+    LibSql(Arc<libsql::Error>),
 
     MissingEtag,
 
     #[cfg(feature = "dynostore")]
-    ObjectStore(#[from] object_store::Error),
+    ObjectStore(Arc<object_store::Error>),
 
     Outdated {
         current: T,
         version: Version,
     },
 
-    SerdeJson(#[from] serde_json::Error),
+    SerdeJson(Arc<serde_json::Error>),
 
     #[cfg(feature = "postgres")]
-    TokioPostgres(#[from] tokio_postgres::error::Error),
+    TokioPostgres(Arc<tokio_postgres::error::Error>),
 
     #[cfg(feature = "turso")]
-    Turso(#[from] turso::Error),
+    Turso(Arc<turso::Error>),
 
     Uuid(#[from] uuid::Error),
+}
+
+#[cfg(feature = "libsql")]
+impl<T> From<libsql::Error> for UpdateError<T> {
+    fn from(value: libsql::Error) -> Self {
+        Self::LibSql(Arc::new(value))
+    }
+}
+
+#[cfg(feature = "turso")]
+impl<T> From<turso::Error> for UpdateError<T> {
+    fn from(value: turso::Error) -> Self {
+        Self::Turso(Arc::new(value))
+    }
+}
+
+#[cfg(feature = "dynostore")]
+impl<T> From<object_store::Error> for UpdateError<T> {
+    fn from(value: object_store::Error) -> Self {
+        Self::ObjectStore(Arc::new(value))
+    }
+}
+
+impl<T> From<serde_json::Error> for UpdateError<T> {
+    fn from(value: serde_json::Error) -> Self {
+        Self::SerdeJson(Arc::new(value))
+    }
+}
+
+#[cfg(feature = "postgres")]
+impl<T> From<tokio_postgres::error::Error> for UpdateError<T> {
+    fn from(value: tokio_postgres::error::Error) -> Self {
+        Self::TokioPostgres(Arc::new(value))
+    }
 }
 
 /// Storage Container
@@ -1458,6 +1530,8 @@ pub struct Builder<N, C, A, S> {
     schema_registry: Option<Registry>,
     #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
     lake_house: Option<tansu_schema::lake::House>,
+
+    cancellation: CancellationToken,
 }
 
 type PhantomBuilder =
@@ -1473,6 +1547,7 @@ impl<N, C, A, S> Builder<N, C, A, S> {
             schema_registry: self.schema_registry,
             #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
             lake_house: self.lake_house,
+            cancellation: self.cancellation,
         }
     }
 
@@ -1485,6 +1560,7 @@ impl<N, C, A, S> Builder<N, C, A, S> {
             schema_registry: self.schema_registry,
             #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
             lake_house: self.lake_house,
+            cancellation: self.cancellation,
         }
     }
 
@@ -1497,6 +1573,7 @@ impl<N, C, A, S> Builder<N, C, A, S> {
             schema_registry: self.schema_registry,
             #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
             lake_house: self.lake_house,
+            cancellation: self.cancellation,
         }
     }
 
@@ -1511,38 +1588,34 @@ impl<N, C, A, S> Builder<N, C, A, S> {
             schema_registry: self.schema_registry,
             #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
             lake_house: self.lake_house,
+            cancellation: self.cancellation,
         }
     }
 
-    pub fn schema_registry(self, schema_registry: Option<Registry>) -> Builder<N, C, A, S> {
+    pub fn schema_registry(self, schema_registry: Option<Registry>) -> Self {
         _ = schema_registry
             .as_ref()
             .inspect(|schema_registry| debug!(?schema_registry));
 
-        Builder {
-            node_id: self.node_id,
-            cluster_id: self.cluster_id,
-            advertised_listener: self.advertised_listener,
-            storage: self.storage,
+        Self {
             schema_registry,
-            #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
-            lake_house: self.lake_house,
+            ..self
         }
     }
 
     #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
-    pub fn lake_house(self, lake_house: Option<tansu_schema::lake::House>) -> Builder<N, C, A, S> {
+    pub fn lake_house(self, lake_house: Option<tansu_schema::lake::House>) -> Self {
         _ = lake_house
             .as_ref()
             .inspect(|lake_house| debug!(?lake_house));
 
-        Builder {
-            node_id: self.node_id,
-            cluster_id: self.cluster_id,
-            advertised_listener: self.advertised_listener,
-            storage: self.storage,
-            schema_registry: self.schema_registry,
-            lake_house,
+        Self { lake_house, ..self }
+    }
+
+    pub fn cancellation(self, cancellation: CancellationToken) -> Self {
+        Self {
+            cancellation,
+            ..self
         }
     }
 }
@@ -1660,6 +1733,7 @@ impl Builder<i32, String, Url, Url> {
                 .advertised_listener(self.advertised_listener.clone())
                 .schemas(self.schema_registry)
                 .lake(self.lake_house.clone())
+                .cancellation(self.cancellation.clone())
                 .build()
                 .await
                 .map(StorageContainer::Lite),
@@ -1674,6 +1748,7 @@ impl Builder<i32, String, Url, Url> {
                 .cluster(self.cluster_id.clone())
                 .advertised_listener(self.advertised_listener.clone())
                 .schemas(self.schema_registry)
+                .cancellation(self.cancellation.clone())
                 .build()
                 .await
                 .map(StorageContainer::Lite),
@@ -2547,51 +2622,51 @@ impl Storage for StorageContainer {
         })
     }
 
-    fn cluster_id(&self) -> Result<&str> {
+    async fn cluster_id(&self) -> Result<String> {
         match self {
             #[cfg(feature = "dynostore")]
-            Self::DynoStore(engine) => engine.cluster_id(),
+            Self::DynoStore(engine) => engine.cluster_id().await,
 
             #[cfg(feature = "libsql")]
-            Self::Lite(engine) => engine.cluster_id(),
+            Self::Lite(engine) => engine.cluster_id().await,
 
             #[cfg(feature = "postgres")]
-            Self::Postgres(engine) => engine.cluster_id(),
+            Self::Postgres(engine) => engine.cluster_id().await,
 
             #[cfg(feature = "turso")]
-            Self::Turso(engine) => engine.cluster_id(),
+            Self::Turso(engine) => engine.cluster_id().await,
         }
     }
 
-    fn node(&self) -> Result<i32> {
+    async fn node(&self) -> Result<i32> {
         match self {
             #[cfg(feature = "dynostore")]
-            Self::DynoStore(engine) => engine.node(),
+            Self::DynoStore(engine) => engine.node().await,
 
             #[cfg(feature = "libsql")]
-            Self::Lite(engine) => engine.node(),
+            Self::Lite(engine) => engine.node().await,
 
             #[cfg(feature = "postgres")]
-            Self::Postgres(engine) => engine.node(),
+            Self::Postgres(engine) => engine.node().await,
 
             #[cfg(feature = "turso")]
-            Self::Turso(engine) => engine.node(),
+            Self::Turso(engine) => engine.node().await,
         }
     }
 
-    fn advertised_listener(&self) -> Result<&Url> {
+    async fn advertised_listener(&self) -> Result<Url> {
         match self {
             #[cfg(feature = "dynostore")]
-            Self::DynoStore(engine) => engine.advertised_listener(),
+            Self::DynoStore(engine) => engine.advertised_listener().await,
 
             #[cfg(feature = "libsql")]
-            Self::Lite(engine) => engine.advertised_listener(),
+            Self::Lite(engine) => engine.advertised_listener().await,
 
             #[cfg(feature = "postgres")]
-            Self::Postgres(engine) => engine.advertised_listener(),
+            Self::Postgres(engine) => engine.advertised_listener().await,
 
             #[cfg(feature = "turso")]
-            Self::Turso(engine) => engine.advertised_listener(),
+            Self::Turso(engine) => engine.advertised_listener().await,
         }
     }
 }
