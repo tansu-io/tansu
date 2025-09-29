@@ -182,6 +182,7 @@ use tansu_sans_io::{
     txn_offset_commit_response::TxnOffsetCommitResponseTopic,
 };
 use tansu_schema::Registry;
+use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, debug, debug_span};
 use tracing_subscriber::filter::ParseError;
 use url::Url;
@@ -1529,6 +1530,8 @@ pub struct Builder<N, C, A, S> {
     schema_registry: Option<Registry>,
     #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
     lake_house: Option<tansu_schema::lake::House>,
+
+    cancellation: CancellationToken,
 }
 
 type PhantomBuilder =
@@ -1544,6 +1547,7 @@ impl<N, C, A, S> Builder<N, C, A, S> {
             schema_registry: self.schema_registry,
             #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
             lake_house: self.lake_house,
+            cancellation: self.cancellation,
         }
     }
 
@@ -1556,6 +1560,7 @@ impl<N, C, A, S> Builder<N, C, A, S> {
             schema_registry: self.schema_registry,
             #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
             lake_house: self.lake_house,
+            cancellation: self.cancellation,
         }
     }
 
@@ -1568,6 +1573,7 @@ impl<N, C, A, S> Builder<N, C, A, S> {
             schema_registry: self.schema_registry,
             #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
             lake_house: self.lake_house,
+            cancellation: self.cancellation,
         }
     }
 
@@ -1582,38 +1588,34 @@ impl<N, C, A, S> Builder<N, C, A, S> {
             schema_registry: self.schema_registry,
             #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
             lake_house: self.lake_house,
+            cancellation: self.cancellation,
         }
     }
 
-    pub fn schema_registry(self, schema_registry: Option<Registry>) -> Builder<N, C, A, S> {
+    pub fn schema_registry(self, schema_registry: Option<Registry>) -> Self {
         _ = schema_registry
             .as_ref()
             .inspect(|schema_registry| debug!(?schema_registry));
 
-        Builder {
-            node_id: self.node_id,
-            cluster_id: self.cluster_id,
-            advertised_listener: self.advertised_listener,
-            storage: self.storage,
+        Self {
             schema_registry,
-            #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
-            lake_house: self.lake_house,
+            ..self
         }
     }
 
     #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
-    pub fn lake_house(self, lake_house: Option<tansu_schema::lake::House>) -> Builder<N, C, A, S> {
+    pub fn lake_house(self, lake_house: Option<tansu_schema::lake::House>) -> Self {
         _ = lake_house
             .as_ref()
             .inspect(|lake_house| debug!(?lake_house));
 
-        Builder {
-            node_id: self.node_id,
-            cluster_id: self.cluster_id,
-            advertised_listener: self.advertised_listener,
-            storage: self.storage,
-            schema_registry: self.schema_registry,
-            lake_house,
+        Self { lake_house, ..self }
+    }
+
+    pub fn cancellation(self, cancellation: CancellationToken) -> Self {
+        Self {
+            cancellation,
+            ..self
         }
     }
 }
@@ -1731,6 +1733,7 @@ impl Builder<i32, String, Url, Url> {
                 .advertised_listener(self.advertised_listener.clone())
                 .schemas(self.schema_registry)
                 .lake(self.lake_house.clone())
+                .cancellation(self.cancellation.clone())
                 .build()
                 .await
                 .map(StorageContainer::Lite),
@@ -1745,6 +1748,7 @@ impl Builder<i32, String, Url, Url> {
                 .cluster(self.cluster_id.clone())
                 .advertised_listener(self.advertised_listener.clone())
                 .schemas(self.schema_registry)
+                .cancellation(self.cancellation.clone())
                 .build()
                 .await
                 .map(StorageContainer::Lite),

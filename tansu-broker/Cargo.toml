@@ -52,6 +52,7 @@ tansu-service.workspace = true
 tansu-storage.workspace = true
 thiserror.workspace = true
 tokio-postgres = { workspace = true, optional = true }
+tokio-util.workspace = true
 tokio.workspace = true
 tracing-opentelemetry.workspace = true
 tracing-subscriber.workspace = true

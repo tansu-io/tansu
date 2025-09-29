@@ -25,10 +25,11 @@ use std::{
 };
 
 use crate::{
-    BrokerRegistrationRequest, Error, GroupDetail, ListOffsetResponse, METER, MetadataResponse,
-    NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse, Result, Storage,
-    TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse, TxnOffsetCommitRequest,
-    TxnState, UpdateError, Version,
+    BrokerRegistrationRequest, ChannelRequestLayer, Error, GroupDetail, ListOffsetResponse, METER,
+    MetadataResponse, NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse,
+    RequestChannelService, RequestStorageService, Result, Storage, TopicId, Topition,
+    TxnAddPartitionsRequest, TxnAddPartitionsResponse, TxnOffsetCommitRequest, TxnState,
+    UpdateError, Version, bounded_channel,
     sql::{Cache, default_hash, idempotent_sequence_check, remove_comments},
 };
 use async_trait::async_trait;
@@ -41,6 +42,7 @@ use opentelemetry::{
     KeyValue,
     metrics::{Counter, Histogram},
 };
+use rama::{Context, Layer as _, Service as _};
 use rand::{rng, seq::SliceRandom as _};
 use regex::Regex;
 use tansu_sans_io::{
@@ -67,7 +69,9 @@ use tansu_sans_io::{
     txn_offset_commit_response::{TxnOffsetCommitResponsePartition, TxnOffsetCommitResponseTopic},
 };
 use tansu_schema::Registry;
-use tracing::{debug, error};
+use tokio::task::JoinSet;
+use tokio_util::sync::CancellationToken;
+use tracing::{debug, error, instrument};
 use url::Url;
 use uuid::Uuid;
 
@@ -148,7 +152,7 @@ impl TryFrom<Row> for Txn {
 /// LibSQL/SQLite storage engine
 ///
 #[derive(Clone, Debug)]
-pub struct Engine {
+pub(crate) struct Delegate {
     cluster: String,
     node: i32,
     advertised_listener: Url,
@@ -164,12 +168,7 @@ pub struct Engine {
     lake: Option<()>,
 }
 
-impl Engine {
-    pub fn builder()
-    -> Builder<PhantomData<String>, PhantomData<i32>, PhantomData<Url>, PhantomData<Url>> {
-        Builder::default()
-    }
-
+impl Delegate {
     fn elapsed_millis(&self, start: SystemTime) -> u64 {
         start
             .elapsed()
@@ -979,6 +978,8 @@ pub struct Builder<C, N, L, D> {
 
     #[cfg(not(any(feature = "parquet", feature = "iceberg", feature = "delta")))]
     lake: Option<()>,
+
+    cancellation: CancellationToken,
 }
 
 impl<C, N, L, D> Builder<C, N, L, D> {
@@ -993,6 +994,7 @@ impl<C, N, L, D> Builder<C, N, L, D> {
             storage: self.storage,
             schemas: self.schemas,
             lake: self.lake,
+            cancellation: self.cancellation,
         }
     }
 
@@ -1005,6 +1007,7 @@ impl<C, N, L, D> Builder<C, N, L, D> {
             storage: self.storage,
             schemas: self.schemas,
             lake: self.lake,
+            cancellation: self.cancellation,
         }
     }
 
@@ -1017,6 +1020,7 @@ impl<C, N, L, D> Builder<C, N, L, D> {
             storage: self.storage,
             schemas: self.schemas,
             lake: self.lake,
+            cancellation: self.cancellation,
         }
     }
 
@@ -1029,6 +1033,7 @@ impl<C, N, L, D> Builder<C, N, L, D> {
             storage,
             schemas: self.schemas,
             lake: self.lake,
+            cancellation: self.cancellation,
         }
     }
 
@@ -1039,6 +1044,13 @@ impl<C, N, L, D> Builder<C, N, L, D> {
     #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
     pub(crate) fn lake(self, lake: Option<tansu_schema::lake::House>) -> Self {
         Self { lake, ..self }
+    }
+
+    pub(crate) fn cancellation(self, cancellation: CancellationToken) -> Self {
+        Self {
+            cancellation,
+            ..self
+        }
     }
 }
 
@@ -1110,6 +1122,265 @@ fn sql_lookup(key: &str) -> Result<String> {
         .and_then(|sql| fix_parameters(sql).inspect(|sql| debug!(key, sql)))
 }
 
+#[derive(Clone, Debug)]
+pub struct Engine {
+    #[allow(dead_code)]
+    server: Arc<JoinSet<Result<(), Error>>>,
+    inner: RequestChannelService,
+}
+
+impl Engine {
+    pub fn builder()
+    -> Builder<PhantomData<String>, PhantomData<i32>, PhantomData<Url>, PhantomData<Url>> {
+        Builder::default()
+    }
+}
+
+#[async_trait]
+impl Storage for Engine {
+    #[instrument(ret)]
+    async fn register_broker(&self, broker_registration: BrokerRegistrationRequest) -> Result<()> {
+        self.inner.register_broker(broker_registration).await
+    }
+
+    #[instrument(ret)]
+    async fn brokers(&self) -> Result<Vec<DescribeClusterBroker>> {
+        self.inner.brokers().await
+    }
+
+    #[instrument(ret)]
+    async fn create_topic(&self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {
+        self.inner.create_topic(topic, validate_only).await
+    }
+
+    #[instrument(ret)]
+    async fn delete_records(
+        &self,
+        topics: &[DeleteRecordsTopic],
+    ) -> Result<Vec<DeleteRecordsTopicResult>> {
+        self.inner.delete_records(topics).await
+    }
+
+    #[instrument(ret)]
+    async fn delete_topic(&self, topic: &TopicId) -> Result<ErrorCode> {
+        self.inner.delete_topic(topic).await
+    }
+
+    #[instrument(ret)]
+    async fn incremental_alter_resource(
+        &self,
+        resource: AlterConfigsResource,
+    ) -> Result<AlterConfigsResourceResponse> {
+        self.inner.incremental_alter_resource(resource).await
+    }
+
+    #[instrument(ret)]
+    async fn produce(
+        &self,
+        transaction_id: Option<&str>,
+        topition: &Topition,
+        deflated: deflated::Batch,
+    ) -> Result<i64> {
+        self.inner.produce(transaction_id, topition, deflated).await
+    }
+
+    #[instrument(ret)]
+    async fn fetch(
+        &self,
+        topition: &Topition,
+        offset: i64,
+        min_bytes: u32,
+        max_bytes: u32,
+        isolation_level: IsolationLevel,
+    ) -> Result<Vec<deflated::Batch>> {
+        self.inner
+            .fetch(topition, offset, min_bytes, max_bytes, isolation_level)
+            .await
+    }
+
+    #[instrument(ret)]
+    async fn offset_stage(&self, topition: &Topition) -> Result<OffsetStage> {
+        self.inner.offset_stage(topition).await
+    }
+
+    #[instrument(ret)]
+    async fn offset_commit(
+        &self,
+        group: &str,
+        retention: Option<Duration>,
+        offsets: &[(Topition, OffsetCommitRequest)],
+    ) -> Result<Vec<(Topition, ErrorCode)>> {
+        self.inner.offset_commit(group, retention, offsets).await
+    }
+
+    #[instrument(ret)]
+    async fn committed_offset_topitions(&self, group_id: &str) -> Result<BTreeMap<Topition, i64>> {
+        self.inner.committed_offset_topitions(group_id).await
+    }
+
+    #[instrument(ret)]
+    async fn offset_fetch(
+        &self,
+        group_id: Option<&str>,
+        topics: &[Topition],
+        require_stable: Option<bool>,
+    ) -> Result<BTreeMap<Topition, i64>> {
+        self.inner
+            .offset_fetch(group_id, topics, require_stable)
+            .await
+    }
+
+    #[instrument(ret)]
+    async fn list_offsets(
+        &self,
+        isolation_level: IsolationLevel,
+        offsets: &[(Topition, ListOffset)],
+    ) -> Result<Vec<(Topition, ListOffsetResponse)>> {
+        self.inner.list_offsets(isolation_level, offsets).await
+    }
+
+    #[instrument(ret)]
+    async fn metadata(&self, topics: Option<&[TopicId]>) -> Result<MetadataResponse> {
+        self.inner.metadata(topics).await
+    }
+
+    #[instrument(ret)]
+    async fn describe_config(
+        &self,
+        name: &str,
+        resource: ConfigResource,
+        keys: Option<&[String]>,
+    ) -> Result<DescribeConfigsResult> {
+        self.inner.describe_config(name, resource, keys).await
+    }
+
+    #[instrument(ret)]
+    async fn describe_topic_partitions(
+        &self,
+        topics: Option<&[TopicId]>,
+        partition_limit: i32,
+        cursor: Option<Topition>,
+    ) -> Result<Vec<DescribeTopicPartitionsResponseTopic>> {
+        self.inner
+            .describe_topic_partitions(topics, partition_limit, cursor)
+            .await
+    }
+
+    #[instrument(ret)]
+    async fn list_groups(&self, states_filter: Option<&[String]>) -> Result<Vec<ListedGroup>> {
+        self.inner.list_groups(states_filter).await
+    }
+
+    #[instrument(ret)]
+    async fn delete_groups(
+        &self,
+        group_ids: Option<&[String]>,
+    ) -> Result<Vec<DeletableGroupResult>> {
+        self.inner.delete_groups(group_ids).await
+    }
+
+    #[instrument(ret)]
+    async fn describe_groups(
+        &self,
+        group_ids: Option<&[String]>,
+        include_authorized_operations: bool,
+    ) -> Result<Vec<NamedGroupDetail>> {
+        self.inner
+            .describe_groups(group_ids, include_authorized_operations)
+            .await
+    }
+
+    #[instrument(ret)]
+    async fn update_group(
+        &self,
+        group_id: &str,
+        detail: GroupDetail,
+        version: Option<Version>,
+    ) -> Result<Version, UpdateError<GroupDetail>> {
+        self.inner.update_group(group_id, detail, version).await
+    }
+
+    #[instrument(ret)]
+    async fn init_producer(
+        &self,
+        transaction_id: Option<&str>,
+        transaction_timeout_ms: i32,
+        producer_id: Option<i64>,
+        producer_epoch: Option<i16>,
+    ) -> Result<ProducerIdResponse> {
+        self.inner
+            .init_producer(
+                transaction_id,
+                transaction_timeout_ms,
+                producer_id,
+                producer_epoch,
+            )
+            .await
+    }
+
+    #[instrument(ret)]
+    async fn txn_add_offsets(
+        &self,
+        transaction_id: &str,
+        producer_id: i64,
+        producer_epoch: i16,
+        group_id: &str,
+    ) -> Result<ErrorCode> {
+        self.inner
+            .txn_add_offsets(transaction_id, producer_id, producer_epoch, group_id)
+            .await
+    }
+
+    #[instrument(ret)]
+    async fn txn_add_partitions(
+        &self,
+        partitions: TxnAddPartitionsRequest,
+    ) -> Result<TxnAddPartitionsResponse> {
+        self.inner.txn_add_partitions(partitions).await
+    }
+
+    #[instrument(ret)]
+    async fn txn_offset_commit(
+        &self,
+        offsets: TxnOffsetCommitRequest,
+    ) -> Result<Vec<TxnOffsetCommitResponseTopic>> {
+        self.inner.txn_offset_commit(offsets).await
+    }
+
+    #[instrument(ret)]
+    async fn txn_end(
+        &self,
+        transaction_id: &str,
+        producer_id: i64,
+        producer_epoch: i16,
+        committed: bool,
+    ) -> Result<ErrorCode> {
+        self.inner
+            .txn_end(transaction_id, producer_id, producer_epoch, committed)
+            .await
+    }
+
+    #[instrument(ret)]
+    async fn maintain(&self) -> Result<()> {
+        self.inner.maintain().await
+    }
+
+    #[instrument(ret)]
+    async fn cluster_id(&self) -> Result<String> {
+        self.inner.cluster_id().await
+    }
+
+    #[instrument(ret)]
+    async fn node(&self) -> Result<i32> {
+        self.inner.node().await
+    }
+
+    #[instrument(ret)]
+    async fn advertised_listener(&self) -> Result<Url> {
+        self.inner.advertised_listener().await
+    }
+}
+
 impl Builder<String, i32, Url, Url> {
     pub(crate) async fn build(self) -> Result<Engine> {
         debug!(domain = self.storage.domain(), path = self.storage.path());
@@ -1140,13 +1411,34 @@ impl Builder<String, i32, Url, Url> {
                 .inspect_err(|err| error!(name, ?err));
         }
 
+        let (sender, receiver) = bounded_channel(10);
+        let mut server = JoinSet::new();
+
+        let _ = {
+            let cancellation = self.cancellation.clone();
+
+            let storage = Delegate {
+                cluster: self.cluster,
+                node: self.node,
+                advertised_listener: self.advertised_listener,
+                db: Arc::new(Mutex::new(db)),
+                schemas: self.schemas,
+                lake: self.lake,
+            };
+
+            server.spawn(async move {
+                let server = ChannelRequestLayer::new(cancellation)
+                    .into_layer(RequestStorageService::new(storage));
+
+                server.serve(Context::default(), receiver).await
+            })
+        };
+
+        let inner = RequestChannelService::new(sender);
+
         Ok(Engine {
-            cluster: self.cluster,
-            node: self.node,
-            advertised_listener: self.advertised_listener,
-            db: Arc::new(Mutex::new(db)),
-            schemas: self.schemas,
-            lake: self.lake,
+            server: Arc::new(server),
+            inner,
         })
     }
 }
@@ -1168,7 +1460,7 @@ fn unique_constraint(error_code: ErrorCode) -> impl Fn(libsql::Error) -> Error {
 }
 
 #[async_trait]
-impl Storage for Engine {
+impl Storage for Delegate {
     async fn register_broker(&self, broker_registration: BrokerRegistrationRequest) -> Result<()> {
         debug!(?broker_registration);
 
@@ -2754,7 +3046,6 @@ impl Storage for Engine {
         detail: GroupDetail,
         version: Option<Version>,
     ) -> Result<Version, UpdateError<GroupDetail>> {
-        debug!(cluster = self.cluster, group_id, ?detail, ?version);
         debug!(cluster = self.cluster, group_id, ?detail, ?version);
 
         let tx = self.transaction().await?;
