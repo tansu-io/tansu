@@ -10,7 +10,7 @@ cargo-build +args:
 
 build: (cargo-build "--bin" "tansu" "--no-default-features" "--features" "delta,dynostore,iceberg,libsql,parquet,postgres")
 
-release: (cargo-build "--release" "--workspace" "--all-targets")
+release: (cargo-build "--release" "--bin" "tansu" "--no-default-features" "--features" "delta,dynostore,iceberg,libsql,parquet,postgres")
 
 test: test-workspace test-doc
 
@@ -283,11 +283,14 @@ otel: build docker-compose-down db-up minio-up minio-ready-local minio-local-ali
 
 otel-up: docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up tansu-up
 
-tansu-broker *args:
-    target/debug/tansu broker {{args}} 2>&1 | tee broker.log
+tansu-broker kind *args:
+    target/{{kind}}/tansu broker {{args}} 2>&1 | tee broker.log
 
-# run a broker with configuration from .env
-broker *args: build docker-compose-down prometheus-up grafana-up db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket lakehouse-catalog-up (tansu-broker args)
+# run a debug broker with configuration from .env
+broker *args: build docker-compose-down prometheus-up grafana-up db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket lakehouse-catalog-up (tansu-broker "debug" args)
+
+# run a release broker with configuration from .env
+broker-release *args: release docker-compose-down prometheus-up grafana-up db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket lakehouse-catalog-up (tansu-broker "release" args)
 
 
 # run a proxy with configuration from .env

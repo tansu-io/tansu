@@ -36,7 +36,8 @@ mod txn;
 use std::{
     collections::BTreeMap,
     fmt::{self, Debug, Display, Formatter},
-    time::Duration,
+    sync::LazyLock,
+    time::{Duration, SystemTime},
 };
 
 use async_trait::async_trait;
@@ -58,6 +59,10 @@ pub use list_groups::ListGroupsService;
 pub use list_offsets::ListOffsetsService;
 pub use list_partition_reassignments::ListPartitionReassignmentsService;
 pub use metadata::MetadataService;
+use opentelemetry::{
+    KeyValue,
+    metrics::{Counter, Gauge, Histogram},
+};
 pub use produce::ProduceService;
 use rama::{Context, Layer, Service};
 use tansu_sans_io::{
@@ -72,9 +77,12 @@ use tansu_sans_io::{
     list_groups_response::ListedGroup, record::deflated,
     txn_offset_commit_response::TxnOffsetCommitResponseTopic,
 };
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{
+    mpsc::{self, error::SendError},
+    oneshot,
+};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, instrument};
+use tracing::{debug, error, instrument};
 pub use txn::add_offsets::AddOffsetsService as TxnAddOffsetsService;
 pub use txn::add_partitions::AddPartitionService as TxnAddPartitionService;
 pub use txn::offset_commit::OffsetCommitService as TxnOffsetCommitService;
@@ -82,7 +90,7 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::{
-    BrokerRegistrationRequest, Error, GroupDetail, ListOffsetResponse, MetadataResponse,
+    BrokerRegistrationRequest, Error, GroupDetail, ListOffsetResponse, METER, MetadataResponse,
     NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse, Result, Storage,
     TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse, TxnOffsetCommitRequest,
     UpdateError, Version,
@@ -172,7 +180,43 @@ pub enum Request {
     Maintain,
     ClusterId,
     Node,
-    AdvertisedLister,
+    AdvertisedListener,
+}
+
+impl Display for Request {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::AdvertisedListener => f.write_str("AdvertisedListener"),
+            Self::Brokers => f.write_str("Brokers"),
+            Self::ClusterId => f.write_str("ClusterId"),
+            Self::CommittedOffsetTopitions(_) => f.write_str("CommittedOffsetTopitions"),
+            Self::CreateTopic { .. } => f.write_str("CreateTopic"),
+            Self::DeleteGroups(_) => f.write_str("DeleteGroups"),
+            Self::DeleteRecords(_) => f.write_str("DeleteRecords"),
+            Self::DeleteTopic(_) => f.write_str("DeleteTopic"),
+            Self::DescribeConfig { .. } => f.write_str("DescribeConfig"),
+            Self::DescribeGroups { .. } => f.write_str("DescribeGroups"),
+            Self::DescribeTopicPartitions { .. } => f.write_str("DescribeTopicPartitions"),
+            Self::Fetch { .. } => f.write_str("Fetch"),
+            Self::IncrementalAlterResource(_) => f.write_str("IncrementalAlterResource"),
+            Self::InitProducer { .. } => f.write_str("InitProducer"),
+            Self::ListGroups(_) => f.write_str("ListGroups"),
+            Self::ListOffsets { .. } => f.write_str("ListOffsets"),
+            Self::Maintain => f.write_str("Maintain"),
+            Self::Metadata(_) => f.write_str("Metadata"),
+            Self::Node => f.write_str("Node"),
+            Self::OffsetCommit { .. } => f.write_str("OffsetCommit"),
+            Self::OffsetFetch { .. } => f.write_str("OffsetFetch"),
+            Self::OffsetStage(_) => f.write_str("OffsetStage"),
+            Self::Produce { .. } => f.write_str("Produce"),
+            Self::RegisterBroker(_) => f.write_str("RegisterBroker"),
+            Self::TxnAddOffsets { .. } => f.write_str("TxnAddOffsets"),
+            Self::TxnAddPartitions(_) => f.write_str("TxnAddPartitions"),
+            Self::TxnEnd { .. } => f.write_str("TxnEnd"),
+            Self::TxnOffsetCommit(_) => f.write_str("TxnOffsetCommit"),
+            Self::UpdateGroup { .. } => f.write_str("UpdateGroup"),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -224,6 +268,12 @@ pub enum ServiceError {
 impl Display for ServiceError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{self:?}")
+    }
+}
+
+impl From<SendError<()>> for ServiceError {
+    fn from(_value: SendError<()>) -> Self {
+        Self::Storage(Error::UnableToSend)
     }
 }
 
@@ -303,7 +353,20 @@ impl RequestChannelService {
     pub fn new(tx: RequestSender) -> Self {
         Self { tx }
     }
+
+    fn elapsed_millis(&self, start: SystemTime) -> u64 {
+        start
+            .elapsed()
+            .map_or(0, |duration| duration.as_millis() as u64)
+    }
 }
+
+static STORAGE_CHANNEL_CAPACITY: LazyLock<Gauge<u64>> = LazyLock::new(|| {
+    METER
+        .u64_gauge("tansu_storage_channel_capacity")
+        .with_description("Storage channel capacity")
+        .build()
+});
 
 impl<State> Service<State, Request> for RequestChannelService
 where
@@ -321,14 +384,66 @@ where
         let _ = ctx;
         let (resp_tx, resp_rx) = oneshot::channel();
 
-        self.tx
-            .send((req, resp_tx))
-            .await
-            .map_err(|_send_error| ServiceError::Storage(Error::UnableToSend))?;
+        let start = SystemTime::now();
 
-        resp_rx.await.map_err(|_| Error::OneshotRecv.into())
+        let operation = req.to_string();
+        let attributes = [KeyValue::new("operation", operation.clone())];
+
+        let capacity = self.tx.capacity();
+        STORAGE_CHANNEL_CAPACITY.record(capacity as u64, &attributes);
+        debug!(operation, capacity);
+
+        self.tx
+            .reserve()
+            .await
+            .map(|permit| permit.send((req, resp_tx)))
+            .inspect(|_| {
+                let permit_elapsed = self.elapsed_millis(start);
+                STORAGE_CHANNEL_PERMIT_DURATION.record(permit_elapsed, &attributes);
+                debug!(operation, permit_elapsed);
+            })
+            .inspect_err(|err| {
+                error!(operation, ?err);
+                STORAGE_CHANNEL_ERROR.add(1, &attributes);
+            })?;
+
+        resp_rx
+            .await
+            .map_err(|_| Error::OneshotRecv.into())
+            .inspect(|_| {
+                let elapsed_millis = self.elapsed_millis(start);
+                STORAGE_CHANNEL_REQUEST_DURATION.record(elapsed_millis, &attributes);
+                debug!(operation, elapsed_millis);
+            })
+            .inspect_err(|err| {
+                error!(operation, ?err);
+                STORAGE_CHANNEL_ERROR.add(1, &attributes);
+            })
     }
 }
+
+static STORAGE_CHANNEL_REQUEST_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
+    METER
+        .u64_histogram("tansu_storage_channel_request_duration")
+        .with_unit("ms")
+        .with_description("Storage channel request latency in milliseconds")
+        .build()
+});
+
+static STORAGE_CHANNEL_PERMIT_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
+    METER
+        .u64_histogram("tansu_storage_channel_permit_duration")
+        .with_unit("ms")
+        .with_description("Storage channel permit latency in milliseconds")
+        .build()
+});
+
+static STORAGE_CHANNEL_ERROR: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    METER
+        .u64_counter("tansu_storage_channel_error")
+        .with_description("Storage channel error count")
+        .build()
+});
 
 #[async_trait]
 impl Storage for RequestChannelService {
@@ -949,7 +1064,7 @@ impl Storage for RequestChannelService {
 
     #[instrument(ret)]
     async fn advertised_listener(&self) -> Result<Url> {
-        self.serve(Context::default(), Request::AdvertisedLister)
+        self.serve(Context::default(), Request::AdvertisedListener)
             .await
             .and_then(|response| {
                 if let Response::AdvertisedListener(inner) = response {
@@ -1224,7 +1339,7 @@ where
             Request::Maintain => Ok(Response::Maintain(self.storage.maintain().await)),
             Request::ClusterId => Ok(Response::ClusterId(self.storage.cluster_id().await)),
             Request::Node => Ok(Response::Node(self.storage.node().await)),
-            Request::AdvertisedLister => Ok(Response::AdvertisedListener(
+            Request::AdvertisedListener => Ok(Response::AdvertisedListener(
                 self.storage.advertised_listener().await,
             )),
         }
