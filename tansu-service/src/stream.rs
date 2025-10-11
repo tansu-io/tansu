@@ -292,6 +292,7 @@ where
                 let mut request: Vec<u8> = vec![0u8; frame_length(size)];
                 request[0..size.len()].copy_from_slice(&size[..]);
                 _ = req.read_exact(&mut request[4..]).await?;
+                debug!(?request);
 
                 REQUEST_SIZE.record(request.len() as u64, &attributes);
 
@@ -313,6 +314,8 @@ where
                             &attributes,
                         );
                     })?;
+
+                debug!(response = ?&response[..]);
 
                 req.write_all(&response).await?
             }
