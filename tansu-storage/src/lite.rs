@@ -133,6 +133,13 @@ static ENGINE_REQUEST_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
 static DELEGATE_REQUEST_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
     METER
         .u64_histogram("tansu_sqlite_delegate_request_duration")
+        .with_boundaries(
+            [
+                0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 10.0, 25.0, 50.0, 75.0, 100.0, 250.0, 500.0, 750.0,
+                1000.0,
+            ]
+            .into(),
+        )
         .with_unit("ms")
         .with_description("The engine latencies in milliseconds")
         .build()
@@ -690,17 +697,31 @@ impl Delegate {
 
         debug!(after_attributes = elapsed_millis(start));
 
-        // duration: 6ms
-
         if !attributes.control
             && let Some(ref schemas) = self.schemas
+            && self
+                .describe_config(topic, ConfigResource::Topic, None)
+                .await
+                .map(|resources| {
+                    resources
+                        .configs
+                        .as_ref()
+                        .and_then(|configs| {
+                            configs
+                                .iter()
+                                .inspect(|config| debug!(?config))
+                                .find(|config| config.name.as_str() == "tansu.schema.validation")
+                                .and_then(|config| config.value.as_deref())
+                                .and_then(|value| bool::from_str(value).ok())
+                        })
+                        .unwrap_or(true)
+                })
+                .inspect(|tansu_schema_validation| debug!(tansu_schema_validation))?
         {
             schemas.validate(topition.topic(), &inflated).await?;
         }
 
         debug!(after_validation = elapsed_millis(start));
-
-        // duration: 10ms
 
         let last_offset_delta = i64::from(inflated.last_offset_delta);
 
@@ -765,8 +786,6 @@ impl Delegate {
         }
 
         debug!(after_record_insert = elapsed_millis(start));
-
-        // duration: 40ms
 
         if let Some(transaction_id) = transaction_id
             && attributes.transaction
