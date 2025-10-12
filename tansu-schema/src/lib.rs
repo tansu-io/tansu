@@ -20,6 +20,7 @@
 use std::{
     collections::BTreeMap,
     env::{self},
+    fmt::{self, Display, Formatter},
     io,
     num::TryFromIntError,
     result,
@@ -28,12 +29,22 @@ use std::{
     time::{Duration, SystemTime},
 };
 
+#[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
 use arrow::{datatypes::DataType, error::ArrowError, record_batch::RecordBatch};
+
 use bytes::Bytes;
+
+#[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
 use datafusion::error::DataFusionError;
+
+#[cfg(feature = "delta")]
 use deltalake::DeltaTableError;
+
 use governor::InsufficientCapacity;
+
+#[cfg(feature = "iceberg")]
 use iceberg::spec::DataFileBuilderError;
+
 use jsonschema::ValidationError;
 use object_store::{
     DynObjectStore, ObjectStore, aws::AmazonS3Builder, local::LocalFileSystem, memory::InMemory,
@@ -44,20 +55,29 @@ use opentelemetry::{
     metrics::{Counter, Histogram, Meter},
 };
 use opentelemetry_semantic_conventions::SCHEMA_URL;
+
+#[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
 use parquet::errors::ParquetError;
+
 use rhai::EvalAltResult;
 use serde_json::Value;
 use tansu_sans_io::{ErrorCode, record::inflated::Batch};
-use tracing::{debug, error};
+use tracing::debug;
 use tracing_subscriber::filter::ParseError;
 use url::Url;
 
+#[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
 use crate::lake::LakeHouseType;
 
 pub mod avro;
 pub mod json;
+
+#[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
 pub mod lake;
+
 pub mod proto;
+
+#[cfg(feature = "delta")]
 pub(crate) mod sql;
 
 pub(crate) const ARROW_LIST_FIELD_NAME: &str = "element";
@@ -65,132 +85,108 @@ pub(crate) const ARROW_LIST_FIELD_NAME: &str = "element";
 /// Error
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
-    #[error("{:?}", self)]
     Anyhow(#[from] anyhow::Error),
 
-    #[error("{:?}", self)]
     Api(ErrorCode),
 
-    #[error("{:?}", self)]
+    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
     Arrow(#[from] ArrowError),
 
-    #[error("{:?}", self)]
     Avro(Box<apache_avro::Error>),
 
-    #[error("{:?}", self)]
     AvroToJson(apache_avro::types::Value),
 
-    #[error("{:?}", self)]
-    BadDowncast { field: String },
+    BadDowncast {
+        field: String,
+    },
 
-    #[error("{:?}", self)]
     EvalAlt(#[from] Box<EvalAltResult>),
 
-    #[error("{:?}", self)]
     BuilderExhausted,
 
-    #[error("{:?}", self)]
     ChronoParse(#[from] chrono::ParseError),
 
-    #[error("{:?}", self)]
+    #[cfg(feature = "iceberg")]
     DataFileBuilder(#[from] DataFileBuilderError),
 
-    #[error("{:?}", self)]
+    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
     DataFusion(#[from] DataFusionError),
 
-    #[error("{:?}", self)]
+    #[cfg(feature = "delta")]
     DeltaTable(#[from] DeltaTableError),
 
-    #[error("{:?}", self)]
     Downcast,
 
-    #[error("{:?}", self)]
     FromUtf8(#[from] FromUtf8Error),
 
-    #[error("{:?}", self)]
+    #[cfg(feature = "iceberg")]
     Iceberg(#[from] ::iceberg::Error),
 
-    #[error("{:?}", self)]
     InvalidValue(apache_avro::types::Value),
 
-    #[error("{:?}", self)]
     InsufficientCapacity(#[from] InsufficientCapacity),
 
-    #[error("{:?}", self)]
     Io(#[from] io::Error),
 
-    #[error("{:?}", self)]
     JsonToAvro(Box<apache_avro::Schema>, Box<Value>),
 
-    #[error("field: {field}, not found in: {value} with schema: {schema}")]
     JsonToAvroFieldNotFound {
         schema: Box<apache_avro::Schema>,
         value: Box<Value>,
         field: String,
     },
 
-    #[error("{:?}", self)]
     KafkaSansIo(#[from] tansu_sans_io::Error),
 
-    #[error("{:?}", self)]
     Message(String),
 
-    #[error("{:?}", self)]
+    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
     NoCommonType(Vec<DataType>),
 
-    #[error("{:?}", self)]
     ObjectStore(#[from] object_store::Error),
 
-    #[error("{:?}", self)]
+    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
     Parquet(#[from] ParquetError),
 
-    #[error("{:?}", self)]
     ParseFilter(#[from] ParseError),
 
-    #[error("{:?}", self)]
     ParseUrl(#[from] url::ParseError),
 
-    #[error("{:?}", self)]
     Poison,
 
-    #[error("{:?}", self)]
     ProtobufJsonMapping(#[from] protobuf_json_mapping::ParseError),
 
-    #[error("{:?}", self)]
     ProtobufJsonMappingPrint(#[from] protobuf_json_mapping::PrintError),
 
-    #[error("{:?}", self)]
     Protobuf(#[from] protobuf::Error),
 
-    #[error("{:?}", self)]
     ProtobufFileDescriptorMissing(Bytes),
 
-    #[error("{:?}", self)]
     SchemaValidation,
 
-    #[error("{:?}", self)]
     SerdeJson(#[from] serde_json::Error),
 
-    #[error("{:?}", self)]
+    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
     SqlParser(#[from] datafusion::logical_expr::sqlparser::parser::ParserError),
 
-    #[error("{:?}", self)]
     TryFromInt(#[from] TryFromIntError),
 
-    #[error("{:?}", self)]
     UnsupportedIcebergCatalogUrl(Url),
 
-    #[error("{:?}", self)]
     UnsupportedLakeHouseUrl(Url),
 
-    #[error("{:?}", self)]
     UnsupportedSchemaRegistryUrl(Url),
 
-    #[error("{:?}", self)]
+    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
     UnsupportedSchemaRuntimeValue(DataType, Value),
 
-    #[error("{:?}", self)]
     Uuid(#[from] uuid::Error),
+}
+
+impl Display for Error {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{self:?}")
+    }
 }
 
 impl From<apache_avro::Error> for Error {
@@ -219,6 +215,7 @@ pub trait Validator {
 }
 
 /// Represent a Batch in the Arrow columnar data format
+#[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
 pub trait AsArrow {
     fn as_arrow(
         &self,
@@ -292,6 +289,7 @@ impl Validator for Schema {
     }
 }
 
+#[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
 impl AsArrow for Schema {
     fn as_arrow(
         &self,
@@ -446,14 +444,6 @@ static VALIDATION_ERROR: LazyLock<Counter<u64>> = LazyLock::new(|| {
         .build()
 });
 
-static AS_ARROW_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
-    METER
-        .u64_histogram("registry_as_arrow_duration")
-        .with_unit("ms")
-        .with_description("The registry as Apache Arrow latencies in milliseconds")
-        .build()
-});
-
 impl Registry {
     pub fn new(object_store: impl ObjectStore) -> Self {
         Builder::new(object_store).build()
@@ -467,6 +457,7 @@ impl Registry {
         Builder::try_from(url)
     }
 
+    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
     pub fn as_arrow(
         &self,
         topic: &str,
@@ -493,7 +484,7 @@ impl Registry {
                         .as_ref()
                         .map(|record_batch| record_batch.num_rows())
                 );
-                AS_ARROW_DURATION.record(
+                lake::AS_ARROW_DURATION.record(
                     start
                         .elapsed()
                         .map_or(0, |duration| duration.as_millis() as u64),
@@ -626,7 +617,7 @@ mod tests {
     use serde_json::json;
     use std::{fs::File, sync::Arc, thread};
     use tansu_sans_io::record::Record;
-    use tracing::{error, subscriber::DefaultGuard};
+    use tracing::subscriber::DefaultGuard;
     use tracing_subscriber::EnvFilter;
 
     fn init_tracing() -> Result<DefaultGuard> {
@@ -741,7 +732,7 @@ mod tests {
             registry
                 .validate("abc", &batch)
                 .await
-                .inspect_err(|err| error!(?err)),
+                .inspect_err(|err| debug!(?err)),
             Err(Error::Api(ErrorCode::InvalidRecord))
         ));
 

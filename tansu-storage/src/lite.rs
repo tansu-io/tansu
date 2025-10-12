@@ -66,10 +66,7 @@ use tansu_sans_io::{
     to_system_time, to_timestamp,
     txn_offset_commit_response::{TxnOffsetCommitResponsePartition, TxnOffsetCommitResponseTopic},
 };
-use tansu_schema::{
-    Registry,
-    lake::{House, LakeHouse as _},
-};
+use tansu_schema::Registry;
 use tracing::{debug, error};
 use url::Url;
 use uuid::Uuid;
@@ -156,10 +153,15 @@ pub struct Engine {
     node: i32,
     advertised_listener: Url,
     db: Arc<Mutex<Database>>,
-    #[allow(dead_code)]
+
     schemas: Option<Registry>,
+
+    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
+    lake: Option<tansu_schema::lake::House>,
+
     #[allow(dead_code)]
-    lake: Option<House>,
+    #[cfg(not(any(feature = "parquet", feature = "iceberg", feature = "delta")))]
+    lake: Option<()>,
 }
 
 impl Engine {
@@ -686,10 +688,13 @@ impl Engine {
             .inspect(|n| debug!(?n))
             .inspect_err(|err| error!(?err))?;
 
+        #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
         if !attributes.control
             && let Some(ref registry) = self.schemas
             && let Some(ref lake) = self.lake
         {
+            use tansu_schema::lake::LakeHouse as _;
+
             let lake_type = lake.lake_type().await?;
 
             if let Some(record_batch) = registry
@@ -968,7 +973,12 @@ pub struct Builder<C, N, L, D> {
     advertised_listener: L,
     storage: D,
     schemas: Option<Registry>,
-    lake: Option<House>,
+
+    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
+    lake: Option<tansu_schema::lake::House>,
+
+    #[cfg(not(any(feature = "parquet", feature = "iceberg", feature = "delta")))]
+    lake: Option<()>,
 }
 
 impl<C, N, L, D> Builder<C, N, L, D> {
@@ -1026,7 +1036,8 @@ impl<C, N, L, D> Builder<C, N, L, D> {
         Self { schemas, ..self }
     }
 
-    pub(crate) fn lake(self, lake: Option<House>) -> Self {
+    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
+    pub(crate) fn lake(self, lake: Option<tansu_schema::lake::House>) -> Self {
         Self { lake, ..self }
     }
 }

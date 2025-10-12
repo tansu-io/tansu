@@ -13,6 +13,16 @@ version.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = ["delta", "dynostore", "iceberg", "libsql", "parquet", "postgres"]
+delta = []
+dynostore = []
+libsql = []
+parquet = []
+postgres = []
+iceberg = []
+turso = []
+
 [dependencies]
 clap.workspace = true
 dotenv.workspace = true

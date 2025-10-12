@@ -17,21 +17,22 @@ use std::time::Duration;
 use crate::{EnvVarExp, Result};
 
 use super::DEFAULT_BROKER;
-use clap::{Parser, Subcommand};
+use clap::Parser;
 use tansu_broker::{NODE_ID, broker::Broker, coordinator::group::administrator::Controller};
 use tansu_sans_io::ErrorCode;
-use tansu_schema::{
-    Registry,
-    lake::{self},
-};
+use tansu_schema::Registry;
 use tansu_storage::StorageContainer;
 use tracing::debug;
 use url::Url;
 use uuid::Uuid;
 
+#[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
+use clap::Subcommand;
+
 #[derive(Clone, Debug, Parser)]
 pub(super) struct Arg {
     #[command(subcommand)]
+    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
     command: Option<Command>,
 
     /// All members of the same cluster should use the same id
@@ -79,8 +80,10 @@ pub(super) struct Arg {
 }
 
 #[derive(Clone, Debug, Subcommand)]
+#[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
 pub(super) enum Command {
     /// Schema topics are written as Apache Iceberg tables
+    #[cfg(feature = "iceberg")]
     Iceberg {
         /// Apache Parquet files are written to this location, examples are: file://./lake or s3://lake/
         #[arg(long, env = "DATA_LAKE")]
@@ -100,6 +103,7 @@ pub(super) enum Command {
     },
 
     /// Schema topics are written as Delta Lake tables
+    #[cfg(feature = "delta")]
     Delta {
         /// Apache Parquet files are written to this location, examples are: file://./lake or s3://lake/
         #[arg(long, env = "DATA_LAKE")]
@@ -115,6 +119,7 @@ pub(super) enum Command {
     },
 
     /// Schema topics are written in Parquet format
+    #[cfg(feature = "parquet")]
     Parquet {
         /// Apache Parquet files are written to this location, examples are: file://./lake or s3://lake/
         #[arg(long, env = "DATA_LAKE")]
@@ -155,47 +160,54 @@ impl Arg {
             })
             .transpose()?;
 
+        #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
         let lake_house = self
             .command
             .map(|command| match command {
+                #[cfg(feature = "iceberg")]
                 Command::Iceberg {
                     location,
                     catalog,
                     namespace,
                     warehouse,
-                } => lake::House::iceberg()
+                } => tansu_schema::lake::House::iceberg()
                     .location(location.into_inner())
                     .catalog(catalog.into_inner())
                     .namespace(namespace)
                     .warehouse(warehouse)
                     .build(),
+
+                #[cfg(feature = "delta")]
                 Command::Delta {
                     location,
                     database,
                     records_per_second,
-                } => lake::House::delta()
+                } => tansu_schema::lake::House::delta()
                     .location(location.into_inner())
                     .database(database)
                     .records_per_second(records_per_second)
                     .build(),
-                Command::Parquet { location } => lake::House::parquet()
+
+                #[cfg(feature = "parquet")]
+                Command::Parquet { location } => tansu_schema::lake::House::parquet()
                     .location(location.into_inner())
                     .build(),
             })
             .transpose()?;
 
-        Broker::<Controller<StorageContainer>, StorageContainer>::builder()
+        let broker = Broker::<Controller<StorageContainer>, StorageContainer>::builder()
             .node_id(NODE_ID)
             .cluster_id(cluster_id)
             .incarnation_id(incarnation_id)
             .advertised_listener(advertised_listener)
             .otlp_endpoint_url(otlp_endpoint_url)
             .schema_registry(schema_registry)
-            .lake_house(lake_house)
             .storage(storage_engine)
-            .listener(listener)
-            .build()
-            .await
-            .map_err(Into::into)
+            .listener(listener);
+
+        #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
+        let broker = broker.lake_house(lake_house);
+
+        broker.build().await.map_err(Into::into)
     }
 }
