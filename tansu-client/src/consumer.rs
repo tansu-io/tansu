@@ -54,8 +54,9 @@ impl Group {
     }
 }
 
-fn group(group_id: &str, topics: &[&str]) -> Result<(), Error> {
-    let q = JoinGroupRequest::default().group_id(group_id.into());
+#[allow(dead_code)]
+fn group(group_id: &str, _topics: &[&str]) -> Result<(), Error> {
+    let _ = JoinGroupRequest::default().group_id(group_id.into());
 
     Ok(())
 }
