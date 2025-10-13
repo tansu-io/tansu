@@ -13,7 +13,7 @@
 -- limitations under the License.
 
 create table if not exists txn_offset_commit_tp (
-    id integer primary key autoincrement,
+    id integer primary key autoincrement not null,
     offset_commit integer references txn_offset_commit (id),
     topition integer references topition (id),
     committed_offset integer,

@@ -1096,6 +1096,8 @@ impl Builder<String, i32, Url, Url> {
 }
 
 fn unique_constraint(error_code: ErrorCode) -> impl Fn(turso::Error) -> Error {
+    debug!(?error_code);
+
     let _ = error_code;
     move |err| {
         let _ = err;

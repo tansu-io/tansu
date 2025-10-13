@@ -13,7 +13,7 @@
 -- limitations under the License.
 
 create table if not exists topic_configuration (
-    id integer primary key autoincrement,
+    id integer primary key autoincrement not null,
     topic int references topic (id),
     name text not null,
     value text,

@@ -3777,6 +3777,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8bb03732005da905c88227371639bf1ad885cc712789c011c31c5fb3ab3ccf02"
 
 [[package]]
+name = "intrusive-collections"
+version = "0.9.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "189d0897e4cbe8c75efedf3502c18c887b05046e59d28404d4d8e46cbc4d1e86"
+dependencies = [
+ "memoffset",
+]
+
+[[package]]
 name = "io-uring"
 version = "0.7.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4266,6 +4275,15 @@ name = "memchr"
 version = "2.7.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32a282da65faaf38286cf3be983213fcf1d2e2a58700e808f83f4ea9a4804bc0"
+
+[[package]]
+name = "memoffset"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "488016bfae457b036d996092f6cb448677611ce4449e970ceaf42695203f218a"
+dependencies = [
+ "autocfg",
+]
 
 [[package]]
 name = "miette"
@@ -6396,6 +6414,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "sha1_smol"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbfa15b3dddfee50a0fff136974b3e1bde555604ba463834a7eb7deb6417705d"
+
+[[package]]
 name = "sha2"
 version = "0.10.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7543,8 +7567,8 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
 name = "turso"
-version = "0.2.0-pre.7"
-source = "git+https://github.com/tursodatabase/turso.git#1ca647fe68839096869108e73a0f5d5561a62cff"
+version = "0.3.0-pre.1"
+source = "git+https://github.com/tursodatabase/turso.git?tag=v0.3.0-pre.1#fb1042187b472940610c6a3b4b7759ac186efb83"
 dependencies = [
  "thiserror 2.0.16",
  "turso_core",
@@ -7552,8 +7576,8 @@ dependencies = [
 
 [[package]]
 name = "turso_core"
-version = "0.2.0-pre.7"
-source = "git+https://github.com/tursodatabase/turso.git#1ca647fe68839096869108e73a0f5d5561a62cff"
+version = "0.3.0-pre.1"
+source = "git+https://github.com/tursodatabase/turso.git?tag=v0.3.0-pre.1#fb1042187b472940610c6a3b4b7759ac186efb83"
 dependencies = [
  "aegis",
  "aes",
@@ -7567,6 +7591,7 @@ dependencies = [
  "fallible-iterator 0.3.0",
  "getrandom 0.2.16",
  "hex",
+ "intrusive-collections",
  "io-uring",
  "julian_day_converter",
  "libc",
@@ -7597,8 +7622,8 @@ dependencies = [
 
 [[package]]
 name = "turso_ext"
-version = "0.2.0-pre.7"
-source = "git+https://github.com/tursodatabase/turso.git#1ca647fe68839096869108e73a0f5d5561a62cff"
+version = "0.3.0-pre.1"
+source = "git+https://github.com/tursodatabase/turso.git?tag=v0.3.0-pre.1#fb1042187b472940610c6a3b4b7759ac186efb83"
 dependencies = [
  "chrono",
  "getrandom 0.3.3",
@@ -7607,8 +7632,8 @@ dependencies = [
 
 [[package]]
 name = "turso_macros"
-version = "0.2.0-pre.7"
-source = "git+https://github.com/tursodatabase/turso.git#1ca647fe68839096869108e73a0f5d5561a62cff"
+version = "0.3.0-pre.1"
+source = "git+https://github.com/tursodatabase/turso.git?tag=v0.3.0-pre.1#fb1042187b472940610c6a3b4b7759ac186efb83"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -7617,8 +7642,8 @@ dependencies = [
 
 [[package]]
 name = "turso_parser"
-version = "0.2.0-pre.7"
-source = "git+https://github.com/tursodatabase/turso.git#1ca647fe68839096869108e73a0f5d5561a62cff"
+version = "0.3.0-pre.1"
+source = "git+https://github.com/tursodatabase/turso.git?tag=v0.3.0-pre.1#fb1042187b472940610c6a3b4b7759ac186efb83"
 dependencies = [
  "bitflags",
  "miette",
@@ -7805,6 +7830,7 @@ dependencies = [
  "js-sys",
  "rand 0.9.2",
  "serde",
+ "sha1_smol",
  "wasm-bindgen",
 ]
 

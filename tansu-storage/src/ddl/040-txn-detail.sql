@@ -13,7 +13,7 @@
 -- limitations under the License.
 
 create table if not exists txn_detail (
-    id integer primary key autoincrement,
+    id integer primary key autoincrement not null,
     "transaction" integer references txn (id),
     producer_epoch integer references producer_epoch (id),
     transaction_timeout_ms integer not null,
