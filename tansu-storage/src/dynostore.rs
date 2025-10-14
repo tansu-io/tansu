@@ -1200,7 +1200,7 @@ impl Storage for DynoStore {
             responses.push((
                 topition.to_owned(),
                 match offset_request {
-                    ListOffset::Earliest => {
+                    ListOffset::Timestamp(..) | ListOffset::Earliest => {
                         let watermark = self.watermarks.lock().map(|mut locked| {
                             locked
                                 .entry(topition.to_owned())
@@ -1250,7 +1250,6 @@ impl Storage for DynoStore {
                                 .await?
                         }
                     }
-                    ListOffset::Timestamp(..) => todo!(),
                 },
             ));
         }
