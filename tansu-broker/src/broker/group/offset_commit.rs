@@ -38,7 +38,11 @@ where
         let correlation_id = req.correlation_id()?;
         let coordinator = ctx.state_mut();
 
-        let offset_commit = OffsetCommitRequest::try_from(req.body)?;
+        let mut offset_commit = OffsetCommitRequest::try_from(req.body)?;
+
+        _ = offset_commit
+            .retention_time_ms
+            .take_if(|retention_ms| retention_ms.is_negative());
 
         coordinator
             .offset_commit(OffsetCommit {

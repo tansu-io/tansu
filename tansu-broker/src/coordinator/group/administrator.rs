@@ -1613,12 +1613,12 @@ where
     }
 
     async fn commit_offset(&mut self, detail: &OffsetCommit<'_>) -> Result<Body> {
-        let retention_time_ms = detail
-            .retention_time_ms
-            .map_or(Ok(None), |ms| {
-                u64::try_from(ms).map_err(Error::from).map(Some)
-            })?
-            .map(Duration::from_millis);
+        let retention_time_ms = detail.retention_time_ms.map_or(Ok(None), |ms| {
+            u64::try_from(ms)
+                .map(Duration::from_millis)
+                .map_err(Error::from)
+                .map(Some)
+        })?;
 
         if let Some(topics) = detail.topics {
             let mut offsets = vec![];
