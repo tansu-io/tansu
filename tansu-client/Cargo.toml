@@ -1,14 +1,14 @@
 [package]
 name = "tansu-client"
 description = "A Service/Layer based Kafka client"
-edition.workspace = true
-version.workspace = true
-license.workspace = true
-homepage.workspace = true
-repository.workspace = true
-keywords.workspace = true
 authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
 include.workspace = true
+keywords.workspace = true
+license.workspace = true
+repository.workspace = true
+version.workspace = true
 
 [dependencies]
 bytes.workspace = true

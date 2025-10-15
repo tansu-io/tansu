@@ -4,20 +4,11 @@ description = "Storage abstraction for PostgreSQL, libSQL and ObjectStore (S3 or
 authors.workspace = true
 edition.workspace = true
 homepage.workspace = true
+include.workspace = true
 keywords.workspace = true
 license.workspace = true
 repository.workspace = true
 version.workspace = true
-
-include = [
-    "build.rs",
-    "benches/*.rs",
-    "src/**/*.rs",
-    "src/**/*.sql",
-    "tests",
-    "Cargo.toml",
-    "LICENSE",
-]
 
 [features]
 default = []
