@@ -1200,7 +1200,7 @@ impl Storage for DynoStore {
             responses.push((
                 topition.to_owned(),
                 match offset_request {
-                    ListOffset::Earliest => {
+                    ListOffset::Timestamp(..) | ListOffset::Earliest => {
                         let watermark = self.watermarks.lock().map(|mut locked| {
                             locked
                                 .entry(topition.to_owned())
@@ -1250,7 +1250,6 @@ impl Storage for DynoStore {
                                 .await?
                         }
                     }
-                    ListOffset::Timestamp(..) => todo!(),
                 },
             ));
         }
@@ -2608,16 +2607,16 @@ impl Storage for DynoStore {
         Ok(())
     }
 
-    fn cluster_id(&self) -> Result<&str> {
-        Ok(self.cluster.as_str())
+    async fn cluster_id(&self) -> Result<String> {
+        Ok(self.cluster.clone())
     }
 
-    fn node(&self) -> Result<i32> {
+    async fn node(&self) -> Result<i32> {
         Ok(self.node)
     }
 
-    fn advertised_listener(&self) -> Result<&Url> {
-        Ok(&self.advertised_listener)
+    async fn advertised_listener(&self) -> Result<Url> {
+        Ok(self.advertised_listener.clone())
     }
 }
 

@@ -49,7 +49,7 @@ async fn req() -> Result<(), Error> {
         .await?;
 
     assert_eq!(
-        Some(ErrorCode::None.into()),
+        Some(ErrorCode::None),
         if let Some(error_code) = response.error_code {
             ErrorCode::try_from(error_code).map(Some)?
         } else {

@@ -27,11 +27,11 @@ mod common;
 pub async fn join_with_empty_member_id(
     cluster_id: impl Into<String>,
     broker_id: i32,
-    mut sc: StorageContainer,
+    sc: StorageContainer,
 ) -> Result<()> {
-    register_broker(cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, &sc).await?;
 
-    let mut controller = Controller::with_storage(sc.clone())?;
+    let mut controller = Controller::with_storage(sc)?;
 
     let session_timeout_ms = 45_000;
     let rebalance_timeout_ms = Some(300_000);
@@ -95,9 +95,9 @@ pub async fn join_with_empty_member_id(
 pub async fn rejoin_with_empty_member_id(
     cluster_id: impl Into<String>,
     broker_id: i32,
-    mut sc: StorageContainer,
+    sc: StorageContainer,
 ) -> Result<()> {
-    register_broker(cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, &sc).await?;
 
     let mut controller = Controller::with_storage(sc.clone())?;
 

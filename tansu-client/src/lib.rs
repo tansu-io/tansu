@@ -629,10 +629,7 @@ impl Service<Object<ConnectionManager>, Bytes> for BytesConnectionService {
         let local = c.stream.local_addr()?;
         let peer = c.stream.peer_addr()?;
 
-        let attributes = [
-            KeyValue::new("correlation_id", c.correlation_id.to_string()),
-            KeyValue::new("peer", peer.to_string()),
-        ];
+        let attributes = [KeyValue::new("peer", peer.to_string())];
 
         let span = span!(Level::DEBUG, "client", local = %local, peer = %peer);
 
@@ -776,10 +773,7 @@ mod tests {
                     .and_then(|builder| builder.build())?,
             );
 
-        server
-            .serve(Context::default(), listener)
-            .await
-            .map_err(Into::into)
+        server.serve(Context::default(), listener).await
     }
 
     #[tokio::test]

@@ -39,6 +39,7 @@ use tansu_client::{Client, ConnectionManager};
 use tansu_otel::meter_provider;
 use tansu_sans_io::{
     ErrorCode, ProduceRequest,
+    primitive::ByteSize,
     produce_request::{PartitionProduceData, TopicProduceData},
     record::{deflated, inflated},
 };
@@ -119,6 +120,7 @@ pub struct Configuration {
     schema_registry: Url,
     batch_size: u32,
     per_second: Option<u32>,
+    throughput: Option<u32>,
     producers: u32,
     duration: Option<Duration>,
     otlp_endpoint_url: Option<Url>,
@@ -160,12 +162,49 @@ static PRODUCE_REQUEST_RESPONSE_DURATION: LazyLock<Histogram<u64>> = LazyLock::n
         .build()
 });
 
+fn frame(name: String, index: i32, schema: Schema, batch_size: i32) -> Result<deflated::Frame> {
+    let attributes = [
+        KeyValue::new("topic", name.clone()),
+        KeyValue::new("partition", index.to_string()),
+        KeyValue::new("batch_size", batch_size.to_string()),
+    ];
+
+    let start = SystemTime::now();
+
+    let mut batch = inflated::Batch::builder();
+    let offset_deltas = 0..batch_size;
+
+    for offset_delta in offset_deltas {
+        batch = schema
+            .generate()
+            .map(|record| record.offset_delta(offset_delta))
+            .map(|record| batch.record(record))?;
+    }
+
+    batch
+        .last_offset_delta(batch_size)
+        .build()
+        .map(|batch| inflated::Frame {
+            batches: vec![batch],
+        })
+        .and_then(deflated::Frame::try_from)
+        .inspect(|_| {
+            GENERATE_PRODUCE_BATCH_DURATION.record(
+                start
+                    .elapsed()
+                    .map_or(0, |duration| duration.as_millis() as u64),
+                &attributes,
+            )
+        })
+        .map_err(Into::into)
+}
+
 pub async fn produce(
     client: Client,
     name: String,
     index: i32,
-    schema: Schema,
     batch_size: i32,
+    frame: deflated::Frame,
 ) -> Result<()> {
     debug!(?client, %name, index, batch_size);
 
@@ -174,36 +213,6 @@ pub async fn produce(
         KeyValue::new("partition", index.to_string()),
         KeyValue::new("batch_size", batch_size.to_string()),
     ];
-
-    let frame = {
-        let start = SystemTime::now();
-
-        let mut batch = inflated::Batch::builder();
-        let offset_deltas = 0..batch_size;
-
-        for offset_delta in offset_deltas {
-            batch = schema
-                .generate()
-                .map(|record| record.offset_delta(offset_delta))
-                .map(|record| batch.record(record))?;
-        }
-
-        batch
-            .last_offset_delta(batch_size)
-            .build()
-            .map(|batch| inflated::Frame {
-                batches: vec![batch],
-            })
-            .and_then(deflated::Frame::try_from)
-            .inspect(|_| {
-                GENERATE_PRODUCE_BATCH_DURATION.record(
-                    start
-                        .elapsed()
-                        .map_or(0, |duration| duration.as_millis() as u64),
-                    &attributes,
-                )
-            })?
-    };
 
     let req = ProduceRequest::default().topic_data(Some(
         [TopicProduceData::default().name(name).partition_data(Some(
@@ -269,6 +278,8 @@ static PRODUCE_API_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
 
 impl Generate {
     pub async fn main(self) -> Result<ErrorCode> {
+        debug!(configuration = ?self.configuration);
+
         let meter_provider = self
             .configuration
             .otlp_endpoint_url
@@ -291,6 +302,7 @@ impl Generate {
         let rate_limiter = self
             .configuration
             .per_second
+            .or(self.configuration.throughput)
             .and_then(NonZeroU32::new)
             .map(Quota::per_second)
             .map(RateLimiter::direct)
@@ -329,8 +341,17 @@ impl Generate {
                         loop {
                             debug!(%topic, partition);
 
-                            if let Some(ref rate_limiter) = rate_limiter {
+                           let Ok(frame) = frame(topic.clone(), partition, schema.clone(), batch_size.get() as i32) else {
+                               break
+                           };
+
+                           if let Some(ref rate_limiter) = rate_limiter {
                                 let rate_limit_start = SystemTime::now();
+
+
+                                let cells = self.configuration.throughput.and(frame.size_in_bytes().ok().and_then(|bytes|NonZeroU32::new(bytes as u32))).unwrap_or(batch_size);
+                                debug!(cells);
+
 
                                 tokio::select! {
                                     cancelled = token.cancelled() => {
@@ -338,10 +359,11 @@ impl Generate {
                                         break
                                     },
 
-                                    Ok(_) = rate_limiter.until_n_ready_with_jitter(batch_size, Jitter::up_to(Duration::from_millis(50))) => {
+                                    Ok(_) = rate_limiter.until_n_ready_with_jitter(cells, Jitter::up_to(Duration::from_millis(50))) => {
                                         RATE_LIMIT_DURATION.record(
                                         rate_limit_start
                                             .elapsed()
+                                            .inspect(|duration|debug!(rate_limit_duration_ms = duration.as_millis()))
                                             .map_or(0, |duration| duration.as_millis() as u64),
                                             &attributes)
 
@@ -357,14 +379,15 @@ impl Generate {
                                     break
                                 },
 
-                                Ok(_) = produce(client.clone(), topic.clone(), partition, schema.clone(), batch_size.get() as i32) => {
+                                Ok(_) = produce(client.clone(), topic.clone(), partition,  batch_size.get() as i32, frame) => {
                                     PRODUCE_RECORD_COUNT.add(batch_size.get() as u64, &attributes);
-                                    PRODUCE_API_DURATION.record(produce_start.elapsed().map_or(0, |duration| duration.as_millis() as u64), &attributes);
+                                    PRODUCE_API_DURATION.record(produce_start.elapsed().inspect(|duration|debug!(produce_duration_ms = duration.as_millis())).map_or(0, |duration| duration.as_millis() as u64), &attributes);
                                 },
                             }
                         }
 
-                    }.instrument(span).await
+                    }.instrument(span).await;
+
 
                 });
         }
@@ -449,6 +472,7 @@ pub struct Builder<B, T, P, S> {
     schema_registry: S,
     batch_size: u32,
     per_second: Option<u32>,
+    throughput: Option<u32>,
     producers: u32,
     duration: Option<Duration>,
     otlp_endpoint_url: Option<Url>,
@@ -465,6 +489,7 @@ impl Default
             schema_registry: Default::default(),
             batch_size: 1,
             per_second: None,
+            throughput: None,
             producers: 1,
             duration: None,
             otlp_endpoint_url: None,
@@ -481,6 +506,7 @@ impl<B, T, P, S> Builder<B, T, P, S> {
             schema_registry: self.schema_registry,
             batch_size: self.batch_size,
             per_second: self.per_second,
+            throughput: self.throughput,
             producers: self.producers,
             duration: self.duration,
             otlp_endpoint_url: self.otlp_endpoint_url,
@@ -495,6 +521,7 @@ impl<B, T, P, S> Builder<B, T, P, S> {
             schema_registry: self.schema_registry,
             batch_size: self.batch_size,
             per_second: self.per_second,
+            throughput: self.throughput,
             producers: self.producers,
             duration: self.duration,
             otlp_endpoint_url: self.otlp_endpoint_url,
@@ -509,6 +536,7 @@ impl<B, T, P, S> Builder<B, T, P, S> {
             schema_registry: self.schema_registry,
             batch_size: self.batch_size,
             per_second: self.per_second,
+            throughput: self.throughput,
             producers: self.producers,
             duration: self.duration,
             otlp_endpoint_url: self.otlp_endpoint_url,
@@ -523,79 +551,37 @@ impl<B, T, P, S> Builder<B, T, P, S> {
             schema_registry,
             batch_size: self.batch_size,
             per_second: self.per_second,
+            throughput: self.throughput,
             producers: self.producers,
             duration: self.duration,
             otlp_endpoint_url: self.otlp_endpoint_url,
         }
     }
 
-    pub fn batch_size(self, batch_size: u32) -> Builder<B, T, P, S> {
-        Builder {
-            broker: self.broker,
-            topic: self.topic,
-            partition: self.partition,
-            schema_registry: self.schema_registry,
-            batch_size,
-            per_second: self.per_second,
-            producers: self.producers,
-            duration: self.duration,
-            otlp_endpoint_url: self.otlp_endpoint_url,
-        }
+    pub fn batch_size(self, batch_size: u32) -> Self {
+        Self { batch_size, ..self }
     }
 
-    pub fn per_second(self, per_second: Option<u32>) -> Builder<B, T, P, S> {
-        Builder {
-            broker: self.broker,
-            topic: self.topic,
-            partition: self.partition,
-            schema_registry: self.schema_registry,
-            batch_size: self.batch_size,
-            per_second,
-            producers: self.producers,
-            duration: self.duration,
-            otlp_endpoint_url: self.otlp_endpoint_url,
-        }
+    pub fn per_second(self, per_second: Option<u32>) -> Self {
+        Self { per_second, ..self }
     }
 
-    pub fn producers(self, producers: u32) -> Builder<B, T, P, S> {
-        Builder {
-            broker: self.broker,
-            topic: self.topic,
-            partition: self.partition,
-            schema_registry: self.schema_registry,
-            batch_size: self.batch_size,
-            per_second: self.per_second,
-            producers,
-            duration: self.duration,
-            otlp_endpoint_url: self.otlp_endpoint_url,
-        }
+    pub fn throughput(self, throughput: Option<u32>) -> Self {
+        Self { throughput, ..self }
     }
 
-    pub fn duration(self, duration: Option<Duration>) -> Builder<B, T, P, S> {
-        Builder {
-            broker: self.broker,
-            topic: self.topic,
-            partition: self.partition,
-            schema_registry: self.schema_registry,
-            batch_size: self.batch_size,
-            per_second: self.per_second,
-            producers: self.producers,
-            duration,
-            otlp_endpoint_url: self.otlp_endpoint_url,
-        }
+    pub fn producers(self, producers: u32) -> Self {
+        Self { producers, ..self }
     }
 
-    pub fn otlp_endpoint_url(self, otlp_endpoint_url: Option<Url>) -> Builder<B, T, P, S> {
-        Builder {
-            broker: self.broker,
-            topic: self.topic,
-            partition: self.partition,
-            schema_registry: self.schema_registry,
-            batch_size: self.batch_size,
-            per_second: self.per_second,
-            producers: self.producers,
-            duration: self.duration,
+    pub fn duration(self, duration: Option<Duration>) -> Self {
+        Self { duration, ..self }
+    }
+
+    pub fn otlp_endpoint_url(self, otlp_endpoint_url: Option<Url>) -> Self {
+        Self {
             otlp_endpoint_url,
+            ..self
         }
     }
 }
@@ -609,6 +595,7 @@ impl Builder<Url, String, i32, Url> {
             schema_registry: self.schema_registry,
             batch_size: self.batch_size,
             per_second: self.per_second,
+            throughput: self.throughput,
             producers: self.producers,
             duration: self.duration,
             otlp_endpoint_url: self.otlp_endpoint_url,

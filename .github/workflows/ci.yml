@@ -50,10 +50,11 @@ jobs:
         with:
           components: clippy, rustfmt
           cache: false
-      - run: cargo build --all-features
-      - run: cargo fmt --all --check
-      - run: cargo clippy -- -D warnings
-      - run: cargo test --all-features
+      - run: just check
+      - run: just build
+      - run: just fmt
+      - run: just clippy
+      - run: just test
   typos:
     runs-on: ubuntu-latest
     steps:
@@ -258,7 +259,7 @@ jobs:
           RUSTFLAGS: ${{matrix.flags}}
           TARGET: ${{matrix.target}}
         run: |
-          cargo build --release --target ${{matrix.target}}
+          cargo build --release --target ${{matrix.target}} --features delta,dynostore,iceberg,libsql,parquet,postgres
           dist=$(mktemp -d -p ${{runner.temp}})
           mkdir "$dist"/bin
           cp target/"${TARGET}"/release/tansu "$dist"/bin

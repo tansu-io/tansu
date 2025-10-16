@@ -1551,6 +1551,7 @@ dependencies = [
  "ciborium",
  "clap",
  "criterion-plot",
+ "futures",
  "is-terminal",
  "itertools 0.10.5",
  "num-traits",
@@ -1563,6 +1564,7 @@ dependencies = [
  "serde_derive",
  "serde_json",
  "tinytemplate",
+ "tokio",
  "walkdir",
 ]
 
@@ -3398,6 +3400,26 @@ name = "httpdate"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
+
+[[package]]
+name = "human-units"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "47cf34dbcbbb7f1f6589c18e26f15a5a72592750dd5472037eb78fc0f92020d4"
+dependencies = [
+ "human-units-derive",
+ "paste",
+]
+
+[[package]]
+name = "human-units-derive"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d038795b69839775557f262a2a514913a34d08bc54b9965fef1db5041fbf502e"
+dependencies = [
+ "quote",
+ "syn 2.0.106",
+]
 
 [[package]]
 name = "humantime"
@@ -6721,7 +6743,7 @@ checksum = "7b2093cf4c8eb1e67749a6762251bc9cd836b6fc171623bd0a9d324d37af2417"
 
 [[package]]
 name = "tansu"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "dotenv",
  "tansu-broker",
@@ -6733,7 +6755,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-broker"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "async-trait",
  "bytes",
@@ -6765,6 +6787,7 @@ dependencies = [
  "thiserror 2.0.17",
  "tokio",
  "tokio-postgres",
+ "tokio-util",
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
@@ -6775,7 +6798,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-cat"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "bytes",
  "futures",
@@ -6795,10 +6818,11 @@ dependencies = [
 
 [[package]]
 name = "tansu-cli"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "clap",
  "dotenv",
+ "human-units",
  "humantime",
  "regex",
  "tansu-broker",
@@ -6819,7 +6843,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-client"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "bytes",
  "deadpool",
@@ -6838,7 +6862,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-generator"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "futures",
  "futures-core",
@@ -6865,7 +6889,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-model"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "convert_case",
  "lazy_static",
@@ -6880,7 +6904,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-otel"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "opentelemetry 0.30.0",
  "opentelemetry-otlp",
@@ -6893,7 +6917,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-proxy"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "async-trait",
  "bytes",
@@ -6918,7 +6942,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-sans-io"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "bytes",
  "clap",
@@ -6946,7 +6970,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-schema"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "anyhow",
  "apache-avro",
@@ -6992,7 +7016,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-service"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "async-trait",
  "bytes",
@@ -7012,7 +7036,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-storage"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "assert_matches",
  "async-trait",
@@ -7043,6 +7067,7 @@ dependencies = [
  "time",
  "tokio",
  "tokio-postgres",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
  "turso",
@@ -7052,7 +7077,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-topic"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "futures",
  "futures-core",

@@ -153,7 +153,7 @@ async fn create_delete_create_by_name() -> Result<(), Error> {
         CreateTopicsResponse { topics: Some(topics), ..} => {
             assert_eq!(topics.len(), 1);
             assert_eq!(topic, topics[0].name.as_str());
-            assert_matches!(topics[0].configs.as_ref(), Some(configs) if configs.len() == 0);
+            assert_matches!(topics[0].configs.as_ref(), Some(configs) if configs.is_empty());
             assert_eq!(topics[0].topic_config_error_code, Some(0));
             assert_eq!(topics[0].num_partitions, Some(num_partitions));
             assert_eq!(topics[0].replication_factor, Some(replication_factor));
@@ -210,7 +210,7 @@ async fn create_delete_create_by_name() -> Result<(), Error> {
         CreateTopicsResponse { topics: Some(topics), ..} => {
             assert_eq!(topics.len(), 1);
             assert_eq!(topic, topics[0].name.as_str());
-            assert_matches!(topics[0].configs.as_ref(), Some(configs) if configs.len() == 0);
+            assert_matches!(topics[0].configs.as_ref(), Some(configs) if configs.is_empty());
             assert_eq!(topics[0].topic_config_error_code, Some(0));
             assert_eq!(topics[0].num_partitions, Some(num_partitions));
             assert_eq!(topics[0].replication_factor, Some(replication_factor));

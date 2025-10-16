@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::time::SystemTime;
+
 use bytes::Bytes;
 use common::{StorageType, alphanumeric_string, init_tracing, register_broker};
 use rand::{prelude::*, rng};
@@ -20,6 +22,7 @@ use tansu_sans_io::{
     IsolationLevel, ListOffset,
     create_topics_request::CreatableTopic,
     record::{Record, inflated},
+    to_system_time,
 };
 use tansu_storage::{Storage, StorageContainer, Topition};
 use tracing::debug;
@@ -31,9 +34,9 @@ pub mod common;
 pub async fn new_topic(
     cluster_id: impl Into<String>,
     broker_id: i32,
-    mut sc: StorageContainer,
+    sc: StorageContainer,
 ) -> Result<()> {
-    register_broker(cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, &sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -76,15 +79,57 @@ pub async fn new_topic(
         assert_eq!(None, response.timestamp);
     }
 
+    let offsets = (0..num_partitions)
+        .map(|partition| {
+            (
+                Topition::new(topic_name.clone(), partition),
+                ListOffset::Earliest,
+            )
+        })
+        .collect::<Vec<_>>();
+
+    let items = sc
+        .list_offsets(IsolationLevel::ReadUncommitted, &offsets[..])
+        .await?;
+
+    assert!(!items.is_empty());
+
+    for (_toptition, response) in items {
+        assert_eq!(Some(0), response.offset);
+        assert_eq!(None, response.timestamp);
+    }
+
+    let timestamp = to_system_time(0)?;
+
+    let offsets = (0..num_partitions)
+        .map(|partition| {
+            (
+                Topition::new(topic_name.clone(), partition),
+                ListOffset::Timestamp(timestamp),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    let items = sc
+        .list_offsets(IsolationLevel::ReadUncommitted, &offsets[..])
+        .await?;
+
+    assert!(!items.is_empty());
+
+    for (_toptition, response) in items {
+        assert_eq!(Some(0), response.offset);
+        assert_eq!(None, response.timestamp);
+    }
+
     Ok(())
 }
 
 pub async fn single_record(
     cluster_id: impl Into<String>,
     broker_id: i32,
-    mut sc: StorageContainer,
+    sc: StorageContainer,
 ) -> Result<()> {
-    register_broker(cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, &sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -118,12 +163,16 @@ pub async fn single_record(
         .and_then(TryInto::try_into)
         .inspect(|deflated| debug!(?deflated))?;
 
+    let before = SystemTime::now();
+
     assert_eq!(
         0,
         sc.produce(None, &topition, batch)
             .await
             .inspect(|offset| debug!(?offset))?
     );
+
+    let after = SystemTime::now();
 
     let offsets = [(topition.clone(), ListOffset::Latest)];
 
@@ -133,6 +182,33 @@ pub async fn single_record(
 
     assert_eq!(1, responses.len());
     assert_eq!(Some(1), responses[0].1.offset);
+
+    let offsets = [(topition.clone(), ListOffset::Earliest)];
+
+    let responses = sc
+        .list_offsets(IsolationLevel::ReadUncommitted, &offsets[..])
+        .await?;
+
+    assert_eq!(1, responses.len());
+    assert_eq!(Some(0), responses[0].1.offset);
+
+    let offsets = [(topition.clone(), ListOffset::Timestamp(before))];
+
+    let responses = sc
+        .list_offsets(IsolationLevel::ReadUncommitted, &offsets[..])
+        .await?;
+
+    assert_eq!(1, responses.len());
+    assert_eq!(Some(0), responses[0].1.offset);
+
+    let offsets = [(topition.clone(), ListOffset::Timestamp(after))];
+
+    let responses = sc
+        .list_offsets(IsolationLevel::ReadUncommitted, &offsets[..])
+        .await?;
+
+    assert_eq!(1, responses.len());
+    assert_eq!(Some(0), responses[0].1.offset);
 
     Ok(())
 }

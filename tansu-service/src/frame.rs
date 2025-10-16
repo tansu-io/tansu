@@ -245,7 +245,7 @@ where
                     .map_err(Into::into)
                 })
                 .inspect(|response| {
-                    debug!(?response);
+                    debug!(response = ?&response[..]);
                     API_REQUESTS.add(1, &attributes);
                 })
                 .inspect_err(|err| {
