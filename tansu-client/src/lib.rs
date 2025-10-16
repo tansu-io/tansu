@@ -124,6 +124,10 @@ use tracing::{Instrument, Level, debug, error, span};
 use tracing_subscriber::filter::ParseError;
 use url::Url;
 
+mod consumer;
+
+pub use consumer::Group;
+
 /// Client Errors
 #[derive(thiserror::Error, Clone, Debug)]
 pub enum Error {
