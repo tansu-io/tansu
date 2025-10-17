@@ -25,7 +25,7 @@ pub(super) struct Arg {
     pub(super) listener_url: EnvVarExp<Url>,
 
     /// The proxy will forward traffic to this origin broker
-    #[arg(long, default_value = DEFAULT_BROKER)]
+    #[arg(long, env = "ORIGIN_URL", default_value = DEFAULT_BROKER)]
     pub(super) origin_url: EnvVarExp<Url>,
 
     /// OTEL Exporter OTLP endpoint
