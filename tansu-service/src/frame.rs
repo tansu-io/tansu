@@ -49,7 +49,7 @@ where
     State: Clone + Debug,
 {
     fn matches(&self, ext: Option<&mut Extensions>, ctx: &Context<State>, req: &Frame) -> bool {
-        debug!(?ext, ?ctx, ?req);
+        let _ = (ext, ctx);
         req.api_key().is_ok_and(|api_key| api_key == self.0)
     }
 }
