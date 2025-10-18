@@ -106,6 +106,7 @@ use std::{
     time::SystemTime,
 };
 
+use backoff::{ExponentialBackoff, future::retry};
 use bytes::Bytes;
 use deadpool::managed::{self, BuildError, Object, PoolError};
 use opentelemetry::{
@@ -220,25 +221,31 @@ impl managed::Manager for ConnectionManager {
         let attributes = [KeyValue::new("broker", self.broker.to_string())];
         let start = SystemTime::now();
 
-        TcpStream::connect(host_port(self.broker.clone()).await?)
-            .await
-            .inspect(|_| {
-                TCP_CONNECT_DURATION.record(
-                    start
-                        .elapsed()
-                        .map_or(0, |duration| duration.as_millis() as u64),
-                    &attributes,
-                )
-            })
-            .inspect_err(|err| {
-                error!(broker = %self.broker, ?err);
-                TCP_CONNECT_ERRORS.add(1, &attributes);
-            })
-            .map(|stream| Connection {
-                stream,
-                correlation_id: 0,
-            })
-            .map_err(Into::into)
+        let addr = host_port(self.broker.clone()).await?;
+        debug!(%addr);
+
+        retry(ExponentialBackoff::default(), || async {
+            Ok(TcpStream::connect(addr)
+                .await
+                .inspect(|_| {
+                    TCP_CONNECT_DURATION.record(
+                        start
+                            .elapsed()
+                            .map_or(0, |duration| duration.as_millis() as u64),
+                        &attributes,
+                    )
+                })
+                .inspect_err(|err| {
+                    error!(broker = %self.broker, ?err);
+                    TCP_CONNECT_ERRORS.add(1, &attributes);
+                })
+                .map(|stream| Connection {
+                    stream,
+                    correlation_id: 0,
+                })?)
+        })
+        .await
+        .map_err(Into::into)
     }
 
     async fn recycle(
@@ -464,7 +471,7 @@ where
     type Error = S::Error;
 
     async fn serve(&self, ctx: Context<Pool>, req: Frame) -> Result<Self::Response, Self::Error> {
-        debug!(?ctx, ?req);
+        debug!(?req);
 
         let api_key = req.api_key()?;
         let api_version = req.api_version()?;
@@ -525,7 +532,7 @@ where
     type Error = S::Error;
 
     async fn serve(&self, ctx: Context<Pool>, req: Q) -> Result<Self::Response, Self::Error> {
-        debug!(?ctx, ?req);
+        debug!(?req);
         let pool = ctx.state();
         let api_key = Q::KEY;
         let api_version = pool.manager().api_version(api_key)?;
@@ -563,7 +570,7 @@ impl BytesConnectionService {
         frame: Bytes,
         attributes: &[KeyValue],
     ) -> Result<(), Error> {
-        debug!(?frame);
+        debug!(frame = ?&frame[..]);
 
         let start = SystemTime::now();
 
@@ -611,7 +618,7 @@ impl BytesConnectionService {
                 TCP_RECEIVE_ERRORS.add(1, attributes);
             })?;
 
-        Ok(Bytes::from(buffer)).inspect(|frame| debug!(?frame))
+        Ok(Bytes::from(buffer)).inspect(|frame| debug!(frame = ?&frame[..]))
     }
 }
 

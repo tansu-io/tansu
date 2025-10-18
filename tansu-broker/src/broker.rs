@@ -173,7 +173,7 @@ where
     }
 
     pub async fn listen(&self) -> Result<()> {
-        debug!(listener = %self.listener, advertised_listener = %self.advertised_listener);
+        debug!(%self.listener, %self.advertised_listener);
 
         let listener = TcpListener::bind(self.listener.host().map_or_else(
             || {
@@ -184,6 +184,7 @@ where
             },
             |host| {
                 let port = self.listener.port().unwrap_or(9092);
+                debug!(?host, port);
 
                 match host {
                     url::Host::Domain(domain) => SocketAddr::from_str(&format!("{domain}:{port}"))
@@ -194,6 +195,7 @@ where
             },
         ))
         .await
+        .inspect(|listener| debug!(listener = ?listener.local_addr().ok()))
         .inspect_err(|err| error!(?err, %self.advertised_listener))?;
 
         let mut interval = time::interval(Duration::from_millis(600_000));

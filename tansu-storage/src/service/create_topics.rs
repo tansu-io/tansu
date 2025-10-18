@@ -97,7 +97,7 @@ where
 
             let num_partitions = Some(match topic.num_partitions {
                 -1 => {
-                    topic.num_partitions = 1;
+                    topic.num_partitions = 3;
                     topic.num_partitions
                 }
                 otherwise => otherwise,
@@ -105,7 +105,7 @@ where
 
             let replication_factor = Some(match topic.replication_factor {
                 -1 => {
-                    topic.replication_factor = 3;
+                    topic.replication_factor = 1;
                     topic.replication_factor
                 }
                 otherwise => otherwise,

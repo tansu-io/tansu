@@ -11,6 +11,7 @@ repository.workspace = true
 version.workspace = true
 
 [dependencies]
+backoff.workspace = true
 bytes.workspace = true
 deadpool.workspace = true
 opentelemetry-semantic-conventions.workspace = true
