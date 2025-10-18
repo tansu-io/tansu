@@ -36,7 +36,7 @@ mod topic;
 
 const DEFAULT_BROKER: &str = "tcp://localhost:9092";
 
-fn storage_engines() -> String {
+fn storage_engines() -> Vec<&'static str> {
     let mut engines = Vec::new();
 
     #[cfg(feature = "dynostore")]
@@ -51,11 +51,10 @@ fn storage_engines() -> String {
     #[cfg(feature = "turso")]
     engines.push("turso");
 
-    format!("Storage engines: {}", engines.join(", "))
+    engines
 }
 
-#[cfg(any(feature = "delta", feature = "iceberg"))]
-fn lakes() -> String {
+fn lakes() -> Vec<&'static str> {
     let mut lakes = Vec::new();
 
     #[cfg(feature = "delta")]
@@ -64,16 +63,15 @@ fn lakes() -> String {
     #[cfg(feature = "iceberg")]
     lakes.push("iceberg");
 
-    format!("Data lakes: {}", lakes.join(", "))
-}
-
-#[cfg(not(any(feature = "delta", feature = "iceberg")))]
-fn lakes() -> String {
-    "Data lakes:\n".into()
+    lakes
 }
 
 fn after_help() -> String {
-    [storage_engines(), lakes()].join("\n")
+    [
+        format!("Storage engines: {}", storage_engines().join(", ")),
+        format!("Data lakes: {}", lakes().join(", ")),
+    ]
+    .join("\n")
 }
 
 #[derive(Clone, Debug, Parser)]
@@ -119,7 +117,11 @@ enum Command {
 
 impl Cli {
     pub async fn main() -> Result<ErrorCode> {
-        debug!(pid = process::id());
+        debug!(
+            pid = process::id(),
+            storage = ?storage_engines(),
+            lakes = ?lakes()
+        );
 
         let cli = Cli::parse();
 
@@ -140,6 +142,7 @@ impl Cli {
 
             Command::Proxy(arg) => tansu_proxy::Proxy::main(
                 arg.listener_url.into_inner(),
+                arg.advertised_listener_url.into_inner(),
                 arg.origin_url.into_inner(),
                 arg.otlp_endpoint_url
                     .map(|otlp_endpoint_url| otlp_endpoint_url.into_inner()),

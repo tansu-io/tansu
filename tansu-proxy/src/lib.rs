@@ -18,7 +18,7 @@ use opentelemetry_sdk::error::OTelSdkError;
 use opentelemetry_semantic_conventions::SCHEMA_URL;
 use rama::{
     Context, Layer, Service,
-    layer::{HijackLayer, MapErrLayer, MapResponseLayer},
+    layer::{HijackLayer, MapErrLayer, MapRequestLayer, MapResponseLayer},
 };
 use std::{
     fmt, io,
@@ -30,8 +30,8 @@ use tansu_client::{
 };
 use tansu_otel::meter_provider;
 use tansu_sans_io::{
-    ApiKey, ErrorCode, MetadataRequest, MetadataResponse, ProduceRequest,
-    metadata_response::MetadataResponseBroker,
+    ApiKey, ErrorCode, MetadataRequest, MetadataResponse, NULL_TOPIC_ID, ProduceRequest,
+    metadata_request::MetadataRequestTopic, metadata_response::MetadataResponseBroker,
 };
 use tansu_service::{
     BytesFrameLayer, FrameApiKeyMatcher, FrameBytesLayer, FrameRequestLayer, TcpBytesLayer,
@@ -123,18 +123,23 @@ pub(crate) static METER: LazyLock<Meter> = LazyLock::new(|| {
 #[derive(Clone, Debug)]
 pub struct Proxy {
     listener: Url,
+    advertised_listener: Url,
     origin: Url,
 }
 
 impl Proxy {
     const NODE_ID: i32 = 111;
 
-    pub fn new(listener: Url, origin: Url) -> Self {
-        Self { listener, origin }
+    pub fn new(listener: Url, advertised_listener: Url, origin: Url) -> Self {
+        Self {
+            listener,
+            advertised_listener,
+            origin,
+        }
     }
 
     pub async fn listen(&self) -> Result<(), Error> {
-        debug!(%self.listener, %self.origin);
+        debug!(%self.listener, %self.advertised_listener, %self.origin);
 
         let configuration = ResourceConfig::default();
 
@@ -164,20 +169,44 @@ impl Proxy {
         )
             .into_layer(BytesConnectionService);
 
-        let host = String::from(self.listener.host_str().unwrap_or("localhost"));
-        let port = i32::from(self.listener.port().unwrap_or(9092));
+        let host = String::from(self.advertised_listener.host_str().unwrap_or("localhost"));
+        let port = i32::from(self.advertised_listener.port().unwrap_or(9092));
 
         let meta = HijackLayer::new(
             FrameApiKeyMatcher(MetadataRequest::KEY),
             (
                 FrameRequestLayer::<MetadataRequest>::new(),
+                MapRequestLayer::new(move |request: MetadataRequest| {
+                    MetadataRequest::default()
+                        .topics(request.topics.map(|topics| {
+                            topics
+                                .into_iter()
+                                .map(|topic| {
+                                    MetadataRequestTopic::default()
+                                        .name(topic.name)
+                                        .topic_id(topic.topic_id.or(Some(NULL_TOPIC_ID)))
+                                })
+                                .collect()
+                        }))
+                        .allow_auto_topic_creation(
+                            request.allow_auto_topic_creation.or(Some(false)),
+                        )
+                        .include_cluster_authorized_operations(
+                            request
+                                .include_cluster_authorized_operations
+                                .or(Some(false)),
+                        )
+                        .include_topic_authorized_operations(
+                            request.include_topic_authorized_operations.or(Some(false)),
+                        )
+                }),
                 MapResponseLayer::new(move |response: MetadataResponse| {
                     response.brokers(Some(vec![
                         MetadataResponseBroker::default()
                             .node_id(Self::NODE_ID)
                             .host(host)
                             .port(port)
-                            .rack(None),
+                            .rack(Some("".into())),
                     ]))
                 }),
             )
@@ -221,6 +250,7 @@ impl Proxy {
 
     pub async fn main(
         listener_url: Url,
+        advertised_listener_url: Url,
         origin_url: Url,
         otlp_endpoint_url: Option<Url>,
     ) -> Result<ErrorCode, Error> {
@@ -231,7 +261,7 @@ impl Proxy {
         })?;
 
         {
-            let proxy = Proxy::new(listener_url, origin_url);
+            let proxy = Proxy::new(listener_url, advertised_listener_url, origin_url);
             _ = set.spawn(async move { proxy.listen().await.unwrap() });
         }
 

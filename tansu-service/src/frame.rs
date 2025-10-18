@@ -164,11 +164,15 @@ where
 
         let req = Q::try_from(req.body).map_err(Into::into)?;
 
-        self.inner.serve(ctx, req).await.map(|response| Frame {
-            size: 0,
-            header: Header::Response { correlation_id },
-            body: response.into(),
-        })
+        self.inner
+            .serve(ctx, req)
+            .await
+            .map(|response| Frame {
+                size: 0,
+                header: Header::Response { correlation_id },
+                body: response.into(),
+            })
+            .inspect(|response| debug!(?response))
     }
 }
 
