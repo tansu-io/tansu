@@ -134,7 +134,7 @@ impl Proxy {
     }
 
     pub async fn listen(&self) -> Result<(), Error> {
-        debug!(%self.listener);
+        debug!(%self.listener, %self.origin);
 
         let configuration = ResourceConfig::default();
 
