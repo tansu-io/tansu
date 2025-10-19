@@ -37,33 +37,25 @@ mod topic;
 const DEFAULT_BROKER: &str = "tcp://localhost:9092";
 
 fn storage_engines() -> Vec<&'static str> {
-    let mut engines = Vec::new();
-
-    #[cfg(feature = "dynostore")]
-    engines.push("dynostore");
-
-    #[cfg(feature = "libsql")]
-    engines.push("libsql");
-
-    #[cfg(feature = "postgres")]
-    engines.push("postgres");
-
-    #[cfg(feature = "turso")]
-    engines.push("turso");
-
-    engines
+    vec![
+        #[cfg(feature = "dynostore")]
+        "dynostore",
+        #[cfg(feature = "libsql")]
+        "libsql",
+        #[cfg(feature = "postgres")]
+        "postgres",
+        #[cfg(feature = "turso")]
+        "turso",
+    ]
 }
 
 fn lakes() -> Vec<&'static str> {
-    let mut lakes = Vec::new();
-
-    #[cfg(feature = "delta")]
-    lakes.push("delta");
-
-    #[cfg(feature = "iceberg")]
-    lakes.push("iceberg");
-
-    lakes
+    vec![
+        #[cfg(feature = "delta")]
+        "delta",
+        #[cfg(feature = "iceberg")]
+        "iceberg",
+    ]
 }
 
 fn after_help() -> String {
