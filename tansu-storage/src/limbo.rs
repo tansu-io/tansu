@@ -2840,7 +2840,7 @@ impl Storage for Engine {
                     .group_id(group_id)
                     .protocol_type("consumer".into())
                     .group_state(Some("unknown".into()))
-                    .group_type(None),
+                    .group_type(Some("classic".into())),
             );
         }
 

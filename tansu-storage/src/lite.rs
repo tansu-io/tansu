@@ -3428,7 +3428,7 @@ impl Storage for Delegate {
                     .group_id(group_id.to_owned())
                     .protocol_type("consumer".into())
                     .group_state(Some("unknown".into()))
-                    .group_type(None),
+                    .group_type(Some("classic".into())),
             );
         }
 
