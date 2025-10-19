@@ -30,7 +30,8 @@ use tansu_client::{
 };
 use tansu_otel::meter_provider;
 use tansu_sans_io::{
-    ApiKey, ErrorCode, MetadataRequest, MetadataResponse, NULL_TOPIC_ID, ProduceRequest,
+    ApiKey, ErrorCode, FindCoordinatorRequest, FindCoordinatorResponse, MetadataRequest,
+    MetadataResponse, NULL_TOPIC_ID, ProduceRequest, find_coordinator_response::Coordinator,
     metadata_request::MetadataRequestTopic, metadata_response::MetadataResponseBroker,
 };
 use tansu_service::{
@@ -213,6 +214,42 @@ impl Proxy {
                 .into_layer(request_origin.clone()),
         );
 
+        let host = String::from(self.advertised_listener.host_str().unwrap_or("localhost"));
+
+        let find_coordinator = HijackLayer::new(
+            FrameApiKeyMatcher(FindCoordinatorRequest::KEY),
+            (
+                FrameRequestLayer::<FindCoordinatorRequest>::new(),
+                MapRequestLayer::new(move |request: FindCoordinatorRequest| {
+                    FindCoordinatorRequest::default()
+                        .key_type(request.key_type)
+                        .coordinator_keys(
+                            request
+                                .coordinator_keys
+                                .or(request.key.map(|key| vec![key])),
+                        )
+                }),
+                MapResponseLayer::new(move |response: FindCoordinatorResponse| {
+                    let coordinators = response.coordinators.as_ref().map(|coordinators| {
+                        coordinators
+                            .iter()
+                            .map(|coordinator| {
+                                Coordinator::default()
+                                    .key(coordinator.key.clone())
+                                    .error_code(coordinator.error_code)
+                                    .host(host.clone())
+                                    .port(port)
+                                    .node_id(coordinator.node_id)
+                            })
+                            .collect()
+                    });
+
+                    response.coordinators(coordinators)
+                }),
+            )
+                .into_layer(request_origin.clone()),
+        );
+
         let produce = HijackLayer::new(
             FrameApiKeyMatcher(ProduceRequest::KEY),
             (
@@ -240,6 +277,7 @@ impl Proxy {
             BytesFrameLayer,
             meta,
             produce,
+            find_coordinator,
         )
             .into_layer(frame_origin);
 
