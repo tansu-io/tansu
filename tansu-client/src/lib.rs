@@ -222,7 +222,6 @@ impl managed::Manager for ConnectionManager {
         let start = SystemTime::now();
 
         let addr = host_port(self.broker.clone()).await?;
-        debug!(%addr);
 
         retry(ExponentialBackoff::default(), || async {
             Ok(TcpStream::connect(addr)
@@ -555,7 +554,9 @@ where
 
         let frame = self.inner.serve(ctx, frame).await?;
 
-        Q::Response::try_from(frame.body).map_err(Into::into)
+        Q::Response::try_from(frame.body)
+            .inspect(|response| debug!(?response))
+            .map_err(Into::into)
     }
 }
 

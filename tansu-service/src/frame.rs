@@ -49,7 +49,7 @@ where
     State: Clone + Debug,
 {
     fn matches(&self, ext: Option<&mut Extensions>, ctx: &Context<State>, req: &Frame) -> bool {
-        debug!(?ext, ?ctx, ?req);
+        let _ = (ext, ctx);
         req.api_key().is_ok_and(|api_key| api_key == self.0)
     }
 }
@@ -164,11 +164,15 @@ where
 
         let req = Q::try_from(req.body).map_err(Into::into)?;
 
-        self.inner.serve(ctx, req).await.map(|response| Frame {
-            size: 0,
-            header: Header::Response { correlation_id },
-            body: response.into(),
-        })
+        self.inner
+            .serve(ctx, req)
+            .await
+            .map(|response| Frame {
+                size: 0,
+                header: Header::Response { correlation_id },
+                body: response.into(),
+            })
+            .inspect(|response| debug!(?response))
     }
 }
 

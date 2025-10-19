@@ -36,44 +36,34 @@ mod topic;
 
 const DEFAULT_BROKER: &str = "tcp://localhost:9092";
 
-fn storage_engines() -> String {
-    let mut engines = Vec::new();
-
-    #[cfg(feature = "dynostore")]
-    engines.push("dynostore");
-
-    #[cfg(feature = "libsql")]
-    engines.push("libsql");
-
-    #[cfg(feature = "postgres")]
-    engines.push("postgres");
-
-    #[cfg(feature = "turso")]
-    engines.push("turso");
-
-    format!("Storage engines: {}", engines.join(", "))
+fn storage_engines() -> Vec<&'static str> {
+    vec![
+        #[cfg(feature = "dynostore")]
+        "dynostore",
+        #[cfg(feature = "libsql")]
+        "libsql",
+        #[cfg(feature = "postgres")]
+        "postgres",
+        #[cfg(feature = "turso")]
+        "turso",
+    ]
 }
 
-#[cfg(any(feature = "delta", feature = "iceberg"))]
-fn lakes() -> String {
-    let mut lakes = Vec::new();
-
-    #[cfg(feature = "delta")]
-    lakes.push("delta");
-
-    #[cfg(feature = "iceberg")]
-    lakes.push("iceberg");
-
-    format!("Data lakes: {}", lakes.join(", "))
-}
-
-#[cfg(not(any(feature = "delta", feature = "iceberg")))]
-fn lakes() -> String {
-    "Data lakes:\n".into()
+fn lakes() -> Vec<&'static str> {
+    vec![
+        #[cfg(feature = "delta")]
+        "delta",
+        #[cfg(feature = "iceberg")]
+        "iceberg",
+    ]
 }
 
 fn after_help() -> String {
-    [storage_engines(), lakes()].join("\n")
+    [
+        format!("Storage engines: {}", storage_engines().join(", ")),
+        format!("Data lakes: {}", lakes().join(", ")),
+    ]
+    .join("\n")
 }
 
 #[derive(Clone, Debug, Parser)]
@@ -119,7 +109,11 @@ enum Command {
 
 impl Cli {
     pub async fn main() -> Result<ErrorCode> {
-        debug!(pid = process::id());
+        debug!(
+            pid = process::id(),
+            storage = ?storage_engines(),
+            lakes = ?lakes()
+        );
 
         let cli = Cli::parse();
 
@@ -140,6 +134,7 @@ impl Cli {
 
             Command::Proxy(arg) => tansu_proxy::Proxy::main(
                 arg.listener_url.into_inner(),
+                arg.advertised_listener_url.into_inner(),
                 arg.origin_url.into_inner(),
                 arg.otlp_endpoint_url
                     .map(|otlp_endpoint_url| otlp_endpoint_url.into_inner()),
