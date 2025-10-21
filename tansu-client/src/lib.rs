@@ -121,7 +121,7 @@ use tokio::{
     io::{AsyncReadExt as _, AsyncWriteExt as _},
     net::TcpStream,
 };
-use tracing::{Instrument, Level, debug, error, span};
+use tracing::{Instrument, Level, debug, span};
 use tracing_subscriber::filter::ParseError;
 use url::Url;
 
@@ -235,7 +235,7 @@ impl managed::Manager for ConnectionManager {
                     )
                 })
                 .inspect_err(|err| {
-                    error!(broker = %self.broker, ?err);
+                    debug!(broker = %self.broker, ?err, elapsed = start.elapsed().map_or(0, |duration| duration.as_millis() as u64));
                     TCP_CONNECT_ERRORS.add(1, &attributes);
                 })
                 .map(|stream| Connection {

@@ -43,6 +43,32 @@ use tracing::debug;
 pub mod common;
 
 #[test]
+fn api_versions_request_v0_000() -> Result<()> {
+    let _guard = init_tracing()?;
+
+    let v = [
+        0, 0, 0, 25, 0, 18, 0, 0, 0, 0, 0, 1, 0, 15, 97, 105, 111, 107, 97, 102, 107, 97, 45, 48,
+        46, 49, 50, 46, 48,
+    ];
+
+    assert_eq!(
+        Frame {
+            size: 25,
+            header: Header::Request {
+                api_key: 18,
+                api_version: 0,
+                correlation_id: 1,
+                client_id: Some("aiokafka-0.12.0".into())
+            },
+            body: Body::ApiVersionsRequest(ApiVersionsRequest::default())
+        },
+        Frame::request_from_bytes(&v[..])?
+    );
+
+    Ok(())
+}
+
+#[test]
 fn api_versions_request_v3_000() -> Result<()> {
     let _guard = init_tracing()?;
 
@@ -2895,6 +2921,97 @@ fn find_coordinator_request_v1_000() -> Result<()> {
 }
 
 #[test]
+fn find_coordinator_response_v1_000() -> Result<()> {
+    let _guard = init_tracing()?;
+
+    let v = [
+        0, 0, 0, 62, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 0, 0, 3, 234, 0, 40, 105, 112, 45, 49,
+        48, 45, 50, 45, 57, 49, 45, 54, 54, 46, 101, 117, 45, 119, 101, 115, 116, 45, 49, 46, 99,
+        111, 109, 112, 117, 116, 101, 46, 105, 110, 116, 101, 114, 110, 97, 108, 0, 0, 35, 132,
+    ];
+
+    assert_eq!(
+        Frame {
+            size: 62,
+            header: Header::Response { correlation_id: 0 },
+            body: FindCoordinatorResponse::default()
+                .throttle_time_ms(Some(0))
+                .error_code(Some(0))
+                .error_message(None)
+                .node_id(Some(1002))
+                .host(Some("ip-10-2-91-66.eu-west-1.compute.internal".into()))
+                .port(Some(9092))
+                .coordinators(None)
+                .into()
+        },
+        Frame::response_from_bytes(&v[..], FindCoordinatorResponse::KEY, 1)?
+    );
+
+    Ok(())
+}
+
+#[test]
+fn find_coordinator_request_v1_001() -> Result<()> {
+    let _guard = init_tracing()?;
+
+    let v = [
+        0, 0, 0, 36, 0, 10, 0, 1, 0, 0, 0, 2, 0, 15, 97, 105, 111, 107, 97, 102, 107, 97, 45, 48,
+        46, 49, 50, 46, 48, 0, 8, 109, 121, 45, 103, 114, 111, 117, 112, 0,
+    ];
+
+    assert_eq!(
+        Frame {
+            size: 36,
+            header: Header::Request {
+                api_key: 10,
+                api_version: 1,
+                correlation_id: 2,
+                client_id: Some("aiokafka-0.12.0".into())
+            },
+            body: Body::FindCoordinatorRequest(
+                FindCoordinatorRequest::default()
+                    .key(Some("my-group".into()))
+                    .key_type(Some(0))
+                    .coordinator_keys(None)
+            )
+        },
+        Frame::request_from_bytes(&v[..])?
+    );
+
+    Ok(())
+}
+
+#[test]
+fn find_coordinator_response_v1_001() -> Result<()> {
+    let _guard = init_tracing()?;
+
+    let v = [
+        0, 0, 0, 35, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 4, 78, 79, 78, 69, 0, 0, 0, 111, 0, 9, 108,
+        111, 99, 97, 108, 104, 111, 115, 116, 0, 0, 35, 132,
+    ];
+
+    assert_eq!(
+        Frame {
+            size: 35,
+            header: Header::Response { correlation_id: 2 },
+            body: Body::FindCoordinatorResponse(
+                FindCoordinatorResponse::default()
+                    .throttle_time_ms(Some(0))
+                    .error_code(Some(0))
+                    .error_message(Some("NONE".into()))
+                    .node_id(Some(111))
+                    .host(Some("localhost".into()))
+                    .port(Some(9092))
+                    .coordinators(None)
+            )
+        },
+        Frame::response_from_bytes(&v[..], FindCoordinatorResponse::KEY, 1)?
+    );
+
+    Ok(())
+}
+
+#[test]
 fn find_coordinator_request_v2_000() -> Result<()> {
     let _guard = init_tracing()?;
 
@@ -2920,36 +3037,6 @@ fn find_coordinator_request_v2_000() -> Result<()> {
                 .into()
         },
         Frame::request_from_bytes(&v[..])?
-    );
-
-    Ok(())
-}
-
-#[test]
-fn find_coordinator_response_v1_000() -> Result<()> {
-    let _guard = init_tracing()?;
-
-    let v = [
-        0, 0, 0, 62, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 0, 0, 3, 234, 0, 40, 105, 112, 45, 49,
-        48, 45, 50, 45, 57, 49, 45, 54, 54, 46, 101, 117, 45, 119, 101, 115, 116, 45, 49, 46, 99,
-        111, 109, 112, 117, 116, 101, 46, 105, 110, 116, 101, 114, 110, 97, 108, 0, 0, 35, 132,
-    ];
-
-    assert_eq!(
-        Frame {
-            size: 62,
-            header: Header::Response { correlation_id: 0 },
-            body: FindCoordinatorResponse::default()
-                .throttle_time_ms(Some(0))
-                .error_code(Some(0))
-                .error_message(None)
-                .node_id(Some(1002))
-                .host(Some("ip-10-2-91-66.eu-west-1.compute.internal".into()))
-                .port(Some(9092))
-                .coordinators(None)
-                .into()
-        },
-        Frame::response_from_bytes(&v[..], FindCoordinatorResponse::KEY, 1)?
     );
 
     Ok(())
@@ -3154,6 +3241,54 @@ fn join_group_response_v5_000() -> Result<()> {
                 .into()
         },
         Frame::response_from_bytes(&v[..], api_key, api_version)?
+    );
+
+    Ok(())
+}
+
+#[test]
+fn join_group_request_v5_001() -> Result<()> {
+    use tansu_sans_io::join_group_request::JoinGroupRequestProtocol;
+
+    let _guard = init_tracing()?;
+
+    let v = [
+        0, 0, 0, 97, 0, 11, 0, 5, 0, 0, 0, 2, 0, 15, 97, 105, 111, 107, 97, 102, 107, 97, 45, 48,
+        46, 49, 50, 46, 48, 0, 8, 109, 121, 45, 103, 114, 111, 117, 112, 0, 0, 39, 16, 0, 0, 39,
+        16, 0, 0, 255, 255, 0, 8, 99, 111, 110, 115, 117, 109, 101, 114, 0, 0, 0, 1, 0, 10, 114,
+        111, 117, 110, 100, 114, 111, 98, 105, 110, 0, 0, 0, 20, 0, 0, 0, 0, 0, 1, 0, 8, 99, 117,
+        115, 116, 111, 109, 101, 114, 0, 0, 0, 0,
+    ];
+
+    let metadata = Bytes::from_static(b"\0\0\0\0\0\x01\0\x08customer\0\0\0\0");
+
+    assert_eq!(
+        Frame {
+            size: 97,
+            header: Header::Request {
+                api_key: 11,
+                api_version: 5,
+                correlation_id: 2,
+                client_id: Some("aiokafka-0.12.0".into())
+            },
+            body: Body::JoinGroupRequest(
+                JoinGroupRequest::default()
+                    .group_id("my-group".into())
+                    .session_timeout_ms(10000)
+                    .rebalance_timeout_ms(Some(10000))
+                    .member_id("".into())
+                    .group_instance_id(None)
+                    .protocol_type("consumer".into())
+                    .protocols(Some(
+                        [JoinGroupRequestProtocol::default()
+                            .name("roundrobin".into())
+                            .metadata(metadata)]
+                        .into()
+                    ))
+                    .reason(None)
+            )
+        },
+        Frame::request_from_bytes(&v[..])?
     );
 
     Ok(())
@@ -3574,6 +3709,246 @@ fn metadata_response_v1_000() -> Result<()> {
                 ))
                 .cluster_authorized_operations(None)
                 .into()
+        },
+        Frame::response_from_bytes(&v[..], api_key, api_version)?
+    );
+
+    Ok(())
+}
+
+#[test]
+fn metadata_request_v1_001() -> Result<()> {
+    use tansu_sans_io::metadata_request::MetadataRequestTopic;
+
+    let _guard = init_tracing()?;
+
+    let v = [
+        0, 0, 0, 39, 0, 3, 0, 1, 0, 0, 0, 3, 0, 15, 97, 105, 111, 107, 97, 102, 107, 97, 45, 48,
+        46, 49, 50, 46, 48, 0, 0, 0, 1, 0, 8, 99, 117, 115, 116, 111, 109, 101, 114,
+    ];
+
+    assert_eq!(
+        Frame {
+            size: 39,
+            header: Header::Request {
+                api_key: 3,
+                api_version: 1,
+                correlation_id: 3,
+                client_id: Some("aiokafka-0.12.0".into())
+            },
+            body: Body::MetadataRequest(
+                MetadataRequest::default()
+                    .topics(Some(
+                        [MetadataRequestTopic::default()
+                            .topic_id(None)
+                            .name(Some("customer".into()))]
+                        .into()
+                    ))
+                    .allow_auto_topic_creation(None)
+                    .include_cluster_authorized_operations(None)
+                    .include_topic_authorized_operations(None)
+            )
+        },
+        Frame::request_from_bytes(&v[..])?
+    );
+
+    Ok(())
+}
+
+#[test]
+fn metadata_response_v1_001() -> Result<()> {
+    let _guard = init_tracing()?;
+
+    let api_key = 3;
+    let api_version = 1;
+
+    let v = [
+        0, 0, 0, 132, 0, 0, 0, 3, 0, 0, 0, 1, 0, 0, 0, 111, 0, 9, 108, 111, 99, 97, 108, 104, 111,
+        115, 116, 0, 0, 35, 132, 255, 255, 0, 0, 0, 111, 0, 0, 0, 1, 0, 0, 0, 8, 99, 117, 115, 116,
+        111, 109, 101, 114, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 111, 0, 0, 0, 1, 0, 0, 0,
+        111, 0, 0, 0, 1, 0, 0, 0, 111, 0, 0, 0, 0, 0, 1, 0, 0, 0, 111, 0, 0, 0, 1, 0, 0, 0, 111, 0,
+        0, 0, 1, 0, 0, 0, 111, 0, 0, 0, 0, 0, 2, 0, 0, 0, 111, 0, 0, 0, 1, 0, 0, 0, 111, 0, 0, 0,
+        1, 0, 0, 0, 111,
+    ];
+
+    assert_eq!(
+        Frame {
+            size: 132,
+            header: Header::Response { correlation_id: 3 },
+            body: Body::MetadataResponse(
+                MetadataResponse::default()
+                    .throttle_time_ms(None)
+                    .brokers(Some(
+                        [MetadataResponseBroker::default()
+                            .node_id(111)
+                            .host("localhost".into())
+                            .port(9092)
+                            .rack(None)]
+                        .into()
+                    ))
+                    .cluster_id(None)
+                    .controller_id(Some(111))
+                    .topics(Some(
+                        [MetadataResponseTopic::default()
+                            .error_code(0)
+                            .name(Some("customer".into()))
+                            .topic_id(None)
+                            .is_internal(Some(false))
+                            .partitions(Some(
+                                [
+                                    MetadataResponsePartition::default()
+                                        .error_code(0)
+                                        .partition_index(0)
+                                        .leader_id(111)
+                                        .leader_epoch(None)
+                                        .replica_nodes(Some([111].into()))
+                                        .isr_nodes(Some([111].into()))
+                                        .offline_replicas(None),
+                                    MetadataResponsePartition::default()
+                                        .error_code(0)
+                                        .partition_index(1)
+                                        .leader_id(111)
+                                        .leader_epoch(None)
+                                        .replica_nodes(Some([111].into()))
+                                        .isr_nodes(Some([111].into()))
+                                        .offline_replicas(None),
+                                    MetadataResponsePartition::default()
+                                        .error_code(0)
+                                        .partition_index(2)
+                                        .leader_id(111)
+                                        .leader_epoch(None)
+                                        .replica_nodes(Some([111].into()))
+                                        .isr_nodes(Some([111].into()))
+                                        .offline_replicas(None)
+                                ]
+                                .into()
+                            ))
+                            .topic_authorized_operations(None)]
+                        .into()
+                    ))
+                    .cluster_authorized_operations(None)
+            )
+        },
+        Frame::response_from_bytes(&v[..], api_key, api_version)?
+    );
+
+    Ok(())
+}
+
+#[test]
+fn metadata_request_v1_002() -> Result<()> {
+    use tansu_sans_io::metadata_request::MetadataRequestTopic;
+
+    let _guard = init_tracing()?;
+
+    let v = [
+        0, 0, 0, 39, 0, 3, 0, 1, 0, 0, 0, 3, 0, 15, 97, 105, 111, 107, 97, 102, 107, 97, 45, 48,
+        46, 49, 50, 46, 48, 0, 0, 0, 1, 0, 8, 99, 117, 115, 116, 111, 109, 101, 114,
+    ];
+
+    assert_eq!(
+        Frame {
+            size: 39,
+            header: Header::Request {
+                api_key: 3,
+                api_version: 1,
+                correlation_id: 3,
+                client_id: Some("aiokafka-0.12.0".into())
+            },
+            body: Body::MetadataRequest(
+                MetadataRequest::default()
+                    .topics(Some(
+                        [MetadataRequestTopic::default()
+                            .topic_id(None)
+                            .name(Some("customer".into()))]
+                        .into()
+                    ))
+                    .allow_auto_topic_creation(None)
+                    .include_cluster_authorized_operations(None)
+                    .include_topic_authorized_operations(None)
+            )
+        },
+        Frame::request_from_bytes(&v[..])?
+    );
+
+    Ok(())
+}
+
+#[test]
+fn metadata_response_v1_002() -> Result<()> {
+    use tansu_sans_io::metadata_response::{MetadataResponseBroker, MetadataResponseTopic};
+
+    let _guard = init_tracing()?;
+
+    let v = [
+        0, 0, 0, 132, 0, 0, 0, 3, 0, 0, 0, 1, 0, 0, 0, 111, 0, 9, 108, 111, 99, 97, 108, 104, 111,
+        115, 116, 0, 0, 35, 132, 255, 255, 0, 0, 0, 111, 0, 0, 0, 1, 0, 0, 0, 8, 99, 117, 115, 116,
+        111, 109, 101, 114, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 111, 0, 0, 0, 1, 0, 0, 0,
+        111, 0, 0, 0, 1, 0, 0, 0, 111, 0, 0, 0, 0, 0, 1, 0, 0, 0, 111, 0, 0, 0, 1, 0, 0, 0, 111, 0,
+        0, 0, 1, 0, 0, 0, 111, 0, 0, 0, 0, 0, 2, 0, 0, 0, 111, 0, 0, 0, 1, 0, 0, 0, 111, 0, 0, 0,
+        1, 0, 0, 0, 111,
+    ];
+
+    let api_key = 3;
+    let api_version = 1;
+
+    assert_eq!(
+        Frame {
+            size: 132,
+            header: Header::Response { correlation_id: 3 },
+            body: Body::MetadataResponse(
+                MetadataResponse::default()
+                    .throttle_time_ms(None)
+                    .brokers(Some(
+                        [MetadataResponseBroker::default()
+                            .node_id(111)
+                            .host("localhost".into())
+                            .port(9092)
+                            .rack(None)]
+                        .into()
+                    ))
+                    .cluster_id(None)
+                    .controller_id(Some(111))
+                    .topics(Some(
+                        [MetadataResponseTopic::default()
+                            .error_code(0)
+                            .name(Some("customer".into()))
+                            .topic_id(None)
+                            .is_internal(Some(false))
+                            .partitions(Some(
+                                [
+                                    MetadataResponsePartition::default()
+                                        .error_code(0)
+                                        .partition_index(0)
+                                        .leader_id(111)
+                                        .leader_epoch(None)
+                                        .replica_nodes(Some([111].into()))
+                                        .isr_nodes(Some([111].into()))
+                                        .offline_replicas(None),
+                                    MetadataResponsePartition::default()
+                                        .error_code(0)
+                                        .partition_index(1)
+                                        .leader_id(111)
+                                        .leader_epoch(None)
+                                        .replica_nodes(Some([111].into()))
+                                        .isr_nodes(Some([111].into()))
+                                        .offline_replicas(None),
+                                    MetadataResponsePartition::default()
+                                        .error_code(0)
+                                        .partition_index(2)
+                                        .leader_id(111)
+                                        .leader_epoch(None)
+                                        .replica_nodes(Some([111].into()))
+                                        .isr_nodes(Some([111].into()))
+                                        .offline_replicas(None)
+                                ]
+                                .into()
+                            ))
+                            .topic_authorized_operations(None)]
+                        .into()
+                    ))
+                    .cluster_authorized_operations(None)
+            )
         },
         Frame::response_from_bytes(&v[..], api_key, api_version)?
     );
