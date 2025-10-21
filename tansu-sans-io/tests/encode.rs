@@ -3360,6 +3360,35 @@ fn metadata_request_v12_001() -> Result<()> {
 }
 
 #[test]
+fn metadata_request_v12_002() -> Result<()> {
+    let _guard = init_tracing()?;
+
+    let header = Header::Request {
+        api_key: 3,
+        api_version: 12,
+        correlation_id: 1,
+        client_id: Some("console-producer".into()),
+    };
+
+    let body = MetadataRequest::default()
+        .topics(Some([].into()))
+        .allow_auto_topic_creation(Some(true))
+        .include_cluster_authorized_operations(Some(false))
+        .include_topic_authorized_operations(Some(false))
+        .into();
+
+    assert_eq!(
+        vec![
+            0, 0, 0, 31, 0, 3, 0, 12, 0, 0, 0, 1, 0, 16, 99, 111, 110, 115, 111, 108, 101, 45, 112,
+            114, 111, 100, 117, 99, 101, 114, 0, 1, 1, 0, 0,
+        ],
+        Frame::request(header, body)?,
+    );
+
+    Ok(())
+}
+
+#[test]
 fn metadata_response_v12_0000() -> Result<()> {
     use tansu_sans_io::metadata_response::{MetadataResponseBroker, MetadataResponseTopic};
 
@@ -3388,6 +3417,54 @@ fn metadata_response_v12_0000() -> Result<()> {
                 .topic_authorized_operations(Some(-2147483648)),
         ]))
         .cluster_authorized_operations(None)
+        .into();
+
+    let api_key = 3;
+    let api_version = 12;
+
+    assert_eq!(
+        vec![
+            0, 0, 0, 92, 0, 0, 0, 5, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 13, 107, 97, 102, 107, 97, 45,
+            115, 101, 114, 118, 101, 114, 0, 0, 35, 132, 0, 0, 23, 82, 118, 81, 119, 114, 89, 101,
+            103, 83, 85, 67, 107, 73, 80, 107, 97, 105, 65, 90, 81, 108, 81, 0, 0, 0, 0, 2, 0, 3,
+            5, 116, 101, 115, 116, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 128, 0, 0,
+            0, 0, 0
+        ],
+        Frame::response(header, body, api_key, api_version)?,
+    );
+
+    Ok(())
+}
+
+#[test]
+fn metadata_response_v12_0001() -> Result<()> {
+    use tansu_sans_io::metadata_response::{MetadataResponseBroker, MetadataResponseTopic};
+
+    let _guard = init_tracing()?;
+
+    let header = Header::Response { correlation_id: 5 };
+
+    let body = MetadataResponse::default()
+        .throttle_time_ms(Some(0))
+        .brokers(Some(vec![
+            MetadataResponseBroker::default()
+                .node_id(0)
+                .host("kafka-server".into())
+                .port(9092)
+                .rack(None),
+        ]))
+        .cluster_id(Some("RvQwrYegSUCkIPkaiAZQlQ".into()))
+        .controller_id(Some(0))
+        .topics(Some(vec![
+            MetadataResponseTopic::default()
+                .error_code(3)
+                .name(Some("test".into()))
+                .topic_id(Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]))
+                .is_internal(Some(false))
+                .partitions(Some(vec![]))
+                .topic_authorized_operations(Some(-2147483648)),
+        ]))
+        .cluster_authorized_operations(Some(-1))
         .into();
 
     let api_key = 3;

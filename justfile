@@ -114,6 +114,9 @@ docker-run-postgres:
         --volume ./etc/initdb.d/:/docker-entrypoint-initdb.d/ \
         postgres:16.4
 
+docker-prune:
+    docker system prune --force
+
 docker-run:
     docker run --detach --name tansu --publish 9092:9092 tansu
 

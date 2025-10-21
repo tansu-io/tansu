@@ -85,11 +85,11 @@ where
                     let handle = set.spawn(async move {
                             match service.serve(ctx, stream).await {
                                 Err(error) => {
-                                    debug!(%error);
+                                    debug!(%addr, %error);
                                 },
 
                                 Ok(response) => {
-                                    debug!(?response)
+                                    debug!(%addr, ?response)
                                 }
                         }
                     });
@@ -279,7 +279,10 @@ where
             loop {
                 let ctx = ctx.clone();
 
-                _ = req.read_exact(&mut size).await?;
+                _ = req
+                    .read_exact(&mut size)
+                    .await
+                    .inspect_err(|err| debug!(?err))?;
 
                 if ctx
                     .state()
@@ -291,7 +294,10 @@ where
 
                 let mut request: Vec<u8> = vec![0u8; frame_length(size)];
                 request[0..size.len()].copy_from_slice(&size[..]);
-                _ = req.read_exact(&mut request[4..]).await?;
+                _ = req
+                    .read_exact(&mut request[4..])
+                    .await
+                    .inspect_err(|err| error!(?err))?;
                 debug!(?request);
 
                 REQUEST_SIZE.record(request.len() as u64, &attributes);
@@ -317,7 +323,9 @@ where
 
                 debug!(response = ?&response[..]);
 
-                req.write_all(&response).await?
+                req.write_all(&response)
+                    .await
+                    .inspect_err(|err| error!(?err))?
             }
         }
         .instrument(span)

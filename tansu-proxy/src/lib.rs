@@ -129,8 +129,6 @@ pub struct Proxy {
 }
 
 impl Proxy {
-    const NODE_ID: i32 = 111;
-
     pub fn new(listener: Url, advertised_listener: Url, origin: Url) -> Self {
         Self {
             listener,
@@ -193,22 +191,27 @@ impl Proxy {
                             request.allow_auto_topic_creation.or(Some(false)),
                         )
                         .include_cluster_authorized_operations(
-                            request
-                                .include_cluster_authorized_operations
-                                .or(Some(false)),
+                            request.include_cluster_authorized_operations,
                         )
                         .include_topic_authorized_operations(
                             request.include_topic_authorized_operations.or(Some(false)),
                         )
                 }),
                 MapResponseLayer::new(move |response: MetadataResponse| {
-                    response.brokers(Some(vec![
-                        MetadataResponseBroker::default()
-                            .node_id(Self::NODE_ID)
-                            .host(host)
-                            .port(port)
-                            .rack(Some("".into())),
-                    ]))
+                    let brokers = response.brokers.as_ref().map(|brokers| {
+                        brokers
+                            .iter()
+                            .map(|broker| {
+                                MetadataResponseBroker::default()
+                                    .node_id(broker.node_id)
+                                    .host(host.clone())
+                                    .port(port)
+                                    .rack(broker.rack.clone())
+                            })
+                            .collect()
+                    });
+
+                    response.brokers(brokers)
                 }),
             )
                 .into_layer(request_origin.clone()),
@@ -244,7 +247,33 @@ impl Proxy {
                             .collect()
                     });
 
-                    response.coordinators(coordinators)
+                    let coordinator = response
+                        .coordinators
+                        .as_deref()
+                        .and_then(|coordinators| coordinators.first());
+
+                    FindCoordinatorResponse::default()
+                        .throttle_time_ms(Some(0))
+                        .coordinators(coordinators)
+                        .error_code(
+                            response
+                                .error_code
+                                .or(coordinator.map(|coordinator| coordinator.error_code)),
+                        )
+                        .error_message(
+                            response
+                                .error_message
+                                .or(coordinator
+                                    .and_then(|coordinator| coordinator.error_message.clone()))
+                                .or(Some("NONE".into())),
+                        )
+                        .host(Some(host.clone()))
+                        .port(Some(port))
+                        .node_id(
+                            response
+                                .node_id
+                                .or(coordinator.map(|coordinator| coordinator.node_id)),
+                        )
                 }),
             )
                 .into_layer(request_origin.clone()),
