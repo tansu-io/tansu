@@ -114,7 +114,7 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 
-#[cfg(feature = "libsql")]
+#[cfg(any(feature = "libsql", feature = "postgres"))]
 use deadpool::managed::PoolError;
 #[cfg(feature = "dynostore")]
 use dynostore::DynoStore;
@@ -138,7 +138,7 @@ use pg::Postgres;
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-#[cfg(feature = "libsql")]
+#[cfg(any(feature = "libsql", feature = "postgres"))]
 use std::error;
 use std::{
     array::TryFromSliceError,
@@ -239,7 +239,7 @@ pub enum Error {
 
     ChronoParse(#[from] chrono::ParseError),
 
-    #[cfg(feature = "postgres")]
+    #[cfg(any(feature = "postgres", feature = "libsql"))]
     DeadPoolBuild(#[from] deadpool::managed::BuildError),
 
     FeatureNotEnabled {
