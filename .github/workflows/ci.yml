@@ -63,6 +63,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        os:
+          - ubuntu-latest
         storage:
           - dynostore
           - libsql
@@ -79,6 +81,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        os:
+          - ubuntu-latest
         storage:
           - dynostore
           - libsql
