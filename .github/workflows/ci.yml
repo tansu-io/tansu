@@ -73,7 +73,7 @@ jobs:
         with:
           components: clippy, rustfmt
           cache: false
-      - run: cargo build --features ${{storage}}
+      - run: cargo build --features ${{matrix.storage}}
   build-storage-lake:
     runs-on: ${{matrix.os}}
     strategy:
@@ -92,7 +92,7 @@ jobs:
         with:
           components: clippy, rustfmt
           cache: false
-      - run: cargo build --features ${{storage}} --features ${{lake}}
+      - run: cargo build --features ${{matrix.storage}} --features ${{matrix.lake}}
   typos:
     runs-on: ubuntu-latest
     steps:
