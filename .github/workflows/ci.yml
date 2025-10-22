@@ -1,5 +1,7 @@
 ---
 name: ci
+permissions:
+  contents: read
 on:
   push:
     branches:
@@ -63,8 +65,8 @@ jobs:
       matrix:
         storage:
           - dynostore
-	  - libsql
-	  - postgres
+          - libsql
+          - postgres
     steps:
       - uses: actions/checkout@v5
       - uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -79,8 +81,8 @@ jobs:
       matrix:
         storage:
           - dynostore
-	  - libsql
-	  - postgres
+          - libsql
+          - postgres
         lake:
           - delta
           - iceberg
