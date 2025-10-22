@@ -14,6 +14,7 @@ env:
   CLICOLOR: 1
 jobs:
   build:
+    needs: [build-storage, build-storage-lake]
     runs-on: ${{matrix.os}}
     strategy:
       fail-fast: false
@@ -55,6 +56,41 @@ jobs:
       - run: just fmt
       - run: just clippy
       - run: just test
+  build-storage:
+    runs-on: ${{matrix.os}}
+    strategy:
+      fail-fast: false
+      matrix:
+        storage:
+          - dynostore
+	  - libsql
+	  - postgres
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: clippy, rustfmt
+          cache: false
+      - run: cargo build --features ${{storage}}
+  build-storage-lake:
+    runs-on: ${{matrix.os}}
+    strategy:
+      fail-fast: false
+      matrix:
+        storage:
+          - dynostore
+	  - libsql
+	  - postgres
+        lake:
+          - delta
+          - iceberg
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: clippy, rustfmt
+          cache: false
+      - run: cargo build --features ${{storage}} --features ${{lake}}
   typos:
     runs-on: ubuntu-latest
     steps:
