@@ -64,7 +64,10 @@ use tansu_sans_io::{
     record::{Record, deflated, inflated},
     txn_offset_commit_response::{TxnOffsetCommitResponsePartition, TxnOffsetCommitResponseTopic},
 };
-use tansu_schema::Registry;
+use tansu_schema::{
+    Registry,
+    lake::{House, LakeHouse as _},
+};
 use tracing::{debug, error, warn};
 use url::Url;
 use uuid::Uuid;
@@ -87,13 +90,7 @@ pub struct DynoStore {
     node: i32,
     advertised_listener: Url,
     schemas: Option<Registry>,
-
-    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
-    lake: Option<tansu_schema::lake::House>,
-
-    #[cfg(not(any(feature = "parquet", feature = "iceberg", feature = "delta")))]
-    lake: Option<()>,
-
+    lake: Option<House>,
     watermarks: Arc<Mutex<BTreeMap<Topition, OptiCon<Watermark>>>>,
     meta: OptiCon<Meta>,
 
@@ -377,7 +374,7 @@ impl DynoStore {
     }
 
     #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
-    pub fn lake(self, lake: Option<tansu_schema::lake::House>) -> Self {
+    pub fn lake(self, lake: Option<House>) -> Self {
         Self { lake, ..self }
     }
 
@@ -761,28 +758,17 @@ impl Storage for DynoStore {
                         .inspect(|validation| debug!(?validation))
                         .inspect_err(|err| debug!(?err))?;
 
-                    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
                     if let Some(ref lake) = self.lake {
-                        use tansu_schema::lake::LakeHouse as _;
-
-                        let lake_type = lake.lake_type().await?;
-
-                        if let Some(record_batch) = registry
-                            .as_arrow(topition.topic(), topition.partition(), &inflated, lake_type)
-                            .inspect(|record_batch| debug!(?record_batch))
-                            .inspect_err(|err| debug!(?err))?
-                        {
-                            lake.store(
-                                topition.topic(),
-                                topition.partition(),
-                                offset,
-                                record_batch,
-                                config,
-                            )
-                            .await
-                            .inspect(|store| debug!(?store))
-                            .inspect_err(|err| debug!(?err))?;
-                        }
+                        lake.store(
+                            topition.topic(),
+                            topition.partition(),
+                            offset,
+                            &inflated,
+                            config,
+                        )
+                        .await
+                        .inspect(|store| debug!(?store))
+                        .inspect_err(|err| debug!(?err))?;
                     }
                 }
             }
@@ -882,40 +868,26 @@ impl Storage for DynoStore {
                 .inspect(|offset| debug!(offset, transaction_id, ?topition))
                 .inspect_err(|err| error!(?err, transaction_id, ?topition))?;
 
-            #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
-            if let Some(ref registry) = self.schemas {
-                let batch_attribute = BatchAttribute::try_from(deflated.attributes)
-                    .inspect_err(|err| debug!(?err))?;
-
-                if !batch_attribute.control
-                    && let Some(ref lake) = self.lake
-                {
-                    use tansu_schema::lake::LakeHouse as _;
-
-                    let lake_type = lake.lake_type().await.inspect_err(|err| debug!(?err))?;
-                    let inflated =
-                        inflated::Batch::try_from(&deflated).inspect_err(|err| debug!(?err))?;
-                    if let Some(record_batch) = registry.as_arrow(
-                        topition.topic(),
-                        topition.partition(),
-                        &inflated,
-                        lake_type,
-                    )? {
-                        lake.store(
-                            topition.topic(),
-                            topition.partition(),
-                            offset,
-                            record_batch,
-                            config,
-                        )
-                        .await
-                        .inspect_err(|err| debug!(?err))?;
-                    }
-                }
-            }
-
             let attributes =
                 BatchAttribute::try_from(deflated.attributes).inspect_err(|err| debug!(?err))?;
+
+            if !attributes.control
+                && let Some(ref lake) = self.lake
+            {
+                let inflated =
+                    inflated::Batch::try_from(&deflated).inspect_err(|err| debug!(?err))?;
+
+                lake.store(
+                    topition.topic(),
+                    topition.partition(),
+                    offset,
+                    &inflated,
+                    config,
+                )
+                .await
+                .inspect(|store| debug!(?store))
+                .inspect_err(|err| debug!(?err))?;
+            }
 
             if let Some(transaction_id) = transaction_id
                 && attributes.transaction

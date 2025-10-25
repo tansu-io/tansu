@@ -63,7 +63,7 @@ use tansu_sans_io::{
     to_system_time, to_timestamp,
     txn_offset_commit_response::{TxnOffsetCommitResponsePartition, TxnOffsetCommitResponseTopic},
 };
-use tansu_schema::Registry;
+use tansu_schema::{Registry, lake::LakeHouse as _};
 use tracing::{debug, error};
 use turso::{
     Connection, Database, Row, Value, params::IntoParams, transaction::Transaction,
@@ -608,31 +608,23 @@ impl Engine {
             .inspect(|n| debug!(?n))
             .inspect_err(|err| error!(?err))?;
 
-        #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
         if !attributes.control
-            && let Some(ref registry) = self.schemas
             && let Some(ref lake) = self.lake
         {
-            use tansu_schema::lake::LakeHouse as _;
-
-            let lake_type = lake.lake_type().await?;
-
-            if let Some(record_batch) =
-                registry.as_arrow(topition.topic(), topition.partition(), &inflated, lake_type)?
-            {
-                let config = self
-                    .describe_config(topition.topic(), ConfigResource::Topic, None)
-                    .await?;
-
-                lake.store(
-                    topition.topic(),
-                    topition.partition(),
-                    high.unwrap_or_default(),
-                    record_batch,
-                    config,
-                )
+            let config = self
+                .describe_config(topition.topic(), ConfigResource::Topic, None)
                 .await?;
-            }
+
+            lake.store(
+                topition.topic(),
+                topition.partition(),
+                high.unwrap_or_default(),
+                &inflated,
+                config,
+            )
+            .await
+            .inspect(|store| debug!(?store))
+            .inspect_err(|err| debug!(?err))?;
         }
 
         Ok(high.unwrap_or_default())

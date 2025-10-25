@@ -24,6 +24,7 @@ use std::{
     io,
     num::TryFromIntError,
     result,
+    str::FromStr,
     string::FromUtf8Error,
     sync::{Arc, LazyLock, Mutex, PoisonError},
     time::{Duration, SystemTime},
@@ -62,16 +63,13 @@ use parquet::errors::ParquetError;
 use rhai::EvalAltResult;
 use serde_json::Value;
 use tansu_sans_io::{ErrorCode, record::inflated::Batch};
-use tracing::debug;
+use tracing::{debug, instrument};
 use tracing_subscriber::filter::ParseError;
 use url::Url;
 
 pub mod avro;
 pub mod json;
-
-#[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
 pub mod lake;
-
 pub mod proto;
 
 #[cfg(feature = "delta")]
@@ -166,6 +164,8 @@ pub enum Error {
     #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
     SqlParser(#[from] datafusion::logical_expr::sqlparser::parser::ParserError),
 
+    TopicWithoutSchema(String),
+
     TryFromInt(#[from] TryFromIntError),
 
     UnsupportedIcebergCatalogUrl(Url),
@@ -234,9 +234,10 @@ pub trait Validator {
 
 /// Represent a Batch in the Arrow columnar data format
 #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
-pub trait AsArrow {
-    fn as_arrow(
+trait AsArrow {
+    async fn as_arrow(
         &self,
+        topic: &str,
         partition: i32,
         batch: &Batch,
         lake_type: lake::LakeHouseType,
@@ -296,9 +297,8 @@ impl AsKafkaRecord for Schema {
 }
 
 impl Validator for Schema {
+    #[instrument(skip(self, batch), ret)]
     fn validate(&self, batch: &Batch) -> Result<()> {
-        debug!(?batch);
-
         match self {
             Self::Avro(schema) => schema.validate(batch),
             Self::Json(schema) => schema.validate(batch),
@@ -309,23 +309,24 @@ impl Validator for Schema {
 
 #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
 impl AsArrow for Schema {
-    fn as_arrow(
+    #[instrument(skip(self, batch), ret)]
+    async fn as_arrow(
         &self,
+        topic: &str,
         partition: i32,
         batch: &Batch,
         lake_type: lake::LakeHouseType,
     ) -> Result<RecordBatch> {
-        debug!(?batch);
-
         match self {
-            Self::Avro(schema) => schema.as_arrow(partition, batch, lake_type),
-            Self::Json(schema) => schema.as_arrow(partition, batch, lake_type),
-            Self::Proto(schema) => schema.as_arrow(partition, batch, lake_type),
+            Self::Avro(schema) => schema.as_arrow(topic, partition, batch, lake_type).await,
+            Self::Json(schema) => schema.as_arrow(topic, partition, batch, lake_type).await,
+            Self::Proto(schema) => schema.as_arrow(topic, partition, batch, lake_type).await,
         }
     }
 }
 
 impl AsJsonValue for Schema {
+    #[instrument(skip(self, batch), ret)]
     fn as_json_value(&self, batch: &Batch) -> Result<Value> {
         debug!(?batch);
 
@@ -355,6 +356,17 @@ pub struct Registry {
     object_store: Arc<DynObjectStore>,
     schemas: SchemaCache,
     cache_expiry_after: Option<Duration>,
+}
+
+impl FromStr for Registry {
+    type Err = Error;
+
+    fn from_str(s: &str) -> result::Result<Self, Self::Err> {
+        Url::parse(s)
+            .map_err(Into::into)
+            .and_then(|location| Builder::try_from(&location))
+            .map(Into::into)
+    }
 }
 
 // Schema Registry builder
@@ -475,46 +487,8 @@ impl Registry {
         Builder::try_from(url)
     }
 
-    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
-    pub fn as_arrow(
-        &self,
-        topic: &str,
-        partition: i32,
-        batch: &Batch,
-        lake_type: lake::LakeHouseType,
-    ) -> Result<Option<RecordBatch>> {
-        debug!(topic, partition, ?batch);
-
-        let start = SystemTime::now();
-
-        self.schemas
-            .lock()
-            .map_err(Into::into)
-            .and_then(|guard| {
-                guard
-                    .get(topic)
-                    .map(|cached| cached.schema.as_arrow(partition, batch, lake_type))
-                    .transpose()
-            })
-            .inspect(|record_batch| {
-                debug!(
-                    rows = record_batch
-                        .as_ref()
-                        .map(|record_batch| record_batch.num_rows())
-                );
-                lake::AS_ARROW_DURATION.record(
-                    start
-                        .elapsed()
-                        .map_or(0, |duration| duration.as_millis() as u64),
-                    &[KeyValue::new("topic", topic.to_owned())],
-                )
-            })
-            .inspect_err(|err| debug!(?err))
-    }
-
+    #[instrument(skip(self), ret)]
     pub async fn schema(&self, topic: &str) -> Result<Option<Schema>> {
-        debug!(?topic);
-
         let proto = Path::from(format!("{topic}.proto"));
         let json = Path::from(format!("{topic}.json"));
         let avro = Path::from(format!("{topic}.avsc"));
@@ -594,9 +568,8 @@ impl Registry {
         }
     }
 
+    #[instrument(skip(self, batch), ret)]
     pub async fn validate(&self, topic: &str, batch: &Batch) -> Result<()> {
-        debug!(%topic, ?batch);
-
         let validation_start = SystemTime::now();
 
         let Some(schema) = self.schema(topic).await? else {
@@ -623,6 +596,38 @@ impl Registry {
                     ],
                 )
             })
+    }
+}
+
+#[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
+impl AsArrow for Registry {
+    #[instrument(skip(self, batch), ret)]
+    async fn as_arrow(
+        &self,
+        topic: &str,
+        partition: i32,
+        batch: &Batch,
+        lake_type: lake::LakeHouseType,
+    ) -> Result<RecordBatch> {
+        let start = SystemTime::now();
+
+        let schema = self
+            .schema(topic)
+            .await
+            .and_then(|schema| schema.ok_or(Error::TopicWithoutSchema(topic.to_owned())))?;
+
+        schema
+            .as_arrow(topic, partition, batch, lake_type)
+            .await
+            .inspect(|_| {
+                lake::AS_ARROW_DURATION.record(
+                    start
+                        .elapsed()
+                        .map_or(0, |duration| duration.as_millis() as u64),
+                    &[KeyValue::new("topic", topic.to_owned())],
+                )
+            })
+            .inspect_err(|err| debug!(?err))
     }
 }
 
