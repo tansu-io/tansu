@@ -69,7 +69,10 @@ use tansu_sans_io::{
     to_system_time, to_timestamp,
     txn_offset_commit_response::{TxnOffsetCommitResponsePartition, TxnOffsetCommitResponseTopic},
 };
-use tansu_schema::Registry;
+use tansu_schema::{
+    Registry,
+    lake::{House, LakeHouse as _},
+};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, instrument};
@@ -206,12 +209,7 @@ pub(crate) struct Delegate {
 
     schemas: Option<Registry>,
 
-    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
-    lake: Option<tansu_schema::lake::House>,
-
-    #[allow(dead_code)]
-    #[cfg(not(any(feature = "parquet", feature = "iceberg", feature = "delta")))]
-    lake: Option<()>,
+    lake: Option<House>,
 }
 
 #[derive(Clone, Debug)]
@@ -830,34 +828,23 @@ impl Delegate {
             .inspect(|n| debug!(?n, after_watermark_update = elapsed_millis(start)))
             .inspect_err(|err| error!(?err))?;
 
-        #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
         if !attributes.control
-            && let Some(ref registry) = self.schemas
             && let Some(ref lake) = self.lake
         {
-            use tansu_schema::lake::LakeHouse as _;
-
-            let lake_type = lake.lake_type().await?;
-
-            if let Some(record_batch) = registry
-                .as_arrow(topition.topic(), topition.partition(), &inflated, lake_type)
-                .inspect_err(|err| error!(?err))?
-            {
-                let config = self
-                    .describe_config(topition.topic(), ConfigResource::Topic, None)
-                    .await
-                    .inspect_err(|err| error!(?err))?;
-
-                lake.store(
-                    topition.topic(),
-                    topition.partition(),
-                    high.unwrap_or_default(),
-                    record_batch,
-                    config,
-                )
+            let config = self
+                .describe_config(topition.topic(), ConfigResource::Topic, None)
                 .await
                 .inspect_err(|err| error!(?err))?;
-            }
+
+            lake.store(
+                topition.topic(),
+                topition.partition(),
+                high.unwrap_or_default(),
+                &inflated,
+                config,
+            )
+            .await
+            .inspect_err(|err| error!(?err))?;
         }
 
         debug!(after_all_done = elapsed_millis(start));
@@ -1122,13 +1109,7 @@ pub struct Builder<C, N, L, D> {
     advertised_listener: L,
     storage: D,
     schemas: Option<Registry>,
-
-    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
-    lake: Option<tansu_schema::lake::House>,
-
-    #[cfg(not(any(feature = "parquet", feature = "iceberg", feature = "delta")))]
-    lake: Option<()>,
-
+    lake: Option<House>,
     cancellation: CancellationToken,
 }
 
@@ -1192,7 +1173,7 @@ impl<C, N, L, D> Builder<C, N, L, D> {
     }
 
     #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
-    pub(crate) fn lake(self, lake: Option<tansu_schema::lake::House>) -> Self {
+    pub(crate) fn lake(self, lake: Option<House>) -> Self {
         Self { lake, ..self }
     }
 

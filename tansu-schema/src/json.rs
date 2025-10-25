@@ -25,7 +25,7 @@ use bytes::Bytes;
 use serde_json::Value;
 
 use tansu_sans_io::{ErrorCode, record::inflated::Batch};
-use tracing::{debug, warn};
+use tracing::{debug, instrument, warn};
 
 #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
 mod arrow;
@@ -84,19 +84,21 @@ impl TryFrom<Bytes> for Schema {
     type Error = Error;
 
     fn try_from(encoded: Bytes) -> Result<Self, Self::Error> {
+        debug!(encoded = &encoded[..]);
         const PROPERTIES: &str = "properties";
 
-        let mut schema =
-            serde_json::from_slice::<Value>(&encoded[..]).inspect(|schema| debug!(%schema))?;
+        let mut schema = serde_json::from_slice::<Value>(&encoded[..])?;
 
         let key = schema
             .get(PROPERTIES)
             .and_then(|properties| properties.get(MessageKind::Key.as_ref()))
+            .inspect(|key| debug!(?key))
             .and_then(|key| jsonschema::validator_for(key).ok());
 
         let value = schema
             .get(PROPERTIES)
             .and_then(|properties| properties.get(MessageKind::Value.as_ref()))
+            .inspect(|value| debug!(?value))
             .and_then(|value| jsonschema::validator_for(value).ok());
 
         let meta =
@@ -109,7 +111,6 @@ impl TryFrom<Bytes> for Schema {
             .inspect(|properties| debug!(?properties))
             .and_then(|object| object.insert(MessageKind::Meta.as_ref().to_owned(), meta));
 
-        debug!(%schema);
         let ids = field_ids(&schema);
         debug!(?ids);
 
@@ -118,9 +119,8 @@ impl TryFrom<Bytes> for Schema {
 }
 
 impl Validator for Schema {
+    #[instrument(skip(self, batch), ret)]
     fn validate(&self, batch: &Batch) -> Result<()> {
-        debug!(?batch);
-
         for record in &batch.records {
             debug!(?record);
 
@@ -170,9 +170,8 @@ impl AsJsonValue for Schema {
     }
 }
 
+#[instrument(skip(schema), ret)]
 fn field_ids(schema: &Value) -> BTreeMap<String, i32> {
-    debug!(%schema);
-
     fn field_ids_with_path(path: &[&str], schema: &Value, id: &mut i32) -> BTreeMap<String, i32> {
         debug!(?path, %schema, id);
 
@@ -240,8 +239,6 @@ fn field_ids(schema: &Value) -> BTreeMap<String, i32> {
             ids.extend(field_ids_with_path(&[kind.as_ref()], schema, &mut id));
         }
     }
-
-    debug!(?ids);
 
     ids
 }

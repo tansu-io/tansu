@@ -49,11 +49,14 @@ use tansu_sans_io::{
     incremental_alter_configs_response::AlterConfigsResourceResponse,
     list_groups_response::ListedGroup,
     metadata_response::{MetadataResponseBroker, MetadataResponsePartition, MetadataResponseTopic},
-    record::{Header, Record, deflated, inflated},
+    record::{Header, Record, deflated, inflated::Batch},
     to_system_time, to_timestamp,
     txn_offset_commit_response::{TxnOffsetCommitResponsePartition, TxnOffsetCommitResponseTopic},
 };
-use tansu_schema::Registry;
+use tansu_schema::{
+    Registry,
+    lake::{House, LakeHouse as _},
+};
 use tokio_postgres::{Config, NoTls, Row, Transaction, error::SqlState, types::ToSql};
 use tracing::{debug, error};
 use url::Url;
@@ -81,13 +84,7 @@ pub struct Postgres {
     advertised_listener: Url,
     pool: Pool,
     schemas: Option<Registry>,
-
-    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
-    lake: Option<tansu_schema::lake::House>,
-
-    #[allow(dead_code)]
-    #[cfg(not(any(feature = "parquet", feature = "iceberg", feature = "delta")))]
-    lake: Option<()>,
+    lake: Option<House>,
 }
 
 /// PostgreSQL Storage Builder
@@ -98,11 +95,7 @@ pub struct Builder<C, N, L, P> {
     advertised_listener: L,
     pool: P,
     schemas: Option<Registry>,
-    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
-    lake: Option<tansu_schema::lake::House>,
-
-    #[cfg(not(any(feature = "parquet", feature = "iceberg", feature = "delta")))]
-    lake: Option<()>,
+    lake: Option<House>,
 }
 
 impl<C, N, L, P> Builder<C, N, L, P> {
@@ -143,8 +136,7 @@ impl<C, N, L, P> Builder<C, N, L, P> {
         Self { schemas, ..self }
     }
 
-    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
-    pub fn lake(self, lake: Option<tansu_schema::lake::House>) -> Self {
+    pub fn lake(self, lake: Option<House>) -> Self {
         Self { lake, ..self }
     }
 }
@@ -708,7 +700,7 @@ impl Postgres {
 
         debug!(?low, ?high);
 
-        let inflated = inflated::Batch::try_from(deflated).inspect_err(|err| error!(?err))?;
+        let inflated = Batch::try_from(deflated).inspect_err(|err| error!(?err))?;
 
         let attributes = BatchAttribute::try_from(inflated.attributes)?;
 
@@ -836,32 +828,8 @@ impl Postgres {
             .inspect(|n| debug!(?n))
             .inspect_err(|err| error!(?err))?;
 
-        #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
-        if !attributes.control
-            && let Some(ref registry) = self.schemas
-            && let Some(ref lake) = self.lake
-        {
-            use tansu_schema::lake::LakeHouse as _;
-
-            let lake_type = lake.lake_type().await?;
-
-            if let Some(record_batch) =
-                registry.as_arrow(topition.topic(), topition.partition(), &inflated, lake_type)?
-            {
-                let config = self
-                    .describe_config(topition.topic(), ConfigResource::Topic, None)
-                    .await?;
-
-                lake.store(
-                    topition.topic(),
-                    topition.partition(),
-                    high.unwrap_or_default(),
-                    record_batch,
-                    config,
-                )
-                .await?;
-            }
-        }
+        self.lake_store(&attributes, topition, high, &inflated)
+            .await?;
 
         Ok(high.unwrap_or_default())
     }
@@ -907,7 +875,7 @@ impl Postgres {
             };
             let end_transaction_marker: Bytes = EndTransactionMarker::default().try_into()?;
 
-            let batch = inflated::Batch::builder()
+            let batch = Batch::builder()
                 .record(
                     Record::builder()
                         .key(control_batch.into())
@@ -1126,6 +1094,33 @@ impl Postgres {
         }
 
         Ok(ErrorCode::None)
+    }
+
+    async fn lake_store(
+        &self,
+        attributes: &BatchAttribute,
+        topition: &Topition,
+        high: Option<i64>,
+        inflated: &Batch,
+    ) -> Result<()> {
+        if !attributes.control
+            && let Some(ref lake) = self.lake
+        {
+            let config = self
+                .describe_config(topition.topic(), ConfigResource::Topic, None)
+                .await?;
+
+            lake.store(
+                topition.topic(),
+                topition.partition(),
+                high.unwrap_or_default(),
+                inflated,
+                config,
+            )
+            .await?;
+        }
+
+        Ok(())
     }
 }
 
@@ -1664,7 +1659,7 @@ impl Storage for Postgres {
         let mut batches = vec![];
 
         if let Some(first) = records.first() {
-            let mut batch_builder = inflated::Batch::builder()
+            let mut batch_builder = Batch::builder()
                 .base_offset(
                     first
                         .try_get::<_, i64>(0)
@@ -1718,7 +1713,7 @@ impl Storage for Postgres {
                 {
                     batches.push(batch_builder.build().and_then(TryInto::try_into)?);
 
-                    batch_builder = inflated::Batch::builder()
+                    batch_builder = Batch::builder()
                         .base_offset(
                             record
                                 .try_get::<_, i64>(0)
@@ -1816,11 +1811,7 @@ impl Storage for Postgres {
 
             batches.push(batch_builder.build().and_then(TryInto::try_into)?);
         } else {
-            batches.push(
-                inflated::Batch::builder()
-                    .build()
-                    .and_then(TryInto::try_into)?,
-            );
+            batches.push(Batch::builder().build().and_then(TryInto::try_into)?);
         }
 
         Ok(batches)

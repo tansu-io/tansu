@@ -20,10 +20,9 @@ use std::{
 };
 
 use crate::{
-    Error, Result,
+    AsArrow as _, Error, Registry, Result,
     lake::{LakeHouse, LakeHouseType},
 };
-use arrow::array::RecordBatch;
 use async_trait::async_trait;
 use iceberg::{
     Catalog, MemoryCatalog, NamespaceIdent, TableCreation, TableIdent,
@@ -42,7 +41,7 @@ use iceberg::{
 };
 use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
 use parquet::file::properties::WriterProperties;
-use tansu_sans_io::describe_configs_response::DescribeConfigsResult;
+use tansu_sans_io::{describe_configs_response::DescribeConfigsResult, record::inflated::Batch};
 use tracing::{debug, error};
 use url::Url;
 use uuid::Uuid;
@@ -64,27 +63,40 @@ pub fn env_s3_props() -> impl Iterator<Item = (String, String)> {
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct Builder<C = PhantomData<Url>, L = PhantomData<Url>> {
+pub struct Builder<C = PhantomData<Url>, L = PhantomData<Url>, R = PhantomData<Registry>> {
     location: L,
     catalog: C,
+    schema_registry: R,
     namespace: Option<String>,
     warehouse: Option<String>,
 }
 
-impl<C, L> Builder<C, L> {
-    pub fn location(self, location: Url) -> Builder<C, Url> {
+impl<C, L, R> Builder<C, L, R> {
+    pub fn location(self, location: Url) -> Builder<C, Url, R> {
         Builder {
             location,
             catalog: self.catalog,
+            schema_registry: self.schema_registry,
             namespace: self.namespace,
             warehouse: self.warehouse,
         }
     }
 
-    pub fn catalog(self, catalog: Url) -> Builder<Url, L> {
+    pub fn catalog(self, catalog: Url) -> Builder<Url, L, R> {
         Builder {
-            catalog,
             location: self.location,
+            catalog,
+            schema_registry: self.schema_registry,
+            namespace: self.namespace,
+            warehouse: self.warehouse,
+        }
+    }
+
+    pub fn schema_registry(self, schema_registry: Registry) -> Builder<C, L, Registry> {
+        Builder {
+            catalog: self.catalog,
+            location: self.location,
+            schema_registry,
             namespace: self.namespace,
             warehouse: self.warehouse,
         }
@@ -99,7 +111,7 @@ impl<C, L> Builder<C, L> {
     }
 }
 
-impl Builder<Url, Url> {
+impl Builder<Url, Url, Registry> {
     pub fn build(self) -> Result<House> {
         Iceberg::try_from(self).map(House::Iceberg)
     }
@@ -110,16 +122,18 @@ pub struct Iceberg {
     catalog: Arc<dyn Catalog>,
     namespace: String,
     tables: Arc<Mutex<HashMap<String, Table>>>,
+    schema_registry: Registry,
 }
 
-impl TryFrom<Builder<Url, Url>> for Iceberg {
+impl TryFrom<Builder<Url, Url, Registry>> for Iceberg {
     type Error = Error;
 
-    fn try_from(value: Builder<Url, Url>) -> Result<Self, Self::Error> {
+    fn try_from(value: Builder<Url, Url, Registry>) -> Result<Self, Self::Error> {
         iceberg_catalog(&value.catalog, value.warehouse.clone()).map(|catalog| Self {
             catalog,
             namespace: value.namespace.unwrap_or(String::from("tansu")),
             tables: Arc::new(Mutex::new(HashMap::new())),
+            schema_registry: value.schema_registry,
         })
     }
 }
@@ -251,10 +265,15 @@ impl LakeHouse for Iceberg {
         topic: &str,
         partition: i32,
         offset: i64,
-        record_batch: RecordBatch,
+        inflated: &Batch,
         config: DescribeConfigsResult,
     ) -> Result<()> {
         let _ = config;
+
+        let record_batch = self
+            .schema_registry
+            .as_arrow(topic, partition, inflated, LakeHouseType::Iceberg)
+            .await?;
 
         debug!(?record_batch);
 
@@ -340,7 +359,7 @@ mod tests {
     use dotenv::dotenv;
     use iceberg::spec::{NestedField, PrimitiveType, Type};
     use rand::{distr::Alphanumeric, prelude::*, rng};
-    use std::{env::var, fs::File, marker::PhantomData, sync::Arc, thread};
+    use std::{env::var, fs::File, marker::PhantomData, str::FromStr as _, sync::Arc, thread};
     use tracing::subscriber::DefaultGuard;
     use tracing_subscriber::EnvFilter;
 
@@ -387,11 +406,14 @@ mod tests {
         let namespace = alphanumeric_string(5);
         debug!(catalog_uri, location_uri, ?warehouse, namespace);
 
+        let schema_registry = Registry::from_str("memory://")?;
+
         let lake = Iceberg::try_from(
-            Builder::<PhantomData<Url>, PhantomData<Url>>::default()
+            Builder::<PhantomData<Url>, PhantomData<Url>, PhantomData<Registry>>::default()
                 .location(Url::parse(location_uri)?)
                 .catalog(Url::parse(catalog_uri)?)
                 .warehouse(warehouse.clone())
+                .schema_registry(schema_registry)
                 .namespace(Some(namespace.clone())),
         )?;
 
@@ -412,12 +434,15 @@ mod tests {
         let namespace = alphanumeric_string(5);
         debug!(catalog_uri, location_uri, ?warehouse, namespace);
 
+        let schema_registry = Registry::from_str("memory://")?;
+
         {
             let lake = Iceberg::try_from(
-                Builder::<PhantomData<Url>, PhantomData<Url>>::default()
+                Builder::<PhantomData<Url>, PhantomData<Url>, PhantomData<Registry>>::default()
                     .location(Url::parse(location_uri)?)
                     .catalog(Url::parse(catalog_uri)?)
                     .warehouse(warehouse.clone())
+                    .schema_registry(schema_registry.clone())
                     .namespace(Some(namespace.clone())),
             )?;
 
@@ -427,10 +452,11 @@ mod tests {
 
         {
             let lake = Iceberg::try_from(
-                Builder::<PhantomData<Url>, PhantomData<Url>>::default()
+                Builder::<PhantomData<Url>, PhantomData<Url>, PhantomData<Registry>>::default()
                     .location(Url::parse(location_uri)?)
                     .catalog(Url::parse(catalog_uri)?)
                     .warehouse(warehouse)
+                    .schema_registry(schema_registry)
                     .namespace(Some(namespace.clone())),
             )?;
 
@@ -453,11 +479,14 @@ mod tests {
 
         debug!(catalog_uri, location_uri, ?warehouse, namespace);
 
+        let schema_registry = Registry::from_str("memory://")?;
+
         let lake_house = Iceberg::try_from(
-            Builder::<PhantomData<Url>, PhantomData<Url>>::default()
+            Builder::<PhantomData<Url>, PhantomData<Url>, PhantomData<Registry>>::default()
                 .location(Url::parse(location_uri)?)
                 .catalog(Url::parse(catalog_uri)?)
                 .namespace(Some(namespace.clone()))
+                .schema_registry(schema_registry)
                 .warehouse(warehouse.clone()),
         )?;
 
@@ -493,6 +522,8 @@ mod tests {
 
         debug!(catalog_uri, location_uri, ?warehouse, namespace, table_name);
 
+        let schema_registry = Registry::from_str("memory://")?;
+
         let schema = Schema::builder()
             .with_fields(vec![
                 NestedField::optional(1, "foo", Type::Primitive(PrimitiveType::String)).into(),
@@ -505,10 +536,11 @@ mod tests {
 
         {
             let lake_house = Iceberg::try_from(
-                Builder::<PhantomData<Url>, PhantomData<Url>>::default()
+                Builder::<PhantomData<Url>, PhantomData<Url>, PhantomData<Registry>>::default()
                     .location(Url::parse(location_uri)?)
                     .catalog(Url::parse(catalog_uri)?)
                     .warehouse(warehouse.clone())
+                    .schema_registry(schema_registry.clone())
                     .namespace(Some(namespace.clone())),
             )?;
 
@@ -521,10 +553,11 @@ mod tests {
 
         {
             let lake_house = Iceberg::try_from(
-                Builder::<PhantomData<Url>, PhantomData<Url>>::default()
+                Builder::<PhantomData<Url>, PhantomData<Url>, PhantomData<Registry>>::default()
                     .location(Url::parse(location_uri)?)
                     .catalog(Url::parse(catalog_uri)?)
                     .namespace(Some(namespace.clone()))
+                    .schema_registry(schema_registry)
                     .warehouse(warehouse),
             )?;
 
