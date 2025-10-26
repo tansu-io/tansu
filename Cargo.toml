@@ -1,25 +1,25 @@
 [workspace]
 resolver = "3"
 members = [
+    "tansu",
+    "tansu-broker",
     "tansu-cat",
     "tansu-cli",
+    "tansu-client",
     "tansu-generator",
     "tansu-model",
-    "tansu-sans-io",
     "tansu-otel",
     "tansu-proxy",
+    "tansu-sans-io",
     "tansu-schema",
-    "tansu-broker",
     "tansu-service",
     "tansu-storage",
     "tansu-topic",
-    "tansu",
-    "tansu-client",
 ]
 
 [workspace.package]
 edition = "2024"
-version = "0.5.3"
+version = "0.5.4"
 license = "Apache-2.0"
 homepage = "https://tansu.io"
 repository = "https://github.com/tansu-io/tansu"
@@ -128,19 +128,19 @@ serde_json = "1"
 snap = "1.1.1"
 syn = { version = "2.0", features = ["full"] }
 tansu = { version = "0.5.3", path = "tansu", default-features = false }
-tansu-broker = { version = "0.5.3", path = "tansu-broker", default-features = false }
-tansu-cat = { version = "0.5.3", path = "tansu-cat", default-features = false }
-tansu-cli = { version = "0.5.3", path = "tansu-cli", default-features = false }
-tansu-client = { version = "0.5.3", path = "tansu-client", default-features = false }
-tansu-generator = { version = "0.5.3", path = "tansu-generator", default-features = false }
-tansu-model = { version = "0.5.3", path = "tansu-model", default-features = false }
-tansu-otel = { version = "0.5.3", path = "tansu-otel", default-features = false }
-tansu-proxy = { version = "0.5.3", path = "tansu-proxy", default-features = false }
-tansu-sans-io = { version = "0.5.3", path = "tansu-sans-io", default-features = false }
-tansu-schema = { version = "0.5.3", path = "tansu-schema", default-features = false }
-tansu-service = { version = "0.5.3", path = "tansu-service", default-features = false }
-tansu-storage = { version = "0.5.3", path = "tansu-storage", default-features = false }
-tansu-topic = { version = "0.5.3", path = "tansu-topic", default-features = false }
+tansu-broker = { version = "0.5.4", path = "tansu-broker", default-features = false }
+tansu-cat = { version = "0.5.4", path = "tansu-cat", default-features = false }
+tansu-cli = { version = "0.5.4", path = "tansu-cli", default-features = false }
+tansu-client = { version = "0.5.4", path = "tansu-client", default-features = false }
+tansu-generator = { version = "0.5.4", path = "tansu-generator", default-features = false }
+tansu-model = { version = "0.5.4", path = "tansu-model", default-features = false }
+tansu-otel = { version = "0.5.4", path = "tansu-otel", default-features = false }
+tansu-proxy = { version = "0.5.4", path = "tansu-proxy", default-features = false }
+tansu-sans-io = { version = "0.5.4", path = "tansu-sans-io", default-features = false }
+tansu-schema = { version = "0.5.4", path = "tansu-schema", default-features = false }
+tansu-service = { version = "0.5.4", path = "tansu-service", default-features = false }
+tansu-storage = { version = "0.5.4", path = "tansu-storage", default-features = false }
+tansu-topic = { version = "0.5.4", path = "tansu-topic", default-features = false }
 tempfile = "3"
 thiserror = "2.0"
 time = { version = "0.3.37", features = ["formatting", "macros"] }
