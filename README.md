@@ -1,14 +1,14 @@
 # Tansu
 
 [Tansu][github-com-tansu-io] is a drop-in replacement for
-Apache Kafka with PostgreSQL, S3 or memory storage engines.
+Apache Kafka with PostgreSQL, libSQL (SQLite), S3 or memory storage engines.
 Schema backed topics (Avro, JSON or Protocol buffers) can
 be written as [Apache Iceberg](https://iceberg.apache.org) or [Delta Lake](https://delta.io) tables.
 
 Features:
 
 - Apache Kafka API compatible
-- Available with [PostgreSQL](https://www.postgresql.org), [S3](https://en.wikipedia.org/wiki/Amazon_S3) or memory storage engines
+- Available with [PostgreSQL](https://www.postgresql.org), [libSQL](https://docs.turso.tech/libsql), [S3](https://en.wikipedia.org/wiki/Amazon_S3) or memory storage engines
 - Topics [validated](docs/schema-registry.md) by [JSON Schema][json-schema-org], [Apache Avro](https://avro.apache.org)
   or [Protocol buffers](protocol-buffers) can be written as [Apache Iceberg](https://iceberg.apache.org) or [Delta Lake](https://delta.io) tables
 
