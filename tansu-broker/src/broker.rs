@@ -29,7 +29,7 @@ use std::{
     time::Duration,
 };
 use tansu_sans_io::ErrorCode;
-use tansu_schema::Registry;
+use tansu_schema::{Registry, lake::House};
 use tansu_storage::{BrokerRegistrationRequest, Storage, StorageContainer};
 use tokio::{
     net::TcpListener,
@@ -284,9 +284,7 @@ pub struct Builder<N, C, I, A, S, L> {
     listener: L,
     otlp_endpoint_url: Option<Url>,
     schema_registry: Option<Registry>,
-
-    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
-    lake_house: Option<tansu_schema::lake::House>,
+    lake_house: Option<House>,
 
     cancellation: CancellationToken,
 }
@@ -311,8 +309,6 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             listener: self.listener,
             otlp_endpoint_url: self.otlp_endpoint_url,
             schema_registry: self.schema_registry,
-
-            #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
             lake_house: self.lake_house,
 
             cancellation: self.cancellation,
@@ -329,8 +325,6 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             listener: self.listener,
             otlp_endpoint_url: self.otlp_endpoint_url,
             schema_registry: self.schema_registry,
-
-            #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
             lake_house: self.lake_house,
 
             cancellation: self.cancellation,
@@ -347,8 +341,6 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             listener: self.listener,
             otlp_endpoint_url: self.otlp_endpoint_url,
             schema_registry: self.schema_registry,
-
-            #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
             lake_house: self.lake_house,
 
             cancellation: self.cancellation,
@@ -368,8 +360,6 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             listener: self.listener,
             otlp_endpoint_url: self.otlp_endpoint_url,
             schema_registry: self.schema_registry,
-
-            #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
             lake_house: self.lake_house,
 
             cancellation: self.cancellation,
@@ -388,8 +378,6 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             listener: self.listener,
             otlp_endpoint_url: self.otlp_endpoint_url,
             schema_registry: self.schema_registry,
-
-            #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
             lake_house: self.lake_house,
 
             cancellation: self.cancellation,
@@ -408,8 +396,6 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             listener,
             otlp_endpoint_url: self.otlp_endpoint_url,
             schema_registry: self.schema_registry,
-
-            #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
             lake_house: self.lake_house,
 
             cancellation: self.cancellation,
@@ -423,8 +409,7 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
         }
     }
 
-    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
-    pub fn lake_house(self, lake_house: Option<tansu_schema::lake::House>) -> Self {
+    pub fn lake_house(self, lake_house: Option<House>) -> Self {
         _ = lake_house
             .as_ref()
             .inspect(|lake_house| debug!(?lake_house));
@@ -450,24 +435,12 @@ impl Builder<i32, String, Uuid, Url, Url, Url> {
             otel::metric_exporter(otlp_endpoint_url)?;
         }
 
-        #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
         let storage = StorageContainer::builder()
             .cluster_id(self.cluster_id.clone())
             .node_id(self.node_id)
             .advertised_listener(self.advertised_listener.clone())
             .schema_registry(self.schema_registry.clone())
             .lake_house(self.lake_house.clone())
-            .storage(self.storage.clone())
-            .cancellation(self.cancellation.clone())
-            .build()
-            .await?;
-
-        #[cfg(not(any(feature = "parquet", feature = "iceberg", feature = "delta")))]
-        let storage = StorageContainer::builder()
-            .cluster_id(self.cluster_id.clone())
-            .node_id(self.node_id)
-            .advertised_listener(self.advertised_listener.clone())
-            .schema_registry(self.schema_registry.clone())
             .storage(self.storage.clone())
             .cancellation(self.cancellation.clone())
             .build()
