@@ -13,42 +13,27 @@
 // limitations under the License.
 
 use tansu_client::{Client, ConnectionManager};
-use tansu_sans_io::{
-    DeleteTopicsRequest, DeleteTopicsResponse, ErrorCode, NULL_TOPIC_ID,
-    delete_topics_request::DeleteTopicState, delete_topics_response::DeletableTopicResult,
-};
+use tansu_sans_io::{ErrorCode, MetadataRequest, MetadataResponse};
 use tracing::debug;
 use url::Url;
 
 use crate::{Error, Result, Topic};
 
 #[derive(Clone, Debug, Default)]
-pub struct Builder<B, N> {
+pub struct Builder<B> {
     broker: B,
-    name: N,
 }
 
-impl<B, N> Builder<B, N> {
-    pub fn broker(self, broker: Url) -> Builder<Url, N> {
-        Builder {
-            broker,
-            name: self.name,
-        }
-    }
-
-    pub fn name(self, name: impl Into<String>) -> Builder<B, String> {
-        Builder {
-            broker: self.broker,
-            name: name.into(),
-        }
+impl<B> Builder<B> {
+    pub fn broker(self, broker: Url) -> Builder<Url> {
+        Builder { broker }
     }
 }
 
-impl Builder<Url, String> {
+impl Builder<Url> {
     pub fn build(self) -> Topic {
-        Topic::Delete(Configuration {
+        Topic::List(Configuration {
             broker: self.broker,
-            name: self.name,
         })
     }
 }
@@ -56,23 +41,22 @@ impl Builder<Url, String> {
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Configuration {
     broker: Url,
-    name: String,
 }
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub(crate) struct Delete {
+pub(crate) struct List {
     configuration: Configuration,
 }
 
-impl TryFrom<Configuration> for Delete {
+impl TryFrom<Configuration> for List {
     type Error = Error;
 
     fn try_from(configuration: Configuration) -> Result<Self, Self::Error> {
-        Ok(Delete { configuration })
+        Ok(List { configuration })
     }
 }
 
-impl Delete {
+impl List {
     pub(crate) async fn main(self) -> Result<ErrorCode> {
         let client = ConnectionManager::builder(self.configuration.broker.clone())
             .client_id(Some(env!("CARGO_PKG_NAME").into()))
@@ -81,29 +65,20 @@ impl Delete {
             .inspect(|pool| debug!(?pool))
             .map(Client::new)?;
 
-        let timeout_ms = 30_000;
+        let req = MetadataRequest::default()
+            .allow_auto_topic_creation(Some(false))
+            .include_cluster_authorized_operations(Some(false))
+            .include_topic_authorized_operations(Some(false))
+            .topics(None);
 
-        let req = DeleteTopicsRequest::default()
-            .topics(Some(
-                [DeleteTopicState::default()
-                    .name(Some(self.configuration.name))
-                    .topic_id(NULL_TOPIC_ID)]
-                .into(),
-            ))
-            .topic_names(None)
-            .timeout_ms(timeout_ms);
-
-        let DeleteTopicsResponse { responses, .. } = client
+        let MetadataResponse { topics, .. } = client
             .call(req)
             .await
             .inspect(|response| debug!(?response))?;
 
-        let responses = responses.unwrap_or_default();
-        assert_eq!(1, responses.len());
-
-        let DeletableTopicResult { error_code, .. } =
-            responses.first().expect("responses: {responses:?}");
-
-        ErrorCode::try_from(error_code).map_err(Into::into)
+        serde_json::to_string(topics.as_deref().unwrap_or_default())
+            .inspect(|topics| println!("{topics}"))
+            .map_err(Into::into)
+            .and(Ok(ErrorCode::None))
     }
 }

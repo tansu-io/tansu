@@ -7097,6 +7097,8 @@ dependencies = [
  "futures",
  "futures-core",
  "futures-util",
+ "serde",
+ "serde_json",
  "tansu-client",
  "tansu-sans-io",
  "thiserror 2.0.17",
