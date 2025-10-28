@@ -8,6 +8,9 @@ about:
 cargo-build +args:
     cargo build {{args}}
 
+license:
+    cargo about generate about.hbs > license.html
+
 build: (cargo-build "--bin" "tansu" "--no-default-features" "--features" "delta,dynostore,iceberg,libsql,parquet,postgres")
 
 release: (cargo-build "--release" "--bin" "tansu" "--no-default-features" "--features" "delta,dynostore,iceberg,libsql,parquet,postgres")
