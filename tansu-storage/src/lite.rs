@@ -1172,7 +1172,6 @@ impl<C, N, L, D> Builder<C, N, L, D> {
         Self { schemas, ..self }
     }
 
-    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
     pub(crate) fn lake(self, lake: Option<House>) -> Self {
         Self { lake, ..self }
     }

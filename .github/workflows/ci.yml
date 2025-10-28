@@ -16,7 +16,7 @@ env:
   CLICOLOR: 1
 jobs:
   build:
-    needs: [build-storage, build-storage-lake]
+    needs: [build-storage, build-storage-lake, cargo-publish-dry-run]
     runs-on: ${{matrix.os}}
     strategy:
       fail-fast: false
@@ -97,6 +97,12 @@ jobs:
           components: clippy, rustfmt
           cache: false
       - run: cargo build --features ${{matrix.storage}} --features ${{matrix.lake}}
+  cargo-publish-dry-run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - run: cargo publish --dry-run --workspace --verbose
   typos:
     runs-on: ubuntu-latest
     steps:

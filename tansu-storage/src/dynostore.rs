@@ -373,7 +373,6 @@ impl DynoStore {
         Self { schemas, ..self }
     }
 
-    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
     pub fn lake(self, lake: Option<House>) -> Self {
         Self { lake, ..self }
     }
@@ -2564,10 +2563,7 @@ impl Storage for DynoStore {
     async fn maintain(&self) -> Result<()> {
         debug!(?self);
 
-        #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
         if let Some(ref lake) = self.lake {
-            use tansu_schema::lake::LakeHouse as _;
-
             return lake
                 .maintain()
                 .await

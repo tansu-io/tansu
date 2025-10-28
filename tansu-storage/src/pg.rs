@@ -3409,10 +3409,7 @@ impl Storage for Postgres {
     }
 
     async fn maintain(&self) -> Result<()> {
-        #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
         if let Some(ref lake) = self.lake {
-            use tansu_schema::lake::LakeHouse as _;
-
             return lake.maintain().await.map_err(Into::into);
         }
 
