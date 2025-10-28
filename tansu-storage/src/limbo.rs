@@ -63,7 +63,10 @@ use tansu_sans_io::{
     to_system_time, to_timestamp,
     txn_offset_commit_response::{TxnOffsetCommitResponsePartition, TxnOffsetCommitResponseTopic},
 };
-use tansu_schema::{Registry, lake::LakeHouse as _};
+use tansu_schema::{
+    Registry,
+    lake::{House, LakeHouse as _},
+};
 use tracing::{debug, error};
 use turso::{
     Connection, Database, Row, Value, params::IntoParams, transaction::Transaction,
@@ -172,13 +175,7 @@ pub struct Engine {
     db: Arc<Mutex<Database>>,
 
     schemas: Option<Registry>,
-
-    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
-    lake: Option<tansu_schema::lake::House>,
-
-    #[allow(dead_code)]
-    #[cfg(not(any(feature = "parquet", feature = "iceberg", feature = "delta")))]
-    lake: Option<()>,
+    lake: Option<House>,
 }
 
 impl Engine {
@@ -906,13 +903,7 @@ pub struct Builder<C, N, L, D> {
     advertised_listener: L,
     storage: D,
     schemas: Option<Registry>,
-
-    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
-    lake: Option<tansu_schema::lake::House>,
-
-    #[allow(dead_code)]
-    #[cfg(not(any(feature = "parquet", feature = "iceberg", feature = "delta")))]
-    lake: Option<()>,
+    lake: Option<House>,
 }
 
 impl<C, N, L, D> Builder<C, N, L, D> {
@@ -970,8 +961,7 @@ impl<C, N, L, D> Builder<C, N, L, D> {
         Self { schemas, ..self }
     }
 
-    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
-    pub(crate) fn lake(self, lake: Option<tansu_schema::lake::House>) -> Self {
+    pub(crate) fn lake(self, lake: Option<House>) -> Self {
         Self { lake, ..self }
     }
 }

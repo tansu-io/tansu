@@ -10,6 +10,9 @@ license.workspace = true
 repository.workspace = true
 version.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 dotenv.workspace = true
 tansu-broker.workspace = true
@@ -17,6 +20,3 @@ tansu-cli.workspace = true
 tansu-sans-io.workspace = true
 tokio.workspace = true
 tracing.workspace = true
-
-[lints]
-workspace = true
