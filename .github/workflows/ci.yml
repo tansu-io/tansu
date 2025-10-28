@@ -104,7 +104,6 @@ jobs:
       matrix:
         os:
           - ubuntu-latest
-          - macos-latest
     steps:
       - uses: actions/checkout@v5
       - uses: actions-rust-lang/setup-rust-toolchain@v1
