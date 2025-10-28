@@ -98,11 +98,17 @@ jobs:
           cache: false
       - run: cargo build --features ${{matrix.storage}} --features ${{matrix.lake}}
   cargo-publish-dry-run:
-    runs-on: ubuntu-latest
+    runs-on: ${{matrix.os}}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
     steps:
       - uses: actions/checkout@v5
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - run: cargo publish --dry-run --workspace --verbose
+      - run: cargo publish --dry-run --workspace
   typos:
     runs-on: ubuntu-latest
     steps:
