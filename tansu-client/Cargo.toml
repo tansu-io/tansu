@@ -28,3 +28,8 @@ url.workspace = true
 
 [lints]
 workspace = true
+
+
+[dev-dependencies]
+clap.workspace = true
+dotenv.workspace = true
