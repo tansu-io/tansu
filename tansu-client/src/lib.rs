@@ -115,7 +115,7 @@ use opentelemetry::{
 };
 use opentelemetry_semantic_conventions::SCHEMA_URL;
 use rama::{Context, Layer, Service};
-use tansu_sans_io::{ApiKey, ApiVersionsRequest, Body, Frame, Header, Request};
+use tansu_sans_io::{ApiKey, ApiVersionsRequest, Body, Frame, Header, Request, RootMessageMeta};
 use tansu_service::{FrameBytesLayer, FrameBytesService, host_port};
 use tokio::{
     io::{AsyncReadExt as _, AsyncWriteExt as _},
@@ -299,12 +299,25 @@ impl Builder {
         .build()
         .map(Client::new)?;
 
+        let supported = RootMessageMeta::messages().requests();
+
         client.call(req).await.map(|response| {
             response
                 .api_keys
                 .unwrap_or_default()
                 .into_iter()
-                .map(|api| (api.api_key, api.max_version))
+                .filter_map(|api| {
+                    supported.get(&api.api_key).and_then(|supported| {
+                        if api.min_version >= supported.version.valid.start {
+                            Some((
+                                api.api_key,
+                                api.max_version.min(supported.version.valid.end),
+                            ))
+                        } else {
+                            None
+                        }
+                    })
+                })
                 .collect()
         })
     }
