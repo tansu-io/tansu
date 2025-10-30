@@ -1412,14 +1412,30 @@ pub enum Ack {
     FullIsr,
 }
 
+impl Ack {
+    const FULL_ISR: i16 = -1;
+    const NONE: i16 = 0;
+    const LEADER: i16 = 1;
+}
+
+impl From<Ack> for i16 {
+    fn from(value: Ack) -> Self {
+        match value {
+            Ack::FullIsr => Ack::FULL_ISR,
+            Ack::None => Ack::NONE,
+            Ack::Leader => Ack::LEADER,
+        }
+    }
+}
+
 impl TryFrom<i16> for Ack {
     type Error = Error;
 
     fn try_from(value: i16) -> Result<Self, Self::Error> {
         match value {
-            -1 => Ok(Self::FullIsr),
-            0 => Ok(Self::None),
-            1 => Ok(Self::Leader),
+            Self::FULL_ISR => Ok(Self::FullIsr),
+            Self::NONE => Ok(Self::None),
+            Self::LEADER => Ok(Self::Leader),
             _ => Err(Error::InvalidAckValue(value)),
         }
     }
