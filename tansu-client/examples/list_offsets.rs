@@ -163,7 +163,6 @@ async fn main() -> Result<()> {
                 .topics(Some(
                     [ListOffsetsTopic::default().name(arg.topic).partitions(Some(
                         (0..partitions)
-                            .into_iter()
                             .map(|partition_index| {
                                 ListOffsetsPartition::default()
                                     .partition_index(partition_index)
