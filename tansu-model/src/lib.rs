@@ -361,7 +361,7 @@ impl<'a> TryFrom<&Wv<'a>> for Version {
         Ok(Self {
             valid: value.as_a("validVersions")?,
             deprecated: value.as_option("deprecatedVersions")?,
-            flexible: value.as_a("flexibleVersions")?,
+            flexible: value.as_option("flexibleVersions")?.unwrap_or_default(),
         })
     }
 }
@@ -677,14 +677,20 @@ impl<'a> TryFrom<&Wv<'a>> for Message {
                     .map(Some)
             })?;
 
-        let fields = value.as_a("fields").and_then(|fields: &[Value]| {
-            fields.iter().try_fold(Vec::new(), |mut acc, field| {
-                Field::try_from(&Wv::from(field)).map(|f| {
-                    acc.push(f);
-                    acc
-                })
-            })
-        })?;
+        let fields = value
+            .as_option("fields")?
+            .map_or(Ok(None), |fields: &[Value]| {
+                fields
+                    .iter()
+                    .try_fold(Vec::new(), |mut acc, field| {
+                        Field::try_from(&Wv::from(field)).map(|f| {
+                            acc.push(f);
+                            acc
+                        })
+                    })
+                    .map(Some)
+            })?
+            .unwrap_or_default();
 
         let versions = Version::try_from(value)?;
         let common_structs =
@@ -959,7 +965,7 @@ mod tests {
             Ok(Header {
                 name: value.as_a("name")?,
                 valid: value.as_a("validVersions")?,
-                flexible: value.as_a("flexibleVersions")?,
+                flexible: value.as_option("flexibleVersions")?.unwrap_or_default(),
                 fields: fields.iter().try_fold(Vec::new(), |mut acc, field| {
                     Field::try_from(&Wv::from(field)).map(|f| {
                         acc.push(f);
