@@ -25,7 +25,7 @@ where
 c.name = $1
 and t.name = $2
 and tp.partition = $3
-and r.timestamp < $4
+and r.timestamp >= $4
 
-order by r.offset_id desc
+order by r.offset_id asc
 limit 1;

@@ -37,7 +37,7 @@ use tansu_storage::{
 
 use crate::Error;
 
-pub(crate) fn services<S>(
+pub fn services<S>(
     builder: FrameRouteBuilder<(), Error>,
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
@@ -74,7 +74,7 @@ where
     })
 }
 
-fn consumer_group_describe<S>(
+pub fn consumer_group_describe<S>(
     builder: FrameRouteBuilder<(), Error>,
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
@@ -95,7 +95,7 @@ where
         .map_err(Into::into)
 }
 
-fn create_topics<S>(
+pub fn create_topics<S>(
     builder: FrameRouteBuilder<(), Error>,
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
@@ -116,7 +116,7 @@ where
         .map_err(Into::into)
 }
 
-fn delete_groups<S>(
+pub fn delete_groups<S>(
     builder: FrameRouteBuilder<(), Error>,
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
@@ -137,7 +137,7 @@ where
         .map_err(Into::into)
 }
 
-fn delete_records<S>(
+pub fn delete_records<S>(
     builder: FrameRouteBuilder<(), Error>,
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
@@ -158,7 +158,7 @@ where
         .map_err(Into::into)
 }
 
-fn delete_topics<S>(
+pub fn delete_topics<S>(
     builder: FrameRouteBuilder<(), Error>,
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
@@ -179,7 +179,7 @@ where
         .map_err(Into::into)
 }
 
-fn describe_cluster<S>(
+pub fn describe_cluster<S>(
     builder: FrameRouteBuilder<(), Error>,
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
@@ -200,7 +200,7 @@ where
         .map_err(Into::into)
 }
 
-fn describe_configs<S>(
+pub fn describe_configs<S>(
     builder: FrameRouteBuilder<(), Error>,
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
@@ -221,7 +221,7 @@ where
         .map_err(Into::into)
 }
 
-fn describe_groups<S>(
+pub fn describe_groups<S>(
     builder: FrameRouteBuilder<(), Error>,
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
@@ -242,7 +242,7 @@ where
         .map_err(Into::into)
 }
 
-fn describe_topic_partitions<S>(
+pub fn describe_topic_partitions<S>(
     builder: FrameRouteBuilder<(), Error>,
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
@@ -263,7 +263,7 @@ where
         .map_err(Into::into)
 }
 
-fn fetch<S>(
+pub fn fetch<S>(
     builder: FrameRouteBuilder<(), Error>,
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
@@ -284,7 +284,7 @@ where
         .map_err(Into::into)
 }
 
-fn find_coordinator<S>(
+pub fn find_coordinator<S>(
     builder: FrameRouteBuilder<(), Error>,
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
@@ -305,7 +305,7 @@ where
         .map_err(Into::into)
 }
 
-fn incremental_alter_configs<S>(
+pub fn incremental_alter_configs<S>(
     builder: FrameRouteBuilder<(), Error>,
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
@@ -326,7 +326,7 @@ where
         .map_err(Into::into)
 }
 
-fn init_producer_id<S>(
+pub fn init_producer_id<S>(
     builder: FrameRouteBuilder<(), Error>,
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
@@ -347,7 +347,7 @@ where
         .map_err(Into::into)
 }
 
-fn list_groups<S>(
+pub fn list_groups<S>(
     builder: FrameRouteBuilder<(), Error>,
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
@@ -368,7 +368,7 @@ where
         .map_err(Into::into)
 }
 
-fn list_offsets<S>(
+pub fn list_offsets<S>(
     builder: FrameRouteBuilder<(), Error>,
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
@@ -389,7 +389,7 @@ where
         .map_err(Into::into)
 }
 
-fn list_partition_reassignments<S>(
+pub fn list_partition_reassignments<S>(
     builder: FrameRouteBuilder<(), Error>,
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
@@ -410,7 +410,7 @@ where
         .map_err(Into::into)
 }
 
-fn metadata<S>(
+pub fn metadata<S>(
     builder: FrameRouteBuilder<(), Error>,
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
@@ -431,7 +431,7 @@ where
         .map_err(Into::into)
 }
 
-fn produce<S>(
+pub fn produce<S>(
     builder: FrameRouteBuilder<(), Error>,
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
@@ -452,7 +452,7 @@ where
         .map_err(Into::into)
 }
 
-fn get_telemetry_subscriptions<S>(
+pub fn get_telemetry_subscriptions<S>(
     builder: FrameRouteBuilder<(), Error>,
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
@@ -473,7 +473,7 @@ where
         .map_err(Into::into)
 }
 
-fn add_offsets_to_txn<S>(
+pub fn add_offsets_to_txn<S>(
     builder: FrameRouteBuilder<(), Error>,
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
@@ -494,7 +494,7 @@ where
         .map_err(Into::into)
 }
 
-fn add_partitions_to_txn<S>(
+pub fn add_partitions_to_txn<S>(
     builder: FrameRouteBuilder<(), Error>,
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
@@ -515,7 +515,7 @@ where
         .map_err(Into::into)
 }
 
-fn txn_offset_commit_request<S>(
+pub fn txn_offset_commit_request<S>(
     builder: FrameRouteBuilder<(), Error>,
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>

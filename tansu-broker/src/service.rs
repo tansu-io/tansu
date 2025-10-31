@@ -22,8 +22,8 @@ use tracing::debug;
 
 use crate::{Error, Result, coordinator::group::Coordinator};
 
-mod coordinator;
-mod storage;
+pub mod coordinator;
+pub mod storage;
 
 type TcpRouteFrame =
     TcpContextService<TcpBytesService<BytesFrameService<FrameRouteService<(), Error>>, ()>>;
