@@ -837,19 +837,7 @@ where
 
                 Err(UpdateError::Error(error)) => return Err(error.into()),
 
-                #[cfg(feature = "dynostore")]
-                Err(UpdateError::ObjectStore(error)) => return Err(error.into()),
-
                 Err(UpdateError::SerdeJson(error)) => return Err(error.into()),
-
-                #[cfg(feature = "postgres")]
-                Err(UpdateError::TokioPostgres(error)) => return Err(error.into()),
-
-                #[cfg(feature = "libsql")]
-                Err(UpdateError::LibSql(error)) => return Err(error.into()),
-
-                #[cfg(feature = "turso")]
-                Err(UpdateError::Turso(error)) => return Err(error.into()),
 
                 Err(UpdateError::MissingEtag) => {
                     return Err(Error::Message(String::from("missing e-tag")));
@@ -974,19 +962,7 @@ where
 
                 Err(UpdateError::Error(error)) => return Err(error.into()),
 
-                #[cfg(feature = "dynostore")]
-                Err(UpdateError::ObjectStore(error)) => return Err(error.into()),
-
                 Err(UpdateError::SerdeJson(error)) => return Err(error.into()),
-
-                #[cfg(feature = "postgres")]
-                Err(UpdateError::TokioPostgres(error)) => return Err(error.into()),
-
-                #[cfg(feature = "libsql")]
-                Err(UpdateError::LibSql(error)) => return Err(error.into()),
-
-                #[cfg(feature = "turso")]
-                Err(UpdateError::Turso(error)) => return Err(error.into()),
 
                 Err(UpdateError::MissingEtag) => {
                     return Err(Error::Message(String::from("missing e-tag")));
@@ -1060,19 +1036,7 @@ where
 
                 Err(UpdateError::Error(error)) => return Err(error.into()),
 
-                #[cfg(feature = "dynostore")]
-                Err(UpdateError::ObjectStore(error)) => return Err(error.into()),
-
                 Err(UpdateError::SerdeJson(error)) => return Err(error.into()),
-
-                #[cfg(feature = "postgres")]
-                Err(UpdateError::TokioPostgres(error)) => return Err(error.into()),
-
-                #[cfg(feature = "libsql")]
-                Err(UpdateError::LibSql(error)) => return Err(error.into()),
-
-                #[cfg(feature = "turso")]
-                Err(UpdateError::Turso(error)) => return Err(error.into()),
 
                 Err(UpdateError::MissingEtag) => {
                     return Err(Error::Message(String::from("missing e-tag")));
@@ -1141,19 +1105,7 @@ where
 
                 Err(UpdateError::Error(error)) => return Err(error.into()),
 
-                #[cfg(feature = "dynostore")]
-                Err(UpdateError::ObjectStore(error)) => return Err(error.into()),
-
                 Err(UpdateError::SerdeJson(error)) => return Err(error.into()),
-
-                #[cfg(feature = "postgres")]
-                Err(UpdateError::TokioPostgres(error)) => return Err(error.into()),
-
-                #[cfg(feature = "libsql")]
-                Err(UpdateError::LibSql(error)) => return Err(error.into()),
-
-                #[cfg(feature = "turso")]
-                Err(UpdateError::Turso(error)) => return Err(error.into()),
 
                 Err(UpdateError::MissingEtag) => {
                     return Err(Error::Message(String::from("missing e-tag")));
@@ -1252,19 +1204,7 @@ where
 
                 Err(UpdateError::Error(error)) => return Err(error.into()),
 
-                #[cfg(feature = "dynostore")]
-                Err(UpdateError::ObjectStore(error)) => return Err(error.into()),
-
                 Err(UpdateError::SerdeJson(error)) => return Err(error.into()),
-
-                #[cfg(feature = "postgres")]
-                Err(UpdateError::TokioPostgres(error)) => return Err(error.into()),
-
-                #[cfg(feature = "libsql")]
-                Err(UpdateError::LibSql(error)) => return Err(error.into()),
-
-                #[cfg(feature = "turso")]
-                Err(UpdateError::Turso(error)) => return Err(error.into()),
 
                 Err(UpdateError::MissingEtag) => {
                     return Err(Error::Message(String::from("missing e-tag")));
