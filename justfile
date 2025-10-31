@@ -13,6 +13,8 @@ license:
 
 build: (cargo-build "--bin" "tansu" "--no-default-features" "--features" "delta,dynostore,iceberg,libsql,parquet,postgres")
 
+build-examples: (cargo-build "--examples")
+
 release: (cargo-build "--release" "--bin" "tansu" "--no-default-features" "--features" "delta,dynostore,iceberg,libsql,parquet,postgres")
 
 test: test-workspace test-doc
@@ -234,6 +236,12 @@ tansu-server:
 
 kafka-proxy:
     docker run -d -p 19092:9092 apache/kafka:3.9.0
+
+kafka39:
+    docker run --rm -p 9092:9092 apache/kafka:3.9.0
+
+kafka41:
+    docker run --rm -p 9092:9092 apache/kafka:4.1.0
 
 codespace-create:
     gh codespace create \
