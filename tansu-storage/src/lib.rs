@@ -1442,26 +1442,11 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
 pub enum UpdateError<T> {
     Error(#[from] Error),
 
-    #[cfg(feature = "libsql")]
-    LibSql(Arc<libsql::Error>),
-
     MissingEtag,
 
-    #[cfg(feature = "dynostore")]
-    ObjectStore(Arc<object_store::Error>),
-
-    Outdated {
-        current: T,
-        version: Version,
-    },
+    Outdated { current: T, version: Version },
 
     SerdeJson(Arc<serde_json::Error>),
-
-    #[cfg(feature = "postgres")]
-    TokioPostgres(Arc<tokio_postgres::error::Error>),
-
-    #[cfg(feature = "turso")]
-    Turso(Arc<turso::Error>),
 
     Uuid(#[from] uuid::Error),
 }
@@ -1469,21 +1454,21 @@ pub enum UpdateError<T> {
 #[cfg(feature = "libsql")]
 impl<T> From<libsql::Error> for UpdateError<T> {
     fn from(value: libsql::Error) -> Self {
-        Self::LibSql(Arc::new(value))
+        Self::Error(Error::from(value))
     }
 }
 
 #[cfg(feature = "turso")]
 impl<T> From<turso::Error> for UpdateError<T> {
     fn from(value: turso::Error) -> Self {
-        Self::Turso(Arc::new(value))
+        Self::Error(Error::from(value))
     }
 }
 
 #[cfg(feature = "dynostore")]
 impl<T> From<object_store::Error> for UpdateError<T> {
     fn from(value: object_store::Error) -> Self {
-        Self::ObjectStore(Arc::new(value))
+        Self::Error(Error::from(value))
     }
 }
 
@@ -1496,7 +1481,7 @@ impl<T> From<serde_json::Error> for UpdateError<T> {
 #[cfg(feature = "postgres")]
 impl<T> From<tokio_postgres::error::Error> for UpdateError<T> {
     fn from(value: tokio_postgres::error::Error) -> Self {
-        Self::TokioPostgres(Arc::new(value))
+        Self::Error(Error::from(value))
     }
 }
 
