@@ -6861,7 +6861,9 @@ version = "0.5.6"
 dependencies = [
  "backoff",
  "bytes",
+ "clap",
  "deadpool",
+ "dotenv",
  "opentelemetry 0.30.0",
  "opentelemetry-semantic-conventions",
  "rama",
