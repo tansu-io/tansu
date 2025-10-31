@@ -138,10 +138,11 @@ use pg::Postgres;
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+#[cfg(any(feature = "libsql", feature = "postgres"))]
+use std::error;
 use std::{
     array::TryFromSliceError,
     collections::BTreeMap,
-    error,
     ffi::OsString,
     fmt::{self, Debug, Display, Formatter},
     fs::DirEntry,
