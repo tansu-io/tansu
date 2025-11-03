@@ -1676,7 +1676,7 @@ impl Storage for Postgres {
                     first
                         .try_get::<_, SystemTime>(2)
                         .map_err(Error::from)
-                        .and_then(|system_time| to_timestamp(system_time).map_err(Into::into))
+                        .and_then(|system_time| to_timestamp(&system_time).map_err(Into::into))
                         .inspect_err(|err| error!(?err))?,
                 )
                 .producer_id(
@@ -1725,7 +1725,7 @@ impl Storage for Postgres {
                                 .try_get::<_, SystemTime>(2)
                                 .map_err(Error::from)
                                 .and_then(|system_time| {
-                                    to_timestamp(system_time).map_err(Into::into)
+                                    to_timestamp(&system_time).map_err(Into::into)
                                 })
                                 .inspect_err(|err| error!(?err))?,
                         )
@@ -1744,7 +1744,7 @@ impl Storage for Postgres {
                     .try_get::<_, SystemTime>(2)
                     .map_err(Error::from)
                     .and_then(|system_time| {
-                        to_timestamp(system_time)
+                        to_timestamp(&system_time)
                             .map(|timestamp| timestamp - batch_builder.base_timestamp)
                             .map_err(Into::into)
                     })

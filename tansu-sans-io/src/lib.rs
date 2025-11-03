@@ -1980,7 +1980,7 @@ pub fn to_system_time(timestamp: i64) -> Result<SystemTime> {
 }
 
 /// convert system time into a kafka timestamp
-pub fn to_timestamp(system_time: SystemTime) -> Result<i64> {
+pub fn to_timestamp(system_time: &SystemTime) -> Result<i64> {
     system_time
         .duration_since(SystemTime::UNIX_EPOCH)
         .map_err(Into::into)
@@ -2011,7 +2011,7 @@ impl TryFrom<ListOffset> for i64 {
         match value {
             ListOffset::Earliest => Ok(ListOffset::EARLIEST_OFFSET),
             ListOffset::Latest => Ok(ListOffset::LATEST_OFFSET),
-            ListOffset::Timestamp(timestamp) => to_timestamp(timestamp),
+            ListOffset::Timestamp(timestamp) => to_timestamp(&timestamp),
         }
     }
 }

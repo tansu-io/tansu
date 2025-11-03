@@ -2268,7 +2268,7 @@ impl Storage for Delegate {
                     row.get_value(2)
                         .map_err(Error::from)
                         .and_then(LiteTimestamp::try_from)
-                        .and_then(|system_time| to_timestamp(system_time.0).map_err(Into::into))
+                        .and_then(|system_time| to_timestamp(&system_time.0).map_err(Into::into))
                         .inspect_err(|err| error!(?err))?,
                 )
                 .producer_id(
@@ -2316,7 +2316,7 @@ impl Storage for Delegate {
                                 .map_err(Error::from)
                                 .and_then(LiteTimestamp::try_from)
                                 .and_then(|system_time| {
-                                    to_timestamp(system_time.0).map_err(Into::into)
+                                    to_timestamp(&system_time.0).map_err(Into::into)
                                 })
                                 .inspect_err(|err| error!(?err))?,
                         )
@@ -2336,7 +2336,7 @@ impl Storage for Delegate {
                     .map_err(Error::from)
                     .and_then(LiteTimestamp::try_from)
                     .and_then(|system_time| {
-                        to_timestamp(system_time.0)
+                        to_timestamp(&system_time.0)
                             .map(|timestamp| timestamp - batch_builder.base_timestamp)
                             .map_err(Into::into)
                     })
@@ -4285,7 +4285,7 @@ impl From<LiteTimestamp> for SystemTime {
 
 impl From<LiteTimestamp> for Value {
     fn from(value: LiteTimestamp) -> Self {
-        Value::Integer(to_timestamp(value.0).unwrap_or_default())
+        Value::Integer(to_timestamp(&value.0).unwrap_or_default())
     }
 }
 

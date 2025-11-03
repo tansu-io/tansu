@@ -583,7 +583,7 @@ impl ListOffsetResponse {
 
     pub fn timestamp(&self) -> Result<Option<i64>> {
         self.timestamp.map_or(Ok(None), |system_time| {
-            to_timestamp(system_time).map(Some).map_err(Into::into)
+            to_timestamp(&system_time).map(Some).map_err(Into::into)
         })
     }
 
@@ -1744,7 +1744,7 @@ static STORAGE_CONTAINER_ERRORS: LazyLock<Counter<u64>> = LazyLock::new(|| {
 
 #[async_trait]
 impl Storage for StorageContainer {
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn register_broker(&self, broker_registration: BrokerRegistrationRequest) -> Result<()> {
         let attributes = [KeyValue::new("method", "register_broker")];
 
@@ -1772,7 +1772,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn incremental_alter_resource(
         &self,
         resource: AlterConfigsResource,
@@ -1803,7 +1803,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn create_topic(&self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {
         let attributes = [KeyValue::new("method", "create_topic")];
         let span = debug_span!("create_topic", ?topic, validate_only);
@@ -1836,7 +1836,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn delete_records(
         &self,
         topics: &[DeleteRecordsTopic],
@@ -1867,7 +1867,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn delete_topic(&self, topic: &TopicId) -> Result<ErrorCode> {
         let attributes = [KeyValue::new("method", "delete_topic")];
 
@@ -1895,7 +1895,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn brokers(&self) -> Result<Vec<DescribeClusterBroker>> {
         let attributes = [KeyValue::new("method", "brokers")];
 
@@ -1923,7 +1923,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn produce(
         &self,
         transaction_id: Option<&str>,
@@ -1956,7 +1956,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn fetch(
         &self,
         topition: &'_ Topition,
@@ -1995,7 +1995,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn offset_stage(&self, topition: &Topition) -> Result<OffsetStage> {
         let attributes = [KeyValue::new("method", "offset_stage")];
 
@@ -2023,7 +2023,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn list_offsets(
         &self,
         isolation_level: IsolationLevel,
@@ -2055,7 +2055,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn offset_commit(
         &self,
         group_id: &str,
@@ -2088,7 +2088,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn committed_offset_topitions(&self, group_id: &str) -> Result<BTreeMap<Topition, i64>> {
         let attributes = [KeyValue::new("method", "committed_offset_topitions")];
 
@@ -2116,7 +2116,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn offset_fetch(
         &self,
         group_id: Option<&str>,
@@ -2149,7 +2149,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn metadata(&self, topics: Option<&[TopicId]>) -> Result<MetadataResponse> {
         let attributes = [KeyValue::new("method", "metadata")];
 
@@ -2177,7 +2177,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn describe_config(
         &self,
         name: &str,
@@ -2210,7 +2210,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn describe_topic_partitions(
         &self,
         topics: Option<&[TopicId]>,
@@ -2249,7 +2249,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn list_groups(&self, states_filter: Option<&[String]>) -> Result<Vec<ListedGroup>> {
         let attributes = [KeyValue::new("method", "list_groups")];
 
@@ -2277,7 +2277,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn delete_groups(
         &self,
         group_ids: Option<&[String]>,
@@ -2308,7 +2308,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn describe_groups(
         &self,
         group_ids: Option<&[String]>,
@@ -2344,7 +2344,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn update_group(
         &self,
         group_id: &str,
@@ -2377,7 +2377,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn init_producer(
         &self,
         transaction_id: Option<&str>,
@@ -2443,7 +2443,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn txn_add_offsets(
         &self,
         transaction_id: &str,
@@ -2487,7 +2487,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn txn_add_partitions(
         &self,
         partitions: TxnAddPartitionsRequest,
@@ -2518,7 +2518,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn txn_offset_commit(
         &self,
         offsets: TxnOffsetCommitRequest,
@@ -2549,7 +2549,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn txn_end(
         &self,
         transaction_id: &str,
@@ -2593,7 +2593,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn maintain(&self) -> Result<()> {
         let attributes = [KeyValue::new("method", "maintain")];
 
@@ -2623,7 +2623,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn cluster_id(&self) -> Result<String> {
         match self {
             #[cfg(feature = "dynostore")]
@@ -2642,7 +2642,7 @@ impl Storage for StorageContainer {
         }
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn node(&self) -> Result<i32> {
         match self {
             #[cfg(feature = "dynostore")]
@@ -2661,7 +2661,7 @@ impl Storage for StorageContainer {
         }
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn advertised_listener(&self) -> Result<Url> {
         match self {
             #[cfg(feature = "dynostore")]

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use bytes::Bytes;
 use common::{StorageType, alphanumeric_string, init_tracing, register_broker};
@@ -26,13 +26,14 @@ use tansu_sans_io::{
     list_offsets_request::{ListOffsetsPartition, ListOffsetsTopic},
     produce_request::{PartitionProduceData, TopicProduceData},
     record::{Record, deflated, inflated},
-    to_system_time,
+    to_system_time, to_timestamp,
 };
 use tansu_service::{
     BytesFrameLayer, BytesFrameService, BytesLayer, BytesService, FrameBytesLayer,
     FrameBytesService, FrameRouteService, RequestFrameLayer, RequestFrameService,
 };
 use tansu_storage::{Storage, StorageContainer, Topition};
+use tokio::time::sleep;
 use tracing::debug;
 use url::Url;
 use uuid::Uuid;
@@ -95,7 +96,7 @@ pub async fn multiple_record(broker: Broker) -> Result<()> {
     let max_num_offsets = Some(6);
     let current_leader_epoch = -1;
 
-    // empty topic: uncommitted latest offset:
+    debug!(phase = "empty topic: uncommitted latest offset");
     let isolation = Some(IsolationLevel::ReadUncommitted.into());
     let timestamp = ListOffset::Latest.try_into()?;
 
@@ -136,7 +137,7 @@ pub async fn multiple_record(broker: Broker) -> Result<()> {
         assert_eq!(Some(-1), partition.timestamp);
     }
 
-    // empty topic: uncommitted earliest offset:
+    debug!(phase = "empty topic: uncommitted earliest offset");
     let timestamp = ListOffset::Earliest.try_into()?;
 
     let response = broker
@@ -176,6 +177,9 @@ pub async fn multiple_record(broker: Broker) -> Result<()> {
         assert_eq!(Some(-1), partition.timestamp);
     }
 
+    let first = SystemTime::now();
+    sleep(Duration::from_millis(500)).await;
+
     let frame = inflated::Batch::builder()
         .record(Record::builder().value(Some(Bytes::from_static(b"one"))))
         .build()
@@ -185,8 +189,6 @@ pub async fn multiple_record(broker: Broker) -> Result<()> {
         .and_then(deflated::Frame::try_from)?;
 
     let partition = 0;
-
-    let first = SystemTime::now();
 
     let response = broker
         .serve(
@@ -207,7 +209,7 @@ pub async fn multiple_record(broker: Broker) -> Result<()> {
                 )),
         )
         .await
-        .inspect(|response| println!("{response:?}"))?;
+        .inspect(|response| debug!("{response:?}"))?;
 
     let topics = response.responses.as_deref().unwrap_or_default();
     assert_eq!(1, topics.len());
@@ -219,6 +221,7 @@ pub async fn multiple_record(broker: Broker) -> Result<()> {
     assert_eq!(0, partitions[0].base_offset);
 
     let second = SystemTime::now();
+    sleep(Duration::from_millis(500)).await;
 
     let frame = inflated::Batch::builder()
         .record(Record::builder().value(Some(Bytes::from_static(b"two"))))
@@ -247,7 +250,7 @@ pub async fn multiple_record(broker: Broker) -> Result<()> {
                 )),
         )
         .await
-        .inspect(|response| println!("{response:?}"))?;
+        .inspect(|response| debug!("{response:?}"))?;
 
     let topics = response.responses.as_deref().unwrap_or_default();
     assert_eq!(1, topics.len());
@@ -259,6 +262,8 @@ pub async fn multiple_record(broker: Broker) -> Result<()> {
     assert_eq!(1, partitions[0].base_offset);
 
     let third = SystemTime::now();
+    sleep(Duration::from_millis(500)).await;
+
     let frame = inflated::Batch::builder()
         .record(Record::builder().value(Some(Bytes::from_static(b"three"))))
         .build()
@@ -286,7 +291,7 @@ pub async fn multiple_record(broker: Broker) -> Result<()> {
                 )),
         )
         .await
-        .inspect(|response| println!("{response:?}"))?;
+        .inspect(|response| debug!("{response:?}"))?;
 
     let topics = response.responses.as_deref().unwrap_or_default();
     assert_eq!(1, topics.len());
@@ -297,7 +302,7 @@ pub async fn multiple_record(broker: Broker) -> Result<()> {
     assert_eq!(i16::from(ErrorCode::None), partitions[0].error_code);
     assert_eq!(2, partitions[0].base_offset);
 
-    // topic: uncommitted earliest offset:
+    debug!(phase = "topic: uncommitted earliest offset");
     let timestamp = ListOffset::Earliest.try_into()?;
 
     let response = broker
@@ -345,7 +350,7 @@ pub async fn multiple_record(broker: Broker) -> Result<()> {
         assert_eq!(Some(-1), partition.timestamp);
     }
 
-    // topic: uncommitted latest offset:
+    debug!(phase = "topic: uncommitted latest offset");
     let timestamp = ListOffset::Latest.try_into()?;
 
     let response = broker
@@ -393,8 +398,10 @@ pub async fn multiple_record(broker: Broker) -> Result<()> {
         assert_eq!(Some(-1), partition.timestamp);
     }
 
-    // first
-    let timestamp = ListOffset::Timestamp(first).try_into()?;
+    debug!(phase = "first offset");
+    let timestamp = ListOffset::Timestamp(first)
+        .try_into()
+        .inspect(|first| debug!(?first))?;
 
     let response = broker
         .serve(
@@ -441,8 +448,10 @@ pub async fn multiple_record(broker: Broker) -> Result<()> {
         assert_eq!(Some(-1), partition.timestamp);
     }
 
-    // second
-    let timestamp = ListOffset::Timestamp(second).try_into()?;
+    debug!(phase = "second offset");
+    let timestamp = ListOffset::Timestamp(second)
+        .try_into()
+        .inspect(|second| debug!(?second))?;
 
     let response = broker
         .serve(
@@ -489,8 +498,10 @@ pub async fn multiple_record(broker: Broker) -> Result<()> {
         assert_eq!(Some(-1), partition.timestamp);
     }
 
-    // third
-    let timestamp = ListOffset::Timestamp(third).try_into()?;
+    debug!(phase = "third");
+    let timestamp = ListOffset::Timestamp(third)
+        .try_into()
+        .inspect(|third| debug!(?third))?;
 
     let response = broker
         .serve(
@@ -579,7 +590,8 @@ pub async fn new_topic(
 
     let items = sc
         .list_offsets(IsolationLevel::ReadUncommitted, &offsets[..])
-        .await?;
+        .await
+        .inspect(|response| debug!(?response))?;
 
     assert!(!items.is_empty());
 
@@ -599,7 +611,8 @@ pub async fn new_topic(
 
     let items = sc
         .list_offsets(IsolationLevel::ReadUncommitted, &offsets[..])
-        .await?;
+        .await
+        .inspect(|response| debug!(?response))?;
 
     assert!(!items.is_empty());
 
@@ -621,7 +634,8 @@ pub async fn new_topic(
 
     let items = sc
         .list_offsets(IsolationLevel::ReadUncommitted, &offsets[..])
-        .await?;
+        .await
+        .inspect(|response| debug!(?response))?;
 
     assert!(!items.is_empty());
 
@@ -666,13 +680,15 @@ pub async fn single_record(
 
     let value = Bytes::copy_from_slice(alphanumeric_string(15).as_bytes());
 
+    let before = SystemTime::now();
+    debug!(before = to_timestamp(&before)?);
+    sleep(Duration::from_millis(500)).await;
+
     let batch = inflated::Batch::builder()
         .record(Record::builder().value(value.clone().into()))
         .build()
         .and_then(TryInto::try_into)
         .inspect(|deflated| debug!(?deflated))?;
-
-    let before = SystemTime::now();
 
     assert_eq!(
         0,
@@ -682,12 +698,14 @@ pub async fn single_record(
     );
 
     let after = SystemTime::now();
+    debug!(after = to_timestamp(&after)?);
 
     let offsets = [(topition.clone(), ListOffset::Latest)];
 
     let responses = sc
         .list_offsets(IsolationLevel::ReadUncommitted, &offsets[..])
-        .await?;
+        .await
+        .inspect(|responses| debug!(?responses))?;
 
     assert_eq!(1, responses.len());
     assert_eq!(Some(1), responses[0].1.offset);
@@ -696,7 +714,8 @@ pub async fn single_record(
 
     let responses = sc
         .list_offsets(IsolationLevel::ReadUncommitted, &offsets[..])
-        .await?;
+        .await
+        .inspect(|responses| debug!(?responses))?;
 
     assert_eq!(1, responses.len());
     assert_eq!(Some(0), responses[0].1.offset);
@@ -796,7 +815,6 @@ mod in_memory {
         .await
     }
 
-    #[ignore]
     #[tokio::test]
     async fn multiple_record() -> Result<()> {
         let _guard = init_tracing()?;
