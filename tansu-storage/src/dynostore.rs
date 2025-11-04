@@ -1712,7 +1712,12 @@ impl Storage for DynoStore {
                 Err(_) => todo!(),
             },
 
-            _ => todo!(),
+            _ => Ok(DescribeConfigsResult::default()
+                .error_code(ErrorCode::None.into())
+                .error_message(Some(ErrorCode::None.to_string()))
+                .resource_type(i8::from(resource))
+                .resource_name(name.into())
+                .configs(Some(vec![]))),
         }
     }
 
