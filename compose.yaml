@@ -1,48 +1,139 @@
 ---
 services:
+  grafana:
+    image: grafana/grafana:11.5.1
+    ports:
+      - 3000:3000
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: true
+      GF_AUTH_ANONYMOUS_HIDE_VERSION: true
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: true
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/dashboards/home.json
+      GF_LIVE_ALLOWED_ORIGINS: "https://*.preview.app.github.dev"
+    volumes:
+      - type: bind
+        source: etc/grafana/provisioning
+        target: /etc/grafana/provisioning
+      - type: bind
+        source: etc/grafana/dashboards
+        target: /etc/dashboards
+      - grafana:/var/lib/grafana
+    pull_policy: missing
   db:
-    image: postgres:16.4
+    image: ${POSTGRES_IMAGE:-postgres:17}
     environment:
       PGUSER: postgres
       POSTGRES_PASSWORD: postgres
-    command: -c wal_level=logical
     ports:
       - 5432:5432
     volumes:
       - db:/var/lib/postgresql/data
-      - ./work-dir/initdb.d/:/docker-entrypoint-initdb.d/
-      - ./work-dir/data:/mnt
+      - ./etc/initdb.d/:/docker-entrypoint-initdb.d/
     healthcheck:
       test: /usr/bin/pg_isready
       interval: 5s
       timeout: 10s
       retries: 5
     pull_policy: missing
+  minio:
+    image: quay.io/minio/minio
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio:/data
+    ports:
+      - 9000:9000
+      - 9001:9001
+    environment:
+      MINIO_PROMETHEUS_AUTH_TYPE: public
+    healthcheck:
+      test: timeout 5s bash -c ':> /dev/tcp/127.0.0.1/9000' || exit 1
+      interval: 5s
+      retries: 1
+      start_period: 5s
+      timeout: 5s
   tansu:
-    image: ghcr.io/tansu-io/tansu
+    image: ${TANSU_IMAGE}
     restart: unless-stopped
     environment:
-      RUST_BACKTRACE: full
-      RUST_LOG: warn
-    command:
-      --kafka-cluster-id RvQwrYegSUCkIPkaiAZQlQ
-      --kafka-listener-url tcp://0.0.0.0:9092/
-      --kafka-node-id 4343
-      --raft-listener-url tcp://0.0.0.0:4567/
-      --raft-peer-url tcp://127.0.0.1:4568/
-      --storage-engine db=postgres://postgres:postgres@db
-      --work-dir /data
+      RUST_BACKTRACE: ${RUST_BACKTRACE}
+      RUST_LOG: ${RUST_LOG}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_ENDPOINT: ${AWS_ENDPOINT}
+      AWS_ALLOW_HTTP: ${AWS_ALLOW_HTTP}
     volumes:
-      - raft:/data
+      - ./etc/schema/:/schema/
+      - ./data:/data/
+    command: |
+      --kafka-cluster-id ${CLUSTER_ID}
+      --kafka-listener-url tcp://0.0.0.0:9092/
+      --kafka-advertised-listener-url ${ADVERTISED_LISTENER_URL}
+      --storage-engine ${STORAGE_ENGINE}
+      --schema-registry file:///schema
     ports:
       - 9092:9092
-      - 4567:4567
-    links:
-      - db
-    pull_policy:
-      ${PULL_POLICY:-always}
+      - 9100:9100
+  jaeger:
+    image: jaegertracing/all-in-one
+    ports:
+      - 16686:16686
+      - 4317:4317
+      - 4318:4318
+      - 5778:5778
+      - 9411:9411
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    ports:
+      - 9090:9090
+    command: --web.enable-otlp-receiver
+    extra_hosts:
+      - "host.docker.internal=host-gateway"
+    configs:
+      - source: prometheus_yaml
+        target: /prometheus/prometheus.yml
+  lakehouse-catalog:
+    image: ${LAKEKEEPER_IMAGE}
+    environment:
+      - LAKEKEEPER__PG_ENCRYPTION_KEY=This-is-NOT-Secure!
+      - LAKEKEEPER__PG_DATABASE_URL_READ=postgresql://postgres:postgres@db:5432/postgres
+      - LAKEKEEPER__PG_DATABASE_URL_WRITE=postgresql://postgres:postgres@db:5432/postgres
+      - RUST_LOG=trace,axum=trace,sqlx=trace,iceberg-catalog=trace
+    command: ["serve"]
+    healthcheck:
+      test: ["CMD", "/home/nonroot/iceberg-catalog", "healthcheck"]
+      interval: 1s
+      timeout: 10s
+      retries: 3
+      start_period: 3s
+    depends_on:
+      lakehouse-migrate:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    ports:
+      - "8181:8181"
+  lakehouse-migrate:
+    image: ${LAKEKEEPER_IMAGE}
+    environment:
+      - LAKEKEEPER__PG_ENCRYPTION_KEY=This-is-NOT-Secure!
+      - LAKEKEEPER__PG_DATABASE_URL_READ=postgresql://postgres:postgres@db:5432/postgres
+      - LAKEKEEPER__PG_DATABASE_URL_WRITE=postgresql://postgres:postgres@db:5432/postgres
+      - RUST_LOG=info
+    restart: "no"
+    command: ["migrate"]
+    depends_on:
+      db:
+        condition: service_healthy
+configs:
+  prometheus_yaml:
+    file: etc/prometheus.yaml
 volumes:
   db:
     driver: local
-  raft:
+  minio:
+    driver: local
+  grafana:
     driver: local

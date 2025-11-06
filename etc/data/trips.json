@@ -1,0 +1,38 @@
+[
+  {
+    "value": {
+      "vendor_id": 1,
+      "trip_id": 1000371,
+      "trip_distance": 1.8,
+      "fare_amount": 15.32,
+      "store_and_fwd": "N"
+    }
+  },
+  {
+    "value": {
+      "vendor_id": 2,
+      "trip_id": 1000372,
+      "trip_distance": 2.5,
+      "fare_amount": 22.15,
+      "store_and_fwd": "N"
+    }
+  },
+  {
+    "value": {
+      "vendor_id": 2,
+      "trip_id": 1000373,
+      "trip_distance": 0.9,
+      "fare_amount": 9.01,
+      "store_and_fwd": "N"
+    }
+  },
+  {
+    "value": {
+      "vendor_id": 1,
+      "trip_id": 1000374,
+      "trip_distance": 8.4,
+      "fare_amount": 42.13,
+      "store_and_fwd": "Y"
+    }
+  }
+]

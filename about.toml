@@ -1,0 +1,36 @@
+accepted = [
+    "Apache-2.0 WITH LLVM-exception",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",
+    "OpenSSL",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Zlib",
+]
+
+workarounds = ["ring", "rustix"]
+
+[object_store.clarify]
+license = "Apache-2.0"
+[[object_store.clarify.files]]
+path = "LICENSE.txt"
+checksum = '240b8a39fdfd2bd3b3539c02e34466334884fc84b056b57f06e9da35323ecd97'
+
+[linux-raw-sys.clarify]
+license = "Apache-2.0"
+[[linux-raw-sys.clarify.files]]
+path = "LICENSE-APACHE"
+checksum = "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+
+[deadpool-postgres.clarify]
+license = "Apache-2.0"
+[[deadpool-postgres.clarify.files]]
+path = "LICENSE-APACHE"
+checksum = "23fac4edada8cdd75ecd793864bfb3a60ef59da853425ed3e2b3d030dc730aa6"

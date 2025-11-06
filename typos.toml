@@ -1,0 +1,8 @@
+[files]
+ignore-files = true
+ignore-hidden = true
+extend-exclude = [
+    # not our typos
+    "license.html",
+    "tansu-sans-io/message",
+]

@@ -1,0 +1,42 @@
+[
+  {
+    "key": "1E44D9C2-5E7A-443B-BF10-2B1E5FD72F15",
+    "value": { "amount": 23.2, "unit": "CELSIUS" }
+  },
+  {
+    "key": "1E44D9C2-5E7A-443B-BF10-2B1E5FD72F15",
+    "value": { "amount": 1027.0, "unit": "MILLIBAR" }
+  },
+  {
+    "key": "1E44D9C2-5E7A-443B-BF10-2B1E5FD72F15",
+    "value": { "amount": 22.8, "unit": "CELSIUS" }
+  },
+  {
+    "key": "1E44D9C2-5E7A-443B-BF10-2B1E5FD72F15",
+    "value": { "amount": 1023.0, "unit": "MILLIBAR" }
+  },
+  {
+    "key": "1E44D9C2-5E7A-443B-BF10-2B1E5FD72F15",
+    "value": { "amount": 22.5, "unit": "CELSIUS" }
+  },
+  {
+    "key": "1E44D9C2-5E7A-443B-BF10-2B1E5FD72F15",
+    "value": { "amount": 1018.0, "unit": "MILLIBAR" }
+  },
+  {
+    "key": "1E44D9C2-5E7A-443B-BF10-2B1E5FD72F15",
+    "value": { "amount": 23.1, "unit": "CELSIUS" }
+  },
+  {
+    "key": "1E44D9C2-5E7A-443B-BF10-2B1E5FD72F15",
+    "value": { "amount": 1020.0, "unit": "MILLIBAR" }
+  },
+  {
+    "key": "1E44D9C2-5E7A-443B-BF10-2B1E5FD72F15",
+    "value": { "amount": 23.4, "unit": "CELSIUS" }
+  },
+  {
+    "key": "1E44D9C2-5E7A-443B-BF10-2B1E5FD72F15",
+    "value": { "amount": 1025.0, "unit": "MILLIBAR" }
+  }
+]

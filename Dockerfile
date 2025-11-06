@@ -1,51 +1,41 @@
-# Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+# Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 #
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU Affero General Public License as
-# published by the Free Software Foundation, either version 3 of the
-# License, or (at your option) any later version.
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
 #
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU Affero General Public License for more details.
+# http://www.apache.org/licenses/LICENSE-2.0
 #
-# You should have received a copy of the GNU Affero General Public License
-# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
-ARG BUILD_IMAGE=rust:1.80
+FROM --platform=$BUILDPLATFORM tonistiigi/xx AS xx
 
-FROM ${BUILD_IMAGE} AS builder
-
-ARG PACKAGE=tansu-server
+FROM --platform=$BUILDPLATFORM rust:1.88-alpine AS builder
+COPY --from=xx / /
+RUN apk add clang cmake lld
+RUN rustup target add $(xx-cargo --print-target-triple)
 
 WORKDIR /usr/src
 ADD / /usr/src/
-RUN cargo build --package ${PACKAGE} --release
+
+ARG TARGETPLATFORM
+RUN xx-apk add --no-cache musl-dev zlib-dev zlib-static gcc
+RUN xx-cargo build --bin tansu --all-features --release --target-dir ./build
+RUN xx-verify --static ./build/$(xx-cargo --print-target-triple)/release/tansu
 
 RUN <<EOF
-mkdir /image /data
-
-# copy any dynamically linked libaries used
-for lib in $(ldd target/release/* 2>/dev/null|grep "=>"|awk '{print $3}'|sort|uniq); do
-    mkdir -p $(dirname /image$lib)
-    cp -Lv $lib /image$lib
-done
-
-# ensure that the link loader is present
-case `arch` in
-    x86_64)
-        mkdir -p /image/lib64
-        cp -v /lib64/ld-linux*.so.* /image/lib64;;
-
-    aarch64)
-        cp -v /lib/ld-linux*.so.* /image/lib;;
-esac
-
-# copy the executable
-cp -v target/release/${PACKAGE} /image
+mkdir -p /image/schema /image/data /image/tmp /image/etc/ssl
+cp -v build/$(xx-cargo --print-target-triple)/release/tansu /image
+cp -v LICENSE /image
+cp -rv /etc/ssl /image/etc
 EOF
 
 FROM scratch
-COPY --from=builder /image /data /
-ENTRYPOINT [ "/tansu-server" ]
+COPY --from=builder /image /
+ENV TMP=/tmp
+ENTRYPOINT ["/tansu"]
+CMD ["broker"]
