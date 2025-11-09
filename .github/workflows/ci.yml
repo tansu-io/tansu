@@ -49,7 +49,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: extractions/setup-just@v3
       - run: just ci
-      - run: sudo apt-get install -y libclang-dev
+      - run: sudo apt-get install -y libclang-dev libkrb5-dev
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: clippy, rustfmt
@@ -76,7 +76,7 @@ jobs:
         with:
           components: clippy, rustfmt
           cache: false
-      - run: sudo apt-get install -y libclang-dev
+      - run: sudo apt-get install -y libclang-dev libkrb5-dev
       - run: cargo build --features ${{matrix.storage}}
   build-storage-lake:
     runs-on: ${{matrix.os}}
@@ -98,7 +98,7 @@ jobs:
         with:
           components: clippy, rustfmt
           cache: false
-      - run: sudo apt-get install -y libclang-dev
+      - run: sudo apt-get install -y libclang-dev libkrb5-dev
       - run: cargo build --features ${{matrix.storage}} --features ${{matrix.lake}}
   cargo-publish-dry-run:
     runs-on: ${{matrix.os}}
@@ -110,7 +110,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - run: sudo apt-get install -y libclang-dev
+      - run: sudo apt-get install -y libclang-dev libkrb5-dev
       - run: cargo publish --dry-run --workspace
   typos:
     runs-on: ubuntu-latest
