@@ -10,16 +10,9 @@
 -- distributed under the License is distributed on an "AS IS" BASIS,
 -- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 -- See the License for the specific language governing permissions and
--- limitations under the License.
 
-create table if not exists scram_credential (
-  username text not null,
-  mechanism integer not null,
-  salt blob not null,
-  iterations integer not null,
-  stored_key blob not null,
-  server_key blob not null,
-  last_updated text default current_timestamp not null,
-  created_at text default current_timestamp not null,
-  primary key (username, mechanism)
-);
+select from scram_credential
+salt, iterations, stored_key, server_key
+where
+username = $1
+and mechanism = $2

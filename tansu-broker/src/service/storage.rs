@@ -17,22 +17,23 @@ use rama::{
     layer::{MapErrLayer, MapStateLayer},
 };
 use tansu_sans_io::{
-    AddOffsetsToTxnRequest, AddPartitionsToTxnRequest, ApiKey as _, ConsumerGroupDescribeRequest,
-    CreateTopicsRequest, DeleteGroupsRequest, DeleteRecordsRequest, DeleteTopicsRequest,
-    DescribeClusterRequest, DescribeConfigsRequest, DescribeGroupsRequest,
-    DescribeTopicPartitionsRequest, FetchRequest, FindCoordinatorRequest,
+    AddOffsetsToTxnRequest, AddPartitionsToTxnRequest, AlterUserScramCredentialsRequest,
+    ApiKey as _, ConsumerGroupDescribeRequest, CreateTopicsRequest, DeleteGroupsRequest,
+    DeleteRecordsRequest, DeleteTopicsRequest, DescribeClusterRequest, DescribeConfigsRequest,
+    DescribeGroupsRequest, DescribeTopicPartitionsRequest, FetchRequest, FindCoordinatorRequest,
     GetTelemetrySubscriptionsRequest, IncrementalAlterConfigsRequest, InitProducerIdRequest,
     ListGroupsRequest, ListOffsetsRequest, ListPartitionReassignmentsRequest, MetadataRequest,
     ProduceRequest, TxnOffsetCommitRequest,
 };
 use tansu_service::{FrameRequestLayer, FrameRouteBuilder};
 use tansu_storage::{
-    ConsumerGroupDescribeService, CreateTopicsService, DeleteGroupsService, DeleteRecordsService,
-    DeleteTopicsService, DescribeClusterService, DescribeConfigsService, DescribeGroupsService,
-    DescribeTopicPartitionsService, FetchService, FindCoordinatorService,
-    GetTelemetrySubscriptionsService, IncrementalAlterConfigsService, InitProducerIdService,
-    ListGroupsService, ListOffsetsService, ListPartitionReassignmentsService, MetadataService,
-    ProduceService, Storage, TxnAddOffsetsService, TxnAddPartitionService, TxnOffsetCommitService,
+    AlterUserScramCredentialsService, ConsumerGroupDescribeService, CreateTopicsService,
+    DeleteGroupsService, DeleteRecordsService, DeleteTopicsService, DescribeClusterService,
+    DescribeConfigsService, DescribeGroupsService, DescribeTopicPartitionsService, FetchService,
+    FindCoordinatorService, GetTelemetrySubscriptionsService, IncrementalAlterConfigsService,
+    InitProducerIdService, ListGroupsService, ListOffsetsService,
+    ListPartitionReassignmentsService, MetadataService, ProduceService, Storage,
+    TxnAddOffsetsService, TxnAddPartitionService, TxnOffsetCommitService,
 };
 
 use crate::Error;
@@ -47,6 +48,7 @@ where
     [
         add_offsets_to_txn,
         add_partitions_to_txn,
+        alter_user_scram_credentials,
         consumer_group_describe,
         create_topics,
         delete_groups,
@@ -72,6 +74,27 @@ where
     .try_fold(builder, |builder, service| {
         service(builder, storage.clone())
     })
+}
+
+pub fn alter_user_scram_credentials<S>(
+    builder: FrameRouteBuilder<(), Error>,
+    storage: S,
+) -> Result<FrameRouteBuilder<(), Error>, Error>
+where
+    S: Storage,
+{
+    builder
+        .with_route(
+            AlterUserScramCredentialsRequest::KEY,
+            (
+                MapErrLayer::new(Error::from),
+                MapStateLayer::new(|_| storage),
+                FrameRequestLayer::<AlterUserScramCredentialsRequest>::new(),
+            )
+                .into_layer(AlterUserScramCredentialsService)
+                .boxed(),
+        )
+        .map_err(Into::into)
 }
 
 pub fn consumer_group_describe<S>(

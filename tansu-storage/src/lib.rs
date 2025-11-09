@@ -204,14 +204,14 @@ mod proxy;
 mod service;
 
 pub use service::{
-    ChannelRequestLayer, ChannelRequestService, ConsumerGroupDescribeService, CreateTopicsService,
-    DeleteGroupsService, DeleteRecordsService, DeleteTopicsService, DescribeClusterService,
-    DescribeConfigsService, DescribeGroupsService, DescribeTopicPartitionsService, FetchService,
-    FindCoordinatorService, GetTelemetrySubscriptionsService, IncrementalAlterConfigsService,
-    InitProducerIdService, ListGroupsService, ListOffsetsService,
-    ListPartitionReassignmentsService, MetadataService, ProduceService, Request,
-    RequestChannelService, RequestLayer, RequestReceiver, RequestSender, RequestService,
-    RequestStorageService, Response, TxnAddOffsetsService, TxnAddPartitionService,
+    AlterUserScramCredentialsService, ChannelRequestLayer, ChannelRequestService,
+    ConsumerGroupDescribeService, CreateTopicsService, DeleteGroupsService, DeleteRecordsService,
+    DeleteTopicsService, DescribeClusterService, DescribeConfigsService, DescribeGroupsService,
+    DescribeTopicPartitionsService, FetchService, FindCoordinatorService,
+    GetTelemetrySubscriptionsService, IncrementalAlterConfigsService, InitProducerIdService,
+    ListGroupsService, ListOffsetsService, ListPartitionReassignmentsService, MetadataService,
+    ProduceService, Request, RequestChannelService, RequestLayer, RequestReceiver, RequestSender,
+    RequestService, RequestStorageService, Response, TxnAddOffsetsService, TxnAddPartitionService,
     TxnOffsetCommitService, bounded_channel,
 };
 
@@ -244,7 +244,6 @@ pub enum Error {
 
     Glob(Arc<GlobError>),
     Io(Arc<io::Error>),
-    KafkaSansIo(#[from] tansu_sans_io::Error),
     LessThanBaseOffset {
         offset: i64,
         base_offset: i64,
@@ -286,8 +285,7 @@ pub enum Error {
 
     Regex(#[from] regex::Error),
 
-    Sasl(Arc<rsasl::prelude::SASLError>),
-    SaslSession(Arc<rsasl::prelude::SessionError>),
+    SansIo(#[from] tansu_sans_io::Error),
 
     Schema(Arc<tansu_schema::Error>),
 
@@ -332,18 +330,6 @@ pub enum Error {
 impl Display for Error {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{self:?}")
-    }
-}
-
-impl From<rsasl::prelude::SASLError> for Error {
-    fn from(value: rsasl::prelude::SASLError) -> Self {
-        Self::Sasl(Arc::new(value))
-    }
-}
-
-impl From<rsasl::prelude::SessionError> for Error {
-    fn from(value: rsasl::prelude::SessionError) -> Self {
-        Self::SaslSession(Arc::new(value))
     }
 }
 

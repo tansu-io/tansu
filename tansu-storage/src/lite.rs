@@ -1192,6 +1192,10 @@ static DDL: LazyLock<Cache> = LazyLock::new(|| {
             include_sql!("ddl/020-consumer-group.sql"),
         ),
         ("020-producer.sql", include_sql!("ddl/020-producer.sql")),
+        (
+            "020-scram-credential.sql",
+            include_sql!("ddl/020-scram-credential.sql"),
+        ),
         ("020-topic.sql", include_sql!("ddl/020-topic.sql")),
         (
             "030-consumer-group-detail.sql",
@@ -1721,19 +1725,37 @@ impl Storage for Engine {
 
     async fn upsert_user_scram_credential(
         &self,
-        _user: &str,
-        _mechanism: ScramMechanism,
-        _credential: ScramCredential,
+        user: &str,
+        mechanism: ScramMechanism,
+        credential: ScramCredential,
     ) -> Result<()> {
-        todo!()
+        let start = SystemTime::now();
+        self.inner
+            .upsert_user_scram_credential(user, mechanism, credential)
+            .await
+            .inspect(|_| {
+                ENGINE_REQUEST_DURATION.record(
+                    elapsed_millis(start),
+                    &[KeyValue::new("operation", "upsert_user_scram_credential")],
+                )
+            })
     }
 
     async fn user_scram_credential(
         &self,
-        _user: &str,
-        _mechanism: ScramMechanism,
+        user: &str,
+        mechanism: ScramMechanism,
     ) -> Result<Option<ScramCredential>> {
-        todo!()
+        let start = SystemTime::now();
+        self.inner
+            .user_scram_credential(user, mechanism)
+            .await
+            .inspect(|_| {
+                ENGINE_REQUEST_DURATION.record(
+                    elapsed_millis(start),
+                    &[KeyValue::new("operation", "user_scram_credential")],
+                )
+            })
     }
 }
 
@@ -4272,19 +4294,69 @@ impl Storage for Delegate {
 
     async fn upsert_user_scram_credential(
         &self,
-        _user: &str,
-        _mechanism: ScramMechanism,
-        _credential: ScramCredential,
+        user: &str,
+        mechanism: ScramMechanism,
+        credential: ScramCredential,
     ) -> Result<()> {
-        todo!()
+        let start = SystemTime::now();
+        let connection = self.connection().await?;
+
+        self.prepare_execute(
+            &connection,
+            &sql_lookup("scram_credential_insert.sql")?,
+            (
+                user,
+                i32::from(mechanism),
+                &credential.salt[..],
+                credential.iterations,
+                &credential.stored_key[..],
+                &credential.server_key[..],
+            ),
+        )
+        .await
+        .inspect_err(|err| error!(?err))
+        .map_err(Into::into)
+        .and(Ok(()))
+        .inspect(|_| {
+            DELEGATE_REQUEST_DURATION.record(
+                elapsed_millis(start),
+                &[KeyValue::new("operation", "upsert_user_scram_credential")],
+            )
+        })
     }
 
     async fn user_scram_credential(
         &self,
-        _user: &str,
-        _mechanism: ScramMechanism,
+        user: &str,
+        mechanism: ScramMechanism,
     ) -> Result<Option<ScramCredential>> {
-        todo!()
+        let start = SystemTime::now();
+        let connection = self.connection().await?;
+
+        self.prepare_query_one(
+            &connection,
+            &sql_lookup("scram_credential_select.sql")?,
+            (user, i32::from(mechanism)),
+        )
+        .await
+        .inspect_err(|err| error!(?err))
+        .map_err(Into::into)
+        .and_then(|row| {
+            let salt = row.get::<Vec<u8>>(0).map(Bytes::from)?;
+            let iterations = row.get::<i32>(1)?;
+            let stored_key = row.get::<Vec<u8>>(2).map(Bytes::from)?;
+            let server_key = row.get::<Vec<u8>>(3).map(Bytes::from)?;
+
+            Ok(Some(ScramCredential::new(
+                salt, iterations, stored_key, server_key,
+            )))
+        })
+        .inspect(|_| {
+            DELEGATE_REQUEST_DURATION.record(
+                elapsed_millis(start),
+                &[KeyValue::new("operation", "upsert_user_scram_credential")],
+            )
+        })
     }
 }
 

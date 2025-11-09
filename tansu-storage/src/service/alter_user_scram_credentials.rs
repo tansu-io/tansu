@@ -1,51 +1,51 @@
-// Copyright ⓒ 2024 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
+// http://www.apache.org/licenses/LICENSE-2.0
 //
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
-use crate::{Result, ScramCredential, Storage};
+use crate::{Error, Result, ScramCredential, Storage};
 use bytes::Bytes;
+use rama::{Context, Service};
 use rsasl::mechanisms::scram::tools::derive_keys;
 use sha2::{Digest, Sha256, Sha512};
 use tansu_sans_io::{
-    AlterUserScramCredentialsResponse, Body, ErrorCode, ScramMechanism,
-    alter_user_scram_credentials_request::{ScramCredentialDeletion, ScramCredentialUpsertion},
-    alter_user_scram_credentials_response::AlterUserScramCredentialsResult,
+    AlterUserScramCredentialsRequest, AlterUserScramCredentialsResponse, ApiKey, ErrorCode,
+    ScramMechanism, alter_user_scram_credentials_response::AlterUserScramCredentialsResult,
 };
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct AlterUserScramCredentials<S> {
-    storage: S,
+pub struct AlterUserScramCredentialsService;
+
+impl ApiKey for AlterUserScramCredentialsService {
+    const KEY: i16 = AlterUserScramCredentialsRequest::KEY;
 }
 
-impl<S> AlterUserScramCredentials<S>
+impl<G> Service<G, AlterUserScramCredentialsRequest> for AlterUserScramCredentialsService
 where
-    S: Storage,
+    G: Storage,
 {
-    pub fn with_storage(storage: S) -> Self {
-        Self { storage }
-    }
+    type Response = AlterUserScramCredentialsResponse;
+    type Error = Error;
 
-    pub async fn response(
+    async fn serve(
         &self,
-        deletions: Option<Vec<ScramCredentialDeletion>>,
-        upsertions: Option<Vec<ScramCredentialUpsertion>>,
-    ) -> Result<Body> {
+        ctx: Context<G>,
+        req: AlterUserScramCredentialsRequest,
+    ) -> Result<Self::Response, Self::Error> {
         let mut results = vec![];
 
-        if let Some(_deletions) = deletions {}
+        if let Some(_deletions) = req.deletions {}
 
-        if let Some(upsertions) = upsertions {
+        if let Some(upsertions) = req.upsertions {
             for upsertion in upsertions {
                 let (mechanism, stored_key, server_key) =
                     ScramMechanism::try_from(upsertion.mechanism).map(|mechanism| {
@@ -78,7 +78,7 @@ where
                 );
 
                 results.push(
-                    self.storage
+                    ctx.state()
                         .upsert_user_scram_credential(
                             upsertion.name.as_str(),
                             mechanism,
@@ -101,10 +101,8 @@ where
             }
         }
 
-        Ok(Body::AlterUserScramCredentialsResponse(
-            AlterUserScramCredentialsResponse::default()
-                .throttle_time_ms(0)
-                .results(Some(results)),
-        ))
+        Ok(AlterUserScramCredentialsResponse::default()
+            .throttle_time_ms(0)
+            .results(Some(results)))
     }
 }

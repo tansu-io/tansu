@@ -538,3 +538,15 @@ order by
     tp.partition;
 
 commit;
+
+create table scram_credential (
+  username text,
+  mechanism integer,
+  salt bytea not null,
+  iterations integer not null,
+  stored_key bytea not null,
+  server_key bytea not null,
+  primary key (username, mechanism),
+  last_updated timestamp default current_timestamp not null,
+  created_at timestamp default current_timestamp not null
+);

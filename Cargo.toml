@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
-    "tansu",
+    "tansu", "tansu-auth",
     "tansu-broker",
     "tansu-cat",
     "tansu-cli",
@@ -124,13 +124,14 @@ rand = "0.9"
 regex = "1.11.1"
 rhai = { version = "1.22.2", features = ["sync"] }
 rhai-rand = "0.1"
-rsasl = { version = "2.1.0", features = ["config_builder", "oauthbearer", "provider", "scram-sha-2"], default-features = false }
+rsasl = { version = "2.1.0", features = [ "provider"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10.9"
 snap = "1.1.1"
 syn = { version = "2.0", features = ["full"] }
 tansu = { version = "0.5.7", path = "tansu", default-features = false }
+tansu-auth = { version = "0.5.7", path = "tansu-auth", default-features = false }
 tansu-broker = { version = "0.5.7", path = "tansu-broker", default-features = false }
 tansu-cat = { version = "0.5.7", path = "tansu-cat", default-features = false }
 tansu-cli = { version = "0.5.7", path = "tansu-cli", default-features = false }

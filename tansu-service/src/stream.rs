@@ -17,6 +17,7 @@ use std::{error, fmt::Debug, io, marker::PhantomData, time::SystemTime};
 use bytes::Bytes;
 use opentelemetry::KeyValue;
 use rama::{Context, Layer, Service};
+use tansu_sans_io::{ApiKey as _, SaslHandshakeRequest};
 use tokio::{
     io::{AsyncReadExt as _, AsyncWriteExt as _},
     net::{TcpListener, TcpStream},
@@ -275,6 +276,8 @@ where
             attributes
         };
 
+        let mut sasl_handleshake_v0 = false;
+
         async move {
             loop {
                 let ctx = ctx.clone();
@@ -298,7 +301,11 @@ where
                     .read_exact(&mut request[4..])
                     .await
                     .inspect_err(|err| error!(?err))?;
-                debug!(?request);
+
+                let api_key = i16::from_be_bytes([request[4], request[5]]);
+                let api_version = i16::from_be_bytes([request[6], request[7]]);
+
+                debug!(?request, sasl_handleshake_v0);
 
                 REQUEST_SIZE.record(request.len() as u64, &attributes);
 
@@ -322,6 +329,8 @@ where
                     })?;
 
                 debug!(response = ?&response[..]);
+
+                sasl_handleshake_v0 = api_key == SaslHandshakeRequest::KEY && api_version == 0;
 
                 req.write_all(&response)
                     .await

@@ -32,9 +32,6 @@ mod list_offsets;
 mod list_partition_reassignments;
 mod metadata;
 mod produce;
-mod sasl;
-mod sasl_authenticate;
-mod sasl_handshake;
 mod txn;
 
 use std::{
@@ -44,6 +41,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
+pub use alter_user_scram_credentials::AlterUserScramCredentialsService;
 use async_trait::async_trait;
 pub use consumer_group_describe::ConsumerGroupDescribeService;
 pub use create_topics::CreateTopicsService;
@@ -185,6 +183,15 @@ pub enum Request {
     ClusterId,
     Node,
     AdvertisedListener,
+    UpsertUserScramCredential {
+        user: String,
+        mechanism: ScramMechanism,
+        credential: ScramCredential,
+    },
+    UserScramCredential {
+        user: String,
+        mechanism: ScramMechanism,
+    },
 }
 
 impl Display for Request {
@@ -219,41 +226,45 @@ impl Display for Request {
             Self::TxnEnd { .. } => f.write_str("TxnEnd"),
             Self::TxnOffsetCommit(_) => f.write_str("TxnOffsetCommit"),
             Self::UpdateGroup { .. } => f.write_str("UpdateGroup"),
+            Self::UpsertUserScramCredential { .. } => f.write_str("UpsertUserScramCredential"),
+            Self::UserScramCredential { .. } => f.write_str("UserScramCredential"),
         }
     }
 }
 
 #[derive(Clone, Debug)]
 pub enum Response {
-    RegisterBroker(Result<()>),
-    IncrementalAlterResponse(Result<AlterConfigsResourceResponse>),
+    AdvertisedListener(Result<Url>),
+    Brokers(Result<Vec<DescribeClusterBroker>>),
+    ClusterId(Result<String>),
+    CommittedOffsetTopitions(Result<BTreeMap<Topition, i64>>),
     CreateTopic(Result<Uuid>),
+    DeleteGroups(Result<Vec<DeletableGroupResult>>),
     DeleteRecords(Result<Vec<DeleteRecordsTopicResult>>),
     DeleteTopic(Result<ErrorCode>),
-    Brokers(Result<Vec<DescribeClusterBroker>>),
-    Produce(Result<i64>),
-    Fetch(Result<Vec<deflated::Batch>>),
-    OffsetStage(Result<OffsetStage>),
-    ListOffsets(Result<Vec<(Topition, ListOffsetResponse)>>),
-    OffsetCommit(Result<Vec<(Topition, ErrorCode)>>),
-    CommittedOffsetTopitions(Result<BTreeMap<Topition, i64>>),
-    OffsetFetch(Result<BTreeMap<Topition, i64>>),
-    Metadata(Result<MetadataResponse>),
     DescribeConfig(Result<DescribeConfigsResult>),
-    DescribeTopicPartitions(Result<Vec<DescribeTopicPartitionsResponseTopic>>),
-    ListGroups(Result<Vec<ListedGroup>>),
-    DeleteGroups(Result<Vec<DeletableGroupResult>>),
     DescribeGroups(Result<Vec<NamedGroupDetail>>),
-    UpdateGroup(Result<Version, UpdateError<GroupDetail>>),
+    DescribeTopicPartitions(Result<Vec<DescribeTopicPartitionsResponseTopic>>),
+    Fetch(Result<Vec<deflated::Batch>>),
+    IncrementalAlterResponse(Result<AlterConfigsResourceResponse>),
     InitProducer(Result<ProducerIdResponse>),
+    ListGroups(Result<Vec<ListedGroup>>),
+    ListOffsets(Result<Vec<(Topition, ListOffsetResponse)>>),
+    Maintain(Result<()>),
+    Metadata(Result<MetadataResponse>),
+    Node(Result<i32>),
+    OffsetCommit(Result<Vec<(Topition, ErrorCode)>>),
+    OffsetFetch(Result<BTreeMap<Topition, i64>>),
+    OffsetStage(Result<OffsetStage>),
+    Produce(Result<i64>),
+    RegisterBroker(Result<()>),
     TxnAddOffsets(Result<ErrorCode>),
     TxnAddPartitions(Result<TxnAddPartitionsResponse>),
-    TxnOffsetCommit(Result<Vec<TxnOffsetCommitResponseTopic>>),
     TxnEnd(Result<ErrorCode>),
-    Maintain(Result<()>),
-    ClusterId(Result<String>),
-    Node(Result<i32>),
-    AdvertisedListener(Result<Url>),
+    TxnOffsetCommit(Result<Vec<TxnOffsetCommitResponseTopic>>),
+    UpdateGroup(Result<Version, UpdateError<GroupDetail>>),
+    UpsertUserScramCredential(Result<()>),
+    UserScramCredential(Result<Option<ScramCredential>>),
 }
 
 pub type RequestSender = mpsc::Sender<(Request, oneshot::Sender<Response>)>;
@@ -1082,19 +1093,51 @@ impl Storage for RequestChannelService {
 
     async fn upsert_user_scram_credential(
         &self,
-        _user: &str,
-        _mechanism: ScramMechanism,
-        _credential: ScramCredential,
+        user: &str,
+        mechanism: ScramMechanism,
+        credential: ScramCredential,
     ) -> Result<()> {
-        todo!()
+        let user = user.to_string();
+
+        self.serve(
+            Context::default(),
+            Request::UpsertUserScramCredential {
+                user,
+                mechanism,
+                credential,
+            },
+        )
+        .await
+        .and_then(|response| {
+            if let Response::UpsertUserScramCredential(inner) = response {
+                inner.map_err(Into::into)
+            } else {
+                Err(Error::UnexpectedServiceResponse(Box::new(response)).into())
+            }
+        })
+        .map_err(Into::into)
     }
 
     async fn user_scram_credential(
         &self,
-        _user: &str,
-        _mechanism: ScramMechanism,
+        user: &str,
+        mechanism: ScramMechanism,
     ) -> Result<Option<ScramCredential>> {
-        todo!()
+        let user = user.to_string();
+
+        self.serve(
+            Context::default(),
+            Request::UserScramCredential { user, mechanism },
+        )
+        .await
+        .and_then(|response| {
+            if let Response::UserScramCredential(inner) = response {
+                inner.map_err(Into::into)
+            } else {
+                Err(Error::UnexpectedServiceResponse(Box::new(response)).into())
+            }
+        })
+        .map_err(Into::into)
     }
 }
 
@@ -1362,6 +1405,20 @@ where
             Request::Node => Ok(Response::Node(self.storage.node().await)),
             Request::AdvertisedListener => Ok(Response::AdvertisedListener(
                 self.storage.advertised_listener().await,
+            )),
+            Request::UpsertUserScramCredential {
+                user,
+                mechanism,
+                credential,
+            } => Ok(Response::UpsertUserScramCredential(
+                self.storage
+                    .upsert_user_scram_credential(&user[..], mechanism, credential)
+                    .await,
+            )),
+            Request::UserScramCredential { user, mechanism } => Ok(Response::UserScramCredential(
+                self.storage
+                    .user_scram_credential(&user[..], mechanism)
+                    .await,
             )),
         }
     }

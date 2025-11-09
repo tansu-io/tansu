@@ -22,7 +22,7 @@ use tansu_sans_io::{
     LeaveGroupRequest, ListGroupsRequest, ListOffsetsResponse, ListPartitionReassignmentsRequest,
     ListTransactionsRequest, ListTransactionsResponse, MetadataRequest, MetadataResponse,
     OffsetCommitRequest, OffsetFetchRequest, OffsetFetchResponse, OffsetForLeaderEpochRequest,
-    ProduceRequest, ProduceResponse, Result, SyncGroupRequest,
+    ProduceRequest, ProduceResponse, Result, SaslHandshakeRequest, SyncGroupRequest,
     alter_user_scram_credentials_request::ScramCredentialUpsertion,
     api_versions_request::ApiVersionsRequest,
     api_versions_response::{
@@ -42,6 +42,33 @@ use tansu_sans_io::{
 use tracing::debug;
 
 pub mod common;
+
+#[test]
+fn sasl_handshake_v0_000() -> Result<()> {
+    let _guard = init_tracing()?;
+    let v = [
+        0, 0, 0, 36, 0, 17, 0, 0, 0, 0, 0, 1, 0, 19, 97, 105, 111, 107, 97, 102, 107, 97, 45, 112,
+        114, 111, 100, 117, 99, 101, 114, 45, 49, 0, 5, 80, 76, 65, 73, 78,
+    ];
+
+    assert_eq!(
+        Frame {
+            size: 36,
+            header: Header::Request {
+                api_key: 17,
+                api_version: 0,
+                correlation_id: 1,
+                client_id: Some("aiokafka-producer-1".into())
+            },
+            body: Body::SaslHandshakeRequest(
+                SaslHandshakeRequest::default().mechanism("PLAIN".into())
+            )
+        },
+        Frame::request_from_bytes(&v[..])?
+    );
+
+    Ok(())
+}
 
 #[test]
 fn alter_scram_user_credentials_v0_000() -> Result<()> {
