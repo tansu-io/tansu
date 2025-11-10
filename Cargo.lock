@@ -995,26 +995,6 @@ dependencies = [
 
 [[package]]
 name = "bindgen"
-version = "0.71.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f58bf3d7db68cfbac37cfc485a8d711e87e064c3d0fe0435b92f7a407f9d6b3"
-dependencies = [
- "bitflags",
- "cexpr",
- "clang-sys",
- "itertools 0.10.5",
- "log",
- "prettyplease",
- "proc-macro2",
- "quote",
- "regex",
- "rustc-hash 2.1.1",
- "shlex",
- "syn 2.0.109",
-]
-
-[[package]]
-name = "bindgen"
 version = "0.72.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "993776b509cfb49c750f11b8f07a46fa23e0a1386ffc01fb1e7d343efc387895"
@@ -4113,28 +4093,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "libgssapi"
-version = "0.7.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e8663f3a3a93dd394b669dd9b213b457c5e0d2bc5a1b13a0950bd733c6fb6e37"
-dependencies = [
- "bitflags",
- "bytes",
- "lazy_static",
- "libgssapi-sys",
-]
-
-[[package]]
-name = "libgssapi-sys"
-version = "0.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7518e6902e94f92e7c7271232684b60988b4bd813529b4ef9d97aead96956ae8"
-dependencies = [
- "bindgen 0.71.1",
- "pkg-config",
-]
-
-[[package]]
 name = "libloading"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6070,16 +6028,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8b534a23662bb559c5c73213be63ecd6524e774d291f3618c2b04b723d184eb"
 dependencies = [
  "base64 0.22.1",
- "bitflags",
  "core2",
  "digest",
  "hmac",
- "libgssapi",
  "pbkdf2",
  "rand 0.8.5",
  "serde",
  "serde_json",
- "sha1",
  "sha2",
  "stringprep",
  "thiserror 1.0.69",
@@ -7156,6 +7111,7 @@ dependencies = [
  "opentelemetry 0.30.0",
  "opentelemetry-semantic-conventions",
  "rama",
+ "tansu-auth",
  "tansu-sans-io",
  "thiserror 2.0.17",
  "tokio",
