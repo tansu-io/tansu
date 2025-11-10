@@ -20,6 +20,7 @@ deadpool.workspace = true
 opentelemetry-semantic-conventions.workspace = true
 opentelemetry.workspace = true
 rama.workspace = true
+tansu-auth.workspace = true
 tansu-sans-io.workspace = true
 thiserror.workspace = true
 tokio-util.workspace = true

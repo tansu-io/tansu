@@ -2732,19 +2732,67 @@ impl Storage for StorageContainer {
 
     async fn upsert_user_scram_credential(
         &self,
-        _user: &str,
-        _mechanism: ScramMechanism,
-        _credential: ScramCredential,
+        user: &str,
+        mechanism: ScramMechanism,
+        credential: ScramCredential,
     ) -> Result<()> {
-        todo!()
+        match self {
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => {
+                engine
+                    .upsert_user_scram_credential(user, mechanism, credential)
+                    .await
+            }
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => {
+                engine
+                    .upsert_user_scram_credential(user, mechanism, credential)
+                    .await
+            }
+
+            Self::Null(engine) => {
+                engine
+                    .upsert_user_scram_credential(user, mechanism, credential)
+                    .await
+            }
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => {
+                engine
+                    .upsert_user_scram_credential(user, mechanism, credential)
+                    .await
+            }
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => {
+                engine
+                    .upsert_user_scram_credential(user, mechanism, credential)
+                    .await
+            }
+        }
     }
 
     async fn user_scram_credential(
         &self,
-        _user: &str,
-        _mechanism: ScramMechanism,
+        user: &str,
+        mechanism: ScramMechanism,
     ) -> Result<Option<ScramCredential>> {
-        todo!()
+        match self {
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.user_scram_credential(user, mechanism).await,
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.user_scram_credential(user, mechanism).await,
+
+            Self::Null(engine) => engine.user_scram_credential(user, mechanism).await,
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.user_scram_credential(user, mechanism).await,
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.user_scram_credential(user, mechanism).await,
+        }
     }
 }
 

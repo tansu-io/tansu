@@ -12,14 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{
-    io::Cursor,
-    sync::{Arc, Mutex},
-};
+use std::io::Cursor;
 
-use crate::{Authentication, Error};
+use crate::{Authentication, Error, Stage};
 use bytes::Bytes;
 use rama::{Context, Service};
+use rsasl::prelude::State;
 use tansu_sans_io::{ApiKey, ErrorCode, SaslAuthenticateRequest, SaslAuthenticateResponse};
 use tracing::debug;
 
@@ -30,27 +28,31 @@ impl ApiKey for SaslAuthenticateService {
     const KEY: i16 = SaslAuthenticateRequest::KEY;
 }
 
-impl Service<Arc<Mutex<Option<Authentication>>>, SaslAuthenticateRequest>
-    for SaslAuthenticateService
-{
+impl Service<Authentication, SaslAuthenticateRequest> for SaslAuthenticateService {
     type Response = SaslAuthenticateResponse;
     type Error = Error;
 
     async fn serve(
         &self,
-        ctx: Context<Arc<Mutex<Option<Authentication>>>>,
+        ctx: Context<Authentication>,
         req: SaslAuthenticateRequest,
     ) -> Result<Self::Response, Self::Error> {
         ctx.state()
+            .stage
             .lock()
             .map_err(Into::into)
             .and_then(|mut guard| {
-                if let Some(Authentication::Session(session)) = guard.as_mut() {
+                if let Some(Stage::Session(session)) = guard.as_mut() {
                     let mut outcome = Cursor::new(Vec::new());
                     session
                         .step(Some(&req.auth_bytes), &mut outcome)
                         .map_err(Into::into)
-                        .inspect(|state| debug!(?state))
+                        .inspect(|state| {
+                            debug!(?state);
+                            if let State::Finished(_) = state {
+                                _ = guard.replace(Stage::Finished)
+                            }
+                        })
                         .and(Ok(SaslAuthenticateResponse::default()
                             .error_code(ErrorCode::None.into())
                             .error_message(Some("NONE".into()))

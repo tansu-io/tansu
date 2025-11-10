@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::{Arc, Mutex};
-
 use crate::Error;
 use rama::{
     Layer as _, Service as _,
@@ -25,7 +23,7 @@ use tansu_service::{FrameRequestLayer, FrameRouteBuilder};
 
 pub fn services(
     builder: FrameRouteBuilder<(), Error>,
-    authentication: Arc<Mutex<Option<Authentication>>>,
+    authentication: Authentication,
 ) -> Result<FrameRouteBuilder<(), Error>, Error> {
     [authenticate, handshake]
         .iter()
@@ -36,7 +34,7 @@ pub fn services(
 
 pub fn authenticate(
     builder: FrameRouteBuilder<(), Error>,
-    authentication: Arc<Mutex<Option<Authentication>>>,
+    authentication: Authentication,
 ) -> Result<FrameRouteBuilder<(), Error>, Error> {
     builder
         .with_route(
@@ -54,7 +52,7 @@ pub fn authenticate(
 
 pub fn handshake(
     builder: FrameRouteBuilder<(), Error>,
-    authentication: Arc<Mutex<Option<Authentication>>>,
+    authentication: Authentication,
 ) -> Result<FrameRouteBuilder<(), Error>, Error> {
     builder
         .with_route(

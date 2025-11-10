@@ -12,9 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::{Arc, Mutex};
-
-use crate::{Authentication, Error};
+use crate::{Authentication, Error, Stage};
 use rama::{Context, Service};
 use rsasl::prelude::Mechname;
 use tansu_sans_io::{ApiKey, ErrorCode, SaslHandshakeRequest, SaslHandshakeResponse};
@@ -27,21 +25,21 @@ impl ApiKey for SaslHandshakeService {
     const KEY: i16 = SaslHandshakeRequest::KEY;
 }
 
-impl Service<Arc<Mutex<Option<Authentication>>>, SaslHandshakeRequest> for SaslHandshakeService {
+impl Service<Authentication, SaslHandshakeRequest> for SaslHandshakeService {
     type Response = SaslHandshakeResponse;
     type Error = Error;
 
     #[instrument(skip(self, ctx), ret)]
     async fn serve(
         &self,
-        ctx: Context<Arc<Mutex<Option<Authentication>>>>,
+        ctx: Context<Authentication>,
         req: SaslHandshakeRequest,
     ) -> Result<Self::Response, Self::Error> {
-        ctx.state()
+        ctx.state().stage
             .lock()
             .map_err(Into::into)
             .and_then(|mut guard| {
-                if let Some(Authentication::Server(server)) = guard.take()
+                if let Some(Stage::Server(server)) = guard.take()
                     && let Ok(mechanism) = Mechname::parse(req.mechanism.as_bytes())
                 {
                     debug!(available = ?server.get_available().into_iter().map(|mechanism|mechanism.mechanism.as_str()).collect::<Vec<_>>());
@@ -53,7 +51,7 @@ impl Service<Arc<Mutex<Option<Authentication>>>, SaslHandshakeRequest> for SaslH
                         .map(|session| {
                             let mechanisms = [session.get_mechname().to_string()];
 
-                            _ = guard.replace(Authentication::Session(session));
+                            _ = guard.replace(Stage::Session(session));
 
                             SaslHandshakeResponse::default()
                                 .error_code(ErrorCode::None.into())

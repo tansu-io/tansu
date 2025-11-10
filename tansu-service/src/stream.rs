@@ -17,6 +17,7 @@ use std::{error, fmt::Debug, io, marker::PhantomData, time::SystemTime};
 use bytes::Bytes;
 use opentelemetry::KeyValue;
 use rama::{Context, Layer, Service};
+use tansu_auth::Authentication;
 use tansu_sans_io::{ApiKey as _, SaslHandshakeRequest};
 use tokio::{
     io::{AsyncReadExt as _, AsyncWriteExt as _},
@@ -26,7 +27,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument as _, Level, debug, error, span};
 
-use crate::{Error, REQUEST_DURATION, REQUEST_SIZE, RESPONSE_SIZE, frame_length};
+use crate::{Error, REQUEST_DURATION, REQUEST_SIZE, RESPONSE_SIZE, SaslHandshakeV0, frame_length};
 
 /// A [`Layer`] that listens for TCP connections
 #[derive(Clone, Debug, Default)]
@@ -116,10 +117,11 @@ where
 
 /// A [context state][`Context#method.state`] state used by [`TcpContextLayer`] and [`TcpContextService`]
 #[non_exhaustive]
-#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Default)]
 pub struct TcpContext {
     cluster_id: Option<String>,
     maximum_frame_size: Option<usize>,
+    authentication: Authentication,
 }
 
 impl TcpContext {
@@ -133,10 +135,17 @@ impl TcpContext {
             ..self
         }
     }
+
+    pub fn authentication(self, authentication: Authentication) -> Self {
+        Self {
+            authentication,
+            ..self
+        }
+    }
 }
 
 /// A [`Layer`] that injects the [`TcpContext`] into the service [`Context`] state
-#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Default)]
 pub struct TcpContextLayer {
     state: TcpContext,
 }
@@ -159,7 +168,7 @@ impl<S> Layer<S> for TcpContextLayer {
 }
 
 /// A [`Service`] that requires the [`TcpContext`] as the service [`Context`] state
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug)]
 pub struct TcpContextService<S> {
     inner: S,
     state: TcpContext,
@@ -295,6 +304,8 @@ where
                     return Err(Into::into(Error::FrameTooBig(frame_length(size))));
                 }
 
+                let authenticated = ctx.state().authentication.is_authenticated();
+
                 let mut request: Vec<u8> = vec![0u8; frame_length(size)];
                 request[0..size.len()].copy_from_slice(&size[..]);
                 _ = req
@@ -305,11 +316,17 @@ where
                 let api_key = i16::from_be_bytes([request[4], request[5]]);
                 let api_version = i16::from_be_bytes([request[6], request[7]]);
 
-                debug!(?request, sasl_handleshake_v0);
+                debug!(?request, authenticated, sasl_handleshake_v0);
 
                 REQUEST_SIZE.record(request.len() as u64, &attributes);
 
-                let (ctx, _) = ctx.swap_state(State::default());
+                let (mut ctx, _) = ctx.swap_state(State::default());
+
+                if sasl_handleshake_v0 && !authenticated {
+                    let v0 = ctx.get_or_insert_default::<SaslHandshakeV0>();
+                    v0.0 = sasl_handleshake_v0
+                }
+
                 let request_start = SystemTime::now();
 
                 let response = self
@@ -330,7 +347,8 @@ where
 
                 debug!(response = ?&response[..]);
 
-                sasl_handleshake_v0 = api_key == SaslHandshakeRequest::KEY && api_version == 0;
+                sasl_handleshake_v0 = sasl_handleshake_v0
+                    || (api_key == SaslHandshakeRequest::KEY && api_version == 0);
 
                 req.write_all(&response)
                     .await

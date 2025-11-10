@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::{Arc, Mutex};
-
 use rama::Layer;
 use tansu_auth::Authentication;
 use tansu_service::{
@@ -36,7 +34,7 @@ pub fn services<C, S>(
     cluster_id: &str,
     coordinator: C,
     storage: S,
-    authentication: Arc<Mutex<Option<Authentication>>>,
+    authentication: Authentication,
 ) -> Result<TcpRouteFrame, Error>
 where
     S: Storage,
@@ -47,7 +45,7 @@ where
         .and_then(|builder| {
             coordinator::services(builder, coordinator).inspect(|builder| debug!(?builder))
         })
-        .and_then(|builder| auth::services(builder, authentication))
+        .and_then(|builder| auth::services(builder, authentication.clone()))
         .and_then(|builder| builder.build().map_err(Into::into))
         .map(|route| {
             (

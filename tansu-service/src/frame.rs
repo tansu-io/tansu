@@ -17,13 +17,16 @@ use std::{
     marker::PhantomData,
 };
 
-use bytes::Bytes;
+use bytes::{BufMut as _, Bytes, BytesMut};
 use opentelemetry::KeyValue;
 use rama::{Context, Layer, Service, context::Extensions, matcher::Matcher, service::BoxService};
-use tansu_sans_io::{ApiKey, Body, Frame, Header, Request, Response, RootMessageMeta};
+use tansu_sans_io::{
+    ApiKey, Body, Frame, Header, Request, Response, RootMessageMeta, SaslAuthenticateRequest,
+    SaslAuthenticateResponse,
+};
 use tracing::{Instrument as _, Level, debug, error, span};
 
-use crate::{API_ERRORS, API_REQUESTS};
+use crate::{API_ERRORS, API_REQUESTS, SaslHandshakeV0};
 
 /// A [Matcher] of [`Request`]s using their [API key][`ApiKey`].
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -216,7 +219,28 @@ where
     type Error = S::Error;
 
     async fn serve(&self, ctx: Context<State>, req: Bytes) -> Result<Self::Response, Self::Error> {
-        let req = Frame::request_from_bytes(req).inspect(|req| debug!(?req))?;
+        let sasl_handleshake_v0 = ctx
+            .get::<SaslHandshakeV0>()
+            .map(|handshake| handshake.0)
+            .unwrap_or_default();
+
+        let req = if sasl_handleshake_v0 {
+            Frame {
+                size: 0,
+                header: Header::Request {
+                    api_key: SaslAuthenticateRequest::KEY,
+                    api_version: 0,
+                    correlation_id: 0,
+                    client_id: None,
+                },
+                body: Body::SaslAuthenticateRequest(
+                    SaslAuthenticateRequest::default().auth_bytes(req.slice(4..)),
+                ),
+            }
+        } else {
+            Frame::request_from_bytes(req).inspect(|req| debug!(?req))?
+        };
+
         let api_key = req.api_key()?;
         let api_version = req.api_version()?;
         let correlation_id = req.correlation_id()?;
@@ -240,13 +264,28 @@ where
                 .await
                 .inspect(|response| debug!(?response))
                 .and_then(|Frame { body, .. }| {
-                    Frame::response(
-                        Header::Response { correlation_id },
-                        body,
-                        api_key,
-                        api_version,
-                    )
-                    .map_err(Into::into)
+                    if sasl_handleshake_v0 {
+                        SaslAuthenticateResponse::try_from(body)
+                            .and_then(|response| {
+                                i32::try_from(response.auth_bytes.len())
+                                    .map_err(Into::into)
+                                    .map(|size| {
+                                        let mut frame = BytesMut::new();
+                                        frame.put(&size.to_be_bytes()[..]);
+                                        frame.put(response.auth_bytes);
+                                        Bytes::from(frame)
+                                    })
+                            })
+                            .map_err(Into::into)
+                    } else {
+                        Frame::response(
+                            Header::Response { correlation_id },
+                            body,
+                            api_key,
+                            api_version,
+                        )
+                        .map_err(Into::into)
+                    }
                 })
                 .inspect(|response| {
                     debug!(response = ?&response[..]);

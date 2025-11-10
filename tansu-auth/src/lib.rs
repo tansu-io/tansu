@@ -16,7 +16,7 @@ use rsasl::{
     callback::{Context, Request, SessionCallback, SessionData},
     config::SASLConfig,
     prelude::{SASLError, SASLServer, Session, SessionError, Validation},
-    property::AuthId,
+    property::{AuthId, AuthzId, Password},
     validate::{Validate, ValidationError},
 };
 use std::{
@@ -66,24 +66,61 @@ impl From<SessionError> for Error {
     }
 }
 
-pub enum Authentication {
+#[derive(Clone, Default)]
+pub struct Authentication {
+    stage: Arc<Mutex<Option<Stage>>>,
+}
+
+pub enum Stage {
     Server(SASLServer<Justification>),
     Session(Session<Justification>),
+    Finished,
+}
+
+impl Debug for Stage {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct(stringify!(Stage)).finish()
+    }
 }
 
 impl Authentication {
-    pub fn server(config: Arc<SASLConfig>) -> Arc<Mutex<Option<Authentication>>> {
-        Arc::new(Mutex::new(Some(Authentication::Server(SASLServer::<
-            Justification,
-        >::new(
-            config
-        )))))
+    pub fn server(config: Arc<SASLConfig>) -> Self {
+        Self {
+            stage: Arc::new(Mutex::new(Some(Stage::Server(
+                SASLServer::<Justification>::new(config),
+            )))),
+        }
+    }
+
+    pub fn is_authenticated(&self) -> bool {
+        self.stage
+            .lock()
+            .map(|guard| {
+                if let Some(Stage::Finished) = guard.as_ref() {
+                    true
+                } else {
+                    false
+                }
+            })
+            .ok()
+            .unwrap_or_default()
     }
 }
 
 impl Debug for Authentication {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct(stringify!(Authentication)).finish()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Error, Hash, Ord, PartialEq, PartialOrd)]
+pub enum AuthError {
+    NoSuchUser,
+}
+
+impl fmt::Display for AuthError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{self:?}")
     }
 }
 
@@ -94,7 +131,7 @@ pub struct Success;
 pub struct Justification;
 
 impl Validation for Justification {
-    type Value = Result<Success, Error>;
+    type Value = Result<Success, AuthError>;
 }
 
 #[allow(dead_code)]
@@ -114,6 +151,26 @@ where
     {
         Self { handle, storage }
     }
+
+    fn test_validate(
+        &self,
+        _session_data: &SessionData,
+        context: &Context<'_>,
+    ) -> Result<Result<Success, AuthError>, Error> {
+        let _authzid = context
+            .get_ref::<AuthzId>()
+            .inspect(|authz_id| debug!(?authz_id));
+        let _authid = context
+            .get_ref::<AuthId>()
+            .inspect(|auth_id| debug!(?auth_id))
+            .expect("SIMPLE validation requested but AuthId prop is missing!");
+        let _password = context
+            .get_ref::<Password>()
+            .inspect(|password| debug!(?password))
+            .expect("SIMPLE validation requested but Password prop is missing!");
+
+        Ok(Ok(Success))
+    }
 }
 
 impl<S> SessionCallback for Callback<S>
@@ -131,8 +188,23 @@ where
 
         if session_data.mechanism().mechanism.starts_with("SCRAM-") {
             let mechanism = session_data.mechanism().mechanism;
-            let auth_id = context.get_ref::<AuthId>();
+            let auth_id = context.get_ref::<AuthId>().expect("auth_id");
             debug!(?auth_id, ?mechanism);
+
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+
+            let storage = self.storage.clone();
+
+            _ = rt
+                .block_on(async {
+                    storage
+                        .user_scram_credential(auth_id, tansu_sans_io::ScramMechanism::Scram256)
+                        .await
+                })
+                .inspect(|credential| debug!(?credential))
+                .expect("credentials");
         }
 
         Ok(())
@@ -144,8 +216,14 @@ where
         context: &Context<'_>,
         validate: &mut Validate<'_>,
     ) -> Result<(), ValidationError> {
-        let _ = (session_data, context, validate);
         debug!(?session_data);
+
+        if session_data.mechanism().mechanism == "PLAIN" {
+            _ = validate.with::<Justification, _>(|| {
+                self.test_validate(session_data, context)
+                    .map_err(|e| ValidationError::Boxed(Box::new(e)))
+            })?;
+        }
 
         Ok(())
     }
