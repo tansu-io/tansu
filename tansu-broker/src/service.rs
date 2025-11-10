@@ -49,7 +49,11 @@ where
         .and_then(|builder| builder.build().map_err(Into::into))
         .map(|route| {
             (
-                TcpContextLayer::new(TcpContext::default().cluster_id(Some(cluster_id.into()))),
+                TcpContextLayer::new(
+                    TcpContext::default()
+                        .cluster_id(Some(cluster_id.into()))
+                        .authentication(authentication),
+                ),
                 TcpBytesLayer::default(),
                 BytesFrameLayer,
             )

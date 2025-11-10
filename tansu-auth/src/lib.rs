@@ -15,17 +15,20 @@
 use rsasl::{
     callback::{Context, Request, SessionCallback, SessionData},
     config::SASLConfig,
+    mechanisms::scram::properties::ScramStoredPassword,
     prelude::{SASLError, SASLServer, Session, SessionError, Validation},
     property::{AuthId, AuthzId, Password},
     validate::{Validate, ValidationError},
 };
 use std::{
     fmt::{self, Debug, Formatter},
+    str::FromStr,
     sync::{Arc, Mutex, PoisonError},
 };
+use tansu_sans_io::ScramMechanism;
 use tansu_storage::Storage;
 use thiserror::Error;
-use tokio::runtime::Handle;
+use tokio::task::JoinError;
 use tracing::debug;
 
 mod authenticate;
@@ -36,6 +39,7 @@ pub use handshake::SaslHandshakeService;
 
 #[derive(Clone, Debug, Error)]
 pub enum Error {
+    Join(Arc<JoinError>),
     Poison,
     SansIo(#[from] tansu_sans_io::Error),
     Sasl(Arc<SASLError>),
@@ -45,6 +49,12 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{self:?}")
+    }
+}
+
+impl From<JoinError> for Error {
+    fn from(value: JoinError) -> Self {
+        Self::Join(Arc::new(value))
     }
 }
 
@@ -74,7 +84,7 @@ pub struct Authentication {
 pub enum Stage {
     Server(SASLServer<Justification>),
     Session(Session<Justification>),
-    Finished,
+    Finished(Option<Success>),
 }
 
 impl Debug for Stage {
@@ -96,7 +106,7 @@ impl Authentication {
         self.stage
             .lock()
             .map(|guard| {
-                if let Some(Stage::Finished) = guard.as_ref() {
+                if let Some(Stage::Finished(_)) = guard.as_ref() {
                     true
                 } else {
                     false
@@ -113,9 +123,13 @@ impl Debug for Authentication {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Error, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Debug, Error)]
 pub enum AuthError {
+    Bad,
+    Io(tansu_sans_io::Error),
+    MissingProperty { mechanism: String, property: String },
     NoSuchUser,
+    UnknownMechanism(String),
 }
 
 impl fmt::Display for AuthError {
@@ -124,8 +138,10 @@ impl fmt::Display for AuthError {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct Success;
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct Success {
+    auth_id: String,
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Justification;
@@ -134,10 +150,8 @@ impl Validation for Justification {
     type Value = Result<Success, AuthError>;
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub struct Callback<S> {
-    handle: Handle,
     storage: S,
 }
 
@@ -145,31 +159,69 @@ impl<S> Callback<S>
 where
     S: Storage,
 {
-    pub fn new(handle: Handle, storage: S) -> Self
+    pub fn new(storage: S) -> Self
     where
         S: Storage,
     {
-        Self { handle, storage }
+        Self { storage }
     }
 
-    fn test_validate(
+    fn check(
         &self,
-        _session_data: &SessionData,
+        session_data: &SessionData,
         context: &Context<'_>,
     ) -> Result<Result<Success, AuthError>, Error> {
-        let _authzid = context
-            .get_ref::<AuthzId>()
-            .inspect(|authz_id| debug!(?authz_id));
-        let _authid = context
-            .get_ref::<AuthId>()
-            .inspect(|auth_id| debug!(?auth_id))
-            .expect("SIMPLE validation requested but AuthId prop is missing!");
-        let _password = context
-            .get_ref::<Password>()
-            .inspect(|password| debug!(?password))
-            .expect("SIMPLE validation requested but Password prop is missing!");
-
-        Ok(Ok(Success))
+        if session_data.mechanism().mechanism == "PLAIN" {
+            Ok(context
+                .get_ref::<Password>()
+                .ok_or(AuthError::MissingProperty {
+                    mechanism: session_data.mechanism().mechanism.to_string(),
+                    property: "Password".into(),
+                })
+                .and(
+                    context
+                        .get_ref::<AuthId>()
+                        .inspect(|auth_id| {
+                            debug!(mechanism = %session_data.mechanism().mechanism, auth_id)
+                        })
+                        .ok_or(AuthError::MissingProperty {
+                            mechanism: session_data.mechanism().mechanism.to_string(),
+                            property: "AuthId".into(),
+                        }).map(ToString::to_string).map(|auth_id| {
+                            Success { auth_id }
+                        })
+                ))
+        } else if session_data.mechanism().mechanism.starts_with("SCRAM-") {
+            Ok(context
+                .get_ref::<AuthId>()
+                .inspect(|auth_id| debug!(mechanism = %session_data.mechanism().mechanism, auth_id))
+                .ok_or(AuthError::MissingProperty {
+                    mechanism: session_data.mechanism().mechanism.to_string(),
+                    property: "AuthId".into(),
+                })
+                .and_then(|auth_id| {
+                    context
+                        .get_ref::<AuthzId>()
+                        .inspect(|authz_id| {
+                            debug!(mechanism = %session_data.mechanism().mechanism, authz_id)
+                        })
+                        .map_or(Ok(Success{
+                            auth_id:auth_id.to_string()
+                        }), |authz_id| {
+                            if authz_id == auth_id {
+                                Ok(Success{
+                                    auth_id:auth_id.to_string()
+                                })
+                            } else {
+                                Err(AuthError::Bad)
+                            }
+                        })
+                }))
+        } else {
+            Ok(Err(AuthError::UnknownMechanism(
+                session_data.mechanism().mechanism.to_string(),
+            )))
+        }
     }
 }
 
@@ -183,12 +235,18 @@ where
         context: &Context<'_>,
         request: &mut Request<'_>,
     ) -> Result<(), SessionError> {
-        let _ = (session_data, context, request);
         debug!(?session_data);
 
         if session_data.mechanism().mechanism.starts_with("SCRAM-") {
-            let mechanism = session_data.mechanism().mechanism;
-            let auth_id = context.get_ref::<AuthId>().expect("auth_id");
+            let mechanism = ScramMechanism::from_str(session_data.mechanism().mechanism)
+                .map_err(|error| SessionError::Boxed(Box::new(error)))?;
+
+            let auth_id = context
+                .get_ref::<AuthId>()
+                .ok_or(SessionError::ValidationError(
+                    ValidationError::MissingRequiredProperty,
+                ))?;
+
             debug!(?auth_id, ?mechanism);
 
             let rt = tokio::runtime::Builder::new_current_thread()
@@ -197,14 +255,22 @@ where
 
             let storage = self.storage.clone();
 
-            _ = rt
+            if let Some(credential) = rt
                 .block_on(async {
                     storage
-                        .user_scram_credential(auth_id, tansu_sans_io::ScramMechanism::Scram256)
+                        .user_scram_credential(auth_id, ScramMechanism::Scram256)
                         .await
                 })
                 .inspect(|credential| debug!(?credential))
-                .expect("credentials");
+                .expect("credentials")
+            {
+                _ = request.satisfy::<ScramStoredPassword<'_>>(&ScramStoredPassword::new(
+                    credential.iterations() as u32,
+                    &credential.salt()[..],
+                    &credential.stored_key()[..],
+                    &credential.server_key()[..],
+                ))?;
+            }
         }
 
         Ok(())
@@ -218,24 +284,22 @@ where
     ) -> Result<(), ValidationError> {
         debug!(?session_data);
 
-        if session_data.mechanism().mechanism == "PLAIN" {
-            _ = validate.with::<Justification, _>(|| {
-                self.test_validate(session_data, context)
-                    .map_err(|e| ValidationError::Boxed(Box::new(e)))
-            })?;
-        }
+        _ = validate.with::<Justification, _>(|| {
+            self.check(session_data, context)
+                .map_err(|e| ValidationError::Boxed(Box::new(e)))
+        })?;
 
         Ok(())
     }
 }
 
-pub fn configuration<S>(handle: Handle, storage: S) -> Result<Arc<SASLConfig>, Error>
+pub fn configuration<S>(storage: S) -> Result<Arc<SASLConfig>, Error>
 where
     S: Storage,
 {
     SASLConfig::builder()
         .with_defaults()
-        .with_callback(Callback::new(handle, storage))
+        .with_callback(Callback::new(storage))
         .map_err(Into::into)
 }
 

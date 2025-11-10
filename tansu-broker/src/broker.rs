@@ -33,7 +33,6 @@ use tansu_schema::{Registry, lake::House};
 use tansu_storage::{BrokerRegistrationRequest, Storage, StorageContainer};
 use tokio::{
     net::TcpListener,
-    runtime::Handle,
     signal::unix::{SignalKind, signal},
     task::JoinSet,
     time::{self, sleep},
@@ -203,7 +202,7 @@ where
 
         let mut set = JoinSet::new();
 
-        let sasl_config = tansu_auth::configuration(Handle::current(), self.storage.clone())?;
+        let sasl_config = tansu_auth::configuration(self.storage.clone())?;
 
         loop {
             tokio::select! {

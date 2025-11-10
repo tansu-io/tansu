@@ -136,7 +136,8 @@ use std::{
     io::{self, BufRead, Cursor, Read, Write},
     num,
     process::{ExitCode, Termination},
-    str, string,
+    str::{self, FromStr},
+    string,
     sync::{Arc, OnceLock},
     time::{Duration, SystemTime, SystemTimeError},
 };
@@ -232,6 +233,7 @@ pub enum Error {
     NoSuchMessage(&'static str),
     NoSuchRequest(i16),
     ParseFilter(Arc<ParseError>),
+    ParseScram(String),
     ResponseFrame,
     Snap(#[from] snap::Error),
     StringWithoutApiVersion,
@@ -2036,6 +2038,18 @@ impl TryFrom<i64> for ListOffset {
 pub enum ScramMechanism {
     Scram256,
     Scram512,
+}
+
+impl FromStr for ScramMechanism {
+    type Err = Error;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "SCRAM-SHA-256" => Ok(ScramMechanism::Scram256),
+            "SCRAM-SHA-512" => Ok(ScramMechanism::Scram512),
+            otherwise => Err(Error::ParseScram(otherwise.to_string())),
+        }
+    }
 }
 
 impl TryFrom<i8> for ScramMechanism {

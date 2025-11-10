@@ -19,6 +19,7 @@ use bytes::Bytes;
 use rama::{Context, Service};
 use rsasl::prelude::State;
 use tansu_sans_io::{ApiKey, ErrorCode, SaslAuthenticateRequest, SaslAuthenticateResponse};
+use tokio::task;
 use tracing::debug;
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -37,36 +38,48 @@ impl Service<Authentication, SaslAuthenticateRequest> for SaslAuthenticateServic
         ctx: Context<Authentication>,
         req: SaslAuthenticateRequest,
     ) -> Result<Self::Response, Self::Error> {
-        ctx.state()
-            .stage
-            .lock()
-            .map_err(Into::into)
-            .and_then(|mut guard| {
-                if let Some(Stage::Session(session)) = guard.as_mut() {
-                    let mut outcome = Cursor::new(Vec::new());
-                    session
-                        .step(Some(&req.auth_bytes), &mut outcome)
-                        .map_err(Into::into)
-                        .inspect(|state| {
-                            debug!(?state);
-                            if let State::Finished(_) = state {
-                                _ = guard.replace(Stage::Finished)
-                            }
-                        })
-                        .and(Ok(SaslAuthenticateResponse::default()
+        let authentication = ctx.state().to_owned();
+
+        task::spawn_blocking(move || {
+            authentication
+                .stage
+                .lock()
+                .map_err(Into::into)
+                .and_then(|mut guard| {
+                    if let Some(Stage::Session(session)) = guard.as_mut() {
+                        let mut outcome = Cursor::new(Vec::new());
+
+                        let state = session
+                            .step(Some(&req.auth_bytes), &mut outcome)
+                            .inspect(|state| debug!(?state))?;
+
+                        let success = session
+                            .validation()
+                            .transpose()
+                            .ok()
+                            .flatten()
+                            .inspect(|success| debug!(?success));
+
+                        if let State::Finished(_) = state {
+                            _ = guard.replace(Stage::Finished(success))
+                        }
+
+                        Ok(SaslAuthenticateResponse::default()
                             .error_code(ErrorCode::None.into())
                             .error_message(Some("NONE".into()))
                             .auth_bytes(Bytes::from(outcome.into_inner()))
-                            .session_lifetime_ms(Some(60_000))))
-                } else {
-                    _ = guard.take();
+                            .session_lifetime_ms(Some(60_000)))
+                    } else {
+                        _ = guard.take();
 
-                    Ok(SaslAuthenticateResponse::default()
-                        .error_code(ErrorCode::IllegalSaslState.into())
-                        .error_message(None)
-                        .auth_bytes(Bytes::from_static(b""))
-                        .session_lifetime_ms(None))
-                }
-            })
+                        Ok(SaslAuthenticateResponse::default()
+                            .error_code(ErrorCode::IllegalSaslState.into())
+                            .error_message(None)
+                            .auth_bytes(Bytes::from_static(b""))
+                            .session_lifetime_ms(None))
+                    }
+                })
+        })
+        .await?
     }
 }

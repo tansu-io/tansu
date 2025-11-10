@@ -221,7 +221,7 @@ impl managed::Manager for ConnectionManager {
     type Type = Connection;
     type Error = Error;
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn create(&self) -> Result<Self::Type, Self::Error> {
         let start = SystemTime::now();
 
@@ -272,7 +272,7 @@ impl managed::Manager for ConnectionManager {
             .inspect(|_| CONNECT_DURATION.record(elapsed_millis(start), &[]))
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn recycle(
         &self,
         obj: &mut Self::Type,
@@ -1272,7 +1272,7 @@ impl Engine {
 
 #[async_trait]
 impl Storage for Engine {
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn register_broker(&self, broker_registration: BrokerRegistrationRequest) -> Result<()> {
         let start = SystemTime::now();
         self.inner
@@ -1286,7 +1286,7 @@ impl Storage for Engine {
             })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn brokers(&self) -> Result<Vec<DescribeClusterBroker>> {
         let start = SystemTime::now();
         self.inner.brokers().await.inspect(|_| {
@@ -1297,7 +1297,7 @@ impl Storage for Engine {
         })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn create_topic(&self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {
         let start = SystemTime::now();
         self.inner
@@ -1311,7 +1311,7 @@ impl Storage for Engine {
             })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn delete_records(
         &self,
         topics: &[DeleteRecordsTopic],
@@ -1325,7 +1325,7 @@ impl Storage for Engine {
         })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn delete_topic(&self, topic: &TopicId) -> Result<ErrorCode> {
         let start = SystemTime::now();
         self.inner.delete_topic(topic).await.inspect(|_| {
@@ -1336,7 +1336,7 @@ impl Storage for Engine {
         })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn incremental_alter_resource(
         &self,
         resource: AlterConfigsResource,
@@ -1353,7 +1353,7 @@ impl Storage for Engine {
             })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn produce(
         &self,
         transaction_id: Option<&str>,
@@ -1372,7 +1372,7 @@ impl Storage for Engine {
             })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn fetch(
         &self,
         topition: &Topition,
@@ -1393,7 +1393,7 @@ impl Storage for Engine {
             })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn offset_stage(&self, topition: &Topition) -> Result<OffsetStage> {
         let start = SystemTime::now();
         self.inner.offset_stage(topition).await.inspect(|_| {
@@ -1404,7 +1404,7 @@ impl Storage for Engine {
         })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn offset_commit(
         &self,
         group: &str,
@@ -1423,7 +1423,7 @@ impl Storage for Engine {
             })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn committed_offset_topitions(&self, group_id: &str) -> Result<BTreeMap<Topition, i64>> {
         let start = SystemTime::now();
         self.inner
@@ -1437,7 +1437,7 @@ impl Storage for Engine {
             })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn offset_fetch(
         &self,
         group_id: Option<&str>,
@@ -1456,7 +1456,7 @@ impl Storage for Engine {
             })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn list_offsets(
         &self,
         isolation_level: IsolationLevel,
@@ -1474,7 +1474,7 @@ impl Storage for Engine {
             })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn metadata(&self, topics: Option<&[TopicId]>) -> Result<MetadataResponse> {
         let start = SystemTime::now();
         self.inner.metadata(topics).await.inspect(|_| {
@@ -1485,7 +1485,7 @@ impl Storage for Engine {
         })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn describe_config(
         &self,
         name: &str,
@@ -1504,7 +1504,7 @@ impl Storage for Engine {
             })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn describe_topic_partitions(
         &self,
         topics: Option<&[TopicId]>,
@@ -1523,7 +1523,7 @@ impl Storage for Engine {
             })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn list_groups(&self, states_filter: Option<&[String]>) -> Result<Vec<ListedGroup>> {
         let start = SystemTime::now();
         self.inner.list_groups(states_filter).await.inspect(|_| {
@@ -1534,7 +1534,7 @@ impl Storage for Engine {
         })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn delete_groups(
         &self,
         group_ids: Option<&[String]>,
@@ -1548,7 +1548,7 @@ impl Storage for Engine {
         })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn describe_groups(
         &self,
         group_ids: Option<&[String]>,
@@ -1566,7 +1566,7 @@ impl Storage for Engine {
             })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn update_group(
         &self,
         group_id: &str,
@@ -1585,7 +1585,7 @@ impl Storage for Engine {
             })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn init_producer(
         &self,
         transaction_id: Option<&str>,
@@ -1610,7 +1610,7 @@ impl Storage for Engine {
             })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn txn_add_offsets(
         &self,
         transaction_id: &str,
@@ -1630,7 +1630,7 @@ impl Storage for Engine {
             })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn txn_add_partitions(
         &self,
         partitions: TxnAddPartitionsRequest,
@@ -1647,7 +1647,7 @@ impl Storage for Engine {
             })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn txn_offset_commit(
         &self,
         offsets: TxnOffsetCommitRequest,
@@ -1661,7 +1661,7 @@ impl Storage for Engine {
         })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn txn_end(
         &self,
         transaction_id: &str,
@@ -1681,7 +1681,7 @@ impl Storage for Engine {
             })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn maintain(&self) -> Result<()> {
         let start = SystemTime::now();
         self.inner.maintain().await.inspect(|_| {
@@ -1692,7 +1692,7 @@ impl Storage for Engine {
         })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn cluster_id(&self) -> Result<String> {
         let start = SystemTime::now();
         self.inner.cluster_id().await.inspect(|_| {
@@ -1703,7 +1703,7 @@ impl Storage for Engine {
         })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn node(&self) -> Result<i32> {
         let start = SystemTime::now();
         self.inner.node().await.inspect(|_| {
@@ -1712,7 +1712,7 @@ impl Storage for Engine {
         })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn advertised_listener(&self) -> Result<Url> {
         let start = SystemTime::now();
         self.inner.advertised_listener().await.inspect(|_| {
@@ -1723,6 +1723,7 @@ impl Storage for Engine {
         })
     }
 
+    #[instrument(skip(self), ret)]
     async fn upsert_user_scram_credential(
         &self,
         user: &str,
@@ -1741,6 +1742,7 @@ impl Storage for Engine {
             })
     }
 
+    #[instrument(skip(self), ret)]
     async fn user_scram_credential(
         &self,
         user: &str,
@@ -4333,7 +4335,7 @@ impl Storage for Delegate {
         let start = SystemTime::now();
         let connection = self.connection().await?;
 
-        self.prepare_query_one(
+        self.prepare_query_opt(
             &connection,
             &sql_lookup("scram_credential_select.sql")?,
             (user, i32::from(mechanism)),
@@ -4342,14 +4344,18 @@ impl Storage for Delegate {
         .inspect_err(|err| error!(?err))
         .map_err(Into::into)
         .and_then(|row| {
-            let salt = row.get::<Vec<u8>>(0).map(Bytes::from)?;
-            let iterations = row.get::<i32>(1)?;
-            let stored_key = row.get::<Vec<u8>>(2).map(Bytes::from)?;
-            let server_key = row.get::<Vec<u8>>(3).map(Bytes::from)?;
+            if let Some(row) = row {
+                let salt = row.get::<Vec<u8>>(0).map(Bytes::from)?;
+                let iterations = row.get::<i32>(1)?;
+                let stored_key = row.get::<Vec<u8>>(2).map(Bytes::from)?;
+                let server_key = row.get::<Vec<u8>>(3).map(Bytes::from)?;
 
-            Ok(Some(ScramCredential::new(
-                salt, iterations, stored_key, server_key,
-            )))
+                Ok(Some(ScramCredential::new(
+                    salt, iterations, stored_key, server_key,
+                )))
+            } else {
+                Ok(None)
+            }
         })
         .inspect(|_| {
             DELEGATE_REQUEST_DURATION.record(
