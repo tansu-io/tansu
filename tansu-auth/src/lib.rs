@@ -105,13 +105,7 @@ impl Authentication {
     pub fn is_authenticated(&self) -> bool {
         self.stage
             .lock()
-            .map(|guard| {
-                if let Some(Stage::Finished(_)) = guard.as_ref() {
-                    true
-                } else {
-                    false
-                }
-            })
+            .map(|guard| matches!(guard.as_ref(), Some(Stage::Finished(_))))
             .ok()
             .unwrap_or_default()
     }
