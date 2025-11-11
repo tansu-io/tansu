@@ -14,9 +14,27 @@ version.workspace = true
 workspace = true
 
 [dependencies]
+tansu-cli     = { workspace = true, default-features = false, optional = true }
+tansu-schema  = { workspace = true, default-features = false, optional = true }
+tansu-storage = { workspace = true, default-features = false, optional = true }
+tansu-broker  = { workspace = true, default-features = false, optional = true }
+
 dotenv.workspace = true
-tansu-broker.workspace = true
-tansu-cli.workspace = true
 tansu-sans-io.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+
+
+[features]
+default   = []
+delta     = ["dep:tansu-cli", "tansu-cli/delta", "tansu-schema/delta"]
+dynostore = ["dep:tansu-cli", "dep:tansu-storage", "dep:tansu-broker",
+             "tansu-cli/dynostore", "tansu-storage/dynostore", "tansu-broker/dynostore"]
+iceberg   = ["dep:tansu-cli", "tansu-cli/iceberg", "tansu-schema/iceberg"]
+libsql    = ["dep:tansu-cli", "dep:tansu-storage", "dep:tansu-broker",
+             "tansu-cli/libsql", "tansu-storage/libsql", "tansu-broker/libsql"]
+parquet   = ["dep:tansu-cli", "tansu-cli/parquet", "tansu-schema/parquet"]
+postgres  = ["dep:tansu-cli", "dep:tansu-storage", "dep:tansu-broker",
+             "tansu-cli/postgres", "tansu-storage/postgres", "tansu-broker/postgres"]
+turso     = ["dep:tansu-cli", "dep:tansu-storage", "dep:tansu-broker",
+             "tansu-cli/turso", "tansu-storage/turso", "tansu-broker/turso"]
