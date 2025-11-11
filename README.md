@@ -28,6 +28,8 @@ Tansu is a single statically linked binary containing the following:
 - **cat** a CLI to consume or produce Avro, JSON or Protobuf messages to a topic
 - **proxy** an Apache Kafka compatible proxy
 
+# CLI
+
 ## broker
 
 The broker subcommand is default if no other command is supplied.
@@ -152,6 +154,21 @@ Results in the following output:
 |-----------+---------+---------------+-------------+---------------|
 ```
 
+# Install
+
+```shell
+git clone https://github.com/tansu-io/tansu
+cd tansu
+```
+
+## Local
+
+```shell
+cargo install --path tansu --all-features
+~/.cargo/bin/tansu -h
+```
+
+## Docker
 
 ### s3
 
@@ -347,11 +364,11 @@ Consumer:
   -b localhost:9092
 ```
 
-## Feedback
+# Feedback
 
 Please [raise an issue][tansu-issues] if you encounter a problem.
 
-## License
+# License
 
 Tansu is licensed under [Apache 2.0][apache-license].
 
