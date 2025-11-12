@@ -62,8 +62,8 @@ Options:
           Apache Iceberg Catalog, examples are: http://localhost:8181/ [env: ICEBERG_CATALOG=http://localhost:8181/]
       --iceberg-namespace <ICEBERG_NAMESPACE>
           Iceberg namespace [env: ICEBERG_NAMESPACE=] [default: tansu]
-      --prometheus-listener-url <PROMETHEUS_LISTENER_URL>
-          Broker metrics can be scraped by Prometheus from this URL [env: PROMETHEUS_LISTENER_URL=tcp://0.0.0.0:9100] [default: tcp://[::]:9100]
+      --otlp-endpoint-url <OTLP_ENDPOINT_URL>
+          OTEL Exporter OTLP endpoint for pushing metrics and traces [env: OTEL_EXPORTER_OTLP_ENDPOINT=]
   -h, --help
           Print help
   -V, --version
@@ -167,6 +167,10 @@ cd tansu
 cargo install --path tansu --all-features
 ~/.cargo/bin/tansu -h
 ```
+
+### Postgres
+
+For now, you have to manually run the [initdb script](etc/initdb.d/010-schema.sql) before starting tansu for the first time.
 
 ## Docker
 
