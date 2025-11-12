@@ -270,6 +270,7 @@ pub use stream::{
 
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum Error {
+    Auth(#[from] tansu_auth::Error),
     DuplicateRoute(i16),
     FrameTooBig(usize),
     Io(Arc<io::Error>),
@@ -351,6 +352,15 @@ pub async fn host_port(url: Url) -> Result<SocketAddr, Error> {
 
     Err(Error::UnknownHost(url))
 }
+
+///  If SaslHandshakeRequest version is v0, a series of SASL client and server tokens
+///  corresponding to the mechanism are sent as opaque packets without wrapping the
+///  messages with Kafka protocol headers. If SaslHandshakeRequest version is v1,
+///  the SaslAuthenticate request/response are used, where the actual SASL tokens
+///  are wrapped in the Kafka protocol. The error code in the final message from
+///  the broker will indicate if authentication succeeded or failed.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct SaslHandshakeV0(bool);
 
 pub(crate) static DNS_LOOKUP_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
     METER

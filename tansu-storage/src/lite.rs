@@ -27,8 +27,8 @@ use std::{
 use crate::{
     BrokerRegistrationRequest, ChannelRequestLayer, Error, GroupDetail, ListOffsetResponse, METER,
     MetadataResponse, NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse,
-    RequestChannelService, RequestStorageService, Result, Storage, TopicId, Topition,
-    TxnAddPartitionsRequest, TxnAddPartitionsResponse, TxnOffsetCommitRequest, TxnState,
+    RequestChannelService, RequestStorageService, Result, ScramCredential, Storage, TopicId,
+    Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse, TxnOffsetCommitRequest, TxnState,
     UpdateError, Version, bounded_channel,
     sql::{Cache, default_hash, idempotent_sequence_check, remove_comments},
 };
@@ -48,7 +48,7 @@ use rand::{rng, seq::SliceRandom as _};
 use regex::Regex;
 use tansu_sans_io::{
     BatchAttribute, ConfigResource, ConfigSource, ConfigType, ControlBatch, EndTransactionMarker,
-    ErrorCode, IsolationLevel, ListOffset, NULL_TOPIC_ID, OpType,
+    ErrorCode, IsolationLevel, ListOffset, NULL_TOPIC_ID, OpType, ScramMechanism,
     add_partitions_to_txn_response::{
         AddPartitionsToTxnPartitionResult, AddPartitionsToTxnTopicResult,
     },
@@ -221,7 +221,7 @@ impl managed::Manager for ConnectionManager {
     type Type = Connection;
     type Error = Error;
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn create(&self) -> Result<Self::Type, Self::Error> {
         let start = SystemTime::now();
 
@@ -272,13 +272,13 @@ impl managed::Manager for ConnectionManager {
             .inspect(|_| CONNECT_DURATION.record(elapsed_millis(start), &[]))
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self, obj), ret)]
     async fn recycle(
         &self,
         obj: &mut Self::Type,
         metrics: &managed::Metrics,
     ) -> managed::RecycleResult<Self::Error> {
-        debug!(?obj, ?metrics);
+        let _ = obj;
         Ok(())
     }
 }
@@ -1192,6 +1192,10 @@ static DDL: LazyLock<Cache> = LazyLock::new(|| {
             include_sql!("ddl/020-consumer-group.sql"),
         ),
         ("020-producer.sql", include_sql!("ddl/020-producer.sql")),
+        (
+            "020-scram-credential.sql",
+            include_sql!("ddl/020-scram-credential.sql"),
+        ),
         ("020-topic.sql", include_sql!("ddl/020-topic.sql")),
         (
             "030-consumer-group-detail.sql",
@@ -1268,7 +1272,7 @@ impl Engine {
 
 #[async_trait]
 impl Storage for Engine {
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn register_broker(&self, broker_registration: BrokerRegistrationRequest) -> Result<()> {
         let start = SystemTime::now();
         self.inner
@@ -1282,7 +1286,7 @@ impl Storage for Engine {
             })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn brokers(&self) -> Result<Vec<DescribeClusterBroker>> {
         let start = SystemTime::now();
         self.inner.brokers().await.inspect(|_| {
@@ -1293,7 +1297,7 @@ impl Storage for Engine {
         })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn create_topic(&self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {
         let start = SystemTime::now();
         self.inner
@@ -1307,7 +1311,7 @@ impl Storage for Engine {
             })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn delete_records(
         &self,
         topics: &[DeleteRecordsTopic],
@@ -1321,7 +1325,7 @@ impl Storage for Engine {
         })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn delete_topic(&self, topic: &TopicId) -> Result<ErrorCode> {
         let start = SystemTime::now();
         self.inner.delete_topic(topic).await.inspect(|_| {
@@ -1332,7 +1336,7 @@ impl Storage for Engine {
         })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn incremental_alter_resource(
         &self,
         resource: AlterConfigsResource,
@@ -1349,7 +1353,7 @@ impl Storage for Engine {
             })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn produce(
         &self,
         transaction_id: Option<&str>,
@@ -1368,7 +1372,7 @@ impl Storage for Engine {
             })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn fetch(
         &self,
         topition: &Topition,
@@ -1389,7 +1393,7 @@ impl Storage for Engine {
             })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn offset_stage(&self, topition: &Topition) -> Result<OffsetStage> {
         let start = SystemTime::now();
         self.inner.offset_stage(topition).await.inspect(|_| {
@@ -1400,7 +1404,7 @@ impl Storage for Engine {
         })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn offset_commit(
         &self,
         group: &str,
@@ -1419,7 +1423,7 @@ impl Storage for Engine {
             })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn committed_offset_topitions(&self, group_id: &str) -> Result<BTreeMap<Topition, i64>> {
         let start = SystemTime::now();
         self.inner
@@ -1433,7 +1437,7 @@ impl Storage for Engine {
             })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn offset_fetch(
         &self,
         group_id: Option<&str>,
@@ -1452,7 +1456,7 @@ impl Storage for Engine {
             })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn list_offsets(
         &self,
         isolation_level: IsolationLevel,
@@ -1470,7 +1474,7 @@ impl Storage for Engine {
             })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn metadata(&self, topics: Option<&[TopicId]>) -> Result<MetadataResponse> {
         let start = SystemTime::now();
         self.inner.metadata(topics).await.inspect(|_| {
@@ -1481,7 +1485,7 @@ impl Storage for Engine {
         })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn describe_config(
         &self,
         name: &str,
@@ -1500,7 +1504,7 @@ impl Storage for Engine {
             })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn describe_topic_partitions(
         &self,
         topics: Option<&[TopicId]>,
@@ -1519,7 +1523,7 @@ impl Storage for Engine {
             })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn list_groups(&self, states_filter: Option<&[String]>) -> Result<Vec<ListedGroup>> {
         let start = SystemTime::now();
         self.inner.list_groups(states_filter).await.inspect(|_| {
@@ -1530,7 +1534,7 @@ impl Storage for Engine {
         })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn delete_groups(
         &self,
         group_ids: Option<&[String]>,
@@ -1544,7 +1548,7 @@ impl Storage for Engine {
         })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn describe_groups(
         &self,
         group_ids: Option<&[String]>,
@@ -1562,7 +1566,7 @@ impl Storage for Engine {
             })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn update_group(
         &self,
         group_id: &str,
@@ -1581,7 +1585,7 @@ impl Storage for Engine {
             })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn init_producer(
         &self,
         transaction_id: Option<&str>,
@@ -1606,7 +1610,7 @@ impl Storage for Engine {
             })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn txn_add_offsets(
         &self,
         transaction_id: &str,
@@ -1626,7 +1630,7 @@ impl Storage for Engine {
             })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn txn_add_partitions(
         &self,
         partitions: TxnAddPartitionsRequest,
@@ -1643,7 +1647,7 @@ impl Storage for Engine {
             })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn txn_offset_commit(
         &self,
         offsets: TxnOffsetCommitRequest,
@@ -1657,7 +1661,7 @@ impl Storage for Engine {
         })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn txn_end(
         &self,
         transaction_id: &str,
@@ -1677,7 +1681,7 @@ impl Storage for Engine {
             })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn maintain(&self) -> Result<()> {
         let start = SystemTime::now();
         self.inner.maintain().await.inspect(|_| {
@@ -1688,7 +1692,7 @@ impl Storage for Engine {
         })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn cluster_id(&self) -> Result<String> {
         let start = SystemTime::now();
         self.inner.cluster_id().await.inspect(|_| {
@@ -1699,7 +1703,7 @@ impl Storage for Engine {
         })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn node(&self) -> Result<i32> {
         let start = SystemTime::now();
         self.inner.node().await.inspect(|_| {
@@ -1708,7 +1712,7 @@ impl Storage for Engine {
         })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn advertised_listener(&self) -> Result<Url> {
         let start = SystemTime::now();
         self.inner.advertised_listener().await.inspect(|_| {
@@ -1717,6 +1721,43 @@ impl Storage for Engine {
                 &[KeyValue::new("operation", "advertised_listener")],
             )
         })
+    }
+
+    #[instrument(skip(self), ret)]
+    async fn upsert_user_scram_credential(
+        &self,
+        user: &str,
+        mechanism: ScramMechanism,
+        credential: ScramCredential,
+    ) -> Result<()> {
+        let start = SystemTime::now();
+        self.inner
+            .upsert_user_scram_credential(user, mechanism, credential)
+            .await
+            .inspect(|_| {
+                ENGINE_REQUEST_DURATION.record(
+                    elapsed_millis(start),
+                    &[KeyValue::new("operation", "upsert_user_scram_credential")],
+                )
+            })
+    }
+
+    #[instrument(skip(self), ret)]
+    async fn user_scram_credential(
+        &self,
+        user: &str,
+        mechanism: ScramMechanism,
+    ) -> Result<Option<ScramCredential>> {
+        let start = SystemTime::now();
+        self.inner
+            .user_scram_credential(user, mechanism)
+            .await
+            .inspect(|_| {
+                ENGINE_REQUEST_DURATION.record(
+                    elapsed_millis(start),
+                    &[KeyValue::new("operation", "user_scram_credential")],
+                )
+            })
     }
 }
 
@@ -4249,6 +4290,77 @@ impl Storage for Delegate {
             DELEGATE_REQUEST_DURATION.record(
                 elapsed_millis(start),
                 &[KeyValue::new("operation", "advertised_listener")],
+            )
+        })
+    }
+
+    async fn upsert_user_scram_credential(
+        &self,
+        user: &str,
+        mechanism: ScramMechanism,
+        credential: ScramCredential,
+    ) -> Result<()> {
+        let start = SystemTime::now();
+        let connection = self.connection().await?;
+
+        self.prepare_execute(
+            &connection,
+            &sql_lookup("scram_credential_insert.sql")?,
+            (
+                user,
+                i32::from(mechanism),
+                &credential.salt[..],
+                credential.iterations,
+                &credential.stored_key[..],
+                &credential.server_key[..],
+            ),
+        )
+        .await
+        .inspect_err(|err| error!(?err))
+        .map_err(Into::into)
+        .and(Ok(()))
+        .inspect(|_| {
+            DELEGATE_REQUEST_DURATION.record(
+                elapsed_millis(start),
+                &[KeyValue::new("operation", "upsert_user_scram_credential")],
+            )
+        })
+    }
+
+    async fn user_scram_credential(
+        &self,
+        user: &str,
+        mechanism: ScramMechanism,
+    ) -> Result<Option<ScramCredential>> {
+        let start = SystemTime::now();
+        let connection = self.connection().await?;
+
+        self.prepare_query_opt(
+            &connection,
+            &sql_lookup("scram_credential_select.sql")?,
+            (user, i32::from(mechanism)),
+        )
+        .await
+        .inspect_err(|err| error!(?err))
+        .map_err(Into::into)
+        .and_then(|row| {
+            if let Some(row) = row {
+                let salt = row.get::<Vec<u8>>(0).map(Bytes::from)?;
+                let iterations = row.get::<i32>(1)?;
+                let stored_key = row.get::<Vec<u8>>(2).map(Bytes::from)?;
+                let server_key = row.get::<Vec<u8>>(3).map(Bytes::from)?;
+
+                Ok(Some(ScramCredential::new(
+                    salt, iterations, stored_key, server_key,
+                )))
+            } else {
+                Ok(None)
+            }
+        })
+        .inspect(|_| {
+            DELEGATE_REQUEST_DURATION.record(
+                elapsed_millis(start),
+                &[KeyValue::new("operation", "upsert_user_scram_credential")],
             )
         })
     }

@@ -16,9 +16,9 @@ use std::{collections::BTreeMap, time::Duration};
 
 use async_trait::async_trait;
 use tansu_sans_io::{
-    ConfigResource, ErrorCode, IsolationLevel, ListOffset, create_topics_request::CreatableTopic,
-    delete_groups_response::DeletableGroupResult, delete_records_request::DeleteRecordsTopic,
-    delete_records_response::DeleteRecordsTopicResult,
+    ConfigResource, ErrorCode, IsolationLevel, ListOffset, ScramMechanism,
+    create_topics_request::CreatableTopic, delete_groups_response::DeletableGroupResult,
+    delete_records_request::DeleteRecordsTopic, delete_records_response::DeleteRecordsTopicResult,
     describe_cluster_response::DescribeClusterBroker,
     describe_configs_response::DescribeConfigsResult,
     describe_topic_partitions_response::DescribeTopicPartitionsResponseTopic,
@@ -33,9 +33,9 @@ use uuid::Uuid;
 
 use crate::{
     BrokerRegistrationRequest, Error, GroupDetail, ListOffsetResponse, MetadataResponse,
-    NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse, Result, Storage,
-    TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse, TxnOffsetCommitRequest,
-    UpdateError, Version,
+    NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse, Result,
+    ScramCredential, Storage, TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse,
+    TxnOffsetCommitRequest, UpdateError, Version,
 };
 
 #[derive(Copy, Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -350,6 +350,31 @@ impl Storage for Engine {
 
     #[instrument(ret)]
     async fn advertised_listener(&self) -> Result<Url> {
+        Err(Error::FeatureNotEnabled {
+            feature: FEATURE.into(),
+            message: MESSAGE.into(),
+        })
+    }
+
+    #[instrument(ret)]
+    async fn upsert_user_scram_credential(
+        &self,
+        user: &str,
+        _mechanism: ScramMechanism,
+        _credential: ScramCredential,
+    ) -> Result<()> {
+        Err(Error::FeatureNotEnabled {
+            feature: FEATURE.into(),
+            message: MESSAGE.into(),
+        })
+    }
+
+    #[instrument(ret)]
+    async fn user_scram_credential(
+        &self,
+        _user: &str,
+        _mechanism: ScramMechanism,
+    ) -> Result<Option<ScramCredential>> {
         Err(Error::FeatureNotEnabled {
             feature: FEATURE.into(),
             message: MESSAGE.into(),

@@ -32,7 +32,7 @@ use rand::{prelude::*, rng};
 use serde_json::Value;
 use tansu_sans_io::{
     BatchAttribute, ConfigResource, ConfigSource, ConfigType, ControlBatch, EndTransactionMarker,
-    ErrorCode, IsolationLevel, ListOffset, NULL_TOPIC_ID, OpType,
+    ErrorCode, IsolationLevel, ListOffset, NULL_TOPIC_ID, OpType, ScramMechanism,
     add_partitions_to_txn_response::{
         AddPartitionsToTxnPartitionResult, AddPartitionsToTxnTopicResult,
     },
@@ -64,9 +64,9 @@ use uuid::Uuid;
 
 use crate::{
     BrokerRegistrationRequest, Error, GroupDetail, ListOffsetResponse, METER, MetadataResponse,
-    NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse, Result, Storage,
-    TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse, TxnOffsetCommitRequest,
-    TxnState, UpdateError, Version,
+    NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse, Result,
+    ScramCredential, Storage, TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse,
+    TxnOffsetCommitRequest, TxnState, UpdateError, Version,
     sql::{default_hash, idempotent_sequence_check, remove_comments},
 };
 
@@ -3414,6 +3414,86 @@ impl Storage for Postgres {
         }
 
         Ok(())
+    }
+
+    async fn upsert_user_scram_credential(
+        &self,
+        username: &str,
+        mechanism: ScramMechanism,
+        credential: ScramCredential,
+    ) -> Result<()> {
+        let c = self.connection().await?;
+
+        let prepared = c
+            .prepare(concat!(
+                "insert into scram_credential ",
+                " (username, mechanism, salt, iterations, stored_key, server_key) ",
+                " values",
+                " ($1, $2, $3, $4, $5, $6)",
+                " on conflict (username, mechanism)",
+                " do update set",
+                " salt = excluded.salt",
+                ", iterations = excluded.iterations",
+                ", stored_key = excluded.stored_key",
+                ", server_key = excluded.server_key",
+                ", last_updated = excluded.last_updated",
+            ))
+            .await
+            .inspect_err(|err| error!(?err, ?username, ?mechanism,))?;
+
+        c.execute(
+            &prepared,
+            &[
+                &username,
+                &i32::from(mechanism),
+                &&credential.salt()[..],
+                &credential.iterations,
+                &&credential.stored_key()[..],
+                &&credential.server_key()[..],
+            ],
+        )
+        .await
+        .inspect_err(|err| error!(?err, ?username, ?mechanism,))
+        .map_err(Into::into)
+        .and(Ok(()))
+    }
+
+    async fn user_scram_credential(
+        &self,
+        user: &str,
+        mechanism: ScramMechanism,
+    ) -> Result<Option<ScramCredential>> {
+        let c = self.connection().await?;
+
+        let prepared = c
+            .prepare(concat!(
+                "select from scram_credential",
+                " salt, iterations, stored_key, server_key",
+                " where",
+                " username = $1",
+                ", and mechanism = $2",
+            ))
+            .await
+            .inspect_err(|err| error!(?err, ?user, ?mechanism,))?;
+
+        c.query_opt(&prepared, &[&user, &i32::from(mechanism)])
+            .await
+            .map_err(Into::into)
+            .and_then(|maybe| {
+                if let Some(row) = maybe {
+                    let salt = row.try_get::<_, &[u8]>(0).map(Bytes::copy_from_slice)?;
+                    let iterations = row.try_get::<_, i32>(1)?;
+                    let stored_key = row.try_get::<_, &[u8]>(2).map(Bytes::copy_from_slice)?;
+                    let server_key = row.try_get::<_, &[u8]>(3).map(Bytes::copy_from_slice)?;
+
+                    Ok(Some(ScramCredential::new(
+                        salt, iterations, stored_key, server_key,
+                    )))
+                } else {
+                    Ok(None)
+                }
+            })
+            .inspect_err(|err| error!(?err, ?user, ?mechanism,))
     }
 
     async fn cluster_id(&self) -> Result<String> {

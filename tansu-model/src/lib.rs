@@ -289,7 +289,7 @@ impl FromStr for VersionRange {
         }
 
         if s == "none" {
-            Ok(VersionRange { start: 0, end: 0 })
+            Ok(VersionRange { start: -2, end: -1 })
         } else {
             RX.captures(s)
                 .ok_or(Error::Message(format!("invalid version range format: {s}")))
@@ -1084,7 +1084,7 @@ mod tests {
     #[test]
     fn version_range_from_str() -> Result<()> {
         assert_eq!(
-            VersionRange { start: 0, end: 0 },
+            VersionRange { start: -2, end: -1 },
             VersionRange::from_str("none")?
         );
 

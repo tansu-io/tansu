@@ -12,11 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod alter_user_scram_credentials;
 mod consumer_group_describe;
+mod create_acls;
 mod create_topics;
 mod delete_groups;
 mod delete_records;
 mod delete_topics;
+mod describe_acls;
 mod describe_cluster;
 mod describe_configs;
 mod describe_groups;
@@ -40,12 +43,15 @@ use std::{
     time::{Duration, SystemTime},
 };
 
+pub use alter_user_scram_credentials::AlterUserScramCredentialsService;
 use async_trait::async_trait;
 pub use consumer_group_describe::ConsumerGroupDescribeService;
+pub use create_acls::CreateAclsService;
 pub use create_topics::CreateTopicsService;
 pub use delete_groups::DeleteGroupsService;
 pub use delete_records::DeleteRecordsService;
 pub use delete_topics::DeleteTopicsService;
+pub use describe_acls::DescribeAclsService;
 pub use describe_cluster::DescribeClusterService;
 pub use describe_configs::DescribeConfigsService;
 pub use describe_groups::DescribeGroupsService;
@@ -66,9 +72,9 @@ use opentelemetry::{
 pub use produce::ProduceService;
 use rama::{Context, Layer, Service};
 use tansu_sans_io::{
-    ConfigResource, ErrorCode, IsolationLevel, ListOffset, create_topics_request::CreatableTopic,
-    delete_groups_response::DeletableGroupResult, delete_records_request::DeleteRecordsTopic,
-    delete_records_response::DeleteRecordsTopicResult,
+    ConfigResource, ErrorCode, IsolationLevel, ListOffset, ScramMechanism,
+    create_topics_request::CreatableTopic, delete_groups_response::DeletableGroupResult,
+    delete_records_request::DeleteRecordsTopic, delete_records_response::DeleteRecordsTopicResult,
     describe_cluster_response::DescribeClusterBroker,
     describe_configs_response::DescribeConfigsResult,
     describe_topic_partitions_response::DescribeTopicPartitionsResponseTopic,
@@ -91,9 +97,9 @@ use uuid::Uuid;
 
 use crate::{
     BrokerRegistrationRequest, Error, GroupDetail, ListOffsetResponse, METER, MetadataResponse,
-    NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse, Result, Storage,
-    TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse, TxnOffsetCommitRequest,
-    UpdateError, Version,
+    NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse, Result,
+    ScramCredential, Storage, TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse,
+    TxnOffsetCommitRequest, UpdateError, Version,
 };
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -181,6 +187,15 @@ pub enum Request {
     ClusterId,
     Node,
     AdvertisedListener,
+    UpsertUserScramCredential {
+        user: String,
+        mechanism: ScramMechanism,
+        credential: ScramCredential,
+    },
+    UserScramCredential {
+        user: String,
+        mechanism: ScramMechanism,
+    },
 }
 
 impl Display for Request {
@@ -215,41 +230,45 @@ impl Display for Request {
             Self::TxnEnd { .. } => f.write_str("TxnEnd"),
             Self::TxnOffsetCommit(_) => f.write_str("TxnOffsetCommit"),
             Self::UpdateGroup { .. } => f.write_str("UpdateGroup"),
+            Self::UpsertUserScramCredential { .. } => f.write_str("UpsertUserScramCredential"),
+            Self::UserScramCredential { .. } => f.write_str("UserScramCredential"),
         }
     }
 }
 
 #[derive(Clone, Debug)]
 pub enum Response {
-    RegisterBroker(Result<()>),
-    IncrementalAlterResponse(Result<AlterConfigsResourceResponse>),
+    AdvertisedListener(Result<Url>),
+    Brokers(Result<Vec<DescribeClusterBroker>>),
+    ClusterId(Result<String>),
+    CommittedOffsetTopitions(Result<BTreeMap<Topition, i64>>),
     CreateTopic(Result<Uuid>),
+    DeleteGroups(Result<Vec<DeletableGroupResult>>),
     DeleteRecords(Result<Vec<DeleteRecordsTopicResult>>),
     DeleteTopic(Result<ErrorCode>),
-    Brokers(Result<Vec<DescribeClusterBroker>>),
-    Produce(Result<i64>),
-    Fetch(Result<Vec<deflated::Batch>>),
-    OffsetStage(Result<OffsetStage>),
-    ListOffsets(Result<Vec<(Topition, ListOffsetResponse)>>),
-    OffsetCommit(Result<Vec<(Topition, ErrorCode)>>),
-    CommittedOffsetTopitions(Result<BTreeMap<Topition, i64>>),
-    OffsetFetch(Result<BTreeMap<Topition, i64>>),
-    Metadata(Result<MetadataResponse>),
     DescribeConfig(Result<DescribeConfigsResult>),
-    DescribeTopicPartitions(Result<Vec<DescribeTopicPartitionsResponseTopic>>),
-    ListGroups(Result<Vec<ListedGroup>>),
-    DeleteGroups(Result<Vec<DeletableGroupResult>>),
     DescribeGroups(Result<Vec<NamedGroupDetail>>),
-    UpdateGroup(Result<Version, UpdateError<GroupDetail>>),
+    DescribeTopicPartitions(Result<Vec<DescribeTopicPartitionsResponseTopic>>),
+    Fetch(Result<Vec<deflated::Batch>>),
+    IncrementalAlterResponse(Result<AlterConfigsResourceResponse>),
     InitProducer(Result<ProducerIdResponse>),
+    ListGroups(Result<Vec<ListedGroup>>),
+    ListOffsets(Result<Vec<(Topition, ListOffsetResponse)>>),
+    Maintain(Result<()>),
+    Metadata(Result<MetadataResponse>),
+    Node(Result<i32>),
+    OffsetCommit(Result<Vec<(Topition, ErrorCode)>>),
+    OffsetFetch(Result<BTreeMap<Topition, i64>>),
+    OffsetStage(Result<OffsetStage>),
+    Produce(Result<i64>),
+    RegisterBroker(Result<()>),
     TxnAddOffsets(Result<ErrorCode>),
     TxnAddPartitions(Result<TxnAddPartitionsResponse>),
-    TxnOffsetCommit(Result<Vec<TxnOffsetCommitResponseTopic>>),
     TxnEnd(Result<ErrorCode>),
-    Maintain(Result<()>),
-    ClusterId(Result<String>),
-    Node(Result<i32>),
-    AdvertisedListener(Result<Url>),
+    TxnOffsetCommit(Result<Vec<TxnOffsetCommitResponseTopic>>),
+    UpdateGroup(Result<Version, UpdateError<GroupDetail>>),
+    UpsertUserScramCredential(Result<()>),
+    UserScramCredential(Result<Option<ScramCredential>>),
 }
 
 pub type RequestSender = mpsc::Sender<(Request, oneshot::Sender<Response>)>;
@@ -375,7 +394,7 @@ where
     type Response = Response;
     type Error = ServiceError;
 
-    #[instrument(skip(ctx), ret)]
+    #[instrument(skip(self, ctx), ret)]
     async fn serve(
         &self,
         ctx: Context<State>,
@@ -464,7 +483,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn incremental_alter_resource(
         &self,
         resource: AlterConfigsResource,
@@ -484,7 +503,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn create_topic(&self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {
         self.serve(
             Context::default(),
@@ -504,7 +523,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn delete_records(
         &self,
         topics: &[DeleteRecordsTopic],
@@ -524,7 +543,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn delete_topic(&self, topic: &TopicId) -> Result<ErrorCode> {
         self.serve(Context::default(), Request::DeleteTopic(topic.to_owned()))
             .await
@@ -538,7 +557,7 @@ impl Storage for RequestChannelService {
             .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn brokers(&self) -> Result<Vec<DescribeClusterBroker>> {
         self.serve(Context::default(), Request::Brokers)
             .await
@@ -552,7 +571,7 @@ impl Storage for RequestChannelService {
             .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn produce(
         &self,
         transaction_id: Option<&str>,
@@ -581,7 +600,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn fetch(
         &self,
         topition: &'_ Topition,
@@ -613,7 +632,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn offset_stage(&self, topition: &Topition) -> Result<OffsetStage> {
         self.serve(
             Context::default(),
@@ -630,7 +649,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn list_offsets(
         &self,
         isolation_level: IsolationLevel,
@@ -656,7 +675,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn offset_commit(
         &self,
         group_id: &str,
@@ -685,7 +704,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn committed_offset_topitions(&self, group_id: &str) -> Result<BTreeMap<Topition, i64>> {
         let group_id = group_id.to_string();
 
@@ -704,7 +723,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn offset_fetch(
         &self,
         group_id: Option<&str>,
@@ -733,7 +752,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn metadata(&self, topics: Option<&[TopicId]>) -> Result<MetadataResponse> {
         let topics = topics.map(Vec::from);
 
@@ -749,7 +768,7 @@ impl Storage for RequestChannelService {
             .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn describe_config(
         &self,
         name: &str,
@@ -778,7 +797,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn describe_topic_partitions(
         &self,
         topics: Option<&[TopicId]>,
@@ -806,7 +825,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn list_groups(&self, states_filter: Option<&[String]>) -> Result<Vec<ListedGroup>> {
         let states_filter = states_filter.map(Vec::from);
 
@@ -822,7 +841,7 @@ impl Storage for RequestChannelService {
             .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn delete_groups(
         &self,
         group_ids: Option<&[String]>,
@@ -841,7 +860,7 @@ impl Storage for RequestChannelService {
             .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn describe_groups(
         &self,
         group_ids: Option<&[String]>,
@@ -867,7 +886,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn update_group(
         &self,
         group_id: &str,
@@ -895,7 +914,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn init_producer(
         &self,
         transaction_id: Option<&str>,
@@ -925,7 +944,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn txn_add_offsets(
         &self,
         transaction_id: &str,
@@ -956,7 +975,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn txn_add_partitions(
         &self,
         partitions: TxnAddPartitionsRequest,
@@ -973,7 +992,7 @@ impl Storage for RequestChannelService {
             .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn txn_offset_commit(
         &self,
         offsets: TxnOffsetCommitRequest,
@@ -990,7 +1009,7 @@ impl Storage for RequestChannelService {
             .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn txn_end(
         &self,
         transaction_id: &str,
@@ -1020,7 +1039,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn maintain(&self) -> Result<()> {
         self.serve(Context::default(), Request::Maintain)
             .await
@@ -1034,7 +1053,7 @@ impl Storage for RequestChannelService {
             .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn cluster_id(&self) -> Result<String> {
         self.serve(Context::default(), Request::ClusterId)
             .await
@@ -1048,7 +1067,7 @@ impl Storage for RequestChannelService {
             .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn node(&self) -> Result<i32> {
         self.serve(Context::default(), Request::Node)
             .await
@@ -1062,7 +1081,7 @@ impl Storage for RequestChannelService {
             .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self), ret)]
     async fn advertised_listener(&self) -> Result<Url> {
         self.serve(Context::default(), Request::AdvertisedListener)
             .await
@@ -1074,6 +1093,57 @@ impl Storage for RequestChannelService {
                 }
             })
             .map_err(Into::into)
+    }
+
+    #[instrument(skip(self), ret)]
+    async fn upsert_user_scram_credential(
+        &self,
+        user: &str,
+        mechanism: ScramMechanism,
+        credential: ScramCredential,
+    ) -> Result<()> {
+        let user = user.to_string();
+
+        self.serve(
+            Context::default(),
+            Request::UpsertUserScramCredential {
+                user,
+                mechanism,
+                credential,
+            },
+        )
+        .await
+        .and_then(|response| {
+            if let Response::UpsertUserScramCredential(inner) = response {
+                inner.map_err(Into::into)
+            } else {
+                Err(Error::UnexpectedServiceResponse(Box::new(response)).into())
+            }
+        })
+        .map_err(Into::into)
+    }
+
+    #[instrument(skip(self), ret)]
+    async fn user_scram_credential(
+        &self,
+        user: &str,
+        mechanism: ScramMechanism,
+    ) -> Result<Option<ScramCredential>> {
+        let user = user.to_string();
+
+        self.serve(
+            Context::default(),
+            Request::UserScramCredential { user, mechanism },
+        )
+        .await
+        .and_then(|response| {
+            if let Response::UserScramCredential(inner) = response {
+                inner.map_err(Into::into)
+            } else {
+                Err(Error::UnexpectedServiceResponse(Box::new(response)).into())
+            }
+        })
+        .map_err(Into::into)
     }
 }
 
@@ -1121,7 +1191,7 @@ where
         loop {
             tokio::select! {
                 Some((request, tx)) = req.recv() => {
-                    debug!(?request, ?tx);
+                    debug!(?request);
 
                     self.inner
                     .serve(ctx.clone(), request)
@@ -1341,6 +1411,20 @@ where
             Request::Node => Ok(Response::Node(self.storage.node().await)),
             Request::AdvertisedListener => Ok(Response::AdvertisedListener(
                 self.storage.advertised_listener().await,
+            )),
+            Request::UpsertUserScramCredential {
+                user,
+                mechanism,
+                credential,
+            } => Ok(Response::UpsertUserScramCredential(
+                self.storage
+                    .upsert_user_scram_credential(&user[..], mechanism, credential)
+                    .await,
+            )),
+            Request::UserScramCredential { user, mechanism } => Ok(Response::UserScramCredential(
+                self.storage
+                    .user_scram_credential(&user[..], mechanism)
+                    .await,
             )),
         }
     }

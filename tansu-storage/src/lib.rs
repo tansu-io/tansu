@@ -156,7 +156,7 @@ use std::{
     time::{Duration, SystemTime, SystemTimeError},
 };
 use tansu_sans_io::{
-    Body, ConfigResource, ErrorCode, IsolationLevel, ListOffset, NULL_TOPIC_ID,
+    Body, ConfigResource, ErrorCode, IsolationLevel, ListOffset, NULL_TOPIC_ID, ScramMechanism,
     add_partitions_to_txn_request::{
         AddPartitionsToTxnRequest, AddPartitionsToTxnTopic, AddPartitionsToTxnTransaction,
     },
@@ -204,8 +204,9 @@ mod proxy;
 mod service;
 
 pub use service::{
-    ChannelRequestLayer, ChannelRequestService, ConsumerGroupDescribeService, CreateTopicsService,
-    DeleteGroupsService, DeleteRecordsService, DeleteTopicsService, DescribeClusterService,
+    AlterUserScramCredentialsService, ChannelRequestLayer, ChannelRequestService,
+    ConsumerGroupDescribeService, CreateAclsService, CreateTopicsService, DeleteGroupsService,
+    DeleteRecordsService, DeleteTopicsService, DescribeAclsService, DescribeClusterService,
     DescribeConfigsService, DescribeGroupsService, DescribeTopicPartitionsService, FetchService,
     FindCoordinatorService, GetTelemetrySubscriptionsService, IncrementalAlterConfigsService,
     InitProducerIdService, ListGroupsService, ListOffsetsService,
@@ -244,7 +245,6 @@ pub enum Error {
 
     Glob(Arc<GlobError>),
     Io(Arc<io::Error>),
-    KafkaSansIo(#[from] tansu_sans_io::Error),
     LessThanBaseOffset {
         offset: i64,
         base_offset: i64,
@@ -285,6 +285,9 @@ pub enum Error {
     Pool(Arc<Box<dyn error::Error + Send + Sync>>),
 
     Regex(#[from] regex::Error),
+
+    SansIo(#[from] tansu_sans_io::Error),
+
     Schema(Arc<tansu_schema::Error>),
 
     SegmentEmpty(Topition),
@@ -1346,6 +1349,19 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
     /// Query broker and topic metadata.
     async fn metadata(&self, topics: Option<&[TopicId]>) -> Result<MetadataResponse>;
 
+    async fn upsert_user_scram_credential(
+        &self,
+        user: &str,
+        mechanism: ScramMechanism,
+        credential: ScramCredential,
+    ) -> Result<()>;
+
+    async fn user_scram_credential(
+        &self,
+        user: &str,
+        mechanism: ScramMechanism,
+    ) -> Result<Option<ScramCredential>>;
+
     /// Query the configuration of a resource in this storage.
     async fn describe_config(
         &self,
@@ -1741,6 +1757,41 @@ static STORAGE_CONTAINER_ERRORS: LazyLock<Counter<u64>> = LazyLock::new(|| {
         .with_description("tansu storage container errors")
         .build()
 });
+
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ScramCredential {
+    salt: Bytes,
+    iterations: i32,
+    stored_key: Bytes,
+    server_key: Bytes,
+}
+
+impl ScramCredential {
+    pub fn new(salt: Bytes, iterations: i32, stored_key: Bytes, server_key: Bytes) -> Self {
+        Self {
+            salt,
+            iterations,
+            stored_key,
+            server_key,
+        }
+    }
+
+    pub fn salt(&self) -> Bytes {
+        self.salt.clone()
+    }
+
+    pub fn iterations(&self) -> i32 {
+        self.iterations
+    }
+
+    pub fn stored_key(&self) -> Bytes {
+        self.stored_key.clone()
+    }
+
+    pub fn server_key(&self) -> Bytes {
+        self.server_key.clone()
+    }
+}
 
 #[async_trait]
 impl Storage for StorageContainer {
@@ -2677,6 +2728,71 @@ impl Storage for StorageContainer {
 
             #[cfg(feature = "turso")]
             Self::Turso(engine) => engine.advertised_listener().await,
+        }
+    }
+
+    async fn upsert_user_scram_credential(
+        &self,
+        user: &str,
+        mechanism: ScramMechanism,
+        credential: ScramCredential,
+    ) -> Result<()> {
+        match self {
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => {
+                engine
+                    .upsert_user_scram_credential(user, mechanism, credential)
+                    .await
+            }
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => {
+                engine
+                    .upsert_user_scram_credential(user, mechanism, credential)
+                    .await
+            }
+
+            Self::Null(engine) => {
+                engine
+                    .upsert_user_scram_credential(user, mechanism, credential)
+                    .await
+            }
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => {
+                engine
+                    .upsert_user_scram_credential(user, mechanism, credential)
+                    .await
+            }
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => {
+                engine
+                    .upsert_user_scram_credential(user, mechanism, credential)
+                    .await
+            }
+        }
+    }
+
+    async fn user_scram_credential(
+        &self,
+        user: &str,
+        mechanism: ScramMechanism,
+    ) -> Result<Option<ScramCredential>> {
+        match self {
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.user_scram_credential(user, mechanism).await,
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.user_scram_credential(user, mechanism).await,
+
+            Self::Null(engine) => engine.user_scram_credential(user, mechanism).await,
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.user_scram_credential(user, mechanism).await,
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.user_scram_credential(user, mechanism).await,
         }
     }
 }

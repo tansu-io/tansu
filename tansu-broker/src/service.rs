@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use rama::Layer;
+use tansu_auth::Authentication;
 use tansu_service::{
     BytesFrameLayer, BytesFrameService, FrameRouteService, TcpBytesLayer, TcpBytesService,
     TcpContext, TcpContextLayer, TcpContextService,
@@ -22,13 +23,19 @@ use tracing::debug;
 
 use crate::{Error, Result, coordinator::group::Coordinator};
 
+pub mod auth;
 pub mod coordinator;
 pub mod storage;
 
 type TcpRouteFrame =
     TcpContextService<TcpBytesService<BytesFrameService<FrameRouteService<(), Error>>, ()>>;
 
-pub fn services<C, S>(cluster_id: &str, coordinator: C, storage: S) -> Result<TcpRouteFrame, Error>
+pub fn services<C, S>(
+    cluster_id: &str,
+    coordinator: C,
+    storage: S,
+    authentication: Authentication,
+) -> Result<TcpRouteFrame, Error>
 where
     S: Storage,
     C: Coordinator,
@@ -38,11 +45,16 @@ where
         .and_then(|builder| {
             coordinator::services(builder, coordinator).inspect(|builder| debug!(?builder))
         })
+        .and_then(|builder| auth::services(builder, authentication.clone()))
         .and_then(|builder| builder.build().map_err(Into::into))
         .map(|route| {
             (
-                TcpContextLayer::new(TcpContext::default().cluster_id(Some(cluster_id.into()))),
-                TcpBytesLayer::<()>::default(),
+                TcpContextLayer::new(
+                    TcpContext::default()
+                        .cluster_id(Some(cluster_id.into()))
+                        .authentication(authentication),
+                ),
+                TcpBytesLayer::default(),
                 BytesFrameLayer,
             )
                 .into_layer(route)
