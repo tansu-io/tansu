@@ -34,7 +34,7 @@ Tansu is a single statically linked binary containing the following:
 
 Start quickly by setting up a Tansu broker via:
 
-- **Docker**
+- **Docker** (recommended)
   - [S3-based engine](#s3)
   - [PostgreSQL-based engine](#postgresql)
 - **Local installation**
