@@ -28,6 +28,22 @@ Tansu is a single statically linked binary containing the following:
 - **cat** a CLI to consume or produce Avro, JSON or Protobuf messages to a topic
 - **proxy** an Apache Kafka compatible proxy
 
+# Next Steps
+
+## Quickstart
+
+Start quickly by setting up a Tansu broker via:
+
+- **Docker**
+  - [S3-based engine](#s3)
+  - [PostgreSQL-based engine](#postgresql)
+- **Local installation**
+  - [Build and run locally](#local)
+
+## Learn Tansu
+
+- **[The CLI tools](#cli)
+
 # CLI
 
 ## broker
@@ -161,16 +177,6 @@ git clone https://github.com/tansu-io/tansu
 cd tansu
 ```
 
-## Local
-
-```shell
-cargo install --path tansu --all-features
-~/.cargo/bin/tansu -h
-```
-
-### Postgres
-
-For now, you have to manually run the [initdb script](etc/initdb.d/010-schema.sql) before starting tansu for the first time.
 
 ## Docker
 
@@ -367,6 +373,17 @@ Consumer:
   -t test -p 1 \
   -b localhost:9092
 ```
+
+## Local
+
+```shell
+cargo install --path tansu --all-features
+~/.cargo/bin/tansu -h
+```
+
+### Postgres
+
+For now, you have to manually run the [initdb script](etc/initdb.d/010-schema.sql) before starting tansu for the first time.
 
 # Feedback
 
