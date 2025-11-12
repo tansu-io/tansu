@@ -6035,6 +6035,7 @@ dependencies = [
  "rand 0.8.5",
  "serde",
  "serde_json",
+ "sha1",
  "sha2",
  "stringprep",
  "thiserror 1.0.69",

@@ -15,10 +15,10 @@
 use bytes::Bytes;
 use common::init_tracing;
 use tansu_sans_io::{
-    AlterUserScramCredentialsRequest, ApiKey, Body, DescribeConfigsResponse,
-    DescribeTopicPartitionsRequest, DescribeTopicPartitionsResponse, ErrorCode, FetchRequest,
-    FetchResponse, FindCoordinatorRequest, FindCoordinatorResponse, Frame, Header,
-    HeartbeatRequest, InitProducerIdRequest, JoinGroupRequest, JoinGroupResponse,
+    AlterUserScramCredentialsRequest, ApiKey, Body, CreateAclsRequest, DescribeAclsRequest,
+    DescribeConfigsResponse, DescribeTopicPartitionsRequest, DescribeTopicPartitionsResponse,
+    ErrorCode, FetchRequest, FetchResponse, FindCoordinatorRequest, FindCoordinatorResponse, Frame,
+    Header, HeartbeatRequest, InitProducerIdRequest, JoinGroupRequest, JoinGroupResponse,
     LeaveGroupRequest, ListGroupsRequest, ListOffsetsResponse, ListPartitionReassignmentsRequest,
     ListTransactionsRequest, ListTransactionsResponse, MetadataRequest, MetadataResponse,
     OffsetCommitRequest, OffsetFetchRequest, OffsetFetchResponse, OffsetForLeaderEpochRequest,
@@ -28,6 +28,7 @@ use tansu_sans_io::{
     api_versions_response::{
         ApiVersion, ApiVersionsResponse, FinalizedFeatureKey, SupportedFeatureKey,
     },
+    create_acls_request::AclCreation,
     describe_configs_response::{DescribeConfigsResourceResult, DescribeConfigsResult},
     fetch_response::{
         EpochEndOffset, FetchableTopicResponse, LeaderIdAndEpoch, PartitionData, SnapshotId,
@@ -44,7 +45,7 @@ use tracing::debug;
 pub mod common;
 
 #[test]
-fn sasl_handshake_v0_000() -> Result<()> {
+fn sasl_handshake_request_v0_000() -> Result<()> {
     let _guard = init_tracing()?;
     let v = [
         0, 0, 0, 36, 0, 17, 0, 0, 0, 0, 0, 1, 0, 19, 97, 105, 111, 107, 97, 102, 107, 97, 45, 112,
@@ -71,7 +72,79 @@ fn sasl_handshake_v0_000() -> Result<()> {
 }
 
 #[test]
-fn alter_scram_user_credentials_v0_000() -> Result<()> {
+fn create_acls_request_v3_000() -> Result<()> {
+    let _guard = init_tracing()?;
+    let v = [
+        0, 0, 0, 48, 0, 30, 0, 3, 0, 0, 0, 3, 0, 13, 97, 100, 109, 105, 110, 99, 108, 105, 101,
+        110, 116, 45, 49, 0, 2, 2, 4, 97, 98, 99, 3, 11, 85, 115, 101, 114, 58, 97, 108, 105, 99,
+        101, 2, 42, 4, 3, 0, 0,
+    ];
+
+    assert_eq!(
+        Frame {
+            size: 48,
+            header: Header::Request {
+                api_key: 30,
+                api_version: 3,
+                correlation_id: 3,
+                client_id: Some("adminclient-1".into())
+            },
+            body: Body::CreateAclsRequest(
+                CreateAclsRequest::default().creations(Some(
+                    [AclCreation::default()
+                        .resource_type(2)
+                        .resource_name("abc".into())
+                        .resource_pattern_type(Some(3))
+                        .principal("User:alice".into())
+                        .host("*".into())
+                        .operation(4)
+                        .permission_type(3)]
+                    .into()
+                ))
+            )
+        },
+        Frame::request_from_bytes(&v[..])?
+    );
+
+    Ok(())
+}
+
+#[test]
+fn describe_acls_request_v3_000() -> Result<()> {
+    let _guard = init_tracing()?;
+    let v = [
+        0, 0, 0, 32, 0, 29, 0, 3, 0, 0, 0, 3, 0, 13, 97, 100, 109, 105, 110, 99, 108, 105, 101,
+        110, 116, 45, 49, 0, 1, 0, 1, 0, 0, 1, 1, 0,
+    ];
+
+    assert_eq!(
+        Frame {
+            size: 32,
+            header: Header::Request {
+                api_key: 29,
+                api_version: 3,
+                correlation_id: 3,
+                client_id: Some("adminclient-1".into())
+            },
+            body: Body::DescribeAclsRequest(
+                DescribeAclsRequest::default()
+                    .resource_type_filter(1)
+                    .resource_name_filter(None)
+                    .pattern_type_filter(Some(1))
+                    .principal_filter(None)
+                    .host_filter(None)
+                    .operation(1)
+                    .permission_type(1)
+            )
+        },
+        Frame::request_from_bytes(&v[..])?
+    );
+
+    Ok(())
+}
+
+#[test]
+fn alter_scram_user_credentials_request_v0_000() -> Result<()> {
     let _guard = init_tracing()?;
 
     let v = [

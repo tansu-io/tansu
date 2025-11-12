@@ -124,7 +124,7 @@ rand = "0.9"
 regex = "1.11.1"
 rhai = { version = "1.22.2", features = ["sync"] }
 rhai-rand = "0.1"
-rsasl = { version = "2.1.0", features = ["config_builder", "oauthbearer", "plain", "provider", "scram-sha-2"], default-features = false }
+rsasl = { version = "2.2.0", features = ["config_builder", "oauthbearer", "provider", "scram-sha-1", "scram-sha-2"], default-features = false }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10.9"

@@ -116,9 +116,11 @@
 //! and whether any tagged fields can be present for a particular message version. Serializers
 //! map from the [Serde Data Model](https://serde.rs/data-model.html) to the Kafka protocol or vice versa.
 
+pub mod acl;
 pub mod de;
 pub mod primitive;
 pub mod record;
+pub mod resource;
 pub mod ser;
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};

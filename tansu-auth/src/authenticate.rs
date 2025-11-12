@@ -22,8 +22,26 @@ use tansu_sans_io::{ApiKey, ErrorCode, SaslAuthenticateRequest, SaslAuthenticate
 use tokio::task;
 use tracing::debug;
 
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct SaslAuthenticateService;
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct SaslAuthenticateService {
+    session_lifetime_ms: Option<i64>,
+}
+
+impl Default for SaslAuthenticateService {
+    fn default() -> Self {
+        Self {
+            session_lifetime_ms: Some(60_000),
+        }
+    }
+}
+
+impl SaslAuthenticateService {
+    pub fn session_lifetime_ms(self, session_lifetime_ms: Option<i64>) -> Self {
+        Self {
+            session_lifetime_ms,
+        }
+    }
+}
 
 impl ApiKey for SaslAuthenticateService {
     const KEY: i16 = SaslAuthenticateRequest::KEY;
@@ -39,19 +57,32 @@ impl Service<Authentication, SaslAuthenticateRequest> for SaslAuthenticateServic
         req: SaslAuthenticateRequest,
     ) -> Result<Self::Response, Self::Error> {
         let authentication = ctx.state().to_owned();
+        let session_lifetime_ms = self.session_lifetime_ms;
 
         task::spawn_blocking(move || {
             authentication
                 .stage
                 .lock()
                 .map_err(Into::into)
-                .and_then(|mut guard| {
+                .map(|mut guard| {
                     if let Some(Stage::Session(session)) = guard.as_mut() {
                         let mut outcome = Cursor::new(Vec::new());
 
-                        let state = session
+                        let Ok(state) = session
                             .step(Some(&req.auth_bytes), &mut outcome)
-                            .inspect(|state| debug!(?state))?;
+                            .inspect(|state| debug!(?state))
+                            .inspect_err(|err| debug!(?err))
+                        else {
+                            _ = guard.take();
+
+                            return SaslAuthenticateResponse::default()
+                                .error_code(ErrorCode::SaslAuthenticationFailed.into())
+                                .error_message(Some(
+                                    ErrorCode::SaslAuthenticationFailed.to_string(),
+                                ))
+                                .auth_bytes(Bytes::from_static(b""))
+                                .session_lifetime_ms(Some(0));
+                        };
 
                         let success = session
                             .validation()
@@ -64,19 +95,19 @@ impl Service<Authentication, SaslAuthenticateRequest> for SaslAuthenticateServic
                             _ = guard.replace(Stage::Finished(success))
                         }
 
-                        Ok(SaslAuthenticateResponse::default()
+                        SaslAuthenticateResponse::default()
                             .error_code(ErrorCode::None.into())
                             .error_message(Some("NONE".into()))
                             .auth_bytes(Bytes::from(outcome.into_inner()))
-                            .session_lifetime_ms(Some(60_000)))
+                            .session_lifetime_ms(session_lifetime_ms)
                     } else {
                         _ = guard.take();
 
-                        Ok(SaslAuthenticateResponse::default()
+                        SaslAuthenticateResponse::default()
                             .error_code(ErrorCode::IllegalSaslState.into())
-                            .error_message(None)
+                            .error_message(Some(ErrorCode::IllegalSaslState.to_string()))
                             .auth_bytes(Bytes::from_static(b""))
-                            .session_lifetime_ms(None))
+                            .session_lifetime_ms(Some(0))
                     }
                 })
         })

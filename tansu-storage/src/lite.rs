@@ -272,13 +272,13 @@ impl managed::Manager for ConnectionManager {
             .inspect(|_| CONNECT_DURATION.record(elapsed_millis(start), &[]))
     }
 
-    #[instrument(skip(self), ret)]
+    #[instrument(skip(self, obj), ret)]
     async fn recycle(
         &self,
         obj: &mut Self::Type,
         metrics: &managed::Metrics,
     ) -> managed::RecycleResult<Self::Error> {
-        debug!(?obj, ?metrics);
+        let _ = obj;
         Ok(())
     }
 }

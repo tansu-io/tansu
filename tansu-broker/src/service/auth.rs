@@ -44,7 +44,7 @@ pub fn authenticate(
                 MapStateLayer::new(|_| authentication),
                 FrameRequestLayer::<SaslAuthenticateRequest>::new(),
             )
-                .into_layer(SaslAuthenticateService)
+                .into_layer(SaslAuthenticateService::default())
                 .boxed(),
         )
         .map_err(Into::into)
