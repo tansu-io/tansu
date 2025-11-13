@@ -63,7 +63,7 @@ where
             throttle_time_ms: 0,
             error_code,
             error_message: None,
-            controller_id: -1,
+            controller_id: broker_id,
             brokers,
             cluster_authorized_operations: -2_147_483_648,
             ..

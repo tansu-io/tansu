@@ -44,7 +44,7 @@ use protobuf::{
 use protobuf_json_mapping::print_to_string;
 use serde_json::json;
 use tansu_sans_io::{ErrorCode, record::inflated::Batch};
-use tracing::{debug, error};
+use tracing::{debug, error, instrument};
 
 const GOOGLE_PROTOBUF_TIMESTAMP: &str = "google.protobuf.Timestamp";
 
@@ -1014,14 +1014,14 @@ where
 }
 
 impl AsArrow for Schema {
-    fn as_arrow(
+    #[instrument(skip(self, batch), ret)]
+    async fn as_arrow(
         &self,
+        topic: &str,
         partition: i32,
         batch: &Batch,
         lake_type: LakeHouseType,
     ) -> Result<RecordBatch> {
-        debug!(?batch, ?lake_type);
-
         let ids = if lake_type.is_iceberg() {
             field_ids(&self.file_descriptors)
         } else {
@@ -1336,6 +1336,9 @@ mod tests {
     #[cfg(feature = "iceberg")]
     async fn enumeration() -> Result<()> {
         let _guard = init_tracing()?;
+
+        let topic = "t";
+
         let proto = Bytes::from_static(
             br#"
             syntax = 'proto3';
@@ -1393,7 +1396,9 @@ mod tests {
             batch.build()?
         };
 
-        let record_batch = schema.as_arrow(0, &batch, LakeHouseType::Iceberg)?;
+        let record_batch = schema
+            .as_arrow(topic, 0, &batch, LakeHouseType::Iceberg)
+            .await?;
 
         let data_files = iceberg_write(record_batch.clone()).await?;
         assert_eq!(1, data_files.len());
@@ -1401,8 +1406,8 @@ mod tests {
 
         let ctx = SessionContext::new();
 
-        _ = ctx.register_batch("t", record_batch.clone())?;
-        let df = ctx.sql("select * from t").await?;
+        _ = ctx.register_batch(topic, record_batch.clone())?;
+        let df = ctx.sql(format!("select * from {topic}").as_str()).await?;
         let results = df.collect().await?;
 
         let pretty_results = pretty_format_batches(&results)?.to_string();
@@ -1551,7 +1556,12 @@ mod tests {
             batch.build()?
         };
 
-        let record_batch = schema.as_arrow(0, &batch, LakeHouseType::Iceberg)?;
+        let topic = "ty";
+        let partition = 0;
+
+        let record_batch = schema
+            .as_arrow(topic, partition, &batch, LakeHouseType::Iceberg)
+            .await?;
 
         let data_files = iceberg_write(record_batch.clone()).await?;
         assert_eq!(1, data_files.len());
@@ -1559,8 +1569,8 @@ mod tests {
 
         let ctx = SessionContext::new();
 
-        _ = ctx.register_batch("ty", record_batch)?;
-        let df = ctx.sql("select * from ty").await?;
+        _ = ctx.register_batch(topic, record_batch)?;
+        let df = ctx.sql(format!("select * from {topic}").as_str()).await?;
         let results = df.collect().await?;
 
         let pretty_results = pretty_format_batches(&results)?.to_string();
@@ -1633,15 +1643,18 @@ mod tests {
             batch.build()?
         };
 
-        let record_batch = schema.as_arrow(0, &batch, LakeHouseType::Iceberg)?;
+        let topic = "abc";
+        let partition = 0;
+
+        let record_batch = schema
+            .as_arrow(topic, partition, &batch, LakeHouseType::Iceberg)
+            .await?;
 
         let data_files = iceberg_write(record_batch.clone()).await?;
         assert_eq!(1, data_files.len());
         assert_eq!(2, data_files[0].record_count());
 
         let ctx = SessionContext::new();
-
-        let topic = "abc";
 
         _ = ctx.register_batch(topic, record_batch)?;
         let df = ctx.sql(format!("select * from {topic}").as_str()).await?;
@@ -1687,7 +1700,11 @@ mod tests {
             .base_timestamp(119_731_017_000)
             .build()?;
 
-        let record_batch = schema.as_arrow(0, &batch, LakeHouseType::Iceberg)?;
+        let topic = "taxi";
+        let partition = 0;
+        let record_batch = schema
+            .as_arrow(topic, partition, &batch, LakeHouseType::Iceberg)
+            .await?;
 
         let data_files = iceberg_write(record_batch.clone()).await?;
         assert_eq!(1, data_files.len());
@@ -1695,7 +1712,6 @@ mod tests {
 
         let ctx = SessionContext::new();
 
-        let topic = "taxi";
         _ = ctx.register_batch(topic, record_batch)?;
         let df = ctx.sql(format!("select * from {topic}").as_str()).await?;
         let results = df.collect().await?;
@@ -1744,11 +1760,14 @@ mod tests {
             .record(Record::builder().value(value.into()))
             .build()?;
 
-        let record_batch = schema.as_arrow(0, &batch, LakeHouseType::Parquet)?;
+        let topic = "snippets";
+        let partition = 0;
+        let record_batch = schema
+            .as_arrow(topic, partition, &batch, LakeHouseType::Parquet)
+            .await?;
 
         let ctx = SessionContext::new();
 
-        let topic = "snippets";
         _ = ctx.register_batch(topic, record_batch)?;
         let df = ctx.sql(format!("select * from {topic}").as_str()).await?;
         let results = df.collect().await?;
@@ -1806,11 +1825,14 @@ mod tests {
             .base_timestamp(119_731_017_000)
             .build()?;
 
-        let record_batch = schema.as_arrow(0, &batch, LakeHouseType::Parquet)?;
+        let topic = "snippets";
+        let partition = 0;
+        let record_batch = schema
+            .as_arrow(topic, partition, &batch, LakeHouseType::Parquet)
+            .await?;
 
         let ctx = SessionContext::new();
 
-        let topic = "snippets";
         _ = ctx.register_batch(topic, record_batch)?;
         let df = ctx.sql(format!("select * from {topic}").as_str()).await?;
         let results = df.collect().await?;
@@ -1866,7 +1888,11 @@ mod tests {
             .record(Record::builder().value(value.into()))
             .build()?;
 
-        let record_batch = schema.as_arrow(0, &batch, LakeHouseType::Iceberg)?;
+        let topic = "snippets";
+        let partition = 0;
+        let record_batch = schema
+            .as_arrow(topic, partition, &batch, LakeHouseType::Iceberg)
+            .await?;
 
         let data_files = iceberg_write(record_batch.clone()).await?;
         assert_eq!(1, data_files.len());
@@ -1874,7 +1900,6 @@ mod tests {
 
         let ctx = SessionContext::new();
 
-        let topic = "snippets";
         _ = ctx.register_batch(topic, record_batch)?;
         let df = ctx.sql(format!("select * from {topic}").as_str()).await?;
         let results = df.collect().await?;
@@ -1925,14 +1950,17 @@ mod tests {
             .record(Record::builder().value(value.into()))
             .build()?;
 
-        let record_batch = schema.as_arrow(0, &batch, LakeHouseType::Iceberg)?;
+        let topic = "snippets";
+        let partition = 0;
+        let record_batch = schema
+            .as_arrow(topic, partition, &batch, LakeHouseType::Iceberg)
+            .await?;
         let data_files = iceberg_write(record_batch.clone()).await?;
         assert_eq!(1, data_files.len());
         assert_eq!(1, data_files[0].record_count());
 
         let ctx = SessionContext::new();
 
-        let topic = "snippets";
         _ = ctx.register_batch(topic, record_batch)?;
         let df = ctx.sql(format!("select * from {topic}").as_str()).await?;
         let results = df.collect().await?;
@@ -1988,14 +2016,17 @@ mod tests {
             .base_timestamp(119_731_017_000)
             .build()?;
 
-        let record_batch = schema.as_arrow(0, &batch, LakeHouseType::Iceberg)?;
+        let topic = "snippets";
+        let partition = 0;
+        let record_batch = schema
+            .as_arrow(topic, partition, &batch, LakeHouseType::Iceberg)
+            .await?;
         let data_files = iceberg_write(record_batch.clone()).await?;
         assert_eq!(1, data_files.len());
         assert_eq!(1, data_files[0].record_count());
 
         let ctx = SessionContext::new();
 
-        let topic = "snippets";
         _ = ctx.register_batch(topic, record_batch)?;
         let df = ctx.sql(format!("select * from {topic}").as_str()).await?;
         let results = df.collect().await?;
@@ -2025,19 +2056,21 @@ mod tests {
         )))?;
 
         let topic = "t";
+        let partition = 0;
         let ctx = SessionContext::new();
 
-        _ = schema
-            .generate()
-            .and_then(|record| {
-                Batch::builder()
-                    .record(record)
-                    .base_timestamp(119_731_017_000)
-                    .build()
-                    .map_err(Into::into)
-            })
-            .and_then(|batch| schema.as_arrow(0, &batch, LakeHouseType::Parquet))
-            .and_then(|record_batch| ctx.register_batch(topic, record_batch).map_err(Into::into))?;
+        let batch = schema.generate().and_then(|record| {
+            Batch::builder()
+                .record(record)
+                .base_timestamp(119_731_017_000)
+                .build()
+                .map_err(Into::into)
+        })?;
+
+        let record_batch = schema
+            .as_arrow(topic, partition, &batch, LakeHouseType::Parquet)
+            .await?;
+        _ = ctx.register_batch(topic, record_batch)?;
 
         let df = ctx.sql(format!("select * from {topic}").as_str()).await?;
         let results = df.collect().await?;
@@ -2067,19 +2100,21 @@ mod tests {
         )))?;
 
         let topic = "t";
+        let partition = 0;
         let ctx = SessionContext::new();
 
-        _ = schema
-            .generate()
-            .and_then(|record| {
-                Batch::builder()
-                    .record(record)
-                    .base_timestamp(119_731_017_000)
-                    .build()
-                    .map_err(Into::into)
-            })
-            .and_then(|batch| schema.as_arrow(0, &batch, LakeHouseType::Parquet))
-            .and_then(|record_batch| ctx.register_batch(topic, record_batch).map_err(Into::into))?;
+        let batch = schema.generate().and_then(|record| {
+            Batch::builder()
+                .record(record)
+                .base_timestamp(119_731_017_000)
+                .build()
+                .map_err(Into::into)
+        })?;
+
+        let record_batch = schema
+            .as_arrow(topic, partition, &batch, LakeHouseType::Parquet)
+            .await?;
+        _ = ctx.register_batch(topic, record_batch)?;
 
         let df = ctx.sql(format!("select * from {topic}").as_str()).await?;
         let results = df.collect().await?;

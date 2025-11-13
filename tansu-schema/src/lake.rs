@@ -15,12 +15,18 @@
 //! Data Lake: Delta, Iceberg or Parquet
 
 use crate::{METER, Result};
-use arrow::array::RecordBatch;
 use async_trait::async_trait;
 use opentelemetry::{KeyValue, metrics::Histogram};
+
+#[cfg_attr(
+    not(any(feature = "parquet", feature = "iceberg", feature = "delta")),
+    allow(unused_imports)
+)]
 use std::{fmt::Debug, marker::PhantomData, sync::LazyLock, time::SystemTime};
-use tansu_sans_io::describe_configs_response::DescribeConfigsResult;
-use tracing::{debug, warn};
+use tansu_sans_io::{describe_configs_response::DescribeConfigsResult, record::inflated::Batch};
+use tracing::instrument;
+
+#[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
 use url::Url;
 
 #[cfg(feature = "iceberg")]
@@ -35,8 +41,15 @@ pub mod quet;
 /// House
 ///
 /// Wrapper enum for the each Data Lake implementation
-#[derive(Clone, Debug)]
+#[cfg_attr(
+    not(any(feature = "parquet", feature = "iceberg", feature = "delta")),
+    allow(missing_copy_implementations)
+)]
+#[derive(Clone, Debug, Default)]
 pub enum House {
+    #[default]
+    None,
+
     #[cfg(feature = "delta")]
     Delta(delta::Delta),
 
@@ -51,7 +64,7 @@ pub enum House {
 ///
 /// While Parquet is a common format used by both Delta and Iceberg,
 /// there are some minor differences.
-#[derive(Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Copy, Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum LakeHouseType {
     #[cfg(feature = "delta")]
     Delta,
@@ -61,6 +74,9 @@ pub enum LakeHouseType {
 
     #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
     Parquet,
+
+    #[default]
+    None,
 }
 
 impl From<&House> for LakeHouseType {
@@ -74,6 +90,8 @@ impl From<&House> for LakeHouseType {
 
             #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
             House::Parquet(_) => Self::Parquet,
+
+            House::None => Self::None,
         }
     }
 }
@@ -121,7 +139,7 @@ pub trait LakeHouse: Clone + Debug + Send + Sync + 'static {
         topic: &str,
         partition: i32,
         offset: i64,
-        record_batch: RecordBatch,
+        inflated: &Batch,
         config: DescribeConfigsResult,
     ) -> Result<()>;
 
@@ -132,6 +150,7 @@ pub trait LakeHouse: Clone + Debug + Send + Sync + 'static {
     async fn lake_type(&self) -> Result<LakeHouseType>;
 }
 
+#[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
 pub(crate) static AS_ARROW_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
     METER
         .u64_histogram("registry_as_arrow_duration")
@@ -156,92 +175,44 @@ static MAINTENANCE_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
         .build()
 });
 
-#[derive(Clone, Debug)]
-struct Config(Vec<(String, String)>);
-
-impl From<DescribeConfigsResult> for Config {
-    fn from(config: DescribeConfigsResult) -> Self {
-        Self(config.configs.map_or(vec![], |configs| {
-            configs
-                .into_iter()
-                .filter_map(|config| config.value.map(|value| (config.name, value)))
-                .collect::<Vec<(String, String)>>()
-        }))
-    }
-}
-
-impl Config {
-    fn is_normalized(&self) -> bool {
-        self.0
-            .iter()
-            .find_map(|(name, value)| {
-                (name == "tansu.lake.normalize").then(|| value.parse().ok().unwrap_or_default())
-            })
-            .unwrap_or(false)
-    }
-
-    fn normalize_separator(&self) -> &str {
-        self.0
-            .iter()
-            .find(|(name, _)| name == "tansu.lake.normalize.separator")
-            .map(|(_, value)| value.as_str())
-            .unwrap_or(".")
-    }
-}
-
 #[async_trait]
 impl LakeHouse for House {
+    #[instrument(skip(self, inflated), ret)]
     async fn store(
         &self,
         topic: &str,
         partition: i32,
         offset: i64,
-        record_batch: RecordBatch,
+        inflated: &Batch,
         configs: DescribeConfigsResult,
     ) -> Result<()> {
-        debug!(
-            ?topic,
-            ?partition,
-            ?offset,
-            rows = record_batch.num_rows(),
-            columns = record_batch.num_columns(),
-            ?record_batch
-        );
+        let _ = (topic, partition, offset, inflated, configs.clone());
 
         let start = SystemTime::now();
-
-        let config = Config::from(configs.clone());
-
-        let record_batch = if LakeHouseType::from(self).is_iceberg() & config.is_normalized() {
-            warn!(iceberg_normalized = config.is_normalized());
-            record_batch
-        } else if config.is_normalized() {
-            record_batch.normalize(config.normalize_separator(), None)?
-        } else {
-            record_batch
-        };
 
         match self {
             #[cfg(feature = "delta")]
             House::Delta(inner) => {
                 inner
-                    .store(topic, partition, offset, record_batch, configs)
+                    .store(topic, partition, offset, inflated, configs)
                     .await
             }
 
             #[cfg(feature = "iceberg")]
             House::Iceberg(inner) => {
                 inner
-                    .store(topic, partition, offset, record_batch, configs)
+                    .store(topic, partition, offset, inflated, configs)
                     .await
             }
 
             #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
             House::Parquet(inner) => {
                 inner
-                    .store(topic, partition, offset, record_batch, configs)
+                    .store(topic, partition, offset, inflated, configs)
                     .await
             }
+
+            House::None => Ok(()),
         }
         .inspect(|_| {
             STORE_DURATION.record(
@@ -253,9 +224,8 @@ impl LakeHouse for House {
         })
     }
 
+    #[instrument(skip(self), ret)]
     async fn maintain(&self) -> Result<()> {
-        debug!(?self);
-
         let start = SystemTime::now();
 
         match self {
@@ -267,6 +237,8 @@ impl LakeHouse for House {
 
             #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
             House::Parquet(inner) => inner.maintain().await,
+
+            House::None => Ok(()),
         }
         .inspect(|_| {
             MAINTENANCE_DURATION.record(
@@ -278,6 +250,7 @@ impl LakeHouse for House {
         })
     }
 
+    #[instrument(skip(self), ret)]
     async fn lake_type(&self) -> Result<LakeHouseType> {
         Ok(LakeHouseType::from(self))
     }
@@ -285,12 +258,12 @@ impl LakeHouse for House {
 
 impl House {
     #[cfg(feature = "iceberg")]
-    pub fn iceberg() -> berg::Builder<PhantomData<Url>, PhantomData<Url>> {
+    pub fn iceberg() -> berg::Builder {
         berg::Builder::default()
     }
 
     #[cfg(feature = "delta")]
-    pub fn delta() -> delta::Builder<PhantomData<Url>> {
+    pub fn delta() -> delta::Builder {
         delta::Builder::default()
     }
 

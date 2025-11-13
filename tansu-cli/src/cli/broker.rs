@@ -173,6 +173,7 @@ impl Arg {
                 } => tansu_schema::lake::House::iceberg()
                     .location(location.into_inner())
                     .catalog(catalog.into_inner())
+                    .schema_registry(schema_registry.clone().unwrap())
                     .namespace(namespace)
                     .warehouse(warehouse)
                     .build(),
@@ -184,6 +185,7 @@ impl Arg {
                     records_per_second,
                 } => tansu_schema::lake::House::delta()
                     .location(location.into_inner())
+                    .schema_registry(schema_registry.clone().unwrap())
                     .database(database)
                     .records_per_second(records_per_second)
                     .build(),
@@ -191,6 +193,7 @@ impl Arg {
                 #[cfg(feature = "parquet")]
                 Command::Parquet { location } => tansu_schema::lake::House::parquet()
                     .location(location.into_inner())
+                    .schema_registry(schema_registry.clone().unwrap())
                     .build(),
             })
             .transpose()?;

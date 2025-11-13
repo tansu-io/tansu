@@ -81,14 +81,14 @@ where
         let brokers = ctx.state().brokers().await?;
         debug!(?brokers);
 
-        let cluster_id = ctx.state().cluster_id()?;
+        let cluster_id = ctx.state().cluster_id().await?;
 
         Ok(DescribeClusterResponse::default()
             .throttle_time_ms(0)
             .error_code(ErrorCode::None.into())
             .error_message(None)
             .endpoint_type(req.endpoint_type)
-            .controller_id(-1)
+            .controller_id(brokers.first().map(|broker| broker.broker_id).unwrap_or(-1))
             .cluster_id(cluster_id.to_owned())
             .brokers(Some(brokers))
             .cluster_authorized_operations(-2_147_483_648))

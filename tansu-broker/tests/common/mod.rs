@@ -174,12 +174,10 @@ where
 
                 let paths = glob(pattern)?;
 
-                for path in paths {
-                    if let Ok(path) = path {
-                        debug!(?path);
+                for path in paths.flatten() {
+                    debug!(?path);
 
-                        remove_file(path).await?;
-                    }
+                    remove_file(path).await?;
                 }
             }
 

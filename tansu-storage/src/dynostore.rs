@@ -62,9 +62,13 @@ use tansu_sans_io::{
     list_groups_response::ListedGroup,
     metadata_response::{MetadataResponseBroker, MetadataResponsePartition, MetadataResponseTopic},
     record::{Record, deflated, inflated},
+    to_system_time, to_timestamp,
     txn_offset_commit_response::{TxnOffsetCommitResponsePartition, TxnOffsetCommitResponseTopic},
 };
-use tansu_schema::Registry;
+use tansu_schema::{
+    Registry,
+    lake::{House, LakeHouse as _},
+};
 use tracing::{debug, error, warn};
 use url::Url;
 use uuid::Uuid;
@@ -87,13 +91,7 @@ pub struct DynoStore {
     node: i32,
     advertised_listener: Url,
     schemas: Option<Registry>,
-
-    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
-    lake: Option<tansu_schema::lake::House>,
-
-    #[cfg(not(any(feature = "parquet", feature = "iceberg", feature = "delta")))]
-    lake: Option<()>,
-
+    lake: Option<House>,
     watermarks: Arc<Mutex<BTreeMap<Topition, OptiCon<Watermark>>>>,
     meta: OptiCon<Meta>,
 
@@ -326,6 +324,7 @@ struct TopicMetadata {
 struct Watermark {
     low: Option<i64>,
     high: Option<i64>,
+    timestamps: Option<BTreeMap<i64, i64>>,
 }
 
 impl OptiCon<Watermark> {
@@ -334,23 +333,6 @@ impl OptiCon<Watermark> {
             "clusters/{}/topics/{}/partitions/{:0>10}/watermark.json",
             cluster, topition.topic, topition.partition,
         ))
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
-struct WatermarkSequence {
-    epoch: i16,
-    sequence: i32,
-    updated: SystemTime,
-}
-
-impl Default for WatermarkSequence {
-    fn default() -> Self {
-        Self {
-            epoch: 0,
-            sequence: 0,
-            updated: SystemTime::now(),
-        }
     }
 }
 
@@ -393,8 +375,7 @@ impl DynoStore {
         Self { schemas, ..self }
     }
 
-    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
-    pub fn lake(self, lake: Option<tansu_schema::lake::House>) -> Self {
+    pub fn lake(self, lake: Option<House>) -> Self {
         Self { lake, ..self }
     }
 
@@ -526,8 +507,7 @@ impl DynoStore {
 
 #[async_trait]
 impl Storage for DynoStore {
-    async fn register_broker(&self, broker_registration: BrokerRegistrationRequest) -> Result<()> {
-        debug!(?broker_registration);
+    async fn register_broker(&self, _broker_registration: BrokerRegistrationRequest) -> Result<()> {
         Ok(())
     }
 
@@ -582,9 +562,7 @@ impl Storage for DynoStore {
         }
     }
 
-    async fn create_topic(&self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {
-        debug!(?topic, ?validate_only);
-
+    async fn create_topic(&self, topic: CreatableTopic, _validate_only: bool) -> Result<Uuid> {
         match self
             .meta
             .with_mut(&self.object_store, |meta| {
@@ -633,15 +611,12 @@ impl Storage for DynoStore {
 
     async fn delete_records(
         &self,
-        topics: &[DeleteRecordsTopic],
+        _topics: &[DeleteRecordsTopic],
     ) -> Result<Vec<DeleteRecordsTopicResult>> {
-        debug!(?topics);
         todo!()
     }
 
     async fn delete_topic(&self, topic: &TopicId) -> Result<ErrorCode> {
-        debug!(?topic);
-
         if let Some(metadata) = self.topic_metadata(topic).await? {
             self.meta
                 .with_mut(&self.object_store, |meta| {
@@ -708,8 +683,6 @@ impl Storage for DynoStore {
     }
 
     async fn brokers(&self) -> Result<Vec<DescribeClusterBroker>> {
-        debug!(cluster = self.cluster);
-
         let broker_id = self.node;
         let host = self
             .advertised_listener
@@ -734,8 +707,6 @@ impl Storage for DynoStore {
         topition: &Topition,
         deflated: deflated::Batch,
     ) -> Result<i64> {
-        debug!(?transaction_id, ?topition, ?deflated);
-
         let config = self
             .describe_config(topition.topic(), ConfigResource::Topic, None)
             .await
@@ -778,28 +749,17 @@ impl Storage for DynoStore {
                         .inspect(|validation| debug!(?validation))
                         .inspect_err(|err| debug!(?err))?;
 
-                    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
                     if let Some(ref lake) = self.lake {
-                        use tansu_schema::lake::LakeHouse as _;
-
-                        let lake_type = lake.lake_type().await?;
-
-                        if let Some(record_batch) = registry
-                            .as_arrow(topition.topic(), topition.partition(), &inflated, lake_type)
-                            .inspect(|record_batch| debug!(?record_batch))
-                            .inspect_err(|err| debug!(?err))?
-                        {
-                            lake.store(
-                                topition.topic(),
-                                topition.partition(),
-                                offset,
-                                record_batch,
-                                config,
-                            )
-                            .await
-                            .inspect(|store| debug!(?store))
-                            .inspect_err(|err| debug!(?err))?;
-                        }
+                        lake.store(
+                            topition.topic(),
+                            topition.partition(),
+                            offset,
+                            &inflated,
+                            config,
+                        )
+                        .await
+                        .inspect(|store| debug!(?store))
+                        .inspect_err(|err| debug!(?err))?;
                     }
                 }
             }
@@ -891,6 +851,11 @@ impl Storage for DynoStore {
                             Some(high + deflated.last_offset_delta as i64 + 1i64)
                         });
 
+                    _ = watermark
+                        .timestamps
+                        .get_or_insert_default()
+                        .insert(deflated.base_timestamp, offset);
+
                     debug!(?watermark);
 
                     Ok(offset)
@@ -899,40 +864,26 @@ impl Storage for DynoStore {
                 .inspect(|offset| debug!(offset, transaction_id, ?topition))
                 .inspect_err(|err| error!(?err, transaction_id, ?topition))?;
 
-            #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
-            if let Some(ref registry) = self.schemas {
-                let batch_attribute = BatchAttribute::try_from(deflated.attributes)
-                    .inspect_err(|err| debug!(?err))?;
-
-                if !batch_attribute.control
-                    && let Some(ref lake) = self.lake
-                {
-                    use tansu_schema::lake::LakeHouse as _;
-
-                    let lake_type = lake.lake_type().await.inspect_err(|err| debug!(?err))?;
-                    let inflated =
-                        inflated::Batch::try_from(&deflated).inspect_err(|err| debug!(?err))?;
-                    if let Some(record_batch) = registry.as_arrow(
-                        topition.topic(),
-                        topition.partition(),
-                        &inflated,
-                        lake_type,
-                    )? {
-                        lake.store(
-                            topition.topic(),
-                            topition.partition(),
-                            offset,
-                            record_batch,
-                            config,
-                        )
-                        .await
-                        .inspect_err(|err| debug!(?err))?;
-                    }
-                }
-            }
-
             let attributes =
                 BatchAttribute::try_from(deflated.attributes).inspect_err(|err| debug!(?err))?;
+
+            if !attributes.control
+                && let Some(ref lake) = self.lake
+            {
+                let inflated =
+                    inflated::Batch::try_from(&deflated).inspect_err(|err| debug!(?err))?;
+
+                lake.store(
+                    topition.topic(),
+                    topition.partition(),
+                    offset,
+                    &inflated,
+                    config,
+                )
+                .await
+                .inspect(|store| debug!(?store))
+                .inspect_err(|err| debug!(?err))?;
+            }
 
             if let Some(transaction_id) = transaction_id
                 && attributes.transaction
@@ -1020,14 +971,7 @@ impl Storage for DynoStore {
             }
         })?;
 
-        debug!(
-            ?topition,
-            ?offset,
-            ?min_bytes,
-            ?max_bytes,
-            ?isolation_level,
-            high_watermark
-        );
+        debug!(high_watermark);
 
         let mut offsets = BTreeSet::new();
 
@@ -1099,8 +1043,6 @@ impl Storage for DynoStore {
     }
 
     async fn offset_stage(&self, topition: &Topition) -> Result<OffsetStage> {
-        debug!(?topition);
-
         let stable = self
             .meta
             .with(&self.object_store, |meta| {
@@ -1170,8 +1112,6 @@ impl Storage for DynoStore {
         isolation_level: IsolationLevel,
         offsets: &[(Topition, ListOffset)],
     ) -> Result<Vec<(Topition, ListOffsetResponse)>> {
-        debug!(?offsets, ?isolation_level);
-
         let stable = if isolation_level == IsolationLevel::ReadCommitted {
             self.meta
                 .with(&self.object_store, |meta| {
@@ -1217,26 +1157,112 @@ impl Storage for DynoStore {
             responses.push((
                 topition.to_owned(),
                 match offset_request {
-                    ListOffset::Earliest => {
-                        let watermark = self.watermarks.lock().map(|mut locked| {
-                            locked
-                                .entry(topition.to_owned())
-                                .or_insert(OptiCon::<Watermark>::new(
-                                    self.cluster.as_str(),
-                                    topition,
-                                ))
-                                .to_owned()
-                        })?;
+                    ListOffset::Timestamp(target) => {
+                        debug!(?target);
+
+                        let watermark = self
+                            .watermarks
+                            .lock()
+                            .map(|mut locked| {
+                                locked
+                                    .entry(topition.to_owned())
+                                    .or_insert(OptiCon::<Watermark>::new(
+                                        self.cluster.as_str(),
+                                        topition,
+                                    ))
+                                    .to_owned()
+                            })
+                            .inspect(|watermark| debug!(?watermark))?;
+
+                        let target = to_timestamp(target).inspect(|target| debug!(target))?;
 
                         watermark
                             .with(&self.object_store, |watermark| {
-                                Ok(ListOffsetResponse {
-                                    error_code: ErrorCode::None,
-                                    timestamp: None,
-                                    offset: Some(watermark.low.unwrap_or(0)),
-                                })
+                                debug!(?watermark.timestamps);
+                                watermark
+                                    .timestamps
+                                    .as_ref()
+                                    .and_then(|timestamps| {
+                                        timestamps
+                                            .range(target..)
+                                            .next()
+                                            .or(watermark
+                                                .timestamps
+                                                .as_ref()
+                                                .and_then(|timestamps| timestamps.last_key_value()))
+                                            .inspect(|(timestamp, offset)| {
+                                                debug!(target, timestamp, offset)
+                                            })
+                                            .map(|(timestamp, offset)| {
+                                                to_system_time(*timestamp)
+                                                    .map_err(Into::into)
+                                                    .map(|timestamp| (*offset, timestamp))
+                                            })
+                                    })
+                                    .transpose()
                             })
-                            .await?
+                            .await
+                            .inspect(|timestamp| debug!(?timestamp))
+                            .map(|timestamp| {
+                                timestamp.map_or(
+                                    ListOffsetResponse {
+                                        error_code: ErrorCode::None,
+                                        offset: Some(0),
+                                        ..Default::default()
+                                    },
+                                    |(offset, timestamp)| ListOffsetResponse {
+                                        error_code: ErrorCode::None,
+                                        offset: Some(offset),
+                                        timestamp: Some(timestamp),
+                                    },
+                                )
+                            })?
+                    }
+                    ListOffset::Earliest => {
+                        let watermark = self
+                            .watermarks
+                            .lock()
+                            .map(|mut locked| {
+                                locked
+                                    .entry(topition.to_owned())
+                                    .or_insert(OptiCon::<Watermark>::new(
+                                        self.cluster.as_str(),
+                                        topition,
+                                    ))
+                                    .to_owned()
+                            })
+                            .inspect(|watermark| debug!(?watermark))?;
+
+                        watermark
+                            .with(&self.object_store, |watermark| {
+                                watermark
+                                    .timestamps
+                                    .as_ref()
+                                    .and_then(|timestamps| {
+                                        timestamps.first_key_value().map(|(timestamp, offset)| {
+                                            to_system_time(*timestamp)
+                                                .map_err(Into::into)
+                                                .map(|timestamp| (*offset, timestamp))
+                                        })
+                                    })
+                                    .transpose()
+                            })
+                            .await
+                            .inspect(|timestamp| debug!(?timestamp))
+                            .map(|timestamp| {
+                                timestamp.map_or(
+                                    ListOffsetResponse {
+                                        error_code: ErrorCode::None,
+                                        offset: Some(0),
+                                        ..Default::default()
+                                    },
+                                    |(offset, timestamp)| ListOffsetResponse {
+                                        error_code: ErrorCode::None,
+                                        offset: Some(offset),
+                                        timestamp: Some(timestamp),
+                                    },
+                                )
+                            })?
                     }
                     ListOffset::Latest => {
                         if let Some(offset) = stable.get(topition) {
@@ -1246,28 +1272,59 @@ impl Storage for DynoStore {
                                 offset: Some(*offset),
                             }
                         } else {
-                            let watermark = self.watermarks.lock().map(|mut locked| {
-                                locked
-                                    .entry(topition.to_owned())
-                                    .or_insert(OptiCon::<Watermark>::new(
-                                        self.cluster.as_str(),
-                                        topition,
-                                    ))
-                                    .to_owned()
-                            })?;
+                            let watermark = self
+                                .watermarks
+                                .lock()
+                                .map(|mut locked| {
+                                    locked
+                                        .entry(topition.to_owned())
+                                        .or_insert(OptiCon::<Watermark>::new(
+                                            self.cluster.as_str(),
+                                            topition,
+                                        ))
+                                        .to_owned()
+                                })
+                                .inspect(|watermark| debug!(?watermark))?;
 
                             watermark
                                 .with(&self.object_store, |watermark| {
-                                    Ok(ListOffsetResponse {
-                                        error_code: ErrorCode::None,
-                                        timestamp: None,
-                                        offset: Some(watermark.high.unwrap_or(0)),
-                                    })
+                                    watermark
+                                        .timestamps
+                                        .as_ref()
+                                        .and_then(|timestamps| {
+                                            timestamps.last_key_value().map(
+                                                |(timestamp, offset)| {
+                                                    to_system_time(*timestamp)
+                                                        .map_err(Into::into)
+                                                        .map(|timestamp| {
+                                                            (
+                                                                watermark.high.unwrap_or(*offset),
+                                                                timestamp,
+                                                            )
+                                                        })
+                                                },
+                                            )
+                                        })
+                                        .transpose()
                                 })
-                                .await?
+                                .await
+                                .inspect(|timestamp| debug!(?timestamp))
+                                .map(|timestamp| {
+                                    timestamp.map_or(
+                                        ListOffsetResponse {
+                                            error_code: ErrorCode::None,
+                                            offset: Some(0),
+                                            ..Default::default()
+                                        },
+                                        |(offset, timestamp)| ListOffsetResponse {
+                                            error_code: ErrorCode::None,
+                                            offset: Some(offset),
+                                            timestamp: Some(timestamp),
+                                        },
+                                    )
+                                })?
                         }
                     }
-                    ListOffset::Timestamp(..) => todo!(),
                 },
             ));
         }
@@ -1278,11 +1335,9 @@ impl Storage for DynoStore {
     async fn offset_commit(
         &self,
         group_id: &str,
-        retention_time_ms: Option<Duration>,
+        _retention_time_ms: Option<Duration>,
         offsets: &[(Topition, OffsetCommitRequest)],
     ) -> Result<Vec<(Topition, ErrorCode)>> {
-        debug!(?retention_time_ms, ?group_id, ?offsets);
-
         let mut responses = vec![];
 
         for (topition, offset_commit) in offsets {
@@ -1324,8 +1379,6 @@ impl Storage for DynoStore {
     }
 
     async fn committed_offset_topitions(&self, group_id: &str) -> Result<BTreeMap<Topition, i64>> {
-        debug!(group_id);
-
         let mut topitions = vec![];
 
         {
@@ -1380,9 +1433,8 @@ impl Storage for DynoStore {
         &self,
         group_id: Option<&str>,
         topics: &[Topition],
-        require_stable: Option<bool>,
+        _require_stable: Option<bool>,
     ) -> Result<BTreeMap<Topition, i64>> {
-        debug!(?group_id, ?topics, ?require_stable);
         let mut responses = BTreeMap::new();
 
         if let Some(group_id) = group_id {
@@ -1421,8 +1473,6 @@ impl Storage for DynoStore {
     }
 
     async fn metadata(&self, topics: Option<&[TopicId]>) -> Result<MetadataResponse> {
-        debug!(?topics);
-
         let brokers = vec![
             MetadataResponseBroker::default()
                 .node_id(self.node)
@@ -1621,10 +1671,8 @@ impl Storage for DynoStore {
         &self,
         name: &str,
         resource: ConfigResource,
-        keys: Option<&[String]>,
+        _keys: Option<&[String]>,
     ) -> Result<DescribeConfigsResult> {
-        debug!(?name, ?resource, ?keys);
-
         match resource {
             ConfigResource::Topic => match self.topic_metadata(&TopicId::Name(name.into())).await {
                 Ok(Some(topic_metadata)) => {
@@ -1664,7 +1712,12 @@ impl Storage for DynoStore {
                 Err(_) => todo!(),
             },
 
-            _ => todo!(),
+            _ => Ok(DescribeConfigsResult::default()
+                .error_code(ErrorCode::None.into())
+                .error_message(Some(ErrorCode::None.to_string()))
+                .resource_type(i8::from(resource))
+                .resource_name(name.into())
+                .configs(Some(vec![]))),
         }
     }
 
@@ -1755,9 +1808,7 @@ impl Storage for DynoStore {
         Ok(responses)
     }
 
-    async fn list_groups(&self, states_filter: Option<&[String]>) -> Result<Vec<ListedGroup>> {
-        debug!(?states_filter);
-
+    async fn list_groups(&self, _states_filter: Option<&[String]>) -> Result<Vec<ListedGroup>> {
         let location = Path::from(format!("clusters/{}/groups/consumers/", self.cluster,));
         let list_result = self
             .object_store
@@ -1775,7 +1826,7 @@ impl Storage for DynoStore {
                         .group_id(group_id.as_ref().into())
                         .protocol_type("consumer".into())
                         .group_state(Some("Unknown".into()))
-                        .group_type(None),
+                        .group_type(Some("classic".into())),
                 );
             }
         }
@@ -1787,8 +1838,6 @@ impl Storage for DynoStore {
         &self,
         group_ids: Option<&[String]>,
     ) -> Result<Vec<DeletableGroupResult>> {
-        debug!(?group_ids);
-
         let mut results = vec![];
 
         if let Some(group_ids) = group_ids {
@@ -1848,9 +1897,8 @@ impl Storage for DynoStore {
     async fn describe_groups(
         &self,
         group_ids: Option<&[String]>,
-        include_authorized_operations: bool,
+        _include_authorized_operations: bool,
     ) -> Result<Vec<NamedGroupDetail>> {
-        debug!(?group_ids, include_authorized_operations);
         let mut results = vec![];
         if let Some(group_ids) = group_ids {
             for group_id in group_ids {
@@ -1904,8 +1952,6 @@ impl Storage for DynoStore {
         detail: GroupDetail,
         version: Option<Version>,
     ) -> Result<Version, UpdateError<GroupDetail>> {
-        debug!(?group_id, ?detail, ?version);
-
         let location = Path::from(format!(
             "clusters/{}/groups/consumers/{}.json",
             self.cluster, group_id,
@@ -1928,13 +1974,6 @@ impl Storage for DynoStore {
         producer_id: Option<i64>,
         producer_epoch: Option<i16>,
     ) -> Result<ProducerIdResponse> {
-        debug!(
-            ?transaction_id,
-            ?transaction_timeout_ms,
-            ?producer_id,
-            ?producer_epoch,
-        );
-
         #[derive(Clone, Debug)]
         enum InitProducer {
             Completed(ProducerIdResponse),
@@ -2116,13 +2155,11 @@ impl Storage for DynoStore {
 
     async fn txn_add_offsets(
         &self,
-        transaction_id: &str,
-        producer_id: i64,
-        producer_epoch: i16,
-        group_id: &str,
+        _transaction_id: &str,
+        _producer_id: i64,
+        _producer_epoch: i16,
+        _group_id: &str,
     ) -> Result<ErrorCode> {
-        debug!(transaction_id, producer_id, producer_epoch, group_id);
-
         Ok(ErrorCode::None)
     }
 
@@ -2130,8 +2167,6 @@ impl Storage for DynoStore {
         &self,
         partitions: TxnAddPartitionsRequest,
     ) -> Result<TxnAddPartitionsResponse> {
-        debug!(?partitions);
-
         match partitions {
             TxnAddPartitionsRequest::VersionZeroToThree {
                 transaction_id,
@@ -2288,7 +2323,6 @@ impl Storage for DynoStore {
         &self,
         offsets: TxnOffsetCommitRequest,
     ) -> Result<Vec<TxnOffsetCommitResponseTopic>> {
-        debug!(?offsets);
         self.meta
             .with_mut(&self.object_store, |meta| {
                 let Some(transaction) = meta.transactions.get_mut(&offsets.transaction_id) else {
@@ -2370,8 +2404,6 @@ impl Storage for DynoStore {
         producer_epoch: i16,
         committed: bool,
     ) -> Result<ErrorCode> {
-        debug!(transaction_id, producer_id, producer_epoch, committed);
-
         let produced = self
             .meta
             .with_mut(&self.object_store, |meta| {
@@ -2608,12 +2640,7 @@ impl Storage for DynoStore {
     }
 
     async fn maintain(&self) -> Result<()> {
-        debug!(?self);
-
-        #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
         if let Some(ref lake) = self.lake {
-            use tansu_schema::lake::LakeHouse as _;
-
             return lake
                 .maintain()
                 .await
@@ -2625,16 +2652,16 @@ impl Storage for DynoStore {
         Ok(())
     }
 
-    fn cluster_id(&self) -> Result<&str> {
-        Ok(self.cluster.as_str())
+    async fn cluster_id(&self) -> Result<String> {
+        Ok(self.cluster.clone())
     }
 
-    fn node(&self) -> Result<i32> {
+    async fn node(&self) -> Result<i32> {
         Ok(self.node)
     }
 
-    fn advertised_listener(&self) -> Result<&Url> {
-        Ok(&self.advertised_listener)
+    async fn advertised_listener(&self) -> Result<Url> {
+        Ok(self.advertised_listener.clone())
     }
 }
 
@@ -2936,5 +2963,54 @@ where
                 additional.append(&mut attributes);
                 self.request_error.add(1, &additional[..]);
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn range_check() {
+        let map = BTreeMap::from([(3, "a"), (5, "b"), (8, "c")]);
+
+        assert_eq!(Some((&3, &"a")), map.range(2..).next());
+        assert_eq!(Some((&5, &"b")), map.range(4..).next());
+        assert_eq!(None, map.range(9..).next());
+    }
+
+    #[test]
+    fn schema_change() -> Result<()> {
+        #[derive(
+            Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize,
+        )]
+        struct X0 {
+            low: Option<i64>,
+            high: Option<i64>,
+        }
+
+        let low = Some(6);
+        let high = Some(66);
+
+        let x0 = X0 { low, high };
+
+        let encoded = serde_json::to_string(&x0)?;
+
+        #[derive(
+            Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize,
+        )]
+        struct X1 {
+            low: Option<i64>,
+            high: Option<i64>,
+            timestamps: Option<BTreeMap<i64, i64>>,
+        }
+
+        let x1: X1 = serde_json::from_str(&encoded[..])?;
+
+        assert_eq!(low, x1.low);
+        assert_eq!(high, x1.high);
+        assert!(x1.timestamps.is_none());
+
+        Ok(())
     }
 }

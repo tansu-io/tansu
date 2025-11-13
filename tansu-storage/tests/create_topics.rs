@@ -15,9 +15,10 @@
 use crate::common::{Error, init_tracing};
 use rama::{Context, Layer as _, Service as _, layer::MapStateLayer};
 use tansu_sans_io::{
-    CreateTopicsRequest, ErrorCode, NULL_TOPIC_ID, create_topics_request::CreatableTopic,
+    CreateTopicsRequest, DescribeTopicPartitionsRequest, ErrorCode, NULL_TOPIC_ID,
+    create_topics_request::CreatableTopic, describe_topic_partitions_request::TopicRequest,
 };
-use tansu_storage::{CreateTopicsService, StorageContainer};
+use tansu_storage::{CreateTopicsService, DescribeTopicPartitionsService, StorageContainer};
 use url::Url;
 
 mod common;
@@ -86,7 +87,10 @@ async fn create_with_default() -> Result<(), Error> {
         .build()
         .await?;
 
-    let service = MapStateLayer::new(|_| storage).into_layer(CreateTopicsService);
+    let service = {
+        let storage = storage.clone();
+        MapStateLayer::new(|_| storage).into_layer(CreateTopicsService)
+    };
 
     let name = "pqr";
     let num_partitions = -1;
@@ -115,9 +119,56 @@ async fn create_with_default() -> Result<(), Error> {
     assert_eq!(1, topics.len());
     assert_eq!(name, topics[0].name.as_str());
     assert_ne!(Some(NULL_TOPIC_ID), topics[0].topic_id);
-    assert_eq!(Some(1), topics[0].num_partitions);
-    assert_eq!(Some(3), topics[0].replication_factor);
+    assert_eq!(Some(3), topics[0].num_partitions);
+    assert_eq!(Some(1), topics[0].replication_factor);
     assert_eq!(ErrorCode::None, ErrorCode::try_from(topics[0].error_code)?);
+
+    let service = {
+        let storage = storage.clone();
+        MapStateLayer::new(|_| storage).into_layer(DescribeTopicPartitionsService)
+    };
+
+    let response = service
+        .serve(
+            Context::default(),
+            DescribeTopicPartitionsRequest::default()
+                .topics(Some([TopicRequest::default().name(name.into())].into())),
+        )
+        .await?;
+
+    let topics = response.topics.unwrap_or_default();
+    assert_eq!(1, topics.len());
+    assert_eq!(Some(name), topics[0].name.as_deref());
+    assert_eq!(ErrorCode::None, ErrorCode::try_from(topics[0].error_code)?);
+    let partitions = topics[0].partitions.as_deref().unwrap_or_default();
+
+    assert_eq!(3, partitions.len());
+
+    for (index, partition) in partitions.iter().enumerate() {
+        assert_eq!(index as i32, partition.partition_index);
+        assert_eq!(node_id, partition.leader_id);
+        assert_eq!(-1, partition.leader_epoch);
+        assert_eq!(ErrorCode::None, ErrorCode::try_from(partition.error_code)?);
+    }
+
+    let offline_replicas = partitions[0]
+        .offline_replicas
+        .as_deref()
+        .unwrap_or_default();
+    assert!(offline_replicas.is_empty());
+
+    let last_known_elr = partitions[0].last_known_elr.as_deref().unwrap_or_default();
+    assert!(last_known_elr.is_empty());
+
+    let eligible_leader_replicas = partitions[0]
+        .eligible_leader_replicas
+        .as_deref()
+        .unwrap_or_default();
+    assert!(eligible_leader_replicas.is_empty());
+
+    let isr_nodes = partitions[0].isr_nodes.as_deref().unwrap_or_default();
+    assert_eq!(1, isr_nodes.len());
+    assert!(isr_nodes.iter().all(|isr_node| *isr_node == node_id));
 
     Ok(())
 }

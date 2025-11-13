@@ -106,6 +106,7 @@ use std::{
     time::SystemTime,
 };
 
+use backoff::{ExponentialBackoff, future::retry};
 use bytes::Bytes;
 use deadpool::managed::{self, BuildError, Object, PoolError};
 use opentelemetry::{
@@ -114,13 +115,13 @@ use opentelemetry::{
 };
 use opentelemetry_semantic_conventions::SCHEMA_URL;
 use rama::{Context, Layer, Service};
-use tansu_sans_io::{ApiKey, ApiVersionsRequest, Body, Frame, Header, Request};
+use tansu_sans_io::{ApiKey, ApiVersionsRequest, Body, Frame, Header, Request, RootMessageMeta};
 use tansu_service::{FrameBytesLayer, FrameBytesService, host_port};
 use tokio::{
     io::{AsyncReadExt as _, AsyncWriteExt as _},
     net::TcpStream,
 };
-use tracing::{Instrument, Level, debug, error, span};
+use tracing::{Instrument, Level, debug, span};
 use tracing_subscriber::filter::ParseError;
 use url::Url;
 
@@ -220,25 +221,30 @@ impl managed::Manager for ConnectionManager {
         let attributes = [KeyValue::new("broker", self.broker.to_string())];
         let start = SystemTime::now();
 
-        TcpStream::connect(host_port(self.broker.clone()).await?)
-            .await
-            .inspect(|_| {
-                TCP_CONNECT_DURATION.record(
-                    start
-                        .elapsed()
-                        .map_or(0, |duration| duration.as_millis() as u64),
-                    &attributes,
-                )
-            })
-            .inspect_err(|err| {
-                error!(broker = %self.broker, ?err);
-                TCP_CONNECT_ERRORS.add(1, &attributes);
-            })
-            .map(|stream| Connection {
-                stream,
-                correlation_id: 0,
-            })
-            .map_err(Into::into)
+        let addr = host_port(self.broker.clone()).await?;
+
+        retry(ExponentialBackoff::default(), || async {
+            Ok(TcpStream::connect(addr)
+                .await
+                .inspect(|_| {
+                    TCP_CONNECT_DURATION.record(
+                        start
+                            .elapsed()
+                            .map_or(0, |duration| duration.as_millis() as u64),
+                        &attributes,
+                    )
+                })
+                .inspect_err(|err| {
+                    debug!(broker = %self.broker, ?err, elapsed = start.elapsed().map_or(0, |duration| duration.as_millis() as u64));
+                    TCP_CONNECT_ERRORS.add(1, &attributes);
+                })
+                .map(|stream| Connection {
+                    stream,
+                    correlation_id: 0,
+                })?)
+        })
+        .await
+        .map_err(Into::into)
     }
 
     async fn recycle(
@@ -293,12 +299,25 @@ impl Builder {
         .build()
         .map(Client::new)?;
 
+        let supported = RootMessageMeta::messages().requests();
+
         client.call(req).await.map(|response| {
             response
                 .api_keys
                 .unwrap_or_default()
                 .into_iter()
-                .map(|api| (api.api_key, api.max_version))
+                .filter_map(|api| {
+                    supported.get(&api.api_key).and_then(|supported| {
+                        if api.min_version >= supported.version.valid.start {
+                            Some((
+                                api.api_key,
+                                api.max_version.min(supported.version.valid.end),
+                            ))
+                        } else {
+                            None
+                        }
+                    })
+                })
                 .collect()
         })
     }
@@ -464,7 +483,7 @@ where
     type Error = S::Error;
 
     async fn serve(&self, ctx: Context<Pool>, req: Frame) -> Result<Self::Response, Self::Error> {
-        debug!(?ctx, ?req);
+        debug!(?req);
 
         let api_key = req.api_key()?;
         let api_version = req.api_version()?;
@@ -525,7 +544,7 @@ where
     type Error = S::Error;
 
     async fn serve(&self, ctx: Context<Pool>, req: Q) -> Result<Self::Response, Self::Error> {
-        debug!(?ctx, ?req);
+        debug!(?req);
         let pool = ctx.state();
         let api_key = Q::KEY;
         let api_version = pool.manager().api_version(api_key)?;
@@ -548,7 +567,9 @@ where
 
         let frame = self.inner.serve(ctx, frame).await?;
 
-        Q::Response::try_from(frame.body).map_err(Into::into)
+        Q::Response::try_from(frame.body)
+            .inspect(|response| debug!(?response))
+            .map_err(Into::into)
     }
 }
 
@@ -563,7 +584,7 @@ impl BytesConnectionService {
         frame: Bytes,
         attributes: &[KeyValue],
     ) -> Result<(), Error> {
-        debug!(?frame);
+        debug!(frame = ?&frame[..]);
 
         let start = SystemTime::now();
 
@@ -611,7 +632,7 @@ impl BytesConnectionService {
                 TCP_RECEIVE_ERRORS.add(1, attributes);
             })?;
 
-        Ok(Bytes::from(buffer)).inspect(|frame| debug!(?frame))
+        Ok(Bytes::from(buffer)).inspect(|frame| debug!(frame = ?&frame[..]))
     }
 }
 
@@ -629,10 +650,7 @@ impl Service<Object<ConnectionManager>, Bytes> for BytesConnectionService {
         let local = c.stream.local_addr()?;
         let peer = c.stream.peer_addr()?;
 
-        let attributes = [
-            KeyValue::new("correlation_id", c.correlation_id.to_string()),
-            KeyValue::new("peer", peer.to_string()),
-        ];
+        let attributes = [KeyValue::new("peer", peer.to_string())];
 
         let span = span!(Level::DEBUG, "client", local = %local, peer = %peer);
 
@@ -776,10 +794,7 @@ mod tests {
                     .and_then(|builder| builder.build())?,
             );
 
-        server
-            .serve(Context::default(), listener)
-            .await
-            .map_err(Into::into)
+        server.serve(Context::default(), listener).await
     }
 
     #[tokio::test]

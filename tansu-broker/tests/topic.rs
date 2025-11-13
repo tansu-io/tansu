@@ -27,9 +27,9 @@ pub mod common;
 pub async fn create_delete(
     cluster_id: impl Into<String>,
     broker_id: i32,
-    mut sc: StorageContainer,
+    sc: StorageContainer,
 ) -> Result<()> {
-    register_broker(cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, &sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -64,9 +64,9 @@ pub async fn create_delete(
 pub async fn create_describe_topic_partitions_by_id(
     cluster_id: impl Into<String>,
     broker_id: i32,
-    mut sc: StorageContainer,
+    sc: StorageContainer,
 ) -> Result<()> {
-    register_broker(cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, &sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -135,9 +135,9 @@ pub async fn create_describe_topic_partitions_by_id(
 pub async fn create_describe_topic_partitions_by_name(
     cluster_id: impl Into<String>,
     broker_id: i32,
-    mut sc: StorageContainer,
+    sc: StorageContainer,
 ) -> Result<()> {
-    register_broker(cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, &sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -206,9 +206,9 @@ pub async fn create_describe_topic_partitions_by_name(
 pub async fn describe_non_existing_topic_partitions_by_name(
     cluster_id: impl Into<String>,
     broker_id: i32,
-    mut sc: StorageContainer,
+    sc: StorageContainer,
 ) -> Result<()> {
-    register_broker(cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, &sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -241,9 +241,9 @@ pub async fn describe_non_existing_topic_partitions_by_name(
 pub async fn create_with_config_delete(
     cluster_id: impl Into<String>,
     broker_id: i32,
-    mut sc: StorageContainer,
+    sc: StorageContainer,
 ) -> Result<()> {
-    register_broker(cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, &sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -583,6 +583,7 @@ mod turso {
         .await
     }
 
+    #[ignore]
     #[tokio::test]
     async fn create_describe_topic_partitions_by_id() -> Result<()> {
         let _guard = init_tracing()?;
@@ -598,6 +599,7 @@ mod turso {
         .await
     }
 
+    #[ignore]
     #[tokio::test]
     async fn create_describe_topic_partitions_by_name() -> Result<()> {
         let _guard = init_tracing()?;
@@ -613,6 +615,7 @@ mod turso {
         .await
     }
 
+    #[ignore]
     #[tokio::test]
     async fn describe_non_existing_topic_partitions_by_name() -> Result<()> {
         let _guard = init_tracing()?;

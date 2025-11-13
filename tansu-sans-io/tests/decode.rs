@@ -43,10 +43,36 @@ use tracing::debug;
 pub mod common;
 
 #[test]
+fn api_versions_request_v0_000() -> Result<()> {
+    let _guard = init_tracing()?;
+
+    let v = [
+        0, 0, 0, 25, 0, 18, 0, 0, 0, 0, 0, 1, 0, 15, 97, 105, 111, 107, 97, 102, 107, 97, 45, 48,
+        46, 49, 50, 46, 48,
+    ];
+
+    assert_eq!(
+        Frame {
+            size: 25,
+            header: Header::Request {
+                api_key: 18,
+                api_version: 0,
+                correlation_id: 1,
+                client_id: Some("aiokafka-0.12.0".into())
+            },
+            body: Body::ApiVersionsRequest(ApiVersionsRequest::default())
+        },
+        Frame::request_from_bytes(&v[..])?
+    );
+
+    Ok(())
+}
+
+#[test]
 fn api_versions_request_v3_000() -> Result<()> {
     let _guard = init_tracing()?;
 
-    let v = vec![
+    let v = [
         0, 0, 0, 52, 0, 18, 0, 3, 0, 0, 0, 3, 0, 16, 99, 111, 110, 115, 111, 108, 101, 45, 112,
         114, 111, 100, 117, 99, 101, 114, 0, 18, 97, 112, 97, 99, 104, 101, 45, 107, 97, 102, 107,
         97, 45, 106, 97, 118, 97, 6, 51, 46, 54, 46, 49, 0,
@@ -270,7 +296,7 @@ fn create_topics_request_v7_000() -> Result<()> {
 
     let _guard = init_tracing()?;
 
-    let v = vec![
+    let v = [
         0, 0, 0, 73, 0, 19, 0, 7, 0, 0, 1, 42, 0, 13, 97, 100, 109, 105, 110, 99, 108, 105, 101,
         110, 116, 45, 49, 0, 2, 9, 98, 97, 108, 97, 110, 99, 101, 115, 255, 255, 255, 255, 255,
         255, 1, 2, 15, 99, 108, 101, 97, 110, 117, 112, 46, 112, 111, 108, 105, 99, 121, 8, 99,
@@ -546,7 +572,7 @@ fn delete_topics_request_v6_000() -> Result<()> {
 
     let _guard = init_tracing()?;
 
-    let v = vec![
+    let v = [
         0, 0, 0, 52, 0, 20, 0, 6, 0, 0, 0, 4, 0, 13, 97, 100, 109, 105, 110, 99, 108, 105, 101,
         110, 116, 45, 49, 0, 2, 5, 116, 101, 115, 116, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 117, 48, 0,
@@ -583,7 +609,7 @@ fn describe_cluster_request_v1_000() -> Result<()> {
 
     let _guard = init_tracing()?;
 
-    let v = vec![
+    let v = [
         0, 0, 0, 27, 0, 60, 0, 1, 0, 0, 0, 7, 0, 13, 97, 100, 109, 105, 110, 99, 108, 105, 101,
         110, 116, 45, 49, 0, 0, 1, 0,
     ];
@@ -615,7 +641,7 @@ fn describe_configs_request_v4_000() -> Result<()> {
 
     let _guard = init_tracing()?;
 
-    let v = vec![
+    let v = [
         0, 0, 0, 36, 0, 32, 0, 4, 0, 0, 0, 5, 0, 13, 97, 100, 109, 105, 110, 99, 108, 105, 101,
         110, 116, 45, 49, 0, 2, 2, 5, 116, 101, 115, 116, 0, 0, 0, 0, 0,
     ];
@@ -654,7 +680,7 @@ fn describe_configs_request_v4_001() -> Result<()> {
 
     let _guard = init_tracing()?;
 
-    let v = vec![
+    let v = [
         0, 0, 0, 40, 0, 32, 0, 4, 0, 0, 0, 3, 0, 13, 97, 100, 109, 105, 110, 99, 108, 105, 101,
         110, 116, 45, 49, 0, 2, 2, 9, 95, 115, 99, 104, 101, 109, 97, 115, 0, 0, 1, 0, 0,
     ];
@@ -693,7 +719,7 @@ fn describe_configs_request_v4_002() -> Result<()> {
 
     let _guard = init_tracing()?;
 
-    let v = vec![
+    let v = [
         0, 0, 0, 36, 0, 32, 0, 4, 0, 0, 0, 6, 0, 13, 97, 100, 109, 105, 110, 99, 108, 105, 101,
         110, 116, 45, 49, 0, 2, 2, 5, 116, 101, 115, 116, 0, 0, 0, 0, 0,
     ];
@@ -1728,7 +1754,7 @@ fn describe_groups_request_v1_000() -> Result<()> {
 
     let _guard = init_tracing()?;
 
-    let v = vec![
+    let v = [
         0, 0, 0, 22, 0, 15, 0, 1, 0, 0, 0, 0, 255, 255, 0, 0, 0, 1, 0, 6, 97, 98, 99, 97, 98, 99,
     ];
 
@@ -1757,7 +1783,7 @@ fn describe_groups_response_v1_000() -> Result<()> {
     use tansu_sans_io::describe_groups_response::{DescribeGroupsResponse, DescribedGroup};
     let _guard = init_tracing()?;
 
-    let v = vec![
+    let v = [
         0, 0, 0, 32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 16, 0, 6, 97, 98, 99, 97, 98, 99, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0,
     ];
@@ -1793,7 +1819,7 @@ fn fetch_request_v6_000() -> Result<()> {
 
     let _guard = init_tracing()?;
 
-    let v = vec![
+    let v = [
         0, 0, 0, 72, 0, 1, 0, 6, 0, 0, 0, 0, 255, 255, 255, 255, 255, 255, 0, 0, 19, 136, 0, 0, 4,
         0, 0, 0, 16, 0, 1, 0, 0, 0, 1, 0, 11, 97, 98, 99, 97, 98, 99, 97, 98, 99, 97, 98, 0, 0, 0,
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 16, 0,
@@ -1851,7 +1877,7 @@ fn fetch_request_v12_000() -> Result<()> {
 
     let _guard = init_tracing()?;
 
-    let v = vec![
+    let v = [
         0, 0, 0, 162, 0, 1, 0, 12, 0, 0, 0, 8, 0, 16, 99, 111, 110, 115, 111, 108, 101, 45, 99,
         111, 110, 115, 117, 109, 101, 114, 0, 255, 255, 255, 255, 0, 0, 1, 244, 0, 0, 0, 1, 3, 32,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 5, 116, 101, 115, 116, 4, 0, 0, 0, 1, 255, 255, 255,
@@ -2138,7 +2164,7 @@ fn fetch_request_v15_000() -> Result<()> {
 fn fetch_request_v16_000() -> Result<()> {
     let _guard = init_tracing()?;
 
-    let encoded = vec![
+    let encoded = [
         0, 0, 0, 52, 0, 1, 0, 16, 0, 0, 0, 12, 0, 16, 99, 111, 110, 115, 111, 108, 101, 45, 99,
         111, 110, 115, 117, 109, 101, 114, 0, 0, 0, 1, 244, 0, 0, 0, 1, 3, 32, 0, 0, 0, 0, 0, 0, 0,
         255, 255, 255, 255, 1, 1, 1, 0,
@@ -2179,7 +2205,7 @@ fn fetch_request_v16_001() -> Result<()> {
     use tansu_sans_io::fetch_request::{FetchPartition, FetchTopic};
     let _guard = init_tracing()?;
 
-    let encoded = vec![
+    let encoded = [
         0, 0, 0, 103, 0, 1, 0, 16, 0, 0, 0, 8, 0, 16, 99, 111, 110, 115, 111, 108, 101, 45, 99,
         111, 110, 115, 117, 109, 101, 114, 0, 0, 0, 1, 244, 0, 0, 0, 1, 3, 32, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 2, 246, 177, 3, 16, 190, 12, 74, 195, 190, 197, 130, 25, 106, 235, 221, 30, 2,
@@ -2244,7 +2270,7 @@ fn fetch_response_v12_000() -> Result<()> {
     let api_key = 1;
     let api_version = 12;
 
-    let v = vec![
+    let v = [
         0, 0, 0, 135, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 52, 239, 167, 250, 2, 5, 116, 101, 115, 116,
         4, 0, 0, 0, 1, 0, 3, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
         255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 1, 255, 255, 255, 255, 1, 0, 0, 0, 0, 0,
@@ -2686,7 +2712,7 @@ fn fetch_response_v16_001() -> Result<()> {
     let api_key = 1;
     let api_version = 16;
 
-    let v = vec![
+    let v = [
         0, 0, 0, 189, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 28, 205, 172, 195, 142, 19,
         71, 71, 182, 128, 13, 18, 65, 142, 210, 222, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 1, 255, 255, 255, 255, 255, 255, 255, 255, 1, 0, 0, 0, 0, 74, 0, 0, 0,
@@ -2779,7 +2805,7 @@ fn fetch_response_v16_002() -> Result<()> {
     let api_key = FetchResponse::KEY;
     let api_version = 16;
 
-    let v = vec![
+    let v = [
         0, 0, 0, 186, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 28, 205, 172, 195, 142, 19,
         71, 71, 182, 128, 13, 18, 65, 142, 210, 222, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 1, 255, 255, 255, 255, 255, 255, 255, 255, 1, 0, 0, 0, 0, 74, 0, 0, 0,
@@ -2869,7 +2895,7 @@ fn fetch_response_v16_002() -> Result<()> {
 fn find_coordinator_request_v1_000() -> Result<()> {
     let _guard = init_tracing()?;
 
-    let v = vec![
+    let v = [
         0, 0, 0, 19, 0, 10, 0, 1, 0, 0, 0, 0, 255, 255, 0, 6, 97, 98, 99, 100, 101, 102, 0,
     ];
 
@@ -2895,10 +2921,101 @@ fn find_coordinator_request_v1_000() -> Result<()> {
 }
 
 #[test]
+fn find_coordinator_response_v1_000() -> Result<()> {
+    let _guard = init_tracing()?;
+
+    let v = [
+        0, 0, 0, 62, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 0, 0, 3, 234, 0, 40, 105, 112, 45, 49,
+        48, 45, 50, 45, 57, 49, 45, 54, 54, 46, 101, 117, 45, 119, 101, 115, 116, 45, 49, 46, 99,
+        111, 109, 112, 117, 116, 101, 46, 105, 110, 116, 101, 114, 110, 97, 108, 0, 0, 35, 132,
+    ];
+
+    assert_eq!(
+        Frame {
+            size: 62,
+            header: Header::Response { correlation_id: 0 },
+            body: FindCoordinatorResponse::default()
+                .throttle_time_ms(Some(0))
+                .error_code(Some(0))
+                .error_message(None)
+                .node_id(Some(1002))
+                .host(Some("ip-10-2-91-66.eu-west-1.compute.internal".into()))
+                .port(Some(9092))
+                .coordinators(None)
+                .into()
+        },
+        Frame::response_from_bytes(&v[..], FindCoordinatorResponse::KEY, 1)?
+    );
+
+    Ok(())
+}
+
+#[test]
+fn find_coordinator_request_v1_001() -> Result<()> {
+    let _guard = init_tracing()?;
+
+    let v = [
+        0, 0, 0, 36, 0, 10, 0, 1, 0, 0, 0, 2, 0, 15, 97, 105, 111, 107, 97, 102, 107, 97, 45, 48,
+        46, 49, 50, 46, 48, 0, 8, 109, 121, 45, 103, 114, 111, 117, 112, 0,
+    ];
+
+    assert_eq!(
+        Frame {
+            size: 36,
+            header: Header::Request {
+                api_key: 10,
+                api_version: 1,
+                correlation_id: 2,
+                client_id: Some("aiokafka-0.12.0".into())
+            },
+            body: Body::FindCoordinatorRequest(
+                FindCoordinatorRequest::default()
+                    .key(Some("my-group".into()))
+                    .key_type(Some(0))
+                    .coordinator_keys(None)
+            )
+        },
+        Frame::request_from_bytes(&v[..])?
+    );
+
+    Ok(())
+}
+
+#[test]
+fn find_coordinator_response_v1_001() -> Result<()> {
+    let _guard = init_tracing()?;
+
+    let v = [
+        0, 0, 0, 35, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 4, 78, 79, 78, 69, 0, 0, 0, 111, 0, 9, 108,
+        111, 99, 97, 108, 104, 111, 115, 116, 0, 0, 35, 132,
+    ];
+
+    assert_eq!(
+        Frame {
+            size: 35,
+            header: Header::Response { correlation_id: 2 },
+            body: Body::FindCoordinatorResponse(
+                FindCoordinatorResponse::default()
+                    .throttle_time_ms(Some(0))
+                    .error_code(Some(0))
+                    .error_message(Some("NONE".into()))
+                    .node_id(Some(111))
+                    .host(Some("localhost".into()))
+                    .port(Some(9092))
+                    .coordinators(None)
+            )
+        },
+        Frame::response_from_bytes(&v[..], FindCoordinatorResponse::KEY, 1)?
+    );
+
+    Ok(())
+}
+
+#[test]
 fn find_coordinator_request_v2_000() -> Result<()> {
     let _guard = init_tracing()?;
 
-    let v = vec![
+    let v = [
         0, 0, 0, 45, 0, 10, 0, 2, 0, 0, 0, 3, 0, 7, 114, 100, 107, 97, 102, 107, 97, 0, 25, 101,
         120, 97, 109, 112, 108, 101, 95, 99, 111, 110, 115, 117, 109, 101, 114, 95, 103, 114, 111,
         117, 112, 95, 105, 100, 0,
@@ -2926,40 +3043,10 @@ fn find_coordinator_request_v2_000() -> Result<()> {
 }
 
 #[test]
-fn find_coordinator_response_v1_000() -> Result<()> {
-    let _guard = init_tracing()?;
-
-    let v = vec![
-        0, 0, 0, 62, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 0, 0, 3, 234, 0, 40, 105, 112, 45, 49,
-        48, 45, 50, 45, 57, 49, 45, 54, 54, 46, 101, 117, 45, 119, 101, 115, 116, 45, 49, 46, 99,
-        111, 109, 112, 117, 116, 101, 46, 105, 110, 116, 101, 114, 110, 97, 108, 0, 0, 35, 132,
-    ];
-
-    assert_eq!(
-        Frame {
-            size: 62,
-            header: Header::Response { correlation_id: 0 },
-            body: FindCoordinatorResponse::default()
-                .throttle_time_ms(Some(0))
-                .error_code(Some(0))
-                .error_message(None)
-                .node_id(Some(1002))
-                .host(Some("ip-10-2-91-66.eu-west-1.compute.internal".into()))
-                .port(Some(9092))
-                .coordinators(None)
-                .into()
-        },
-        Frame::response_from_bytes(&v[..], FindCoordinatorResponse::KEY, 1)?
-    );
-
-    Ok(())
-}
-
-#[test]
 fn find_coordinator_request_v4_000() -> Result<()> {
     let _guard = init_tracing()?;
 
-    let v = vec![
+    let v = [
         0, 0, 0, 50, 0, 10, 0, 4, 0, 0, 0, 0, 0, 16, 99, 111, 110, 115, 111, 108, 101, 45, 99, 111,
         110, 115, 117, 109, 101, 114, 0, 0, 2, 20, 116, 101, 115, 116, 45, 99, 111, 110, 115, 117,
         109, 101, 114, 45, 103, 114, 111, 117, 112, 0,
@@ -2990,7 +3077,7 @@ fn find_coordinator_request_v4_000() -> Result<()> {
 fn heartbeat_request_v4_000() -> Result<()> {
     let _guard = init_tracing()?;
 
-    let v = vec![
+    let v = [
         0, 0, 0, 58, 0, 12, 0, 4, 0, 0, 40, 48, 0, 16, 99, 111, 110, 115, 111, 108, 101, 45, 99,
         111, 110, 115, 117, 109, 101, 114, 0, 20, 116, 101, 115, 116, 45, 99, 111, 110, 115, 117,
         109, 101, 114, 45, 103, 114, 111, 117, 112, 0, 0, 0, 0, 5, 49, 48, 48, 48, 0, 0,
@@ -3022,7 +3109,7 @@ fn heartbeat_request_v4_000() -> Result<()> {
 fn init_producer_id_request_v4_000() -> Result<()> {
     let _guard = init_tracing()?;
 
-    let v = vec![
+    let v = [
         0, 0, 0, 43, 0, 22, 0, 4, 0, 0, 0, 2, 0, 16, 99, 111, 110, 115, 111, 108, 101, 45, 112,
         114, 111, 100, 117, 99, 101, 114, 0, 0, 127, 255, 255, 255, 255, 255, 255, 255, 255, 255,
         255, 255, 255, 255, 0,
@@ -3056,7 +3143,7 @@ fn join_group_request_v5_000() -> Result<()> {
 
     let _guard = init_tracing()?;
 
-    let v = vec![
+    let v = [
         0, 0, 0, 159, 0, 11, 0, 5, 0, 0, 0, 3, 0, 7, 114, 100, 107, 97, 102, 107, 97, 0, 25, 101,
         120, 97, 109, 112, 108, 101, 95, 99, 111, 110, 115, 117, 109, 101, 114, 95, 103, 114, 111,
         117, 112, 95, 105, 100, 0, 0, 23, 112, 0, 4, 147, 224, 0, 0, 255, 255, 0, 8, 99, 111, 110,
@@ -3160,12 +3247,60 @@ fn join_group_response_v5_000() -> Result<()> {
 }
 
 #[test]
+fn join_group_request_v5_001() -> Result<()> {
+    use tansu_sans_io::join_group_request::JoinGroupRequestProtocol;
+
+    let _guard = init_tracing()?;
+
+    let v = [
+        0, 0, 0, 97, 0, 11, 0, 5, 0, 0, 0, 2, 0, 15, 97, 105, 111, 107, 97, 102, 107, 97, 45, 48,
+        46, 49, 50, 46, 48, 0, 8, 109, 121, 45, 103, 114, 111, 117, 112, 0, 0, 39, 16, 0, 0, 39,
+        16, 0, 0, 255, 255, 0, 8, 99, 111, 110, 115, 117, 109, 101, 114, 0, 0, 0, 1, 0, 10, 114,
+        111, 117, 110, 100, 114, 111, 98, 105, 110, 0, 0, 0, 20, 0, 0, 0, 0, 0, 1, 0, 8, 99, 117,
+        115, 116, 111, 109, 101, 114, 0, 0, 0, 0,
+    ];
+
+    let metadata = Bytes::from_static(b"\0\0\0\0\0\x01\0\x08customer\0\0\0\0");
+
+    assert_eq!(
+        Frame {
+            size: 97,
+            header: Header::Request {
+                api_key: 11,
+                api_version: 5,
+                correlation_id: 2,
+                client_id: Some("aiokafka-0.12.0".into())
+            },
+            body: Body::JoinGroupRequest(
+                JoinGroupRequest::default()
+                    .group_id("my-group".into())
+                    .session_timeout_ms(10000)
+                    .rebalance_timeout_ms(Some(10000))
+                    .member_id("".into())
+                    .group_instance_id(None)
+                    .protocol_type("consumer".into())
+                    .protocols(Some(
+                        [JoinGroupRequestProtocol::default()
+                            .name("roundrobin".into())
+                            .metadata(metadata)]
+                        .into()
+                    ))
+                    .reason(None)
+            )
+        },
+        Frame::request_from_bytes(&v[..])?
+    );
+
+    Ok(())
+}
+
+#[test]
 fn join_group_request_v9_000() -> Result<()> {
     use tansu_sans_io::join_group_request::JoinGroupRequestProtocol;
 
     let _guard = init_tracing()?;
 
-    let v = vec![
+    let v = [
         0, 0, 0, 154, 0, 11, 0, 9, 0, 0, 0, 5, 0, 16, 99, 111, 110, 115, 111, 108, 101, 45, 99,
         111, 110, 115, 117, 109, 101, 114, 0, 20, 116, 101, 115, 116, 45, 99, 111, 110, 115, 117,
         109, 101, 114, 45, 103, 114, 111, 117, 112, 0, 0, 175, 200, 0, 4, 147, 224, 1, 0, 9, 99,
@@ -3217,7 +3352,7 @@ fn leave_group_request_v5_000() -> Result<()> {
 
     let _guard = init_tracing()?;
 
-    let v = vec![
+    let v = [
         0, 0, 0, 85, 0, 13, 0, 5, 0, 0, 0, 11, 0, 16, 99, 111, 110, 115, 111, 108, 101, 45, 99,
         111, 110, 115, 117, 109, 101, 114, 0, 20, 116, 101, 115, 116, 45, 99, 111, 110, 115, 117,
         109, 101, 114, 45, 103, 114, 111, 117, 112, 2, 5, 49, 48, 48, 48, 0, 29, 116, 104, 101, 32,
@@ -3256,7 +3391,7 @@ fn leave_group_request_v5_000() -> Result<()> {
 fn list_groups_request_v4_000() -> Result<()> {
     let _guard = init_tracing()?;
 
-    let v = vec![
+    let v = [
         0, 0, 0, 26, 0, 16, 0, 4, 0, 0, 0, 84, 0, 13, 97, 100, 109, 105, 110, 99, 108, 105, 101,
         110, 116, 45, 49, 0, 1, 0,
     ];
@@ -3289,7 +3424,7 @@ fn list_offsets_response_v0_000() -> Result<()> {
 
     let _guard = init_tracing()?;
 
-    let v = vec![
+    let v = [
         0, 0, 0, 67, 0, 0, 0, 0, 0, 0, 0, 1, 0, 11, 97, 98, 99, 97, 98, 99, 97, 98, 99, 97, 98, 0,
         0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 18, 37, 164, 0, 0, 0, 0, 0, 17, 233,
         252, 0, 0, 0, 0, 0, 17, 198, 100, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -3330,7 +3465,7 @@ fn list_partition_reassignments_request_v0_000() -> Result<()> {
 
     let _guard = init_tracing()?;
 
-    let v = vec![
+    let v = [
         0, 0, 0, 49, 0, 46, 0, 0, 0, 0, 0, 7, 0, 13, 97, 100, 109, 105, 110, 99, 108, 105, 101,
         110, 116, 45, 49, 0, 0, 0, 117, 48, 2, 5, 116, 101, 115, 116, 4, 0, 0, 0, 1, 0, 0, 0, 0, 0,
         0, 0, 2, 0, 0,
@@ -3366,7 +3501,7 @@ fn list_partition_reassignments_request_v0_000() -> Result<()> {
 fn list_transactions_request_v1_000() -> Result<()> {
     let _guard = init_tracing()?;
 
-    let v = vec![
+    let v = [
         0, 0, 0, 35, 0, 66, 0, 1, 0, 0, 0, 4, 0, 13, 97, 100, 109, 105, 110, 99, 108, 105, 101,
         110, 116, 45, 49, 0, 1, 1, 255, 255, 255, 255, 255, 255, 255, 255, 0,
     ];
@@ -3399,7 +3534,7 @@ fn list_transactions_response_v1_000() -> Result<()> {
     let api_key = 66;
     let api_version = 1;
 
-    let v = vec![
+    let v = [
         0, 0, 0, 70, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 1, 2, 32, 108, 105, 98, 114, 100, 107, 97,
         102, 107, 97, 95, 116, 114, 97, 110, 115, 97, 99, 116, 105, 111, 110, 115, 95, 101, 120,
         97, 109, 112, 108, 101, 0, 0, 0, 0, 0, 0, 0, 0, 15, 67, 111, 109, 112, 108, 101, 116, 101,
@@ -3435,7 +3570,7 @@ fn metadata_request_v1_000() -> Result<()> {
 
     let _guard = init_tracing()?;
 
-    let v = vec![
+    let v = [
         0, 0, 0, 30, 0, 3, 0, 1, 0, 0, 0, 1, 0, 5, 115, 97, 109, 115, 97, 0, 0, 0, 1, 0, 9, 98,
         101, 110, 99, 104, 109, 97, 114, 107,
     ];
@@ -3582,10 +3717,250 @@ fn metadata_response_v1_000() -> Result<()> {
 }
 
 #[test]
+fn metadata_request_v1_001() -> Result<()> {
+    use tansu_sans_io::metadata_request::MetadataRequestTopic;
+
+    let _guard = init_tracing()?;
+
+    let v = [
+        0, 0, 0, 39, 0, 3, 0, 1, 0, 0, 0, 3, 0, 15, 97, 105, 111, 107, 97, 102, 107, 97, 45, 48,
+        46, 49, 50, 46, 48, 0, 0, 0, 1, 0, 8, 99, 117, 115, 116, 111, 109, 101, 114,
+    ];
+
+    assert_eq!(
+        Frame {
+            size: 39,
+            header: Header::Request {
+                api_key: 3,
+                api_version: 1,
+                correlation_id: 3,
+                client_id: Some("aiokafka-0.12.0".into())
+            },
+            body: Body::MetadataRequest(
+                MetadataRequest::default()
+                    .topics(Some(
+                        [MetadataRequestTopic::default()
+                            .topic_id(None)
+                            .name(Some("customer".into()))]
+                        .into()
+                    ))
+                    .allow_auto_topic_creation(None)
+                    .include_cluster_authorized_operations(None)
+                    .include_topic_authorized_operations(None)
+            )
+        },
+        Frame::request_from_bytes(&v[..])?
+    );
+
+    Ok(())
+}
+
+#[test]
+fn metadata_response_v1_001() -> Result<()> {
+    let _guard = init_tracing()?;
+
+    let api_key = 3;
+    let api_version = 1;
+
+    let v = [
+        0, 0, 0, 132, 0, 0, 0, 3, 0, 0, 0, 1, 0, 0, 0, 111, 0, 9, 108, 111, 99, 97, 108, 104, 111,
+        115, 116, 0, 0, 35, 132, 255, 255, 0, 0, 0, 111, 0, 0, 0, 1, 0, 0, 0, 8, 99, 117, 115, 116,
+        111, 109, 101, 114, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 111, 0, 0, 0, 1, 0, 0, 0,
+        111, 0, 0, 0, 1, 0, 0, 0, 111, 0, 0, 0, 0, 0, 1, 0, 0, 0, 111, 0, 0, 0, 1, 0, 0, 0, 111, 0,
+        0, 0, 1, 0, 0, 0, 111, 0, 0, 0, 0, 0, 2, 0, 0, 0, 111, 0, 0, 0, 1, 0, 0, 0, 111, 0, 0, 0,
+        1, 0, 0, 0, 111,
+    ];
+
+    assert_eq!(
+        Frame {
+            size: 132,
+            header: Header::Response { correlation_id: 3 },
+            body: Body::MetadataResponse(
+                MetadataResponse::default()
+                    .throttle_time_ms(None)
+                    .brokers(Some(
+                        [MetadataResponseBroker::default()
+                            .node_id(111)
+                            .host("localhost".into())
+                            .port(9092)
+                            .rack(None)]
+                        .into()
+                    ))
+                    .cluster_id(None)
+                    .controller_id(Some(111))
+                    .topics(Some(
+                        [MetadataResponseTopic::default()
+                            .error_code(0)
+                            .name(Some("customer".into()))
+                            .topic_id(None)
+                            .is_internal(Some(false))
+                            .partitions(Some(
+                                [
+                                    MetadataResponsePartition::default()
+                                        .error_code(0)
+                                        .partition_index(0)
+                                        .leader_id(111)
+                                        .leader_epoch(None)
+                                        .replica_nodes(Some([111].into()))
+                                        .isr_nodes(Some([111].into()))
+                                        .offline_replicas(None),
+                                    MetadataResponsePartition::default()
+                                        .error_code(0)
+                                        .partition_index(1)
+                                        .leader_id(111)
+                                        .leader_epoch(None)
+                                        .replica_nodes(Some([111].into()))
+                                        .isr_nodes(Some([111].into()))
+                                        .offline_replicas(None),
+                                    MetadataResponsePartition::default()
+                                        .error_code(0)
+                                        .partition_index(2)
+                                        .leader_id(111)
+                                        .leader_epoch(None)
+                                        .replica_nodes(Some([111].into()))
+                                        .isr_nodes(Some([111].into()))
+                                        .offline_replicas(None)
+                                ]
+                                .into()
+                            ))
+                            .topic_authorized_operations(None)]
+                        .into()
+                    ))
+                    .cluster_authorized_operations(None)
+            )
+        },
+        Frame::response_from_bytes(&v[..], api_key, api_version)?
+    );
+
+    Ok(())
+}
+
+#[test]
+fn metadata_request_v1_002() -> Result<()> {
+    use tansu_sans_io::metadata_request::MetadataRequestTopic;
+
+    let _guard = init_tracing()?;
+
+    let v = [
+        0, 0, 0, 39, 0, 3, 0, 1, 0, 0, 0, 3, 0, 15, 97, 105, 111, 107, 97, 102, 107, 97, 45, 48,
+        46, 49, 50, 46, 48, 0, 0, 0, 1, 0, 8, 99, 117, 115, 116, 111, 109, 101, 114,
+    ];
+
+    assert_eq!(
+        Frame {
+            size: 39,
+            header: Header::Request {
+                api_key: 3,
+                api_version: 1,
+                correlation_id: 3,
+                client_id: Some("aiokafka-0.12.0".into())
+            },
+            body: Body::MetadataRequest(
+                MetadataRequest::default()
+                    .topics(Some(
+                        [MetadataRequestTopic::default()
+                            .topic_id(None)
+                            .name(Some("customer".into()))]
+                        .into()
+                    ))
+                    .allow_auto_topic_creation(None)
+                    .include_cluster_authorized_operations(None)
+                    .include_topic_authorized_operations(None)
+            )
+        },
+        Frame::request_from_bytes(&v[..])?
+    );
+
+    Ok(())
+}
+
+#[test]
+fn metadata_response_v1_002() -> Result<()> {
+    use tansu_sans_io::metadata_response::{MetadataResponseBroker, MetadataResponseTopic};
+
+    let _guard = init_tracing()?;
+
+    let v = [
+        0, 0, 0, 132, 0, 0, 0, 3, 0, 0, 0, 1, 0, 0, 0, 111, 0, 9, 108, 111, 99, 97, 108, 104, 111,
+        115, 116, 0, 0, 35, 132, 255, 255, 0, 0, 0, 111, 0, 0, 0, 1, 0, 0, 0, 8, 99, 117, 115, 116,
+        111, 109, 101, 114, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 111, 0, 0, 0, 1, 0, 0, 0,
+        111, 0, 0, 0, 1, 0, 0, 0, 111, 0, 0, 0, 0, 0, 1, 0, 0, 0, 111, 0, 0, 0, 1, 0, 0, 0, 111, 0,
+        0, 0, 1, 0, 0, 0, 111, 0, 0, 0, 0, 0, 2, 0, 0, 0, 111, 0, 0, 0, 1, 0, 0, 0, 111, 0, 0, 0,
+        1, 0, 0, 0, 111,
+    ];
+
+    let api_key = 3;
+    let api_version = 1;
+
+    assert_eq!(
+        Frame {
+            size: 132,
+            header: Header::Response { correlation_id: 3 },
+            body: Body::MetadataResponse(
+                MetadataResponse::default()
+                    .throttle_time_ms(None)
+                    .brokers(Some(
+                        [MetadataResponseBroker::default()
+                            .node_id(111)
+                            .host("localhost".into())
+                            .port(9092)
+                            .rack(None)]
+                        .into()
+                    ))
+                    .cluster_id(None)
+                    .controller_id(Some(111))
+                    .topics(Some(
+                        [MetadataResponseTopic::default()
+                            .error_code(0)
+                            .name(Some("customer".into()))
+                            .topic_id(None)
+                            .is_internal(Some(false))
+                            .partitions(Some(
+                                [
+                                    MetadataResponsePartition::default()
+                                        .error_code(0)
+                                        .partition_index(0)
+                                        .leader_id(111)
+                                        .leader_epoch(None)
+                                        .replica_nodes(Some([111].into()))
+                                        .isr_nodes(Some([111].into()))
+                                        .offline_replicas(None),
+                                    MetadataResponsePartition::default()
+                                        .error_code(0)
+                                        .partition_index(1)
+                                        .leader_id(111)
+                                        .leader_epoch(None)
+                                        .replica_nodes(Some([111].into()))
+                                        .isr_nodes(Some([111].into()))
+                                        .offline_replicas(None),
+                                    MetadataResponsePartition::default()
+                                        .error_code(0)
+                                        .partition_index(2)
+                                        .leader_id(111)
+                                        .leader_epoch(None)
+                                        .replica_nodes(Some([111].into()))
+                                        .isr_nodes(Some([111].into()))
+                                        .offline_replicas(None)
+                                ]
+                                .into()
+                            ))
+                            .topic_authorized_operations(None)]
+                        .into()
+                    ))
+                    .cluster_authorized_operations(None)
+            )
+        },
+        Frame::response_from_bytes(&v[..], api_key, api_version)?
+    );
+
+    Ok(())
+}
+
+#[test]
 fn metadata_request_v7_000() -> Result<()> {
     let _guard = init_tracing()?;
 
-    let v = vec![
+    let v = [
         0, 0, 0, 21, 0, 3, 0, 7, 0, 0, 0, 0, 0, 6, 115, 97, 114, 97, 109, 97, 255, 255, 255, 255, 0,
     ];
 
@@ -3618,7 +3993,7 @@ fn metadata_response_v7_000() -> Result<()> {
 
     let _guard = init_tracing()?;
 
-    let v = vec![
+    let v = [
         0, 0, 0, 180, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 9, 108, 111, 99, 97, 108,
         104, 111, 115, 116, 0, 0, 35, 132, 255, 255, 0, 22, 53, 76, 54, 103, 51, 110, 83, 104, 84,
         45, 101, 77, 67, 116, 75, 45, 45, 88, 56, 54, 115, 119, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 4,
@@ -3700,7 +4075,7 @@ fn metadata_request_v12_000() -> Result<()> {
 
     let _guard = init_tracing()?;
 
-    let v = vec![
+    let v = [
         0, 0, 0, 53, 0, 3, 0, 12, 0, 0, 0, 5, 0, 16, 99, 111, 110, 115, 111, 108, 101, 45, 112,
         114, 111, 100, 117, 99, 101, 114, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5,
         116, 101, 115, 116, 0, 1, 0, 0,
@@ -3739,7 +4114,7 @@ fn metadata_response_v12_000() -> Result<()> {
 
     let _guard = init_tracing()?;
 
-    let v = vec![
+    let v = [
         0, 0, 0, 92, 0, 0, 0, 5, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 13, 107, 97, 102, 107, 97, 45, 115,
         101, 114, 118, 101, 114, 0, 0, 35, 132, 0, 0, 23, 82, 118, 81, 119, 114, 89, 101, 103, 83,
         85, 67, 107, 73, 80, 107, 97, 105, 65, 90, 81, 108, 81, 0, 0, 0, 0, 2, 0, 3, 5, 116, 101,
@@ -3786,7 +4161,7 @@ fn metadata_response_v12_000() -> Result<()> {
 fn metadata_request_v12_001() -> Result<()> {
     let _guard = init_tracing()?;
 
-    let v = vec![
+    let v = [
         0, 0, 0, 31, 0, 3, 0, 12, 0, 0, 0, 1, 0, 16, 99, 111, 110, 115, 111, 108, 101, 45, 112,
         114, 111, 100, 117, 99, 101, 114, 0, 1, 1, 0, 0,
     ];
@@ -3817,7 +4192,7 @@ fn metadata_request_v12_001() -> Result<()> {
 fn metadata_request_v12_002() -> Result<()> {
     let _guard = init_tracing()?;
 
-    let v = vec![
+    let v = [
         0, 0, 0, 49, 0, 3, 0, 12, 0, 0, 0, 2, 0, 7, 114, 100, 107, 97, 102, 107, 97, 0, 2, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10, 98, 101, 110, 99, 104, 109, 97, 114, 107, 0, 1,
         0, 0,
@@ -3975,7 +4350,7 @@ fn offset_fetch_request_v3_000() -> Result<()> {
 
     let _guard = init_tracing()?;
 
-    let v = vec![
+    let v = [
         0, 0, 0, 65, 0, 9, 0, 3, 0, 0, 0, 0, 255, 255, 0, 3, 97, 98, 99, 0, 0, 0, 2, 0, 5, 116,
         101, 115, 116, 50, 0, 0, 0, 3, 0, 0, 0, 3, 0, 0, 0, 4, 0, 0, 0, 5, 0, 5, 116, 101, 115,
         116, 49, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 2,
@@ -4019,7 +4394,7 @@ fn offset_fetch_request_v7_000() -> Result<()> {
 
     let _guard = init_tracing()?;
 
-    let v = vec![
+    let v = [
         0, 0, 0, 87, 0, 9, 0, 7, 0, 0, 0, 8, 0, 7, 114, 100, 107, 97, 102, 107, 97, 0, 26, 101,
         120, 97, 109, 112, 108, 101, 95, 99, 111, 110, 115, 117, 109, 101, 114, 95, 103, 114, 111,
         117, 112, 95, 105, 100, 2, 10, 98, 101, 110, 99, 104, 109, 97, 114, 107, 8, 0, 0, 0, 0, 0,
@@ -4057,7 +4432,7 @@ fn offset_fetch_request_v7_000() -> Result<()> {
 fn offset_fetch_response_v7_000() -> Result<()> {
     let _guard = init_tracing()?;
 
-    let v = vec![
+    let v = [
         0, 0, 0, 165, 0, 0, 0, 8, 0, 0, 0, 0, 0, 2, 10, 98, 101, 110, 99, 104, 109, 97, 114, 107,
         8, 0, 0, 0, 1, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 1, 0, 0, 0, 0,
         0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 1, 0, 0, 0, 0, 0, 0,
@@ -4111,7 +4486,7 @@ fn offset_fetch_request_v9_000() -> Result<()> {
 
     let _guard = init_tracing()?;
 
-    let v = vec![
+    let v = [
         0, 0, 0, 76, 0, 9, 0, 9, 0, 0, 0, 7, 0, 16, 99, 111, 110, 115, 111, 108, 101, 45, 99, 111,
         110, 115, 117, 109, 101, 114, 0, 2, 20, 116, 101, 115, 116, 45, 99, 111, 110, 115, 117,
         109, 101, 114, 45, 103, 114, 111, 117, 112, 0, 255, 255, 255, 255, 2, 5, 116, 101, 115,
@@ -4160,7 +4535,7 @@ fn offset_commit_request_v9_000() -> Result<()> {
 
     let _guard = init_tracing()?;
 
-    let v = vec![
+    let v = [
         0, 0, 0, 120, 0, 8, 0, 9, 0, 0, 0, 10, 0, 16, 99, 111, 110, 115, 111, 108, 101, 45, 99,
         111, 110, 115, 117, 109, 101, 114, 0, 20, 116, 101, 115, 116, 45, 99, 111, 110, 115, 117,
         109, 101, 114, 45, 103, 114, 111, 117, 112, 0, 0, 0, 0, 5, 49, 48, 48, 48, 0, 2, 5, 116,
@@ -4226,7 +4601,7 @@ fn offset_for_leader_request_v0_000() -> Result<()> {
 
     let _guard = init_tracing()?;
 
-    let v = vec![
+    let v = [
         0, 0, 0, 31, 0, 23, 0, 0, 0, 0, 0, 0, 255, 255, 0, 0, 0, 1, 0, 11, 97, 98, 99, 97, 98, 99,
         97, 98, 99, 97, 98, 0, 0, 0, 0,
     ];
@@ -4263,7 +4638,7 @@ fn produce_request_v0_000() -> Result<()> {
 
     let _guard = init_tracing()?;
 
-    let v = vec![
+    let v = [
         0, 0, 0, 136, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 115, 97, 114, 97, 109, 97, 0, 1, 0, 0, 39, 16,
         0, 0, 0, 1, 0, 4, 116, 101, 115, 116, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 92, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 80, 14, 140, 97, 161, 0, 0, 255, 255, 255, 255, 0, 0, 0, 66, 181, 164,
@@ -4376,7 +4751,7 @@ fn produce_request_v3_000() -> Result<()> {
 
     let _guard = init_tracing()?;
 
-    let v = vec![
+    let v = [
         0, 0, 0, 196, 0, 0, 0, 3, 0, 0, 0, 1, 0, 5, 115, 97, 109, 115, 97, 255, 255, 0, 0, 0, 0, 3,
         232, 0, 0, 0, 1, 0, 9, 98, 101, 110, 99, 104, 109, 97, 114, 107, 0, 0, 0, 1, 0, 0, 0, 0, 0,
         0, 0, 146, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 134, 255, 255, 255, 255, 2, 194, 19, 88, 191,
@@ -4491,7 +4866,7 @@ fn produce_request_v7_000() -> Result<()> {
 
     let _guard = init_tracing()?;
 
-    let v = vec![
+    let v = [
         0, 0, 0, 158, 0, 0, 0, 7, 0, 0, 0, 3, 0, 7, 114, 100, 107, 97, 102, 107, 97, 255, 255, 255,
         255, 0, 0, 117, 48, 0, 0, 0, 1, 0, 9, 98, 101, 110, 99, 104, 109, 97, 114, 107, 0, 0, 0, 1,
         0, 0, 0, 0, 0, 0, 0, 106, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 94, 0, 0, 0, 0, 2, 178, 166,
@@ -4571,7 +4946,7 @@ fn produce_request_v9_000() -> Result<()> {
 
     let _guard = init_tracing()?;
 
-    let v = vec![
+    let v = [
         0, 0, 0, 120, 0, 0, 0, 9, 0, 0, 0, 6, 0, 16, 99, 111, 110, 115, 111, 108, 101, 45, 112,
         114, 111, 100, 117, 99, 101, 114, 0, 0, 255, 255, 0, 0, 5, 220, 2, 5, 116, 101, 115, 116,
         2, 0, 0, 0, 0, 72, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 59, 255, 255, 255, 255, 2, 67, 41, 231,
@@ -4815,7 +5190,7 @@ fn produce_request_v10_000() -> Result<()> {
 
     let _guard = init_tracing()?;
 
-    let v = vec![
+    let v = [
         0, 0, 0, 149, 0, 0, 0, 10, 0, 0, 0, 7, 0, 16, 99, 111, 110, 115, 111, 108, 101, 45, 112,
         114, 111, 100, 117, 99, 101, 114, 0, 0, 255, 255, 0, 0, 5, 220, 2, 5, 116, 101, 115, 116,
         2, 0, 0, 0, 0, 101, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 88, 255, 255, 255, 255, 2, 61, 161,
@@ -5420,7 +5795,7 @@ fn produce_response_v9_000() -> Result<()> {
 
     let _guard = init_tracing()?;
 
-    let v = vec![
+    let v = [
         0, 0, 0, 51, 0, 0, 0, 6, 0, 2, 5, 116, 101, 115, 116, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 2, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0,
         0, 0, 0,
@@ -5464,7 +5839,7 @@ pub fn sync_group_request_v5_000() -> Result<()> {
 
     let _guard = init_tracing()?;
 
-    let v = vec![
+    let v = [
         0, 0, 0, 113, 0, 14, 0, 5, 0, 0, 0, 6, 0, 16, 99, 111, 110, 115, 111, 108, 101, 45, 99,
         111, 110, 115, 117, 109, 101, 114, 0, 20, 116, 101, 115, 116, 45, 99, 111, 110, 115, 117,
         109, 101, 114, 45, 103, 114, 111, 117, 112, 0, 0, 0, 0, 5, 49, 48, 48, 48, 0, 9, 99, 111,
@@ -5510,7 +5885,7 @@ fn describe_topic_partitions_request_v0_000() -> Result<()> {
 
     let _guard = init_tracing()?;
 
-    let v = vec![
+    let v = [
         0, 0, 0, 37, 0, 75, 0, 0, 0, 0, 0, 5, 0, 13, 97, 100, 109, 105, 110, 99, 108, 105, 101,
         110, 116, 45, 49, 0, 2, 5, 116, 101, 115, 116, 0, 0, 0, 7, 208, 255, 0,
     ];
@@ -5545,7 +5920,7 @@ fn describe_topic_partitions_response_v0_000() -> Result<()> {
 
     let _guard = init_tracing()?;
 
-    let v = vec![
+    let v = [
         0, 0, 0, 126, 0, 0, 0, 5, 0, 0, 0, 0, 0, 2, 0, 0, 5, 116, 101, 115, 116, 113, 142, 248, 9,
         90, 152, 68, 142, 161, 218, 25, 210, 166, 234, 204, 62, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
         0, 0, 0, 0, 2, 0, 0, 0, 1, 2, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0,

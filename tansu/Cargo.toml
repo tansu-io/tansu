@@ -1,14 +1,17 @@
 [package]
 name = "tansu"
 description = "Apache Kafka compatible broker with S3, PostgreSQL, Apache Iceberg and Delta Lake"
-edition.workspace = true
-version.workspace = true
-license.workspace = true
-homepage.workspace = true
-repository.workspace = true
-keywords.workspace = true
 authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
 include.workspace = true
+keywords.workspace = true
+license.workspace = true
+repository.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true
 
 [dependencies]
 dotenv.workspace = true
@@ -17,6 +20,3 @@ tansu-cli.workspace = true
 tansu-sans-io.workspace = true
 tokio.workspace = true
 tracing.workspace = true
-
-[lints]
-workspace = true

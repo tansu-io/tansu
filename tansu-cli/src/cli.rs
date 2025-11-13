@@ -36,8 +36,45 @@ mod topic;
 
 const DEFAULT_BROKER: &str = "tcp://localhost:9092";
 
+fn storage_engines() -> Vec<&'static str> {
+    vec![
+        #[cfg(feature = "dynostore")]
+        "dynostore",
+        #[cfg(feature = "libsql")]
+        "libsql",
+        #[cfg(feature = "postgres")]
+        "postgres",
+        #[cfg(feature = "turso")]
+        "turso",
+    ]
+}
+
+fn lakes() -> Vec<&'static str> {
+    vec![
+        #[cfg(feature = "delta")]
+        "delta",
+        #[cfg(feature = "iceberg")]
+        "iceberg",
+    ]
+}
+
+fn after_help() -> String {
+    [
+        format!("Storage engines: {}", storage_engines().join(", ")),
+        format!("Data lakes: {}", lakes().join(", ")),
+    ]
+    .join("\n")
+}
+
 #[derive(Clone, Debug, Parser)]
-#[command(name = "tansu", version, about, long_about = None, args_conflicts_with_subcommands = true)]
+#[command(
+    name = "tansu",
+    version,
+    about,
+    long_about = None,
+    after_help = after_help(),
+    args_conflicts_with_subcommands = true
+)]
 pub struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
@@ -72,7 +109,11 @@ enum Command {
 
 impl Cli {
     pub async fn main() -> Result<ErrorCode> {
-        debug!(pid = process::id());
+        debug!(
+            pid = process::id(),
+            storage = ?storage_engines(),
+            lakes = ?lakes()
+        );
 
         let cli = Cli::parse();
 
@@ -93,6 +134,7 @@ impl Cli {
 
             Command::Proxy(arg) => tansu_proxy::Proxy::main(
                 arg.listener_url.into_inner(),
+                arg.advertised_listener_url.into_inner(),
                 arg.origin_url.into_inner(),
                 arg.otlp_endpoint_url
                     .map(|otlp_endpoint_url| otlp_endpoint_url.into_inner()),

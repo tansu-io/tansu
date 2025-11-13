@@ -63,7 +63,10 @@ use tansu_sans_io::{
     to_system_time, to_timestamp,
     txn_offset_commit_response::{TxnOffsetCommitResponsePartition, TxnOffsetCommitResponseTopic},
 };
-use tansu_schema::Registry;
+use tansu_schema::{
+    Registry,
+    lake::{House, LakeHouse as _},
+};
 use tracing::{debug, error};
 use turso::{
     Connection, Database, Row, Value, params::IntoParams, transaction::Transaction,
@@ -172,13 +175,7 @@ pub struct Engine {
     db: Arc<Mutex<Database>>,
 
     schemas: Option<Registry>,
-
-    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
-    lake: Option<tansu_schema::lake::House>,
-
-    #[allow(dead_code)]
-    #[cfg(not(any(feature = "parquet", feature = "iceberg", feature = "delta")))]
-    lake: Option<()>,
+    lake: Option<House>,
 }
 
 impl Engine {
@@ -608,31 +605,23 @@ impl Engine {
             .inspect(|n| debug!(?n))
             .inspect_err(|err| error!(?err))?;
 
-        #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
         if !attributes.control
-            && let Some(ref registry) = self.schemas
             && let Some(ref lake) = self.lake
         {
-            use tansu_schema::lake::LakeHouse as _;
-
-            let lake_type = lake.lake_type().await?;
-
-            if let Some(record_batch) =
-                registry.as_arrow(topition.topic(), topition.partition(), &inflated, lake_type)?
-            {
-                let config = self
-                    .describe_config(topition.topic(), ConfigResource::Topic, None)
-                    .await?;
-
-                lake.store(
-                    topition.topic(),
-                    topition.partition(),
-                    high.unwrap_or_default(),
-                    record_batch,
-                    config,
-                )
+            let config = self
+                .describe_config(topition.topic(), ConfigResource::Topic, None)
                 .await?;
-            }
+
+            lake.store(
+                topition.topic(),
+                topition.partition(),
+                high.unwrap_or_default(),
+                &inflated,
+                config,
+            )
+            .await
+            .inspect(|store| debug!(?store))
+            .inspect_err(|err| debug!(?err))?;
         }
 
         Ok(high.unwrap_or_default())
@@ -914,13 +903,7 @@ pub struct Builder<C, N, L, D> {
     advertised_listener: L,
     storage: D,
     schemas: Option<Registry>,
-
-    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
-    lake: Option<tansu_schema::lake::House>,
-
-    #[allow(dead_code)]
-    #[cfg(not(any(feature = "parquet", feature = "iceberg", feature = "delta")))]
-    lake: Option<()>,
+    lake: Option<House>,
 }
 
 impl<C, N, L, D> Builder<C, N, L, D> {
@@ -978,8 +961,7 @@ impl<C, N, L, D> Builder<C, N, L, D> {
         Self { schemas, ..self }
     }
 
-    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
-    pub(crate) fn lake(self, lake: Option<tansu_schema::lake::House>) -> Self {
+    pub(crate) fn lake(self, lake: Option<House>) -> Self {
         Self { lake, ..self }
     }
 }
@@ -1545,7 +1527,7 @@ impl Storage for Engine {
                     row.get_value(2)
                         .map_err(Error::from)
                         .and_then(LiteTimestamp::try_from)
-                        .and_then(|system_time| to_timestamp(system_time.0).map_err(Into::into))
+                        .and_then(|system_time| to_timestamp(&system_time.0).map_err(Into::into))
                         .inspect_err(|err| error!(?err))?,
                 )
                 .producer_id(
@@ -1621,7 +1603,7 @@ impl Storage for Engine {
                                 .map_err(Error::from)
                                 .and_then(LiteTimestamp::try_from)
                                 .and_then(|system_time| {
-                                    to_timestamp(system_time.0).map_err(Into::into)
+                                    to_timestamp(&system_time.0).map_err(Into::into)
                                 })
                                 .inspect_err(|err| error!(?err))?,
                         )
@@ -1649,7 +1631,7 @@ impl Storage for Engine {
                     .map_err(Error::from)
                     .and_then(LiteTimestamp::try_from)
                     .and_then(|system_time| {
-                        to_timestamp(system_time.0)
+                        to_timestamp(&system_time.0)
                             .map(|timestamp| timestamp - batch_builder.base_timestamp)
                             .map_err(Into::into)
                     })
@@ -2842,7 +2824,7 @@ impl Storage for Engine {
                     .group_id(group_id)
                     .protocol_type("consumer".into())
                     .group_state(Some("unknown".into()))
-                    .group_type(None),
+                    .group_type(Some("classic".into())),
             );
         }
 
@@ -3650,16 +3632,16 @@ impl Storage for Engine {
         Ok(())
     }
 
-    fn cluster_id(&self) -> Result<&str> {
-        Ok(self.cluster.as_str())
+    async fn cluster_id(&self) -> Result<String> {
+        Ok(self.cluster.clone())
     }
 
-    fn node(&self) -> Result<i32> {
+    async fn node(&self) -> Result<i32> {
         Ok(self.node)
     }
 
-    fn advertised_listener(&self) -> Result<&Url> {
-        Ok(&self.advertised_listener)
+    async fn advertised_listener(&self) -> Result<Url> {
+        Ok(self.advertised_listener.clone())
     }
 }
 

@@ -45,7 +45,7 @@ async fn with_txn() -> Result<()> {
     let cluster_id = Uuid::now_v7();
     let broker_id = rng.random_range(0..i32::MAX);
 
-    let mut sc = storage_container(
+    let sc = storage_container(
         StorageType::Postgres,
         cluster_id,
         broker_id,
@@ -54,7 +54,7 @@ async fn with_txn() -> Result<()> {
     )
     .await?;
 
-    register_broker(cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, &sc).await?;
 
     let transaction_id: String = alphanumeric_string(10);
     debug!(?transaction_id);

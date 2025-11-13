@@ -14,14 +14,19 @@ version.workspace = true
 workspace = true
 
 [features]
-default = ["delta", "iceberg", "parquet"]
+default = []
 delta = []
+dynostore = []
+libsql = []
 parquet = []
+postgres = []
 iceberg = []
+turso = []
 
 [dependencies]
 clap.workspace = true
 dotenv.workspace = true
+human-units.workspace = true
 humantime.workspace = true
 regex.workspace = true
 tansu-broker.workspace = true

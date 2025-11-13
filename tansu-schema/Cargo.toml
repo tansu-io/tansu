@@ -4,25 +4,13 @@ description = "Avro, JSON and Protocol buffer validation with conversion to Apac
 authors.workspace = true
 edition.workspace = true
 homepage.workspace = true
+include.workspace = true
 keywords.workspace = true
 license.workspace = true
 repository.workspace = true
 version.workspace = true
 
-include = [
-    "build.rs",
-    "benches/*.rs",
-    "src/**/*.rs",
-    "src/**/*.proto",
-    "src/**/*.avsc",
-    "src/**/*.json",
-    "tests",
-    "Cargo.toml",
-    "LICENSE",
-]
-
 [features]
-default = ["delta", "iceberg", "parquet"]
 delta = ["dep:arrow", "dep:delta_kernel", "dep:deltalake", "dep:datafusion", "dep:parquet"]
 iceberg = ["dep:arrow", "dep:iceberg-catalog-rest", "dep:iceberg-datafusion", "dep:iceberg", "dep:datafusion", "dep:parquet"]
 parquet = ["dep:arrow", "dep:parquet"]

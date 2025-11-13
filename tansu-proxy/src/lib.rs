@@ -18,7 +18,7 @@ use opentelemetry_sdk::error::OTelSdkError;
 use opentelemetry_semantic_conventions::SCHEMA_URL;
 use rama::{
     Context, Layer, Service,
-    layer::{HijackLayer, MapErrLayer, MapResponseLayer},
+    layer::{HijackLayer, MapErrLayer, MapRequestLayer, MapResponseLayer},
 };
 use std::{
     fmt, io,
@@ -30,8 +30,9 @@ use tansu_client::{
 };
 use tansu_otel::meter_provider;
 use tansu_sans_io::{
-    ApiKey, ErrorCode, MetadataRequest, MetadataResponse, ProduceRequest,
-    metadata_response::MetadataResponseBroker,
+    ApiKey, ErrorCode, FindCoordinatorRequest, FindCoordinatorResponse, MetadataRequest,
+    MetadataResponse, NULL_TOPIC_ID, ProduceRequest, find_coordinator_response::Coordinator,
+    metadata_request::MetadataRequestTopic, metadata_response::MetadataResponseBroker,
 };
 use tansu_service::{
     BytesFrameLayer, FrameApiKeyMatcher, FrameBytesLayer, FrameRequestLayer, TcpBytesLayer,
@@ -123,18 +124,21 @@ pub(crate) static METER: LazyLock<Meter> = LazyLock::new(|| {
 #[derive(Clone, Debug)]
 pub struct Proxy {
     listener: Url,
+    advertised_listener: Url,
     origin: Url,
 }
 
 impl Proxy {
-    const NODE_ID: i32 = 111;
-
-    pub fn new(listener: Url, origin: Url) -> Self {
-        Self { listener, origin }
+    pub fn new(listener: Url, advertised_listener: Url, origin: Url) -> Self {
+        Self {
+            listener,
+            advertised_listener,
+            origin,
+        }
     }
 
     pub async fn listen(&self) -> Result<(), Error> {
-        debug!(%self.listener);
+        debug!(%self.listener, %self.advertised_listener, %self.origin);
 
         let configuration = ResourceConfig::default();
 
@@ -164,21 +168,112 @@ impl Proxy {
         )
             .into_layer(BytesConnectionService);
 
-        let host = String::from(self.listener.host_str().unwrap_or("localhost"));
-        let port = i32::from(self.listener.port().unwrap_or(9092));
+        let host = String::from(self.advertised_listener.host_str().unwrap_or("localhost"));
+        let port = i32::from(self.advertised_listener.port().unwrap_or(9092));
 
         let meta = HijackLayer::new(
             FrameApiKeyMatcher(MetadataRequest::KEY),
             (
                 FrameRequestLayer::<MetadataRequest>::new(),
+                MapRequestLayer::new(move |request: MetadataRequest| {
+                    MetadataRequest::default()
+                        .topics(request.topics.map(|topics| {
+                            topics
+                                .into_iter()
+                                .map(|topic| {
+                                    MetadataRequestTopic::default()
+                                        .name(topic.name)
+                                        .topic_id(topic.topic_id.or(Some(NULL_TOPIC_ID)))
+                                })
+                                .collect()
+                        }))
+                        .allow_auto_topic_creation(
+                            request.allow_auto_topic_creation.or(Some(false)),
+                        )
+                        .include_cluster_authorized_operations(
+                            request.include_cluster_authorized_operations,
+                        )
+                        .include_topic_authorized_operations(
+                            request.include_topic_authorized_operations.or(Some(false)),
+                        )
+                }),
                 MapResponseLayer::new(move |response: MetadataResponse| {
-                    response.brokers(Some(vec![
-                        MetadataResponseBroker::default()
-                            .node_id(Self::NODE_ID)
-                            .host(host)
-                            .port(port)
-                            .rack(None),
-                    ]))
+                    let brokers = response.brokers.as_ref().map(|brokers| {
+                        brokers
+                            .iter()
+                            .map(|broker| {
+                                MetadataResponseBroker::default()
+                                    .node_id(broker.node_id)
+                                    .host(host.clone())
+                                    .port(port)
+                                    .rack(broker.rack.clone())
+                            })
+                            .collect()
+                    });
+
+                    response.brokers(brokers)
+                }),
+            )
+                .into_layer(request_origin.clone()),
+        );
+
+        let host = String::from(self.advertised_listener.host_str().unwrap_or("localhost"));
+
+        let find_coordinator = HijackLayer::new(
+            FrameApiKeyMatcher(FindCoordinatorRequest::KEY),
+            (
+                FrameRequestLayer::<FindCoordinatorRequest>::new(),
+                MapRequestLayer::new(move |request: FindCoordinatorRequest| {
+                    FindCoordinatorRequest::default()
+                        .key_type(request.key_type)
+                        .coordinator_keys(
+                            request
+                                .coordinator_keys
+                                .or(request.key.map(|key| vec![key])),
+                        )
+                }),
+                MapResponseLayer::new(move |response: FindCoordinatorResponse| {
+                    let coordinators = response.coordinators.as_ref().map(|coordinators| {
+                        coordinators
+                            .iter()
+                            .map(|coordinator| {
+                                Coordinator::default()
+                                    .key(coordinator.key.clone())
+                                    .error_code(coordinator.error_code)
+                                    .host(host.clone())
+                                    .port(port)
+                                    .node_id(coordinator.node_id)
+                            })
+                            .collect()
+                    });
+
+                    let coordinator = response
+                        .coordinators
+                        .as_deref()
+                        .and_then(|coordinators| coordinators.first());
+
+                    FindCoordinatorResponse::default()
+                        .throttle_time_ms(Some(0))
+                        .coordinators(coordinators)
+                        .error_code(
+                            response
+                                .error_code
+                                .or(coordinator.map(|coordinator| coordinator.error_code)),
+                        )
+                        .error_message(
+                            response
+                                .error_message
+                                .or(coordinator
+                                    .and_then(|coordinator| coordinator.error_message.clone()))
+                                .or(Some("NONE".into())),
+                        )
+                        .host(Some(host.clone()))
+                        .port(Some(port))
+                        .node_id(
+                            response
+                                .node_id
+                                .or(coordinator.map(|coordinator| coordinator.node_id)),
+                        )
                 }),
             )
                 .into_layer(request_origin.clone()),
@@ -211,6 +306,7 @@ impl Proxy {
             BytesFrameLayer,
             meta,
             produce,
+            find_coordinator,
         )
             .into_layer(frame_origin);
 
@@ -221,6 +317,7 @@ impl Proxy {
 
     pub async fn main(
         listener_url: Url,
+        advertised_listener_url: Url,
         origin_url: Url,
         otlp_endpoint_url: Option<Url>,
     ) -> Result<ErrorCode, Error> {
@@ -231,7 +328,7 @@ impl Proxy {
         })?;
 
         {
-            let proxy = Proxy::new(listener_url, origin_url);
+            let proxy = Proxy::new(listener_url, advertised_listener_url, origin_url);
             _ = set.spawn(async move { proxy.listen().await.unwrap() });
         }
 

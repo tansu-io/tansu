@@ -29,15 +29,15 @@ use std::{
     time::Duration,
 };
 use tansu_sans_io::ErrorCode;
-use tansu_schema::Registry;
+use tansu_schema::{Registry, lake::House};
 use tansu_storage::{BrokerRegistrationRequest, Storage, StorageContainer};
 use tokio::{
     net::TcpListener,
     signal::unix::{SignalKind, signal},
-    sync::broadcast::{self, Receiver},
     task::JoinSet,
     time::{self, sleep},
 };
+use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, Level, debug, error, span};
 use url::Url;
 use uuid::Uuid;
@@ -54,6 +54,8 @@ pub struct Broker<G, S> {
 
     #[allow(dead_code)]
     otlp_endpoint_url: Option<Url>,
+
+    cancellation: CancellationToken,
 }
 
 impl<G, S> Broker<G, S>
@@ -80,6 +82,8 @@ where
             storage,
             groups,
             otlp_endpoint_url: None,
+
+            cancellation: CancellationToken::new(),
         }
     }
 
@@ -90,23 +94,19 @@ where
     pub async fn main(mut self) -> Result<ErrorCode> {
         let mut set = JoinSet::new();
 
-        let (sender, receiver) = broadcast::channel(16);
-        debug!(?sender, ?receiver);
-
         let mut interrupt_signal = signal(SignalKind::interrupt()).unwrap();
         debug!(?interrupt_signal);
 
         let mut terminate_signal = signal(SignalKind::terminate()).unwrap();
         debug!(?terminate_signal);
 
+        let token = self.cancellation.clone();
+
         _ = set.spawn(async move {
-            self.serve(receiver)
-                .await
-                .inspect_err(|err| error!(?err))
-                .unwrap();
+            self.serve().await.inspect_err(|err| error!(?err)).unwrap();
         });
 
-        let cancellation = tokio::select! {
+        let kind = tokio::select! {
             v = set.join_next() => {
                 debug!(?v);
                 None
@@ -123,8 +123,8 @@ where
             }
         };
 
-        if let Some(cancellation) = cancellation {
-            _ = sender.send(cancellation).inspect_err(|err| debug!(?err))?;
+        if let Some(kind) = kind {
+            token.cancel();
 
             let cleanup = async {
                 while !set.is_empty() {
@@ -134,7 +134,7 @@ where
                 }
             };
 
-            let patience = sleep(Duration::from(cancellation));
+            let patience = sleep(Duration::from(kind));
 
             tokio::select! {
                 v = cleanup => {
@@ -155,9 +155,9 @@ where
         Ok(ErrorCode::None)
     }
 
-    pub async fn serve(&mut self, interrupts: Receiver<CancelKind>) -> Result<()> {
+    pub async fn serve(&mut self) -> Result<()> {
         self.register().await?;
-        self.listen(interrupts).await
+        self.listen().await
     }
 
     pub async fn register(&mut self) -> Result<()> {
@@ -172,8 +172,8 @@ where
             .map_err(Into::into)
     }
 
-    pub async fn listen(&self, mut interrupts: Receiver<CancelKind>) -> Result<()> {
-        debug!(listener = %self.listener, advertised_listener = %self.advertised_listener);
+    pub async fn listen(&self) -> Result<()> {
+        debug!(%self.listener, %self.advertised_listener);
 
         let listener = TcpListener::bind(self.listener.host().map_or_else(
             || {
@@ -184,6 +184,7 @@ where
             },
             |host| {
                 let port = self.listener.port().unwrap_or(9092);
+                debug!(?host, port);
 
                 match host {
                     url::Host::Domain(domain) => SocketAddr::from_str(&format!("{domain}:{port}"))
@@ -194,6 +195,7 @@ where
             },
         ))
         .await
+        .inspect(|listener| debug!(listener = ?listener.local_addr().ok()))
         .inspect_err(|err| error!(?err, %self.advertised_listener))?;
 
         let mut interval = time::interval(Duration::from_millis(600_000));
@@ -255,7 +257,7 @@ where
                     debug!(?v);
                 }
 
-                Ok(message) = interrupts.recv() => {
+                message = self.cancellation.cancelled() => {
                     debug!(?message);
                     break;
                 }
@@ -282,9 +284,9 @@ pub struct Builder<N, C, I, A, S, L> {
     listener: L,
     otlp_endpoint_url: Option<Url>,
     schema_registry: Option<Registry>,
+    lake_house: Option<House>,
 
-    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
-    lake_house: Option<tansu_schema::lake::House>,
+    cancellation: CancellationToken,
 }
 
 type PhantomBuilder = Builder<
@@ -307,9 +309,9 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             listener: self.listener,
             otlp_endpoint_url: self.otlp_endpoint_url,
             schema_registry: self.schema_registry,
-
-            #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
             lake_house: self.lake_house,
+
+            cancellation: self.cancellation,
         }
     }
 
@@ -323,9 +325,9 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             listener: self.listener,
             otlp_endpoint_url: self.otlp_endpoint_url,
             schema_registry: self.schema_registry,
-
-            #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
             lake_house: self.lake_house,
+
+            cancellation: self.cancellation,
         }
     }
 
@@ -339,9 +341,9 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             listener: self.listener,
             otlp_endpoint_url: self.otlp_endpoint_url,
             schema_registry: self.schema_registry,
-
-            #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
             lake_house: self.lake_house,
+
+            cancellation: self.cancellation,
         }
     }
 
@@ -358,9 +360,9 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             listener: self.listener,
             otlp_endpoint_url: self.otlp_endpoint_url,
             schema_registry: self.schema_registry,
-
-            #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
             lake_house: self.lake_house,
+
+            cancellation: self.cancellation,
         }
     }
 
@@ -376,9 +378,9 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             listener: self.listener,
             otlp_endpoint_url: self.otlp_endpoint_url,
             schema_registry: self.schema_registry,
-
-            #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
             lake_house: self.lake_house,
+
+            cancellation: self.cancellation,
         }
     }
 
@@ -394,63 +396,31 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             listener,
             otlp_endpoint_url: self.otlp_endpoint_url,
             schema_registry: self.schema_registry,
-
-            #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
             lake_house: self.lake_house,
+
+            cancellation: self.cancellation,
         }
     }
 
-    pub fn schema_registry(self, schema_registry: Option<Registry>) -> Builder<N, C, I, A, S, L> {
-        Builder {
-            node_id: self.node_id,
-            cluster_id: self.cluster_id,
-            incarnation_id: self.incarnation_id,
-            advertised_listener: self.advertised_listener,
-            storage: self.storage,
-            listener: self.listener,
-            otlp_endpoint_url: self.otlp_endpoint_url,
+    pub fn schema_registry(self, schema_registry: Option<Registry>) -> Self {
+        Self {
             schema_registry,
-
-            #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
-            lake_house: self.lake_house,
+            ..self
         }
     }
 
-    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
-    pub fn lake_house(
-        self,
-        lake_house: Option<tansu_schema::lake::House>,
-    ) -> Builder<N, C, I, A, S, L> {
+    pub fn lake_house(self, lake_house: Option<House>) -> Self {
         _ = lake_house
             .as_ref()
             .inspect(|lake_house| debug!(?lake_house));
 
-        Builder {
-            node_id: self.node_id,
-            cluster_id: self.cluster_id,
-            incarnation_id: self.incarnation_id,
-            advertised_listener: self.advertised_listener,
-            storage: self.storage,
-            listener: self.listener,
-            otlp_endpoint_url: self.otlp_endpoint_url,
-            schema_registry: self.schema_registry,
-            lake_house,
-        }
+        Self { lake_house, ..self }
     }
 
-    pub fn otlp_endpoint_url(self, otlp_endpoint_url: Option<Url>) -> Builder<N, C, I, A, S, L> {
-        Builder {
-            node_id: self.node_id,
-            cluster_id: self.cluster_id,
-            incarnation_id: self.incarnation_id,
-            advertised_listener: self.advertised_listener,
-            storage: self.storage,
-            listener: self.listener,
+    pub fn otlp_endpoint_url(self, otlp_endpoint_url: Option<Url>) -> Self {
+        Self {
             otlp_endpoint_url,
-            schema_registry: self.schema_registry,
-
-            #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
-            lake_house: self.lake_house,
+            ..self
         }
     }
 }
@@ -465,7 +435,6 @@ impl Builder<i32, String, Uuid, Url, Url, Url> {
             otel::metric_exporter(otlp_endpoint_url)?;
         }
 
-        #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
         let storage = StorageContainer::builder()
             .cluster_id(self.cluster_id.clone())
             .node_id(self.node_id)
@@ -473,16 +442,7 @@ impl Builder<i32, String, Uuid, Url, Url, Url> {
             .schema_registry(self.schema_registry.clone())
             .lake_house(self.lake_house.clone())
             .storage(self.storage.clone())
-            .build()
-            .await?;
-
-        #[cfg(not(any(feature = "parquet", feature = "iceberg", feature = "delta")))]
-        let storage = StorageContainer::builder()
-            .cluster_id(self.cluster_id.clone())
-            .node_id(self.node_id)
-            .advertised_listener(self.advertised_listener.clone())
-            .schema_registry(self.schema_registry.clone())
-            .storage(self.storage.clone())
+            .cancellation(self.cancellation.clone())
             .build()
             .await?;
 
@@ -497,6 +457,7 @@ impl Builder<i32, String, Uuid, Url, Url, Url> {
             storage,
             groups,
             otlp_endpoint_url: self.otlp_endpoint_url,
+            cancellation: self.cancellation,
         })
     }
 }

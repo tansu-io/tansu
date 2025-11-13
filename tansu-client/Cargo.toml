@@ -1,16 +1,17 @@
 [package]
 name = "tansu-client"
 description = "A Service/Layer based Kafka client"
-edition.workspace = true
-version.workspace = true
-license.workspace = true
-homepage.workspace = true
-repository.workspace = true
-keywords.workspace = true
 authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
 include.workspace = true
+keywords.workspace = true
+license.workspace = true
+repository.workspace = true
+version.workspace = true
 
 [dependencies]
+backoff.workspace = true
 bytes.workspace = true
 deadpool.workspace = true
 opentelemetry-semantic-conventions.workspace = true
@@ -27,3 +28,8 @@ url.workspace = true
 
 [lints]
 workspace = true
+
+
+[dev-dependencies]
+clap.workspace = true
+dotenv.workspace = true

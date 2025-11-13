@@ -14,18 +14,18 @@
 -- limitations under the License.
 
 select
-id as offset, timestamp
-from
-record
-join (
-select
-coalesce(min(record.id), (select last_value from record_id_seq)) as offset
-from record, topic, cluster
+r.offset_id, r.timestamp
+
+from cluster c
+join topic t on t.cluster = c.id
+join topition tp on tp.topic = t.id
+join record r on r.topition = tp.id
+
 where
-topic.cluster = cluster.id
-and cluster.name = $1
-and topic.name = $2
-and record.partition = $3
-and record.timestamp >= $4
-and record.topic = topic.id) as minimum
-on record.id = minimum.offset;
+c.name = $1
+and t.name = $2
+and tp.partition = $3
+and r.timestamp >= $4
+
+order by r.offset_id asc
+limit 1;

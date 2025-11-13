@@ -14,12 +14,15 @@
 
 use std::{
     collections::{HashMap, VecDeque},
+    marker::PhantomData,
     num::NonZeroU32,
     sync::{Arc, LazyLock, Mutex},
     time::{Duration, SystemTime},
 };
 
-use crate::{Error, METER, Result, lake::LakeHouseType, sql::typeof_sql_expr};
+use crate::{
+    AsArrow as _, Error, METER, Registry, Result, lake::LakeHouseType, sql::typeof_sql_expr,
+};
 use arrow::{
     array::RecordBatch,
     datatypes::{Field, Schema as ArrowSchema},
@@ -41,23 +44,34 @@ use opentelemetry::{
     metrics::{Counter, Histogram},
 };
 use parquet::file::properties::WriterProperties;
-use tansu_sans_io::describe_configs_response::DescribeConfigsResult;
-use tracing::{debug, warn};
+use tansu_sans_io::{describe_configs_response::DescribeConfigsResult, record::inflated::Batch};
+use tracing::{debug, instrument, warn};
 use url::Url;
 
 use super::{House, LakeHouse};
 
 #[derive(Clone, Debug, Default)]
-pub struct Builder<L> {
+pub struct Builder<L = PhantomData<Url>, R = PhantomData<Registry>> {
     location: L,
+    schema_registry: R,
     database: Option<String>,
     records_per_second: Option<u32>,
 }
 
-impl<L> Builder<L> {
-    pub fn location(self, location: Url) -> Builder<Url> {
+impl<L, R> Builder<L, R> {
+    pub fn location(self, location: Url) -> Builder<Url, R> {
         Builder {
             location,
+            schema_registry: self.schema_registry,
+            database: self.database,
+            records_per_second: self.records_per_second,
+        }
+    }
+
+    pub fn schema_registry(self, schema_registry: Registry) -> Builder<L, Registry> {
+        Builder {
+            location: self.location,
+            schema_registry,
             database: self.database,
             records_per_second: self.records_per_second,
         }
@@ -75,7 +89,7 @@ impl<L> Builder<L> {
     }
 }
 
-impl Builder<Url> {
+impl Builder<Url, Registry> {
     pub fn build(self) -> Result<House> {
         Delta::try_from(self).map(House::Delta)
     }
@@ -165,6 +179,7 @@ static OPTIMIZE_TOTAL_FILES_SKIPPED: LazyLock<Counter<u64>> = LazyLock::new(|| {
 #[derive(Clone, Debug)]
 pub struct Delta {
     location: Url,
+    schema_registry: Registry,
     tables: Arc<Mutex<HashMap<String, Table>>>,
     database: String,
     rate_limiter: Option<Arc<DefaultDirectRateLimiter<NoOpMiddleware<QuantaInstant>>>>,
@@ -249,6 +264,23 @@ impl Config {
             .iter()
             .map(|field| StructField::try_from(field.as_ref()).map_err(Into::into))
             .collect::<Result<Vec<_>>>()
+    }
+
+    fn is_normalized(&self) -> bool {
+        self.0
+            .iter()
+            .find_map(|(name, value)| {
+                (name == "tansu.lake.normalize").then(|| value.parse().ok().unwrap_or_default())
+            })
+            .unwrap_or(false)
+    }
+
+    fn normalize_separator(&self) -> &str {
+        self.0
+            .iter()
+            .find(|(name, _)| name == "tansu.lake.normalize.separator")
+            .map(|(_, value)| value.as_str())
+            .unwrap_or(".")
     }
 }
 
@@ -564,17 +596,30 @@ impl Delta {
 
 #[async_trait]
 impl LakeHouse for Delta {
+    #[instrument(skip(self, inflated, config), ret)]
     async fn store(
         &self,
         topic: &str,
         partition: i32,
         offset: i64,
-        record_batch: RecordBatch,
+        inflated: &Batch,
         config: DescribeConfigsResult,
     ) -> Result<()> {
-        debug!(%topic, partition, offset, rows = record_batch.num_rows(), columns = record_batch.num_columns(), ?config);
-
         let config = Config::from(config);
+        debug!(?config);
+
+        let record_batch = self
+            .schema_registry
+            .as_arrow(topic, partition, inflated, LakeHouseType::Delta)
+            .await?;
+
+        let record_batch = if config.is_normalized() {
+            record_batch.normalize(config.normalize_separator(), None)?
+        } else {
+            record_batch
+        };
+
+        debug!(%topic, partition, offset, rows = record_batch.num_rows(), columns = record_batch.num_columns(), ?config);
 
         let table =
             if let Some(table) = self.tables.lock().map(|guard| guard.get(topic).cloned())? {
@@ -601,6 +646,7 @@ impl LakeHouse for Delta {
         Ok(())
     }
 
+    #[instrument(skip(self), ret)]
     async fn maintain(&self) -> Result<()> {
         debug!(?self);
 
@@ -621,19 +667,21 @@ impl LakeHouse for Delta {
         Ok(())
     }
 
+    #[instrument(skip(self), ret)]
     async fn lake_type(&self) -> Result<LakeHouseType> {
         Ok(LakeHouseType::Delta)
     }
 }
 
-impl TryFrom<Builder<Url>> for Delta {
+impl TryFrom<Builder<Url, Registry>> for Delta {
     type Error = Error;
 
-    fn try_from(value: Builder<Url>) -> Result<Self, Self::Error> {
+    fn try_from(value: Builder<Url, Registry>) -> Result<Self, Self::Error> {
         aws::register_handlers(None);
 
         Ok(Self {
             location: value.location,
+            schema_registry: value.schema_registry,
             database: value.database.unwrap_or(String::from("tansu")),
             tables: Arc::new(Mutex::new(HashMap::new())),
             rate_limiter: value
@@ -649,13 +697,13 @@ impl TryFrom<Builder<Url>> for Delta {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs::File, marker::PhantomData, sync::Arc, thread};
-
     use arrow::util::pretty::pretty_format_batches;
     use bytes::Bytes;
     use datafusion::execution::context::SessionContext;
     use deltalake::DeltaTableBuilder;
+    use object_store::{ObjectStore as _, PutPayload, memory::InMemory, path::Path};
     use serde_json::json;
+    use std::{fs::File, marker::PhantomData, str::FromStr as _, sync::Arc, thread};
     use tansu_sans_io::{
         ConfigResource, ErrorCode,
         describe_configs_response::DescribeConfigsResourceResult,
@@ -665,7 +713,7 @@ mod tests {
     use tracing::subscriber::DefaultGuard;
     use tracing_subscriber::EnvFilter;
 
-    use crate::{AsArrow, Error};
+    use crate::Error;
 
     use super::*;
 
@@ -733,6 +781,7 @@ mod tests {
     }
 
     mod proto {
+
         use super::*;
         use crate::{
             Generator,
@@ -742,6 +791,8 @@ mod tests {
         #[tokio::test]
         async fn message_descriptor_singular_to_field() -> Result<()> {
             let _guard = init_tracing()?;
+
+            let topic = "abc";
 
             let proto = Bytes::from_static(
                 br#"
@@ -769,6 +820,14 @@ mod tests {
                 }
                 "#,
             );
+
+            let object_store = InMemory::new();
+
+            let location = Path::from(format!("{topic}.proto"));
+            _ = object_store
+                .put(&location, PutPayload::from(proto.clone()))
+                .await?;
+            let schema_registry = Registry::new(object_store);
 
             let kv = [(
                 json!({"id": 32123}),
@@ -805,11 +864,10 @@ mod tests {
                     );
                 }
 
-                batch
-                    .build()
-                    .map_err(Into::into)
-                    .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))
+                batch.build()
             }?;
+
+            schema_registry.validate(topic, &record_batch).await?;
 
             let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
             let location = format!("file://{}", temp_dir.path().to_str().unwrap());
@@ -819,13 +877,12 @@ mod tests {
                 Url::parse(location.as_ref())
                     .map_err(Into::into)
                     .and_then(|location| {
-                        Builder::<PhantomData<Url>>::default()
+                        Builder::<PhantomData<Url>, PhantomData<Registry>>::default()
                             .location(location)
                             .database(Some(database.into()))
+                            .schema_registry(schema_registry)
                             .build()
                     })?;
-
-            let topic = "abc";
 
             let config = DescribeConfigsResult::default()
                 .error_code(ErrorCode::None.into())
@@ -848,7 +905,7 @@ mod tests {
             let offset = 543212345;
 
             lake_house
-                .store(topic, partition, offset, record_batch, config)
+                .store(topic, partition, offset, &record_batch, config)
                 .await
                 .inspect(|result| debug!(?result))
                 .inspect_err(|err| debug!(?err))?;
@@ -887,6 +944,8 @@ mod tests {
         async fn taxi_plain() -> Result<()> {
             let _guard = init_tracing()?;
 
+            let topic = "taxi";
+
             let schema = Schema::try_from(Bytes::from_static(include_bytes!(
                 "../../../../tansu/etc/schema/taxi.proto"
             )))?;
@@ -907,25 +966,26 @@ mod tests {
             let record_batch = Batch::builder()
                 .record(Record::builder().value(value.into()))
                 .base_timestamp(119_731_017_000)
-                .build()
-                .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))?;
+                .build()?;
 
             let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
             let location = format!("file://{}", temp_dir.path().to_str().unwrap());
             let database = "pqr";
 
+            let schema_registry = Registry::from_str("file://../../../etc/schema")?;
+
+            schema_registry.validate(topic, &record_batch).await?;
+
             let lake_house =
                 Url::parse(location.as_ref())
                     .map_err(Into::into)
                     .and_then(|location| {
-                        Builder::<PhantomData<Url>>::default()
+                        Builder::<PhantomData<Url>, PhantomData<Registry>>::default()
                             .location(location)
                             .database(Some(database.into()))
+                            .schema_registry(schema_registry)
                             .build()
                     })?;
-
-            let topic = "taxi";
 
             let config = DescribeConfigsResult::default()
                 .error_code(ErrorCode::None.into())
@@ -937,7 +997,7 @@ mod tests {
             let offset = 543212345;
 
             lake_house
-                .store(topic, partition, offset, record_batch, config)
+                .store(topic, partition, offset, &record_batch, config)
                 .await
                 .inspect(|result| debug!(?result))
                 .inspect_err(|err| debug!(?err))?;
@@ -976,6 +1036,8 @@ mod tests {
         async fn taxi_normalized() -> Result<()> {
             let _guard = init_tracing()?;
 
+            let topic = "taxi";
+
             let schema = Schema::try_from(Bytes::from_static(include_bytes!(
                 "../../../../tansu/etc/schema/taxi.proto"
             )))?;
@@ -996,25 +1058,26 @@ mod tests {
             let record_batch = Batch::builder()
                 .record(Record::builder().value(value.into()))
                 .base_timestamp(119_731_017_000)
-                .build()
-                .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))?;
+                .build()?;
 
             let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
             let location = format!("file://{}", temp_dir.path().to_str().unwrap());
             let database = "pqr";
 
+            let schema_registry = Registry::from_str("file://../../../etc/schema")?;
+
+            schema_registry.validate(topic, &record_batch).await?;
+
             let lake_house =
                 Url::parse(location.as_ref())
                     .map_err(Into::into)
                     .and_then(|location| {
-                        Builder::<PhantomData<Url>>::default()
+                        Builder::<PhantomData<Url>, PhantomData<Registry>>::default()
                             .location(location)
                             .database(Some(database.into()))
+                            .schema_registry(schema_registry)
                             .build()
                     })?;
-
-            let topic = "taxi";
 
             let config = DescribeConfigsResult::default()
                 .error_code(ErrorCode::None.into())
@@ -1037,7 +1100,7 @@ mod tests {
             let offset = 543212345;
 
             lake_house
-                .store(topic, partition, offset, record_batch, config)
+                .store(topic, partition, offset, &record_batch, config)
                 .await
                 .inspect(|result| debug!(?result))
                 .inspect_err(|err| debug!(?err))?;
@@ -1076,6 +1139,8 @@ mod tests {
         async fn taxi_normalized_with_separator() -> Result<()> {
             let _guard = init_tracing()?;
 
+            let topic = "taxi";
+
             let schema = Schema::try_from(Bytes::from_static(include_bytes!(
                 "../../../../tansu/etc/schema/taxi.proto"
             )))?;
@@ -1096,25 +1161,26 @@ mod tests {
             let record_batch = Batch::builder()
                 .record(Record::builder().value(value.into()))
                 .base_timestamp(119_731_017_000)
-                .build()
-                .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))?;
+                .build()?;
 
             let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
             let location = format!("file://{}", temp_dir.path().to_str().unwrap());
             let database = "pqr";
 
+            let schema_registry = Registry::from_str("file://../../../etc/schema")?;
+
+            schema_registry.validate(topic, &record_batch).await?;
+
             let lake_house =
                 Url::parse(location.as_ref())
                     .map_err(Into::into)
                     .and_then(|location| {
-                        Builder::<PhantomData<Url>>::default()
+                        Builder::<PhantomData<Url>, PhantomData<Registry>>::default()
                             .location(location)
                             .database(Some(database.into()))
+                            .schema_registry(schema_registry)
                             .build()
                     })?;
-
-            let topic = "taxi";
 
             let config = DescribeConfigsResult::default()
                 .error_code(ErrorCode::None.into())
@@ -1147,7 +1213,7 @@ mod tests {
             let offset = 543212345;
 
             lake_house
-                .store(topic, partition, offset, record_batch, config)
+                .store(topic, partition, offset, &record_batch, config)
                 .await
                 .inspect(|result| debug!(?result))
                 .inspect_err(|err| debug!(?err))?;
@@ -1186,6 +1252,8 @@ mod tests {
         async fn taxi_normalized_partition_on_value_dot_vendor_id() -> Result<()> {
             let _guard = init_tracing()?;
 
+            let topic = "taxi";
+
             let schema = Schema::try_from(Bytes::from_static(include_bytes!(
                 "../../../../tansu/etc/schema/taxi.proto"
             )))?;
@@ -1206,25 +1274,26 @@ mod tests {
             let record_batch = Batch::builder()
                 .record(Record::builder().value(value.into()))
                 .base_timestamp(119_731_017_000)
-                .build()
-                .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))?;
+                .build()?;
 
             let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
             let location = format!("file://{}", temp_dir.path().to_str().unwrap());
             let database = "pqr";
 
+            let schema_registry = Registry::from_str("file://../../../etc/schema")?;
+
+            schema_registry.validate(topic, &record_batch).await?;
+
             let lake_house =
                 Url::parse(location.as_ref())
                     .map_err(Into::into)
                     .and_then(|location| {
-                        Builder::<PhantomData<Url>>::default()
+                        Builder::<PhantomData<Url>, PhantomData<Registry>>::default()
                             .location(location)
                             .database(Some(database.into()))
+                            .schema_registry(schema_registry)
                             .build()
                     })?;
-
-            let topic = "taxi";
 
             let config = DescribeConfigsResult::default()
                 .error_code(ErrorCode::None.into())
@@ -1257,7 +1326,7 @@ mod tests {
             let offset = 543212345;
 
             lake_house
-                .store(topic, partition, offset, record_batch, config)
+                .store(topic, partition, offset, &record_batch, config)
                 .await
                 .inspect(|result| debug!(?result))
                 .inspect_err(|err| debug!(?err))?;
@@ -1296,6 +1365,8 @@ mod tests {
         async fn taxi_date_generated_field() -> Result<()> {
             let _guard = init_tracing()?;
 
+            let topic = "taxi";
+
             let schema = Schema::try_from(Bytes::from_static(include_bytes!(
                 "../../../../tansu/etc/schema/taxi.proto"
             )))?;
@@ -1316,25 +1387,26 @@ mod tests {
             let record_batch = Batch::builder()
                 .record(Record::builder().value(value.into()))
                 .base_timestamp(119_731_017_000)
-                .build()
-                .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))?;
+                .build()?;
 
             let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
             let location = format!("file://{}", temp_dir.path().to_str().unwrap());
             let database = "pqr";
 
+            let schema_registry = Registry::from_str("file://../../../etc/schema")?;
+
+            schema_registry.validate(topic, &record_batch).await?;
+
             let lake_house =
                 Url::parse(location.as_ref())
                     .map_err(Into::into)
                     .and_then(|location| {
-                        Builder::<PhantomData<Url>>::default()
+                        Builder::<PhantomData<Url>, PhantomData<Registry>>::default()
                             .location(location)
                             .database(Some(database.into()))
+                            .schema_registry(schema_registry)
                             .build()
                     })?;
-
-            let topic = "taxi";
 
             let config = DescribeConfigsResult::default()
                 .error_code(ErrorCode::None.into())
@@ -1357,7 +1429,7 @@ mod tests {
             let offset = 543212345;
 
             lake_house
-                .store(topic, partition, offset, record_batch, config)
+                .store(topic, partition, offset, &record_batch, config)
                 .await
                 .inspect(|result| debug!(?result))
                 .inspect_err(|err| debug!(?err))?;
@@ -1396,6 +1468,8 @@ mod tests {
         async fn taxi_partition_on_date_generated_field() -> Result<()> {
             let _guard = init_tracing()?;
 
+            let topic = "taxi";
+
             let schema = Schema::try_from(Bytes::from_static(include_bytes!(
                 "../../../../tansu/etc/schema/taxi.proto"
             )))?;
@@ -1416,25 +1490,26 @@ mod tests {
             let record_batch = Batch::builder()
                 .record(Record::builder().value(value.into()))
                 .base_timestamp(119_731_017_000)
-                .build()
-                .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))?;
+                .build()?;
 
             let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
             let location = format!("file://{}", temp_dir.path().to_str().unwrap());
             let database = "pqr";
 
+            let schema_registry = Registry::from_str("file://../../../etc/schema")?;
+
+            schema_registry.validate(topic, &record_batch).await?;
+
             let lake_house =
                 Url::parse(location.as_ref())
                     .map_err(Into::into)
                     .and_then(|location| {
-                        Builder::<PhantomData<Url>>::default()
+                        Builder::<PhantomData<Url>, PhantomData<Registry>>::default()
                             .location(location)
                             .database(Some(database.into()))
+                            .schema_registry(schema_registry)
                             .build()
                     })?;
-
-            let topic = "taxi";
 
             let config = DescribeConfigsResult::default()
                 .error_code(ErrorCode::None.into())
@@ -1467,7 +1542,7 @@ mod tests {
             let offset = 543212345;
 
             lake_house
-                .store(topic, partition, offset, record_batch, config)
+                .store(topic, partition, offset, &record_batch, config)
                 .await
                 .inspect(|result| debug!(?result))
                 .inspect_err(|err| debug!(?err))?;
@@ -1506,6 +1581,8 @@ mod tests {
         async fn taxi_partition_on_value_vendor_id_is_an_error() -> Result<()> {
             let _guard = init_tracing()?;
 
+            let topic = "taxi";
+
             let schema = Schema::try_from(Bytes::from_static(include_bytes!(
                 "../../../../tansu/etc/schema/taxi.proto"
             )))?;
@@ -1526,25 +1603,26 @@ mod tests {
             let record_batch = Batch::builder()
                 .record(Record::builder().value(value.into()))
                 .base_timestamp(119_731_017_000)
-                .build()
-                .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))?;
+                .build()?;
 
             let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
             let location = format!("file://{}", temp_dir.path().to_str().unwrap());
             let database = "pqr";
 
+            let schema_registry = Registry::from_str("file://../../../etc/schema")?;
+
+            schema_registry.validate(topic, &record_batch).await?;
+
             let lake_house =
                 Url::parse(location.as_ref())
                     .map_err(Into::into)
                     .and_then(|location| {
-                        Builder::<PhantomData<Url>>::default()
+                        Builder::<PhantomData<Url>, PhantomData<Registry>>::default()
                             .location(location)
                             .database(Some(database.into()))
+                            .schema_registry(schema_registry)
                             .build()
                     })?;
-
-            let topic = "taxi";
 
             let config = DescribeConfigsResult::default()
                 .error_code(ErrorCode::None.into())
@@ -1566,18 +1644,15 @@ mod tests {
 
             let offset = 543212345;
 
-            let not_found_in_schema =
-                String::from("Partition column value.vendor_id not found in schema");
+            let not_found_in_schema = "Partition column value.vendor_id not found in schema";
 
             assert!(matches!(
                 lake_house
-                    .store(topic, partition, offset, record_batch, config)
+                    .store(topic, partition, offset, &record_batch, config)
                     .await
                     .inspect(|result| debug!(?result))
                     .inspect_err(|err| debug!(?err)),
-                Err(Error::DeltaTable(
-                    deltalake::errors::DeltaTableError::Generic(error)
-                )) if error == not_found_in_schema
+                Err(Error::DeltaTable(ref boxed)) if matches!(&**boxed, deltalake::errors::DeltaTableError::Generic(error) if error == not_found_in_schema)
             ));
 
             Ok(())
@@ -1586,6 +1661,8 @@ mod tests {
         #[tokio::test]
         async fn taxi_partition_on_vendor_id_generated_field() -> Result<()> {
             let _guard = init_tracing()?;
+
+            let topic = "taxi";
 
             let schema = Schema::try_from(Bytes::from_static(include_bytes!(
                 "../../../../tansu/etc/schema/taxi.proto"
@@ -1607,25 +1684,26 @@ mod tests {
             let record_batch = Batch::builder()
                 .record(Record::builder().value(value.into()))
                 .base_timestamp(119_731_017_000)
-                .build()
-                .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))?;
+                .build()?;
 
             let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
             let location = format!("file://{}", temp_dir.path().to_str().unwrap());
             let database = "pqr";
 
+            let schema_registry = Registry::from_str("file://../../../etc/schema")?;
+
+            schema_registry.validate(topic, &record_batch).await?;
+
             let lake_house =
                 Url::parse(location.as_ref())
                     .map_err(Into::into)
                     .and_then(|location| {
-                        Builder::<PhantomData<Url>>::default()
+                        Builder::<PhantomData<Url>, PhantomData<Registry>>::default()
                             .location(location)
                             .database(Some(database.into()))
+                            .schema_registry(schema_registry)
                             .build()
                     })?;
-
-            let topic = "taxi";
 
             let config = DescribeConfigsResult::default()
                 .error_message(None)
@@ -1687,7 +1765,7 @@ mod tests {
             let offset = 543212345;
 
             lake_house
-                .store(topic, partition, offset, record_batch, config)
+                .store(topic, partition, offset, &record_batch, config)
                 .await
                 .inspect(|result| debug!(?result))
                 .inspect_err(|err| debug!(?err))?;
@@ -1726,9 +1804,18 @@ mod tests {
         async fn repeated_string() -> Result<()> {
             let _guard = init_tracing()?;
 
-            let schema = Schema::try_from(Bytes::from_static(include_bytes!(
-                "../../tests/repeated-string.proto"
-            )))?;
+            let topic = "t";
+
+            let proto = Bytes::from_static(include_bytes!("../../tests/repeated-string.proto"));
+            let object_store = InMemory::new();
+
+            let location = Path::from(format!("{topic}.proto"));
+            _ = object_store
+                .put(&location, PutPayload::from(proto.clone()))
+                .await?;
+            let schema_registry = Registry::new(object_store);
+
+            let schema = Schema::try_from(proto)?;
 
             let value = schema.encode_from_value(
                 MessageKind::Value,
@@ -1743,25 +1830,24 @@ mod tests {
             let record_batch = Batch::builder()
                 .record(Record::builder().value(value.into()))
                 .base_timestamp(119_731_017_000)
-                .build()
-                .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))?;
+                .build()?;
 
             let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
             let location = format!("file://{}", temp_dir.path().to_str().unwrap());
             let database = "pqr";
 
+            schema_registry.validate(topic, &record_batch).await?;
+
             let lake_house =
                 Url::parse(location.as_ref())
                     .map_err(Into::into)
                     .and_then(|location| {
-                        Builder::<PhantomData<Url>>::default()
+                        Builder::<PhantomData<Url>, PhantomData<Registry>>::default()
                             .location(location)
                             .database(Some(database.into()))
+                            .schema_registry(schema_registry)
                             .build()
                     })?;
-
-            let topic = "t";
 
             let config = DescribeConfigsResult::default()
                 .error_code(ErrorCode::None.into())
@@ -1773,7 +1859,7 @@ mod tests {
             let offset = 543212345;
 
             lake_house
-                .store(topic, partition, offset, record_batch, config)
+                .store(topic, partition, offset, &record_batch, config)
                 .await
                 .inspect(|result| debug!(?result))
                 .inspect_err(|err| debug!(?err))?;
@@ -1812,20 +1898,28 @@ mod tests {
         async fn customer_schema_migration() -> Result<()> {
             let _guard = init_tracing()?;
 
+            let topic = "t";
             let partition = 32123;
 
-            let record_batch_001 = {
-                let schema = Schema::try_from(Bytes::from_static(include_bytes!(
-                    "../../tests/migrate-001.proto"
-                )))?;
+            let (schema_registry, record_batch_001) = {
+                let proto = Bytes::from_static(include_bytes!("../../tests/migrate-001.proto"));
+                let schema = Schema::try_from(proto.clone())?;
 
-                Batch::builder()
-                    .record(schema.generate()?)
-                    .base_timestamp(119_731_017_000)
-                    .build()
-                    .map_err(Into::into)
-                    .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))?
+                let object_store = InMemory::new();
+
+                let location = Path::from(format!("{topic}.proto"));
+                _ = object_store.put(&location, PutPayload::from(proto)).await?;
+
+                (
+                    Registry::new(object_store),
+                    Batch::builder()
+                        .record(schema.generate()?)
+                        .base_timestamp(119_731_017_000)
+                        .build()?,
+                )
             };
+
+            schema_registry.validate(topic, &record_batch_001).await?;
 
             let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
             let location = format!("file://{}", temp_dir.path().to_str().unwrap());
@@ -1835,13 +1929,12 @@ mod tests {
                 Url::parse(location.as_ref())
                     .map_err(Into::into)
                     .and_then(|location| {
-                        Builder::<PhantomData<Url>>::default()
+                        Builder::<PhantomData<Url>, PhantomData<Registry>>::default()
                             .location(location)
                             .database(Some(database.into()))
+                            .schema_registry(schema_registry)
                             .build()
                     })?;
-
-            let topic = "t";
 
             let config = DescribeConfigsResult::default()
                 .error_code(ErrorCode::None.into())
@@ -1858,7 +1951,7 @@ mod tests {
             let offset = 543212345;
 
             lake_house
-                .store(topic, partition, offset, record_batch_001, config.clone())
+                .store(topic, partition, offset, &record_batch_001, config.clone())
                 .await
                 .inspect(|result| debug!(?result))
                 .inspect_err(|err| debug!(?err))?;
@@ -1889,23 +1982,41 @@ mod tests {
 
             assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
 
-            let record_batch_002 = {
-                let schema = Schema::try_from(Bytes::from_static(include_bytes!(
-                    "../../tests/migrate-002.proto"
-                )))?;
+            let (schema_registry, record_batch_002) = {
+                let proto = Bytes::from_static(include_bytes!("../../tests/migrate-002.proto"));
+                let schema = Schema::try_from(proto.clone())?;
 
-                Batch::builder()
-                    .record(schema.generate()?)
-                    .base_timestamp(119_731_017_000)
-                    .build()
-                    .map_err(Into::into)
-                    .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))?
+                let object_store = InMemory::new();
+
+                let location = Path::from(format!("{topic}.proto"));
+                _ = object_store.put(&location, PutPayload::from(proto)).await?;
+
+                (
+                    Registry::new(object_store),
+                    Batch::builder()
+                        .record(schema.generate()?)
+                        .base_timestamp(119_731_017_000)
+                        .build()?,
+                )
             };
+
+            schema_registry.validate(topic, &record_batch_002).await?;
+
+            let lake_house =
+                Url::parse(location.as_ref())
+                    .map_err(Into::into)
+                    .and_then(|location| {
+                        Builder::<PhantomData<Url>, PhantomData<Registry>>::default()
+                            .location(location)
+                            .database(Some(database.into()))
+                            .schema_registry(schema_registry)
+                            .build()
+                    })?;
 
             let offset = 654323456;
 
             lake_house
-                .store(topic, partition, offset, record_batch_002, config.clone())
+                .store(topic, partition, offset, &record_batch_002, config.clone())
                 .await
                 .inspect(|result| debug!(?result))
                 .inspect_err(|err| debug!(?err))?;
@@ -1937,23 +2048,41 @@ mod tests {
 
             assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
 
-            let record_batch_003 = {
-                let schema = Schema::try_from(Bytes::from_static(include_bytes!(
-                    "../../tests/migrate-003.proto"
-                )))?;
+            let (schema_registry, record_batch_003) = {
+                let proto = Bytes::from_static(include_bytes!("../../tests/migrate-003.proto"));
+                let schema = Schema::try_from(proto.clone())?;
 
-                Batch::builder()
-                    .record(schema.generate()?)
-                    .base_timestamp(119_731_017_000)
-                    .build()
-                    .map_err(Into::into)
-                    .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))?
+                let object_store = InMemory::new();
+
+                let location = Path::from(format!("{topic}.proto"));
+                _ = object_store.put(&location, PutPayload::from(proto)).await?;
+
+                (
+                    Registry::new(object_store),
+                    Batch::builder()
+                        .record(schema.generate()?)
+                        .base_timestamp(119_731_017_000)
+                        .build()?,
+                )
             };
+
+            schema_registry.validate(topic, &record_batch_003).await?;
+
+            let lake_house =
+                Url::parse(location.as_ref())
+                    .map_err(Into::into)
+                    .and_then(|location| {
+                        Builder::<PhantomData<Url>, PhantomData<Registry>>::default()
+                            .location(location)
+                            .database(Some(database.into()))
+                            .schema_registry(schema_registry)
+                            .build()
+                    })?;
 
             let offset = 765434567;
 
             lake_house
-                .store(topic, partition, offset, record_batch_003, config)
+                .store(topic, partition, offset, &record_batch_003, config)
                 .await
                 .inspect(|result| debug!(?result))
                 .inspect_err(|err| debug!(?err))?;
@@ -1998,7 +2127,7 @@ mod tests {
         async fn record_of_primitive_data_types() -> Result<()> {
             let _guard = init_tracing()?;
 
-            let schema = Schema::from(json!({
+            let definition = json!({
                 "type": "record",
                 "name": "Message",
                 "fields": [
@@ -2011,11 +2140,13 @@ mod tests {
                     {"name": "h", "type": "string"}
                     ]}
                 ]
-            }));
+            });
 
+            let topic = "abc";
             let partition = 32123;
 
-            let record_batch = {
+            let (schema_registry, record_batch) = {
+                let schema = Schema::from(definition.clone());
                 let mut batch = Batch::builder().base_timestamp(1_234_567_890 * 1_000);
 
                 let values = [r(
@@ -2037,11 +2168,25 @@ mod tests {
                         ))
                 }
 
-                batch
-                    .build()
-                    .map_err(Into::into)
-                    .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))
-            }?;
+                let object_store = InMemory::new();
+                {
+                    let location = Path::from(format!("{topic}.avsc"));
+                    _ = object_store
+                        .put(
+                            &location,
+                            serde_json::to_vec(&definition)
+                                .map(Bytes::from)
+                                .map(PutPayload::from)?,
+                        )
+                        .await?;
+                }
+
+                let registry = Registry::new(object_store);
+
+                (registry, batch.build()?)
+            };
+
+            schema_registry.validate(topic, &record_batch).await?;
 
             let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
             let location = format!("file://{}", temp_dir.path().to_str().unwrap());
@@ -2051,13 +2196,12 @@ mod tests {
                 Url::parse(location.as_ref())
                     .map_err(Into::into)
                     .and_then(|location| {
-                        Builder::<PhantomData<Url>>::default()
+                        Builder::<PhantomData<Url>, PhantomData<Registry>>::default()
                             .location(location)
                             .database(Some(database.into()))
+                            .schema_registry(schema_registry)
                             .build()
                     })?;
-
-            let topic = "abc";
 
             let config = DescribeConfigsResult::default()
                 .error_code(ErrorCode::None.into())
@@ -2080,7 +2224,7 @@ mod tests {
             let offset = 543212345;
 
             lake_house
-                .store(topic, partition, offset, record_batch, config)
+                .store(topic, partition, offset, &record_batch, config)
                 .await
                 .inspect(|result| debug!(?result))
                 .inspect_err(|err| debug!(?err))?;
@@ -2120,15 +2264,13 @@ mod tests {
         use serde_json::Value;
 
         use super::*;
-        use crate::json::Schema;
 
         #[tokio::test]
         async fn grade() -> Result<()> {
             let _guard = init_tracing()?;
 
-            let schema = Schema::try_from(Bytes::from_static(include_bytes!(
-                "../../../../tansu/etc/schema/grade.json"
-            )))?;
+            let definition =
+                Bytes::from_static(include_bytes!("../../../../tansu/etc/schema/grade.json"));
 
             let kv = if let Value::Array(values) = serde_json::from_slice::<Value>(include_bytes!(
                 "../../../../tansu/etc/data/grades.json"
@@ -2146,9 +2288,10 @@ mod tests {
                 vec![]
             };
 
+            let topic = "abc";
             let partition = 32123;
 
-            let record_batch = {
+            let (schema_registry, record_batch) = {
                 let mut batch = Batch::builder().base_timestamp(1_234_567_890 * 1_000);
 
                 for (ref key, ref value) in kv {
@@ -2161,11 +2304,25 @@ mod tests {
                     );
                 }
 
-                batch
-                    .build()
-                    .map_err(Into::into)
-                    .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))
-            }?;
+                let object_store = InMemory::new();
+                {
+                    let location = Path::from(format!("{topic}.json"));
+                    _ = object_store
+                        .put(
+                            &location,
+                            serde_json::to_vec(&definition)
+                                .map(Bytes::from)
+                                .map(PutPayload::from)?,
+                        )
+                        .await?;
+                }
+
+                let registry = Registry::new(object_store);
+
+                (registry, batch.build()?)
+            };
+
+            schema_registry.validate(topic, &record_batch).await?;
 
             let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
             let location = format!("file://{}", temp_dir.path().to_str().unwrap());
@@ -2175,13 +2332,12 @@ mod tests {
                 Url::parse(location.as_ref())
                     .map_err(Into::into)
                     .and_then(|location| {
-                        Builder::<PhantomData<Url>>::default()
+                        Builder::<PhantomData<Url>, PhantomData<Registry>>::default()
                             .location(location)
                             .database(Some(database.into()))
+                            .schema_registry(schema_registry)
                             .build()
                     })?;
-
-            let topic = "abc";
 
             let config = DescribeConfigsResult::default()
                 .error_code(ErrorCode::None.into())
@@ -2193,7 +2349,7 @@ mod tests {
             let offset = 543212345;
 
             lake_house
-                .store(topic, partition, offset, record_batch, config)
+                .store(topic, partition, offset, &record_batch, config)
                 .await
                 .inspect(|result| debug!(?result))
                 .inspect_err(|err| debug!(?err))?;
