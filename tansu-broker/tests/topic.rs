@@ -631,7 +631,6 @@ mod turso {
         .await
     }
 
-    #[ignore]
     #[tokio::test]
     async fn create_delete() -> Result<()> {
         let _guard = init_tracing()?;

@@ -484,7 +484,6 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
-    #[instrument(ret)]
     async fn create_topic(&self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {
         self.serve(
             Context::default(),

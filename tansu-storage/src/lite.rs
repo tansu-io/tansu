@@ -1293,7 +1293,6 @@ impl Storage for Engine {
         })
     }
 
-    #[instrument(ret)]
     async fn create_topic(&self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {
         let start = SystemTime::now();
         self.inner

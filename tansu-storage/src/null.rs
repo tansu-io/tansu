@@ -62,7 +62,6 @@ impl Storage for Engine {
         })
     }
 
-    #[instrument(ret)]
     async fn create_topic(&self, _topic: CreatableTopic, _validate_only: bool) -> Result<Uuid> {
         Err(Error::FeatureNotEnabled {
             feature: FEATURE.into(),
