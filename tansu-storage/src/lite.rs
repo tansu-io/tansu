@@ -221,7 +221,7 @@ impl managed::Manager for ConnectionManager {
     type Type = Connection;
     type Error = Error;
 
-    #[instrument(ret)]
+    #[instrument(skip_all, ret)]
     async fn create(&self) -> Result<Self::Type, Self::Error> {
         let start = SystemTime::now();
 
@@ -272,13 +272,13 @@ impl managed::Manager for ConnectionManager {
             .inspect(|_| CONNECT_DURATION.record(elapsed_millis(start), &[]))
     }
 
-    #[instrument(ret)]
+    #[instrument(skip_all, fields(recycle_count = metrics.recycle_count), ret)]
     async fn recycle(
         &self,
         obj: &mut Self::Type,
         metrics: &managed::Metrics,
     ) -> managed::RecycleResult<Self::Error> {
-        debug!(?obj, ?metrics);
+        let _ = obj;
         Ok(())
     }
 }
@@ -286,6 +286,7 @@ impl managed::Manager for ConnectionManager {
 pub(crate) type Pool = managed::Pool<ConnectionManager>;
 
 impl Delegate {
+    #[instrument(skip_all)]
     async fn connection(&self) -> Result<managed::Object<ConnectionManager>> {
         let start = SystemTime::now();
 
@@ -316,6 +317,7 @@ impl Delegate {
         attributes
     }
 
+    #[instrument(skip_all)]
     async fn commit(&self, tx: Transaction) -> Result<()> {
         let start = SystemTime::now();
 
@@ -334,6 +336,7 @@ impl Delegate {
             .map_err(Into::into)
     }
 
+    #[instrument(skip_all)]
     async fn transaction(&self) -> Result<Transaction> {
         let start = SystemTime::now();
 
@@ -356,6 +359,7 @@ impl Delegate {
             .map_err(Into::into)
     }
 
+    #[instrument(skip(self, connection), ret)]
     async fn query<P>(
         &self,
         connection: &Connection,
@@ -366,8 +370,6 @@ impl Delegate {
         P: IntoParams,
         P: Debug,
     {
-        debug!(?connection, sql, ?params);
-
         let start = SystemTime::now();
 
         connection
@@ -399,6 +401,7 @@ impl Delegate {
             })
     }
 
+    #[instrument(skip(self, connection), ret)]
     async fn prepare_execute<P>(
         &self,
         connection: &Connection,
@@ -409,7 +412,6 @@ impl Delegate {
         P: IntoParams,
         P: Debug,
     {
-        debug!(?connection, sql, ?params);
         let start = SystemTime::now();
 
         let statement = connection.prepare(sql).await.inspect_err(|err| {
@@ -448,6 +450,7 @@ impl Delegate {
             })
     }
 
+    #[instrument(skip(self, connection), ret)]
     async fn prepare_query_opt<P>(
         &self,
         connection: &Connection,
@@ -458,8 +461,6 @@ impl Delegate {
         P: IntoParams,
         P: Debug,
     {
-        debug!(?connection, sql, ?params);
-
         let start = SystemTime::now();
 
         let statement = connection.prepare(sql).await.inspect_err(|err| {
@@ -489,6 +490,7 @@ impl Delegate {
         Ok(row)
     }
 
+    #[instrument(skip(self, connection), ret)]
     async fn prepare_query_one<P>(
         &self,
         connection: &Connection,
@@ -499,8 +501,6 @@ impl Delegate {
         P: IntoParams,
         P: Debug,
     {
-        debug!(?connection, sql, ?params);
-
         let start = SystemTime::now();
 
         let statement = connection.prepare(sql).await.inspect_err(|err| {
@@ -1100,6 +1100,26 @@ impl Delegate {
 
         Ok(ErrorCode::None)
     }
+
+    #[instrument(skip(self), ret)]
+    async fn compact(&self) -> Result<u64> {
+        let start = SystemTime::now();
+
+        let tx = self.transaction().await?;
+
+        let compacted = tx.execute(&sql_lookup("policy_compact.sql")?, ()).await?;
+
+        tx.commit()
+            .await
+            .map_err(Into::into)
+            .and(Ok(compacted))
+            .inspect(|_| {
+                DELEGATE_REQUEST_DURATION.record(
+                    elapsed_millis(start),
+                    &[KeyValue::new("operation", "compact")],
+                )
+            })
+    }
 }
 
 #[derive(Clone, Default, Debug)]
@@ -1246,10 +1266,9 @@ fn fix_parameters(sql: &str) -> Result<String> {
         .map_err(Into::into)
 }
 
+#[instrument(ret)]
 fn sql_lookup(key: &str) -> Result<String> {
-    crate::sql::SQL
-        .get(key)
-        .and_then(|sql| fix_parameters(sql).inspect(|sql| debug!(key, sql)))
+    crate::sql::SQL.get(key).and_then(fix_parameters)
 }
 
 #[derive(Clone, Debug)]
@@ -1268,7 +1287,6 @@ impl Engine {
 
 #[async_trait]
 impl Storage for Engine {
-    #[instrument(ret)]
     async fn register_broker(&self, broker_registration: BrokerRegistrationRequest) -> Result<()> {
         let start = SystemTime::now();
         self.inner
@@ -1282,7 +1300,6 @@ impl Storage for Engine {
             })
     }
 
-    #[instrument(ret)]
     async fn brokers(&self) -> Result<Vec<DescribeClusterBroker>> {
         let start = SystemTime::now();
         self.inner.brokers().await.inspect(|_| {
@@ -1293,7 +1310,6 @@ impl Storage for Engine {
         })
     }
 
-    #[instrument(ret)]
     async fn create_topic(&self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {
         let start = SystemTime::now();
         self.inner
@@ -1307,7 +1323,6 @@ impl Storage for Engine {
             })
     }
 
-    #[instrument(ret)]
     async fn delete_records(
         &self,
         topics: &[DeleteRecordsTopic],
@@ -1321,7 +1336,6 @@ impl Storage for Engine {
         })
     }
 
-    #[instrument(ret)]
     async fn delete_topic(&self, topic: &TopicId) -> Result<ErrorCode> {
         let start = SystemTime::now();
         self.inner.delete_topic(topic).await.inspect(|_| {
@@ -1332,7 +1346,6 @@ impl Storage for Engine {
         })
     }
 
-    #[instrument(ret)]
     async fn incremental_alter_resource(
         &self,
         resource: AlterConfigsResource,
@@ -1349,7 +1362,6 @@ impl Storage for Engine {
             })
     }
 
-    #[instrument(ret)]
     async fn produce(
         &self,
         transaction_id: Option<&str>,
@@ -1368,7 +1380,6 @@ impl Storage for Engine {
             })
     }
 
-    #[instrument(ret)]
     async fn fetch(
         &self,
         topition: &Topition,
@@ -1389,7 +1400,6 @@ impl Storage for Engine {
             })
     }
 
-    #[instrument(ret)]
     async fn offset_stage(&self, topition: &Topition) -> Result<OffsetStage> {
         let start = SystemTime::now();
         self.inner.offset_stage(topition).await.inspect(|_| {
@@ -1400,7 +1410,6 @@ impl Storage for Engine {
         })
     }
 
-    #[instrument(ret)]
     async fn offset_commit(
         &self,
         group: &str,
@@ -1419,7 +1428,6 @@ impl Storage for Engine {
             })
     }
 
-    #[instrument(ret)]
     async fn committed_offset_topitions(&self, group_id: &str) -> Result<BTreeMap<Topition, i64>> {
         let start = SystemTime::now();
         self.inner
@@ -1433,7 +1441,6 @@ impl Storage for Engine {
             })
     }
 
-    #[instrument(ret)]
     async fn offset_fetch(
         &self,
         group_id: Option<&str>,
@@ -1452,7 +1459,6 @@ impl Storage for Engine {
             })
     }
 
-    #[instrument(ret)]
     async fn list_offsets(
         &self,
         isolation_level: IsolationLevel,
@@ -1470,7 +1476,6 @@ impl Storage for Engine {
             })
     }
 
-    #[instrument(ret)]
     async fn metadata(&self, topics: Option<&[TopicId]>) -> Result<MetadataResponse> {
         let start = SystemTime::now();
         self.inner.metadata(topics).await.inspect(|_| {
@@ -1481,7 +1486,6 @@ impl Storage for Engine {
         })
     }
 
-    #[instrument(ret)]
     async fn describe_config(
         &self,
         name: &str,
@@ -1500,7 +1504,6 @@ impl Storage for Engine {
             })
     }
 
-    #[instrument(ret)]
     async fn describe_topic_partitions(
         &self,
         topics: Option<&[TopicId]>,
@@ -1519,7 +1522,6 @@ impl Storage for Engine {
             })
     }
 
-    #[instrument(ret)]
     async fn list_groups(&self, states_filter: Option<&[String]>) -> Result<Vec<ListedGroup>> {
         let start = SystemTime::now();
         self.inner.list_groups(states_filter).await.inspect(|_| {
@@ -1530,7 +1532,6 @@ impl Storage for Engine {
         })
     }
 
-    #[instrument(ret)]
     async fn delete_groups(
         &self,
         group_ids: Option<&[String]>,
@@ -1544,7 +1545,6 @@ impl Storage for Engine {
         })
     }
 
-    #[instrument(ret)]
     async fn describe_groups(
         &self,
         group_ids: Option<&[String]>,
@@ -1562,7 +1562,6 @@ impl Storage for Engine {
             })
     }
 
-    #[instrument(ret)]
     async fn update_group(
         &self,
         group_id: &str,
@@ -1581,7 +1580,6 @@ impl Storage for Engine {
             })
     }
 
-    #[instrument(ret)]
     async fn init_producer(
         &self,
         transaction_id: Option<&str>,
@@ -1606,7 +1604,6 @@ impl Storage for Engine {
             })
     }
 
-    #[instrument(ret)]
     async fn txn_add_offsets(
         &self,
         transaction_id: &str,
@@ -1626,7 +1623,6 @@ impl Storage for Engine {
             })
     }
 
-    #[instrument(ret)]
     async fn txn_add_partitions(
         &self,
         partitions: TxnAddPartitionsRequest,
@@ -1643,7 +1639,6 @@ impl Storage for Engine {
             })
     }
 
-    #[instrument(ret)]
     async fn txn_offset_commit(
         &self,
         offsets: TxnOffsetCommitRequest,
@@ -1657,7 +1652,6 @@ impl Storage for Engine {
         })
     }
 
-    #[instrument(ret)]
     async fn txn_end(
         &self,
         transaction_id: &str,
@@ -1677,7 +1671,6 @@ impl Storage for Engine {
             })
     }
 
-    #[instrument(ret)]
     async fn maintain(&self) -> Result<()> {
         let start = SystemTime::now();
         self.inner.maintain().await.inspect(|_| {
@@ -1688,7 +1681,6 @@ impl Storage for Engine {
         })
     }
 
-    #[instrument(ret)]
     async fn cluster_id(&self) -> Result<String> {
         let start = SystemTime::now();
         self.inner.cluster_id().await.inspect(|_| {
@@ -1699,7 +1691,6 @@ impl Storage for Engine {
         })
     }
 
-    #[instrument(ret)]
     async fn node(&self) -> Result<i32> {
         let start = SystemTime::now();
         self.inner.node().await.inspect(|_| {
@@ -1708,7 +1699,6 @@ impl Storage for Engine {
         })
     }
 
-    #[instrument(ret)]
     async fn advertised_listener(&self) -> Result<Url> {
         let start = SystemTime::now();
         self.inner.advertised_listener().await.inspect(|_| {
@@ -4200,6 +4190,9 @@ impl Storage for Delegate {
 
     async fn maintain(&self) -> Result<()> {
         let start = SystemTime::now();
+
+        let compacted = self.compact().await?;
+        debug!(compacted);
 
         {
             let connection = self.pool.get().await?;

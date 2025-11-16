@@ -13,24 +13,26 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
--- prepare list_earliest_offset (text, text, integer) as
-select
+with
 
-r.offset_id,
-r.timestamp
+dup as (
+    select
+    tp.id as topition, r.k as k, max(r.offset_id) as offset_id
+    from record r
+    join topition tp on tp.id = r.topition
+    join topic t on tp.topic = t.id
+    join topic_configuration tc on tc.topic = t.id
+    where tc.name = 'cleanup.policy' and tc.value = 'compact'
+    group by tp.id,r.k having count(r.k) > 1
+),
 
-from
+compaction as (
+    select
+    r.topition as topition, r.offset_id as offset_id
+    from record r
+    join dup on r.topition = dup.topition and r.k = dup.k
+    where dup.offset_id > r.offset_id
+)
 
-cluster c
-join topic t on t.cluster = c.id
-join topition tp on tp.topic = t.id
-join record r on r.topition = tp.id
-
-where
-
-c.name = $1
-and t.name = $2
-and tp.partition = $3
-
-order by r.offset_id asc
-limit 1;
+delete from record
+where (record.topition, record.offset_id) in (select * from compaction);

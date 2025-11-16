@@ -33,14 +33,14 @@ where
     type Response = DeleteRecordsResponse;
     type Error = Error;
 
-    #[instrument(skip(ctx), ret)]
+    #[instrument(skip(ctx, req), fields(topics = ?req.topics.as_deref().unwrap_or_default().iter().map(|delete| delete.name.as_str()).collect::<Vec<_>>()), ret)]
     async fn serve(
         &self,
         ctx: Context<G>,
         req: DeleteRecordsRequest,
     ) -> Result<Self::Response, Self::Error> {
         ctx.state()
-            .delete_records(req.topics.as_deref().unwrap_or(&[]))
+            .delete_records(req.topics.as_deref().unwrap_or_default())
             .await
             .map(Some)
             .map(|topics| {

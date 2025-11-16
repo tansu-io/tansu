@@ -73,7 +73,7 @@ where
     type Response = ConsumerGroupDescribeResponse;
     type Error = Error;
 
-    #[instrument(skip(ctx), ret)]
+    #[instrument(skip(ctx, req), fields(group_ids = ?req.group_ids.as_deref().unwrap_or_default()), ret)]
     async fn serve(
         &self,
         ctx: Context<G>,

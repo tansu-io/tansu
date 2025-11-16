@@ -72,7 +72,7 @@ where
     type Response = DescribeClusterResponse;
     type Error = Error;
 
-    #[instrument(skip(ctx), ret)]
+    #[instrument(skip(ctx, req), ret)]
     async fn serve(
         &self,
         ctx: Context<G>,
