@@ -112,7 +112,7 @@
 //!
 
 use async_trait::async_trait;
-use bytes::Bytes;
+use bytes::{Bytes, TryGetError};
 
 #[cfg(any(feature = "libsql", feature = "postgres"))]
 use deadpool::managed::PoolError;
@@ -121,7 +121,7 @@ use dynostore::DynoStore;
 
 use glob::{GlobError, PatternError};
 
-#[cfg(feature = "dynostore")]
+#[cfg(any(feature = "dynostore", feature = "slatedb"))]
 use object_store::{
     aws::{AmazonS3Builder, S3ConditionalPut},
     memory::InMemory,
@@ -240,6 +240,8 @@ pub enum Error {
     #[cfg(any(feature = "postgres", feature = "libsql"))]
     DeadPoolBuild(#[from] deadpool::managed::BuildError),
 
+    Decode(Bytes),
+
     FeatureNotEnabled {
         feature: String,
         message: String,
@@ -275,7 +277,7 @@ pub enum Error {
     NoSuchOffset(i64),
     OsString(OsString),
 
-    #[cfg(feature = "dynostore")]
+    #[cfg(any(feature = "dynostore", feature = "slatedb"))]
     ObjectStore(Arc<object_store::Error>),
 
     ParseFilter(Arc<ParseError>),
@@ -286,6 +288,9 @@ pub enum Error {
 
     #[cfg(any(feature = "libsql", feature = "postgres"))]
     Pool(Arc<Box<dyn error::Error + Send + Sync>>),
+
+    #[cfg(feature = "slatedb")]
+    Postcard(#[from] postcard::Error),
 
     Regex(#[from] regex::Error),
     Schema(Arc<tansu_schema::Error>),
@@ -308,6 +313,8 @@ pub enum Error {
     TokioPostgres(Arc<tokio_postgres::error::Error>),
     TryFromInt(#[from] TryFromIntError),
     TryFromSlice(#[from] TryFromSliceError),
+
+    TryGet(Arc<TryGetError>),
 
     #[cfg(feature = "turso")]
     Turso(Arc<turso::Error>),
@@ -335,6 +342,12 @@ pub enum Error {
 impl Display for Error {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{self:?}")
+    }
+}
+
+impl From<TryGetError> for Error {
+    fn from(value: TryGetError) -> Self {
+        Self::TryGet(Arc::new(value))
     }
 }
 
@@ -387,14 +400,14 @@ impl From<io::Error> for Error {
     }
 }
 
-#[cfg(feature = "dynostore")]
+#[cfg(any(feature = "dynostore", feature = "slatedb"))]
 impl From<Arc<object_store::Error>> for Error {
     fn from(value: Arc<object_store::Error>) -> Self {
         Self::ObjectStore(value)
     }
 }
 
-#[cfg(feature = "dynostore")]
+#[cfg(any(feature = "dynostore", feature = "slatedb"))]
 impl From<object_store::Error> for Error {
     fn from(value: object_store::Error) -> Self {
         Self::from(Arc::new(value))
@@ -1120,6 +1133,15 @@ pub struct Version {
     version: Option<String>,
 }
 
+impl From<&Uuid> for Version {
+    fn from(value: &Uuid) -> Self {
+        Self {
+            e_tag: Some(value.to_string()),
+            version: None,
+        }
+    }
+}
+
 /// Producer Id Response
 #[derive(Copy, Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct ProducerIdResponse {
@@ -1479,7 +1501,7 @@ impl<T> From<turso::Error> for UpdateError<T> {
     }
 }
 
-#[cfg(feature = "dynostore")]
+#[cfg(any(feature = "dynostore", feature = "slatedb"))]
 impl<T> From<object_store::Error> for UpdateError<T> {
     fn from(value: object_store::Error) -> Self {
         Self::Error(Error::from(value))
@@ -1506,6 +1528,7 @@ impl<T> From<tokio_postgres::error::Error> for UpdateError<T> {
         feature = "dynostore",
         feature = "libsql",
         feature = "postgres",
+        feature = "slatedb",
         feature = "turso"
     )),
     allow(missing_copy_implementations)

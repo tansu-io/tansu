@@ -11,7 +11,9 @@ cargo-build +args:
 license:
     cargo about generate about.hbs > license.html
 
-build: (cargo-build "--bin" "tansu" "--no-default-features" "--features" "delta,dynostore,iceberg,libsql,parquet,postgres,slatedb")
+build: (cargo-build "--timings" "--bin" "tansu" "--no-default-features" "--features" "delta,dynostore,iceberg,libsql,parquet,postgres,slatedb")
+
+build-slate: (cargo-build "--timings" "--bin" "tansu" "--no-default-features" "--features" "slatedb")
 
 build-examples: (cargo-build "--examples")
 
