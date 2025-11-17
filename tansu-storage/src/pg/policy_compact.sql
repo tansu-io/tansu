@@ -22,7 +22,9 @@ dup as (
     join topition tp on tp.id = r.topition
     join topic t on tp.topic = t.id
     join topic_configuration tc on tc.topic = t.id
-    where tc.name = 'cleanup.policy' and tc.value = 'compact'
+    where tc.name = 'cleanup.policy'
+    and tc.value = 'compact'
+    and r.k is not null
     group by tp.id,r.k having count(r.k) > 1
 ),
 

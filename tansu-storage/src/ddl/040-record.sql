@@ -13,7 +13,7 @@
 -- limitations under the License.
 
 create table if not exists record (
-    topition integer references topition (id),
+    topition integer references topition (id) on delete cascade,
     offset_id integer not null,
     attributes integer,
     producer_id integer,
@@ -21,7 +21,7 @@ create table if not exists record (
     timestamp integer,
     v blob,
     k blob,
-    last_updated text default current_timestamp not null,
-    created_at text default current_timestamp not null,
+    last_updated datetime default current_timestamp not null,
+    created_at datetime default current_timestamp not null,
     primary key (topition, offset_id)
 );

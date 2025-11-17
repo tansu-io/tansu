@@ -14,9 +14,10 @@
 
 create table if not exists consumer_group_detail (
     id integer primary key autoincrement,
-    consumer_group int references consumer_group (id) unique,
+    consumer_group int references consumer_group (id) on delete cascade,
     e_tag text not null,
     detail text not null,
-    last_updated text default current_timestamp not null,
-    created_at text default current_timestamp not null
+    last_updated datetime default current_timestamp not null,
+    created_at datetime default current_timestamp not null,
+    unique (consumer_group)
 );

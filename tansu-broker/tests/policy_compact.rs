@@ -25,7 +25,7 @@ use tansu_sans_io::{
     create_topics_request::{CreatableTopic, CreatableTopicConfig},
     list_offsets_request::{ListOffsetsPartition, ListOffsetsTopic},
     produce_request::{PartitionProduceData, TopicProduceData},
-    record::{Record, deflated, inflated},
+    record::{Header, Record, deflated, inflated},
     to_system_time, to_timestamp,
 };
 use tansu_service::{
@@ -190,7 +190,12 @@ pub async fn multiple_record(sc: StorageContainer) -> Result<()> {
         .record(
             Record::builder()
                 .key(Some(KEY))
-                .value(Some(Bytes::from_static(b"one"))),
+                .value(Some(Bytes::from_static(b"one")))
+                .header(
+                    Header::builder()
+                        .key(Bytes::from_static(b"x"))
+                        .value(Bytes::from_static(b"y")),
+                ),
         )
         .build()
         .map(|batch| inflated::Frame {

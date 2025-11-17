@@ -14,9 +14,9 @@
 
 create table if not exists producer_epoch (
     id integer primary key autoincrement,
-    producer integer references producer (id),
+    producer integer references producer (id) on delete cascade,
     epoch integer default 0 not null,
-    last_updated text default current_timestamp not null,
-    created_at text default current_timestamp not null,
+    last_updated datetime default current_timestamp not null,
+    created_at datetime default current_timestamp not null,
     unique (producer, epoch)
 );

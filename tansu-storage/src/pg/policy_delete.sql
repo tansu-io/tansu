@@ -13,6 +13,8 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
+-- retention.ms
+
 with
 
 ancient as (
@@ -20,9 +22,12 @@ ancient as (
     from record r
     join topition tp on tp.id = r.topition
     join topic t on t.id = tp.topic
-    join topic_configuration tc on tc.topic = t.id
-    where tc.name = 'cleanup.policy' and tc.value = 'delete'
-    and r.created_at < $1
+    join topic_configuration tc_policy on tc.topic = t.id
+    left join topic_configuration tc_retention on tc.topic = t.id
+    where tc_policy.name = 'cleanup.policy'
+    and tc_policy.value = 'delete'
+    and tc_retention.name = 'retention.ms'
+    and $1 - r.timestamp > coalesce(tc_retention.value, 604800000)
 )
 
 delete from record
