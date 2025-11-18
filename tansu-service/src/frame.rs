@@ -248,8 +248,7 @@ where
                     )
                     .map_err(Into::into)
                 })
-                .inspect(|response| {
-                    debug!(response = ?&response[..]);
+                .inspect(|_response| {
                     API_REQUESTS.add(1, &attributes);
                 })
                 .inspect_err(|err| {

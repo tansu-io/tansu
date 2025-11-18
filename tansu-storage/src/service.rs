@@ -177,7 +177,7 @@ pub enum Request {
         producer_epoch: i16,
         committed: bool,
     },
-    Maintain,
+    Maintain(SystemTime),
     ClusterId,
     Node,
     AdvertisedListener,
@@ -202,7 +202,7 @@ impl Display for Request {
             Self::InitProducer { .. } => f.write_str("InitProducer"),
             Self::ListGroups(_) => f.write_str("ListGroups"),
             Self::ListOffsets { .. } => f.write_str("ListOffsets"),
-            Self::Maintain => f.write_str("Maintain"),
+            Self::Maintain(_) => f.write_str("Maintain"),
             Self::Metadata(_) => f.write_str("Metadata"),
             Self::Node => f.write_str("Node"),
             Self::OffsetCommit { .. } => f.write_str("OffsetCommit"),
@@ -996,8 +996,8 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
-    async fn maintain(&self) -> Result<()> {
-        self.serve(Context::default(), Request::Maintain)
+    async fn maintain(&self, now: SystemTime) -> Result<()> {
+        self.serve(Context::default(), Request::Maintain(now))
             .await
             .and_then(|response| {
                 if let Response::Maintain(inner) = response {
@@ -1308,7 +1308,7 @@ where
                     .txn_end(&transaction_id, producer_id, producer_epoch, committed)
                     .await,
             )),
-            Request::Maintain => Ok(Response::Maintain(self.storage.maintain().await)),
+            Request::Maintain(now) => Ok(Response::Maintain(self.storage.maintain(now).await)),
             Request::ClusterId => Ok(Response::ClusterId(self.storage.cluster_id().await)),
             Request::Node => Ok(Response::Node(self.storage.node().await)),
             Request::AdvertisedListener => Ok(Response::AdvertisedListener(

@@ -1135,7 +1135,7 @@ impl Postgres {
     }
 
     #[instrument(skip(self), ret)]
-    async fn compact(&self) -> Result<u64> {
+    async fn policy_compact(&self) -> Result<u64> {
         let mut c = self.connection().await?;
         let tx = c.transaction().await?;
 
@@ -1143,12 +1143,31 @@ impl Postgres {
             .tx_prepare_execute(
                 &tx,
                 include_sql!("pg/policy_compact.sql").as_str(),
-                &[],
+                &[&self.cluster],
                 "policy_compact",
             )
             .await?;
 
         tx.commit().await.map_err(Into::into).and(Ok(compacted))
+    }
+
+    #[instrument(skip(self), ret)]
+    async fn policy_delete(&self, now: SystemTime) -> Result<u64> {
+        let retention_secs = i32::try_from(Duration::from_hours(7 * 24).as_secs())?;
+
+        let mut c = self.connection().await?;
+        let tx = c.transaction().await?;
+
+        let deleted = self
+            .tx_prepare_execute(
+                &tx,
+                include_sql!("pg/policy_delete.sql").as_str(),
+                &[&self.cluster, &now, &retention_secs],
+                "policy_delete",
+            )
+            .await?;
+
+        tx.commit().await.map_err(Into::into).and(Ok(deleted))
     }
 }
 
@@ -3436,8 +3455,11 @@ impl Storage for Postgres {
         Ok(error_code)
     }
 
-    async fn maintain(&self) -> Result<()> {
-        let compacted = self.compact().await?;
+    async fn maintain(&self, now: SystemTime) -> Result<()> {
+        let deleted = self.policy_delete(now).await?;
+        debug!(deleted);
+
+        let compacted = self.policy_compact().await?;
         debug!(compacted);
 
         if let Some(ref lake) = self.lake {

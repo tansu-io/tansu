@@ -1102,12 +1102,14 @@ impl Delegate {
     }
 
     #[instrument(skip(self), ret)]
-    async fn compact(&self) -> Result<u64> {
+    async fn policy_compact(&self) -> Result<u64> {
         let start = SystemTime::now();
 
         let tx = self.transaction().await?;
 
-        let compacted = tx.execute(&sql_lookup("policy_compact.sql")?, ()).await?;
+        let compacted = tx
+            .execute(&sql_lookup("policy_compact.sql")?, [self.cluster.as_str()])
+            .await?;
 
         tx.commit()
             .await
@@ -1116,7 +1118,35 @@ impl Delegate {
             .inspect(|_| {
                 DELEGATE_REQUEST_DURATION.record(
                     elapsed_millis(start),
-                    &[KeyValue::new("operation", "compact")],
+                    &[KeyValue::new("operation", "policy_compact")],
+                )
+            })
+    }
+
+    #[instrument(skip(self), ret)]
+    async fn policy_delete(&self, now: SystemTime) -> Result<u64> {
+        let start = SystemTime::now();
+
+        let now = to_timestamp(&now)?;
+        let retention_ms = u64::try_from(Duration::from_hours(7 * 24).as_millis())?;
+
+        let tx = self.transaction().await?;
+
+        let deleted = tx
+            .execute(
+                &sql_lookup("lite/policy_delete.sql")?,
+                (self.cluster.as_str(), now, retention_ms),
+            )
+            .await?;
+
+        tx.commit()
+            .await
+            .map_err(Into::into)
+            .and(Ok(deleted))
+            .inspect(|_| {
+                DELEGATE_REQUEST_DURATION.record(
+                    elapsed_millis(start),
+                    &[KeyValue::new("operation", "policy_delete")],
                 )
             })
     }
@@ -1671,9 +1701,9 @@ impl Storage for Engine {
             })
     }
 
-    async fn maintain(&self) -> Result<()> {
+    async fn maintain(&self, now: SystemTime) -> Result<()> {
         let start = SystemTime::now();
-        self.inner.maintain().await.inspect(|_| {
+        self.inner.maintain(now).await.inspect(|_| {
             ENGINE_REQUEST_DURATION.record(
                 elapsed_millis(start),
                 &[KeyValue::new("operation", "maintain")],
@@ -4188,10 +4218,13 @@ impl Storage for Delegate {
         })
     }
 
-    async fn maintain(&self) -> Result<()> {
+    async fn maintain(&self, now: SystemTime) -> Result<()> {
         let start = SystemTime::now();
 
-        let compacted = self.compact().await?;
+        let deleted = self.policy_delete(now).await?;
+        debug!(deleted);
+
+        let compacted = self.policy_compact().await?;
         debug!(compacted);
 
         {

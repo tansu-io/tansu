@@ -29,7 +29,7 @@ ancient as (
     and tc_policy.name = 'cleanup.policy'
     and tc_policy.value = 'delete'
     and tc_retention.name = 'retention.ms'
-    and (extract(epoch from cast($2 as timestamp)) - extract(epoch from r.timestamp)) > coalesce(cast(tc_retention.value as integer) / 1000, $3)
+    and $2 - r.timestamp > coalesce(cast(tc_retention.value as integer), $3)
 )
 
 delete from record

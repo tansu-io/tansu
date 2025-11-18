@@ -26,19 +26,22 @@ use tansu_sans_io::{
     list_offsets_request::{ListOffsetsPartition, ListOffsetsTopic},
     produce_request::{PartitionProduceData, TopicProduceData},
     record::{Header, Record, deflated, inflated},
-    to_system_time, to_timestamp,
 };
 use tansu_service::{
     BytesFrameLayer, BytesFrameService, BytesLayer, BytesService, FrameBytesLayer,
     FrameBytesService, FrameRouteService, RequestFrameLayer, RequestFrameService,
 };
-use tansu_storage::{Storage, StorageContainer, Topition};
-use tokio::time::sleep;
+use tansu_storage::{Storage, StorageContainer};
 use tracing::debug;
 use url::Url;
 use uuid::Uuid;
 
 pub mod common;
+
+const CLEANUP_POLICY: &str = "cleanup.policy";
+const COMPACT: &str = "compact";
+const DELETE: &str = "delete";
+const RETENTION_MS: &str = "retention.ms";
 
 type Broker = RequestFrameService<
     FrameBytesService<BytesService<BytesFrameService<FrameRouteService<(), Error>>>>,
@@ -62,7 +65,7 @@ where
         })
 }
 
-pub async fn multiple_record(sc: StorageContainer) -> Result<()> {
+pub async fn compact_only(sc: StorageContainer) -> Result<()> {
     let broker = broker(sc.clone())?;
 
     let topic_name = &alphanumeric_string(15)[..];
@@ -83,8 +86,8 @@ pub async fn multiple_record(sc: StorageContainer) -> Result<()> {
                         .num_partitions(num_partitions)
                         .configs(Some(
                             [CreatableTopicConfig::default()
-                                .name("cleanup.policy".into())
-                                .value(Some("compact".into()))]
+                                .name(CLEANUP_POLICY.into())
+                                .value(Some(COMPACT.into()))]
                             .into(),
                         ))
                         .assignments(Some([].into()))
@@ -102,87 +105,7 @@ pub async fn multiple_record(sc: StorageContainer) -> Result<()> {
     let replica_id = -1;
     let max_num_offsets = Some(6);
     let current_leader_epoch = -1;
-
-    debug!(phase = "empty topic: uncommitted latest offset");
     let isolation = Some(IsolationLevel::ReadUncommitted.into());
-    let timestamp = ListOffset::Latest.try_into()?;
-
-    let response = broker
-        .serve(
-            Context::default(),
-            ListOffsetsRequest::default()
-                .isolation_level(isolation)
-                .replica_id(replica_id)
-                .topics(Some(
-                    [ListOffsetsTopic::default()
-                        .name(topic_name.into())
-                        .partitions(Some(
-                            (0..num_partitions)
-                                .map(|partition_index| {
-                                    ListOffsetsPartition::default()
-                                        .partition_index(partition_index)
-                                        .max_num_offsets(max_num_offsets)
-                                        .timestamp(timestamp)
-                                        .current_leader_epoch(Some(current_leader_epoch))
-                                })
-                                .collect::<Vec<_>>(),
-                        ))]
-                    .into(),
-                )),
-        )
-        .await?;
-
-    let topics = response.topics.as_deref().unwrap_or_default();
-    assert_eq!(1, topics.len());
-    assert_eq!(topic_name, topics[0].name);
-    let partitions = topics[0].partitions.as_deref().unwrap_or_default();
-    assert_eq!(num_partitions as usize, partitions.len());
-
-    for partition in partitions {
-        assert_eq!(i16::from(ErrorCode::None), partition.error_code);
-        assert_eq!(Some(0), partition.offset);
-        assert_eq!(Some(-1), partition.timestamp);
-    }
-
-    debug!(phase = "empty topic: uncommitted earliest offset");
-    let timestamp = ListOffset::Earliest.try_into()?;
-
-    let response = broker
-        .serve(
-            Context::default(),
-            ListOffsetsRequest::default()
-                .isolation_level(isolation)
-                .replica_id(replica_id)
-                .topics(Some(
-                    [ListOffsetsTopic::default()
-                        .name(topic_name.into())
-                        .partitions(Some(
-                            (0..num_partitions)
-                                .map(|partition_index| {
-                                    ListOffsetsPartition::default()
-                                        .partition_index(partition_index)
-                                        .max_num_offsets(max_num_offsets)
-                                        .timestamp(timestamp)
-                                        .current_leader_epoch(Some(current_leader_epoch))
-                                })
-                                .collect::<Vec<_>>(),
-                        ))]
-                    .into(),
-                )),
-        )
-        .await?;
-
-    let topics = response.topics.as_deref().unwrap_or_default();
-    assert_eq!(1, topics.len());
-    assert_eq!(topic_name, topics[0].name);
-    let partitions = topics[0].partitions.as_deref().unwrap_or_default();
-    assert_eq!(num_partitions as usize, partitions.len());
-
-    for partition in partitions {
-        assert_eq!(i16::from(ErrorCode::None), partition.error_code);
-        assert_eq!(Some(0), partition.offset);
-        assert_eq!(Some(-1), partition.timestamp);
-    }
 
     const KEY: Bytes = Bytes::from_static(b"alpha");
 
@@ -416,7 +339,7 @@ pub async fn multiple_record(sc: StorageContainer) -> Result<()> {
     }
 
     debug!(phase = "maintenance");
-    sc.maintain().await?;
+    sc.maintain(SystemTime::now()).await?;
 
     debug!(phase = "post: uncommitted earliest offset");
     let timestamp = ListOffset::Earliest.try_into()?;
@@ -517,192 +440,474 @@ pub async fn multiple_record(sc: StorageContainer) -> Result<()> {
     Ok(())
 }
 
-pub async fn new_topic(
-    cluster_id: impl Into<String>,
-    broker_id: i32,
-    sc: StorageContainer,
-) -> Result<()> {
-    register_broker(cluster_id, broker_id, &sc).await?;
+pub async fn delete_only(sc: StorageContainer) -> Result<()> {
+    let broker = broker(sc.clone())?;
 
-    let topic_name: String = alphanumeric_string(15);
+    let topic_name = &alphanumeric_string(15)[..];
     debug!(?topic_name);
 
+    let timeout = 5_000;
     let num_partitions = 6;
     let replication_factor = 0;
-    let assignments = Some([].into());
-    let configs = Some([].into());
 
-    let topic_id = sc
-        .create_topic(
-            CreatableTopic::default()
-                .name(topic_name.clone())
-                .num_partitions(num_partitions)
-                .replication_factor(replication_factor)
-                .assignments(assignments.clone())
-                .configs(configs.clone()),
-            false,
+    let response = broker
+        .serve(
+            Context::default(),
+            CreateTopicsRequest::default()
+                .timeout_ms(timeout)
+                .validate_only(Some(false))
+                .topics(Some(
+                    [CreatableTopic::default()
+                        .num_partitions(num_partitions)
+                        .configs(Some(
+                            [
+                                CreatableTopicConfig::default()
+                                    .name(CLEANUP_POLICY.into())
+                                    .value(Some(DELETE.into())),
+                                CreatableTopicConfig::default()
+                                    .name(RETENTION_MS.into())
+                                    .value(Some(Duration::from_mins(30).as_millis().to_string())),
+                            ]
+                            .into(),
+                        ))
+                        .assignments(Some([].into()))
+                        .replication_factor(replication_factor)
+                        .name(topic_name.into())]
+                    .into(),
+                )),
         )
         .await?;
-    debug!(?topic_id);
 
-    let offsets = (0..num_partitions)
-        .map(|partition| {
-            (
-                Topition::new(topic_name.clone(), partition),
-                ListOffset::Latest,
-            )
-        })
-        .collect::<Vec<_>>();
+    let topics = response.topics.as_deref().unwrap_or_default();
+    assert_eq!(1, topics.len());
+    assert_eq!(i16::from(ErrorCode::None), topics[0].error_code);
 
-    let items = sc
-        .list_offsets(IsolationLevel::ReadUncommitted, &offsets[..])
-        .await
-        .inspect(|response| debug!(?response))?;
+    let replica_id = -1;
+    let max_num_offsets = Some(6);
+    let current_leader_epoch = -1;
+    let isolation = Some(IsolationLevel::ReadUncommitted.into());
 
-    assert!(!items.is_empty());
+    const KEY: Bytes = Bytes::from_static(b"alpha");
 
-    for (_toptition, response) in items {
-        assert_eq!(Some(0), response.offset);
-        assert_eq!(None, response.timestamp);
-    }
-
-    let offsets = (0..num_partitions)
-        .map(|partition| {
-            (
-                Topition::new(topic_name.clone(), partition),
-                ListOffset::Earliest,
-            )
-        })
-        .collect::<Vec<_>>();
-
-    let items = sc
-        .list_offsets(IsolationLevel::ReadUncommitted, &offsets[..])
-        .await
-        .inspect(|response| debug!(?response))?;
-
-    assert!(!items.is_empty());
-
-    for (_toptition, response) in items {
-        assert_eq!(Some(0), response.offset);
-        assert_eq!(None, response.timestamp);
-    }
-
-    let timestamp = to_system_time(0)?;
-
-    let offsets = (0..num_partitions)
-        .map(|partition| {
-            (
-                Topition::new(topic_name.clone(), partition),
-                ListOffset::Timestamp(timestamp),
-            )
-        })
-        .collect::<Vec<_>>();
-
-    let items = sc
-        .list_offsets(IsolationLevel::ReadUncommitted, &offsets[..])
-        .await
-        .inspect(|response| debug!(?response))?;
-
-    assert!(!items.is_empty());
-
-    for (_toptition, response) in items {
-        assert_eq!(Some(0), response.offset);
-        assert_eq!(None, response.timestamp);
-    }
-
-    Ok(())
-}
-
-pub async fn single_record(
-    cluster_id: impl Into<String>,
-    broker_id: i32,
-    sc: StorageContainer,
-) -> Result<()> {
-    register_broker(cluster_id, broker_id, &sc).await?;
-
-    let topic_name: String = alphanumeric_string(15);
-    debug!(?topic_name);
-
-    let num_partitions = 6;
-    let replication_factor = 0;
-    let assignments = Some([].into());
-    let configs = Some([].into());
-
-    let topic_id = sc
-        .create_topic(
-            CreatableTopic::default()
-                .name(topic_name.clone())
-                .num_partitions(num_partitions)
-                .replication_factor(replication_factor)
-                .assignments(assignments.clone())
-                .configs(configs.clone()),
-            false,
+    let frame = inflated::Batch::builder()
+        .record(
+            Record::builder()
+                .key(Some(KEY))
+                .value(Some(Bytes::from_static(b"one")))
+                .header(
+                    Header::builder()
+                        .key(Bytes::from_static(b"x"))
+                        .value(Bytes::from_static(b"y")),
+                ),
         )
-        .await?;
-    debug!(?topic_id);
-
-    let partition_index = rng().random_range(0..num_partitions);
-    let topition = Topition::new(topic_name.clone(), partition_index);
-
-    let value = Bytes::copy_from_slice(alphanumeric_string(15).as_bytes());
-
-    let before = SystemTime::now();
-    debug!(before = to_timestamp(&before)?);
-    sleep(Duration::from_millis(500)).await;
-
-    let batch = inflated::Batch::builder()
-        .record(Record::builder().value(value.clone().into()))
         .build()
-        .and_then(TryInto::try_into)
-        .inspect(|deflated| debug!(?deflated))?;
+        .map(|batch| inflated::Frame {
+            batches: vec![batch],
+        })
+        .and_then(deflated::Frame::try_from)?;
 
-    assert_eq!(
-        0,
-        sc.produce(None, &topition, batch)
-            .await
-            .inspect(|offset| debug!(?offset))?
+    let partition = 0;
+
+    let response = broker
+        .serve(
+            Context::default(),
+            ProduceRequest::default()
+                .timeout_ms(timeout)
+                .acks(Ack::Leader.into())
+                .topic_data(Some(
+                    [TopicProduceData::default()
+                        .name(topic_name.into())
+                        .partition_data(Some(
+                            [PartitionProduceData::default()
+                                .index(partition)
+                                .records(Some(frame))]
+                            .into(),
+                        ))]
+                    .into(),
+                )),
+        )
+        .await
+        .inspect(|response| debug!("{response:?}"))?;
+
+    let topics = response.responses.as_deref().unwrap_or_default();
+    assert_eq!(1, topics.len());
+    assert_eq!(topic_name, topics[0].name);
+    let partitions = topics[0].partition_responses.as_deref().unwrap_or_default();
+    assert_eq!(1, partitions.len());
+    assert_eq!(partition, partitions[0].index);
+    assert_eq!(i16::from(ErrorCode::None), partitions[0].error_code);
+    assert_eq!(0, partitions[0].base_offset);
+
+    let frame = inflated::Batch::builder()
+        .record(
+            Record::builder()
+                .key(Some(KEY))
+                .value(Some(Bytes::from_static(b"two"))),
+        )
+        .build()
+        .map(|batch| inflated::Frame {
+            batches: vec![batch],
+        })
+        .and_then(deflated::Frame::try_from)?;
+
+    let response = broker
+        .serve(
+            Context::default(),
+            ProduceRequest::default()
+                .timeout_ms(timeout)
+                .acks(Ack::Leader.into())
+                .topic_data(Some(
+                    [TopicProduceData::default()
+                        .name(topic_name.into())
+                        .partition_data(Some(
+                            [PartitionProduceData::default()
+                                .index(partition)
+                                .records(Some(frame))]
+                            .into(),
+                        ))]
+                    .into(),
+                )),
+        )
+        .await
+        .inspect(|response| debug!("{response:?}"))?;
+
+    let topics = response.responses.as_deref().unwrap_or_default();
+    assert_eq!(1, topics.len());
+    assert_eq!(topic_name, topics[0].name);
+    let partitions = topics[0].partition_responses.as_deref().unwrap_or_default();
+    assert_eq!(1, partitions.len());
+    assert_eq!(partition, partitions[0].index);
+    assert_eq!(i16::from(ErrorCode::None), partitions[0].error_code);
+    assert_eq!(1, partitions[0].base_offset);
+
+    let frame = inflated::Batch::builder()
+        .record(
+            Record::builder()
+                .key(Some(KEY))
+                .value(Some(Bytes::from_static(b"three"))),
+        )
+        .build()
+        .map(|batch| inflated::Frame {
+            batches: vec![batch],
+        })
+        .and_then(deflated::Frame::try_from)?;
+
+    let response = broker
+        .serve(
+            Context::default(),
+            ProduceRequest::default()
+                .timeout_ms(timeout)
+                .acks(Ack::Leader.into())
+                .topic_data(Some(
+                    [TopicProduceData::default()
+                        .name(topic_name.into())
+                        .partition_data(Some(
+                            [PartitionProduceData::default()
+                                .index(partition)
+                                .records(Some(frame))]
+                            .into(),
+                        ))]
+                    .into(),
+                )),
+        )
+        .await
+        .inspect(|response| debug!("{response:?}"))?;
+
+    let topics = response.responses.as_deref().unwrap_or_default();
+    assert_eq!(1, topics.len());
+    assert_eq!(topic_name, topics[0].name);
+    let partitions = topics[0].partition_responses.as_deref().unwrap_or_default();
+    assert_eq!(1, partitions.len());
+    assert_eq!(partition, partitions[0].index);
+    assert_eq!(i16::from(ErrorCode::None), partitions[0].error_code);
+    assert_eq!(2, partitions[0].base_offset);
+
+    debug!(phase = "pre: uncommitted earliest offset");
+    let timestamp = ListOffset::Earliest.try_into()?;
+
+    let response = broker
+        .serve(
+            Context::default(),
+            ListOffsetsRequest::default()
+                .isolation_level(isolation)
+                .replica_id(replica_id)
+                .topics(Some(
+                    [ListOffsetsTopic::default()
+                        .name(topic_name.into())
+                        .partitions(Some(
+                            (0..num_partitions)
+                                .map(|partition_index| {
+                                    ListOffsetsPartition::default()
+                                        .partition_index(partition_index)
+                                        .max_num_offsets(max_num_offsets)
+                                        .timestamp(timestamp)
+                                        .current_leader_epoch(Some(current_leader_epoch))
+                                })
+                                .collect::<Vec<_>>(),
+                        ))]
+                    .into(),
+                )),
+        )
+        .await?;
+
+    let topics = response.topics.as_deref().unwrap_or_default();
+    assert_eq!(1, topics.len());
+    assert_eq!(topic_name, topics[0].name);
+    let partitions = topics[0].partitions.as_deref().unwrap_or_default();
+    assert_eq!(num_partitions as usize, partitions.len());
+
+    assert_eq!(i16::from(ErrorCode::None), partitions[0].error_code);
+    assert_eq!(Some(0), partitions[0].offset);
+    assert!(
+        partitions[0]
+            .timestamp
+            .is_some_and(|timestamp| timestamp > 0)
     );
 
-    let after = SystemTime::now();
-    debug!(after = to_timestamp(&after)?);
+    for partition in partitions[1..].iter() {
+        assert_eq!(i16::from(ErrorCode::None), partition.error_code);
+        assert_eq!(Some(0), partition.offset);
+        assert_eq!(Some(-1), partition.timestamp);
+    }
 
-    let offsets = [(topition.clone(), ListOffset::Latest)];
+    debug!(phase = "pre: uncommitted latest offset");
+    let timestamp = ListOffset::Latest.try_into()?;
 
-    let responses = sc
-        .list_offsets(IsolationLevel::ReadUncommitted, &offsets[..])
-        .await
-        .inspect(|responses| debug!(?responses))?;
-
-    assert_eq!(1, responses.len());
-    assert_eq!(Some(1), responses[0].1.offset);
-
-    let offsets = [(topition.clone(), ListOffset::Earliest)];
-
-    let responses = sc
-        .list_offsets(IsolationLevel::ReadUncommitted, &offsets[..])
-        .await
-        .inspect(|responses| debug!(?responses))?;
-
-    assert_eq!(1, responses.len());
-    assert_eq!(Some(0), responses[0].1.offset);
-
-    let offsets = [(topition.clone(), ListOffset::Timestamp(before))];
-
-    let responses = sc
-        .list_offsets(IsolationLevel::ReadUncommitted, &offsets[..])
+    let response = broker
+        .serve(
+            Context::default(),
+            ListOffsetsRequest::default()
+                .isolation_level(isolation)
+                .replica_id(replica_id)
+                .topics(Some(
+                    [ListOffsetsTopic::default()
+                        .name(topic_name.into())
+                        .partitions(Some(
+                            (0..num_partitions)
+                                .map(|partition_index| {
+                                    ListOffsetsPartition::default()
+                                        .partition_index(partition_index)
+                                        .max_num_offsets(max_num_offsets)
+                                        .timestamp(timestamp)
+                                        .current_leader_epoch(Some(current_leader_epoch))
+                                })
+                                .collect::<Vec<_>>(),
+                        ))]
+                    .into(),
+                )),
+        )
         .await?;
 
-    assert_eq!(1, responses.len());
-    assert_eq!(Some(0), responses[0].1.offset);
+    let topics = response.topics.as_deref().unwrap_or_default();
+    assert_eq!(1, topics.len());
+    assert_eq!(topic_name, topics[0].name);
+    let partitions = topics[0].partitions.as_deref().unwrap_or_default();
+    assert_eq!(num_partitions as usize, partitions.len());
 
-    let offsets = [(topition.clone(), ListOffset::Timestamp(after))];
+    assert_eq!(i16::from(ErrorCode::None), partitions[0].error_code);
+    assert_eq!(Some(3), partitions[0].offset);
+    assert!(
+        partitions[0]
+            .timestamp
+            .is_some_and(|timestamp| timestamp > 0)
+    );
 
-    let responses = sc
-        .list_offsets(IsolationLevel::ReadUncommitted, &offsets[..])
+    for partition in partitions[1..].iter() {
+        assert_eq!(i16::from(ErrorCode::None), partition.error_code);
+        assert_eq!(Some(0), partition.offset);
+        assert_eq!(Some(-1), partition.timestamp);
+    }
+
+    debug!(phase = "maintenance");
+    sc.maintain(SystemTime::now()).await?;
+
+    debug!(phase = "post: uncommitted earliest offset");
+    let timestamp = ListOffset::Earliest.try_into()?;
+
+    let response = broker
+        .serve(
+            Context::default(),
+            ListOffsetsRequest::default()
+                .isolation_level(isolation)
+                .replica_id(replica_id)
+                .topics(Some(
+                    [ListOffsetsTopic::default()
+                        .name(topic_name.into())
+                        .partitions(Some(
+                            (0..num_partitions)
+                                .map(|partition_index| {
+                                    ListOffsetsPartition::default()
+                                        .partition_index(partition_index)
+                                        .max_num_offsets(max_num_offsets)
+                                        .timestamp(timestamp)
+                                        .current_leader_epoch(Some(current_leader_epoch))
+                                })
+                                .collect::<Vec<_>>(),
+                        ))]
+                    .into(),
+                )),
+        )
         .await?;
 
-    assert_eq!(1, responses.len());
-    assert_eq!(Some(0), responses[0].1.offset);
+    let topics = response.topics.as_deref().unwrap_or_default();
+    assert_eq!(1, topics.len());
+    assert_eq!(topic_name, topics[0].name);
+    let partitions = topics[0].partitions.as_deref().unwrap_or_default();
+    assert_eq!(num_partitions as usize, partitions.len());
+
+    assert_eq!(i16::from(ErrorCode::None), partitions[0].error_code);
+    assert_eq!(Some(0), partitions[0].offset);
+    assert!(
+        partitions[0]
+            .timestamp
+            .is_some_and(|timestamp| timestamp > 0)
+    );
+
+    for partition in partitions[1..].iter() {
+        assert_eq!(i16::from(ErrorCode::None), partition.error_code);
+        assert_eq!(Some(0), partition.offset);
+        assert_eq!(Some(-1), partition.timestamp);
+    }
+
+    debug!(phase = "post: uncommitted latest offset");
+    let timestamp = ListOffset::Latest.try_into()?;
+
+    let response = broker
+        .serve(
+            Context::default(),
+            ListOffsetsRequest::default()
+                .isolation_level(isolation)
+                .replica_id(replica_id)
+                .topics(Some(
+                    [ListOffsetsTopic::default()
+                        .name(topic_name.into())
+                        .partitions(Some(
+                            (0..num_partitions)
+                                .map(|partition_index| {
+                                    ListOffsetsPartition::default()
+                                        .partition_index(partition_index)
+                                        .max_num_offsets(max_num_offsets)
+                                        .timestamp(timestamp)
+                                        .current_leader_epoch(Some(current_leader_epoch))
+                                })
+                                .collect::<Vec<_>>(),
+                        ))]
+                    .into(),
+                )),
+        )
+        .await?;
+
+    let topics = response.topics.as_deref().unwrap_or_default();
+    assert_eq!(1, topics.len());
+    assert_eq!(topic_name, topics[0].name);
+    let partitions = topics[0].partitions.as_deref().unwrap_or_default();
+    assert_eq!(num_partitions as usize, partitions.len());
+
+    assert_eq!(i16::from(ErrorCode::None), partitions[0].error_code);
+    assert_eq!(Some(3), partitions[0].offset);
+    assert!(
+        partitions[0]
+            .timestamp
+            .is_some_and(|timestamp| timestamp > 0)
+    );
+
+    for partition in partitions[1..].iter() {
+        assert_eq!(i16::from(ErrorCode::None), partition.error_code);
+        assert_eq!(Some(0), partition.offset);
+        assert_eq!(Some(-1), partition.timestamp);
+    }
+
+    debug!(phase = "maintenance");
+    sc.maintain(
+        SystemTime::now()
+            .checked_add(Duration::from_hours(1))
+            .expect("an hour ahead"),
+    )
+    .await?;
+
+    debug!(phase = "post 1 hour: uncommitted earliest offset");
+    let timestamp = ListOffset::Earliest.try_into()?;
+
+    let response = broker
+        .serve(
+            Context::default(),
+            ListOffsetsRequest::default()
+                .isolation_level(isolation)
+                .replica_id(replica_id)
+                .topics(Some(
+                    [ListOffsetsTopic::default()
+                        .name(topic_name.into())
+                        .partitions(Some(
+                            (0..num_partitions)
+                                .map(|partition_index| {
+                                    ListOffsetsPartition::default()
+                                        .partition_index(partition_index)
+                                        .max_num_offsets(max_num_offsets)
+                                        .timestamp(timestamp)
+                                        .current_leader_epoch(Some(current_leader_epoch))
+                                })
+                                .collect::<Vec<_>>(),
+                        ))]
+                    .into(),
+                )),
+        )
+        .await?;
+
+    let topics = response.topics.as_deref().unwrap_or_default();
+    assert_eq!(1, topics.len());
+    assert_eq!(topic_name, topics[0].name);
+    let partitions = topics[0].partitions.as_deref().unwrap_or_default();
+    assert_eq!(num_partitions as usize, partitions.len());
+
+    assert_eq!(i16::from(ErrorCode::None), partitions[0].error_code);
+
+    for partition in partitions {
+        assert_eq!(i16::from(ErrorCode::None), partition.error_code);
+        assert_eq!(Some(0), partition.offset);
+        assert_eq!(Some(-1), partition.timestamp);
+    }
+
+    debug!(phase = "post 1 hour: uncommitted latest offset");
+    let timestamp = ListOffset::Latest.try_into()?;
+
+    let response = broker
+        .serve(
+            Context::default(),
+            ListOffsetsRequest::default()
+                .isolation_level(isolation)
+                .replica_id(replica_id)
+                .topics(Some(
+                    [ListOffsetsTopic::default()
+                        .name(topic_name.into())
+                        .partitions(Some(
+                            (0..num_partitions)
+                                .map(|partition_index| {
+                                    ListOffsetsPartition::default()
+                                        .partition_index(partition_index)
+                                        .max_num_offsets(max_num_offsets)
+                                        .timestamp(timestamp)
+                                        .current_leader_epoch(Some(current_leader_epoch))
+                                })
+                                .collect::<Vec<_>>(),
+                        ))]
+                    .into(),
+                )),
+        )
+        .await?;
+
+    let topics = response.topics.as_deref().unwrap_or_default();
+    assert_eq!(1, topics.len());
+    assert_eq!(topic_name, topics[0].name);
+    let partitions = topics[0].partitions.as_deref().unwrap_or_default();
+    assert_eq!(num_partitions as usize, partitions.len());
+
+    assert_eq!(i16::from(ErrorCode::None), partitions[0].error_code);
+
+    for partition in partitions {
+        assert_eq!(i16::from(ErrorCode::None), partition.error_code);
+        assert_eq!(Some(0), partition.offset);
+        assert_eq!(Some(-1), partition.timestamp);
+    }
 
     Ok(())
 }
@@ -723,7 +928,7 @@ mod pg {
     }
 
     #[tokio::test]
-    async fn multiple_record() -> Result<()> {
+    async fn compact_only() -> Result<()> {
         let _guard = init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
@@ -732,7 +937,20 @@ mod pg {
         let sc = storage_container(cluster_id, broker_id).await?;
         register_broker(cluster_id, broker_id, &sc).await?;
 
-        super::multiple_record(sc).await
+        super::compact_only(sc).await
+    }
+
+    #[tokio::test]
+    async fn delete_only() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        let sc = storage_container(cluster_id, broker_id).await?;
+        register_broker(cluster_id, broker_id, &sc).await?;
+
+        super::delete_only(sc).await
     }
 }
 
@@ -752,7 +970,7 @@ mod in_memory {
 
     #[ignore]
     #[tokio::test]
-    async fn multiple_record() -> Result<()> {
+    async fn compact_only() -> Result<()> {
         let _guard = init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
@@ -761,7 +979,21 @@ mod in_memory {
         let sc = storage_container(cluster_id, broker_id).await?;
         register_broker(cluster_id, broker_id, &sc).await?;
 
-        super::multiple_record(sc).await
+        super::compact_only(sc).await
+    }
+
+    #[ignore]
+    #[tokio::test]
+    async fn delete_only() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        let sc = storage_container(cluster_id, broker_id).await?;
+        register_broker(cluster_id, broker_id, &sc).await?;
+
+        super::delete_only(sc).await
     }
 }
 
@@ -781,7 +1013,7 @@ mod lite {
     }
 
     #[tokio::test]
-    async fn multiple_record() -> Result<()> {
+    async fn compact_only() -> Result<()> {
         let _guard = init_tracing()?;
 
         let cluster_id = Uuid::now_v7();
@@ -790,6 +1022,19 @@ mod lite {
         let sc = storage_container(cluster_id, broker_id).await?;
         register_broker(cluster_id, broker_id, &sc).await?;
 
-        super::multiple_record(sc).await
+        super::compact_only(sc).await
+    }
+
+    #[tokio::test]
+    async fn delete_only() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        let sc = storage_container(cluster_id, broker_id).await?;
+        register_broker(cluster_id, broker_id, &sc).await?;
+
+        super::delete_only(sc).await
     }
 }
