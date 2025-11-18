@@ -27,7 +27,7 @@ ancient as (
     left join topic_configuration tc_retention on tc_retention.topic = t.id
     where c.name = $1
     and tc_policy.name = 'cleanup.policy'
-    and tc_policy.value = 'delete'
+    and tc_policy.value like '%delete%'
     and tc_retention.name = 'retention.ms'
     and $2 - r.timestamp > coalesce(cast(tc_retention.value as integer), $3)
 )

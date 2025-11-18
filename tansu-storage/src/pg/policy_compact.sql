@@ -25,7 +25,7 @@ dup as (
     join topic_configuration tc on tc.topic = t.id
     where c.name = $1
     and tc.name = 'cleanup.policy'
-    and tc.value = 'compact'
+    and tc.value like '%compact%'
     and r.k is not null
     group by tp.id,r.k having count(r.k) > 1
 ),
