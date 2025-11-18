@@ -360,10 +360,10 @@ where
     type Error = S::Error;
 
     async fn serve(&self, ctx: Context<State>, req: Bytes) -> Result<Self::Response, Self::Error> {
-        debug!(?req);
+        debug!(req = ?&req[..]);
         self.inner
             .serve(ctx, req)
             .await
-            .inspect(|response| debug!(?response))
+            .inspect(|response| debug!(response = ?&response[..]))
     }
 }

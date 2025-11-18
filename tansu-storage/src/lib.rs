@@ -187,7 +187,7 @@ use tansu_sans_io::{
 };
 use tansu_schema::{Registry, lake::House};
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, debug, debug_span, instrument};
+use tracing::{debug, instrument};
 use tracing_subscriber::filter::ParseError;
 use url::Url;
 use uuid::Uuid;
@@ -1426,7 +1426,7 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
     ) -> Result<ErrorCode>;
 
     /// Run periodic maintenance on this storage.
-    async fn maintain(&self) -> Result<()> {
+    async fn maintain(&self, _now: SystemTime) -> Result<()> {
         Ok(())
     }
 
@@ -1744,7 +1744,7 @@ static STORAGE_CONTAINER_ERRORS: LazyLock<Counter<u64>> = LazyLock::new(|| {
 
 #[async_trait]
 impl Storage for StorageContainer {
-    #[instrument(skip(self), ret)]
+    #[instrument(level = "debug", skip_all, fields(cluster_id = broker_registration.cluster_id), ret)]
     async fn register_broker(&self, broker_registration: BrokerRegistrationRequest) -> Result<()> {
         let attributes = [KeyValue::new("method", "register_broker")];
 
@@ -1803,30 +1803,25 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(skip(self), ret)]
+    #[instrument(level = "debug", skip(self,topic), fields(name = topic.name), ret)]
     async fn create_topic(&self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {
         let attributes = [KeyValue::new("method", "create_topic")];
-        let span = debug_span!("create_topic", ?topic, validate_only);
 
-        async move {
-            match self {
-                #[cfg(feature = "dynostore")]
-                Self::DynoStore(engine) => engine.create_topic(topic, validate_only),
+        match self {
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.create_topic(topic, validate_only),
 
-                #[cfg(feature = "libsql")]
-                Self::Lite(engine) => engine.create_topic(topic, validate_only),
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.create_topic(topic, validate_only),
 
-                Self::Null(engine) => engine.create_topic(topic, validate_only),
+            Self::Null(engine) => engine.create_topic(topic, validate_only),
 
-                #[cfg(feature = "postgres")]
-                Self::Postgres(engine) => engine.create_topic(topic, validate_only),
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.create_topic(topic, validate_only),
 
-                #[cfg(feature = "turso")]
-                Self::Turso(engine) => engine.create_topic(topic, validate_only),
-            }
-            .await
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.create_topic(topic, validate_only),
         }
-        .instrument(span)
         .await
         .inspect(|_| {
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
@@ -1923,7 +1918,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(skip(self), ret)]
+    #[instrument(skip(self, batch), ret)]
     async fn produce(
         &self,
         transaction_id: Option<&str>,
@@ -1956,7 +1951,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(skip(self), ret)]
+    #[instrument(skip(self))]
     async fn fetch(
         &self,
         topition: &'_ Topition,
@@ -2593,24 +2588,24 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(skip(self), ret)]
-    async fn maintain(&self) -> Result<()> {
+    #[instrument(skip_all, fields(now = to_timestamp(&now).ok()))]
+    async fn maintain(&self, now: SystemTime) -> Result<()> {
         let attributes = [KeyValue::new("method", "maintain")];
 
         match self {
             #[cfg(feature = "dynostore")]
-            Self::DynoStore(engine) => engine.maintain(),
+            Self::DynoStore(engine) => engine.maintain(now),
 
             #[cfg(feature = "libsql")]
-            Self::Lite(engine) => engine.maintain(),
+            Self::Lite(engine) => engine.maintain(now),
 
-            Self::Null(engine) => engine.maintain(),
+            Self::Null(engine) => engine.maintain(now),
 
             #[cfg(feature = "postgres")]
-            Self::Postgres(engine) => engine.maintain(),
+            Self::Postgres(engine) => engine.maintain(now),
 
             #[cfg(feature = "turso")]
-            Self::Turso(engine) => engine.maintain(),
+            Self::Turso(engine) => engine.maintain(now),
         }
         .await
         .inspect(|maintain| {

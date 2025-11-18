@@ -3626,7 +3626,7 @@ impl Storage for Engine {
         Ok(error_code)
     }
 
-    async fn maintain(&self) -> Result<()> {
+    async fn maintain(&self, _now: SystemTime) -> Result<()> {
         Ok(())
     }
 

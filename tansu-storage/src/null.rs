@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{collections::BTreeMap, time::Duration};
+use std::{
+    collections::BTreeMap,
+    time::{Duration, SystemTime},
+};
 
 use async_trait::async_trait;
 use tansu_sans_io::{
@@ -325,7 +328,7 @@ impl Storage for Engine {
     }
 
     #[instrument(ret)]
-    async fn maintain(&self) -> Result<()> {
+    async fn maintain(&self, _now: SystemTime) -> Result<()> {
         Err(Error::FeatureNotEnabled {
             feature: FEATURE.into(),
             message: MESSAGE.into(),

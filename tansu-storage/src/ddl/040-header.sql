@@ -17,6 +17,7 @@ create table if not exists header (
     offset_id integer,
     k blob,
     v blob,
-    last_updated text default current_timestamp not null,
-    created_at text default current_timestamp not null
+    last_updated datetime default current_timestamp not null,
+    created_at datetime default current_timestamp not null,
+    foreign key (topition, offset_id) references record (topition, offset_id) on delete cascade
 );

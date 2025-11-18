@@ -77,7 +77,7 @@ where
     type Response = DeleteTopicsResponse;
     type Error = Error;
 
-    #[instrument(skip(ctx), ret)]
+    #[instrument(skip(ctx, req), fields(topics = ?req.topic_names.as_deref().unwrap_or_default()), ret)]
     async fn serve(
         &self,
         ctx: Context<G>,

@@ -84,7 +84,7 @@ where
     type Response = CreateTopicsResponse;
     type Error = Error;
 
-    #[instrument(skip(ctx), ret)]
+    #[instrument(skip(self, ctx, req), fields(name = ?req.topics.as_deref().unwrap_or_default().iter().map(|topic| topic.name.as_str()).collect::<Vec<_>>()), ret)]
     async fn serve(
         &self,
         ctx: Context<G>,

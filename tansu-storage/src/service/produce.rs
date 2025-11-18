@@ -18,7 +18,7 @@ use tansu_sans_io::{
     produce_request::{PartitionProduceData, TopicProduceData},
     produce_response::{PartitionProduceResponse, TopicProduceResponse},
 };
-use tracing::{debug, error, warn};
+use tracing::{debug, error, instrument, warn};
 
 use crate::{Error, Result, Storage, Topition};
 
@@ -243,6 +243,7 @@ where
     type Response = ProduceResponse;
     type Error = Error;
 
+    #[instrument(skip(ctx, req), fields(topics = ?req.topic_data.as_deref().unwrap_or_default().iter().map(|topic| topic.name.as_str()).collect::<Vec<_>>()), ret)]
     async fn serve(
         &self,
         ctx: Context<G>,
