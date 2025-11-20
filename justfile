@@ -17,6 +17,8 @@ build-examples: (cargo-build "--examples")
 
 release: (cargo-build "--release" "--bin" "tansu" "--no-default-features" "--features" "delta,dynostore,iceberg,libsql,parquet,postgres")
 
+release-sqlite: (cargo-build "--release" "--bin" "tansu" "--no-default-features" "--features" "libsql")
+
 test: test-workspace test-doc
 
 test-workspace:
@@ -381,3 +383,7 @@ customer-topic-create *args: (topic-create "customer" "--partitions=1"  "--confi
 customer-topic-generator *args: (generator "customer" args)
 
 customer-duckdb-delta: (duckdb "\"select * from delta_scan('s3://lake/tansu.customer');\"")
+
+profile-null:
+    cargo build --profile profiling
+    RUST_LOG=warn samply record ./target/profiling/tansu --storage-engine=null://sink

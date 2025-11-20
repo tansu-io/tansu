@@ -256,8 +256,6 @@ where
 
         if let Some(topics) = req.topic_data {
             for topic in topics {
-                debug!(?topic);
-
                 responses.push(
                     self.topic(ctx.clone(), req.transactional_id.as_deref(), topic)
                         .await,

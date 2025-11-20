@@ -235,6 +235,14 @@ pub struct TcpBytesService<S, State> {
     _state: PhantomData<State>,
 }
 
+impl<S, State> TcpBytesService<S, State> {
+    fn elapsed_millis(&self, start: SystemTime) -> u64 {
+        start
+            .elapsed()
+            .map_or(0, |duration| duration.as_millis() as u64)
+    }
+}
+
 impl<S, State> Service<TcpContext, TcpStream> for TcpBytesService<S, State>
 where
     S: Service<State, Bytes, Response = Bytes>,
@@ -298,7 +306,6 @@ where
                     .read_exact(&mut request[4..])
                     .await
                     .inspect_err(|err| error!(?err))?;
-                debug!(?request);
 
                 REQUEST_SIZE.record(request.len() as u64, &attributes);
 
@@ -313,15 +320,11 @@ where
                     .inspect(|response| {
                         RESPONSE_SIZE.record(response.len() as u64, &attributes);
 
-                        REQUEST_DURATION.record(
-                            request_start
-                                .elapsed()
-                                .map_or(0, |duration| duration.as_millis() as u64),
-                            &attributes,
-                        );
-                    })?;
+                        let elapsed_millis = self.elapsed_millis(request_start);
+                        debug!(elapsed_millis);
 
-                debug!(response = ?&response[..]);
+                        REQUEST_DURATION.record(elapsed_millis, &attributes);
+                    })?;
 
                 req.write_all(&response)
                     .await

@@ -1700,13 +1700,23 @@ impl Builder<i32, String, Url, Url> {
                 message: self.storage.to_string(),
             }),
 
+            "null" => Ok(StorageContainer::Null(null::Engine::new(
+                self.cluster_id.clone(),
+                self.node_id,
+                self.advertised_listener.clone(),
+            ))),
+
             #[cfg(not(any(
                 feature = "dynostore",
                 feature = "libsql",
                 feature = "postgres",
                 feature = "turso"
             )))]
-            _storage => Ok(StorageContainer::Null(null::Engine)),
+            _storage => Ok(StorageContainer::Null(null::Engine::new(
+                self.cluster_id.clone(),
+                self.node_id,
+                self.advertised_listener.clone(),
+            ))),
 
             #[cfg(any(
                 feature = "dynostore",
@@ -1923,7 +1933,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(skip(self), ret)]
+    #[instrument(skip_all, ret)]
     async fn produce(
         &self,
         transaction_id: Option<&str>,

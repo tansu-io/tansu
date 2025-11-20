@@ -159,7 +159,6 @@ where
     type Error = S::Error;
 
     async fn serve(&self, ctx: Context<State>, req: Frame) -> Result<Self::Response, Self::Error> {
-        debug!(?req);
         let correlation_id = req.correlation_id()?;
 
         let req = Q::try_from(req.body).map_err(Into::into)?;
@@ -216,7 +215,7 @@ where
     type Error = S::Error;
 
     async fn serve(&self, ctx: Context<State>, req: Bytes) -> Result<Self::Response, Self::Error> {
-        let req = Frame::request_from_bytes(req).inspect(|req| debug!(?req))?;
+        let req = Frame::request_from_bytes(req)?;
         let api_key = req.api_key()?;
         let api_version = req.api_version()?;
         let correlation_id = req.correlation_id()?;
