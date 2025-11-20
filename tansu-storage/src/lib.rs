@@ -215,6 +215,9 @@ pub use service::{
     TxnOffsetCommitService, bounded_channel,
 };
 
+#[cfg(feature = "slatedb")]
+mod slate;
+
 #[cfg(any(feature = "libsql", feature = "postgres", feature = "turso"))]
 pub(crate) mod sql;
 
@@ -295,6 +298,10 @@ pub enum Error {
     },
 
     SerdeJson(Arc<serde_json::Error>),
+
+    #[cfg(feature = "slatedb")]
+    Slate(Arc<slatedb::Error>),
+
     SystemTime(#[from] SystemTimeError),
 
     #[cfg(feature = "postgres")]
@@ -351,6 +358,13 @@ where
 impl From<libsql::Error> for Error {
     fn from(value: libsql::Error) -> Self {
         Self::LibSql(Arc::new(value))
+    }
+}
+
+#[cfg(feature = "slatedb")]
+impl From<slatedb::Error> for Error {
+    fn from(value: slatedb::Error) -> Self {
+        Self::Slate(Arc::new(value))
     }
 }
 
@@ -1508,6 +1522,9 @@ pub enum StorageContainer {
     #[cfg(feature = "libsql")]
     Lite(lite::Engine),
 
+    #[cfg(feature = "slatedb")]
+    Slate(slate::Engine),
+
     #[cfg(feature = "turso")]
     Turso(limbo::Engine),
 }
@@ -1682,6 +1699,39 @@ impl Builder<i32, String, Url, Url> {
                 message: self.storage.to_string(),
             }),
 
+            #[cfg(feature = "slatedb")]
+            "slatedb" => {
+                use slatedb::Db;
+
+                let bucket_name = self.storage.host_str().unwrap_or("tansu");
+
+                let object_store = AmazonS3Builder::from_env()
+                    .with_bucket_name(bucket_name)
+                    .with_conditional_put(S3ConditionalPut::ETagMatch)
+                    .build()
+                    .map(Arc::new)?;
+
+                Db::open(format!("tansu-{}.slatedb", self.cluster_id), object_store)
+                    .await
+                    .map(Arc::new)
+                    .map(|db| {
+                        slate::Engine::new(
+                            self.cluster_id.as_str(),
+                            self.node_id,
+                            self.advertised_listener,
+                            db,
+                        )
+                    })
+                    .map(StorageContainer::Slate)
+                    .map_err(Into::into)
+            }
+
+            #[cfg(not(feature = "slatedb"))]
+            "slatedb" => Err(Error::FeatureNotEnabled {
+                feature: "libsql".into(),
+                message: self.storage.to_string(),
+            }),
+
             #[cfg(feature = "turso")]
             "turso" => limbo::Engine::builder()
                 .storage(self.storage.clone())
@@ -1710,6 +1760,7 @@ impl Builder<i32, String, Url, Url> {
                 feature = "dynostore",
                 feature = "libsql",
                 feature = "postgres",
+                feature = "slatedb",
                 feature = "turso"
             )))]
             _storage => Ok(StorageContainer::Null(null::Engine::new(
@@ -1722,6 +1773,7 @@ impl Builder<i32, String, Url, Url> {
                 feature = "dynostore",
                 feature = "libsql",
                 feature = "postgres",
+                feature = "slatedb",
                 feature = "turso"
             ))]
             _unsupported => Err(Error::UnsupportedStorageUrl(self.storage.clone())),
@@ -1770,6 +1822,9 @@ impl Storage for StorageContainer {
             #[cfg(feature = "postgres")]
             Self::Postgres(engine) => engine.register_broker(broker_registration),
 
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.register_broker(broker_registration),
+
             #[cfg(feature = "turso")]
             Self::Turso(engine) => engine.register_broker(broker_registration),
         }
@@ -1801,6 +1856,9 @@ impl Storage for StorageContainer {
             #[cfg(feature = "postgres")]
             Self::Postgres(engine) => engine.incremental_alter_resource(resource),
 
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.incremental_alter_resource(resource),
+
             #[cfg(feature = "turso")]
             Self::Turso(engine) => engine.incremental_alter_resource(resource),
         }
@@ -1830,6 +1888,9 @@ impl Storage for StorageContainer {
 
                 #[cfg(feature = "postgres")]
                 Self::Postgres(engine) => engine.create_topic(topic, validate_only),
+
+                #[cfg(feature = "slatedb")]
+                Self::Slate(engine) => engine.create_topic(topic, validate_only),
 
                 #[cfg(feature = "turso")]
                 Self::Turso(engine) => engine.create_topic(topic, validate_only),
@@ -1865,6 +1926,9 @@ impl Storage for StorageContainer {
             #[cfg(feature = "postgres")]
             Self::Postgres(engine) => engine.delete_records(topics),
 
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.delete_records(topics),
+
             #[cfg(feature = "turso")]
             Self::Turso(engine) => engine.delete_records(topics),
         }
@@ -1893,6 +1957,9 @@ impl Storage for StorageContainer {
             #[cfg(feature = "postgres")]
             Self::Postgres(engine) => engine.delete_topic(topic),
 
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.delete_topic(topic),
+
             #[cfg(feature = "turso")]
             Self::Turso(engine) => engine.delete_topic(topic),
         }
@@ -1920,6 +1987,9 @@ impl Storage for StorageContainer {
 
             #[cfg(feature = "postgres")]
             Self::Postgres(engine) => engine.brokers(),
+
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.brokers(),
 
             #[cfg(feature = "turso")]
             Self::Turso(engine) => engine.brokers(),
@@ -1953,6 +2023,9 @@ impl Storage for StorageContainer {
 
             #[cfg(feature = "postgres")]
             Self::Postgres(engine) => engine.produce(transaction_id, topition, batch),
+
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.produce(transaction_id, topition, batch),
 
             #[cfg(feature = "turso")]
             Self::Turso(engine) => engine.produce(transaction_id, topition, batch),
@@ -1993,6 +2066,9 @@ impl Storage for StorageContainer {
                 engine.fetch(topition, offset, min_bytes, max_bytes, isolation)
             }
 
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.fetch(topition, offset, min_bytes, max_bytes, isolation),
+
             #[cfg(feature = "turso")]
             Self::Turso(engine) => engine.fetch(topition, offset, min_bytes, max_bytes, isolation),
         }
@@ -2020,6 +2096,9 @@ impl Storage for StorageContainer {
 
             #[cfg(feature = "postgres")]
             Self::Postgres(engine) => engine.offset_stage(topition),
+
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.offset_stage(topition),
 
             #[cfg(feature = "turso")]
             Self::Turso(engine) => engine.offset_stage(topition),
@@ -2052,6 +2131,9 @@ impl Storage for StorageContainer {
 
             #[cfg(feature = "postgres")]
             Self::Postgres(engine) => engine.list_offsets(isolation_level, offsets),
+
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.list_offsets(isolation_level, offsets),
 
             #[cfg(feature = "turso")]
             Self::Turso(engine) => engine.list_offsets(isolation_level, offsets),
@@ -2086,6 +2168,9 @@ impl Storage for StorageContainer {
             #[cfg(feature = "postgres")]
             Self::Postgres(engine) => engine.offset_commit(group_id, retention_time_ms, offsets),
 
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.offset_commit(group_id, retention_time_ms, offsets),
+
             #[cfg(feature = "turso")]
             Self::Turso(engine) => engine.offset_commit(group_id, retention_time_ms, offsets),
         }
@@ -2113,6 +2198,9 @@ impl Storage for StorageContainer {
 
             #[cfg(feature = "postgres")]
             Self::Postgres(engine) => engine.committed_offset_topitions(group_id),
+
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.committed_offset_topitions(group_id),
 
             #[cfg(feature = "turso")]
             Self::Turso(engine) => engine.committed_offset_topitions(group_id),
@@ -2147,6 +2235,9 @@ impl Storage for StorageContainer {
             #[cfg(feature = "postgres")]
             Self::Postgres(engine) => engine.offset_fetch(group_id, topics, require_stable),
 
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.offset_fetch(group_id, topics, require_stable),
+
             #[cfg(feature = "turso")]
             Self::Turso(engine) => engine.offset_fetch(group_id, topics, require_stable),
         }
@@ -2174,6 +2265,9 @@ impl Storage for StorageContainer {
 
             #[cfg(feature = "postgres")]
             Self::Postgres(engine) => engine.metadata(topics),
+
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.metadata(topics),
 
             #[cfg(feature = "turso")]
             Self::Turso(engine) => engine.metadata(topics),
@@ -2207,6 +2301,9 @@ impl Storage for StorageContainer {
 
             #[cfg(feature = "postgres")]
             Self::Postgres(engine) => engine.describe_config(name, resource, keys),
+
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.describe_config(name, resource, keys),
 
             #[cfg(feature = "turso")]
             Self::Turso(engine) => engine.describe_config(name, resource, keys),
@@ -2245,6 +2342,11 @@ impl Storage for StorageContainer {
                 engine.describe_topic_partitions(topics, partition_limit, cursor)
             }
 
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => {
+                engine.describe_topic_partitions(topics, partition_limit, cursor)
+            }
+
             #[cfg(feature = "turso")]
             Self::Turso(engine) => {
                 engine.describe_topic_partitions(topics, partition_limit, cursor)
@@ -2274,6 +2376,9 @@ impl Storage for StorageContainer {
 
             #[cfg(feature = "postgres")]
             Self::Postgres(engine) => engine.list_groups(states_filter),
+
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.list_groups(states_filter),
 
             #[cfg(feature = "turso")]
             Self::Turso(engine) => engine.list_groups(states_filter),
@@ -2305,6 +2410,9 @@ impl Storage for StorageContainer {
 
             #[cfg(feature = "postgres")]
             Self::Postgres(engine) => engine.delete_groups(group_ids),
+
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.delete_groups(group_ids),
 
             #[cfg(feature = "turso")]
             Self::Turso(engine) => engine.delete_groups(group_ids),
@@ -2342,6 +2450,9 @@ impl Storage for StorageContainer {
                 engine.describe_groups(group_ids, include_authorized_operations)
             }
 
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.describe_groups(group_ids, include_authorized_operations),
+
             #[cfg(feature = "turso")]
             Self::Turso(engine) => engine.describe_groups(group_ids, include_authorized_operations),
         }
@@ -2374,6 +2485,9 @@ impl Storage for StorageContainer {
 
             #[cfg(feature = "postgres")]
             Self::Postgres(engine) => engine.update_group(group_id, detail, version),
+
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.update_group(group_id, detail, version),
 
             #[cfg(feature = "turso")]
             Self::Turso(engine) => engine.update_group(group_id, detail, version),
@@ -2436,6 +2550,14 @@ impl Storage for StorageContainer {
                 producer_epoch,
             ),
 
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.init_producer(
+                transaction_id,
+                transaction_timeout_ms,
+                producer_id,
+                producer_epoch,
+            ),
+
             #[cfg(feature = "turso")]
             Self::Turso(engine) => engine.init_producer(
                 transaction_id,
@@ -2483,6 +2605,11 @@ impl Storage for StorageContainer {
                 engine.txn_add_offsets(transaction_id, producer_id, producer_epoch, group_id)
             }
 
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => {
+                engine.txn_add_offsets(transaction_id, producer_id, producer_epoch, group_id)
+            }
+
             #[cfg(feature = "turso")]
             Self::Turso(engine) => {
                 engine.txn_add_offsets(transaction_id, producer_id, producer_epoch, group_id)
@@ -2516,6 +2643,9 @@ impl Storage for StorageContainer {
             #[cfg(feature = "postgres")]
             Self::Postgres(engine) => engine.txn_add_partitions(partitions),
 
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.txn_add_partitions(partitions),
+
             #[cfg(feature = "turso")]
             Self::Turso(engine) => engine.txn_add_partitions(partitions),
         }
@@ -2546,6 +2676,9 @@ impl Storage for StorageContainer {
 
             #[cfg(feature = "postgres")]
             Self::Postgres(engine) => engine.txn_offset_commit(offsets),
+
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.txn_offset_commit(offsets),
 
             #[cfg(feature = "turso")]
             Self::Turso(engine) => engine.txn_offset_commit(offsets),
@@ -2589,6 +2722,11 @@ impl Storage for StorageContainer {
                 engine.txn_end(transaction_id, producer_id, producer_epoch, committed)
             }
 
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => {
+                engine.txn_end(transaction_id, producer_id, producer_epoch, committed)
+            }
+
             #[cfg(feature = "turso")]
             Self::Turso(engine) => {
                 engine.txn_end(transaction_id, producer_id, producer_epoch, committed)
@@ -2619,6 +2757,9 @@ impl Storage for StorageContainer {
             #[cfg(feature = "postgres")]
             Self::Postgres(engine) => engine.maintain(),
 
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.maintain(),
+
             #[cfg(feature = "turso")]
             Self::Turso(engine) => engine.maintain(),
         }
@@ -2647,6 +2788,9 @@ impl Storage for StorageContainer {
             #[cfg(feature = "postgres")]
             Self::Postgres(engine) => engine.cluster_id().await,
 
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.cluster_id().await,
+
             #[cfg(feature = "turso")]
             Self::Turso(engine) => engine.cluster_id().await,
         }
@@ -2666,6 +2810,9 @@ impl Storage for StorageContainer {
             #[cfg(feature = "postgres")]
             Self::Postgres(engine) => engine.node().await,
 
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.node().await,
+
             #[cfg(feature = "turso")]
             Self::Turso(engine) => engine.node().await,
         }
@@ -2684,6 +2831,9 @@ impl Storage for StorageContainer {
 
             #[cfg(feature = "postgres")]
             Self::Postgres(engine) => engine.advertised_listener().await,
+
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.advertised_listener().await,
 
             #[cfg(feature = "turso")]
             Self::Turso(engine) => engine.advertised_listener().await,
