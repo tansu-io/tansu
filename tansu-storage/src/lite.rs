@@ -221,7 +221,7 @@ impl managed::Manager for ConnectionManager {
     type Type = Connection;
     type Error = Error;
 
-    #[instrument(ret)]
+    #[instrument(skip_all, ret)]
     async fn create(&self) -> Result<Self::Type, Self::Error> {
         let start = SystemTime::now();
 
@@ -239,6 +239,11 @@ impl managed::Manager for ConnectionManager {
         }
 
         {
+            _ = connection
+                .execute("PRAGMA synchronous = normal", ())
+                .await
+                .inspect(|rows| debug!(rows))?;
+
             let mut rows = connection.query("PRAGMA synchronous", ()).await?;
 
             if let Some(row) = rows.next().await.inspect_err(|err| error!(?err))? {
@@ -272,13 +277,11 @@ impl managed::Manager for ConnectionManager {
             .inspect(|_| CONNECT_DURATION.record(elapsed_millis(start), &[]))
     }
 
-    #[instrument(ret)]
     async fn recycle(
         &self,
-        obj: &mut Self::Type,
-        metrics: &managed::Metrics,
+        _obj: &mut Self::Type,
+        _metrics: &managed::Metrics,
     ) -> managed::RecycleResult<Self::Error> {
-        debug!(?obj, ?metrics);
         Ok(())
     }
 }
@@ -543,13 +546,11 @@ impl Delegate {
 
     async fn idempotent_message_check(
         &self,
-        transaction_id: Option<&str>,
+        _transaction_id: Option<&str>,
         topition: &Topition,
         deflated: &deflated::Batch,
         connection: &Connection,
     ) -> Result<()> {
-        debug!(transaction_id, ?deflated);
-
         let mut rows = connection
             .query(
                 &sql_lookup("producer_epoch_current_for_producer.sql")?,
@@ -663,8 +664,6 @@ impl Delegate {
         deflated: deflated::Batch,
         tx: &Transaction,
     ) -> Result<i64> {
-        debug!(cluster = ?self.cluster, ?transaction_id, ?topition, ?deflated);
-
         let start = SystemTime::now();
 
         let topic = topition.topic();
@@ -731,7 +730,7 @@ impl Delegate {
             let key = record.key.as_deref();
             let value = record.value.as_deref();
 
-            debug!(?delta, ?record, ?offset);
+            debug!(?delta, ?offset);
 
             _ = self
                 .prepare_execute(
@@ -1349,7 +1348,7 @@ impl Storage for Engine {
             })
     }
 
-    #[instrument(ret)]
+    #[instrument(skip_all, ret)]
     async fn produce(
         &self,
         transaction_id: Option<&str>,
@@ -2117,8 +2116,6 @@ impl Storage for Delegate {
         deflated: deflated::Batch,
     ) -> Result<i64> {
         let start = SystemTime::now();
-
-        debug!(cluster = self.cluster, transaction_id, ?topition, ?deflated);
 
         let tx = self.transaction().await.inspect(|_| {
             debug!(after_produce_transaction = elapsed_millis(start));

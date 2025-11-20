@@ -375,7 +375,7 @@ where
     type Response = Response;
     type Error = ServiceError;
 
-    #[instrument(skip(ctx), ret)]
+    #[instrument(skip_all)]
     async fn serve(
         &self,
         ctx: Context<State>,
@@ -552,7 +552,7 @@ impl Storage for RequestChannelService {
             .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip(self, transaction_id, batch), ret)]
     async fn produce(
         &self,
         transaction_id: Option<&str>,
@@ -1121,8 +1121,6 @@ where
         loop {
             tokio::select! {
                 Some((request, tx)) = req.recv() => {
-                    debug!(?request, ?tx);
-
                     self.inner
                     .serve(ctx.clone(), request)
                     .await

@@ -394,8 +394,6 @@ pub(crate) fn idempotent_sequence_check(
     sequence: &i32,
     deflated: &deflated::Batch,
 ) -> Result<i32> {
-    debug!(?producer_epoch, ?sequence, ?deflated);
-
     match producer_epoch.cmp(&deflated.producer_epoch) {
         Ordering::Equal => match sequence.cmp(&deflated.base_sequence) {
             Ordering::Equal => Ok(deflated.last_offset_delta + 1),
