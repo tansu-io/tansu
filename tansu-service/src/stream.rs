@@ -241,6 +241,10 @@ impl<S, State> TcpBytesService<S, State> {
             .elapsed()
             .map_or(0, |duration| duration.as_millis() as u64)
     }
+
+    fn elapsed_micros(&self, start: SystemTime) -> u128 {
+        start.elapsed().map_or(0, |duration| duration.as_micros())
+    }
 }
 
 impl<S, State> Service<TcpContext, TcpStream> for TcpBytesService<S, State>
@@ -292,6 +296,8 @@ where
                     .await
                     .inspect_err(|err| debug!(?err))?;
 
+                let start = SystemTime::now();
+
                 if ctx
                     .state()
                     .maximum_frame_size
@@ -300,12 +306,20 @@ where
                     return Err(Into::into(Error::FrameTooBig(frame_length(size))));
                 }
 
-                let mut request: Vec<u8> = vec![0u8; frame_length(size)];
-                request[0..size.len()].copy_from_slice(&size[..]);
-                _ = req
-                    .read_exact(&mut request[4..])
-                    .await
-                    .inspect_err(|err| error!(?err))?;
+                let request = {
+                    let mut request: Vec<u8> = vec![0u8; frame_length(size)];
+
+                    request[0..size.len()].copy_from_slice(&size[..]);
+
+                    _ = req
+                        .read_exact(&mut request[4..])
+                        .await
+                        .inspect_err(|err| error!(?err))?;
+
+                    Bytes::from(request)
+                };
+
+                debug!(request = ?&request[..], elapsed_micros = self.elapsed_micros(start));
 
                 REQUEST_SIZE.record(request.len() as u64, &attributes);
 
@@ -314,20 +328,25 @@ where
 
                 let response = self
                     .inner
-                    .serve(ctx, Bytes::from(request))
+                    .serve(ctx, request)
                     .await
                     .inspect_err(|err| error!(?err))
                     .inspect(|response| {
                         RESPONSE_SIZE.record(response.len() as u64, &attributes);
 
                         let elapsed_millis = self.elapsed_millis(request_start);
-                        debug!(elapsed_millis);
+                        debug!(elapsed_micros = self.elapsed_micros(start));
 
                         REQUEST_DURATION.record(elapsed_millis, &attributes);
                     })?;
 
+                debug!(response = ?&response[..]);
+
                 req.write_all(&response)
                     .await
+                    .inspect(|_| {
+                        debug!(elapsed_micros = self.elapsed_micros(start));
+                    })
                     .inspect_err(|err| error!(?err))?
             }
         }

@@ -234,7 +234,7 @@ search-topic-produce:
 search-duckdb-parquet: (duckdb-parquet "search")
 
 tansu-server:
-    target/debug/tansu broker --schema-registry file://./etc/schema 2>&1 | tee tansu.log
+    target/debug/tansu broker --schema-registry file://./etc/schema 2>&1 | tee broker.log
 
 kafka-proxy:
     docker run -d -p 19092:9092 apache/kafka:3.9.0
@@ -289,13 +289,13 @@ flamegraph *args:
     cargo flamegraph {{args}}
 
 benchmark-flamegraph: build docker-compose-down minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up
-	flamegraph -- target/debug/tansu broker 2>&1  | tee tansu.log
+	flamegraph -- target/debug/tansu broker 2>&1  | tee broker.log
 
 benchmark: build docker-compose-down minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up
-	target/debug/tansu broker 2>&1  | tee tansu.log
+	target/debug/tansu broker 2>&1  | tee broker.log
 
 otel: build docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up
-	target/debug/tansu broker 2>&1  | tee tansu.log
+	target/debug/tansu broker 2>&1  | tee broker.log
 
 otel-up: docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up tansu-up
 
@@ -316,7 +316,7 @@ proxy *args:
 
 # teardown compose, rebuild: minio, db, tansu and lake buckets
 server: (cargo-build "--bin" "tansu") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket lakehouse-catalog-up
-	target/debug/tansu broker 2>&1  | tee tansu.log
+	target/debug/tansu broker 2>&1  | tee broker.log
 
 gdb: (cargo-build "--bin" "tansu") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket
     rust-gdb --args target/debug/tansu broker
@@ -384,6 +384,38 @@ customer-topic-generator *args: (generator "customer" args)
 
 customer-duckdb-delta: (duckdb "\"select * from delta_scan('s3://lake/tansu.customer');\"")
 
-profile-null:
-    cargo build --profile profiling
+broker-null:
+    cargo build --profile profiling --bin tansu
+    ./target/profiling/tansu --storage-engine=null://sink 2>&1 | tee broker.log
+
+samply-null:
+    cargo build --profile profiling --bin tansu
     RUST_LOG=warn samply record ./target/profiling/tansu --storage-engine=null://sink
+
+flamegraph-null-debug:
+    cargo build --bin tansu
+    RUST_LOG=warn flamegraph -- ./target/debug/tansu --storage-engine=null://sink
+
+flamegraph-null profile:
+    cargo build --profile {{profile}} --bin tansu
+    RUST_LOG=warn flamegraph -- ./target/{{profile}}/tansu --storage-engine=null://sink
+
+samply-produce:
+    cargo build --profile profiling --bin bench_produce_v11
+    RUST_LOG=warn samply record ./target/profiling/bench_produce_v11
+
+flamegraph-produce:
+    cargo build --bin bench_produce_v11
+    RUST_LOG=warn flamegraph -- ./target/debug/bench_produce_v11
+
+flamegraph-produce-profile profile:
+    cargo build --profile {{profile}} --bin bench_produce_v11
+    RUST_LOG=warn flamegraph -- ./target/{{profile}}/bench_produce_v11
+
+bench:
+    cargo bench --profile profiling --all-features --package tansu-sans-io --quiet
+
+producer-perf  throughput="1000" record_size="1024" num_records="100000":
+    kafka-producer-perf-test --topic test --num-records {{num_records}} --record-size {{record_size}} --throughput {{throughput}} --producer-props bootstrap.servers=localhost:9092
+
+producer-perf-1000: (producer-perf "1000")

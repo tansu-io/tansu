@@ -15,6 +15,7 @@
 use std::{
     fmt::{self, Debug},
     marker::PhantomData,
+    time::SystemTime,
 };
 
 use bytes::Bytes;
@@ -215,7 +216,17 @@ where
     type Error = S::Error;
 
     async fn serve(&self, ctx: Context<State>, req: Bytes) -> Result<Self::Response, Self::Error> {
-        let req = Frame::request_from_bytes(req)?;
+        let req = {
+            let start = SystemTime::now();
+            let length = req.len();
+
+            Frame::request_from_bytes(req).inspect(|_frame| {
+                debug!(
+                    length,
+                    elapsed_micros = start.elapsed().map_or(0, |duration| duration.as_micros())
+                );
+            })?
+        };
         let api_key = req.api_key()?;
         let api_version = req.api_version()?;
         let correlation_id = req.correlation_id()?;
@@ -239,12 +250,21 @@ where
                 .await
                 .inspect(|response| debug!(?response))
                 .and_then(|Frame { body, .. }| {
+                    let start = SystemTime::now();
+
                     Frame::response(
                         Header::Response { correlation_id },
                         body,
                         api_key,
                         api_version,
                     )
+                    .inspect(|encoded| {
+                        debug!(
+                            length = encoded.len(),
+                            elapsed_micros =
+                                start.elapsed().map_or(0, |duration| duration.as_micros())
+                        )
+                    })
                     .map_err(Into::into)
                 })
                 .inspect(|response| {

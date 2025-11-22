@@ -184,12 +184,12 @@ impl RootMessageMeta {
     }
 
     #[must_use]
-    pub fn requests(&self) -> &HashMap<i16, &'static MessageMeta> {
+    pub const fn requests(&self) -> &HashMap<i16, &'static MessageMeta> {
         &self.requests
     }
 
     #[must_use]
-    pub fn responses(&self) -> &HashMap<i16, &'static MessageMeta> {
+    pub const fn responses(&self) -> &HashMap<i16, &'static MessageMeta> {
         &self.responses
     }
 }
@@ -397,8 +397,16 @@ pub struct Frame {
 }
 
 impl Frame {
+    fn elapsed_millis(start: SystemTime) -> u64 {
+        start
+            .elapsed()
+            .map_or(0, |duration| duration.as_millis() as u64)
+    }
+
     /// serialize an API request into a frame of bytes
     pub fn request(header: Header, body: Body) -> Result<Bytes> {
+        let start = SystemTime::now();
+
         let mut c = Cursor::new(vec![]);
 
         let mut serializer = Encoder::request(&mut c);
@@ -416,18 +424,28 @@ impl Frame {
         let buf = size.to_be_bytes();
         c.write_all(&buf)?;
 
-        Ok(Bytes::from(c.into_inner()))
+        Ok(Bytes::from(c.into_inner())).inspect(|encoded| {
+            debug!(
+                len = encoded.len(),
+                elapsed_millis = Self::elapsed_millis(start)
+            )
+        })
     }
 
     /// deserialize bytes into an API request frame
-    pub fn request_from_bytes(bytes: impl Buf) -> Result<Frame> {
-        let mut reader = bytes.reader();
+    pub fn request_from_bytes(encoded: impl Buf) -> Result<Frame> {
+        let start = SystemTime::now();
+
+        let mut reader = encoded.reader();
         let mut deserializer = Decoder::request(&mut reader);
         Frame::deserialize(&mut deserializer)
+            .inspect(|_frame| debug!(elapsed_millis = Self::elapsed_millis(start)))
     }
 
     /// serialize an API response into a frame of bytes
     pub fn response(header: Header, body: Body, api_key: i16, api_version: i16) -> Result<Bytes> {
+        let start = SystemTime::now();
+
         let mut c = Cursor::new(vec![]);
         let mut serializer = Encoder::response(&mut c, api_key, api_version);
 
@@ -449,14 +467,22 @@ impl Frame {
         let buf = size.to_be_bytes();
         c.write_all(&buf)?;
 
-        Ok(Bytes::from(c.into_inner()))
+        Ok(Bytes::from(c.into_inner())).inspect(|encoded| {
+            debug!(
+                len = encoded.len(),
+                elapsed_millis = Self::elapsed_millis(start)
+            )
+        })
     }
 
     /// deserialize bytes into an API response frame
     pub fn response_from_bytes(bytes: impl Buf, api_key: i16, api_version: i16) -> Result<Frame> {
+        let start = SystemTime::now();
+
         let mut reader = bytes.reader();
         let mut deserializer = Decoder::response(&mut reader, api_key, api_version);
         Frame::deserialize(&mut deserializer)
+            .inspect(|encoded| debug!(elapsed_millis = Self::elapsed_millis(start)))
     }
 
     /// API request key

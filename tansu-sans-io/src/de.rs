@@ -27,6 +27,8 @@ use std::{
 use tansu_model::{FieldMeta, MessageMeta};
 use tracing::{debug, warn};
 
+const PARSE_DEPTH: usize = 6;
+
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 enum Kind {
     Request,
@@ -118,18 +120,28 @@ impl FieldLookup {
     }
 }
 
-#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 struct Meta {
     message: Option<&'static MessageMeta>,
     field: Option<&'static FieldMeta>,
     parse: VecDeque<FieldLookup>,
 }
 
+impl Default for Meta {
+    fn default() -> Self {
+        Self {
+            message: Default::default(),
+            field: Default::default(),
+            parse: VecDeque::with_capacity(PARSE_DEPTH),
+        }
+    }
+}
+
 impl<'de> Decoder<'de> {
     pub fn new(reader: &'de mut dyn Read) -> Self {
         Self {
             reader: ReadPosition::new(reader),
-            containers: VecDeque::new(),
+            containers: VecDeque::with_capacity(PARSE_DEPTH),
             field: None,
             kind: None,
             api_key: None,
@@ -137,7 +149,7 @@ impl<'de> Decoder<'de> {
             meta: Meta::default(),
             length: None,
             in_seq_of_primitive: false,
-            path: VecDeque::new(),
+            path: VecDeque::with_capacity(PARSE_DEPTH),
             in_records: false,
         }
     }
@@ -145,7 +157,7 @@ impl<'de> Decoder<'de> {
     pub(crate) fn request(reader: &'de mut dyn Read) -> Self {
         Self {
             reader: ReadPosition::new(reader),
-            containers: VecDeque::new(),
+            containers: VecDeque::with_capacity(PARSE_DEPTH),
             field: None,
             kind: Some(Kind::Request),
             api_key: None,
@@ -153,7 +165,7 @@ impl<'de> Decoder<'de> {
             meta: Meta::default(),
             length: None,
             in_seq_of_primitive: false,
-            path: VecDeque::new(),
+            path: VecDeque::with_capacity(PARSE_DEPTH),
             in_records: false,
         }
     }
@@ -161,7 +173,7 @@ impl<'de> Decoder<'de> {
     pub(crate) fn response(reader: &'de mut dyn Read, api_key: i16, api_version: i16) -> Self {
         Self {
             reader: ReadPosition::new(reader),
-            containers: VecDeque::new(),
+            containers: VecDeque::with_capacity(PARSE_DEPTH),
             field: None,
             kind: Some(Kind::Response),
             api_key: Some(api_key),
@@ -170,7 +182,7 @@ impl<'de> Decoder<'de> {
                 .responses()
                 .get(&api_key)
                 .map_or_else(Meta::default, |meta| {
-                    let mut parse = VecDeque::new();
+                    let mut parse = VecDeque::with_capacity(PARSE_DEPTH);
                     parse.push_front(meta.fields.into());
 
                     Meta {
@@ -181,7 +193,7 @@ impl<'de> Decoder<'de> {
                 }),
             length: None,
             in_seq_of_primitive: false,
-            path: VecDeque::new(),
+            path: VecDeque::with_capacity(PARSE_DEPTH),
             in_records: false,
         }
     }

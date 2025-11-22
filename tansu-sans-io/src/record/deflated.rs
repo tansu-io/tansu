@@ -13,7 +13,7 @@
 // limitations under the License.
 //
 //! Deflated (compressed) Kafka Records
-use std::fmt::Formatter;
+use std::{fmt::Formatter, time::SystemTime};
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use crc::{CRC_32_ISCSI, Crc, Digest};
@@ -360,43 +360,43 @@ impl<'de> Deserialize<'de> for Batch {
             {
                 let base_offset = seq
                     .next_element::<i64>()?
-                    .ok_or(<A::Error as de::Error>::custom("base_offset"))?;
+                    .ok_or_else(|| <A::Error as de::Error>::custom("base_offset"))?;
                 let batch_length = seq
                     .next_element::<i32>()?
-                    .ok_or(<A::Error as de::Error>::custom("batch_length"))?;
+                    .ok_or_else(|| <A::Error as de::Error>::custom("batch_length"))?;
                 let partition_leader_epoch = seq
                     .next_element::<i32>()?
-                    .ok_or(<A::Error as de::Error>::custom("partition_leader_epoch"))?;
+                    .ok_or_else(|| <A::Error as de::Error>::custom("partition_leader_epoch"))?;
                 let magic = seq
                     .next_element::<i8>()?
-                    .ok_or(<A::Error as de::Error>::custom("magic"))?;
+                    .ok_or_else(|| <A::Error as de::Error>::custom("magic"))?;
                 let crc = seq
                     .next_element::<u32>()?
-                    .ok_or(<A::Error as de::Error>::custom("crc"))?;
+                    .ok_or_else(|| <A::Error as de::Error>::custom("crc"))?;
                 let attributes = seq
                     .next_element::<i16>()?
-                    .ok_or(<A::Error as de::Error>::custom("attributes"))?;
+                    .ok_or_else(|| <A::Error as de::Error>::custom("attributes"))?;
                 let last_offset_delta = seq
                     .next_element::<i32>()?
-                    .ok_or(<A::Error as de::Error>::custom("last_offset_delta"))?;
+                    .ok_or_else(|| <A::Error as de::Error>::custom("last_offset_delta"))?;
                 let base_timestamp = seq
                     .next_element::<i64>()?
-                    .ok_or(<A::Error as de::Error>::custom("base_timestamp"))?;
+                    .ok_or_else(|| <A::Error as de::Error>::custom("base_timestamp"))?;
                 let max_timestamp = seq
                     .next_element::<i64>()?
-                    .ok_or(<A::Error as de::Error>::custom("max_timestamp"))?;
+                    .ok_or_else(|| <A::Error as de::Error>::custom("max_timestamp"))?;
                 let producer_id = seq
                     .next_element::<i64>()?
-                    .ok_or(<A::Error as de::Error>::custom("producer_id"))?;
+                    .ok_or_else(|| <A::Error as de::Error>::custom("producer_id"))?;
                 let producer_epoch = seq
                     .next_element::<i16>()?
-                    .ok_or(<A::Error as de::Error>::custom("producer_epoch"))?;
+                    .ok_or_else(|| <A::Error as de::Error>::custom("producer_epoch"))?;
                 let base_sequence = seq
                     .next_element::<i32>()?
-                    .ok_or(<A::Error as de::Error>::custom("base_sequence"))?;
+                    .ok_or_else(|| <A::Error as de::Error>::custom("base_sequence"))?;
                 let record_count = seq
                     .next_element::<u32>()?
-                    .ok_or(<A::Error as de::Error>::custom("record_count"))?;
+                    .ok_or_else(|| <A::Error as de::Error>::custom("record_count"))?;
 
                 let record_data_size = usize::try_from(batch_length)
                     .map_err(|e| {
@@ -408,17 +408,21 @@ impl<'de> Deserialize<'de> for Batch {
 
                 debug!(?record_data_size);
 
-                let mut record_data = BytesMut::with_capacity(record_data_size);
+                let start = SystemTime::now();
 
-                for _ in 0..record_data_size {
-                    let byte = seq
-                        .next_element::<u8>()?
-                        .ok_or(<A::Error as de::Error>::custom("record_data: {n}"))?;
+                let record_data = {
+                    let mut record_data = BytesMut::with_capacity(record_data_size);
 
-                    record_data.put_u8(byte);
-                }
+                    for _ in 0..record_data_size {
+                        let byte = seq
+                            .next_element::<u8>()?
+                            .ok_or_else(|| <A::Error as de::Error>::custom("record_data: {n}"))?;
 
-                let record_data = Bytes::from(record_data);
+                        record_data.put_u8(byte);
+                    }
+
+                    Bytes::from(record_data)
+                };
 
                 let batch = Batch {
                     base_offset,
