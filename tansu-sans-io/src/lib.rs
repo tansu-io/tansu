@@ -121,7 +121,7 @@ pub mod primitive;
 pub mod record;
 pub mod ser;
 
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use bytes::{Buf, BufMut, Bytes, BytesMut, TryGetError};
 pub use de::Decoder;
 use flate2::read::GzDecoder;
 use primitive::tagged::TagBuffer;
@@ -239,6 +239,7 @@ pub enum Error {
     TansuModel(tansu_model::Error),
     TryFromInt(#[from] num::TryFromIntError),
     TryFromSlice(#[from] TryFromSliceError),
+    TryGet(Arc<TryGetError>),
     UnexpectedType(String),
     UnknownApiErrorCode(i16),
     UnknownCompressionType(i16),
@@ -271,6 +272,12 @@ impl serde::de::Error for Error {
 impl From<io::Error> for Error {
     fn from(value: io::Error) -> Self {
         Self::Io(Arc::new(value))
+    }
+}
+
+impl From<TryGetError> for Error {
+    fn from(value: TryGetError) -> Self {
+        Self::TryGet(Arc::new(value))
     }
 }
 

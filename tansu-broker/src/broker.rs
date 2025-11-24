@@ -97,8 +97,8 @@ where
             debug!(
                 messages = root_meta
                     .requests()
-                    .iter()
-                    .map(|(_, meta)| meta.name)
+                    .values()
+                    .map(|meta| meta.name)
                     .collect::<Vec<_>>()
                     .join(", ")
             );

@@ -448,8 +448,7 @@ impl Builder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Result, de::Decoder};
-    use std::io::Cursor;
+    use crate::{Result, de::BatchDecoder};
 
     #[test]
     fn batch() -> Result<()> {
@@ -475,7 +474,7 @@ mod tests {
 
     #[test]
     fn batch_decode() -> Result<()> {
-        let mut encoded = vec![
+        let encoded = vec![
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 59, 255, 255, 255, 255, 2, 67, 41, 231, 61, 0, 0, 0,
             0, 0, 0, 0, 0, 1, 141, 116, 152, 137, 53, 0, 0, 1, 141, 116, 152, 137, 53, 0, 0, 0, 0,
             0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 18, 0, 0, 0, 1, 6, 100, 101, 102, 0,
@@ -495,9 +494,8 @@ mod tests {
             .record(Record::builder().value(Some(Bytes::from(vec![100, 101, 102]))))
             .build()?;
 
-        let mut c = Cursor::new(&mut encoded);
-        let mut decoder = Decoder::new(&mut c);
-        let actual = Batch::deserialize(&mut decoder)?;
+        let decoder = BatchDecoder::new(Bytes::copy_from_slice(&encoded[..]));
+        let actual = Batch::deserialize(decoder)?;
 
         assert_eq!(decoded, actual);
 
@@ -506,7 +504,7 @@ mod tests {
 
     #[test]
     fn batch_encode() -> Result<()> {
-        let mut encoded = vec![
+        let encoded = vec![
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 59, 255, 255, 255, 255, 2, 67, 41, 231, 61, 0, 0, 0,
             0, 0, 0, 0, 0, 1, 141, 116, 152, 137, 53, 0, 0, 1, 141, 116, 152, 137, 53, 0, 0, 0, 0,
             0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 18, 0, 0, 0, 1, 6, 100, 101, 102, 0,
@@ -526,9 +524,8 @@ mod tests {
             .record(Record::builder().value(Some(Bytes::from(vec![100, 101, 102]))))
             .build()?;
 
-        let mut c = Cursor::new(&mut encoded);
-        let mut decoder = Decoder::new(&mut c);
-        let actual = Batch::deserialize(&mut decoder)?;
+        let decoder = BatchDecoder::new(Bytes::copy_from_slice(&encoded[..]));
+        let actual = Batch::deserialize(decoder)?;
 
         assert_eq!(decoded, actual);
 
