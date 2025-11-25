@@ -141,7 +141,7 @@ use std::{
     time::{Duration, SystemTime, SystemTimeError},
 };
 use tansu_model::{MessageKind, MessageMeta};
-use tracing::{debug, error, warn};
+use tracing::{debug, error, instrument, warn};
 use tracing_subscriber::filter::ParseError;
 
 /// The null topic identifier.
@@ -411,6 +411,7 @@ impl Frame {
     }
 
     /// serialize an API request into a frame of bytes
+    #[instrument(skip_all)]
     pub fn request(header: Header, body: Body) -> Result<Bytes> {
         let start = SystemTime::now();
 
@@ -440,6 +441,7 @@ impl Frame {
     }
 
     /// deserialize bytes into an API request frame
+    #[instrument(skip_all)]
     pub fn request_from_bytes(encoded: impl Buf) -> Result<Frame> {
         let start = SystemTime::now();
 
@@ -450,6 +452,7 @@ impl Frame {
     }
 
     /// serialize an API response into a frame of bytes
+    #[instrument(skip_all)]
     pub fn response(header: Header, body: Body, api_key: i16, api_version: i16) -> Result<Bytes> {
         let start = SystemTime::now();
 
@@ -483,6 +486,7 @@ impl Frame {
     }
 
     /// deserialize bytes into an API response frame
+    #[instrument(skip_all)]
     pub fn response_from_bytes(bytes: impl Buf, api_key: i16, api_version: i16) -> Result<Frame> {
         let start = SystemTime::now();
 

@@ -87,6 +87,8 @@ struct Meta {
     parse: VecDeque<FieldLookup>,
 }
 
+const PARSE_DEPTH: usize = 6;
+
 /// Serialize the serde data model into the Kafka protocol.
 pub struct Encoder<'a> {
     writer: &'a mut dyn Write,
@@ -108,7 +110,7 @@ impl<'a> Encoder<'a> {
     pub(crate) fn request(writer: &'a mut dyn Write) -> Self {
         Self {
             writer,
-            containers: VecDeque::new(),
+            containers: VecDeque::with_capacity(PARSE_DEPTH),
             kind: Some(Kind::Request),
             field: None,
             api_key: None,
@@ -120,7 +122,7 @@ impl<'a> Encoder<'a> {
     pub(crate) fn response(writer: &'a mut dyn Write, api_key: i16, api_version: i16) -> Self {
         Self {
             writer,
-            containers: VecDeque::new(),
+            containers: VecDeque::with_capacity(PARSE_DEPTH),
             kind: Some(Kind::Response),
             field: None,
             api_key: Some(api_key),
@@ -129,7 +131,7 @@ impl<'a> Encoder<'a> {
                 .responses()
                 .get(&api_key)
                 .map_or_else(Meta::default, |meta| {
-                    let mut parse = VecDeque::new();
+                    let mut parse = VecDeque::with_capacity(PARSE_DEPTH);
                     parse.push_front(meta.fields.into());
 
                     Meta {
@@ -144,7 +146,7 @@ impl<'a> Encoder<'a> {
     pub fn new(writer: &'a mut dyn Write) -> Self {
         Self {
             writer,
-            containers: VecDeque::new(),
+            containers: VecDeque::with_capacity(PARSE_DEPTH),
             kind: None,
             field: None,
             api_key: None,

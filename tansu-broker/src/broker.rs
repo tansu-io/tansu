@@ -223,6 +223,7 @@ where
         loop {
             tokio::select! {
                 Ok((stream, _addr)) = listener.accept() => {
+                    stream.set_nodelay(true)?;
 
                     let service = service.clone();
 

@@ -84,6 +84,43 @@ pub struct Batch {
     pub record_data: Bytes,
 }
 
+impl Batch {
+    fn crc(&self) -> Result<u32> {
+        let data = {
+            let mut data = BytesMut::with_capacity(
+                (i16::BITS
+                    + i32::BITS
+                    + i64::BITS
+                    + i64::BITS
+                    + i64::BITS
+                    + i16::BITS
+                    + i32::BITS
+                    + u32::BITS) as usize
+                    / 8
+                    + self.record_data.len(),
+            );
+
+            data.put_i16(self.attributes);
+            data.put_i32(self.last_offset_delta);
+            data.put_i64(self.base_timestamp);
+            data.put_i64(self.max_timestamp);
+            data.put_i64(self.producer_id);
+            data.put_i16(self.producer_epoch);
+            data.put_i32(self.base_sequence);
+            data.put_u32(self.record_count);
+            data.put(self.record_data.clone());
+
+            Bytes::from(data)
+        };
+
+        let crc = Crc::<u32>::new(&CRC_32_ISCSI);
+        let mut digest = crc.digest();
+        digest.update(&data[..]);
+
+        Ok(digest.finalize())
+    }
+}
+
 impl TryFrom<&[u8]> for Batch {
     type Error = Error;
 
@@ -124,19 +161,16 @@ impl TryFrom<&[u8]> for Batch {
             record_data,
         };
 
-        {
-            let crc_data = CrcData::from(&batch);
-            _ = crc_data
-                .crc()
-                .inspect(|computed| {
-                    if *computed == crc {
-                        debug!(crc, computed);
-                    } else {
-                        error!(crc, computed);
-                    }
-                })
-                .inspect_err(|err| error!(?err))?;
-        }
+        _ = batch
+            .crc()
+            .inspect(|computed| {
+                if *computed == crc {
+                    debug!(crc, computed);
+                } else {
+                    error!(crc, computed);
+                }
+            })
+            .inspect_err(|err| error!(?err))?;
 
         Ok(batch)
     }
