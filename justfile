@@ -416,6 +416,6 @@ bench:
     cargo bench --profile profiling --all-features --package tansu-sans-io --quiet
 
 producer-perf  throughput="1000" record_size="1024" num_records="100000":
-    kafka-producer-perf-test --topic test --num-records {{num_records}} --record-size {{record_size}} --throughput {{throughput}} --producer-props bootstrap.servers=localhost:9092
+    kafka-producer-perf-test --topic test --num-records {{num_records}} --record-size {{record_size}} --throughput {{throughput}} --producer-props bootstrap.servers=${ADVERTISED_LISTENER}
 
 producer-perf-1000: (producer-perf "1000")
