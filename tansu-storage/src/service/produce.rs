@@ -146,6 +146,7 @@ impl ProduceService {
             .current_leader(None)
     }
 
+    #[instrument(skip_all)]
     async fn partition<G>(
         &self,
         ctx: Context<G>,
@@ -210,6 +211,7 @@ impl ProduceService {
         }
     }
 
+    #[instrument(skip_all)]
     async fn topic<G>(
         &self,
         ctx: Context<G>,

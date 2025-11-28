@@ -232,7 +232,11 @@ where
 
     #[instrument(skip(ctx, req))]
     async fn serve(&self, ctx: Context<State>, req: Bytes) -> Result<Self::Response, Self::Error> {
-        let req = Frame::request_from_bytes(req)?;
+        let req = {
+            let task = tokio::task::spawn_blocking(|| Frame::request_from_bytes(req));
+            task.await.expect("task")
+        }?;
+
         let api_key = req.api_key()?;
         let api_version = req.api_version()?;
         let correlation_id = req.correlation_id()?;
@@ -242,19 +246,19 @@ where
             KeyValue::new("api_version", api_version as i64),
         ];
 
-        self.inner
-            .serve(ctx, req)
-            .await
-            .inspect(|response| debug!(?response))
-            .and_then(|Frame { body, .. }| {
-                Frame::response(
-                    Header::Response { correlation_id },
-                    body,
-                    api_key,
-                    api_version,
-                )
-                .map_err(Into::into)
-            })
+        let Frame { body, .. } = self.inner.serve(ctx, req).await?;
+
+        let task = tokio::task::spawn_blocking(move || {
+            Frame::response(
+                Header::Response { correlation_id },
+                body,
+                api_key,
+                api_version,
+            )
+        });
+
+        task.await
+            .expect("task")
             .inspect(|_| {
                 API_REQUESTS.add(1, &attributes);
             })
@@ -262,6 +266,7 @@ where
                 error!(api_key, api_version, ?err);
                 API_ERRORS.add(1, &attributes);
             })
+            .map_err(Into::into)
     }
 }
 

@@ -12,7 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{error, fmt::Debug, io, marker::PhantomData, time::SystemTime};
+use std::{
+    error::{self},
+    fmt::Debug,
+    io,
+    marker::PhantomData,
+    time::SystemTime,
+};
 
 use bytes::Bytes;
 use opentelemetry::KeyValue;
@@ -23,7 +29,8 @@ use tokio::{
     task::JoinSet,
 };
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, instrument};
+use tracing::{Instrument as _, Level, debug, error, instrument, span};
+use uuid::Uuid;
 
 use crate::{Error, REQUEST_DURATION, REQUEST_SIZE, RESPONSE_SIZE, frame_length};
 
@@ -272,12 +279,11 @@ where
     State: Clone + Default + Send + Sync + 'static,
 {
     #[instrument(skip_all)]
-    async fn process(
+    async fn wait(
         &self,
-        attributes: &[KeyValue],
-        ctx: Context<TcpContext>,
         req: &mut TcpStream,
-    ) -> Result<(), S::Error> {
+        maximum_frame_size: Option<usize>,
+    ) -> Result<[u8; 4], S::Error> {
         let mut size = [0u8; 4];
 
         _ = req
@@ -285,36 +291,42 @@ where
             .await
             .inspect_err(|err| debug!(?err))?;
 
-        if ctx
-            .state()
-            .maximum_frame_size
+        if maximum_frame_size
             .is_some_and(|maximum_frame_size| maximum_frame_size > frame_length(size))
         {
             return Err(Into::into(Error::FrameTooBig(frame_length(size))));
+        } else {
+            Ok(size)
         }
+    }
 
-        let request = {
-            let mut request: Vec<u8> = vec![0u8; frame_length(size)];
+    #[instrument(skip_all)]
+    async fn read(&self, req: &mut TcpStream, size: [u8; 4]) -> Result<Bytes, S::Error> {
+        let mut request: Vec<u8> = vec![0u8; frame_length(size)];
 
-            request[0..size.len()].copy_from_slice(&size[..]);
+        request[0..size.len()].copy_from_slice(&size[..]);
 
-            _ = req
-                .read_exact(&mut request[4..])
-                .await
-                .inspect_err(|err| error!(?err))?;
+        _ = req
+            .read_exact(&mut request[4..])
+            .await
+            .inspect_err(|err| error!(?err))?;
 
-            Bytes::from(request)
-        };
+        Ok(Bytes::from(request))
+    }
 
-        debug!(request = ?&request[..]);
-
+    #[instrument(skip_all)]
+    async fn process(
+        &self,
+        attributes: &[KeyValue],
+        ctx: Context<TcpContext>,
+        request: Bytes,
+    ) -> Result<Bytes, S::Error> {
         REQUEST_SIZE.record(request.len() as u64, attributes);
 
         let (ctx, _) = ctx.swap_state(State::default());
         let request_start = SystemTime::now();
 
-        let response = self
-            .inner
+        self.inner
             .serve(ctx, request)
             .await
             .inspect_err(|err| error!(?err))
@@ -324,16 +336,13 @@ where
                 let elapsed_millis = self.elapsed_millis(request_start);
 
                 REQUEST_DURATION.record(elapsed_millis, attributes);
-            })?;
+            })
+    }
 
-        debug!(response = ?&response[..]);
-
+    #[instrument(skip_all)]
+    async fn write(&self, req: &mut TcpStream, frame: Bytes) -> Result<(), S::Error> {
         let mut w = BufWriter::new(req);
-
-        w.write_all(&response)
-            .await
-            .inspect_err(|err| error!(?err))?;
-
+        w.write_all(&frame).await.inspect_err(|err| error!(?err))?;
         w.flush().await.map_err(Into::into)
     }
 }
@@ -369,10 +378,23 @@ where
             attributes
         };
 
+        let maximum_frame_size = ctx.state().maximum_frame_size;
+
         loop {
             let ctx = ctx.clone();
+            let attributes = attributes.clone();
 
-            self.process(&attributes[..], ctx, &mut req).await?
+            let id = Uuid::now_v7();
+            let span = span!(Level::DEBUG, "id", %id);
+
+            async {
+                let size = self.wait(&mut req, maximum_frame_size).await?;
+                let request = self.read(&mut req, size).await?;
+                let response = self.process(&attributes[..], ctx, request).await?;
+                self.write(&mut req, response).await
+            }
+            .instrument(span)
+            .await?
         }
     }
 }
