@@ -162,11 +162,6 @@ impl ProduceService {
 
             for batch in records.batches {
                 let tp = Topition::new(name, partition.index);
-                debug!(
-                    record_count = batch.record_count,
-                    record_bytes = batch.record_data.len(),
-                    ?tp
-                );
 
                 match ctx
                     .state()

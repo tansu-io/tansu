@@ -7038,6 +7038,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "deadpool",
+ "nanoid",
  "opentelemetry 0.30.0",
  "opentelemetry-semantic-conventions",
  "rama",

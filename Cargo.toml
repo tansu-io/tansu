@@ -102,6 +102,7 @@ jsonschema = "0.26.2"
 lazy_static = "1.4.0"
 libsql = { version = "0.9.18", default-features = false, features = ["core"] }
 lz4 = "1.28.1"
+nanoid = "0.4.0"
 nonzero_ext = "0.3.0"
 num-bigint = "0.4"
 object_store = { version = "0.12.3", features = ["aws"] }

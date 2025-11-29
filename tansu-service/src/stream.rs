@@ -21,6 +21,7 @@ use std::{
 };
 
 use bytes::Bytes;
+use nanoid::nanoid;
 use opentelemetry::KeyValue;
 use rama::{Context, Layer, Service};
 use tokio::{
@@ -29,8 +30,7 @@ use tokio::{
     task::JoinSet,
 };
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument as _, Level, debug, error, instrument, span};
-use uuid::Uuid;
+use tracing::{debug, error, instrument};
 
 use crate::{Error, REQUEST_DURATION, REQUEST_SIZE, RESPONSE_SIZE, frame_length};
 
@@ -193,7 +193,7 @@ where
     type Response = S::Response;
     type Error = S::Error;
 
-    #[instrument(skip(ctx, req), fields(peer = %req.peer_addr()?))]
+    #[instrument(skip_all, fields(peer = %req.peer_addr()?))]
     async fn serve(
         &self,
         ctx: Context<State>,
@@ -345,6 +345,20 @@ where
         w.write_all(&frame).await.inspect_err(|err| error!(?err))?;
         w.flush().await.map_err(Into::into)
     }
+
+    #[instrument(skip_all, fields(id = nanoid!()))]
+    async fn req(
+        &self,
+        req: &mut TcpStream,
+        maximum_frame_size: Option<usize>,
+        attributes: &[KeyValue],
+        ctx: Context<TcpContext>,
+    ) -> Result<(), S::Error> {
+        let size = self.wait(req, maximum_frame_size).await?;
+        let request = self.read(req, size).await?;
+        let response = self.process(&attributes[..], ctx, request).await?;
+        self.write(req, response).await
+    }
 }
 
 impl<S, State> Service<TcpContext, TcpStream> for TcpBytesService<S, State>
@@ -384,17 +398,8 @@ where
             let ctx = ctx.clone();
             let attributes = attributes.clone();
 
-            let id = Uuid::now_v7();
-            let span = span!(Level::DEBUG, "id", %id);
-
-            async {
-                let size = self.wait(&mut req, maximum_frame_size).await?;
-                let request = self.read(&mut req, size).await?;
-                let response = self.process(&attributes[..], ctx, request).await?;
-                self.write(&mut req, response).await
-            }
-            .instrument(span)
-            .await?
+            self.req(&mut req, maximum_frame_size, &attributes[..], ctx)
+                .await?
         }
     }
 }
