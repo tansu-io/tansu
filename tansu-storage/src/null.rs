@@ -74,10 +74,12 @@ const MESSAGE: &str = "storage has not been defined";
 
 #[async_trait]
 impl Storage for Engine {
+    #[instrument(skip_all)]
     async fn register_broker(&self, _broker_registration: BrokerRegistrationRequest) -> Result<()> {
         Ok(())
     }
 
+    #[instrument(skip_all)]
     async fn brokers(&self) -> Result<Vec<DescribeClusterBroker>> {
         let broker_id = self.node;
         let host = self
@@ -97,6 +99,7 @@ impl Storage for Engine {
         ])
     }
 
+    #[instrument(skip_all)]
     async fn create_topic(&self, topic: CreatableTopic, _validate_only: bool) -> Result<Uuid> {
         self.topics
             .lock()
@@ -111,6 +114,7 @@ impl Storage for Engine {
             })
     }
 
+    #[instrument(skip_all)]
     async fn delete_records(
         &self,
         _topics: &[DeleteRecordsTopic],
@@ -121,10 +125,12 @@ impl Storage for Engine {
         })
     }
 
+    #[instrument(skip_all)]
     async fn delete_topic(&self, _topic: &TopicId) -> Result<ErrorCode> {
         Ok(ErrorCode::None)
     }
 
+    #[instrument(skip_all)]
     async fn incremental_alter_resource(
         &self,
         resource: AlterConfigsResource,
@@ -136,6 +142,7 @@ impl Storage for Engine {
             .resource_type(resource.resource_type))
     }
 
+    #[instrument(skip_all)]
     async fn produce(
         &self,
         _transaction_id: Option<&str>,
@@ -145,6 +152,7 @@ impl Storage for Engine {
         Ok(6)
     }
 
+    #[instrument(skip_all)]
     async fn fetch(
         &self,
         _topition: &Topition,
@@ -156,10 +164,12 @@ impl Storage for Engine {
         Ok([].into())
     }
 
+    #[instrument(skip_all)]
     async fn offset_stage(&self, _topition: &Topition) -> Result<OffsetStage> {
         Ok(OffsetStage::default())
     }
 
+    #[instrument(skip_all)]
     async fn offset_commit(
         &self,
         _group: &str,
@@ -172,10 +182,12 @@ impl Storage for Engine {
             .collect())
     }
 
+    #[instrument(skip_all)]
     async fn committed_offset_topitions(&self, _group_id: &str) -> Result<BTreeMap<Topition, i64>> {
         Ok(BTreeMap::new())
     }
 
+    #[instrument(skip_all)]
     async fn offset_fetch(
         &self,
         _group_id: Option<&str>,
@@ -188,6 +200,7 @@ impl Storage for Engine {
             .collect())
     }
 
+    #[instrument(skip_all)]
     async fn list_offsets(
         &self,
         _isolation_level: IsolationLevel,
@@ -208,6 +221,7 @@ impl Storage for Engine {
             .collect())
     }
 
+    #[instrument(skip_all)]
     async fn metadata(&self, _topics: Option<&[TopicId]>) -> Result<MetadataResponse> {
         let node_id = self.node;
         let host = self
@@ -268,6 +282,7 @@ impl Storage for Engine {
             .map_err(Into::into)
     }
 
+    #[instrument(skip_all)]
     async fn describe_config(
         &self,
         name: &str,
@@ -282,6 +297,7 @@ impl Storage for Engine {
             .error_message(Some(ErrorCode::None.to_string())))
     }
 
+    #[instrument(skip_all)]
     async fn describe_topic_partitions(
         &self,
         _topics: Option<&[TopicId]>,
@@ -313,10 +329,12 @@ impl Storage for Engine {
         })
     }
 
+    #[instrument(skip_all)]
     async fn list_groups(&self, _states_filter: Option<&[String]>) -> Result<Vec<ListedGroup>> {
         Ok([].into())
     }
 
+    #[instrument(skip_all)]
     async fn delete_groups(
         &self,
         group_ids: Option<&[String]>,
@@ -332,6 +350,7 @@ impl Storage for Engine {
             .collect())
     }
 
+    #[instrument(skip_all)]
     async fn describe_groups(
         &self,
         group_ids: Option<&[String]>,
@@ -347,6 +366,7 @@ impl Storage for Engine {
             .collect())
     }
 
+    #[instrument(skip_all)]
     async fn update_group(
         &self,
         _group_id: &str,
@@ -359,6 +379,7 @@ impl Storage for Engine {
         }))
     }
 
+    #[instrument(skip_all)]
     async fn init_producer(
         &self,
         _transaction_id: Option<&str>,
@@ -373,6 +394,7 @@ impl Storage for Engine {
         })
     }
 
+    #[instrument(skip_all)]
     async fn txn_add_offsets(
         &self,
         _transaction_id: &str,
@@ -383,6 +405,7 @@ impl Storage for Engine {
         Ok(ErrorCode::None)
     }
 
+    #[instrument(skip_all)]
     async fn txn_add_partitions(
         &self,
         partitions: TxnAddPartitionsRequest,
@@ -411,6 +434,7 @@ impl Storage for Engine {
         })
     }
 
+    #[instrument(skip_all)]
     async fn txn_offset_commit(
         &self,
         offsets: TxnOffsetCommitRequest,
@@ -422,10 +446,10 @@ impl Storage for Engine {
             .collect())
     }
 
-    #[instrument(ret)]
+    #[instrument(skip_all)]
     async fn txn_end(
         &self,
-        transaction_id: &str,
+        _transaction_id: &str,
         _producer_id: i64,
         _producer_epoch: i16,
         _committed: bool,
@@ -433,18 +457,22 @@ impl Storage for Engine {
         Ok(ErrorCode::None)
     }
 
+    #[instrument(skip_all)]
     async fn maintain(&self) -> Result<()> {
         Ok(())
     }
 
+    #[instrument(skip_all)]
     async fn cluster_id(&self) -> Result<String> {
         Ok(self.cluster.clone())
     }
 
+    #[instrument(skip_all)]
     async fn node(&self) -> Result<i32> {
         Ok(self.node)
     }
 
+    #[instrument(skip_all)]
     async fn advertised_listener(&self) -> Result<Url> {
         Ok(self.advertised_listener.clone())
     }

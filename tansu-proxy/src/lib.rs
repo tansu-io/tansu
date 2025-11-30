@@ -329,7 +329,7 @@ impl Proxy {
 
         {
             let proxy = Proxy::new(listener_url, advertised_listener_url, origin_url);
-            _ = set.spawn(async move { proxy.listen().await.unwrap() });
+            _ = set.spawn(async move { proxy.listen().await });
         }
 
         loop {

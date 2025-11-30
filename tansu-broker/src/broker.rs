@@ -28,7 +28,7 @@ use std::{
     str::FromStr,
     time::Duration,
 };
-use tansu_sans_io::ErrorCode;
+use tansu_sans_io::{ErrorCode, RootMessageMeta};
 use tansu_schema::{Registry, lake::House};
 use tansu_storage::{BrokerRegistrationRequest, Storage, StorageContainer};
 use tokio::{
@@ -92,6 +92,18 @@ where
     }
 
     pub async fn main(mut self) -> Result<ErrorCode> {
+        {
+            let root_meta = RootMessageMeta::messages();
+            debug!(
+                messages = root_meta
+                    .requests()
+                    .values()
+                    .map(|meta| meta.name)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+
         let mut set = JoinSet::new();
 
         let mut interrupt_signal = signal(SignalKind::interrupt()).unwrap();
@@ -211,6 +223,7 @@ where
         loop {
             tokio::select! {
                 Ok((stream, _addr)) = listener.accept() => {
+                    stream.set_nodelay(true)?;
 
                     let service = service.clone();
 
