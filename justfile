@@ -419,3 +419,21 @@ producer-perf  throughput="1000" record_size="1024" num_records="100000":
     kafka-producer-perf-test --topic test --num-records {{num_records}} --record-size {{record_size}} --throughput {{throughput}} --producer-props bootstrap.servers=${ADVERTISED_LISTENER}
 
 producer-perf-1000: (producer-perf "1000")
+
+producer-perf-2000: (producer-perf "2000")
+
+producer-perf-3000: (producer-perf "3000")
+
+producer-perf-5000: (producer-perf "5000")
+
+producer-perf-10000: (producer-perf "10000" "1024" "100000")
+
+producer-perf-20000: (producer-perf "20000" "1024" "500000")
+
+producer-perf-50000: (producer-perf "50000" "1024" "1250000")
+
+producer-perf-100000: (producer-perf "100000" "1024" "2500000")
+
+producer-perf-200000: (producer-perf "200000" "1024" "5000000")
+
+producer-perf-500000: (producer-perf "500000" "1024" "12500000")

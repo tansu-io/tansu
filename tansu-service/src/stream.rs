@@ -356,7 +356,7 @@ where
     ) -> Result<(), S::Error> {
         let size = self.wait(req, maximum_frame_size).await?;
         let request = self.read(req, size).await?;
-        let response = self.process(&attributes[..], ctx, request).await?;
+        let response = self.process(attributes, ctx, request).await?;
         self.write(req, response).await
     }
 }

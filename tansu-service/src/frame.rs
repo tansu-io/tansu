@@ -21,6 +21,7 @@ use bytes::Bytes;
 use opentelemetry::KeyValue;
 use rama::{Context, Layer, Service, context::Extensions, matcher::Matcher, service::BoxService};
 use tansu_sans_io::{ApiKey, Body, Frame, Header, Request, Response, RootMessageMeta};
+use tokio::task::spawn_blocking;
 use tracing::{debug, error, instrument};
 
 use crate::{API_ERRORS, API_REQUESTS};
@@ -225,17 +226,14 @@ impl<S, State> Service<State, Bytes> for BytesFrameService<S>
 where
     S: Service<State, Frame, Response = Frame>,
     State: Clone + Send + Sync + 'static,
-    S::Error: From<tansu_sans_io::Error> + Debug,
+    S::Error: From<tansu_sans_io::Error> + From<tokio::task::JoinError> + Debug,
 {
     type Response = Bytes;
     type Error = S::Error;
 
     #[instrument(skip(ctx, req))]
     async fn serve(&self, ctx: Context<State>, req: Bytes) -> Result<Self::Response, Self::Error> {
-        let req = {
-            let task = tokio::task::spawn_blocking(|| Frame::request_from_bytes(req));
-            task.await.expect("task")
-        }?;
+        let req = spawn_blocking(|| Frame::request_from_bytes(req)).await??;
 
         let api_key = req.api_key()?;
         let api_version = req.api_version()?;
@@ -248,25 +246,23 @@ where
 
         let Frame { body, .. } = self.inner.serve(ctx, req).await?;
 
-        let task = tokio::task::spawn_blocking(move || {
+        spawn_blocking(move || {
             Frame::response(
                 Header::Response { correlation_id },
                 body,
                 api_key,
                 api_version,
             )
-        });
-
-        task.await
-            .expect("task")
-            .inspect(|_| {
-                API_REQUESTS.add(1, &attributes);
-            })
-            .inspect_err(|err| {
-                error!(api_key, api_version, ?err);
-                API_ERRORS.add(1, &attributes);
-            })
-            .map_err(Into::into)
+        })
+        .await?
+        .inspect(|_| {
+            API_REQUESTS.add(1, &attributes);
+        })
+        .inspect_err(|err| {
+            error!(api_key, api_version, ?err);
+            API_ERRORS.add(1, &attributes);
+        })
+        .map_err(Into::into)
     }
 }
 
