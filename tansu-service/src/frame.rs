@@ -233,7 +233,11 @@ where
 
     #[instrument(skip(ctx, req))]
     async fn serve(&self, ctx: Context<State>, req: Bytes) -> Result<Self::Response, Self::Error> {
-        let req = spawn_blocking(|| Frame::request_from_bytes(req)).await??;
+        debug!(request = ?&req[..]);
+
+        let req = spawn_blocking(|| Frame::request_from_bytes(req))
+            .await?
+            .inspect(|request| debug!(?request))?;
 
         let api_key = req.api_key()?;
         let api_version = req.api_version()?;
@@ -244,7 +248,11 @@ where
             KeyValue::new("api_version", api_version as i64),
         ];
 
-        let Frame { body, .. } = self.inner.serve(ctx, req).await?;
+        let Frame { body, .. } = self
+            .inner
+            .serve(ctx, req)
+            .await
+            .inspect(|response| debug!(?response))?;
 
         spawn_blocking(move || {
             Frame::response(
@@ -255,7 +263,8 @@ where
             )
         })
         .await?
-        .inspect(|_| {
+        .inspect(|response| {
+            debug!(response = ?response[..]);
             API_REQUESTS.add(1, &attributes);
         })
         .inspect_err(|err| {

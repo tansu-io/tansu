@@ -57,8 +57,8 @@ use uuid::Uuid;
 
 mod common;
 
-#[cfg(feature = "postgres")]
 #[tokio::test]
+#[cfg(feature = "postgres")]
 async fn simple_txn_commit() -> Result<()> {
     use tansu_sans_io::ListOffset;
 
@@ -373,8 +373,8 @@ async fn simple_txn_commit() -> Result<()> {
                         [OffsetFetchResponsePartition::default()
                             .partition_index(input_partition_index)
                             .committed_offset(-1)
-                            .committed_leader_epoch(None)
-                            .metadata(None)
+                            .committed_leader_epoch(Some(-1))
+                            .metadata(Some("".into()))
                             .error_code(0)]
                         .into()
                     ))]
@@ -490,8 +490,8 @@ async fn simple_txn_commit() -> Result<()> {
                         [OffsetFetchResponsePartition::default()
                             .partition_index(input_partition_index)
                             .committed_offset(COMMITTED_OFFSET)
-                            .committed_leader_epoch(None)
-                            .metadata(None)
+                            .committed_leader_epoch(Some(-1))
+                            .metadata(Some("".into()))
                             .error_code(0)]
                         .into()
                     ))]

@@ -49,6 +49,12 @@ use crate::{
     TxnOffsetCommitRequest, UpdateError, Version,
 };
 
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+struct Group {
+    detail: GroupDetail,
+    version: Option<Version>,
+}
+
 #[derive(Clone, Debug)]
 pub struct Engine {
     cluster: String,
@@ -56,6 +62,7 @@ pub struct Engine {
     advertised_listener: Url,
 
     topics: Arc<Mutex<Vec<CreatableTopic>>>,
+    groups: Arc<Mutex<BTreeMap<String, Group>>>,
 }
 
 impl Engine {
@@ -65,6 +72,7 @@ impl Engine {
             node,
             advertised_listener,
             topics: Arc::new(Mutex::new(Vec::new())),
+            groups: Arc::new(Mutex::new(BTreeMap::new())),
         }
     }
 }
@@ -369,14 +377,37 @@ impl Storage for Engine {
     #[instrument(skip_all)]
     async fn update_group(
         &self,
-        _group_id: &str,
-        _detail: GroupDetail,
-        _version: Option<Version>,
+        group_id: &str,
+        detail: GroupDetail,
+        version: Option<Version>,
     ) -> Result<Version, UpdateError<GroupDetail>> {
-        Err(UpdateError::Error(Error::FeatureNotEnabled {
-            feature: FEATURE.into(),
-            message: MESSAGE.into(),
-        }))
+        self.groups
+            .lock()
+            .map_err(|err| UpdateError::Error(err.into()))
+            .and_then(|mut groups| {
+                let group = groups.entry(group_id.to_string()).or_insert(Group {
+                    detail: detail.clone(),
+                    version: version.clone(),
+                });
+
+                if group.version == version {
+                    let id = Uuid::now_v7();
+                    let version = Version {
+                        e_tag: Some(id.to_string()),
+                        version: Some(id.to_string()),
+                    };
+
+                    group.detail = detail;
+                    group.version = Some(version.clone());
+
+                    Ok(version)
+                } else {
+                    Err(UpdateError::Outdated {
+                        current: group.detail.clone(),
+                        version: group.version.clone().unwrap_or_default(),
+                    })
+                }
+            })
     }
 
     #[instrument(skip_all)]

@@ -384,9 +384,13 @@ customer-topic-generator *args: (generator "customer" args)
 
 customer-duckdb-delta: (duckdb "\"select * from delta_scan('s3://lake/tansu.customer');\"")
 
+null:
+    ./target/debug/tansu --storage-engine=null://sink 2>&1 | tee broker.log
+
+
 broker-null:
     cargo build --profile profiling --bin tansu
-    ./target/profiling/tansu --storage-engine=null://sink 2>&1 >broker.log
+    ./target/profiling/tansu --storage-engine=null://sink 2>&1 | tee broker.log
 
 samply-null:
     cargo build --profile profiling --bin tansu
