@@ -553,7 +553,7 @@ impl Delegate {
     ) -> Result<()> {
         let mut rows = connection
             .query(
-                &sql_lookup("producer_epoch_current_for_producer.sql")?,
+                sql_lookup("producer_epoch_current_for_producer.sql")?,
                 (self.cluster.as_str(), deflated.producer_id),
             )
             .await?;
@@ -567,7 +567,7 @@ impl Delegate {
             let row = self
                 .prepare_query_one(
                     connection,
-                    &sql_lookup("producer_select_for_update.sql")?,
+                    sql_lookup("producer_select_for_update.sql")?,
                     (
                         self.cluster.as_str(),
                         topition.topic(),
@@ -606,7 +606,7 @@ impl Delegate {
                 1,
                 self.prepare_execute(
                     connection,
-                    &sql_lookup("producer_detail_insert.sql")?,
+                    sql_lookup("producer_detail_insert.sql")?,
                     (
                         self.cluster.as_str(),
                         topition.topic(),
@@ -634,7 +634,7 @@ impl Delegate {
 
         let mut rows = tx
             .query(
-                &sql_lookup("watermark_select_no_update.sql")?,
+                sql_lookup("watermark_select_no_update.sql")?,
                 (
                     self.cluster.as_str(),
                     topition.topic(),
@@ -735,7 +735,7 @@ impl Delegate {
             _ = self
                 .prepare_execute(
                     tx,
-                    &sql_lookup("record_insert.sql")?,
+                    sql_lookup("record_insert.sql")?,
                     (
                         self.cluster.as_str(),
                         topic,
@@ -770,7 +770,7 @@ impl Delegate {
                 _ = self
                     .prepare_execute(
                         tx,
-                        &sql_lookup("header_insert.sql")?,
+                        sql_lookup("header_insert.sql")?,
                         (self.cluster.as_str(), topic, partition, offset, key, value),
                     )
                     .await
@@ -792,7 +792,7 @@ impl Delegate {
 
             _ = self
                     .prepare_execute(tx,
-                        &sql_lookup("txn_produce_offset_insert.sql")?,
+                        sql_lookup("txn_produce_offset_insert.sql")?,
                         (
                             self.cluster.as_str(),
                             transaction_id,
@@ -814,7 +814,7 @@ impl Delegate {
         _ = self
             .prepare_execute(
                 tx,
-                &sql_lookup("watermark_update.sql")?,
+                sql_lookup("watermark_update.sql")?,
                 (
                     self.cluster.as_str(),
                     topic,
@@ -870,7 +870,7 @@ impl Delegate {
 
         let mut rows = tx
             .query(
-                &sql_lookup("txn_select_produced_topitions.sql")?,
+                sql_lookup("txn_select_produced_topitions.sql")?,
                 (
                     self.cluster.as_str(),
                     transaction_id,
@@ -922,7 +922,7 @@ impl Delegate {
 
             let mut rows = tx
                 .query(
-                    &sql_lookup("txn_produce_offset_select_offset_range.sql")?,
+                    sql_lookup("txn_produce_offset_select_offset_range.sql")?,
                     (
                         self.cluster.as_str(),
                         transaction_id,
@@ -941,7 +941,7 @@ impl Delegate {
 
                 let mut rows = tx
                     .query(
-                        &sql_lookup("txn_produce_offset_select_overlapping_txn.sql")?,
+                        sql_lookup("txn_produce_offset_select_overlapping_txn.sql")?,
                         (
                             self.cluster.as_str(),
                             transaction_id,
@@ -987,7 +987,7 @@ impl Delegate {
 
                 _ = tx
                     .execute(
-                        &sql_lookup("txn_produce_offset_delete_by_txn.sql")?,
+                        sql_lookup("txn_produce_offset_delete_by_txn.sql")?,
                         (
                             self.cluster.as_str(),
                             txn.name.as_str(),
@@ -999,7 +999,7 @@ impl Delegate {
 
                 _ = tx
                     .execute(
-                        &sql_lookup("txn_topition_delete_by_txn.sql")?,
+                        sql_lookup("txn_topition_delete_by_txn.sql")?,
                         (
                             self.cluster.as_str(),
                             txn.name.as_str(),
@@ -1012,7 +1012,7 @@ impl Delegate {
                 if txn.status == TxnState::PrepareCommit {
                     _ = tx
                         .execute(
-                            &sql_lookup("consumer_offset_insert_from_txn.sql")?,
+                            sql_lookup("consumer_offset_insert_from_txn.sql")?,
                             (
                                 self.cluster.as_str(),
                                 txn.name.as_str(),
@@ -1025,7 +1025,7 @@ impl Delegate {
 
                 _ = tx
                     .execute(
-                        &sql_lookup("txn_offset_commit_tp_delete_by_txn.sql")?,
+                        sql_lookup("txn_offset_commit_tp_delete_by_txn.sql")?,
                         (
                             self.cluster.as_str(),
                             txn.name.as_str(),
@@ -1037,7 +1037,7 @@ impl Delegate {
 
                 _ = tx
                     .execute(
-                        &sql_lookup("txn_offset_commit_delete_by_txn.sql")?,
+                        sql_lookup("txn_offset_commit_delete_by_txn.sql")?,
                         (
                             self.cluster.as_str(),
                             txn.name.as_str(),
@@ -1057,7 +1057,7 @@ impl Delegate {
 
                 _ = tx
                     .execute(
-                        &sql_lookup("txn_status_update.sql")?,
+                        sql_lookup("txn_status_update.sql")?,
                         (
                             self.cluster.as_str(),
                             txn.name.as_str(),
@@ -1079,7 +1079,7 @@ impl Delegate {
 
             _ = tx
                 .execute(
-                    &sql_lookup("txn_status_update.sql")?,
+                    sql_lookup("txn_status_update.sql")?,
                     (
                         self.cluster.as_str(),
                         transaction_id,
@@ -1819,7 +1819,7 @@ impl Storage for Delegate {
 
         self.prepare_execute(
             &connection,
-            &sql_lookup("register_broker.sql")?,
+            sql_lookup("register_broker.sql")?,
             &[broker_registration.cluster_id.as_str()],
         )
         .await
@@ -1880,7 +1880,7 @@ impl Storage for Delegate {
                 (topic.replication_factor as i32),
             );
 
-            self.prepare_query_one(&tx, &sql_lookup("topic_insert.sql")?, parameters.clone())
+            self.prepare_query_one(&tx, sql_lookup("topic_insert.sql")?, parameters.clone())
                 .await
                 .inspect_err(|err| error!(?err))
                 .map_err(unique_constraint(ErrorCode::TopicAlreadyExists))
@@ -1899,13 +1899,13 @@ impl Storage for Delegate {
             let params = (self.cluster.as_str(), topic.name.as_str(), partition);
 
             _ = self
-                .prepare_query_one(&tx, &sql_lookup("topition_insert.sql")?, params)
+                .prepare_query_one(&tx, sql_lookup("topition_insert.sql")?, params)
                 .await
                 .map(|row| row.get_value(0))
                 .inspect(|topition| debug!(?topition))?;
 
             _ = self
-                .prepare_query_one(&tx, &sql_lookup("watermark_insert.sql")?, params)
+                .prepare_query_one(&tx, sql_lookup("watermark_insert.sql")?, params)
                 .await
                 .map(|row| row.get_value(0))
                 .inspect(|watermark| debug!(?watermark))?;
@@ -1923,7 +1923,7 @@ impl Storage for Delegate {
                 );
 
                 _ = self
-                    .prepare_query_one(&tx, &sql_lookup("topic_configuration_upsert.sql")?, params)
+                    .prepare_query_one(&tx, sql_lookup("topic_configuration_upsert.sql")?, params)
                     .await
                     .map(|row| row.get_value(0))
                     .inspect_err(|err| error!(?err, ?config))
@@ -1957,7 +1957,7 @@ impl Storage for Delegate {
             TopicId::Id(id) => {
                 self.query(
                     &tx,
-                    &sql_lookup("topic_select_uuid.sql")?,
+                    sql_lookup("topic_select_uuid.sql")?,
                     (self.cluster.as_str(), id.to_string().as_str()),
                 )
                 .await?
@@ -1966,7 +1966,7 @@ impl Storage for Delegate {
             TopicId::Name(name) => {
                 self.query(
                     &tx,
-                    &sql_lookup("topic_select_name.sql")?,
+                    sql_lookup("topic_select_name.sql")?,
                     (self.cluster.as_str(), name.as_str()),
                 )
                 .await?
@@ -1992,7 +1992,7 @@ impl Storage for Delegate {
             "topition_delete_by_topic.sql",
         ] {
             let rows = self
-                .prepare_execute(&tx, &sql_lookup(sql)?, (self.cluster.as_str(), topic_name))
+                .prepare_execute(&tx, sql_lookup(sql)?, (self.cluster.as_str(), topic_name))
                 .await?;
 
             debug!(?topic, rows, sql)
@@ -2001,7 +2001,7 @@ impl Storage for Delegate {
         _ = self
             .prepare_execute(
                 &tx,
-                &sql_lookup("topic_delete_by.sql")?,
+                sql_lookup("topic_delete_by.sql")?,
                 (self.cluster.as_str(), topic_name),
             )
             .await?;
@@ -2051,7 +2051,7 @@ impl Storage for Delegate {
                             let c = self.connection().await?;
 
                             if c.query(
-                                &sql_lookup("topic_configuration_upsert.sql")?,
+                                sql_lookup("topic_configuration_upsert.sql")?,
                                 (
                                     self.cluster.as_str(),
                                     resource.resource_name.as_str(),
@@ -2071,7 +2071,7 @@ impl Storage for Delegate {
                             let c = self.connection().await?;
 
                             if c.query(
-                                &sql_lookup("topic_configuration_delete.sql")?,
+                                sql_lookup("topic_configuration_delete.sql")?,
                                 (
                                     self.cluster.as_str(),
                                     resource.resource_name.as_str(),
@@ -2186,7 +2186,7 @@ impl Storage for Delegate {
         let mut records = self
             .query(
                 &c,
-                &sql_lookup("record_fetch.sql")?,
+                sql_lookup("record_fetch.sql")?,
                 (
                     self.cluster.as_str(),
                     topition.topic(),
@@ -2225,7 +2225,7 @@ impl Storage for Delegate {
                 let mut headers = self
                     .query(
                         &c,
-                        &sql_lookup("header_fetch.sql")?,
+                        sql_lookup("header_fetch.sql")?,
                         (
                             self.cluster.as_str(),
                             topition.topic(),
@@ -2368,7 +2368,7 @@ impl Storage for Delegate {
                     let mut headers = self
                         .query(
                             &c,
-                            &sql_lookup("header_fetch.sql")?,
+                            sql_lookup("header_fetch.sql")?,
                             (
                                 self.cluster.as_str(),
                                 topition.topic(),
@@ -2433,7 +2433,7 @@ impl Storage for Delegate {
         let row = self
             .prepare_query_one(
                 &c,
-                &sql_lookup("watermark_select.sql")?,
+                sql_lookup("watermark_select.sql")?,
                 (
                     self.cluster.as_str(),
                     topition.topic(),
@@ -2495,7 +2495,7 @@ impl Storage for Delegate {
 
             let mut rows = tx
                 .query(
-                    &sql_lookup("topition_select.sql")?,
+                    sql_lookup("topition_select.sql")?,
                     (
                         self.cluster.as_str(),
                         topition.topic(),
@@ -2510,7 +2510,7 @@ impl Storage for Delegate {
                     let rows = self
                         .prepare_execute(
                             &tx,
-                            &sql_lookup("consumer_group_insert.sql")?,
+                            sql_lookup("consumer_group_insert.sql")?,
                             (self.cluster.as_str(), group),
                         )
                         .await?;
@@ -2522,7 +2522,7 @@ impl Storage for Delegate {
                 let rows = self
                     .prepare_execute(
                         &tx,
-                        &sql_lookup("consumer_offset_insert.sql")?,
+                        sql_lookup("consumer_offset_insert.sql")?,
                         (
                             self.cluster.as_str(),
                             topition.topic(),
@@ -2574,7 +2574,7 @@ impl Storage for Delegate {
         let mut rows = self
             .query(
                 &c,
-                &sql_lookup("consumer_offset_select_by_group.sql")?,
+                sql_lookup("consumer_offset_select_by_group.sql")?,
                 (self.cluster.as_str(), group_id),
             )
             .await?;
@@ -2618,7 +2618,7 @@ impl Storage for Delegate {
             let mut rows = self
                 .query(
                     &c,
-                    &sql_lookup("consumer_offset_select.sql")?,
+                    sql_lookup("consumer_offset_select.sql")?,
                     (
                         self.cluster.as_str(),
                         group_id,
@@ -2823,7 +2823,7 @@ impl Storage for Delegate {
                             let mut rows = self
                                 .query(
                                     &c,
-                                    &sql_lookup("topic_select_name.sql")?,
+                                    sql_lookup("topic_select_name.sql")?,
                                     (self.cluster.as_str(), name.as_str()),
                                 )
                                 .await?;
@@ -2918,7 +2918,7 @@ impl Storage for Delegate {
                             let mut rows = self
                                 .query(
                                     &c,
-                                    &sql_lookup("topic_select_uuid.sql")?,
+                                    sql_lookup("topic_select_uuid.sql")?,
                                     (self.cluster.as_str(), id.to_string().as_str()),
                                 )
                                 .await?;
@@ -3018,7 +3018,7 @@ impl Storage for Delegate {
                 let mut rows = self
                     .query(
                         &c,
-                        &sql_lookup("topic_by_cluster.sql")?,
+                        sql_lookup("topic_by_cluster.sql")?,
                         &[self.cluster.as_str()],
                     )
                     .await?;
@@ -3120,7 +3120,7 @@ impl Storage for Delegate {
         let mut rows = self
             .query(
                 &c,
-                &sql_lookup("topic_select.sql")?,
+                sql_lookup("topic_select.sql")?,
                 (self.cluster.as_str(), name),
             )
             .await?;
@@ -3129,7 +3129,7 @@ impl Storage for Delegate {
             let mut rows = self
                 .query(
                     &c,
-                    &sql_lookup("topic_configuration_select.sql")?,
+                    sql_lookup("topic_configuration_select.sql")?,
                     (self.cluster.as_str(), name),
                 )
                 .await?;
@@ -3211,7 +3211,7 @@ impl Storage for Delegate {
                     match self
                         .prepare_query_opt(
                             &c,
-                            &sql_lookup("topic_select_name.sql")?,
+                            sql_lookup("topic_select_name.sql")?,
                             (self.cluster.as_str(), name.as_str()),
                         )
                         .await
@@ -3304,7 +3304,7 @@ impl Storage for Delegate {
                     match self
                         .prepare_query_one(
                             &c,
-                            &sql_lookup("topic_select_uuid.sql")?,
+                            sql_lookup("topic_select_uuid.sql")?,
                             (self.cluster.as_str(), id.to_string().as_str()),
                         )
                         .await
@@ -3400,7 +3400,7 @@ impl Storage for Delegate {
         let mut rows = self
             .query(
                 &c,
-                &sql_lookup("consumer_group_select.sql")?,
+                sql_lookup("consumer_group_select.sql")?,
                 &[self.cluster.as_str()],
             )
             .await?;
@@ -3439,17 +3439,17 @@ impl Storage for Delegate {
             let c = self.connection().await?;
 
             let consumer_offset = c
-                .prepare(&sql_lookup("consumer_offset_delete_by_cg.sql")?)
+                .prepare(sql_lookup("consumer_offset_delete_by_cg.sql")?)
                 .await
                 .inspect_err(|err| error!(?err))?;
 
             let group_detail = c
-                .prepare(&sql_lookup("consumer_group_detail_delete_by_cg.sql")?)
+                .prepare(sql_lookup("consumer_group_detail_delete_by_cg.sql")?)
                 .await
                 .inspect_err(|err| error!(?err))?;
 
             let group = c
-                .prepare(&sql_lookup("consumer_group_delete.sql")?)
+                .prepare(sql_lookup("consumer_group_delete.sql")?)
                 .await
                 .inspect_err(|err| error!(?err))?;
 
@@ -3509,7 +3509,7 @@ impl Storage for Delegate {
                 if let Some(row) = self
                     .prepare_query_opt(
                         &c,
-                        &sql_lookup("consumer_group_select_by_name.sql")?,
+                        sql_lookup("consumer_group_select_by_name.sql")?,
                         (self.cluster.as_str(), group_id.as_str()),
                     )
                     .await
@@ -3557,7 +3557,7 @@ impl Storage for Delegate {
         _ = self
             .prepare_execute(
                 &tx,
-                &sql_lookup("consumer_group_insert.sql")?,
+                sql_lookup("consumer_group_insert.sql")?,
                 (self.cluster.as_str(), group_id),
             )
             .await?;
@@ -3583,7 +3583,7 @@ impl Storage for Delegate {
         let outcome = if let Some(row) = self
             .prepare_query_opt(
                 &tx,
-                &sql_lookup("consumer_group_detail_insert.sql")?,
+                sql_lookup("consumer_group_detail_insert.sql")?,
                 (
                     self.cluster.as_str(),
                     group_id,
@@ -3612,7 +3612,7 @@ impl Storage for Delegate {
             let row = self
                 .prepare_query_one(
                     &tx,
-                    &sql_lookup("consumer_group_detail.sql")?,
+                    sql_lookup("consumer_group_detail.sql")?,
                     (group_id, self.cluster.as_str()),
                 )
                 .await
@@ -3679,7 +3679,7 @@ impl Storage for Delegate {
                 if let Some(row) = self
                     .prepare_query_opt(
                         &tx,
-                        &sql_lookup("producer_epoch_for_current_txn.sql")?,
+                        sql_lookup("producer_epoch_for_current_txn.sql")?,
                         (self.cluster.as_str(), transaction_id),
                     )
                     .await
@@ -3720,7 +3720,7 @@ impl Storage for Delegate {
                 let (producer, epoch) = if let Some(row) = self
                     .prepare_query_opt(
                         &tx,
-                        &sql_lookup("txn_select_name.sql")?,
+                        sql_lookup("txn_select_name.sql")?,
                         (self.cluster.as_str(), transaction_id),
                     )
                     .await
@@ -3734,7 +3734,7 @@ impl Storage for Delegate {
                     let row = self
                         .prepare_query_one(
                             &tx,
-                            &sql_lookup("producer_epoch_insert.sql")?,
+                            sql_lookup("producer_epoch_insert.sql")?,
                             (self.cluster.as_str(), producer),
                         )
                         .await
@@ -3750,7 +3750,7 @@ impl Storage for Delegate {
                     let row = self
                         .prepare_query_one(
                             &tx,
-                            &sql_lookup("producer_insert.sql")?,
+                            sql_lookup("producer_insert.sql")?,
                             &[self.cluster.as_str()],
                         )
                         .await
@@ -3761,7 +3761,7 @@ impl Storage for Delegate {
                     let row = self
                         .prepare_query_one(
                             &tx,
-                            &sql_lookup("producer_epoch_insert.sql")?,
+                            sql_lookup("producer_epoch_insert.sql")?,
                             (self.cluster.as_str(), producer),
                         )
                         .await
@@ -3773,7 +3773,7 @@ impl Storage for Delegate {
                         1,
                         self.prepare_execute(
                             &tx,
-                            &sql_lookup("txn_insert.sql")?,
+                            sql_lookup("txn_insert.sql")?,
                             (self.cluster.as_str(), transaction_id, producer),
                         )
                         .await
@@ -3794,7 +3794,7 @@ impl Storage for Delegate {
                     1,
                     self.prepare_execute(
                         &tx,
-                        &sql_lookup("txn_detail_insert.sql")?,
+                        sql_lookup("txn_detail_insert.sql")?,
                         (
                             self.cluster.as_str(),
                             transaction_id,
@@ -3840,7 +3840,7 @@ impl Storage for Delegate {
                 let mut rows = self
                     .query(
                         &tx,
-                        &sql_lookup("producer_insert.sql")?,
+                        sql_lookup("producer_insert.sql")?,
                         &[self.cluster.as_str()],
                     )
                     .await?;
@@ -3855,7 +3855,7 @@ impl Storage for Delegate {
                     let mut rows = self
                         .query(
                             &tx,
-                            &sql_lookup("producer_epoch_insert.sql")?,
+                            sql_lookup("producer_epoch_insert.sql")?,
                             (self.cluster.as_str(), producer),
                         )
                         .await?;
@@ -3975,7 +3975,7 @@ impl Storage for Delegate {
                         _ = self
                             .prepare_execute(
                                 &tx,
-                                &sql_lookup("txn_topition_insert.sql")?,
+                                sql_lookup("txn_topition_insert.sql")?,
                                 (
                                     self.cluster.as_str(),
                                     topic.name.as_str(),
@@ -4013,7 +4013,7 @@ impl Storage for Delegate {
                 _ = self
                     .prepare_execute(
                         &tx,
-                        &sql_lookup("txn_detail_update_started_at.sql")?,
+                        sql_lookup("txn_detail_update_started_at.sql")?,
                         (
                             self.cluster.as_str(),
                             transaction_id.as_str(),
@@ -4061,7 +4061,7 @@ impl Storage for Delegate {
         let (producer_id, producer_epoch) = if let Some(row) = self
             .prepare_query_opt(
                 &tx,
-                &sql_lookup("producer_epoch_for_current_txn.sql")?,
+                sql_lookup("producer_epoch_for_current_txn.sql")?,
                 (self.cluster.as_str(), offsets.transaction_id.as_str()),
             )
             .await
@@ -4086,7 +4086,7 @@ impl Storage for Delegate {
         _ = self
             .prepare_execute(
                 &tx,
-                &sql_lookup("consumer_group_insert.sql")?,
+                sql_lookup("consumer_group_insert.sql")?,
                 (self.cluster.as_str(), offsets.group_id.as_str()),
             )
             .await?;
@@ -4096,7 +4096,7 @@ impl Storage for Delegate {
         _ = self
             .prepare_execute(
                 &tx,
-                &sql_lookup("txn_offset_commit_insert.sql")?,
+                sql_lookup("txn_offset_commit_insert.sql")?,
                 (
                     self.cluster.as_str(),
                     offsets.transaction_id.as_str(),
@@ -4123,7 +4123,7 @@ impl Storage for Delegate {
                         _ = self
                             .prepare_execute(
                                 &tx,
-                                &sql_lookup("txn_offset_commit_tp_insert.sql")?,
+                                sql_lookup("txn_offset_commit_tp_insert.sql")?,
                                 (
                                     self.cluster.as_str(),
                                     offsets.transaction_id.as_str(),
@@ -4882,7 +4882,7 @@ mod tests {
             let sql = sql_lookup(k)?;
 
             connection
-                .prepare(&sql)
+                .prepare(sql)
                 .await
                 .inspect_err(|err| error!(?err, k, sql))
                 .and(Ok(()))?;
