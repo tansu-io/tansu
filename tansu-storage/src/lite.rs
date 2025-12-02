@@ -1239,16 +1239,24 @@ static DDL: LazyLock<Cache> = LazyLock::new(|| {
     Cache::new(BTreeMap::from(mapping))
 });
 
+pub(crate) static SQL: LazyLock<Cache> = LazyLock::new(|| {
+    Cache::new(
+        crate::sql::SQL
+            .iter()
+            .map(|(name, sql)| fix_parameters(sql).map(|sql| (*name, sql)))
+            .collect::<Result<BTreeMap<_, _>>>()
+            .unwrap_or_default(),
+    )
+});
+
 fn fix_parameters(sql: &str) -> Result<String> {
     Regex::new(r"\$(?<i>\d+)")
         .map(|re| re.replace_all(sql, "?$i").into_owned())
         .map_err(Into::into)
 }
 
-fn sql_lookup(key: &str) -> Result<String> {
-    crate::sql::SQL
-        .get(key)
-        .and_then(|sql| fix_parameters(sql).inspect(|sql| debug!(key, sql)))
+fn sql_lookup(key: &str) -> Result<&str> {
+    SQL.get(key)
 }
 
 #[derive(Clone, Debug)]
@@ -2694,7 +2702,7 @@ impl Storage for Delegate {
                 ListOffset::Earliest | ListOffset::Latest => self
                     .prepare_query_opt(
                         &c,
-                        query.as_str(),
+                        query,
                         (
                             self.cluster.as_str(),
                             topition.topic(),
@@ -2707,7 +2715,7 @@ impl Storage for Delegate {
                 ListOffset::Timestamp(timestamp) => self
                     .prepare_query_opt(
                         &c,
-                        query.as_str(),
+                        query,
                         (
                             self.cluster.as_str(),
                             topition.topic(),

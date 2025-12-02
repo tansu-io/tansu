@@ -387,7 +387,6 @@ customer-duckdb-delta: (duckdb "\"select * from delta_scan('s3://lake/tansu.cust
 null:
     ./target/debug/tansu --storage-engine=null://sink 2>&1 | tee broker.log
 
-
 broker-null:
     cargo build --profile profiling --bin tansu
     ./target/profiling/tansu --storage-engine=null://sink 2>&1 | tee broker.log
@@ -403,6 +402,11 @@ flamegraph-null-debug:
 flamegraph-null profile:
     RUSTFLAGS="-C force-frame-pointers=yes" cargo build --profile {{profile}} --bin tansu
     RUST_LOG=warn flamegraph -- ./target/{{profile}}/tansu --storage-engine=null://sink
+
+flamegraph-sqlite profile:
+    rm -f tansu.db*
+    RUSTFLAGS="-C force-frame-pointers=yes" cargo build --profile {{profile}} --features libsql --bin tansu
+    RUST_LOG=warn flamegraph -- ./target/{{profile}}/tansu --storage-engine=sqlite://tansu.db
 
 samply-produce:
     cargo build --profile profiling --bin bench_produce_v11
