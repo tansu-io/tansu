@@ -403,6 +403,11 @@ flamegraph-null profile:
     RUSTFLAGS="-C force-frame-pointers=yes" cargo build --profile {{profile}} --bin tansu
     RUST_LOG=warn flamegraph -- ./target/{{profile}}/tansu --storage-engine=null://sink
 
+flamegraph-sqlite-debug:
+    rm -f tansu.db*
+    cargo build --bin tansu --features libsql
+    RUST_LOG=warn flamegraph -- ./target/debug/tansu --storage-engine=sqlite://tansu.db
+
 flamegraph-sqlite profile:
     rm -f tansu.db*
     RUSTFLAGS="-C force-frame-pointers=yes" cargo build --profile {{profile}} --features libsql --bin tansu

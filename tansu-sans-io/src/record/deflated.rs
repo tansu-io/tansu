@@ -22,9 +22,11 @@ use serde::{
     Deserialize, Deserializer, Serialize,
     de::{self, Visitor},
 };
-use tracing::{debug, error};
+use tracing::{debug, error, instrument};
 
-use crate::{Compression, Decoder, Encoder, Error, Result, primitive::ByteSize, record::Record};
+use crate::{
+    Compression, Decode as _, Decoder, Encoder, Error, Result, primitive::ByteSize, record::Record,
+};
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct Frame {
@@ -361,25 +363,40 @@ impl Batch {
 impl TryFrom<Batch> for Vec<Record> {
     type Error = Error;
 
-    fn try_from(batch: Batch) -> Result<Self, Self::Error> {
+    #[instrument(skip_all)]
+    fn try_from(mut batch: Batch) -> Result<Self, Self::Error> {
         let record_count = usize::try_from(batch.record_count)?;
 
         debug!(?record_count);
         debug!(?batch.record_data);
 
-        let mut reader = batch
+        if batch
             .compression()
-            .and_then(|compression| compression.inflator(batch.record_data.reader()))?;
+            .is_ok_and(|compression| compression == Compression::None)
+        {
+            let mut records = Vec::with_capacity(record_count);
 
-        let mut decoder = Decoder::new(&mut reader);
-        let mut records = Vec::with_capacity(record_count);
+            for _ in 0..record_count {
+                let record = Record::decode(&mut batch.record_data)?;
+                records.push(record);
+            }
 
-        for _ in 0..record_count {
-            let record = Record::deserialize(&mut decoder)?;
-            records.push(record);
+            Ok(records)
+        } else {
+            let mut reader = batch
+                .compression()
+                .and_then(|compression| compression.inflator(batch.record_data.reader()))?;
+
+            let mut decoder = Decoder::new(&mut reader);
+            let mut records = Vec::with_capacity(record_count);
+
+            for _ in 0..record_count {
+                let record = Record::deserialize(&mut decoder)?;
+                records.push(record);
+            }
+
+            Ok(records)
         }
-
-        Ok(records)
     }
 }
 
