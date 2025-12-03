@@ -15,6 +15,7 @@
 use crate::{Decode, Encode, Result, primitive::ByteSize, record::codec::Octets};
 use bytes::{BufMut as _, Bytes, BytesMut};
 use serde::{Deserialize, Serialize};
+use tracing::instrument;
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct Header {
@@ -40,6 +41,7 @@ impl ByteSize for Header {
 }
 
 impl Encode for Header {
+    #[instrument(skip_all)]
     fn encode(&self) -> Result<Bytes> {
         let mut encoded = self.size_in_bytes().map(BytesMut::with_capacity)?;
 
@@ -51,6 +53,7 @@ impl Encode for Header {
 }
 
 impl Decode for Header {
+    #[instrument(skip_all)]
     fn decode(encoded: &mut Bytes) -> Result<Self> {
         Octets::decode(encoded).and_then(|key| {
             Octets::decode(encoded).map(|value| Self {

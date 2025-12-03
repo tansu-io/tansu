@@ -66,6 +66,7 @@ impl Encode for Octets {
 }
 
 impl Decode for Octets {
+    #[instrument(skip_all)]
     fn decode(encoded: &mut Bytes) -> Result<Self> {
         let length = VarInt::decode(encoded)?.0;
 
@@ -286,7 +287,7 @@ impl<T> Decode for VarIntSequence<T>
 where
     T: Decode,
 {
-    #[instrument]
+    #[instrument(skip_all)]
     fn decode(encoded: &mut Bytes) -> Result<Self> {
         debug!(encoded = ?encoded[..]);
 

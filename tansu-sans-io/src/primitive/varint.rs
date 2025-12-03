@@ -44,7 +44,7 @@ impl Deref for VarInt {
 }
 
 impl Decode for VarInt {
-    #[instrument(ret)]
+    #[instrument(skip_all, ret)]
     fn decode(encoded: &mut Bytes) -> Result<Self> {
         let mut shift = 0u8;
         let mut accumulator = 0u32;
@@ -254,6 +254,7 @@ impl Encode for LongVarInt {
 }
 
 impl Decode for LongVarInt {
+    #[instrument(skip_all, ret)]
     fn decode(encoded: &mut Bytes) -> Result<Self> {
         let mut shift = 0u8;
         let mut accumulator = 0u64;
