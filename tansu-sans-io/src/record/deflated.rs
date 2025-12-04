@@ -16,7 +16,7 @@
 use std::{fmt::Formatter, result};
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use crc::{CRC_32_ISCSI, Crc, Digest};
+use crc::{CRC_32_ISCSI, Crc, Digest, Table};
 use flate2::write::GzEncoder;
 use serde::{
     Deserialize, Deserializer, Serialize,
@@ -115,7 +115,7 @@ impl Batch {
             Bytes::from(data)
         };
 
-        let crc = Crc::<u32>::new(&CRC_32_ISCSI);
+        let crc = Crc::<u32, Table<16>>::new(&CRC_32_ISCSI);
         let mut digest = crc.digest();
         digest.update(&data[..]);
 
