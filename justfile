@@ -446,6 +446,8 @@ producer-perf-20000: (producer-perf "20000" "1024" "500000")
 
 producer-perf-40000: (producer-perf "40000" "1024" "1000000")
 
+producer-perf-45000: (producer-perf "45000" "1024" "1100000")
+
 producer-perf-50000: (producer-perf "50000" "1024" "1250000")
 
 producer-perf-100000: (producer-perf "100000" "1024" "2500000")

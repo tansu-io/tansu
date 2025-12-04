@@ -493,17 +493,13 @@ mod tests {
 
     #[test]
     fn crc_check() {
-        use crc::CRC_32_ISCSI;
-        use crc::Crc;
+        let mut digester = crc_fast::Digest::new(crc_fast::CrcAlgorithm::Crc32Iscsi);
 
-        let b = [
+        digester.update(&[
             0, 0, 0, 0, 0, 0, 0, 0, 1, 141, 116, 152, 137, 53, 0, 0, 1, 141, 116, 152, 137, 53, 0,
             0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 18, 0, 0, 0, 1, 6, 100, 101, 102, 0,
-        ];
+        ]);
 
-        let crc = Crc::<u32>::new(&CRC_32_ISCSI);
-        let mut digester = crc.digest();
-        digester.update(&b);
         assert_eq!(1_126_819_645, digester.finalize());
     }
 }
