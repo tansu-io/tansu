@@ -26,7 +26,7 @@ use std::{
 use std::{collections::BTreeMap, ops::Deref, sync::LazyLock};
 
 #[cfg(any(feature = "libsql", feature = "turso"))]
-pub(crate) struct Cache(BTreeMap<&'static str, String>);
+pub(crate) struct Cache(pub BTreeMap<&'static str, String>);
 
 #[cfg(any(feature = "libsql", feature = "turso"))]
 impl Deref for Cache {
@@ -43,6 +43,7 @@ impl Cache {
         Self(inner)
     }
 
+    #[cfg(feature = "turso")]
     pub(crate) fn get(&self, key: &str) -> Result<&str> {
         self.0
             .get(key)

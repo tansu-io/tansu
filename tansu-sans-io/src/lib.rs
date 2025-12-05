@@ -2065,6 +2065,14 @@ impl TryFrom<i64> for ListOffset {
     }
 }
 
+pub trait Encode {
+    fn encode(&self) -> Result<Bytes>;
+}
+
+pub trait Decode: Sized {
+    fn decode(encoded: &mut Bytes) -> Result<Self>;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

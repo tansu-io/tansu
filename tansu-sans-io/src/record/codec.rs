@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::{
-    Result,
+    Decode, Encode, Result,
     primitive::{
         ByteSize,
         varint::{UnsignedVarInt, VarInt},
@@ -29,7 +29,7 @@ use std::{
     fmt::{self, Formatter},
     marker::PhantomData,
 };
-use tracing::debug;
+use tracing::{debug, instrument};
 
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Octets(pub Option<Bytes>);
@@ -44,6 +44,37 @@ impl ByteSize for Octets {
                     .map(|vlen| vlen + bytes.len())
             },
         )
+    }
+}
+
+impl Encode for Octets {
+    #[instrument(skip_all)]
+    fn encode(&self) -> Result<Bytes> {
+        match self.0.clone() {
+            None => VarInt::from(-1).encode(),
+            Some(data) => {
+                let mut encoded = self.size_in_bytes().map(BytesMut::with_capacity)?;
+
+                let length = VarInt::try_from(data.len())?;
+                encoded.put(length.encode()?);
+                encoded.put(data);
+
+                Ok(encoded.into())
+            }
+        }
+    }
+}
+
+impl Decode for Octets {
+    #[instrument(skip_all)]
+    fn decode(encoded: &mut Bytes) -> Result<Self> {
+        let length = VarInt::decode(encoded)?.0;
+
+        if length == -1 {
+            Ok(Self(None))
+        } else {
+            Ok(Self(Some(encoded.split_to(length as usize))))
+        }
     }
 }
 
@@ -205,6 +236,12 @@ impl<T> FromIterator<T> for VarIntSequence<T> {
     }
 }
 
+impl<T> From<VarIntSequence<T>> for Vec<T> {
+    fn from(value: VarIntSequence<T>) -> Self {
+        value.0
+    }
+}
+
 impl<T> From<Vec<T>> for VarIntSequence<T> {
     fn from(value: Vec<T>) -> Self {
         Self(value)
@@ -215,6 +252,7 @@ impl<T> ByteSize for VarIntSequence<T>
 where
     T: ByteSize,
 {
+    #[instrument(skip_all, ret)]
     fn size_in_bytes(&self) -> Result<usize> {
         self.0.iter().try_fold(
             i32::try_from(self.0.len())
@@ -223,6 +261,46 @@ where
                 .and_then(|vlen| vlen.size_in_bytes())?,
             |acc, t| t.size_in_bytes().map(|tlen| acc + tlen),
         )
+    }
+}
+
+impl<T> Encode for VarIntSequence<T>
+where
+    T: Encode + ByteSize,
+{
+    #[instrument(skip_all)]
+    fn encode(&self) -> Result<Bytes> {
+        let mut encoded = self.size_in_bytes().map(BytesMut::with_capacity)?;
+
+        let length = VarInt::try_from(self.0.len())?;
+        encoded.put(length.encode()?);
+
+        for i in self.0.iter() {
+            encoded.put(i.encode()?);
+        }
+
+        Ok(encoded.into())
+    }
+}
+
+impl<T> Decode for VarIntSequence<T>
+where
+    T: Decode,
+{
+    #[instrument(skip_all)]
+    fn decode(encoded: &mut Bytes) -> Result<Self> {
+        debug!(encoded = ?encoded[..]);
+
+        let length = VarInt::decode(encoded)
+            .map(|length| length.0 as usize)
+            .inspect(|length| debug!(length))?;
+
+        let mut items = Vec::with_capacity(length);
+        for _ in 0..length {
+            items.push(T::decode(encoded)?);
+        }
+
+        Ok(Self(items))
     }
 }
 
@@ -443,5 +521,107 @@ where
         D: Deserializer<'de>,
     {
         Self::deserialize(deserializer).map(Self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{fmt::Debug, fs::File, sync::Arc, thread};
+
+    use tracing::subscriber::DefaultGuard;
+    use tracing_subscriber::{EnvFilter, fmt::format::FmtSpan};
+
+    use crate::Error;
+
+    use super::*;
+
+    fn init_tracing() -> Result<DefaultGuard, Error> {
+        Ok(tracing::subscriber::set_default(
+            tracing_subscriber::fmt()
+                .with_level(true)
+                .with_line_number(true)
+                .with_thread_names(false)
+                .with_span_events(FmtSpan::FULL)
+                .with_env_filter(
+                    EnvFilter::from_default_env()
+                        .add_directive(format!("{}=debug", env!("CARGO_CRATE_NAME")).parse()?),
+                )
+                .with_writer(
+                    thread::current()
+                        .name()
+                        .ok_or(Error::Message(String::from("unnamed thread")))
+                        .and_then(|name| {
+                            File::create(format!("../logs/{}/{name}.log", env!("CARGO_PKG_NAME"),))
+                                .map_err(Into::into)
+                        })
+                        .map(Arc::new)?,
+                )
+                .finish(),
+        ))
+    }
+
+    #[instrument(skip_all)]
+    fn encode_decode<T>(expected: T) -> Result<()>
+    where
+        T: Encode + Decode + Debug + PartialEq,
+    {
+        debug!(?expected);
+
+        let mut encoded = expected
+            .encode()
+            .inspect(|encoded| debug!(encoded = ?encoded[..]))?;
+        let actual = T::decode(&mut encoded).inspect(|actual| debug!(?actual))?;
+
+        assert_eq!(expected, actual);
+        assert_eq!(0, encoded.len());
+        Ok(())
+    }
+
+    #[test]
+    fn octets_none() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let expected = Octets(None);
+        assert_eq!(1, expected.size_in_bytes()?);
+        encode_decode(expected)
+    }
+
+    #[test]
+    fn octets_some() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let expected = Octets(Some(Bytes::from_static(b"34543")));
+        assert_eq!(6, expected.size_in_bytes()?);
+        encode_decode(expected)
+    }
+
+    #[test]
+    fn empty_var_int_seq() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let expected = VarIntSequence(Vec::<Octets>::new());
+        assert_eq!(1, expected.size_in_bytes()?);
+        encode_decode(expected)
+    }
+
+    #[test]
+    fn single_var_int_seq() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let expected = VarIntSequence(vec![Octets(Some(Bytes::from_static(b"34543")))]);
+        assert_eq!(7, expected.size_in_bytes()?);
+        encode_decode(expected)
+    }
+
+    #[test]
+    fn multiple_var_int_seq() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let expected = VarIntSequence(vec![
+            Octets(Some(Bytes::from_static(b"34543"))),
+            Octets(Some(Bytes::from_static(b"32123"))),
+        ]);
+        assert_eq!(13, expected.size_in_bytes()?);
+        encode_decode(expected)
     }
 }

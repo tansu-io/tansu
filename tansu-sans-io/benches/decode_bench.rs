@@ -63,6 +63,7 @@ fn produce_request_v10_001(c: &mut Criterion) {
         })
     });
 }
+
 fn produce_request_v11_001(c: &mut Criterion) {
     _ = c.bench_function("produce_request_v11_001", |b| {
         b.iter(|| {

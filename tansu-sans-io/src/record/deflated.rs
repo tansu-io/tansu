@@ -16,15 +16,16 @@
 use std::{fmt::Formatter, result};
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use crc::{CRC_32_ISCSI, Crc, Digest};
 use flate2::write::GzEncoder;
 use serde::{
     Deserialize, Deserializer, Serialize,
     de::{self, Visitor},
 };
-use tracing::{debug, error};
+use tracing::{debug, error, instrument};
 
-use crate::{Compression, Decoder, Encoder, Error, Result, primitive::ByteSize, record::Record};
+use crate::{
+    Compression, Decode as _, Decoder, Encoder, Error, Result, primitive::ByteSize, record::Record,
+};
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct Frame {
@@ -84,52 +85,40 @@ pub struct Batch {
     pub record_data: Bytes,
 }
 
-impl Batch {
-    fn crc(&self) -> Result<u32> {
-        let data = {
-            let mut data = BytesMut::with_capacity(
-                (i16::BITS
-                    + i32::BITS
-                    + i64::BITS
-                    + i64::BITS
-                    + i64::BITS
-                    + i16::BITS
-                    + i32::BITS
-                    + u32::BITS) as usize
-                    / 8
-                    + self.record_data.len(),
-            );
-
-            data.put_i16(self.attributes);
-            data.put_i32(self.last_offset_delta);
-            data.put_i64(self.base_timestamp);
-            data.put_i64(self.max_timestamp);
-            data.put_i64(self.producer_id);
-            data.put_i16(self.producer_epoch);
-            data.put_i32(self.base_sequence);
-            data.put_u32(self.record_count);
-            data.put(self.record_data.clone());
-
-            Bytes::from(data)
-        };
-
-        let crc = Crc::<u32>::new(&CRC_32_ISCSI);
-        let mut digest = crc.digest();
-        digest.update(&data[..]);
-
-        Ok(digest.finalize())
-    }
-}
-
 impl TryFrom<&[u8]> for Batch {
     type Error = Error;
 
     fn try_from(mut encoded: &[u8]) -> result::Result<Self, Self::Error> {
         let base_offset = encoded.try_get_i64()?;
         let batch_length = encoded.try_get_i32()?;
+
         let partition_leader_epoch = encoded.try_get_i32()?;
         let magic = encoded.try_get_i8()?;
         let crc = encoded.try_get_u32()?;
+
+        let crc_data_size = usize::try_from(batch_length).map(|batch_length| {
+            batch_length
+            // partition leader epoch
+            - size_of::<i32>()
+            // magic
+            - size_of::<i8>()
+            // crc
+            - size_of::<u32>()
+        })?;
+
+        let crc_data = &encoded[..crc_data_size];
+
+        let computed = {
+            let mut digest = crc_fast::Digest::new(crc_fast::CrcAlgorithm::Crc32Iscsi);
+            digest.update(crc_data);
+
+            digest.finalize() as u32
+        };
+
+        if computed != crc {
+            error!(crc, computed);
+        }
+
         let attributes = encoded.try_get_i16()?;
         let last_offset_delta = encoded.try_get_i32()?;
         let base_timestamp = encoded.try_get_i64()?;
@@ -160,17 +149,6 @@ impl TryFrom<&[u8]> for Batch {
             record_count,
             record_data,
         };
-
-        _ = batch
-            .crc()
-            .inspect(|computed| {
-                if *computed == crc {
-                    debug!(crc, computed);
-                } else {
-                    error!(crc, computed);
-                }
-            })
-            .inspect_err(|err| error!(?err))?;
 
         Ok(batch)
     }
@@ -245,30 +223,10 @@ impl CrcData {
     }
 
     fn crc(&self) -> Result<u32> {
-        struct CrcUpdate<'a> {
-            digest: Digest<'a, u32>,
-        }
-
-        impl std::io::Write for CrcUpdate<'_> {
-            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-                self.digest.update(buf);
-                Ok(buf.len())
-            }
-
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
-        }
-
-        let crc = Crc::<u32>::new(&CRC_32_ISCSI);
-
-        let mut digester = CrcUpdate {
-            digest: crc.digest(),
-        };
-
-        let mut serializer = Encoder::new(&mut digester);
+        let mut digest = crc_fast::Digest::new(crc_fast::CrcAlgorithm::Crc32Iscsi);
+        let mut serializer = Encoder::new(&mut digest);
         self.serialize(&mut serializer)?;
-        Ok(digester.digest.finalize())
+        Ok(digest.finalize() as u32)
     }
 }
 
@@ -361,25 +319,40 @@ impl Batch {
 impl TryFrom<Batch> for Vec<Record> {
     type Error = Error;
 
-    fn try_from(batch: Batch) -> Result<Self, Self::Error> {
+    #[instrument(skip_all)]
+    fn try_from(mut batch: Batch) -> Result<Self, Self::Error> {
         let record_count = usize::try_from(batch.record_count)?;
 
         debug!(?record_count);
         debug!(?batch.record_data);
 
-        let mut reader = batch
+        if batch
             .compression()
-            .and_then(|compression| compression.inflator(batch.record_data.reader()))?;
+            .is_ok_and(|compression| compression == Compression::None)
+        {
+            let mut records = Vec::with_capacity(record_count);
 
-        let mut decoder = Decoder::new(&mut reader);
-        let mut records = Vec::with_capacity(record_count);
+            for _ in 0..record_count {
+                let record = Record::decode(&mut batch.record_data)?;
+                records.push(record);
+            }
 
-        for _ in 0..record_count {
-            let record = Record::deserialize(&mut decoder)?;
-            records.push(record);
+            Ok(records)
+        } else {
+            let mut reader = batch
+                .compression()
+                .and_then(|compression| compression.inflator(batch.record_data.reader()))?;
+
+            let mut decoder = Decoder::new(&mut reader);
+            let mut records = Vec::with_capacity(record_count);
+
+            for _ in 0..record_count {
+                let record = Record::deserialize(&mut decoder)?;
+                records.push(record);
+            }
+
+            Ok(records)
         }
-
-        Ok(records)
     }
 }
 
