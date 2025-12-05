@@ -398,7 +398,7 @@ broker-sqlite profile="profiling":
 
 broker-postgres profile="profiling": docker-compose-down db-up
     cargo build --profile {{profile}} --features postgres --bin tansu
-    ./target/{{profile}}/tansu --storage-engine=postgres://postgres:postgres@localhost 2>&1 | tee broker.log
+    ./target/{{profile}}/tansu --storage-engine=postgres://postgres:postgres@localhost 2>&1 > broker.log
 
 samply-null profile="profiling":
     cargo build --profile {{profile}} --bin tansu
