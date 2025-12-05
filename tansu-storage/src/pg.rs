@@ -25,7 +25,7 @@ use std::{
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use deadpool_postgres::{Manager, ManagerConfig, Object, Pool, RecyclingMethod};
+use deadpool_postgres::{Manager, ManagerConfig, Object, Pool, RecyclingMethod, Transaction};
 use opentelemetry::metrics::Histogram;
 use opentelemetry::{KeyValue, metrics::Counter};
 use rand::{prelude::*, rng};
@@ -57,7 +57,7 @@ use tansu_schema::{
     Registry,
     lake::{House, LakeHouse as _},
 };
-use tokio_postgres::{Config, NoTls, Row, Transaction, error::SqlState, types::ToSql};
+use tokio_postgres::{Config, NoTls, Row, error::SqlState, types::ToSql};
 use tracing::{debug, error};
 use url::Url;
 use uuid::Uuid;
@@ -67,14 +67,8 @@ use crate::{
     NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse, Result, Storage,
     TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse, TxnOffsetCommitRequest,
     TxnState, UpdateError, Version,
-    sql::{default_hash, idempotent_sequence_check, remove_comments},
+    sql::{default_hash, idempotent_sequence_check},
 };
-
-macro_rules! include_sql {
-    ($e: expr) => {
-        remove_comments(include_str!($e))
-    };
-}
 
 /// PostgreSQL Storage Engine
 #[derive(Clone, Debug)]
@@ -230,6 +224,10 @@ impl Postgres {
         self.pool.get().await.map_err(Into::into)
     }
 
+    fn sql_lookup(&self, key: &str) -> Result<&str> {
+        crate::sql::SQL.get(key)
+    }
+
     async fn idempotent_message_check(
         &self,
         transaction_id: Option<&str>,
@@ -238,10 +236,11 @@ impl Postgres {
         tx: &Transaction<'_>,
     ) -> Result<()> {
         debug!(transaction_id, ?deflated);
+
         if let Some(row) = self
             .tx_prepare_query_opt(
                 tx,
-                include_sql!("pg/producer_epoch_current_for_producer.sql").as_str(),
+                self.sql_lookup("producer_epoch_current_for_producer.sql")?,
                 &[&self.cluster, &deflated.producer_id],
                 "idempotent_message_check",
             )
@@ -255,7 +254,7 @@ impl Postgres {
             let row = self
                 .tx_prepare_query_one(
                     tx,
-                    include_sql!("pg/producer_select_for_update.sql").as_str(),
+                    self.sql_lookup("producer_select_for_update.sql")?,
                     &[
                         &self.cluster,
                         &topition.topic(),
@@ -295,7 +294,7 @@ impl Postgres {
                 1,
                 self.tx_prepare_execute(
                     tx,
-                    include_sql!("pg/producer_detail_insert.sql").as_str(),
+                    self.sql_lookup("producer_detail_insert.sql")?,
                     &[
                         &self.cluster,
                         &topition.topic(),
@@ -323,7 +322,7 @@ impl Postgres {
         if let Some(row) = self
             .tx_prepare_query_opt(
                 tx,
-                include_sql!("pg/watermark_select_for_update.sql").as_str(),
+                self.sql_lookup("watermark_select_for_update.sql")?,
                 &[&self.cluster, &topition.topic(), &topition.partition()],
                 "watermark_select_for_update",
             )
@@ -379,7 +378,10 @@ impl Postgres {
         params: &[&(dyn ToSql + Sync)],
         _nickname: &str,
     ) -> Result<u64, tokio_postgres::error::Error> {
-        let prepared = c.prepare(sql).await.inspect_err(|err| error!(?err))?;
+        let prepared = c
+            .prepare_cached(sql)
+            .await
+            .inspect_err(|err| error!(?err))?;
 
         let execute_start = SystemTime::now();
         c.execute(&prepared, params)
@@ -417,7 +419,10 @@ impl Postgres {
     ) -> Result<Vec<Row>, tokio_postgres::error::Error> {
         debug!(sql);
 
-        let prepared = c.prepare(sql).await.inspect_err(|err| error!(?err))?;
+        let prepared = c
+            .prepare_cached(sql)
+            .await
+            .inspect_err(|err| error!(?err))?;
 
         let execute_start = SystemTime::now();
 
@@ -456,7 +461,10 @@ impl Postgres {
     ) -> Result<Row, tokio_postgres::error::Error> {
         debug!(sql);
 
-        let prepared = c.prepare(sql).await.inspect_err(|err| error!(?err))?;
+        let prepared = c
+            .prepare_cached(sql)
+            .await
+            .inspect_err(|err| error!(?err))?;
 
         let execute_start = SystemTime::now();
 
@@ -495,7 +503,10 @@ impl Postgres {
     ) -> Result<Option<Row>, tokio_postgres::error::Error> {
         debug!(sql);
 
-        let prepared = c.prepare(sql).await.inspect_err(|err| error!(?err))?;
+        let prepared = c
+            .prepare_cached(sql)
+            .await
+            .inspect_err(|err| error!(?err))?;
 
         let execute_start = SystemTime::now();
 
@@ -534,7 +545,10 @@ impl Postgres {
     ) -> Result<u64, tokio_postgres::error::Error> {
         debug!(sql);
 
-        let prepared = tx.prepare(sql).await.inspect_err(|err| error!(?err))?;
+        let prepared = tx
+            .prepare_cached(sql)
+            .await
+            .inspect_err(|err| error!(?err))?;
 
         let execute_start = SystemTime::now();
 
@@ -573,7 +587,10 @@ impl Postgres {
     ) -> Result<Vec<Row>, tokio_postgres::error::Error> {
         debug!(sql);
 
-        let prepared = tx.prepare(sql).await.inspect_err(|err| error!(?err))?;
+        let prepared = tx
+            .prepare_cached(sql)
+            .await
+            .inspect_err(|err| error!(?err))?;
 
         let execute_start = SystemTime::now();
         tx.query(&prepared, params)
@@ -611,7 +628,10 @@ impl Postgres {
     ) -> Result<Row, tokio_postgres::error::Error> {
         debug!(sql);
 
-        let prepared = tx.prepare(sql).await.inspect_err(|err| error!(?err))?;
+        let prepared = tx
+            .prepare_cached(sql)
+            .await
+            .inspect_err(|err| error!(?err))?;
 
         let execute_start = SystemTime::now();
         tx.query_one(&prepared, params)
@@ -649,7 +669,10 @@ impl Postgres {
     ) -> Result<Option<Row>, tokio_postgres::error::Error> {
         debug!(sql);
 
-        let prepared = tx.prepare(sql).await.inspect_err(|err| error!(?err))?;
+        let prepared = tx
+            .prepare_cached(sql)
+            .await
+            .inspect_err(|err| error!(?err))?;
 
         let execute_start = SystemTime::now();
         tx.query_opt(&prepared, params)
@@ -723,7 +746,7 @@ impl Postgres {
             _ = self
                 .tx_prepare_execute(
                     tx,
-                    include_sql!("pg/record_insert.sql").as_str(),
+                    self.sql_lookup("record_insert.sql")?,
                     &[
                         &self.cluster,
                         &topic,
@@ -774,7 +797,7 @@ impl Postgres {
                 _ = self
                     .tx_prepare_execute(
                         tx,
-                        include_sql!("pg/header_insert.sql").as_str(),
+                        self.sql_lookup("header_insert.sql")?,
                         &[&self.cluster, &topic, &partition, &offset, &key, &value],
                         "produce_in_tx",
                     )
@@ -793,7 +816,7 @@ impl Postgres {
 
             _ = self
                     .tx_prepare_execute(tx,
-                        include_sql!("pg/txn_produce_offset_insert.sql").as_str(),
+                        self.sql_lookup("txn_produce_offset_insert.sql")?,
                         &[
                             &self.cluster,
                             &transaction_id,
@@ -814,7 +837,7 @@ impl Postgres {
         _ = self
             .tx_prepare_execute(
                 tx,
-                include_sql!("pg/watermark_update.sql").as_str(),
+                self.sql_lookup("watermark_update.sql")?,
                 &[
                     &self.cluster,
                     &topic,
@@ -849,7 +872,7 @@ impl Postgres {
         let rows = self
             .tx_prepare_query(
                 tx,
-                include_sql!("pg/txn_select_produced_topitions.sql").as_str(),
+                self.sql_lookup("txn_select_produced_topitions.sql")?,
                 &[
                     &self.cluster,
                     &transaction_id,
@@ -903,7 +926,7 @@ impl Postgres {
             let row = self
                 .tx_prepare_query_one(
                     tx,
-                    include_sql!("pg/txn_produce_offset_select_offset_range.sql").as_str(),
+                    self.sql_lookup("txn_produce_offset_select_offset_range.sql")?,
                     &[
                         &self.cluster,
                         &transaction_id,
@@ -923,7 +946,7 @@ impl Postgres {
             let rows = self
                 .tx_prepare_query(
                     tx,
-                    include_sql!("pg/txn_produce_offset_select_overlapping_txn.sql").as_str(),
+                    self.sql_lookup("txn_produce_offset_select_overlapping_txn.sql")?,
                     &[
                         &self.cluster,
                         &transaction_id,
@@ -970,7 +993,7 @@ impl Postgres {
                 _ = self
                     .tx_prepare_execute(
                         tx,
-                        include_sql!("pg/txn_produce_offset_delete_by_txn.sql").as_str(),
+                        self.sql_lookup("txn_produce_offset_delete_by_txn.sql")?,
                         &[
                             &self.cluster,
                             &txn.name,
@@ -984,7 +1007,7 @@ impl Postgres {
                 _ = self
                     .tx_prepare_execute(
                         tx,
-                        include_sql!("pg/txn_topition_delete_by_txn.sql").as_str(),
+                        self.sql_lookup("txn_topition_delete_by_txn.sql")?,
                         &[
                             &self.cluster,
                             &txn.name,
@@ -999,7 +1022,7 @@ impl Postgres {
                     _ = self
                         .tx_prepare_execute(
                             tx,
-                            include_sql!("pg/consumer_offset_insert_from_txn.sql").as_str(),
+                            self.sql_lookup("consumer_offset_insert_from_txn.sql")?,
                             &[
                                 &self.cluster,
                                 &txn.name,
@@ -1014,7 +1037,7 @@ impl Postgres {
                 _ = self
                     .tx_prepare_execute(
                         tx,
-                        include_sql!("pg/txn_offset_commit_tp_delete_by_txn.sql").as_str(),
+                        self.sql_lookup("txn_offset_commit_tp_delete_by_txn.sql")?,
                         &[
                             &self.cluster,
                             &txn.name,
@@ -1028,7 +1051,7 @@ impl Postgres {
                 _ = self
                     .tx_prepare_execute(
                         tx,
-                        include_sql!("pg/txn_offset_commit_delete_by_txn.sql").as_str(),
+                        self.sql_lookup("txn_offset_commit_delete_by_txn.sql")?,
                         &[
                             &self.cluster,
                             &txn.name,
@@ -1050,7 +1073,7 @@ impl Postgres {
                 _ = self
                     .tx_prepare_execute(
                         tx,
-                        include_sql!("pg/txn_status_update.sql").as_str(),
+                        self.sql_lookup("txn_status_update.sql")?,
                         &[
                             &self.cluster,
                             &txn.name,
@@ -1074,7 +1097,7 @@ impl Postgres {
             _ = self
                 .tx_prepare_execute(
                     tx,
-                    include_sql!("pg/txn_status_update.sql").as_str(),
+                    self.sql_lookup("txn_status_update.sql")?,
                     &[
                         &self.cluster,
                         &transaction_id,
@@ -1134,13 +1157,7 @@ impl Storage for Postgres {
         _ = self
             .prepare_execute(
                 &c,
-                concat!(
-                    "insert into cluster",
-                    " (name) values ($1)",
-                    " on conflict (name)",
-                    " do update set",
-                    " last_updated = excluded.last_updated",
-                ),
+                self.sql_lookup("register_broker.sql")?,
                 &[&broker_registration.cluster_id],
                 "register_broker",
             )
@@ -1182,7 +1199,7 @@ impl Storage for Postgres {
         let topic_uuid = self
             .tx_prepare_query_one(
                 &tx,
-                include_sql!("pg/topic_insert.sql").as_str(),
+                self.sql_lookup("topic_insert.sql")?,
                 &[
                     &self.cluster,
                     &topic.name,
@@ -1220,7 +1237,7 @@ impl Storage for Postgres {
             _ = self
                 .tx_prepare_query_one(
                     &tx,
-                    include_sql!("pg/topition_insert.sql").as_str(),
+                    self.sql_lookup("topition_insert.sql")?,
                     &[&self.cluster, &topic.name, &partition],
                     "create_topic",
                 )
@@ -1229,7 +1246,7 @@ impl Storage for Postgres {
             _ = self
                 .tx_prepare_query_one(
                     &tx,
-                    include_sql!("pg/watermark_insert.sql").as_str(),
+                    self.sql_lookup("watermark_insert.sql")?,
                     &[&self.cluster, &topic.name, &partition],
                     "create_topic",
                 )
@@ -1243,7 +1260,7 @@ impl Storage for Postgres {
                 _ = self
                     .tx_prepare_execute(
                         &tx,
-                        include_sql!("pg/topic_configuration_upsert.sql").as_str(),
+                        self.sql_lookup("topic_configuration_upsert.sql")?,
                         &[
                             &self.cluster,
                             &topic.name,
@@ -1400,7 +1417,7 @@ impl Storage for Postgres {
             TopicId::Id(id) => {
                 self.tx_prepare_query_opt(
                     &tx,
-                    include_sql!("pg/topic_select_uuid.sql").as_str(),
+                    self.sql_lookup("topic_select_uuid.sql")?,
                     &[&self.cluster, &id],
                     "delete_topic",
                 )
@@ -1410,7 +1427,7 @@ impl Storage for Postgres {
             TopicId::Name(name) => {
                 self.tx_prepare_query_opt(
                     &tx,
-                    include_sql!("pg/topic_select_name.sql").as_str(),
+                    self.sql_lookup("topic_select_name.sql")?,
                     &[&self.cluster, name],
                     "delete_topic",
                 )
@@ -1427,57 +1444,57 @@ impl Storage for Postgres {
         for (description, sql, nickname) in [
             (
                 "consumer_offsets",
-                include_sql!("pg/consumer_offset_delete_by_topic.sql"),
+                self.sql_lookup("consumer_offset_delete_by_topic.sql")?,
                 "delete_topic",
             ),
             (
                 "topic_configuration",
-                include_sql!("pg/topic_configuration_delete_by_topic.sql"),
+                self.sql_lookup("topic_configuration_delete_by_topic.sql")?,
                 "delete_topic",
             ),
             (
                 "watermarks",
-                include_sql!("pg/watermark_delete_by_topic.sql"),
+                self.sql_lookup("watermark_delete_by_topic.sql")?,
                 "delete_topic",
             ),
             (
                 "headers",
-                include_sql!("pg/header_delete_by_topic.sql"),
+                self.sql_lookup("header_delete_by_topic.sql")?,
                 "delete_topic",
             ),
             (
                 "records",
-                include_sql!("pg/record_delete_by_topic.sql"),
+                self.sql_lookup("record_delete_by_topic.sql")?,
                 "delete_topic",
             ),
             (
                 "txn_offset_commit_tp",
-                include_sql!("pg/txn_offset_commit_tp_delete_by_topic.sql"),
+                self.sql_lookup("txn_offset_commit_tp_delete_by_topic.sql")?,
                 "delete_topic",
             ),
             (
                 "txn_produce_offset_delete",
-                include_sql!("pg/txn_produce_offset_delete_by_topic.sql"),
+                self.sql_lookup("txn_produce_offset_delete_by_topic.sql")?,
                 "delete_topic",
             ),
             (
                 "txn_topition",
-                include_sql!("pg/txn_topition_delete_by_topic.sql"),
+                self.sql_lookup("txn_topition_delete_by_topic.sql")?,
                 "delete_topic",
             ),
             (
                 "producer_detail",
-                include_sql!("pg/producer_detail_delete_by_topic.sql"),
+                self.sql_lookup("producer_detail_delete_by_topic.sql")?,
                 "delete_topic",
             ),
             (
                 "topitions",
-                include_sql!("pg/topition_delete_by_topic.sql"),
+                self.sql_lookup("topition_delete_by_topic.sql")?,
                 "delete_topic",
             ),
         ] {
             let rows = self
-                .tx_prepare_execute(&tx, sql.as_str(), &[&self.cluster, &topic_name], nickname)
+                .tx_prepare_execute(&tx, sql, &[&self.cluster, &topic_name], nickname)
                 .await
                 .inspect_err(|err| {
                     debug!(?description, ?err);
@@ -1489,7 +1506,7 @@ impl Storage for Postgres {
         _ = self
             .tx_prepare_execute(
                 &tx,
-                include_sql!("pg/topic_delete_by.sql").as_str(),
+                self.sql_lookup("topic_delete_by.sql")?,
                 &[&self.cluster, &topic_name],
                 "delete_topic",
             )
@@ -1536,7 +1553,7 @@ impl Storage for Postgres {
                             if self
                                 .prepare_query(
                                     &c,
-                                    include_sql!("pg/topic_configuration_upsert.sql").as_str(),
+                                    self.sql_lookup("topic_configuration_upsert.sql")?,
                                     &[
                                         &self.cluster,
                                         &resource.resource_name,
@@ -1559,7 +1576,7 @@ impl Storage for Postgres {
                             if self
                                 .prepare_query(
                                     &c,
-                                    include_sql!("pg/topic_configuration_delete.sql").as_str(),
+                                    self.sql_lookup("topic_configuration_delete.sql")?,
                                     &[&self.cluster, &resource.resource_name, &config.name],
                                     "topic_configuration",
                                 )
@@ -1642,7 +1659,7 @@ impl Storage for Postgres {
         let records = self
             .prepare_query(
                 &c,
-                include_sql!("pg/record_fetch.sql").as_str(),
+                self.sql_lookup("record_fetch.sql")?,
                 &[
                     &self.cluster,
                     &topition.topic(),
@@ -1772,7 +1789,7 @@ impl Storage for Postgres {
                 for header in self
                     .prepare_query(
                         &c,
-                        include_sql!("pg/header_fetch.sql").as_str(),
+                        self.sql_lookup("header_fetch.sql")?,
                         &[
                             &self.cluster,
                             &topition.topic(),
@@ -1824,7 +1841,7 @@ impl Storage for Postgres {
         let row = self
             .prepare_query_one(
                 &c,
-                include_sql!("pg/watermark_select.sql").as_str(),
+                self.sql_lookup("watermark_select.sql")?,
                 &[&self.cluster, &topition.topic(), &topition.partition()],
                 "offset_stage",
             )
@@ -1876,7 +1893,7 @@ impl Storage for Postgres {
             if self
                 .tx_prepare_query_opt(
                     &tx,
-                    include_sql!("pg/topition_select.sql").as_str(),
+                    self.sql_lookup("topition_select.sql")?,
                     &[&self.cluster, &topition.topic(), &topition.partition()],
                     "offset_commit",
                 )
@@ -1888,7 +1905,7 @@ impl Storage for Postgres {
                     let rows = self
                         .tx_prepare_execute(
                             &tx,
-                            include_sql!("pg/consumer_group_insert.sql").as_str(),
+                            self.sql_lookup("consumer_group_insert.sql")?,
                             &[&self.cluster, &group],
                             "offset_commit",
                         )
@@ -1901,7 +1918,7 @@ impl Storage for Postgres {
                 let rows = self
                     .tx_prepare_execute(
                         &tx,
-                        include_sql!("pg/consumer_offset_insert.sql").as_str(),
+                        self.sql_lookup("consumer_offset_insert.sql")?,
                         &[
                             &self.cluster,
                             &topition.topic(),
@@ -1947,7 +1964,7 @@ impl Storage for Postgres {
         for row in self
             .prepare_query(
                 &c,
-                include_sql!("pg/consumer_offset_select_by_group.sql").as_str(),
+                self.sql_lookup("consumer_offset_select_by_group.sql")?,
                 &[&self.cluster, &group_id],
                 "committed_offset_topitions",
             )
@@ -1985,7 +2002,7 @@ impl Storage for Postgres {
             let offset = self
                 .prepare_query_opt(
                     &c,
-                    include_sql!("pg/consumer_offset_select.sql").as_str(),
+                    self.sql_lookup("consumer_offset_select.sql")?,
                     &[&self.cluster, &group_id, &topic.topic(), &topic.partition()],
                     "offset_fetch",
                 )
@@ -2029,15 +2046,15 @@ impl Storage for Postgres {
 
         for (topition, offset_type) in offsets {
             let query = match (offset_type, isolation_level) {
-                (ListOffset::Earliest, _) => include_sql!("pg/list_earliest_offset.sql"),
+                (ListOffset::Earliest, _) => self.sql_lookup("list_earliest_offset.sql")?,
                 (ListOffset::Latest, IsolationLevel::ReadCommitted) => {
-                    include_sql!("pg/list_latest_offset_committed.sql")
+                    self.sql_lookup("list_latest_offset_committed.sql")?
                 }
                 (ListOffset::Latest, IsolationLevel::ReadUncommitted) => {
-                    include_sql!("pg/list_latest_offset_uncommitted.sql")
+                    self.sql_lookup("list_latest_offset_uncommitted.sql")?
                 }
                 (ListOffset::Timestamp(_), _) => {
-                    include_sql!("pg/list_latest_offset_timestamp.sql")
+                    self.sql_lookup("list_latest_offset_timestamp.sql")?
                 }
             };
 
@@ -2047,7 +2064,7 @@ impl Storage for Postgres {
                 ListOffset::Earliest | ListOffset::Latest => self
                     .prepare_query_opt(
                         &c,
-                        query.as_str(),
+                        query,
                         &[&self.cluster, &topition.topic(), &topition.partition()],
                         "list_offsets",
                     )
@@ -2057,7 +2074,7 @@ impl Storage for Postgres {
                 ListOffset::Timestamp(timestamp) => self
                     .prepare_query_opt(
                         &c,
-                        query.as_str(),
+                        query,
                         &[
                             &self.cluster.as_str(),
                             &topition.topic(),
@@ -2150,7 +2167,7 @@ impl Storage for Postgres {
                             match self
                                 .prepare_query_opt(
                                     &c,
-                                    include_sql!("pg/topic_select_name.sql").as_str(),
+                                    self.sql_lookup("topic_select_name.sql")?,
                                     &[&self.cluster, &name.as_str()],
                                     "metadata",
                                 )
@@ -2244,7 +2261,7 @@ impl Storage for Postgres {
                             match self
                                 .prepare_query_one(
                                     &c,
-                                    include_sql!("pg/topic_select_uuid.sql").as_str(),
+                                    self.sql_lookup("topic_select_uuid.sql")?,
                                     &[&self.cluster, &id],
                                     "metadata",
                                 )
@@ -2335,7 +2352,7 @@ impl Storage for Postgres {
                 match self
                     .prepare_query(
                         &c,
-                        include_sql!("pg/topic_by_cluster.sql").as_str(),
+                        self.sql_lookup("topic_by_cluster.sql")?,
                         &[&self.cluster],
                         "metadata",
                     )
@@ -2442,7 +2459,7 @@ impl Storage for Postgres {
         let c = self.connection().await.inspect_err(|err| error!(?err))?;
 
         let prepared = c
-            .prepare(&include_sql!("pg/topic_select.sql"))
+            .prepare_cached(self.sql_lookup("topic_select.sql")?)
             .await
             .inspect_err(|err| error!(?err))?;
 
@@ -2452,7 +2469,7 @@ impl Storage for Postgres {
             .is_some()
         {
             let prepared = c
-                .prepare(&include_sql!("pg/topic_configuration_select.sql"))
+                .prepare_cached(self.sql_lookup("topic_configuration_select.sql")?)
                 .await
                 .inspect_err(|err| error!(?err))?;
 
@@ -2526,7 +2543,7 @@ impl Storage for Postgres {
                     match self
                         .prepare_query_opt(
                             &c,
-                            include_sql!("pg/topic_select_name.sql").as_str(),
+                            self.sql_lookup("topic_select_name.sql")?,
                             &[&self.cluster, &name.as_str()],
                             "metadata",
                         )
@@ -2617,7 +2634,7 @@ impl Storage for Postgres {
                     match self
                         .prepare_query_one(
                             &c,
-                            include_sql!("pg/topic_select_uuid.sql").as_str(),
+                            self.sql_lookup("topic_select_uuid.sql")?,
                             &[&self.cluster, &id],
                             "metadata",
                         )
@@ -2704,7 +2721,7 @@ impl Storage for Postgres {
         for row in self
             .prepare_query(
                 &c,
-                include_sql!("pg/consumer_group_select.sql").as_str(),
+                self.sql_lookup("consumer_group_select.sql")?,
                 &[&self.cluster],
                 "list_groups",
             )
@@ -2737,17 +2754,17 @@ impl Storage for Postgres {
             let c = self.connection().await?;
 
             let consumer_offset = c
-                .prepare(include_sql!("pg/consumer_offset_delete_by_cg.sql").as_str())
+                .prepare_cached(self.sql_lookup("consumer_offset_delete_by_cg.sql")?)
                 .await
                 .inspect_err(|err| error!(?err))?;
 
             let group_detail = c
-                .prepare(include_sql!("pg/consumer_group_detail_delete_by_cg.sql").as_str())
+                .prepare_cached(self.sql_lookup("consumer_group_detail_delete_by_cg.sql")?)
                 .await
                 .inspect_err(|err| error!(?err))?;
 
             let group = c
-                .prepare(include_sql!("pg/consumer_group_delete.sql").as_str())
+                .prepare_cached(self.sql_lookup("consumer_group_delete.sql")?)
                 .await
                 .inspect_err(|err| error!(?err))?;
 
@@ -2800,7 +2817,7 @@ impl Storage for Postgres {
                 if let Some(row) = self
                     .prepare_query_opt(
                         &c,
-                        include_sql!("pg/consumer_group_select_by_name.sql").as_str(),
+                        self.sql_lookup("consumer_group_select_by_name.sql")?,
                         &[&self.cluster, group_id],
                         "describe_groups",
                     )
@@ -2841,7 +2858,7 @@ impl Storage for Postgres {
         _ = self
             .tx_prepare_execute(
                 &tx,
-                include_sql!("pg/consumer_group_insert.sql").as_str(),
+                self.sql_lookup("consumer_group_insert.sql")?,
                 &[&self.cluster, &group_id],
                 "update_group",
             )
@@ -2868,7 +2885,7 @@ impl Storage for Postgres {
         let outcome = if let Some(row) = self
             .tx_prepare_query_opt(
                 &tx,
-                include_sql!("pg/consumer_group_detail_insert.sql").as_str(),
+                self.sql_lookup("consumer_group_detail_insert.sql")?,
                 &[
                     &self.cluster,
                     &group_id,
@@ -2896,7 +2913,7 @@ impl Storage for Postgres {
             let row = self
                 .tx_prepare_query_one(
                     &tx,
-                    include_sql!("pg/consumer_group_detail.sql").as_str(),
+                    self.sql_lookup("consumer_group_detail.sql")?,
                     &[&group_id, &self.cluster.as_str()],
                     "update_group",
                 )
@@ -2949,7 +2966,7 @@ impl Storage for Postgres {
                 if let Some(row) = self
                     .tx_prepare_query_opt(
                         &tx,
-                        include_sql!("pg/producer_epoch_for_current_txn.sql").as_str(),
+                        self.sql_lookup("producer_epoch_for_current_txn.sql")?,
                         &[&self.cluster, &transaction_id],
                         "init_producer",
                     )
@@ -2986,7 +3003,7 @@ impl Storage for Postgres {
                 let (producer, epoch) = if let Some(row) = self
                     .tx_prepare_query_opt(
                         &tx,
-                        include_sql!("pg/txn_select_name.sql").as_str(),
+                        self.sql_lookup("txn_select_name.sql")?,
                         &[&self.cluster, &transaction_id],
                         "init_producer",
                     )
@@ -2998,7 +3015,7 @@ impl Storage for Postgres {
                     let row = self
                         .tx_prepare_query_one(
                             &tx,
-                            include_sql!("pg/producer_epoch_insert.sql").as_str(),
+                            self.sql_lookup("producer_epoch_insert.sql")?,
                             &[&self.cluster, &producer],
                             "init_producer",
                         )
@@ -3012,7 +3029,7 @@ impl Storage for Postgres {
                     let row = self
                         .tx_prepare_query_one(
                             &tx,
-                            include_sql!("pg/producer_insert.sql").as_str(),
+                            self.sql_lookup("producer_insert.sql")?,
                             &[&self.cluster],
                             "init_producer",
                         )
@@ -3024,7 +3041,7 @@ impl Storage for Postgres {
                     let row = self
                         .tx_prepare_query_one(
                             &tx,
-                            include_sql!("pg/producer_epoch_insert.sql").as_str(),
+                            self.sql_lookup("producer_epoch_insert.sql")?,
                             &[&self.cluster, &producer],
                             "init_producer",
                         )
@@ -3037,7 +3054,7 @@ impl Storage for Postgres {
                         1,
                         self.tx_prepare_execute(
                             &tx,
-                            include_sql!("pg/txn_insert.sql").as_str(),
+                            self.sql_lookup("txn_insert.sql")?,
                             &[&self.cluster, &transaction_id, &producer],
                             "init_producer",
                         )
@@ -3059,7 +3076,7 @@ impl Storage for Postgres {
                     1,
                     self.tx_prepare_execute(
                         &tx,
-                        include_sql!("pg/txn_detail_insert.sql").as_str(),
+                        self.sql_lookup("txn_detail_insert.sql")?,
                         &[
                             &self.cluster,
                             &transaction_id,
@@ -3107,7 +3124,7 @@ impl Storage for Postgres {
                 let row = self
                     .tx_prepare_query_one(
                         &tx,
-                        include_sql!("pg/producer_insert.sql").as_str(),
+                        self.sql_lookup("producer_insert.sql")?,
                         &[&self.cluster],
                         "init_producer",
                     )
@@ -3119,7 +3136,7 @@ impl Storage for Postgres {
                 let row = self
                     .tx_prepare_query_one(
                         &tx,
-                        include_sql!("pg/producer_epoch_insert.sql").as_str(),
+                        self.sql_lookup("producer_epoch_insert.sql")?,
                         &[&self.cluster, &producer],
                         "init_producer",
                     )
@@ -3190,7 +3207,7 @@ impl Storage for Postgres {
                         _ = self
                             .tx_prepare_execute(
                                 &tx,
-                                include_sql!("pg/txn_topition_insert.sql").as_str(),
+                                self.sql_lookup("txn_topition_insert.sql")?,
                                 &[
                                     &self.cluster,
                                     &topic.name,
@@ -3229,7 +3246,7 @@ impl Storage for Postgres {
                 _ = self
                     .tx_prepare_execute(
                         &tx,
-                        include_sql!("pg/txn_detail_update_started_at.sql").as_str(),
+                        self.sql_lookup("txn_detail_update_started_at.sql")?,
                         &[
                             &self.cluster,
                             &transaction_id,
@@ -3272,7 +3289,7 @@ impl Storage for Postgres {
         let (producer_id, producer_epoch) = if let Some(row) = self
             .tx_prepare_query_opt(
                 &tx,
-                include_sql!("pg/producer_epoch_for_current_txn.sql").as_str(),
+                self.sql_lookup("producer_epoch_for_current_txn.sql")?,
                 &[&self.cluster, &offsets.transaction_id],
                 "txn_offset_commit",
             )
@@ -3297,7 +3314,7 @@ impl Storage for Postgres {
         _ = self
             .tx_prepare_execute(
                 &tx,
-                include_sql!("pg/consumer_group_insert.sql").as_str(),
+                self.sql_lookup("consumer_group_insert.sql")?,
                 &[&self.cluster, &offsets.group_id],
                 "txn_offset_commit",
             )
@@ -3308,7 +3325,7 @@ impl Storage for Postgres {
         _ = self
             .tx_prepare_execute(
                 &tx,
-                include_sql!("pg/txn_offset_commit_insert.sql").as_str(),
+                self.sql_lookup("txn_offset_commit_insert.sql")?,
                 &[
                     &self.cluster,
                     &offsets.transaction_id,
@@ -3336,7 +3353,7 @@ impl Storage for Postgres {
                         _ = self
                             .tx_prepare_execute(
                                 &tx,
-                                include_sql!("pg/txn_offset_commit_tp_insert.sql").as_str(),
+                                self.sql_lookup("txn_offset_commit_tp_insert.sql")?,
                                 &[
                                     &self.cluster,
                                     &offsets.transaction_id,

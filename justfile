@@ -396,6 +396,10 @@ broker-sqlite profile="profiling":
     cargo build --profile {{profile}} --features libsql --bin tansu
     ./target/{{profile}}/tansu --storage-engine=sqlite://tansu.db 2>&1 | tee broker.log
 
+broker-postgres profile="profiling": docker-compose-down db-up
+    cargo build --profile {{profile}} --features postgres --bin tansu
+    ./target/{{profile}}/tansu --storage-engine=postgres://postgres:postgres@localhost 2>&1 | tee broker.log
+
 samply-null profile="profiling":
     cargo build --profile {{profile}} --bin tansu
     RUST_LOG=warn samply record ./target/{{profile}}/tansu --storage-engine=null://sink
@@ -408,6 +412,18 @@ flamegraph-null profile="profiling":
     RUSTFLAGS="-C force-frame-pointers=yes" cargo build --profile {{profile}} --bin tansu
     RUST_LOG=warn flamegraph -- ./target/{{profile}}/tansu --storage-engine=null://sink
 
+flamegraph-postgres-debug: docker-compose-down db-up
+    cargo build --features postgres --bin tansu
+    RUST_LOG=warn flamegraph -- ./target/debug/tansu --storage-engine=postgres://postgres:postgres@localhost
+
+flamegraph-postgres profile="profiling": docker-compose-down db-up
+    RUSTFLAGS="-C force-frame-pointers=yes" cargo build --profile {{profile}} --features postgres --bin tansu
+    RUST_LOG=warn flamegraph -- ./target/{{profile}}/tansu --storage-engine=postgres://postgres:postgres@localhost
+
+flamegraph-s3 profile="profiling": docker-compose-down minio-up minio-ready-local minio-local-alias minio-tansu-bucket
+    RUSTFLAGS="-C force-frame-pointers=yes" cargo build --profile {{profile}} --features dynostore --bin tansu
+    RUST_LOG=warn flamegraph -- ./target/{{profile}}/tansu --storage-engine=s3://tansu/
+
 flamegraph-sqlite-debug:
     rm -f tansu.db*
     cargo build --bin tansu --features libsql
@@ -416,7 +432,7 @@ flamegraph-sqlite-debug:
 flamegraph-sqlite profile="profiling":
     rm -f tansu.db*
     RUSTFLAGS="-C force-frame-pointers=yes" cargo build --profile {{profile}} --features libsql --bin tansu
-    RUST_LOG=warn flamegraph -- ./target/{{profile}}/tansu --storage-engine=sqlite://tansu.db 2>&1
+    RUST_LOG=warn flamegraph -- ./target/{{profile}}/tansu --storage-engine=sqlite://tansu.db  2>&1 | tee broker.log
 
 samply-produce profile="profiling":
     RUSTFLAGS="-C force-frame-pointers=yes" cargo build --profile {{profile}} --bin bench_produce_v11
@@ -439,6 +455,10 @@ producer-perf-2000: (producer-perf "2000")
 producer-perf-3000: (producer-perf "3000")
 
 producer-perf-5000: (producer-perf "5000")
+
+producer-perf-6000: (producer-perf "6000")
+
+producer-perf-7000: (producer-perf "7000")
 
 producer-perf-10000: (producer-perf "10000" "1024" "100000")
 
