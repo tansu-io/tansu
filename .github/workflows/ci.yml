@@ -16,7 +16,7 @@ env:
   CLICOLOR: 1
 jobs:
   build:
-    needs: [build-storage, build-storage-lake, cargo-publish-dry-run]
+    needs: [build-storage, build-storage-lake]
     runs-on: ${{matrix.os}}
     strategy:
       fail-fast: false
@@ -61,7 +61,9 @@ jobs:
       - run: just fmt
       - run: just clippy
       - run: df -h
+      - run: docker system df
       - run: just test
+      - run: df -h
   build-storage:
     runs-on: ${{matrix.os}}
     strategy:
@@ -146,7 +148,7 @@ jobs:
           path: ${{runner.temp}}/src.tar.gz
           if-no-files-found: error
   package:
-    needs: [build, third-party-license, typos]
+    needs: [build, cargo-publish-dry-run, third-party-license, typos]
     runs-on: ${{matrix.os}}
     permissions:
       packages: write
