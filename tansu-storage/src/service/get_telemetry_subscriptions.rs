@@ -72,13 +72,13 @@ where
     type Response = GetTelemetrySubscriptionsResponse;
     type Error = Error;
 
-    #[instrument(skip(ctx), ret)]
+    #[instrument(skip(ctx, req))]
     async fn serve(
         &self,
         ctx: Context<G>,
         req: GetTelemetrySubscriptionsRequest,
     ) -> Result<Self::Response, Self::Error> {
-        let _ = ctx;
+        let _ = (ctx, req);
 
         let client_instance_id = *Uuid::new_v4().as_bytes();
 

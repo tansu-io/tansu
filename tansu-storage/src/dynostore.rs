@@ -43,12 +43,13 @@ use opticon::OptiCon;
 use rand::{prelude::*, rng};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tansu_sans_io::{
-    BatchAttribute, ConfigResource, ConfigSource, ConfigType, ControlBatch, Decoder, Encoder,
+    BatchAttribute, ConfigResource, ConfigSource, ConfigType, ControlBatch, Encoder,
     EndTransactionMarker, ErrorCode, IsolationLevel, ListOffset, NULL_TOPIC_ID, OpType,
     add_partitions_to_txn_response::{
         AddPartitionsToTxnPartitionResult, AddPartitionsToTxnTopicResult,
     },
     create_topics_request::{CreatableTopic, CreatableTopicConfig},
+    de::BatchDecoder,
     delete_groups_response::DeletableGroupResult,
     delete_records_request::DeleteRecordsTopic,
     delete_records_response::DeleteRecordsTopicResult,
@@ -69,7 +70,7 @@ use tansu_schema::{
     Registry,
     lake::{House, LakeHouse as _},
 };
-use tracing::{debug, error, warn};
+use tracing::{debug, error, instrument, warn};
 use url::Url;
 use uuid::Uuid;
 
@@ -407,10 +408,8 @@ impl DynoStore {
     }
 
     fn decode(&self, encoded: Bytes) -> Result<deflated::Batch> {
-        let mut c = Cursor::new(encoded);
-
-        let mut decoder = Decoder::new(&mut c);
-        deflated::Batch::deserialize(&mut decoder).map_err(Into::into)
+        let decoder = BatchDecoder::new(encoded);
+        deflated::Batch::deserialize(decoder).map_err(Into::into)
     }
 
     async fn get<V>(&self, location: &Path) -> Result<(V, Version)>
@@ -2793,12 +2792,13 @@ where
             })
     }
 
+    #[instrument(skip_all, fields(%location), ret)]
     async fn get_opts(
         &self,
         location: &Path,
         options: GetOptions,
     ) -> Result<GetResult, object_store::Error> {
-        debug!(%location, ?options);
+        debug!(?options);
 
         let execute_start = SystemTime::now();
         let mut attributes = vec![
@@ -2810,7 +2810,7 @@ where
             .get_opts(location, options.clone())
             .await
             .inspect(|get_result| {
-                debug!(%location, meta = ?get_result.meta);
+                debug!(meta = ?get_result.meta);
 
                 self.request_duration.record(
                     execute_start
@@ -2820,7 +2820,7 @@ where
                 )
             })
             .inspect_err(|err| {
-                debug!(%location, ?options, ?err);
+                debug!(?err);
 
                 let mut additional = vec![KeyValue::new("reason", object_store_error_name(err))];
                 additional.append(&mut attributes);

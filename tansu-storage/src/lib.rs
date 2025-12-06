@@ -187,7 +187,7 @@ use tansu_sans_io::{
 };
 use tansu_schema::{Registry, lake::House};
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, debug, debug_span, instrument};
+use tracing::{debug, instrument};
 use tracing_subscriber::filter::ParseError;
 use url::Url;
 use uuid::Uuid;
@@ -1522,7 +1522,7 @@ impl<T> From<tokio_postgres::error::Error> for UpdateError<T> {
 }
 
 /// Storage Container
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 #[cfg_attr(
     not(any(
         feature = "dynostore",
@@ -1550,6 +1550,33 @@ pub enum StorageContainer {
 
     #[cfg(feature = "turso")]
     Turso(limbo::Engine),
+}
+
+impl Debug for StorageContainer {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Null(_) => f.debug_tuple(stringify!(StorageContainer::Null)).finish(),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(_) => f
+                .debug_tuple(stringify!(StorageContainer::Postgres))
+                .finish(),
+
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(_) => f
+                .debug_tuple(stringify!(StorageContainer::DynoStore))
+                .finish(),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(_) => f.debug_tuple(stringify!(StorageContainer::Lite)).finish(),
+
+            #[cfg(feature = "slatedb")]
+            Self::Slate(_) => f.debug_tuple(stringify!(StorageContainer::Slate)).finish(),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(_) => f.debug_tuple(stringify!(StorageContainer::Turso)).finish(),
+        }
+    }
 }
 
 impl StorageContainer {
@@ -1773,6 +1800,12 @@ impl Builder<i32, String, Url, Url> {
                 message: self.storage.to_string(),
             }),
 
+            "null" => Ok(StorageContainer::Null(null::Engine::new(
+                self.cluster_id.clone(),
+                self.node_id,
+                self.advertised_listener.clone(),
+            ))),
+
             #[cfg(not(any(
                 feature = "dynostore",
                 feature = "libsql",
@@ -1780,7 +1813,11 @@ impl Builder<i32, String, Url, Url> {
                 feature = "slatedb",
                 feature = "turso"
             )))]
-            _storage => Ok(StorageContainer::Null(null::Engine)),
+            _storage => Ok(StorageContainer::Null(null::Engine::new(
+                self.cluster_id.clone(),
+                self.node_id,
+                self.advertised_listener.clone(),
+            ))),
 
             #[cfg(any(
                 feature = "dynostore",
@@ -1819,7 +1856,7 @@ static STORAGE_CONTAINER_ERRORS: LazyLock<Counter<u64>> = LazyLock::new(|| {
 
 #[async_trait]
 impl Storage for StorageContainer {
-    #[instrument(skip(self), ret)]
+    #[instrument(skip_all)]
     async fn register_broker(&self, broker_registration: BrokerRegistrationRequest) -> Result<()> {
         let attributes = [KeyValue::new("method", "register_broker")];
 
@@ -1850,7 +1887,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(skip(self), ret)]
+    #[instrument(skip_all)]
     async fn incremental_alter_resource(
         &self,
         resource: AlterConfigsResource,
@@ -1884,33 +1921,28 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(skip(self), ret)]
+    #[instrument(skip_all)]
     async fn create_topic(&self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {
         let attributes = [KeyValue::new("method", "create_topic")];
-        let span = debug_span!("create_topic", ?topic, validate_only);
 
-        async move {
-            match self {
-                #[cfg(feature = "dynostore")]
-                Self::DynoStore(engine) => engine.create_topic(topic, validate_only),
+        match self {
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.create_topic(topic, validate_only),
 
-                #[cfg(feature = "libsql")]
-                Self::Lite(engine) => engine.create_topic(topic, validate_only),
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.create_topic(topic, validate_only),
 
-                Self::Null(engine) => engine.create_topic(topic, validate_only),
+            Self::Null(engine) => engine.create_topic(topic, validate_only),
 
-                #[cfg(feature = "postgres")]
-                Self::Postgres(engine) => engine.create_topic(topic, validate_only),
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.create_topic(topic, validate_only),
 
-                #[cfg(feature = "slatedb")]
-                Self::Slate(engine) => engine.create_topic(topic, validate_only),
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.create_topic(topic, validate_only),
 
-                #[cfg(feature = "turso")]
-                Self::Turso(engine) => engine.create_topic(topic, validate_only),
-            }
-            .await
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.create_topic(topic, validate_only),
         }
-        .instrument(span)
         .await
         .inspect(|_| {
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
@@ -1920,7 +1952,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(skip(self), ret)]
+    #[instrument(skip_all)]
     async fn delete_records(
         &self,
         topics: &[DeleteRecordsTopic],
@@ -1954,7 +1986,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(skip(self), ret)]
+    #[instrument(skip_all)]
     async fn delete_topic(&self, topic: &TopicId) -> Result<ErrorCode> {
         let attributes = [KeyValue::new("method", "delete_topic")];
 
@@ -1985,7 +2017,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(skip(self), ret)]
+    #[instrument(skip_all)]
     async fn brokers(&self) -> Result<Vec<DescribeClusterBroker>> {
         let attributes = [KeyValue::new("method", "brokers")];
 
@@ -2016,7 +2048,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(skip(self), ret)]
+    #[instrument(skip_all)]
     async fn produce(
         &self,
         transaction_id: Option<&str>,
@@ -2052,7 +2084,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(skip(self), ret)]
+    #[instrument(skip_all)]
     async fn fetch(
         &self,
         topition: &'_ Topition,
@@ -2094,7 +2126,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(skip(self), ret)]
+    #[instrument(skip_all)]
     async fn offset_stage(&self, topition: &Topition) -> Result<OffsetStage> {
         let attributes = [KeyValue::new("method", "offset_stage")];
 
@@ -2125,7 +2157,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(skip(self), ret)]
+    #[instrument(skip_all)]
     async fn list_offsets(
         &self,
         isolation_level: IsolationLevel,
@@ -2160,7 +2192,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(skip(self), ret)]
+    #[instrument(skip_all)]
     async fn offset_commit(
         &self,
         group_id: &str,
@@ -2196,7 +2228,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(skip(self), ret)]
+    #[instrument(skip_all)]
     async fn committed_offset_topitions(&self, group_id: &str) -> Result<BTreeMap<Topition, i64>> {
         let attributes = [KeyValue::new("method", "committed_offset_topitions")];
 
@@ -2227,7 +2259,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(skip(self), ret)]
+    #[instrument(skip_all)]
     async fn offset_fetch(
         &self,
         group_id: Option<&str>,
@@ -2263,7 +2295,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(skip(self), ret)]
+    #[instrument(skip_all)]
     async fn metadata(&self, topics: Option<&[TopicId]>) -> Result<MetadataResponse> {
         let attributes = [KeyValue::new("method", "metadata")];
 
@@ -2294,7 +2326,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(skip(self), ret)]
+    #[instrument(skip_all)]
     async fn describe_config(
         &self,
         name: &str,
@@ -2330,7 +2362,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(skip(self), ret)]
+    #[instrument(skip_all)]
     async fn describe_topic_partitions(
         &self,
         topics: Option<&[TopicId]>,
@@ -2374,7 +2406,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(skip(self), ret)]
+    #[instrument(skip_all)]
     async fn list_groups(&self, states_filter: Option<&[String]>) -> Result<Vec<ListedGroup>> {
         let attributes = [KeyValue::new("method", "list_groups")];
 
@@ -2405,7 +2437,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(skip(self), ret)]
+    #[instrument(skip_all)]
     async fn delete_groups(
         &self,
         group_ids: Option<&[String]>,
@@ -2439,7 +2471,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(skip(self), ret)]
+    #[instrument(skip_all)]
     async fn describe_groups(
         &self,
         group_ids: Option<&[String]>,
@@ -2478,7 +2510,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(skip(self), ret)]
+    #[instrument(skip_all)]
     async fn update_group(
         &self,
         group_id: &str,
@@ -2514,7 +2546,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(skip(self), ret)]
+    #[instrument(skip_all)]
     async fn init_producer(
         &self,
         transaction_id: Option<&str>,
@@ -2522,13 +2554,6 @@ impl Storage for StorageContainer {
         producer_id: Option<i64>,
         producer_epoch: Option<i16>,
     ) -> Result<ProducerIdResponse> {
-        debug!(
-            ?transaction_id,
-            ?transaction_timeout_ms,
-            ?producer_id,
-            ?producer_epoch
-        );
-
         let attributes = [KeyValue::new("method", "init_producer")];
 
         match self {
@@ -2588,7 +2613,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(skip(self), ret)]
+    #[instrument(skip_all)]
     async fn txn_add_offsets(
         &self,
         transaction_id: &str,
@@ -2637,7 +2662,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(skip(self), ret)]
+    #[instrument(skip_all)]
     async fn txn_add_partitions(
         &self,
         partitions: TxnAddPartitionsRequest,
@@ -2671,7 +2696,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(skip(self), ret)]
+    #[instrument(skip_all)]
     async fn txn_offset_commit(
         &self,
         offsets: TxnOffsetCommitRequest,
@@ -2705,7 +2730,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(skip(self), ret)]
+    #[instrument(skip_all)]
     async fn txn_end(
         &self,
         transaction_id: &str,
@@ -2754,7 +2779,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(skip(self), ret)]
+    #[instrument(skip_all)]
     async fn maintain(&self) -> Result<()> {
         let attributes = [KeyValue::new("method", "maintain")];
 
@@ -2787,7 +2812,7 @@ impl Storage for StorageContainer {
         })
     }
 
-    #[instrument(skip(self), ret)]
+    #[instrument(skip_all)]
     async fn cluster_id(&self) -> Result<String> {
         match self {
             #[cfg(feature = "dynostore")]
@@ -2809,7 +2834,7 @@ impl Storage for StorageContainer {
         }
     }
 
-    #[instrument(skip(self), ret)]
+    #[instrument(skip_all)]
     async fn node(&self) -> Result<i32> {
         match self {
             #[cfg(feature = "dynostore")]
@@ -2831,7 +2856,7 @@ impl Storage for StorageContainer {
         }
     }
 
-    #[instrument(skip(self), ret)]
+    #[instrument(skip_all)]
     async fn advertised_listener(&self) -> Result<Url> {
         match self {
             #[cfg(feature = "dynostore")]

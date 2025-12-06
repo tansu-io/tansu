@@ -18,7 +18,7 @@ use tansu_sans_io::{
     produce_request::{PartitionProduceData, TopicProduceData},
     produce_response::{PartitionProduceResponse, TopicProduceResponse},
 };
-use tracing::{debug, error, warn};
+use tracing::{debug, error, instrument, warn};
 
 use crate::{Error, Result, Storage, Topition};
 
@@ -146,6 +146,7 @@ impl ProduceService {
             .current_leader(None)
     }
 
+    #[instrument(skip_all)]
     async fn partition<G>(
         &self,
         ctx: Context<G>,
@@ -161,11 +162,6 @@ impl ProduceService {
 
             for batch in records.batches {
                 let tp = Topition::new(name, partition.index);
-                debug!(
-                    record_count = batch.record_count,
-                    record_bytes = batch.record_data.len(),
-                    ?tp
-                );
 
                 match ctx
                     .state()
@@ -210,6 +206,7 @@ impl ProduceService {
         }
     }
 
+    #[instrument(skip_all)]
     async fn topic<G>(
         &self,
         ctx: Context<G>,
@@ -243,6 +240,7 @@ where
     type Response = ProduceResponse;
     type Error = Error;
 
+    #[instrument(skip(ctx, req))]
     async fn serve(
         &self,
         ctx: Context<G>,
@@ -256,8 +254,6 @@ where
 
         if let Some(topics) = req.topic_data {
             for topic in topics {
-                debug!(?topic);
-
                 responses.push(
                     self.topic(ctx.clone(), req.transactional_id.as_deref(), topic)
                         .await,

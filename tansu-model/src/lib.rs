@@ -74,6 +74,7 @@ fn type_mapping(kind: &str) -> String {
 pub struct Kind(String);
 
 impl ToTokens for Kind {
+    #![allow(clippy::unwrap_used)]
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let expr = with_crate!(self);
         syn::parse_str::<Expr>(&expr).unwrap().to_tokens(tokens);
@@ -207,6 +208,7 @@ pub enum MessageKind {
 }
 
 impl ToTokens for MessageKind {
+    #[allow(clippy::unwrap_used)]
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let expr = with_crate!("MessageKind", self);
         syn::parse_str::<Expr>(&expr).unwrap().to_tokens(tokens);
@@ -283,6 +285,7 @@ impl FromStr for VersionRange {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        #![allow(clippy::expect_used)]
         lazy_static! {
             static ref RX: Regex =
                 Regex::new(r"^(?<start>\d+)(-(?<end>\d+)|(?<infinite>\+))?$").expect("regex");
@@ -329,6 +332,7 @@ pub struct Version {
 }
 
 impl ToTokens for Version {
+    #[allow(clippy::unwrap_used)]
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let expr = with_crate!(self);
         syn::parse_str::<Expr>(&expr).unwrap().to_tokens(tokens);
@@ -605,7 +609,7 @@ impl Message {
     }
 
     #[must_use]
-    #[allow(clippy::missing_panics_doc)]
+    #[allow(clippy::missing_panics_doc, clippy::unwrap_used)]
     pub fn type_name(&self) -> Type {
         syn::parse_str::<Type>(&self.name).unwrap()
     }
@@ -626,7 +630,7 @@ impl Message {
     }
 
     #[must_use]
-    #[allow(clippy::missing_panics_doc)]
+    #[allow(clippy::missing_panics_doc, clippy::unwrap_used)]
     pub fn wrapper_new_type(&self, field: &Field) -> Type {
         syn::parse_str::<Type>(&format!("{}{}", self.name, field.name).to_case(Case::Pascal))
             .unwrap()
@@ -1754,7 +1758,7 @@ mod tests {
             m.fields()[0].versions()
         );
 
-        let node_id = &m.fields()[0].fields().unwrap()[0];
+        let node_id = &m.fields()[0].fields().unwrap_or_default()[0];
 
         assert_eq!("NodeId", node_id.name());
         assert_eq!(Kind::new("int32"), node_id.kind);
