@@ -14,6 +14,7 @@
 .vscode
 .zed
 Cargo.lock
+cargo-flamegraph.trace
 debug
 flamegraph*.svg
 license.html
