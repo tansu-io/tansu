@@ -16,7 +16,7 @@ env:
   CLICOLOR: 1
 jobs:
   build:
-    needs: [build-storage, build-storage-lake, cargo-publish-dry-run]
+    needs: [build-storage, build-storage-lake]
     runs-on: ${{matrix.os}}
     strategy:
       fail-fast: false
@@ -46,6 +46,7 @@ jobs:
       STORAGE_ENGINE: s3://tansu/
       TANSU_IMAGE: ghcr.io/tansu-io/tansu
     steps:
+      - run: df -h
       - uses: actions/checkout@v5
       - uses: extractions/setup-just@v3
       - run: just ci
@@ -54,10 +55,20 @@ jobs:
           components: clippy, rustfmt
           cache: false
       - run: just check
+      - run: df -h
+      - run: du -sh target
       - run: just build
+      - run: df -h
       - run: just fmt
       - run: just clippy
+      - run: df -h
+      - run: docker system df
+      - run: du -sh target
+      - run: cargo clean
       - run: just test
+      - run: du -sh target
+      - run: docker system df
+      - run: df -h
   build-storage:
     runs-on: ${{matrix.os}}
     strategy:
@@ -142,7 +153,7 @@ jobs:
           path: ${{runner.temp}}/src.tar.gz
           if-no-files-found: error
   package:
-    needs: [build, third-party-license, typos]
+    needs: [build, cargo-publish-dry-run, third-party-license, typos]
     runs-on: ${{matrix.os}}
     permissions:
       packages: write
