@@ -46,6 +46,7 @@ jobs:
       STORAGE_ENGINE: s3://tansu/
       TANSU_IMAGE: ghcr.io/tansu-io/tansu
     steps:
+      - run: df -h
       - uses: actions/checkout@v5
       - uses: extractions/setup-just@v3
       - run: just ci
@@ -54,9 +55,12 @@ jobs:
           components: clippy, rustfmt
           cache: false
       - run: just check
+      - run: df -h
       - run: just build
+      - run: df -h
       - run: just fmt
       - run: just clippy
+      - run: df -h
       - run: just test
   build-storage:
     runs-on: ${{matrix.os}}
