@@ -33,7 +33,6 @@ jobs:
       AWS_DEFAULT_REGION: eu-west-2
       AWS_ENDPOINT: http://localhost:9000
       AWS_SECRET_ACCESS_KEY: minioadmin
-      CARGO_BUILD_BUILD_DIR: /mnt
       CLUSTER_ID: tansu-ci
       DATA_LAKE: s3://lake
       ICEBERG_CATALOG: http://localhost:8181/catalog
@@ -64,6 +63,8 @@ jobs:
       - run: just clippy
       - run: df -h
       - run: docker system df
+      - run: du -sh target
+      - run: cargo clean
       - run: du -sh target
       - run: just test
         continue-on-error: true
