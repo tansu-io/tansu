@@ -114,6 +114,7 @@ pub(crate) static SQL: LazyLock<Cache> = LazyLock::new(|| {
             "consumer_offset_select.sql",
             include_sql!("pg/consumer_offset_select.sql"),
         ),
+        ("header_copy.sql", include_sql!("pg/header_copy.sql")),
         (
             "header_delete_by_topic.sql",
             include_sql!("pg/header_delete_by_topic.sql"),
@@ -172,6 +173,7 @@ pub(crate) static SQL: LazyLock<Cache> = LazyLock::new(|| {
             "producer_update_sequence.sql",
             include_sql!("pg/producer_update_sequence.sql"),
         ),
+        ("record_copy.sql", include_sql!("pg/record_copy.sql")),
         (
             "record_delete_by_topic.sql",
             include_sql!("pg/record_delete_by_topic.sql"),
@@ -228,6 +230,10 @@ pub(crate) static SQL: LazyLock<Cache> = LazyLock::new(|| {
         (
             "topition_select.sql",
             include_sql!("pg/topition_select.sql"),
+        ),
+        (
+            "topition_select_id.sql",
+            include_sql!("pg/topition_select_id.sql"),
         ),
         (
             "txn_detail_insert.sql",

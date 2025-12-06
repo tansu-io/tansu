@@ -398,7 +398,7 @@ broker-sqlite profile="profiling":
 
 broker-postgres profile="profiling": docker-compose-down db-up
     cargo build --profile {{profile}} --features postgres --bin tansu
-    ./target/{{profile}}/tansu --storage-engine=postgres://postgres:postgres@localhost 2>&1 > broker.log
+    ./target/{{profile}}/tansu --storage-engine=postgres://postgres:postgres@localhost 2>&1 | tee broker.log
 
 samply-null profile="profiling":
     cargo build --profile {{profile}} --bin tansu
@@ -447,6 +447,8 @@ bench:
 
 producer-perf  throughput="1000" record_size="1024" num_records="100000":
     kafka-producer-perf-test --topic test --num-records {{num_records}} --record-size {{record_size}} --throughput {{throughput}} --producer-props bootstrap.servers=${ADVERTISED_LISTENER}
+
+producer-perf-10: (producer-perf "10")
 
 producer-perf-1000: (producer-perf "1000")
 
