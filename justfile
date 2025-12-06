@@ -456,13 +456,19 @@ producer-perf-2000: (producer-perf "2000")
 
 producer-perf-3000: (producer-perf "3000")
 
-producer-perf-5000: (producer-perf "5000")
+producer-perf-5000: (producer-perf "5000" "1024" "125000")
 
-producer-perf-6000: (producer-perf "6000")
+producer-perf-6000: (producer-perf "6000" "1024" "150000")
 
-producer-perf-7000: (producer-perf "7000")
+producer-perf-7000: (producer-perf "7000" "1024" "175000")
 
-producer-perf-10000: (producer-perf "10000" "1024" "100000")
+producer-perf-8000: (producer-perf "8000" "1024" "200000")
+
+producer-perf-9000: (producer-perf "9000" "1024" "225000")
+
+producer-perf-10000: (producer-perf "10000" "1024" "250000")
+
+producer-perf-15000: (producer-perf "15000" "1024" "375000")
 
 producer-perf-20000: (producer-perf "20000" "1024" "500000")
 
