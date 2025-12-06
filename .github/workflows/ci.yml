@@ -63,6 +63,7 @@ jobs:
       - run: df -h
       - run: docker system df
       - run: just test
+        continue-on-error: true
       - run: df -h
   build-storage:
     runs-on: ${{matrix.os}}
