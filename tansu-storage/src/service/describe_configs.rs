@@ -75,7 +75,7 @@ where
     type Response = DescribeConfigsResponse;
     type Error = Error;
 
-    #[instrument(skip(ctx, req), fields(resources = ?req.resources.as_deref().unwrap_or_default().iter().map(|describe| describe.resource_name.as_str()).collect::<Vec<_>>()), ret)]
+    #[instrument(skip(ctx, req))]
     async fn serve(
         &self,
         ctx: Context<G>,

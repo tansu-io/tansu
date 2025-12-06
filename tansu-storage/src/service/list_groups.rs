@@ -67,7 +67,7 @@ where
     type Response = ListGroupsResponse;
     type Error = Error;
 
-    #[instrument(skip(ctx, req), fields(types = ?req.types_filter.as_deref().unwrap_or_default(), states = ?req.states_filter.as_deref().unwrap_or_default()), ret)]
+    #[instrument(skip(ctx, req))]
     async fn serve(
         &self,
         ctx: Context<G>,

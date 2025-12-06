@@ -37,7 +37,8 @@ use bytes::Bytes;
 use chrono::NaiveDateTime;
 use deadpool::managed;
 use libsql::{
-    Connection, Database, Row, Rows, Transaction, TransactionBehavior, Value, params::IntoParams,
+    Connection, Database, Row, Rows, Statement, Transaction, TransactionBehavior, Value,
+    params::IntoParams,
 };
 use opentelemetry::{
     KeyValue,
@@ -217,97 +218,104 @@ pub(crate) struct ConnectionManager {
     db: Arc<Mutex<Database>>,
 }
 
-impl managed::Manager for ConnectionManager {
-    type Type = Connection;
-    type Error = Error;
+pub(crate) struct PoolConnection {
+    connection: Connection,
+}
 
-    #[instrument(skip_all, ret)]
-    async fn create(&self) -> Result<Self::Type, Self::Error> {
-        let start = SystemTime::now();
-
-        let connection = {
-            let db = self.db.lock()?;
-            db.connect()
-        }?;
-
-        {
-            let mut rows = connection.query("PRAGMA journal_mode = WAL", ()).await?;
-
-            if let Some(row) = rows.next().await.inspect_err(|err| error!(?err))? {
-                debug!(journal_mode = row.get_str(0)?);
-            }
-        }
-
-        {
-            let mut rows = connection.query("PRAGMA synchronous", ()).await?;
-
-            if let Some(row) = rows.next().await.inspect_err(|err| error!(?err))? {
-                debug!(synchronous = row.get_str(0)?);
-            }
-        }
-
-        {
-            let mut rows = connection.query("PRAGMA wal_autocheckpoint", ()).await?;
-
-            if let Some(row) = rows.next().await.inspect_err(|err| error!(?err))? {
-                debug!(wal_autocheckpoint = row.get_str(0)?);
-            }
-        }
-
-        {
-            let mut rows = connection.query("PRAGMA journal_size_limit", ()).await?;
-
-            if let Some(row) = rows.next().await.inspect_err(|err| error!(?err))? {
-                debug!(journal_size_limit = row.get_str(0)?);
-            }
-        }
-
-        connection.busy_timeout(Duration::from_millis(60_000))?;
-
-        connection
-            .execute("PRAGMA foreign_keys = ON", ())
-            .await
-            .and(Ok(connection))
-            .map_err(Into::into)
-            .inspect(|_| CONNECT_DURATION.record(elapsed_millis(start), &[]))
-    }
-
-    #[instrument(skip_all, fields(recycle_count = metrics.recycle_count), ret)]
-    async fn recycle(
-        &self,
-        obj: &mut Self::Type,
-        metrics: &managed::Metrics,
-    ) -> managed::RecycleResult<Self::Error> {
-        let _ = obj;
-        Ok(())
+impl Debug for PoolConnection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PoolConnection")
+            .field("connection", &self.connection)
+            .finish()
     }
 }
 
-pub(crate) type Pool = managed::Pool<ConnectionManager>;
+impl PoolConnection {
+    async fn journal_mode(connection: &Connection) -> Result<()> {
+        let mut rows = connection.query("PRAGMA journal_mode = WAL", ()).await?;
 
-impl Delegate {
-    #[instrument(skip_all)]
-    async fn connection(&self) -> Result<managed::Object<ConnectionManager>> {
-        let start = SystemTime::now();
+        if let Some(row) = rows.next().await.inspect_err(|err| error!(?err))? {
+            debug!(journal_mode = row.get_str(0)?);
+        }
 
-        self.pool.get().await.map_err(Into::into).inspect(|_| {
-            CONNECT_DURATION.record(
-                elapsed_millis(start),
-                &[KeyValue::new("cluster_id", self.cluster.clone())],
-            )
-        })
+        Ok(())
     }
 
-    fn attributes_for_error(&self, sql: Option<&str>, error: &libsql::Error) -> Vec<KeyValue> {
-        debug!(sql, ?error);
+    async fn synchronous(connection: &Connection) -> Result<()> {
+        _ = connection
+            .execute("PRAGMA synchronous = normal", ())
+            .await
+            .inspect(|rows| debug!(rows))?;
 
-        let mut attributes = if let Some(sql) = sql {
-            vec![
-                KeyValue::new("sql", sql.to_owned()),
-                KeyValue::new("cluster_id", self.cluster.clone()),
-            ]
+        let mut rows = connection.query("PRAGMA synchronous", ()).await?;
+
+        if let Some(row) = rows.next().await.inspect_err(|err| error!(?err))? {
+            debug!(synchronous = row.get_str(0)?);
+        }
+
+        Ok(())
+    }
+
+    async fn wal_autocheckpoint(connection: &Connection) -> Result<()> {
+        let mut rows = connection.query("PRAGMA wal_autocheckpoint", ()).await?;
+
+        if let Some(row) = rows.next().await.inspect_err(|err| error!(?err))? {
+            debug!(wal_autocheckpoint = row.get_str(0)?);
+        }
+
+        Ok(())
+    }
+
+    async fn journal_size_limit(connection: &Connection) -> Result<()> {
+        let mut rows = connection.query("PRAGMA journal_size_limit", ()).await?;
+
+        if let Some(row) = rows.next().await.inspect_err(|err| error!(?err))? {
+            debug!(journal_size_limit = row.get_str(0)?);
+        }
+
+        Ok(())
+    }
+
+    async fn foreign_keys(connection: &Connection) -> Result<()> {
+        connection
+            .execute("PRAGMA foreign_keys = ON", ())
+            .await
+            .map_err(Into::into)
+            .and(Ok(()))
+    }
+
+    async fn init(connection: &Connection) -> Result<()> {
+        Self::journal_mode(connection).await?;
+        Self::synchronous(connection).await?;
+        Self::wal_autocheckpoint(connection).await?;
+        Self::journal_size_limit(connection).await?;
+        Self::foreign_keys(connection).await?;
+        Ok(())
+    }
+
+    async fn new(connection: Connection) -> Result<Self> {
+        Self::init(&connection).await?;
+
+        Ok(Self { connection })
+    }
+
+    #[instrument(skip(self))]
+    async fn prepared_statement(&self, key: &str) -> Result<Statement, libsql::Error> {
+        let sql = SQL
+            .0
+            .get(key)
+            .ok_or(libsql::Error::Misuse(format!("Unknown cache key: {}", key)))?;
+
+        self.connection.prepare(sql).await
+    }
+
+    fn attributes_for_error(&self, key: Option<&str>, error: &libsql::Error) -> Vec<KeyValue> {
+        debug!(key, ?error);
+
+        let mut attributes = if let Some(sql) = key {
+            vec![KeyValue::new("key", sql.to_owned())]
         } else {
-            vec![KeyValue::new("cluster_id", self.cluster.clone())]
+            vec![]
         };
 
         if let libsql::Error::SqliteFailure(code, _) = error {
@@ -318,17 +326,28 @@ impl Delegate {
     }
 
     #[instrument(skip_all)]
+    async fn transaction(&self) -> Result<Transaction> {
+        let start = SystemTime::now();
+
+        self.connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .await
+            .inspect(|_tx| TRANSACTION_WITH_BEHAVIOR_DURATION.record(elapsed_millis(start), &[]))
+            .inspect_err(|err| {
+                error!(?err, elapsed_millis = elapsed_millis(start));
+
+                SQL_ERROR.add(1, &self.attributes_for_error(None, err)[..]);
+            })
+            .map_err(Into::into)
+    }
+
+    #[instrument(skip_all)]
     async fn commit(&self, tx: Transaction) -> Result<()> {
         let start = SystemTime::now();
 
         tx.commit()
             .await
-            .inspect(|_| {
-                TRANSACTION_COMMIT_DURATION.record(
-                    elapsed_millis(start),
-                    &[KeyValue::new("cluster_id", self.cluster.clone())],
-                )
-            })
+            .inspect(|_| TRANSACTION_COMMIT_DURATION.record(elapsed_millis(start), &[]))
             .inspect_err(|err| {
                 error!(?err, elapsed_millis = elapsed_millis(start));
                 SQL_ERROR.add(1, &self.attributes_for_error(None, err)[..]);
@@ -337,62 +356,29 @@ impl Delegate {
     }
 
     #[instrument(skip_all)]
-    async fn transaction(&self) -> Result<Transaction> {
-        let start = SystemTime::now();
-
-        let connection = self.connection().await?;
-
-        connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .await
-            .inspect(|_tx| {
-                TRANSACTION_WITH_BEHAVIOR_DURATION.record(
-                    elapsed_millis(start),
-                    &[KeyValue::new("cluster_id", self.cluster.clone())],
-                )
-            })
-            .inspect_err(|err| {
-                error!(?err, elapsed_millis = elapsed_millis(start));
-
-                SQL_ERROR.add(1, &self.attributes_for_error(None, err)[..]);
-            })
-            .map_err(Into::into)
-    }
-
-    #[instrument(skip(self, connection), ret)]
-    async fn query<P>(
-        &self,
-        connection: &Connection,
-        sql: &str,
-        params: P,
-    ) -> result::Result<Rows, libsql::Error>
+    async fn query<P>(&self, sql: &str, params: P) -> result::Result<Rows, libsql::Error>
     where
         P: IntoParams,
         P: Debug,
     {
+        debug!(sql, ?params);
+
         let start = SystemTime::now();
 
-        connection
-            .query(sql, params)
+        let statement = self.prepared_statement(sql).await?;
+
+        statement
+            .query(params)
             .await
             .inspect(|rows| {
                 debug!(?rows);
 
                 SQL_DURATION.record(
                     elapsed_millis(start),
-                    &[
-                        KeyValue::new("sql", sql.to_owned()),
-                        KeyValue::new("cluster_id", self.cluster.clone()),
-                    ],
+                    &[KeyValue::new("sql", sql.to_owned())],
                 );
 
-                SQL_REQUESTS.add(
-                    1,
-                    &[
-                        KeyValue::new("sql", sql.to_owned()),
-                        KeyValue::new("cluster_id", self.cluster.clone()),
-                    ],
-                );
+                SQL_REQUESTS.add(1, &[KeyValue::new("sql", sql.to_owned())]);
             })
             .inspect_err(|err| {
                 error!(?err, elapsed_millis = elapsed_millis(start));
@@ -401,24 +387,16 @@ impl Delegate {
             })
     }
 
-    #[instrument(skip(self, connection), ret)]
-    async fn prepare_execute<P>(
-        &self,
-        connection: &Connection,
-        sql: &str,
-        params: P,
-    ) -> result::Result<usize, libsql::Error>
+    #[instrument(skip_all)]
+    async fn execute<P>(&self, sql: &str, params: P) -> result::Result<usize, libsql::Error>
     where
         P: IntoParams,
         P: Debug,
     {
+        debug!(sql, ?params);
         let start = SystemTime::now();
 
-        let statement = connection.prepare(sql).await.inspect_err(|err| {
-            error!(?err, sql, elapsed_millis = elapsed_millis(start));
-
-            SQL_ERROR.add(1, &self.attributes_for_error(Some(sql), err)[..]);
-        })?;
+        let statement = self.prepared_statement(sql).await?;
 
         statement
             .execute(params)
@@ -427,21 +405,8 @@ impl Delegate {
                 let elapsed_millis = elapsed_millis(start);
                 debug!(rows, elapsed_millis);
 
-                SQL_DURATION.record(
-                    elapsed_millis,
-                    &[
-                        KeyValue::new("sql", sql.to_owned()),
-                        KeyValue::new("cluster_id", self.cluster.clone()),
-                    ],
-                );
-
-                SQL_REQUESTS.add(
-                    1,
-                    &[
-                        KeyValue::new("sql", sql.to_owned()),
-                        KeyValue::new("cluster_id", self.cluster.clone()),
-                    ],
-                );
+                SQL_DURATION.record(elapsed_millis, &[KeyValue::new("sql", sql.to_owned())]);
+                SQL_REQUESTS.add(1, &[KeyValue::new("sql", sql.to_owned())]);
             })
             .inspect_err(|err| {
                 error!(?err, sql, elapsed_millis = elapsed_millis(start));
@@ -450,23 +415,17 @@ impl Delegate {
             })
     }
 
-    #[instrument(skip(self, connection), ret)]
-    async fn prepare_query_opt<P>(
-        &self,
-        connection: &Connection,
-        sql: &str,
-        params: P,
-    ) -> result::Result<Option<Row>, libsql::Error>
+    #[instrument(skip_all)]
+    async fn query_opt<P>(&self, sql: &str, params: P) -> result::Result<Option<Row>, libsql::Error>
     where
         P: IntoParams,
         P: Debug,
     {
+        debug!(sql, ?params);
+
         let start = SystemTime::now();
 
-        let statement = connection.prepare(sql).await.inspect_err(|err| {
-            error!(?err, elapsed_millis = elapsed_millis(start));
-            SQL_ERROR.add(1, &self.attributes_for_error(Some(sql), err)[..]);
-        })?;
+        let statement = self.prepared_statement(sql).await?;
 
         let mut rows = statement.query(params).await.inspect_err(|err| {
             error!(?err, elapsed_millis = elapsed_millis(start));
@@ -478,35 +437,25 @@ impl Delegate {
             SQL_ERROR.add(1, &self.attributes_for_error(Some(sql), err)[..]);
         })?;
 
-        let attributes = [
-            KeyValue::new("sql", sql.to_owned()),
-            KeyValue::new("cluster_id", self.cluster.clone()),
-        ];
+        let attributes = [KeyValue::new("sql", sql.to_owned())];
 
         SQL_DURATION.record(elapsed_millis(start), &attributes);
-
         SQL_REQUESTS.add(1, &attributes);
 
         Ok(row)
     }
 
-    #[instrument(skip(self, connection), ret)]
-    async fn prepare_query_one<P>(
-        &self,
-        connection: &Connection,
-        sql: &str,
-        params: P,
-    ) -> result::Result<Row, libsql::Error>
+    #[instrument(skip_all)]
+    async fn query_one<P>(&self, sql: &str, params: P) -> result::Result<Row, libsql::Error>
     where
         P: IntoParams,
         P: Debug,
     {
+        debug!(sql, ?params);
+
         let start = SystemTime::now();
 
-        let statement = connection.prepare(sql).await.inspect_err(|err| {
-            error!(?err, elapsed_millis = elapsed_millis(start));
-            SQL_ERROR.add(1, &self.attributes_for_error(Some(sql), err)[..]);
-        })?;
+        let statement = self.prepared_statement(sql).await?;
 
         let mut rows = statement
             .query(params)
@@ -526,10 +475,7 @@ impl Delegate {
                 SQL_ERROR.add(1, &self.attributes_for_error(Some(sql), err)[..]);
             })?
         {
-            let attributes = [
-                KeyValue::new("sql", sql.to_owned()),
-                KeyValue::new("cluster_id", self.cluster.clone()),
-            ];
+            let attributes = [KeyValue::new("sql", sql.to_owned())];
 
             SQL_DURATION.record(elapsed_millis(start), &attributes);
 
@@ -540,19 +486,61 @@ impl Delegate {
             panic!("more or less than one row");
         }
     }
+}
 
+impl managed::Manager for ConnectionManager {
+    type Type = PoolConnection;
+    type Error = Error;
+
+    #[instrument(skip_all)]
+    async fn create(&self) -> Result<Self::Type, Self::Error> {
+        let start = SystemTime::now();
+
+        let connection = {
+            let db = self.db.lock()?;
+            db.connect()
+        }?;
+
+        PoolConnection::new(connection)
+            .await
+            .inspect(|_| CONNECT_DURATION.record(elapsed_millis(start), &[]))
+    }
+
+    async fn recycle(
+        &self,
+        _obj: &mut Self::Type,
+        _metrics: &managed::Metrics,
+    ) -> managed::RecycleResult<Self::Error> {
+        Ok(())
+    }
+}
+
+pub(crate) type Pool = managed::Pool<ConnectionManager>;
+
+impl Delegate {
+    #[instrument(skip_all)]
+    async fn connection(&self) -> Result<managed::Object<ConnectionManager>> {
+        let start = SystemTime::now();
+
+        self.pool.get().await.map_err(Into::into).inspect(|_| {
+            CONNECT_DURATION.record(
+                elapsed_millis(start),
+                &[KeyValue::new("cluster_id", self.cluster.clone())],
+            )
+        })
+    }
+
+    #[instrument(skip_all)]
     async fn idempotent_message_check(
         &self,
-        transaction_id: Option<&str>,
+        _transaction_id: Option<&str>,
         topition: &Topition,
         deflated: &deflated::Batch,
-        connection: &Connection,
+        connection: &PoolConnection,
     ) -> Result<()> {
-        debug!(transaction_id, ?deflated);
-
         let mut rows = connection
             .query(
-                &sql_lookup("producer_epoch_current_for_producer.sql")?,
+                "producer_epoch_current_for_producer.sql",
                 (self.cluster.as_str(), deflated.producer_id),
             )
             .await?;
@@ -563,10 +551,9 @@ impl Delegate {
                 .inspect_err(|err| error!(self.cluster, deflated.producer_id, ?err))?
                 as i16;
 
-            let row = self
-                .prepare_query_one(
-                    connection,
-                    &sql_lookup("producer_select_for_update.sql")?,
+            let row = connection
+                .query_one(
+                    "producer_select_for_update.sql",
                     (
                         self.cluster.as_str(),
                         topition.topic(),
@@ -603,19 +590,19 @@ impl Delegate {
 
             assert_eq!(
                 1,
-                self.prepare_execute(
-                    connection,
-                    &sql_lookup("producer_detail_insert.sql")?,
-                    (
-                        self.cluster.as_str(),
-                        topition.topic(),
-                        topition.partition(),
-                        deflated.producer_id,
-                        deflated.producer_epoch,
-                        increment,
-                    ),
-                )
-                .await?
+                connection
+                    .execute(
+                        "producer_detail_insert.sql",
+                        (
+                            self.cluster.as_str(),
+                            topition.topic(),
+                            topition.partition(),
+                            deflated.producer_id,
+                            deflated.producer_epoch,
+                            increment,
+                        ),
+                    )
+                    .await?
             );
 
             Ok(())
@@ -624,16 +611,17 @@ impl Delegate {
         }
     }
 
+    #[instrument(skip_all)]
     async fn watermark_select_for_update(
         &self,
         topition: &Topition,
-        tx: &Connection,
+        connection: &PoolConnection,
     ) -> Result<(Option<i64>, Option<i64>)> {
-        debug!(?topition, ?tx);
+        debug!(?topition);
 
-        let mut rows = tx
+        let mut rows = connection
             .query(
-                &sql_lookup("watermark_select_no_update.sql")?,
+                "watermark_select_no_update.sql",
                 (
                     self.cluster.as_str(),
                     topition.topic(),
@@ -656,22 +644,21 @@ impl Delegate {
         }
     }
 
+    #[instrument(skip_all)]
     async fn produce_in_tx(
         &self,
         transaction_id: Option<&str>,
         topition: &Topition,
         deflated: deflated::Batch,
-        tx: &Transaction,
+        connection: &PoolConnection,
     ) -> Result<i64> {
-        debug!(cluster = ?self.cluster, ?transaction_id, ?topition, ?deflated);
-
         let start = SystemTime::now();
 
         let topic = topition.topic();
         let partition = topition.partition();
 
         if deflated.is_idempotent() {
-            self.idempotent_message_check(transaction_id, topition, &deflated, tx)
+            self.idempotent_message_check(transaction_id, topition, &deflated, connection)
                 .await
                 .inspect_err(|err| error!(?err))?;
         }
@@ -679,7 +666,7 @@ impl Delegate {
         debug!(after_idempotent_check = elapsed_millis(start));
 
         let (low, high) = self
-            .watermark_select_for_update(topition, tx)
+            .watermark_select_for_update(topition, connection)
             .await
             .inspect_err(|err| error!(?err))?;
 
@@ -731,12 +718,11 @@ impl Delegate {
             let key = record.key.as_deref();
             let value = record.value.as_deref();
 
-            debug!(?delta, ?record, ?offset);
+            debug!(?delta, ?offset);
 
-            _ = self
-                .prepare_execute(
-                    tx,
-                    &sql_lookup("record_insert.sql")?,
+            _ = connection
+                .execute(
+                    "record_insert.sql",
                     (
                         self.cluster.as_str(),
                         topic,
@@ -768,10 +754,9 @@ impl Delegate {
                 let key = header.key.as_deref();
                 let value = header.value.as_deref();
 
-                _ = self
-                    .prepare_execute(
-                        tx,
-                        &sql_lookup("header_insert.sql")?,
+                _ = connection
+                    .execute(
+                        "header_insert.sql",
                         (self.cluster.as_str(), topic, partition, offset, key, value),
                     )
                     .await
@@ -791,9 +776,9 @@ impl Delegate {
             let offset_start = high.unwrap_or_default();
             let offset_end = high.map_or(last_offset_delta, |high| high + last_offset_delta);
 
-            _ = self
-                    .prepare_execute(tx,
-                        &sql_lookup("txn_produce_offset_insert.sql")?,
+            _ = connection
+                    .execute(
+                        "txn_produce_offset_insert.sql",
                         (
                             self.cluster.as_str(),
                             transaction_id,
@@ -812,10 +797,9 @@ impl Delegate {
 
         debug!(after_some_transaction_id = elapsed_millis(start));
 
-        _ = self
-            .prepare_execute(
-                tx,
-                &sql_lookup("watermark_update.sql")?,
+        _ = connection
+            .execute(
+                "watermark_update.sql",
                 (
                     self.cluster.as_str(),
                     topic,
@@ -863,15 +847,15 @@ impl Delegate {
         producer_id: i64,
         producer_epoch: i16,
         committed: bool,
-        tx: &Transaction,
+        connection: &PoolConnection,
     ) -> Result<ErrorCode> {
         debug!(cluster = ?self.cluster, ?transaction_id, ?producer_id, ?producer_epoch, ?committed);
 
         let mut overlaps = vec![];
 
-        let mut rows = tx
+        let mut rows = connection
             .query(
-                &sql_lookup("txn_select_produced_topitions.sql")?,
+                "txn_select_produced_topitions.sql",
                 (
                     self.cluster.as_str(),
                     transaction_id,
@@ -916,14 +900,14 @@ impl Delegate {
                 .inspect(|deflated| debug!(?deflated))?;
 
             let offset = self
-                .produce_in_tx(Some(transaction_id), &topition, batch, tx)
+                .produce_in_tx(Some(transaction_id), &topition, batch, connection)
                 .await?;
 
             debug!(offset, ?topition);
 
-            let mut rows = tx
+            let mut rows = connection
                 .query(
-                    &sql_lookup("txn_produce_offset_select_offset_range.sql")?,
+                    "txn_produce_offset_select_offset_range.sql",
                     (
                         self.cluster.as_str(),
                         transaction_id,
@@ -940,9 +924,9 @@ impl Delegate {
                 let offset_end = row.get::<i64>(1)?;
                 debug!(offset_start, offset_end);
 
-                let mut rows = tx
+                let mut rows = connection
                     .query(
-                        &sql_lookup("txn_produce_offset_select_overlapping_txn.sql")?,
+                        "txn_produce_offset_select_overlapping_txn.sql",
                         (
                             self.cluster.as_str(),
                             transaction_id,
@@ -986,9 +970,9 @@ impl Delegate {
             for txn in txns {
                 debug!(?txn);
 
-                _ = tx
+                _ = connection
                     .execute(
-                        &sql_lookup("txn_produce_offset_delete_by_txn.sql")?,
+                        "txn_produce_offset_delete_by_txn.sql",
                         (
                             self.cluster.as_str(),
                             txn.name.as_str(),
@@ -998,9 +982,9 @@ impl Delegate {
                     )
                     .await?;
 
-                _ = tx
+                _ = connection
                     .execute(
-                        &sql_lookup("txn_topition_delete_by_txn.sql")?,
+                        "txn_topition_delete_by_txn.sql",
                         (
                             self.cluster.as_str(),
                             txn.name.as_str(),
@@ -1011,9 +995,9 @@ impl Delegate {
                     .await?;
 
                 if txn.status == TxnState::PrepareCommit {
-                    _ = tx
+                    _ = connection
                         .execute(
-                            &sql_lookup("consumer_offset_insert_from_txn.sql")?,
+                            "consumer_offset_insert_from_txn.sql",
                             (
                                 self.cluster.as_str(),
                                 txn.name.as_str(),
@@ -1024,9 +1008,9 @@ impl Delegate {
                         .await?;
                 }
 
-                _ = tx
+                _ = connection
                     .execute(
-                        &sql_lookup("txn_offset_commit_tp_delete_by_txn.sql")?,
+                        "txn_offset_commit_tp_delete_by_txn.sql",
                         (
                             self.cluster.as_str(),
                             txn.name.as_str(),
@@ -1036,9 +1020,9 @@ impl Delegate {
                     )
                     .await?;
 
-                _ = tx
+                _ = connection
                     .execute(
-                        &sql_lookup("txn_offset_commit_delete_by_txn.sql")?,
+                        "txn_offset_commit_delete_by_txn.sql",
                         (
                             self.cluster.as_str(),
                             txn.name.as_str(),
@@ -1056,9 +1040,9 @@ impl Delegate {
                     String::from(txn.status)
                 };
 
-                _ = tx
+                _ = connection
                     .execute(
-                        &sql_lookup("txn_status_update.sql")?,
+                        "txn_status_update.sql",
                         (
                             self.cluster.as_str(),
                             txn.name.as_str(),
@@ -1078,9 +1062,9 @@ impl Delegate {
                 String::from(TxnState::PrepareAbort)
             };
 
-            _ = tx
+            _ = connection
                 .execute(
-                    &sql_lookup("txn_status_update.sql")?,
+                    "txn_status_update.sql",
                     (
                         self.cluster.as_str(),
                         transaction_id,
@@ -1105,11 +1089,12 @@ impl Delegate {
     async fn policy_compact(&self) -> Result<u64> {
         let start = SystemTime::now();
 
-        let tx = self.transaction().await?;
+        let pc = self.connection().await?;
+        let tx = pc.transaction().await?;
 
-        let compacted = tx
-            .execute(&sql_lookup("policy_compact.sql")?, [self.cluster.as_str()])
-            .await?;
+        let compacted = pc
+            .execute("policy_compact.sql", [self.cluster.as_str()])
+            .await? as u64;
 
         tx.commit()
             .await
@@ -1130,14 +1115,15 @@ impl Delegate {
         let now = to_timestamp(&now)?;
         let retention_ms = u64::try_from(Duration::from_hours(7 * 24).as_millis())?;
 
-        let tx = self.transaction().await?;
+        let pc = self.connection().await?;
+        let tx = pc.transaction().await?;
 
-        let deleted = tx
+        let deleted = pc
             .execute(
-                &sql_lookup("lite/policy_delete.sql")?,
+                "lite/policy_delete.sql",
                 (self.cluster.as_str(), now, retention_ms),
             )
-            .await?;
+            .await? as u64;
 
         tx.commit()
             .await
@@ -1290,15 +1276,20 @@ static DDL: LazyLock<Cache> = LazyLock::new(|| {
     Cache::new(BTreeMap::from(mapping))
 });
 
+pub(crate) static SQL: LazyLock<Cache> = LazyLock::new(|| {
+    Cache::new(
+        crate::sql::SQL
+            .iter()
+            .map(|(name, sql)| fix_parameters(sql).map(|sql| (*name, sql)))
+            .collect::<Result<BTreeMap<_, _>>>()
+            .unwrap_or_default(),
+    )
+});
+
 fn fix_parameters(sql: &str) -> Result<String> {
     Regex::new(r"\$(?<i>\d+)")
         .map(|re| re.replace_all(sql, "?$i").into_owned())
         .map_err(Into::into)
-}
-
-#[instrument(ret)]
-fn sql_lookup(key: &str) -> Result<String> {
-    crate::sql::SQL.get(key).and_then(fix_parameters)
 }
 
 #[derive(Clone, Debug)]
@@ -1317,6 +1308,7 @@ impl Engine {
 
 #[async_trait]
 impl Storage for Engine {
+    #[instrument(skip_all)]
     async fn register_broker(&self, broker_registration: BrokerRegistrationRequest) -> Result<()> {
         let start = SystemTime::now();
         self.inner
@@ -1330,6 +1322,7 @@ impl Storage for Engine {
             })
     }
 
+    #[instrument(skip_all)]
     async fn brokers(&self) -> Result<Vec<DescribeClusterBroker>> {
         let start = SystemTime::now();
         self.inner.brokers().await.inspect(|_| {
@@ -1340,6 +1333,7 @@ impl Storage for Engine {
         })
     }
 
+    #[instrument(skip_all)]
     async fn create_topic(&self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {
         let start = SystemTime::now();
         self.inner
@@ -1353,6 +1347,7 @@ impl Storage for Engine {
             })
     }
 
+    #[instrument(skip_all)]
     async fn delete_records(
         &self,
         topics: &[DeleteRecordsTopic],
@@ -1366,6 +1361,7 @@ impl Storage for Engine {
         })
     }
 
+    #[instrument(skip_all)]
     async fn delete_topic(&self, topic: &TopicId) -> Result<ErrorCode> {
         let start = SystemTime::now();
         self.inner.delete_topic(topic).await.inspect(|_| {
@@ -1376,6 +1372,7 @@ impl Storage for Engine {
         })
     }
 
+    #[instrument(skip_all)]
     async fn incremental_alter_resource(
         &self,
         resource: AlterConfigsResource,
@@ -1392,6 +1389,7 @@ impl Storage for Engine {
             })
     }
 
+    #[instrument(skip_all)]
     async fn produce(
         &self,
         transaction_id: Option<&str>,
@@ -1410,6 +1408,7 @@ impl Storage for Engine {
             })
     }
 
+    #[instrument(skip_all)]
     async fn fetch(
         &self,
         topition: &Topition,
@@ -1430,6 +1429,7 @@ impl Storage for Engine {
             })
     }
 
+    #[instrument(skip_all)]
     async fn offset_stage(&self, topition: &Topition) -> Result<OffsetStage> {
         let start = SystemTime::now();
         self.inner.offset_stage(topition).await.inspect(|_| {
@@ -1440,6 +1440,7 @@ impl Storage for Engine {
         })
     }
 
+    #[instrument(skip_all)]
     async fn offset_commit(
         &self,
         group: &str,
@@ -1458,6 +1459,7 @@ impl Storage for Engine {
             })
     }
 
+    #[instrument(skip_all)]
     async fn committed_offset_topitions(&self, group_id: &str) -> Result<BTreeMap<Topition, i64>> {
         let start = SystemTime::now();
         self.inner
@@ -1471,6 +1473,7 @@ impl Storage for Engine {
             })
     }
 
+    #[instrument(skip_all)]
     async fn offset_fetch(
         &self,
         group_id: Option<&str>,
@@ -1489,6 +1492,7 @@ impl Storage for Engine {
             })
     }
 
+    #[instrument(skip_all)]
     async fn list_offsets(
         &self,
         isolation_level: IsolationLevel,
@@ -1506,6 +1510,7 @@ impl Storage for Engine {
             })
     }
 
+    #[instrument(skip_all)]
     async fn metadata(&self, topics: Option<&[TopicId]>) -> Result<MetadataResponse> {
         let start = SystemTime::now();
         self.inner.metadata(topics).await.inspect(|_| {
@@ -1516,6 +1521,7 @@ impl Storage for Engine {
         })
     }
 
+    #[instrument(skip_all)]
     async fn describe_config(
         &self,
         name: &str,
@@ -1534,6 +1540,7 @@ impl Storage for Engine {
             })
     }
 
+    #[instrument(skip_all)]
     async fn describe_topic_partitions(
         &self,
         topics: Option<&[TopicId]>,
@@ -1552,6 +1559,7 @@ impl Storage for Engine {
             })
     }
 
+    #[instrument(skip_all)]
     async fn list_groups(&self, states_filter: Option<&[String]>) -> Result<Vec<ListedGroup>> {
         let start = SystemTime::now();
         self.inner.list_groups(states_filter).await.inspect(|_| {
@@ -1562,6 +1570,7 @@ impl Storage for Engine {
         })
     }
 
+    #[instrument(skip_all)]
     async fn delete_groups(
         &self,
         group_ids: Option<&[String]>,
@@ -1575,6 +1584,7 @@ impl Storage for Engine {
         })
     }
 
+    #[instrument(skip_all)]
     async fn describe_groups(
         &self,
         group_ids: Option<&[String]>,
@@ -1592,6 +1602,7 @@ impl Storage for Engine {
             })
     }
 
+    #[instrument(skip_all)]
     async fn update_group(
         &self,
         group_id: &str,
@@ -1610,6 +1621,7 @@ impl Storage for Engine {
             })
     }
 
+    #[instrument(skip_all)]
     async fn init_producer(
         &self,
         transaction_id: Option<&str>,
@@ -1634,6 +1646,7 @@ impl Storage for Engine {
             })
     }
 
+    #[instrument(skip_all)]
     async fn txn_add_offsets(
         &self,
         transaction_id: &str,
@@ -1653,6 +1666,7 @@ impl Storage for Engine {
             })
     }
 
+    #[instrument(skip_all)]
     async fn txn_add_partitions(
         &self,
         partitions: TxnAddPartitionsRequest,
@@ -1669,6 +1683,7 @@ impl Storage for Engine {
             })
     }
 
+    #[instrument(skip_all)]
     async fn txn_offset_commit(
         &self,
         offsets: TxnOffsetCommitRequest,
@@ -1682,6 +1697,7 @@ impl Storage for Engine {
         })
     }
 
+    #[instrument(skip_all)]
     async fn txn_end(
         &self,
         transaction_id: &str,
@@ -1701,6 +1717,7 @@ impl Storage for Engine {
             })
     }
 
+    #[instrument(skip_all)]
     async fn maintain(&self, now: SystemTime) -> Result<()> {
         let start = SystemTime::now();
         self.inner.maintain(now).await.inspect(|_| {
@@ -1711,6 +1728,7 @@ impl Storage for Engine {
         })
     }
 
+    #[instrument(skip_all)]
     async fn cluster_id(&self) -> Result<String> {
         let start = SystemTime::now();
         self.inner.cluster_id().await.inspect(|_| {
@@ -1721,6 +1739,7 @@ impl Storage for Engine {
         })
     }
 
+    #[instrument(skip_all)]
     async fn node(&self) -> Result<i32> {
         let start = SystemTime::now();
         self.inner.node().await.inspect(|_| {
@@ -1729,6 +1748,7 @@ impl Storage for Engine {
         })
     }
 
+    #[instrument(skip_all)]
     async fn advertised_listener(&self) -> Result<Url> {
         let start = SystemTime::now();
         self.inner.advertised_listener().await.inspect(|_| {
@@ -1830,20 +1850,20 @@ impl Storage for Delegate {
 
         let connection = self.connection().await?;
 
-        self.prepare_execute(
-            &connection,
-            &sql_lookup("register_broker.sql")?,
-            &[broker_registration.cluster_id.as_str()],
-        )
-        .await
-        .map_err(Into::into)
-        .and(Ok(()))
-        .inspect(|_| {
-            DELEGATE_REQUEST_DURATION.record(
-                elapsed_millis(start),
-                &[KeyValue::new("operation", "register_broker")],
+        connection
+            .execute(
+                "register_broker.sql",
+                &[broker_registration.cluster_id.as_str()],
             )
-        })
+            .await
+            .map_err(Into::into)
+            .and(Ok(()))
+            .inspect(|_| {
+                DELEGATE_REQUEST_DURATION.record(
+                    elapsed_millis(start),
+                    &[KeyValue::new("operation", "register_broker")],
+                )
+            })
     }
 
     async fn brokers(&self) -> Result<Vec<DescribeClusterBroker>> {
@@ -1880,7 +1900,8 @@ impl Storage for Delegate {
 
         debug!(cluster = self.cluster, ?topic, validate_only);
 
-        let tx = self.transaction().await?;
+        let pc = self.connection().await?;
+        let tx = pc.transaction().await?;
 
         let uuid = {
             let uuid = Uuid::new_v4();
@@ -1893,7 +1914,7 @@ impl Storage for Delegate {
                 (topic.replication_factor as i32),
             );
 
-            self.prepare_query_one(&tx, &sql_lookup("topic_insert.sql")?, parameters.clone())
+            pc.query_one("topic_insert.sql", parameters.clone())
                 .await
                 .inspect_err(|err| error!(?err))
                 .map_err(unique_constraint(ErrorCode::TopicAlreadyExists))
@@ -1911,16 +1932,16 @@ impl Storage for Delegate {
         for partition in 0..topic.num_partitions {
             let params = (self.cluster.as_str(), topic.name.as_str(), partition);
 
-            _ = self
-                .prepare_query_one(&tx, &sql_lookup("topition_insert.sql")?, params)
+            _ = pc
+                .query_opt("topition_insert.sql", params)
                 .await
-                .map(|row| row.get_value(0))
+                .map(|row| row.map(|row| row.get_value(0)).transpose())
                 .inspect(|topition| debug!(?topition))?;
 
-            _ = self
-                .prepare_query_one(&tx, &sql_lookup("watermark_insert.sql")?, params)
+            _ = pc
+                .query_opt("watermark_insert.sql", params)
                 .await
-                .map(|row| row.get_value(0))
+                .map(|row| row.map(|row| row.get_value(0)).transpose())
                 .inspect(|watermark| debug!(?watermark))?;
         }
 
@@ -1935,8 +1956,8 @@ impl Storage for Delegate {
                     config.value.as_deref(),
                 );
 
-                _ = self
-                    .prepare_query_one(&tx, &sql_lookup("topic_configuration_upsert.sql")?, params)
+                _ = pc
+                    .query_one("topic_configuration_upsert.sql", params)
                     .await
                     .map(|row| row.get_value(0))
                     .inspect_err(|err| error!(?err, ?config))
@@ -1944,7 +1965,7 @@ impl Storage for Delegate {
             }
         }
 
-        self.commit(tx).await.and(Ok(uuid)).inspect(|_| {
+        pc.commit(tx).await.and(Ok(uuid)).inspect(|_| {
             DELEGATE_REQUEST_DURATION.record(
                 elapsed_millis(start),
                 &[KeyValue::new("operation", "create_topic")],
@@ -1964,22 +1985,21 @@ impl Storage for Delegate {
         let start = SystemTime::now();
         debug!(cluster = self.cluster, ?topic);
 
-        let tx = self.transaction().await?;
+        let pc = self.connection().await?;
+        let tx = pc.transaction().await?;
 
         let mut rows = match topic {
             TopicId::Id(id) => {
-                self.query(
-                    &tx,
-                    &sql_lookup("topic_select_uuid.sql")?,
+                pc.query(
+                    "topic_select_uuid.sql",
                     (self.cluster.as_str(), id.to_string().as_str()),
                 )
                 .await?
             }
 
             TopicId::Name(name) => {
-                self.query(
-                    &tx,
-                    &sql_lookup("topic_select_name.sql")?,
+                pc.query(
+                    "topic_select_name.sql",
                     (self.cluster.as_str(), name.as_str()),
                 )
                 .await?
@@ -2004,22 +2024,16 @@ impl Storage for Delegate {
             "producer_detail_delete_by_topic.sql",
             "topition_delete_by_topic.sql",
         ] {
-            let rows = self
-                .prepare_execute(&tx, &sql_lookup(sql)?, (self.cluster.as_str(), topic_name))
-                .await?;
+            let rows = pc.execute(sql, (self.cluster.as_str(), topic_name)).await?;
 
             debug!(?topic, rows, sql)
         }
 
-        _ = self
-            .prepare_execute(
-                &tx,
-                &sql_lookup("topic_delete_by.sql")?,
-                (self.cluster.as_str(), topic_name),
-            )
+        _ = pc
+            .execute("topic_delete_by.sql", (self.cluster.as_str(), topic_name))
             .await?;
 
-        self.commit(tx).await.and(Ok(ErrorCode::None)).inspect(|_| {
+        pc.commit(tx).await.and(Ok(ErrorCode::None)).inspect(|_| {
             DELEGATE_REQUEST_DURATION.record(
                 elapsed_millis(start),
                 &[KeyValue::new("operation", "delete_topic")],
@@ -2064,7 +2078,7 @@ impl Storage for Delegate {
                             let c = self.connection().await?;
 
                             if c.query(
-                                &sql_lookup("topic_configuration_upsert.sql")?,
+                                "topic_configuration_upsert.sql",
                                 (
                                     self.cluster.as_str(),
                                     resource.resource_name.as_str(),
@@ -2084,7 +2098,7 @@ impl Storage for Delegate {
                             let c = self.connection().await?;
 
                             if c.query(
-                                &sql_lookup("topic_configuration_delete.sql")?,
+                                "topic_configuration_delete.sql",
                                 (
                                     self.cluster.as_str(),
                                     resource.resource_name.as_str(),
@@ -2138,21 +2152,21 @@ impl Storage for Delegate {
     ) -> Result<i64> {
         let start = SystemTime::now();
 
-        debug!(cluster = self.cluster, transaction_id, ?topition, ?deflated);
+        let pc = self.connection().await?;
 
-        let tx = self.transaction().await.inspect(|_| {
+        let tx = pc.transaction().await.inspect(|_| {
             debug!(after_produce_transaction = elapsed_millis(start));
         })?;
 
         let high = self
-            .produce_in_tx(transaction_id, topition, deflated, &tx)
+            .produce_in_tx(transaction_id, topition, deflated, &pc)
             .await
             .inspect(|_| {
                 debug!(after_produce_in_tx = elapsed_millis(start));
             })
             .inspect_err(|err| error!(?err))?;
 
-        self.commit(tx)
+        pc.commit(tx)
             .await
             .and(Ok(high))
             .inspect_err(|err| error!(?err))
@@ -2198,10 +2212,9 @@ impl Storage for Delegate {
 
         let c = self.connection().await?;
 
-        let mut records = self
+        let mut records = c
             .query(
-                &c,
-                &sql_lookup("record_fetch.sql")?,
+                "record_fetch.sql",
                 (
                     self.cluster.as_str(),
                     topition.topic(),
@@ -2237,10 +2250,9 @@ impl Storage for Delegate {
                             .inspect_err(|err| error!(?err))?,
                     );
 
-                let mut headers = self
+                let mut headers = c
                     .query(
-                        &c,
-                        &sql_lookup("header_fetch.sql")?,
+                        "header_fetch.sql",
                         (
                             self.cluster.as_str(),
                             topition.topic(),
@@ -2380,10 +2392,9 @@ impl Storage for Delegate {
                                 .inspect_err(|err| error!(?err))?,
                         );
 
-                    let mut headers = self
+                    let mut headers = c
                         .query(
-                            &c,
-                            &sql_lookup("header_fetch.sql")?,
+                            "header_fetch.sql",
                             (
                                 self.cluster.as_str(),
                                 topition.topic(),
@@ -2445,10 +2456,9 @@ impl Storage for Delegate {
 
         let c = self.connection().await?;
 
-        let row = self
-            .prepare_query_one(
-                &c,
-                &sql_lookup("watermark_select.sql")?,
+        let row = c
+            .query_one(
+                "watermark_select.sql",
                 (
                     self.cluster.as_str(),
                     topition.topic(),
@@ -2508,9 +2518,9 @@ impl Storage for Delegate {
         for (topition, offset) in offsets {
             debug!(?topition, ?offset);
 
-            let mut rows = tx
+            let mut rows = c
                 .query(
-                    &sql_lookup("topition_select.sql")?,
+                    "topition_select.sql",
                     (
                         self.cluster.as_str(),
                         topition.topic(),
@@ -2522,22 +2532,17 @@ impl Storage for Delegate {
 
             if rows.next().await.inspect_err(|err| error!(?err))?.is_some() {
                 if !cg_inserted {
-                    let rows = self
-                        .prepare_execute(
-                            &tx,
-                            &sql_lookup("consumer_group_insert.sql")?,
-                            (self.cluster.as_str(), group),
-                        )
+                    let rows = c
+                        .execute("consumer_group_insert.sql", (self.cluster.as_str(), group))
                         .await?;
                     debug!(rows);
 
                     cg_inserted = true;
                 }
 
-                let rows = self
-                    .prepare_execute(
-                        &tx,
-                        &sql_lookup("consumer_offset_insert.sql")?,
+                let rows = c
+                    .execute(
+                        "consumer_offset_insert.sql",
                         (
                             self.cluster.as_str(),
                             topition.topic(),
@@ -2567,7 +2572,7 @@ impl Storage for Delegate {
             }
         }
 
-        tx.commit().await.inspect_err(|err| error!(?err))?;
+        c.commit(tx).await.inspect_err(|err| error!(?err))?;
 
         Ok(responses).inspect(|_| {
             DELEGATE_REQUEST_DURATION.record(
@@ -2586,10 +2591,9 @@ impl Storage for Delegate {
 
         let c = self.connection().await?;
 
-        let mut rows = self
+        let mut rows = c
             .query(
-                &c,
-                &sql_lookup("consumer_offset_select_by_group.sql")?,
+                "consumer_offset_select_by_group.sql",
                 (self.cluster.as_str(), group_id),
             )
             .await?;
@@ -2630,10 +2634,9 @@ impl Storage for Delegate {
         let mut offsets = BTreeMap::new();
 
         for topic in topics {
-            let mut rows = self
+            let mut rows = c
                 .query(
-                    &c,
-                    &sql_lookup("consumer_offset_select.sql")?,
+                    "consumer_offset_select.sql",
                     (
                         self.cluster.as_str(),
                         group_id,
@@ -2701,23 +2704,22 @@ impl Storage for Delegate {
 
         for (topition, offset_type) in offsets {
             let query = match (offset_type, isolation_level) {
-                (ListOffset::Earliest, _) => sql_lookup("list_earliest_offset.sql")?,
+                (ListOffset::Earliest, _) => "list_earliest_offset.sql",
                 (ListOffset::Latest, IsolationLevel::ReadCommitted) => {
-                    sql_lookup("list_latest_offset_committed.sql")?
+                    "list_latest_offset_committed.sql"
                 }
                 (ListOffset::Latest, IsolationLevel::ReadUncommitted) => {
-                    sql_lookup("list_latest_offset_uncommitted.sql")?
+                    "list_latest_offset_uncommitted.sql"
                 }
-                (ListOffset::Timestamp(_), _) => sql_lookup("list_latest_offset_timestamp.sql")?,
+                (ListOffset::Timestamp(_), _) => "list_latest_offset_timestamp.sql",
             };
 
             debug!(?query);
 
             let list_offset = match offset_type {
-                ListOffset::Earliest | ListOffset::Latest => self
-                    .prepare_query_opt(
-                        &c,
-                        query.as_str(),
+                ListOffset::Earliest | ListOffset::Latest => c
+                    .query_opt(
+                        query,
                         (
                             self.cluster.as_str(),
                             topition.topic(),
@@ -2727,10 +2729,9 @@ impl Storage for Delegate {
                     .await
                     .inspect_err(|err| error!(?err, cluster = self.cluster, ?topition)),
 
-                ListOffset::Timestamp(timestamp) => self
-                    .prepare_query_opt(
-                        &c,
-                        query.as_str(),
+                ListOffset::Timestamp(timestamp) => c
+                    .query_opt(
+                        query,
                         (
                             self.cluster.as_str(),
                             topition.topic(),
@@ -2835,10 +2836,9 @@ impl Storage for Delegate {
                 for topic in topics {
                     responses.push(match topic {
                         TopicId::Name(name) => {
-                            let mut rows = self
+                            let mut rows = c
                                 .query(
-                                    &c,
-                                    &sql_lookup("topic_select_name.sql")?,
+                                    "topic_select_name.sql",
                                     (self.cluster.as_str(), name.as_str()),
                                 )
                                 .await?;
@@ -2930,10 +2930,9 @@ impl Storage for Delegate {
                         }
                         TopicId::Id(id) => {
                             debug!(?id);
-                            let mut rows = self
+                            let mut rows = c
                                 .query(
-                                    &c,
-                                    &sql_lookup("topic_select_uuid.sql")?,
+                                    "topic_select_uuid.sql",
                                     (self.cluster.as_str(), id.to_string().as_str()),
                                 )
                                 .await?;
@@ -3030,12 +3029,8 @@ impl Storage for Delegate {
             _ => {
                 let mut responses = vec![];
 
-                let mut rows = self
-                    .query(
-                        &c,
-                        &sql_lookup("topic_by_cluster.sql")?,
-                        &[self.cluster.as_str()],
-                    )
+                let mut rows = c
+                    .query("topic_by_cluster.sql", &[self.cluster.as_str()])
                     .await?;
 
                 while let Some(row) = rows.next().await? {
@@ -3132,19 +3127,14 @@ impl Storage for Delegate {
 
         let c = self.connection().await?;
 
-        let mut rows = self
-            .query(
-                &c,
-                &sql_lookup("topic_select.sql")?,
-                (self.cluster.as_str(), name),
-            )
+        let mut rows = c
+            .query("topic_select.sql", (self.cluster.as_str(), name))
             .await?;
 
         if rows.next().await?.is_some() {
-            let mut rows = self
+            let mut rows = c
                 .query(
-                    &c,
-                    &sql_lookup("topic_configuration_select.sql")?,
+                    "topic_configuration_select.sql",
                     (self.cluster.as_str(), name),
                 )
                 .await?;
@@ -3223,10 +3213,9 @@ impl Storage for Delegate {
         for topic in topics.unwrap_or_default() {
             responses.push(match topic {
                 TopicId::Name(name) => {
-                    match self
-                        .prepare_query_opt(
-                            &c,
-                            &sql_lookup("topic_select_name.sql")?,
+                    match c
+                        .query_opt(
+                            "topic_select_name.sql",
                             (self.cluster.as_str(), name.as_str()),
                         )
                         .await
@@ -3316,10 +3305,9 @@ impl Storage for Delegate {
                 }
                 TopicId::Id(id) => {
                     debug!(?id);
-                    match self
-                        .prepare_query_one(
-                            &c,
-                            &sql_lookup("topic_select_uuid.sql")?,
+                    match c
+                        .query_one(
+                            "topic_select_uuid.sql",
                             (self.cluster.as_str(), id.to_string().as_str()),
                         )
                         .await
@@ -3412,12 +3400,8 @@ impl Storage for Delegate {
 
         let mut listed_groups = vec![];
 
-        let mut rows = self
-            .query(
-                &c,
-                &sql_lookup("consumer_group_select.sql")?,
-                &[self.cluster.as_str()],
-            )
+        let mut rows = c
+            .query("consumer_group_select.sql", &[self.cluster.as_str()])
             .await?;
 
         while let Some(row) = rows.next().await? {
@@ -3453,34 +3437,28 @@ impl Storage for Delegate {
         if let Some(group_ids) = group_ids {
             let c = self.connection().await?;
 
-            let consumer_offset = c
-                .prepare(&sql_lookup("consumer_offset_delete_by_cg.sql")?)
-                .await
-                .inspect_err(|err| error!(?err))?;
-
-            let group_detail = c
-                .prepare(&sql_lookup("consumer_group_detail_delete_by_cg.sql")?)
-                .await
-                .inspect_err(|err| error!(?err))?;
-
-            let group = c
-                .prepare(&sql_lookup("consumer_group_delete.sql")?)
-                .await
-                .inspect_err(|err| error!(?err))?;
-
             for group_id in group_ids {
-                _ = consumer_offset
-                    .execute((self.cluster.as_str(), group_id.as_str()))
+                _ = c
+                    .execute(
+                        "consumer_offset_delete_by_cg.sql",
+                        (self.cluster.as_str(), group_id.as_str()),
+                    )
                     .await
                     .inspect_err(|err| error!(?err))?;
 
-                _ = group_detail
-                    .execute((self.cluster.as_str(), group_id.as_str()))
+                _ = c
+                    .execute(
+                        "consumer_group_detail_delete_by_cg.sql",
+                        (self.cluster.as_str(), group_id.as_str()),
+                    )
                     .await
                     .inspect_err(|err| error!(?err))?;
 
-                let rows = group
-                    .execute((self.cluster.as_str(), group_id.as_str()))
+                let rows = c
+                    .execute(
+                        "consumer_group_delete.sql",
+                        (self.cluster.as_str(), group_id.as_str()),
+                    )
                     .await
                     .inspect_err(|err| error!(?err))?;
 
@@ -3521,10 +3499,9 @@ impl Storage for Delegate {
 
         if let Some(group_ids) = group_ids {
             for group_id in group_ids {
-                if let Some(row) = self
-                    .prepare_query_opt(
-                        &c,
-                        &sql_lookup("consumer_group_select_by_name.sql")?,
+                if let Some(row) = c
+                    .query_opt(
+                        "consumer_group_select_by_name.sql",
                         (self.cluster.as_str(), group_id.as_str()),
                     )
                     .await
@@ -3567,12 +3544,12 @@ impl Storage for Delegate {
 
         debug!(cluster = self.cluster, group_id, ?detail, ?version);
 
-        let tx = self.transaction().await?;
+        let pc = self.connection().await?;
+        let tx = pc.transaction().await?;
 
-        _ = self
-            .prepare_execute(
-                &tx,
-                &sql_lookup("consumer_group_insert.sql")?,
+        _ = pc
+            .execute(
+                "consumer_group_insert.sql",
                 (self.cluster.as_str(), group_id),
             )
             .await?;
@@ -3595,10 +3572,9 @@ impl Storage for Delegate {
 
         let detail = serde_json::to_value(detail).inspect(|detail| debug!(?detail))?;
 
-        let outcome = if let Some(row) = self
-            .prepare_query_opt(
-                &tx,
-                &sql_lookup("consumer_group_detail_insert.sql")?,
+        let outcome = if let Some(row) = pc
+            .query_opt(
+                "consumer_group_detail_insert.sql",
                 (
                     self.cluster.as_str(),
                     group_id,
@@ -3624,10 +3600,9 @@ impl Storage for Delegate {
                 })
                 .inspect(|version| debug!(?version))
         } else {
-            let row = self
-                .prepare_query_one(
-                    &tx,
-                    &sql_lookup("consumer_group_detail.sql")?,
+            let row = pc
+                .query_one(
+                    "consumer_group_detail.sql",
                     (group_id, self.cluster.as_str()),
                 )
                 .await
@@ -3661,7 +3636,7 @@ impl Storage for Delegate {
             Err(UpdateError::Outdated { current, version })
         };
 
-        self.commit(tx).await?;
+        pc.commit(tx).await?;
 
         debug!(?outcome);
 
@@ -3689,12 +3664,12 @@ impl Storage for Delegate {
 
         match (producer_id, producer_epoch, transaction_id) {
             (Some(-1), Some(-1), Some(transaction_id)) => {
-                let tx = self.transaction().await?;
+                let pc = self.connection().await?;
+                let tx = pc.transaction().await?;
 
-                if let Some(row) = self
-                    .prepare_query_opt(
-                        &tx,
-                        &sql_lookup("producer_epoch_for_current_txn.sql")?,
+                if let Some(row) = pc
+                    .query_opt(
+                        "producer_epoch_for_current_txn.sql",
                         (self.cluster.as_str(), transaction_id),
                     )
                     .await
@@ -3713,7 +3688,7 @@ impl Storage for Delegate {
 
                     if let Some(TxnState::Begin) = status {
                         let error = self
-                            .end_in_tx(transaction_id, id, epoch, false, &tx)
+                            .end_in_tx(transaction_id, id, epoch, false, &pc)
                             .await?;
 
                         if error != ErrorCode::None {
@@ -3732,10 +3707,9 @@ impl Storage for Delegate {
                     }
                 }
 
-                let (producer, epoch) = if let Some(row) = self
-                    .prepare_query_opt(
-                        &tx,
-                        &sql_lookup("txn_select_name.sql")?,
+                let (producer, epoch) = if let Some(row) = pc
+                    .query_opt(
+                        "txn_select_name.sql",
                         (self.cluster.as_str(), transaction_id),
                     )
                     .await
@@ -3746,10 +3720,9 @@ impl Storage for Delegate {
                         .inspect_err(|err| error!(?err))
                         .inspect(|producer| debug!(producer))?;
 
-                    let row = self
-                        .prepare_query_one(
-                            &tx,
-                            &sql_lookup("producer_epoch_insert.sql")?,
+                    let row = pc
+                        .query_one(
+                            "producer_epoch_insert.sql",
                             (self.cluster.as_str(), producer),
                         )
                         .await
@@ -3762,21 +3735,16 @@ impl Storage for Delegate {
 
                     (producer, epoch)
                 } else {
-                    let row = self
-                        .prepare_query_one(
-                            &tx,
-                            &sql_lookup("producer_insert.sql")?,
-                            &[self.cluster.as_str()],
-                        )
+                    let row = pc
+                        .query_one("producer_insert.sql", &[self.cluster.as_str()])
                         .await
                         .inspect_err(|err| error!(?err))?;
 
                     let producer: i64 = row.get(0).inspect_err(|err| error!(?err))?;
 
-                    let row = self
-                        .prepare_query_one(
-                            &tx,
-                            &sql_lookup("producer_epoch_insert.sql")?,
+                    let row = pc
+                        .query_one(
+                            "producer_epoch_insert.sql",
                             (self.cluster.as_str(), producer),
                         )
                         .await
@@ -3786,9 +3754,8 @@ impl Storage for Delegate {
 
                     assert_eq!(
                         1,
-                        self.prepare_execute(
-                            &tx,
-                            &sql_lookup("txn_insert.sql")?,
+                        pc.execute(
+                            "txn_insert.sql",
                             (self.cluster.as_str(), transaction_id, producer),
                         )
                         .await
@@ -3807,9 +3774,8 @@ impl Storage for Delegate {
 
                 assert_eq!(
                     1,
-                    self.prepare_execute(
-                        &tx,
-                        &sql_lookup("txn_detail_insert.sql")?,
+                    pc.execute(
+                        "txn_detail_insert.sql",
                         (
                             self.cluster.as_str(),
                             transaction_id,
@@ -3829,7 +3795,7 @@ impl Storage for Delegate {
                     ))?
                 );
 
-                let error = match self.commit(tx).await.inspect_err(|err| {
+                let error = match pc.commit(tx).await.inspect_err(|err| {
                     error!(
                         ?err,
                         cluster = self.cluster,
@@ -3850,14 +3816,11 @@ impl Storage for Delegate {
             }
 
             (Some(-1), Some(-1), None) => {
-                let tx = self.transaction().await?;
+                let pc = self.connection().await?;
+                let tx = pc.transaction().await?;
 
-                let mut rows = self
-                    .query(
-                        &tx,
-                        &sql_lookup("producer_insert.sql")?,
-                        &[self.cluster.as_str()],
-                    )
+                let mut rows = pc
+                    .query("producer_insert.sql", &[self.cluster.as_str()])
                     .await?;
 
                 if let Some(row) = rows.next().await? {
@@ -3867,10 +3830,9 @@ impl Storage for Delegate {
                         debug!(?row)
                     }
 
-                    let mut rows = self
+                    let mut rows = pc
                         .query(
-                            &tx,
-                            &sql_lookup("producer_epoch_insert.sql")?,
+                            "producer_epoch_insert.sql",
                             (self.cluster.as_str(), producer),
                         )
                         .await?;
@@ -3885,7 +3847,7 @@ impl Storage for Delegate {
                             debug!(?row)
                         }
 
-                        let error = match self
+                        let error = match pc
                             .commit(tx)
                             .await
                             .inspect_err(|err| error!(?err, ?transaction_id, producer, epoch))
@@ -3979,7 +3941,8 @@ impl Storage for Delegate {
             } => {
                 debug!(?transaction_id, ?producer_id, ?producer_epoch, ?topics);
 
-                let tx = self.transaction().await?;
+                let pc = self.connection().await?;
+                let tx = pc.transaction().await?;
 
                 let mut results = vec![];
 
@@ -3987,10 +3950,9 @@ impl Storage for Delegate {
                     let mut results_by_partition = vec![];
 
                     for partition_index in topic.partitions.unwrap_or(vec![]) {
-                        _ = self
-                            .prepare_execute(
-                                &tx,
-                                &sql_lookup("txn_topition_insert.sql")?,
+                        _ = pc
+                            .execute(
+                                "txn_topition_insert.sql",
                                 (
                                     self.cluster.as_str(),
                                     topic.name.as_str(),
@@ -4025,10 +3987,9 @@ impl Storage for Delegate {
                     )
                 }
 
-                _ = self
-                    .prepare_execute(
-                        &tx,
-                        &sql_lookup("txn_detail_update_started_at.sql")?,
+                _ = pc
+                    .execute(
+                        "txn_detail_update_started_at.sql",
                         (
                             self.cluster.as_str(),
                             transaction_id.as_str(),
@@ -4047,7 +4008,7 @@ impl Storage for Delegate {
                         )
                     })?;
 
-                self.commit(tx).await?;
+                pc.commit(tx).await?;
 
                 Ok(TxnAddPartitionsResponse::VersionZeroToThree(results)).inspect(|_| {
                     DELEGATE_REQUEST_DURATION.record(
@@ -4071,12 +4032,12 @@ impl Storage for Delegate {
 
         debug!(cluster = self.cluster, ?offsets);
 
-        let tx = self.transaction().await?;
+        let pc = self.connection().await?;
+        let tx = pc.transaction().await?;
 
-        let (producer_id, producer_epoch) = if let Some(row) = self
-            .prepare_query_opt(
-                &tx,
-                &sql_lookup("producer_epoch_for_current_txn.sql")?,
+        let (producer_id, producer_epoch) = if let Some(row) = pc
+            .query_opt(
+                "producer_epoch_for_current_txn.sql",
                 (self.cluster.as_str(), offsets.transaction_id.as_str()),
             )
             .await
@@ -4098,20 +4059,18 @@ impl Storage for Delegate {
             (None, None)
         };
 
-        _ = self
-            .prepare_execute(
-                &tx,
-                &sql_lookup("consumer_group_insert.sql")?,
+        _ = pc
+            .execute(
+                "consumer_group_insert.sql",
                 (self.cluster.as_str(), offsets.group_id.as_str()),
             )
             .await?;
 
         debug!(?producer_id, ?producer_epoch);
 
-        _ = self
-            .prepare_execute(
-                &tx,
-                &sql_lookup("txn_offset_commit_insert.sql")?,
+        _ = pc
+            .execute(
+                "txn_offset_commit_insert.sql",
                 (
                     self.cluster.as_str(),
                     offsets.transaction_id.as_str(),
@@ -4135,10 +4094,9 @@ impl Storage for Delegate {
                     if producer_epoch
                         .is_some_and(|producer_epoch| producer_epoch == offsets.producer_epoch)
                     {
-                        _ = self
-                            .prepare_execute(
-                                &tx,
-                                &sql_lookup("txn_offset_commit_tp_insert.sql")?,
+                        _ = pc
+                            .execute(
+                                "txn_offset_commit_tp_insert.sql",
                                 (
                                     self.cluster.as_str(),
                                     offsets.transaction_id.as_str(),
@@ -4183,7 +4141,7 @@ impl Storage for Delegate {
             );
         }
 
-        self.commit(tx).await?;
+        pc.commit(tx).await?;
 
         Ok(topics).inspect(|_| {
             DELEGATE_REQUEST_DURATION.record(
@@ -4204,13 +4162,14 @@ impl Storage for Delegate {
 
         debug!(cluster = ?self.cluster, transaction_id, producer_id, producer_epoch, committed);
 
-        let tx = self.transaction().await?;
+        let pc = self.connection().await?;
+        let tx = pc.transaction().await?;
 
         let error_code = self
-            .end_in_tx(transaction_id, producer_id, producer_epoch, committed, &tx)
+            .end_in_tx(transaction_id, producer_id, producer_epoch, committed, &pc)
             .await?;
 
-        self.commit(tx).await.and(Ok(error_code)).inspect(|_| {
+        pc.commit(tx).await.and(Ok(error_code)).inspect(|_| {
             DELEGATE_REQUEST_DURATION.record(
                 elapsed_millis(start),
                 &[KeyValue::new("operation", "txn_end")],
@@ -4230,7 +4189,7 @@ impl Storage for Delegate {
         {
             let connection = self.pool.get().await?;
 
-            let mut rows = connection.query("select freelist_count, page_size FROM pragma_freelist_count(), pragma_page_size()", ()).await?;
+            let mut rows = connection.query("lite/freelist_count.sql", ()).await?;
 
             if let Some(row) = rows.next().await.inspect_err(|err| error!(?err))? {
                 debug!(
@@ -4347,7 +4306,7 @@ mod tests {
     use tracing::subscriber::DefaultGuard;
     use tracing_subscriber::EnvFilter;
 
-    use crate::{StorageContainer, sql::SQL};
+    use crate::StorageContainer;
 
     use super::*;
 
@@ -4828,6 +4787,7 @@ mod tests {
         Ok(())
     }
 
+    #[allow(dead_code)]
     async fn clean_up() -> Result<()> {
         let relative = db_path().map(|path| format!("{path}*"))?;
 
@@ -4850,6 +4810,7 @@ mod tests {
         Ok(())
     }
 
+    #[allow(dead_code)]
     async fn storage_container(cluster: &str, node: i32) -> Result<StorageContainer> {
         StorageContainer::builder()
             .cluster_id(cluster)
@@ -4866,6 +4827,7 @@ mod tests {
             .await
     }
 
+    #[allow(dead_code)]
     fn db_path() -> Result<String> {
         thread::current()
             .name()
@@ -4877,38 +4839,5 @@ mod tests {
                     env!("CARGO_CRATE_NAME")
                 )
             })
-    }
-
-    #[ignore]
-    #[tokio::test]
-    async fn sql_parse() -> Result<()> {
-        let _guard = init_tracing()?;
-        clean_up().await?;
-
-        let cluster = "tansu";
-        let node = 12321;
-
-        {
-            // use the storage container just to create tables
-            //
-            storage_container(cluster, node).await.and(Ok(()))?;
-        }
-
-        let db = libsql::Builder::new_local(db_path()?).build().await?;
-        let connection = db.connect()?;
-
-        for k in SQL.keys() {
-            debug!(k);
-
-            let sql = sql_lookup(k)?;
-
-            connection
-                .prepare(&sql)
-                .await
-                .inspect_err(|err| error!(?err, k, sql))
-                .and(Ok(()))?;
-        }
-
-        Ok(())
     }
 }

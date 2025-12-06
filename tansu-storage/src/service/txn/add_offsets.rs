@@ -33,7 +33,7 @@ where
     type Response = AddOffsetsToTxnResponse;
     type Error = Error;
 
-    #[instrument(skip(self, req), ret)]
+    #[instrument(skip(ctx, req))]
     async fn serve(
         &self,
         ctx: Context<G>,

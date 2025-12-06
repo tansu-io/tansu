@@ -15,7 +15,6 @@
 use rama::{Context, Service};
 use tansu_sans_io::{ApiKey, MetadataRequest, MetadataResponse};
 use tracing::{error, instrument};
-use uuid::Uuid;
 
 use crate::{Error, Result, Storage, TopicId};
 
@@ -76,7 +75,7 @@ where
     type Response = MetadataResponse;
     type Error = Error;
 
-    #[instrument(skip(ctx, req), fields(topics = ?req.topics.as_deref().unwrap_or_default().iter().filter_map(|topic| { topic.name.clone().or(topic.topic_id.map(|id| Uuid::from_bytes(id).to_string()))}).collect::<Vec<_>>()), ret)]
+    #[instrument(skip(ctx, req))]
     async fn serve(
         &self,
         ctx: Context<G>,

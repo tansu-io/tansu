@@ -67,7 +67,7 @@ where
     type Response = DeleteGroupsResponse;
     type Error = Error;
 
-    #[instrument(skip(ctx, req), fields(group_names = ?req.groups_names.as_deref().unwrap_or_default()), ret)]
+    #[instrument(skip(ctx, req))]
     async fn serve(
         &self,
         ctx: Context<G>,

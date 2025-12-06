@@ -83,7 +83,7 @@ where
     type Response = FindCoordinatorResponse;
     type Error = Error;
 
-    #[instrument(skip(ctx, req), ret)]
+    #[instrument(skip(ctx, req))]
     async fn serve(
         &self,
         ctx: Context<G>,

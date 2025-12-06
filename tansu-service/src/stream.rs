@@ -12,18 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{error, fmt::Debug, io, marker::PhantomData, time::SystemTime};
+use std::{
+    error::{self},
+    fmt::Debug,
+    io,
+    marker::PhantomData,
+    time::SystemTime,
+};
 
 use bytes::Bytes;
+use nanoid::nanoid;
 use opentelemetry::KeyValue;
 use rama::{Context, Layer, Service};
 use tokio::{
-    io::{AsyncReadExt as _, AsyncWriteExt as _},
+    io::{AsyncReadExt as _, AsyncWriteExt as _, BufWriter},
     net::{TcpListener, TcpStream},
     task::JoinSet,
 };
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument as _, Level, debug, error, span};
+use tracing::{debug, error, instrument};
 
 use crate::{Error, REQUEST_DURATION, REQUEST_SIZE, RESPONSE_SIZE, frame_length};
 
@@ -51,10 +58,16 @@ impl<S> Layer<S> for TcpListenerLayer {
 }
 
 /// A [`Service`] that listens for TCP connections
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct TcpListenerService<S> {
     cancellation: CancellationToken,
     inner: S,
+}
+
+impl<S> Debug for TcpListenerService<S> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct(stringify!(TcpListenerService)).finish()
+    }
 }
 
 impl<State, S> Service<State, TcpListener> for TcpListenerService<S>
@@ -67,6 +80,7 @@ where
     type Response = ();
     type Error = S::Error;
 
+    #[instrument(skip(ctx, req))]
     async fn serve(
         &self,
         ctx: Context<State>,
@@ -158,27 +172,35 @@ impl<S> Layer<S> for TcpContextLayer {
 }
 
 /// A [`Service`] that requires the [`TcpContext`] as the service [`Context`] state
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct TcpContextService<S> {
     inner: S,
     state: TcpContext,
 }
 
+impl<S> Debug for TcpContextService<S> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct(stringify!(TcpContextService)).finish()
+    }
+}
+
 impl<State, S> Service<State, TcpStream> for TcpContextService<S>
 where
     S: Service<TcpContext, TcpStream>,
+    S::Error: From<io::Error>,
     State: Clone + Send + Sync + 'static,
 {
     type Response = S::Response;
     type Error = S::Error;
 
+    #[instrument(skip_all, fields(peer = %req.peer_addr()?))]
     async fn serve(
         &self,
         ctx: Context<State>,
         req: TcpStream,
     ) -> Result<Self::Response, Self::Error> {
-        debug!(?req);
         let (ctx, _) = ctx.swap_state(self.state.clone());
+
         self.inner.serve(ctx, req).await
     }
 }
@@ -191,6 +213,7 @@ impl Service<TcpStream, Bytes> for BytesTcpService {
     type Response = Bytes;
     type Error = Error;
 
+    #[instrument(skip(ctx, req))]
     async fn serve(
         &self,
         mut ctx: Context<TcpStream>,
@@ -229,10 +252,113 @@ impl<S, State> Layer<S> for TcpBytesLayer<State> {
 }
 
 /// A [`Service`] receiving [`Bytes`] from a [`TcpStream`], calling an inner [`Service`] and sending [`Bytes`] into the [`TcpStream`]
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct TcpBytesService<S, State> {
     inner: S,
     _state: PhantomData<State>,
+}
+
+impl<S, State> Debug for TcpBytesService<S, State> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct(stringify!(TcpBytesService)).finish()
+    }
+}
+
+impl<S, State> TcpBytesService<S, State> {
+    fn elapsed_millis(&self, start: SystemTime) -> u64 {
+        start
+            .elapsed()
+            .map_or(0, |duration| duration.as_millis() as u64)
+    }
+}
+
+impl<S, State> TcpBytesService<S, State>
+where
+    S: Service<State, Bytes, Response = Bytes>,
+    S::Error: From<Error> + From<io::Error> + Debug,
+    State: Clone + Default + Send + Sync + 'static,
+{
+    #[instrument(skip_all)]
+    async fn wait(
+        &self,
+        req: &mut TcpStream,
+        maximum_frame_size: Option<usize>,
+    ) -> Result<[u8; 4], S::Error> {
+        let mut size = [0u8; 4];
+
+        _ = req
+            .read_exact(&mut size)
+            .await
+            .inspect_err(|err| debug!(?err))?;
+
+        if maximum_frame_size
+            .is_some_and(|maximum_frame_size| maximum_frame_size > frame_length(size))
+        {
+            return Err(Into::into(Error::FrameTooBig(frame_length(size))));
+        } else {
+            Ok(size)
+        }
+    }
+
+    #[instrument(skip_all)]
+    async fn read(&self, req: &mut TcpStream, size: [u8; 4]) -> Result<Bytes, S::Error> {
+        let mut request: Vec<u8> = vec![0u8; frame_length(size)];
+
+        request[0..size.len()].copy_from_slice(&size[..]);
+
+        _ = req
+            .read_exact(&mut request[4..])
+            .await
+            .inspect_err(|err| error!(?err))?;
+
+        Ok(Bytes::from(request))
+    }
+
+    #[instrument(skip_all)]
+    async fn process(
+        &self,
+        attributes: &[KeyValue],
+        ctx: Context<TcpContext>,
+        request: Bytes,
+    ) -> Result<Bytes, S::Error> {
+        REQUEST_SIZE.record(request.len() as u64, attributes);
+
+        let (ctx, _) = ctx.swap_state(State::default());
+        let request_start = SystemTime::now();
+
+        self.inner
+            .serve(ctx, request)
+            .await
+            .inspect_err(|err| error!(?err))
+            .inspect(|response| {
+                RESPONSE_SIZE.record(response.len() as u64, attributes);
+
+                let elapsed_millis = self.elapsed_millis(request_start);
+
+                REQUEST_DURATION.record(elapsed_millis, attributes);
+            })
+    }
+
+    #[instrument(skip_all)]
+    async fn write(&self, req: &mut TcpStream, frame: Bytes) -> Result<(), S::Error> {
+        let mut w = BufWriter::new(req);
+        w.write_all(&frame).await.inspect_err(|err| error!(?err))?;
+        w.flush().await.map_err(Into::into)
+    }
+
+    #[instrument(skip_all, fields(id = nanoid!()))]
+    async fn req(
+        &self,
+        req: &mut TcpStream,
+        maximum_frame_size: Option<usize>,
+        attributes: &[KeyValue],
+        ctx: Context<TcpContext>,
+    ) -> Result<(), S::Error> {
+        let size = self.wait(req, maximum_frame_size).await?;
+        let request = self.read(req, size).await?;
+        let response = self.process(attributes, ctx, request).await?;
+        self.write(req, response).await
+    }
 }
 
 impl<S, State> Service<TcpContext, TcpStream> for TcpBytesService<S, State>
@@ -245,21 +371,12 @@ where
 
     type Error = S::Error;
 
+    #[instrument(skip(ctx, req))]
     async fn serve(
         &self,
         ctx: Context<TcpContext>,
         mut req: TcpStream,
     ) -> Result<Self::Response, Self::Error> {
-        let peer = req.peer_addr()?;
-
-        let span = span!(
-            Level::DEBUG,
-            "tcp",
-            %peer,
-        );
-
-        let mut size = [0u8; 4];
-
         let attributes = {
             let state = ctx.state();
 
@@ -275,61 +392,15 @@ where
             attributes
         };
 
-        async move {
-            loop {
-                let ctx = ctx.clone();
+        let maximum_frame_size = ctx.state().maximum_frame_size;
 
-                _ = req
-                    .read_exact(&mut size)
-                    .await
-                    .inspect_err(|err| debug!(?err))?;
+        loop {
+            let ctx = ctx.clone();
+            let attributes = attributes.clone();
 
-                if ctx
-                    .state()
-                    .maximum_frame_size
-                    .is_some_and(|maximum_frame_size| maximum_frame_size > frame_length(size))
-                {
-                    return Err(Into::into(Error::FrameTooBig(frame_length(size))));
-                }
-
-                let mut request: Vec<u8> = vec![0u8; frame_length(size)];
-                request[0..size.len()].copy_from_slice(&size[..]);
-                _ = req
-                    .read_exact(&mut request[4..])
-                    .await
-                    .inspect_err(|err| error!(?err))?;
-                debug!(?request);
-
-                REQUEST_SIZE.record(request.len() as u64, &attributes);
-
-                let (ctx, _) = ctx.swap_state(State::default());
-                let request_start = SystemTime::now();
-
-                let response = self
-                    .inner
-                    .serve(ctx, Bytes::from(request))
-                    .await
-                    .inspect_err(|err| error!(?err))
-                    .inspect(|response| {
-                        RESPONSE_SIZE.record(response.len() as u64, &attributes);
-
-                        REQUEST_DURATION.record(
-                            request_start
-                                .elapsed()
-                                .map_or(0, |duration| duration.as_millis() as u64),
-                            &attributes,
-                        );
-                    })?;
-
-                debug!(response = ?&response[..]);
-
-                req.write_all(&response)
-                    .await
-                    .inspect_err(|err| error!(?err))?
-            }
+            self.req(&mut req, maximum_frame_size, &attributes[..], ctx)
+                .await?
         }
-        .instrument(span)
-        .await
     }
 }
 
@@ -346,9 +417,15 @@ impl<S> Layer<S> for BytesLayer {
 }
 
 /// A [`Service`] that handles and responds with [`Bytes`]
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct BytesService<S> {
     inner: S,
+}
+
+impl<S> Debug for BytesService<S> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct(stringify!(BytesService)).finish()
+    }
 }
 
 impl<S, State> Service<State, Bytes> for BytesService<S>
@@ -359,6 +436,7 @@ where
     type Response = Bytes;
     type Error = S::Error;
 
+    #[instrument(skip_all)]
     async fn serve(&self, ctx: Context<State>, req: Bytes) -> Result<Self::Response, Self::Error> {
         debug!(req = ?&req[..]);
         self.inner

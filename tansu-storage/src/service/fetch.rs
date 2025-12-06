@@ -26,7 +26,6 @@ use tansu_sans_io::{
 };
 use tokio::time::sleep;
 use tracing::{debug, error, instrument};
-use uuid::Uuid;
 
 use crate::{Error, Result, Storage, Topition};
 
@@ -373,7 +372,7 @@ where
     type Response = FetchResponse;
     type Error = Error;
 
-    #[instrument(skip(ctx, req), fields(topics = ?req.topics.as_deref().unwrap_or_default().iter().filter_map(|fetch| { fetch.topic.clone().or(fetch.topic_id.map(|id| Uuid::from_bytes(id).to_string()))}).collect::<Vec<_>>()))]
+    #[instrument(skip(ctx, req))]
     async fn serve(
         &self,
         ctx: Context<G>,

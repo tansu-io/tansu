@@ -105,7 +105,7 @@ where
     type Response = ListOffsetsResponse;
     type Error = Error;
 
-    #[instrument(skip(ctx, req), fields(topics = ?req.topics.as_deref().unwrap_or_default().iter().map(|topic| topic.name.as_str()).collect::<Vec<_>>()), ret)]
+    #[instrument(skip(ctx, req))]
     async fn serve(
         &self,
         ctx: Context<G>,

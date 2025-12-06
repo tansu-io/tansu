@@ -33,7 +33,7 @@ where
     type Response = DeleteRecordsResponse;
     type Error = Error;
 
-    #[instrument(skip(ctx, req), fields(topics = ?req.topics.as_deref().unwrap_or_default().iter().map(|delete| delete.name.as_str()).collect::<Vec<_>>()), ret)]
+    #[instrument(skip(ctx, req))]
     async fn serve(
         &self,
         ctx: Context<G>,

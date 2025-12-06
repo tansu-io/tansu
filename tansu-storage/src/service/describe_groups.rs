@@ -72,7 +72,7 @@ where
     type Response = DescribeGroupsResponse;
     type Error = Error;
 
-    #[instrument(skip(ctx, req), fields(groups = ?req.groups.as_deref().unwrap_or_default()), ret)]
+    #[instrument(skip(ctx, req))]
     async fn serve(
         &self,
         ctx: Context<G>,

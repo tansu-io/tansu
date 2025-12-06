@@ -19,11 +19,9 @@ use crate::{
     to_timestamp,
 };
 use bytes::Bytes;
-use crc::{CRC_32_ISCSI, Crc, Digest};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    io,
     time::SystemTime,
 };
 use tracing::debug;
@@ -374,39 +372,19 @@ impl Builder {
     }
 
     fn crc(&self) -> Result<u32> {
-        struct CrcUpdate<'a> {
-            digest: Digest<'a, u32>,
-        }
+        let mut digest = crc_fast::Digest::new(crc_fast::CrcAlgorithm::Crc32Iscsi);
+        let mut serializer = Encoder::new(&mut digest);
 
-        impl io::Write for CrcUpdate<'_> {
-            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-                self.digest.update(buf);
-                Ok(buf.len())
-            }
+        self.attributes.serialize(&mut serializer)?;
+        self.last_offset_delta.serialize(&mut serializer)?;
+        self.base_timestamp.serialize(&mut serializer)?;
+        self.max_timestamp.serialize(&mut serializer)?;
+        self.producer_id.serialize(&mut serializer)?;
+        self.producer_epoch.serialize(&mut serializer)?;
+        self.base_sequence.serialize(&mut serializer)?;
+        self.records.serialize(&mut serializer)?;
 
-            fn flush(&mut self) -> io::Result<()> {
-                Ok(())
-            }
-        }
-
-        let crc = Crc::<u32>::new(&CRC_32_ISCSI);
-
-        let mut digester = CrcUpdate {
-            digest: crc.digest(),
-        };
-
-        let mut serializer = Encoder::new(&mut digester);
-
-        self.attributes
-            .serialize(&mut serializer)
-            .and(self.last_offset_delta.serialize(&mut serializer))
-            .and(self.base_timestamp.serialize(&mut serializer))
-            .and(self.max_timestamp.serialize(&mut serializer))
-            .and(self.producer_id.serialize(&mut serializer))
-            .and(self.producer_epoch.serialize(&mut serializer))
-            .and(self.base_sequence.serialize(&mut serializer))
-            .and(self.records.serialize(&mut serializer))
-            .map(|()| digester.digest.finalize())
+        Ok(digest.finalize() as u32)
     }
 
     pub fn build(self) -> Result<Batch> {
@@ -448,8 +426,7 @@ impl Builder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Result, de::Decoder};
-    use std::io::Cursor;
+    use crate::{Result, de::BatchDecoder};
 
     #[test]
     fn batch() -> Result<()> {
@@ -475,7 +452,7 @@ mod tests {
 
     #[test]
     fn batch_decode() -> Result<()> {
-        let mut encoded = vec![
+        let encoded = vec![
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 59, 255, 255, 255, 255, 2, 67, 41, 231, 61, 0, 0, 0,
             0, 0, 0, 0, 0, 1, 141, 116, 152, 137, 53, 0, 0, 1, 141, 116, 152, 137, 53, 0, 0, 0, 0,
             0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 18, 0, 0, 0, 1, 6, 100, 101, 102, 0,
@@ -495,9 +472,8 @@ mod tests {
             .record(Record::builder().value(Some(Bytes::from(vec![100, 101, 102]))))
             .build()?;
 
-        let mut c = Cursor::new(&mut encoded);
-        let mut decoder = Decoder::new(&mut c);
-        let actual = Batch::deserialize(&mut decoder)?;
+        let decoder = BatchDecoder::new(Bytes::copy_from_slice(&encoded[..]));
+        let actual = Batch::deserialize(decoder)?;
 
         assert_eq!(decoded, actual);
 
@@ -506,7 +482,7 @@ mod tests {
 
     #[test]
     fn batch_encode() -> Result<()> {
-        let mut encoded = vec![
+        let encoded = vec![
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 59, 255, 255, 255, 255, 2, 67, 41, 231, 61, 0, 0, 0,
             0, 0, 0, 0, 0, 1, 141, 116, 152, 137, 53, 0, 0, 1, 141, 116, 152, 137, 53, 0, 0, 0, 0,
             0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 18, 0, 0, 0, 1, 6, 100, 101, 102, 0,
@@ -526,9 +502,8 @@ mod tests {
             .record(Record::builder().value(Some(Bytes::from(vec![100, 101, 102]))))
             .build()?;
 
-        let mut c = Cursor::new(&mut encoded);
-        let mut decoder = Decoder::new(&mut c);
-        let actual = Batch::deserialize(&mut decoder)?;
+        let decoder = BatchDecoder::new(Bytes::copy_from_slice(&encoded[..]));
+        let actual = Batch::deserialize(decoder)?;
 
         assert_eq!(decoded, actual);
 

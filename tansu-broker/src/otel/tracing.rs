@@ -46,7 +46,7 @@ pub(super) fn init_tracing_subscriber(tracing_format: TracingFormat) -> Result<G
                     .with_level(true)
                     .with_line_number(true)
                     .with_thread_ids(false)
-                    .with_span_events(FmtSpan::NONE),
+                    .with_span_events(FmtSpan::FULL),
             )
             // .with(OpenTelemetryLayer::new(tracer))
             .init(),
