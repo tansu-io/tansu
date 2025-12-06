@@ -58,7 +58,7 @@ use tansu_schema::{
     lake::{House, LakeHouse as _},
 };
 use tokio_postgres::{Config, NoTls, Row, Transaction, error::SqlState, types::ToSql};
-use tracing::{debug, error};
+use tracing::{debug, error, instrument};
 use url::Url;
 use uuid::Uuid;
 
@@ -372,6 +372,7 @@ impl Postgres {
         attributes
     }
 
+    #[instrument(skip(self, c))]
     async fn prepare_execute(
         &self,
         c: &Object,
@@ -408,6 +409,7 @@ impl Postgres {
             })
     }
 
+    #[instrument(skip(self, c))]
     async fn prepare_query(
         &self,
         c: &Object,
@@ -447,6 +449,7 @@ impl Postgres {
             })
     }
 
+    #[instrument(skip(self, c))]
     async fn prepare_query_one(
         &self,
         c: &Object,
@@ -486,6 +489,7 @@ impl Postgres {
             })
     }
 
+    #[instrument(skip(self, c))]
     async fn prepare_query_opt(
         &self,
         c: &Object,
@@ -525,6 +529,7 @@ impl Postgres {
             })
     }
 
+    #[instrument(skip(self, tx))]
     async fn tx_prepare_execute(
         &self,
         tx: &Transaction<'_>,
@@ -564,6 +569,7 @@ impl Postgres {
             })
     }
 
+    #[instrument(skip(self, tx))]
     async fn tx_prepare_query(
         &self,
         tx: &Transaction<'_>,
@@ -602,6 +608,7 @@ impl Postgres {
             })
     }
 
+    #[instrument(skip(self, tx))]
     async fn tx_prepare_query_one(
         &self,
         tx: &Transaction<'_>,
@@ -640,6 +647,7 @@ impl Postgres {
             })
     }
 
+    #[instrument(skip(self, tx))]
     async fn tx_prepare_query_opt(
         &self,
         tx: &Transaction<'_>,
@@ -678,6 +686,7 @@ impl Postgres {
             })
     }
 
+    #[instrument(skip(self, deflated, tx))]
     async fn produce_in_tx(
         &self,
         transaction_id: Option<&str>,
@@ -834,6 +843,7 @@ impl Postgres {
         Ok(high.unwrap_or_default())
     }
 
+    #[instrument(skip(self, tx))]
     async fn end_in_tx(
         &self,
         transaction_id: &str,
@@ -1096,6 +1106,7 @@ impl Postgres {
         Ok(ErrorCode::None)
     }
 
+    #[instrument(skip(self, inflated))]
     async fn lake_store(
         &self,
         attributes: &BatchAttribute,
@@ -1121,6 +1132,42 @@ impl Postgres {
         }
 
         Ok(())
+    }
+
+    #[instrument(skip(self), ret)]
+    async fn policy_compact(&self) -> Result<u64> {
+        let mut c = self.connection().await?;
+        let tx = c.transaction().await?;
+
+        let compacted = self
+            .tx_prepare_execute(
+                &tx,
+                include_sql!("pg/policy_compact.sql").as_str(),
+                &[&self.cluster],
+                "policy_compact",
+            )
+            .await?;
+
+        tx.commit().await.map_err(Into::into).and(Ok(compacted))
+    }
+
+    #[instrument(skip(self), ret)]
+    async fn policy_delete(&self, now: SystemTime) -> Result<u64> {
+        let retention_secs = i32::try_from(Duration::from_hours(7 * 24).as_secs())?;
+
+        let mut c = self.connection().await?;
+        let tx = c.transaction().await?;
+
+        let deleted = self
+            .tx_prepare_execute(
+                &tx,
+                include_sql!("pg/policy_delete.sql").as_str(),
+                &[&self.cluster, &now, &retention_secs],
+                "policy_delete",
+            )
+            .await?;
+
+        tx.commit().await.map_err(Into::into).and(Ok(deleted))
     }
 }
 
@@ -3408,7 +3455,13 @@ impl Storage for Postgres {
         Ok(error_code)
     }
 
-    async fn maintain(&self) -> Result<()> {
+    async fn maintain(&self, now: SystemTime) -> Result<()> {
+        let deleted = self.policy_delete(now).await?;
+        debug!(deleted);
+
+        let compacted = self.policy_compact().await?;
+        debug!(compacted);
+
         if let Some(ref lake) = self.lake {
             return lake.maintain().await.map_err(Into::into);
         }

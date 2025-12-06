@@ -378,8 +378,6 @@ where
         ctx: Context<G>,
         req: FetchRequest,
     ) -> Result<Self::Response, Self::Error> {
-        debug!(?req);
-
         let responses = Some(if let Some(topics) = req.topics {
             let isolation_level = req
                 .isolation_level

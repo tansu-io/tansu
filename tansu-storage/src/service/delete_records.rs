@@ -40,7 +40,7 @@ where
         req: DeleteRecordsRequest,
     ) -> Result<Self::Response, Self::Error> {
         ctx.state()
-            .delete_records(req.topics.as_deref().unwrap_or(&[]))
+            .delete_records(req.topics.as_deref().unwrap_or_default())
             .await
             .map(Some)
             .map(|topics| {
