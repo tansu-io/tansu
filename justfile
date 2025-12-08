@@ -11,7 +11,7 @@ cargo-build +args:
 license:
     cargo about generate about.hbs > license.html
 
-build: (cargo-build "--bin" "tansu" "--no-default-features" "--features" "delta,dynostore,iceberg,libsql,parquet,postgres")
+build profile="dev" features="delta,dynostore,iceberg,libsql,parquet,postgres": (cargo-build "--profile" profile "--timings" "--bin" "tansu" "--no-default-features" "--features" features)
 
 build-examples: (cargo-build "--examples")
 
@@ -299,8 +299,8 @@ otel: build docker-compose-down db-up minio-up minio-ready-local minio-local-ali
 
 otel-up: docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up tansu-up
 
-tansu-broker kind *args:
-    target/{{kind}}/tansu broker {{args}} 2>&1 | tee broker.log
+tansu-broker profile *args:
+    target/{{replace(profile, "dev", "debug")}}/tansu broker {{args}} 2>&1 | tee broker.log
 
 # run a debug broker with configuration from .env
 broker *args: build docker-compose-down prometheus-up grafana-up db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket lakehouse-catalog-up (tansu-broker "debug" args)

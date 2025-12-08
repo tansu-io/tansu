@@ -676,7 +676,7 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
 
         let mut buf = vec![0u8; length];
         self.reader.read_exact(&mut buf)?;
-        visitor.visit_bytes(&buf[..])
+        visitor.visit_byte_buf(buf)
     }
 
     fn deserialize_option<V>(self, visitor: V) -> Result<V::Value, Self::Error>
@@ -1198,7 +1198,7 @@ impl<'de> Deserializer<'de> for BatchDecoder {
     where
         V: Visitor<'de>,
     {
-        todo!()
+        visitor.visit_byte_buf(Vec::from(self.encoded))
     }
 
     fn deserialize_option<V>(self, visitor: V) -> std::result::Result<V::Value, Self::Error>
