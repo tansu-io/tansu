@@ -927,7 +927,7 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
             .push_front(Container::Struct { name, fields });
 
         let outcome = if let Some(mm) = self.meta.message {
-            if let Some(fm) = mm.structures().get(name) {
+            if let Some((_, fm)) = mm.structures().iter().find(|(found, _)| name == *found) {
                 debug!(r#struct = name);
 
                 _ = self.meta.field.replace(*fm);
