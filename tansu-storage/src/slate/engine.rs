@@ -176,7 +176,9 @@ impl Builder {
         Engine {
             cluster: self.cluster.expect("cluster is required"),
             node: self.node.expect("node is required"),
-            advertised_listener: self.advertised_listener.expect("advertised_listener is required"),
+            advertised_listener: self
+                .advertised_listener
+                .expect("advertised_listener is required"),
             db: self.db.expect("db is required"),
             schemas: self.schemas,
             lake: self.lake,
@@ -242,18 +244,19 @@ impl Engine {
         Batch::deserialize(&mut decoder).map_err(Into::into)
     }
 
-    pub(super) async fn load_metadata<T>(&self, tx: &slatedb::DBTransaction, key: &[u8]) -> Result<T>
+    pub(super) async fn load_metadata<T>(
+        &self,
+        tx: &slatedb::DBTransaction,
+        key: &[u8],
+    ) -> Result<T>
     where
         T: serde::de::DeserializeOwned + Default,
     {
-        tx.get(key)
-            .await
-            .map_err(Error::from)
-            .and_then(|bytes| {
-                bytes.map_or(Ok(T::default()), |encoded| {
-                    postcard::from_bytes(&encoded[..]).map_err(Into::into)
-                })
+        tx.get(key).await.map_err(Error::from).and_then(|bytes| {
+            bytes.map_or(Ok(T::default()), |encoded| {
+                postcard::from_bytes(&encoded[..]).map_err(Into::into)
             })
+        })
     }
 
     pub(super) fn save_metadata<T>(

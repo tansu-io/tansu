@@ -26,8 +26,10 @@ use bytes::{BufMut, Bytes, BytesMut};
 use serde::Serialize;
 use tansu_sans_io::{
     BatchAttribute, ConfigResource, ConfigSource, ConfigType, Encoder, ErrorCode, IsolationLevel,
-    ListOffset, to_system_time,
-    add_partitions_to_txn_response::{AddPartitionsToTxnPartitionResult, AddPartitionsToTxnTopicResult},
+    ListOffset,
+    add_partitions_to_txn_response::{
+        AddPartitionsToTxnPartitionResult, AddPartitionsToTxnTopicResult,
+    },
     create_topics_request::CreatableTopic,
     delete_groups_response::DeletableGroupResult,
     delete_records_request::DeleteRecordsTopic,
@@ -42,6 +44,7 @@ use tansu_sans_io::{
     list_groups_response::ListedGroup,
     metadata_response::{MetadataResponseBroker, MetadataResponsePartition, MetadataResponseTopic},
     record::{deflated::Batch, inflated::Batch as InflatedBatch},
+    to_system_time,
     txn_offset_commit_response::{TxnOffsetCommitResponsePartition, TxnOffsetCommitResponseTopic},
 };
 use tansu_schema::lake::LakeHouse as _;
@@ -50,16 +53,16 @@ use uuid::Uuid;
 
 use crate::{
     BrokerRegistrationRequest, Error, GroupDetail, ListOffsetResponse, MetadataResponse,
-    NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse, Result, Storage,
-    TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse, TxnOffsetCommitRequest,
-    TxnState, UpdateError, Version, NULL_TOPIC_ID,
+    NULL_TOPIC_ID, NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse, Result,
+    Storage, TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse,
+    TxnOffsetCommitRequest, TxnState, UpdateError, Version,
 };
 
 use super::engine::Engine;
 use super::types::{
     BatchKey, BrokerInfo, Brokers, GroupDetailVersion, GroupKey, OffsetCommitKey,
-    OffsetCommitValue, Producers, TopicMetadata, Topics, Transactions,
-    TxnCommitOffset, TxnDetail, TxnProduceOffset, Txn, Watermark, WatermarkKey,
+    OffsetCommitValue, Producers, TopicMetadata, Topics, Transactions, Txn, TxnCommitOffset,
+    TxnDetail, TxnProduceOffset, Watermark, WatermarkKey,
 };
 
 #[async_trait]
@@ -87,7 +90,11 @@ impl Storage for Engine {
         // NOTE: This is stored permanently - no cleanup mechanism exists yet
         let broker_info = BrokerInfo {
             broker_id: self.node,
-            host: self.advertised_listener.host_str().unwrap_or("0.0.0.0").into(),
+            host: self
+                .advertised_listener
+                .host_str()
+                .unwrap_or("0.0.0.0")
+                .into(),
             port: self.advertised_listener.port().unwrap_or(9092).into(),
             rack: broker_registration.rack,
         };
@@ -204,19 +211,19 @@ impl Storage for Engine {
                             ErrorCode::UnknownTopicOrPartition
                         } else {
                             // Update the low watermark for this partition
-                            let watermark_key = postcard::to_stdvec(
-                                &WatermarkKey::new(metadata.id, partition.partition_index),
-                            )?;
+                            let watermark_key = postcard::to_stdvec(&WatermarkKey::new(
+                                metadata.id,
+                                partition.partition_index,
+                            ))?;
 
-                            let mut watermark = tx
-                                .get(&watermark_key)
-                                .await
-                                .map_err(Error::from)
-                                .and_then(|watermark| {
-                                    watermark.map_or(Ok(Watermark::default()), |encoded| {
-                                        postcard::from_bytes(&encoded[..]).map_err(Into::into)
-                                    })
-                                })?;
+                            let mut watermark =
+                                tx.get(&watermark_key).await.map_err(Error::from).and_then(
+                                    |watermark| {
+                                        watermark.map_or(Ok(Watermark::default()), |encoded| {
+                                            postcard::from_bytes(&encoded[..]).map_err(Into::into)
+                                        })
+                                    },
+                                )?;
 
                             // Update low watermark to the requested offset
                             // Only if it's greater than current low watermark
@@ -349,7 +356,8 @@ impl Storage for Engine {
             };
 
             // Get current epoch for this producer
-            let Some(current_epoch) = producer_detail.sequences.last_key_value().map(|(e, _)| *e) else {
+            let Some(current_epoch) = producer_detail.sequences.last_key_value().map(|(e, _)| *e)
+            else {
                 return Err(Error::Api(ErrorCode::UnknownProducerId));
             };
 
@@ -371,7 +379,8 @@ impl Storage for Engine {
             );
 
             // Check sequence validity
-            let increment = Self::idempotent_sequence_check(&current_epoch, &current_sequence, &deflated)?;
+            let increment =
+                Self::idempotent_sequence_check(&current_epoch, &current_sequence, &deflated)?;
 
             // Update sequence
             _ = producer_detail
@@ -391,15 +400,17 @@ impl Storage for Engine {
             // NOTE: Contention Hotspot
             // Loading all transactions to update state is not scalable.
             // Also, there is no cleanup mechanism for completed transactions, leading to unbounded growth of this blob.
-            let mut transactions: Transactions = self.load_metadata(&tx, Self::TRANSACTIONS).await?;
+            let mut transactions: Transactions =
+                self.load_metadata(&tx, Self::TRANSACTIONS).await?;
 
             if let Some(txn) = transactions.get_mut(transaction_id) {
                 if let Some(txn_detail) = txn.epochs.get_mut(&deflated.producer_epoch) {
                     let offset_start = self
                         .db
-                        .get(postcard::to_stdvec(
-                            &WatermarkKey::new(metadata.id, topition.partition),
-                        )?)
+                        .get(postcard::to_stdvec(&WatermarkKey::new(
+                            metadata.id,
+                            topition.partition,
+                        ))?)
                         .await
                         .map_err(Error::from)
                         .and_then(|watermark| {
@@ -416,7 +427,13 @@ impl Storage for Engine {
                         .produces
                         .entry(topition.topic.clone())
                         .or_default()
-                        .insert(topition.partition, Some(TxnProduceOffset { offset_start, offset_end }));
+                        .insert(
+                            topition.partition,
+                            Some(TxnProduceOffset {
+                                offset_start,
+                                offset_end,
+                            }),
+                        );
 
                     self.save_metadata(&tx, Self::TRANSACTIONS, &transactions)?;
                 }
@@ -424,9 +441,10 @@ impl Storage for Engine {
         }
 
         let mut watermark = tx
-            .get(postcard::to_stdvec(
-                &WatermarkKey::new(metadata.id, topition.partition),
-            )?)
+            .get(postcard::to_stdvec(&WatermarkKey::new(
+                metadata.id,
+                topition.partition,
+            ))?)
             .await
             .map_err(Error::from)
             .and_then(|watermark| {
@@ -458,16 +476,14 @@ impl Storage for Engine {
             Bytes::from(writer.into_inner())
         };
 
-        let batch_key = postcard::to_stdvec(
-            &BatchKey::new(metadata.id, topition.partition, offset),
-        )?;
+        let batch_key =
+            postcard::to_stdvec(&BatchKey::new(metadata.id, topition.partition, offset))?;
 
         tx.put(batch_key, &encoded[..])?;
 
         // Also save the updated watermark
-        let watermark_key = postcard::to_stdvec(
-            &WatermarkKey::new(metadata.id, topition.partition),
-        )?;
+        let watermark_key =
+            postcard::to_stdvec(&WatermarkKey::new(metadata.id, topition.partition))?;
         let watermark_value = postcard::to_stdvec(&watermark)?;
         tx.put(watermark_key, watermark_value)?;
 
@@ -514,7 +530,10 @@ impl Storage for Engine {
             offset_stage.high_watermark
         };
 
-        debug!(?isolation_level, high_watermark, offset, min_bytes, max_bytes);
+        debug!(
+            ?isolation_level,
+            high_watermark, offset, min_bytes, max_bytes
+        );
 
         let topics = self
             .db
@@ -536,9 +555,11 @@ impl Storage for Engine {
         }
 
         let mut i = {
-            let from = postcard::to_stdvec(
-                &BatchKey::scan_from(metadata.id, topition.partition, offset),
-            )?;
+            let from = postcard::to_stdvec(&BatchKey::scan_from(
+                metadata.id,
+                topition.partition,
+                offset,
+            ))?;
 
             self.db.scan(from..).await?
         };
@@ -567,7 +588,9 @@ impl Storage for Engine {
             total_bytes += size;
 
             // Stop if we've exceeded max_bytes (unless we haven't reached min_bytes yet)
-            if total_bytes >= max_bytes || (total_bytes >= min_bytes && size > (max_bytes - total_bytes)) {
+            if total_bytes >= max_bytes
+                || (total_bytes >= min_bytes && size > (max_bytes - total_bytes))
+            {
                 break;
             }
         }
@@ -586,9 +609,8 @@ impl Storage for Engine {
             return Err(Error::Api(ErrorCode::UnknownTopicOrPartition));
         }
 
-        let watermark_key = postcard::to_stdvec(
-            &WatermarkKey::new(metadata.id, topition.partition),
-        )?;
+        let watermark_key =
+            postcard::to_stdvec(&WatermarkKey::new(metadata.id, topition.partition))?;
 
         let watermark = self
             .db
@@ -639,7 +661,9 @@ impl Storage for Engine {
         // Offsets should expire after the configured retention period.
         // Currently, they are stored indefinitely, leading to storage leaks.
         if retention.is_some() {
-            tracing::warn!("offset retention is not implemented, offsets will be kept indefinitely");
+            tracing::warn!(
+                "offset retention is not implemented, offsets will be kept indefinitely"
+            );
         }
         // NOTE: Reading global TOPICS map for validation is inefficient.
         let topics = self.get_topics().await?;
@@ -658,9 +682,11 @@ impl Storage for Engine {
                 continue;
             }
 
-            let key = postcard::to_stdvec(
-                &OffsetCommitKey::new(group, &topition.topic, topition.partition),
-            )?;
+            let key = postcard::to_stdvec(&OffsetCommitKey::new(
+                group,
+                &topition.topic,
+                topition.partition,
+            ))?;
 
             let value = postcard::to_stdvec(&OffsetCommitValue {
                 offset: offset_commit.offset,
@@ -705,18 +731,22 @@ impl Storage for Engine {
         require_stable: Option<bool>,
     ) -> Result<BTreeMap<Topition, i64>> {
         // TODO: Implement require_stable
-        // When true, we must return the Last Stable Offset (LSO) instead of High Watermark.
+        // When true, we must return the Last Stable Offset instead of High Watermark.
         // Current implementation violates READ_COMMITTED isolation by returning potentially unstable offsets.
         if require_stable == Some(true) {
-            tracing::warn!("require_stable is not implemented, returning potentially unstable offsets");
+            tracing::warn!(
+                "require_stable is not implemented, returning potentially unstable offsets"
+            );
         }
         let mut responses = BTreeMap::new();
 
         if let Some(group_id) = group_id {
             for topition in topics {
-                let key = postcard::to_stdvec(
-                    &OffsetCommitKey::new(group_id, &topition.topic, topition.partition),
-                )?;
+                let key = postcard::to_stdvec(&OffsetCommitKey::new(
+                    group_id,
+                    &topition.topic,
+                    topition.partition,
+                ))?;
 
                 let offset = match self.db.get(&key).await {
                     Ok(Some(encoded)) => {
@@ -743,7 +773,7 @@ impl Storage for Engine {
         offsets: &[(Topition, ListOffset)],
     ) -> Result<Vec<(Topition, ListOffsetResponse)>> {
         // TODO: Implement isolation_level for list_offsets
-        // For IsolationLevel::ReadCommitted, we must return the Last Stable Offset (LSO).
+        // For IsolationLevel::ReadCommitted, we must return the Last Stable Offset.
         // Returning High Watermark here can expose uncommitted data to consumers.
         if isolation_level == IsolationLevel::ReadCommitted {
             tracing::warn!("list_offsets ignores isolation_level, always returns high_watermark");
@@ -776,9 +806,8 @@ impl Storage for Engine {
                 continue;
             }
 
-            let watermark_key = postcard::to_stdvec(
-                &WatermarkKey::new(metadata.id, topition.partition),
-            )?;
+            let watermark_key =
+                postcard::to_stdvec(&WatermarkKey::new(metadata.id, topition.partition))?;
 
             let watermark = self
                 .db
@@ -834,7 +863,9 @@ impl Storage for Engine {
                         .unwrap_or(0);
 
                     let result = watermark.timestamps.as_ref().and_then(|ts| {
-                        ts.range(target_millis..).next().map(|(ts, off)| (*off, *ts))
+                        ts.range(target_millis..)
+                            .next()
+                            .map(|(ts, off)| (*off, *ts))
                     });
 
                     match result {
@@ -948,61 +979,61 @@ impl Storage for Engine {
     ) -> Result<DescribeConfigsResult> {
         // TODO: Filter config entries by requested keys
         if keys.is_some() {
-            tracing::warn!("describe_config key filtering is not implemented, returning all configs");
+            tracing::warn!(
+                "describe_config key filtering is not implemented, returning all configs"
+            );
         }
         match resource {
-            ConfigResource::Topic => {
-                match self.topic_metadata(&TopicId::Name(name.into())).await {
-                    Ok(Some(topic_metadata)) => {
-                        let error_code = ErrorCode::None;
+            ConfigResource::Topic => match self.topic_metadata(&TopicId::Name(name.into())).await {
+                Ok(Some(topic_metadata)) => {
+                    let error_code = ErrorCode::None;
 
-                        Ok(DescribeConfigsResult::default()
-                            .error_code(error_code.into())
-                            .error_message(Some(error_code.to_string()))
-                            .resource_type(i8::from(resource))
-                            .resource_name(name.into())
-                            .configs(topic_metadata.topic.configs.map(|configs| {
-                                configs
-                                    .iter()
-                                    .map(|config| {
-                                        DescribeConfigsResourceResult::default()
-                                            .name(config.name.clone())
-                                            .value(config.value.clone())
-                                            .read_only(false)
-                                            .is_default(None)
-                                            .config_source(Some(ConfigSource::DefaultConfig.into()))
-                                            .is_sensitive(false)
-                                            .synonyms(Some([].into()))
-                                            .config_type(Some(ConfigType::String.into()))
-                                            .documentation(None)
-                                    })
-                                    .collect()
-                            })))
-                    }
-
-                    Ok(None) => {
-                        let error_code = ErrorCode::UnknownTopicOrPartition;
-
-                        Ok(DescribeConfigsResult::default()
-                            .error_code(error_code.into())
-                            .error_message(Some(error_code.to_string()))
-                            .resource_type(i8::from(resource))
-                            .resource_name(name.into())
-                            .configs(Some([].into())))
-                    }
-
-                    Err(_) => {
-                        let error_code = ErrorCode::UnknownServerError;
-
-                        Ok(DescribeConfigsResult::default()
-                            .error_code(error_code.into())
-                            .error_message(Some(error_code.to_string()))
-                            .resource_type(i8::from(resource))
-                            .resource_name(name.into())
-                            .configs(Some([].into())))
-                    }
+                    Ok(DescribeConfigsResult::default()
+                        .error_code(error_code.into())
+                        .error_message(Some(error_code.to_string()))
+                        .resource_type(i8::from(resource))
+                        .resource_name(name.into())
+                        .configs(topic_metadata.topic.configs.map(|configs| {
+                            configs
+                                .iter()
+                                .map(|config| {
+                                    DescribeConfigsResourceResult::default()
+                                        .name(config.name.clone())
+                                        .value(config.value.clone())
+                                        .read_only(false)
+                                        .is_default(None)
+                                        .config_source(Some(ConfigSource::DefaultConfig.into()))
+                                        .is_sensitive(false)
+                                        .synonyms(Some([].into()))
+                                        .config_type(Some(ConfigType::String.into()))
+                                        .documentation(None)
+                                })
+                                .collect()
+                        })))
                 }
-            }
+
+                Ok(None) => {
+                    let error_code = ErrorCode::UnknownTopicOrPartition;
+
+                    Ok(DescribeConfigsResult::default()
+                        .error_code(error_code.into())
+                        .error_message(Some(error_code.to_string()))
+                        .resource_type(i8::from(resource))
+                        .resource_name(name.into())
+                        .configs(Some([].into())))
+                }
+
+                Err(_) => {
+                    let error_code = ErrorCode::UnknownServerError;
+
+                    Ok(DescribeConfigsResult::default()
+                        .error_code(error_code.into())
+                        .error_message(Some(error_code.to_string()))
+                        .resource_type(i8::from(resource))
+                        .resource_name(name.into())
+                        .configs(Some([].into())))
+                }
+            },
             _ => {
                 // For other resource types, return empty config
                 Ok(DescribeConfigsResult::default()
@@ -1050,11 +1081,13 @@ impl Storage for Engine {
                                             .leader_epoch(-1)
                                             .replica_nodes(Some(vec![
                                                 self.node;
-                                                topic_metadata.topic.replication_factor as usize
+                                                topic_metadata.topic.replication_factor
+                                                    as usize
                                             ]))
                                             .isr_nodes(Some(vec![
                                                 self.node;
-                                                topic_metadata.topic.replication_factor as usize
+                                                topic_metadata.topic.replication_factor
+                                                    as usize
                                             ]))
                                             .eligible_leader_replicas(Some(vec![]))
                                             .last_known_elr(Some(vec![]))
@@ -1159,8 +1192,7 @@ impl Storage for Engine {
                 }
 
                 // Delete committed offsets for this group
-                let offset_prefix =
-                    postcard::to_stdvec(&OffsetCommitKey::group_prefix(group_id))?;
+                let offset_prefix = postcard::to_stdvec(&OffsetCommitKey::group_prefix(group_id))?;
                 let mut deleted_offsets = false;
 
                 // Note: SlateDB doesn't support range deletes directly,
@@ -1227,8 +1259,10 @@ impl Storage for Engine {
                         }
                     }
                     Ok(None) => {
-                        results
-                            .push(NamedGroupDetail::found(group_id.into(), GroupDetail::default()));
+                        results.push(NamedGroupDetail::found(
+                            group_id.into(),
+                            GroupDetail::default(),
+                        ));
                     }
                     Err(_) => {
                         results.push(NamedGroupDetail::error_code(
@@ -1307,7 +1341,8 @@ impl Storage for Engine {
                 .await
                 .inspect_err(|err| debug!(?err))?;
 
-            let mut transactions: Transactions = self.load_metadata(&tx, Self::TRANSACTIONS).await?;
+            let mut transactions: Transactions =
+                self.load_metadata(&tx, Self::TRANSACTIONS).await?;
             let mut producers: Producers = self.load_metadata(&tx, Self::PRODUCERS).await?;
 
             // Check if transaction already exists
@@ -1782,9 +1817,9 @@ impl Storage for Engine {
             for (group_id, topics) in &txn_detail.offsets {
                 for (topic_name, partitions) in topics {
                     for (partition, commit_offset) in partitions {
-                        let key = postcard::to_stdvec(
-                            &OffsetCommitKey::new(group_id, topic_name, *partition),
-                        )?;
+                        let key = postcard::to_stdvec(&OffsetCommitKey::new(
+                            group_id, topic_name, *partition,
+                        ))?;
 
                         let value = postcard::to_stdvec(&OffsetCommitValue {
                             offset: commit_offset.committed_offset,
