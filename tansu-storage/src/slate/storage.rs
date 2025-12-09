@@ -403,40 +403,40 @@ impl Storage for Engine {
             let mut transactions: Transactions =
                 self.load_metadata(&tx, Self::TRANSACTIONS).await?;
 
-            if let Some(txn) = transactions.get_mut(transaction_id) {
-                if let Some(txn_detail) = txn.epochs.get_mut(&deflated.producer_epoch) {
-                    let offset_start = self
-                        .db
-                        .get(postcard::to_stdvec(&WatermarkKey::new(
-                            metadata.id,
-                            topition.partition,
-                        ))?)
-                        .await
-                        .map_err(Error::from)
-                        .and_then(|watermark| {
-                            watermark.map_or(Ok(Watermark::default()), |encoded| {
-                                postcard::from_bytes(&encoded[..]).map_err(Into::into)
-                            })
-                        })?
-                        .high
-                        .unwrap_or(0);
+            if let Some(txn) = transactions.get_mut(transaction_id)
+                && let Some(txn_detail) = txn.epochs.get_mut(&deflated.producer_epoch)
+            {
+                let offset_start = self
+                    .db
+                    .get(postcard::to_stdvec(&WatermarkKey::new(
+                        metadata.id,
+                        topition.partition,
+                    ))?)
+                    .await
+                    .map_err(Error::from)
+                    .and_then(|watermark| {
+                        watermark.map_or(Ok(Watermark::default()), |encoded| {
+                            postcard::from_bytes(&encoded[..]).map_err(Into::into)
+                        })
+                    })?
+                    .high
+                    .unwrap_or(0);
 
-                    let offset_end = offset_start + deflated.last_offset_delta as i64;
+                let offset_end = offset_start + deflated.last_offset_delta as i64;
 
-                    _ = txn_detail
-                        .produces
-                        .entry(topition.topic.clone())
-                        .or_default()
-                        .insert(
-                            topition.partition,
-                            Some(TxnProduceOffset {
-                                offset_start,
-                                offset_end,
-                            }),
-                        );
+                _ = txn_detail
+                    .produces
+                    .entry(topition.topic.clone())
+                    .or_default()
+                    .insert(
+                        topition.partition,
+                        Some(TxnProduceOffset {
+                            offset_start,
+                            offset_end,
+                        }),
+                    );
 
-                    self.save_metadata(&tx, Self::TRANSACTIONS, &transactions)?;
-                }
+                self.save_metadata(&tx, Self::TRANSACTIONS, &transactions)?;
             }
         }
 
@@ -634,11 +634,11 @@ impl Storage for Engine {
                 // Only consider transactions that are in-progress (Begin state)
                 if txn_detail.state == Some(TxnState::Begin) {
                     // Check if this transaction has produced to this topic/partition
-                    if let Some(partitions) = txn_detail.produces.get(&topition.topic) {
-                        if let Some(Some(offset_range)) = partitions.get(&topition.partition) {
-                            // The last_stable should be the minimum of all in-flight txn start offsets
-                            last_stable = last_stable.min(offset_range.offset_start);
-                        }
+                    if let Some(partitions) = txn_detail.produces.get(&topition.topic)
+                        && let Some(Some(offset_range)) = partitions.get(&topition.partition)
+                    {
+                        // The last_stable should be the minimum of all in-flight txn start offsets
+                        last_stable = last_stable.min(offset_range.offset_start);
                     }
                 }
             }
@@ -921,8 +921,8 @@ impl Storage for Engine {
             })
             .map(|existing| {
                 existing
-                    .into_iter()
-                    .map(|(_name, topic_metadata)| {
+                    .into_values()
+                    .map(|topic_metadata| {
                         let name = Some(topic_metadata.topic.name.to_owned());
                         let error_code = ErrorCode::None.into();
                         let topic_id = Some(topic_metadata.id.into_bytes());
@@ -1299,7 +1299,7 @@ impl Storage for Engine {
             .await
             .map(Some)
             .or_else(|_| Ok::<_, Error>(None))
-            .map_err(|err| UpdateError::Error(err))?;
+            .map_err(UpdateError::Error)?;
 
         if let Some(current) = current_group {
             // Check version if provided
@@ -1318,7 +1318,7 @@ impl Storage for Engine {
             .version(updated_version.clone());
 
         self.save_metadata(&tx, &key, &new_group)
-            .map_err(|err| UpdateError::Error(err))?;
+            .map_err(UpdateError::Error)?;
 
         tx.commit()
             .await
