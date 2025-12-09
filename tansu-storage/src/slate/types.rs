@@ -259,7 +259,11 @@ impl Default for OffsetCommitKey {
 }
 
 impl OffsetCommitKey {
-    pub(super) fn new(group: impl Into<String>, topic: impl Into<String>, partition: Partition) -> Self {
+    pub(super) fn new(
+        group: impl Into<String>,
+        topic: impl Into<String>,
+        partition: Partition,
+    ) -> Self {
         Self {
             prefix: 'c',
             group: group.into(),

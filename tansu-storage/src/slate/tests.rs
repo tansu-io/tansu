@@ -20,8 +20,7 @@ use bytes::Bytes;
 use object_store::memory::InMemory;
 use slatedb::Db;
 use tansu_sans_io::{
-    ConfigResource, ErrorCode, IsolationLevel, ListOffset,
-    create_topics_request::CreatableTopic,
+    ConfigResource, ErrorCode, IsolationLevel, ListOffset, create_topics_request::CreatableTopic,
     record::deflated::Batch,
 };
 use url::Url;
@@ -78,7 +77,10 @@ async fn test_create_duplicate_topic() {
 
     // Second creation should fail
     let result = engine.create_topic(topic, false).await;
-    assert!(matches!(result, Err(Error::Api(ErrorCode::TopicAlreadyExists))));
+    assert!(matches!(
+        result,
+        Err(Error::Api(ErrorCode::TopicAlreadyExists))
+    ));
 }
 
 #[tokio::test]
@@ -94,12 +96,16 @@ async fn test_delete_topic() {
     let _ = engine.create_topic(topic, false).await.unwrap();
 
     // Delete it
-    let result = engine.delete_topic(&TopicId::Name("delete-me".into())).await;
+    let result = engine
+        .delete_topic(&TopicId::Name("delete-me".into()))
+        .await;
     assert!(result.is_ok());
     assert_eq!(ErrorCode::None, result.unwrap());
 
     // Try to delete again - should return UnknownTopicOrPartition
-    let result = engine.delete_topic(&TopicId::Name("delete-me".into())).await;
+    let result = engine
+        .delete_topic(&TopicId::Name("delete-me".into()))
+        .await;
     assert!(result.is_ok());
     assert_eq!(ErrorCode::UnknownTopicOrPartition, result.unwrap());
 }
@@ -159,11 +165,17 @@ async fn test_produce() {
     };
 
     // Produce first batch
-    let offset = engine.produce(None, &topition, batch.clone()).await.unwrap();
+    let offset = engine
+        .produce(None, &topition, batch.clone())
+        .await
+        .unwrap();
     assert_eq!(0, offset);
 
     // Produce second batch - should get next offset
-    let offset = engine.produce(None, &topition, batch.clone()).await.unwrap();
+    let offset = engine
+        .produce(None, &topition, batch.clone())
+        .await
+        .unwrap();
     assert_eq!(1, offset);
 
     // Verify watermark was updated
@@ -299,7 +311,10 @@ async fn test_describe_config() {
         .await
         .unwrap();
 
-    assert_eq!(ErrorCode::None, ErrorCode::try_from(result.error_code).unwrap());
+    assert_eq!(
+        ErrorCode::None,
+        ErrorCode::try_from(result.error_code).unwrap()
+    );
     assert_eq!("config-topic", result.resource_name.as_str());
 }
 
@@ -390,9 +405,11 @@ async fn test_txn_add_partitions() {
         transaction_id: "txn-test".into(),
         producer_id: producer.id,
         producer_epoch: producer.epoch,
-        topics: vec![AddPartitionsToTxnTopic::default()
-            .name("txn-topic".into())
-            .partitions(Some(vec![0, 1]))],
+        topics: vec![
+            AddPartitionsToTxnTopic::default()
+                .name("txn-topic".into())
+                .partitions(Some(vec![0, 1])),
+        ],
     };
 
     let response = engine.txn_add_partitions(request).await.unwrap();
@@ -427,9 +444,11 @@ async fn test_txn_add_partitions_unknown_txn() {
         transaction_id: "unknown-txn".into(),
         producer_id: 1,
         producer_epoch: 0,
-        topics: vec![AddPartitionsToTxnTopic::default()
-            .name("any-topic".into())
-            .partitions(Some(vec![0]))],
+        topics: vec![
+            AddPartitionsToTxnTopic::default()
+                .name("any-topic".into())
+                .partitions(Some(vec![0])),
+        ],
     };
 
     let response = engine.txn_add_partitions(request).await.unwrap();
@@ -470,9 +489,11 @@ async fn test_txn_commit() {
         transaction_id: "commit-txn".into(),
         producer_id: producer.id,
         producer_epoch: producer.epoch,
-        topics: vec![AddPartitionsToTxnTopic::default()
-            .name("commit-topic".into())
-            .partitions(Some(vec![0]))],
+        topics: vec![
+            AddPartitionsToTxnTopic::default()
+                .name("commit-topic".into())
+                .partitions(Some(vec![0])),
+        ],
     };
     let _ = engine.txn_add_partitions(request).await.unwrap();
 
@@ -509,9 +530,11 @@ async fn test_txn_abort() {
         transaction_id: "abort-txn".into(),
         producer_id: producer.id,
         producer_epoch: producer.epoch,
-        topics: vec![AddPartitionsToTxnTopic::default()
-            .name("abort-topic".into())
-            .partitions(Some(vec![0]))],
+        topics: vec![
+            AddPartitionsToTxnTopic::default()
+                .name("abort-topic".into())
+                .partitions(Some(vec![0])),
+        ],
     };
     let _ = engine.txn_add_partitions(request).await.unwrap();
 
@@ -553,13 +576,17 @@ async fn test_txn_offset_commit() {
         generation_id: None,
         member_id: None,
         group_instance_id: None,
-        topics: vec![TxnOffsetCommitRequestTopic::default()
-            .name("txn-offset-topic".into())
-            .partitions(Some(vec![TxnOffsetCommitRequestPartition::default()
-                .partition_index(0)
-                .committed_offset(100)
-                .committed_leader_epoch(Some(0))
-                .committed_metadata(Some("test".into()))]))],
+        topics: vec![
+            TxnOffsetCommitRequestTopic::default()
+                .name("txn-offset-topic".into())
+                .partitions(Some(vec![
+                    TxnOffsetCommitRequestPartition::default()
+                        .partition_index(0)
+                        .committed_offset(100)
+                        .committed_leader_epoch(Some(0))
+                        .committed_metadata(Some("test".into())),
+                ])),
+        ],
     };
 
     let response = engine.txn_offset_commit(request).await.unwrap();
@@ -605,8 +632,14 @@ async fn test_fetch_isolation_levels() {
         record_data: Bytes::new(),
     };
 
-    let _ = engine.produce(None, &topition, batch.clone()).await.unwrap();
-    let _ = engine.produce(None, &topition, batch.clone()).await.unwrap();
+    let _ = engine
+        .produce(None, &topition, batch.clone())
+        .await
+        .unwrap();
+    let _ = engine
+        .produce(None, &topition, batch.clone())
+        .await
+        .unwrap();
 
     // Verify offset stage to confirm data was written
     let stage = engine.offset_stage(&topition).await.unwrap();
@@ -615,7 +648,10 @@ async fn test_fetch_isolation_levels() {
 
     // Test that ReadUncommitted and ReadCommitted return same result when no txns
     let stage_uncommitted = engine.offset_stage(&topition).await.unwrap();
-    assert_eq!(stage_uncommitted.high_watermark, stage_uncommitted.last_stable);
+    assert_eq!(
+        stage_uncommitted.high_watermark,
+        stage_uncommitted.last_stable
+    );
 }
 
 #[tokio::test]
@@ -650,7 +686,10 @@ async fn test_offset_stage_with_transaction() {
         record_data: Bytes::new(),
     };
 
-    let _ = engine.produce(None, &topition, batch.clone()).await.unwrap();
+    let _ = engine
+        .produce(None, &topition, batch.clone())
+        .await
+        .unwrap();
 
     // Check offset stage - no transactions, so last_stable == high_watermark
     let stage = engine.offset_stage(&topition).await.unwrap();
@@ -667,9 +706,11 @@ async fn test_offset_stage_with_transaction() {
         transaction_id: "stage-test-txn".into(),
         producer_id: producer.id,
         producer_epoch: producer.epoch,
-        topics: vec![AddPartitionsToTxnTopic::default()
-            .name("stage-txn-topic".into())
-            .partitions(Some(vec![0]))],
+        topics: vec![
+            AddPartitionsToTxnTopic::default()
+                .name("stage-txn-topic".into())
+                .partitions(Some(vec![0])),
+        ],
     };
     let _ = engine.txn_add_partitions(request).await.unwrap();
 
@@ -761,7 +802,10 @@ async fn test_delete_records() {
     };
 
     for _ in 0..5 {
-        let _ = engine.produce(None, &topition, batch.clone()).await.unwrap();
+        let _ = engine
+            .produce(None, &topition, batch.clone())
+            .await
+            .unwrap();
     }
 
     // Verify initial state
@@ -770,11 +814,15 @@ async fn test_delete_records() {
     assert_eq!(5, stage.high_watermark);
 
     // Delete records up to offset 3
-    let delete_request = vec![DeleteRecordsTopic::default()
-        .name("delete-records-topic".into())
-        .partitions(Some(vec![DeleteRecordsPartition::default()
-            .partition_index(0)
-            .offset(3)]))];
+    let delete_request = vec![
+        DeleteRecordsTopic::default()
+            .name("delete-records-topic".into())
+            .partitions(Some(vec![
+                DeleteRecordsPartition::default()
+                    .partition_index(0)
+                    .offset(3),
+            ])),
+    ];
 
     let results = engine.delete_records(&delete_request).await.unwrap();
 
@@ -825,7 +873,10 @@ async fn test_fetch_with_min_bytes() {
     };
 
     for _ in 0..5 {
-        let _ = engine.produce(None, &topition, batch.clone()).await.unwrap();
+        let _ = engine
+            .produce(None, &topition, batch.clone())
+            .await
+            .unwrap();
     }
 
     // Verify data was written
@@ -884,14 +935,18 @@ async fn test_txn_add_partitions_version_four_plus() {
 
     // Use VersionFourPlus format
     let request = TxnAddPartitionsRequest::VersionFourPlus {
-        transactions: vec![AddPartitionsToTxnTransaction::default()
-            .transactional_id("v4-txn".into())
-            .producer_id(producer.id)
-            .producer_epoch(producer.epoch)
-            .verify_only(false)
-            .topics(Some(vec![AddPartitionsToTxnTopic::default()
-                .name("v4-topic".into())
-                .partitions(Some(vec![0, 1]))]))],
+        transactions: vec![
+            AddPartitionsToTxnTransaction::default()
+                .transactional_id("v4-txn".into())
+                .producer_id(producer.id)
+                .producer_epoch(producer.epoch)
+                .verify_only(false)
+                .topics(Some(vec![
+                    AddPartitionsToTxnTopic::default()
+                        .name("v4-topic".into())
+                        .partitions(Some(vec![0, 1])),
+                ])),
+        ],
     };
 
     let response = engine.txn_add_partitions(request).await.unwrap();
@@ -931,9 +986,11 @@ async fn test_txn_wrong_producer_id() {
         transaction_id: "wrong-id-txn".into(),
         producer_id: 9999, // Wrong ID
         producer_epoch: 0,
-        topics: vec![AddPartitionsToTxnTopic::default()
-            .name("any-topic".into())
-            .partitions(Some(vec![0]))],
+        topics: vec![
+            AddPartitionsToTxnTopic::default()
+                .name("any-topic".into())
+                .partitions(Some(vec![0])),
+        ],
     };
 
     let response = engine.txn_add_partitions(request).await.unwrap();
@@ -967,9 +1024,11 @@ async fn test_txn_wrong_epoch() {
         transaction_id: "wrong-epoch-txn".into(),
         producer_id: producer.id,
         producer_epoch: 99, // Wrong epoch
-        topics: vec![AddPartitionsToTxnTopic::default()
-            .name("any-topic".into())
-            .partitions(Some(vec![0]))],
+        topics: vec![
+            AddPartitionsToTxnTopic::default()
+                .name("any-topic".into())
+                .partitions(Some(vec![0])),
+        ],
     };
 
     let response = engine.txn_add_partitions(request).await.unwrap();
@@ -1010,7 +1069,9 @@ async fn test_txn_end_wrong_producer() {
         .unwrap();
 
     // Try to end with wrong producer_id
-    let result = engine.txn_end("end-wrong-prod", 9999, producer.epoch, true).await;
+    let result = engine
+        .txn_end("end-wrong-prod", 9999, producer.epoch, true)
+        .await;
 
     assert!(matches!(
         result,
@@ -1029,7 +1090,9 @@ async fn test_txn_end_wrong_epoch() {
         .unwrap();
 
     // Try to end with wrong epoch
-    let result = engine.txn_end("end-wrong-epoch", producer.id, 99, true).await;
+    let result = engine
+        .txn_end("end-wrong-epoch", producer.id, 99, true)
+        .await;
 
     assert!(matches!(result, Err(Error::Api(ErrorCode::ProducerFenced))));
 }
@@ -1083,11 +1146,15 @@ async fn test_delete_records_unknown_topic() {
     let engine = create_test_engine().await;
 
     // Delete records from non-existent topic
-    let delete_request = vec![DeleteRecordsTopic::default()
-        .name("nonexistent-topic".into())
-        .partitions(Some(vec![DeleteRecordsPartition::default()
-            .partition_index(0)
-            .offset(5)]))];
+    let delete_request = vec![
+        DeleteRecordsTopic::default()
+            .name("nonexistent-topic".into())
+            .partitions(Some(vec![
+                DeleteRecordsPartition::default()
+                    .partition_index(0)
+                    .offset(5),
+            ])),
+    ];
 
     let results = engine.delete_records(&delete_request).await.unwrap();
 
@@ -1112,11 +1179,15 @@ async fn test_delete_records_unknown_partition() {
     let _ = engine.create_topic(topic, false).await.unwrap();
 
     // Delete records from non-existent partition
-    let delete_request = vec![DeleteRecordsTopic::default()
-        .name("del-unknown-part".into())
-        .partitions(Some(vec![DeleteRecordsPartition::default()
-            .partition_index(99) // Invalid partition
-            .offset(5)]))];
+    let delete_request = vec![
+        DeleteRecordsTopic::default()
+            .name("del-unknown-part".into())
+            .partitions(Some(vec![
+                DeleteRecordsPartition::default()
+                    .partition_index(99) // Invalid partition
+                    .offset(5),
+            ])),
+    ];
 
     let results = engine.delete_records(&delete_request).await.unwrap();
 
@@ -1160,7 +1231,10 @@ async fn test_produce_multiple_partitions() {
     // Produce to different partitions
     for partition in 0..3 {
         let topition = Topition::new("multi-part-topic", partition);
-        let offset = engine.produce(None, &topition, batch.clone()).await.unwrap();
+        let offset = engine
+            .produce(None, &topition, batch.clone())
+            .await
+            .unwrap();
         assert_eq!(0, offset); // Each partition starts at 0
     }
 
