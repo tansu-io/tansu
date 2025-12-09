@@ -124,6 +124,7 @@ impl FieldLookup {
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 struct Meta {
     message: Option<&'static MessageMeta>,
+    structures: Option<Vec<(&'static str, &'static FieldMeta)>>,
     field: Option<&'static FieldMeta>,
     parse: VecDeque<FieldLookup>,
 }
@@ -132,6 +133,7 @@ impl Default for Meta {
     fn default() -> Self {
         Self {
             message: Default::default(),
+            structures: Default::default(),
             field: Default::default(),
             parse: VecDeque::with_capacity(PARSE_DEPTH),
         }
@@ -188,6 +190,7 @@ impl<'de> Decoder<'de> {
 
                     Meta {
                         message: Some(*meta),
+                        structures: Some(meta.structures()),
                         parse,
                         ..Default::default()
                     }
@@ -421,6 +424,7 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
 
                 if let Some(meta) = RootMessageMeta::messages().requests().get(&v) {
                     self.meta.message = Some(*meta);
+                    self.meta.structures = Some(meta.structures());
                     self.meta.parse.push_front(meta.fields.into());
                 }
             }
@@ -927,7 +931,14 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
             .push_front(Container::Struct { name, fields });
 
         let outcome = if let Some(mm) = self.meta.message {
-            if let Some((_, fm)) = mm.structures().iter().find(|(found, _)| name == *found) {
+            if let Some((_, fm)) = self
+                .meta
+                .structures
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .find(|(found, _)| name == *found)
+            {
                 debug!(r#struct = name);
 
                 _ = self.meta.field.replace(*fm);
