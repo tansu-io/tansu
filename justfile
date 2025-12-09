@@ -11,7 +11,7 @@ cargo-build +args:
 license:
     cargo about generate about.hbs > license.html
 
-build profile="dev" features="delta,dynostore,iceberg,libsql,parquet,postgres": (cargo-build "--profile" profile "--timings" "--bin" "tansu" "--no-default-features" "--features" features)
+build profile="dev" features="delta,dynostore,iceberg,libsql,parquet,postgres" bin="tansu": (cargo-build "--profile" profile "--timings" "--bin" bin "--no-default-features" "--features" features)
 
 build-examples: (cargo-build "--examples")
 
@@ -426,8 +426,11 @@ flamegraph-produce profile="profiling":
     RUSTFLAGS="-C force-frame-pointers=yes" cargo build --profile {{profile}} --bin bench_produce_v11
     RUST_LOG=warn flamegraph -- ./target/{{profile}}/bench_produce_v11
 
-bench:
-    cargo bench --profile profiling --all-features --package tansu-sans-io --quiet
+bench-hyperfine profile="release": (build profile "libsql" "bench")
+    hyperfine -N ./target/{{replace(profile, "dev", "debug")}}/bench
+
+flamegraph-bench profile="profiling": (build profile "libsql" "bench")
+    RUST_LOG=warn flamegraph -- ./target/{{replace(profile, "dev", "debug")}}/bench 2>&1 >/dev/null
 
 producer-perf  throughput="1000" record_size="1024" num_records="100000":
     kafka-producer-perf-test --topic test --num-records {{num_records}} --record-size {{record_size}} --throughput {{throughput}} --producer-props bootstrap.servers=${ADVERTISED_LISTENER}
