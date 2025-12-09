@@ -420,6 +420,9 @@ bench-hyperfine profile="release": (build profile "libsql" "bench")
 flamegraph-bench profile="profiling": (build profile "libsql" "bench")
     RUST_LOG=warn flamegraph -- ./target/{{replace(profile, "dev", "debug")}}/bench 2>&1 >/dev/null
 
+bench-perf profile="profiling": (build profile "libsql" "bench")
+    RUST_LOG=warn perf record --call-graph dwarf ./target/{{replace(profile, "dev", "debug")}}/bench 2>&1 >/dev/null
+
 producer-perf  throughput="1000" record_size="1024" num_records="100000":
     kafka-producer-perf-test --topic test --num-records {{num_records}} --record-size {{record_size}} --throughput {{throughput}} --producer-props bootstrap.servers=${ADVERTISED_LISTENER}
 
