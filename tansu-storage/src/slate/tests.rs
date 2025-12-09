@@ -215,7 +215,7 @@ async fn test_offset_commit_and_fetch() {
 
     // Fetch offset
     let offsets = engine
-        .offset_fetch(Some(group), &[topition.clone()], None)
+        .offset_fetch(Some(group), std::slice::from_ref(&topition), None)
         .await
         .unwrap();
 
