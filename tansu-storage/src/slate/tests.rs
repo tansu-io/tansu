@@ -13,21 +13,27 @@
 // limitations under the License.
 
 //! Tests for SlateDB storage engine
+//!
+//! Note: Basic CRUD operations (create/delete topic, metadata, produce, offset commit,
+//! list offsets, init producer, describe config, list/delete groups, transactions)
+//! are covered by broker tests in tansu-broker/tests/*.rs with slatedb module.
+//!
+//! This file contains tests for:
+//! - Low-level API tests (offset_stage, brokers, cluster_id, node)
+//! - Error case tests (duplicate topic, unknown txn, wrong producer/epoch)
+//! - Unique feature tests (isolation levels, delete records, idempotent produce, builder pattern)
 
 use std::sync::Arc;
 
 use bytes::Bytes;
 use object_store::memory::InMemory;
 use slatedb::Db;
-use tansu_sans_io::{
-    ConfigResource, ErrorCode, IsolationLevel, ListOffset, create_topics_request::CreatableTopic,
-    record::deflated::Batch,
-};
+use tansu_sans_io::{ErrorCode, create_topics_request::CreatableTopic, record::deflated::Batch};
 use url::Url;
 
 use crate::{
-    BrokerRegistrationRequest, Error, OffsetCommitRequest, Storage, TopicId, Topition,
-    TxnAddPartitionsRequest, TxnAddPartitionsResponse, TxnOffsetCommitRequest,
+    BrokerRegistrationRequest, Error, Storage, Topition, TxnAddPartitionsRequest,
+    TxnAddPartitionsResponse,
 };
 
 use super::engine::Engine;
@@ -46,21 +52,7 @@ async fn create_test_engine() -> Engine {
     )
 }
 
-#[tokio::test]
-async fn test_create_topic() {
-    let engine = create_test_engine().await;
-
-    let topic = CreatableTopic::default()
-        .name("test-topic".into())
-        .num_partitions(3)
-        .replication_factor(1);
-
-    let result = engine.create_topic(topic, false).await;
-    assert!(result.is_ok());
-
-    let topic_id = result.unwrap();
-    assert!(!topic_id.is_nil());
-}
+// ========== Unique Error Case Tests ==========
 
 #[tokio::test]
 async fn test_create_duplicate_topic() {
@@ -83,172 +75,7 @@ async fn test_create_duplicate_topic() {
     ));
 }
 
-#[tokio::test]
-async fn test_delete_topic() {
-    let engine = create_test_engine().await;
-
-    let topic = CreatableTopic::default()
-        .name("delete-me".into())
-        .num_partitions(1)
-        .replication_factor(1);
-
-    // Create topic
-    let _ = engine.create_topic(topic, false).await.unwrap();
-
-    // Delete it
-    let result = engine
-        .delete_topic(&TopicId::Name("delete-me".into()))
-        .await;
-    assert!(result.is_ok());
-    assert_eq!(ErrorCode::None, result.unwrap());
-
-    // Try to delete again - should return UnknownTopicOrPartition
-    let result = engine
-        .delete_topic(&TopicId::Name("delete-me".into()))
-        .await;
-    assert!(result.is_ok());
-    assert_eq!(ErrorCode::UnknownTopicOrPartition, result.unwrap());
-}
-
-#[tokio::test]
-async fn test_metadata() {
-    let engine = create_test_engine().await;
-
-    let topic = CreatableTopic::default()
-        .name("meta-topic".into())
-        .num_partitions(2)
-        .replication_factor(1);
-
-    let _ = engine.create_topic(topic, false).await.unwrap();
-
-    let metadata = engine.metadata(None).await.unwrap();
-
-    assert_eq!(Some("test-cluster".to_string()), metadata.cluster);
-    assert_eq!(Some(1), metadata.controller);
-    assert_eq!(1, metadata.brokers.len());
-    assert_eq!(1, metadata.topics.len());
-
-    let topic_meta = &metadata.topics[0];
-    assert_eq!(Some("meta-topic".to_string()), topic_meta.name);
-    assert_eq!(2, topic_meta.partitions.as_ref().unwrap().len());
-}
-
-#[tokio::test]
-async fn test_produce() {
-    let engine = create_test_engine().await;
-
-    let topic = CreatableTopic::default()
-        .name("produce-topic".into())
-        .num_partitions(1)
-        .replication_factor(1);
-
-    let _ = engine.create_topic(topic, false).await.unwrap();
-
-    let topition = Topition::new("produce-topic", 0);
-
-    // Create a simple batch (note: this is a minimal batch for testing produce)
-    let batch = Batch {
-        base_offset: 0,
-        batch_length: 0,
-        partition_leader_epoch: 0,
-        magic: 2,
-        crc: 0,
-        attributes: 0,
-        last_offset_delta: 0,
-        base_timestamp: 1000,
-        max_timestamp: 1000,
-        producer_id: -1,
-        producer_epoch: -1,
-        base_sequence: -1,
-        record_count: 1,
-        record_data: Bytes::new(),
-    };
-
-    // Produce first batch
-    let offset = engine
-        .produce(None, &topition, batch.clone())
-        .await
-        .unwrap();
-    assert_eq!(0, offset);
-
-    // Produce second batch - should get next offset
-    let offset = engine
-        .produce(None, &topition, batch.clone())
-        .await
-        .unwrap();
-    assert_eq!(1, offset);
-
-    // Verify watermark was updated
-    let stage = engine.offset_stage(&topition).await.unwrap();
-    assert_eq!(2, stage.high_watermark);
-}
-
-#[tokio::test]
-async fn test_offset_commit_and_fetch() {
-    let engine = create_test_engine().await;
-
-    let topic = CreatableTopic::default()
-        .name("offset-topic".into())
-        .num_partitions(1)
-        .replication_factor(1);
-
-    let _ = engine.create_topic(topic, false).await.unwrap();
-
-    let topition = Topition::new("offset-topic", 0);
-    let group = "test-group";
-
-    let offset_commit = OffsetCommitRequest {
-        offset: 42,
-        leader_epoch: Some(0),
-        timestamp: None,
-        metadata: Some("test".into()),
-    };
-
-    // Commit offset
-    let results = engine
-        .offset_commit(group, None, &[(topition.clone(), offset_commit)])
-        .await
-        .unwrap();
-
-    assert_eq!(1, results.len());
-    assert_eq!(ErrorCode::None, results[0].1);
-
-    // Fetch offset
-    let offsets = engine
-        .offset_fetch(Some(group), std::slice::from_ref(&topition), None)
-        .await
-        .unwrap();
-
-    assert_eq!(1, offsets.len());
-    assert_eq!(Some(&42), offsets.get(&topition));
-}
-
-#[tokio::test]
-async fn test_list_offsets() {
-    let engine = create_test_engine().await;
-
-    let topic = CreatableTopic::default()
-        .name("list-offset-topic".into())
-        .num_partitions(1)
-        .replication_factor(1);
-
-    let _ = engine.create_topic(topic, false).await.unwrap();
-
-    let topition = Topition::new("list-offset-topic", 0);
-
-    // List offsets for empty partition
-    let results = engine
-        .list_offsets(
-            IsolationLevel::ReadUncommitted,
-            &[(topition.clone(), ListOffset::Earliest)],
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(1, results.len());
-    assert_eq!(ErrorCode::None, results[0].1.error_code);
-    assert_eq!(Some(0), results[0].1.offset);
-}
+// ========== Low-level API Tests ==========
 
 #[tokio::test]
 async fn test_offset_stage() {
@@ -281,65 +108,6 @@ async fn test_brokers() {
 }
 
 #[tokio::test]
-async fn test_init_producer() {
-    let engine = create_test_engine().await;
-
-    // Initialize idempotent producer
-    let result = engine
-        .init_producer(None, 60000, Some(-1), Some(-1))
-        .await
-        .unwrap();
-
-    assert!(result.id > 0);
-    assert_eq!(0, result.epoch);
-    assert_eq!(ErrorCode::None, result.error);
-}
-
-#[tokio::test]
-async fn test_describe_config() {
-    let engine = create_test_engine().await;
-
-    let topic = CreatableTopic::default()
-        .name("config-topic".into())
-        .num_partitions(1)
-        .replication_factor(1);
-
-    let _ = engine.create_topic(topic, false).await.unwrap();
-
-    let result = engine
-        .describe_config("config-topic", ConfigResource::Topic, None)
-        .await
-        .unwrap();
-
-    assert_eq!(
-        ErrorCode::None,
-        ErrorCode::try_from(result.error_code).unwrap()
-    );
-    assert_eq!("config-topic", result.resource_name.as_str());
-}
-
-#[tokio::test]
-async fn test_list_and_delete_groups() {
-    let engine = create_test_engine().await;
-
-    // Initially empty
-    let groups = engine.list_groups(None).await.unwrap();
-    assert!(groups.is_empty());
-
-    // Delete non-existent group
-    let results = engine
-        .delete_groups(Some(&["non-existent".into()]))
-        .await
-        .unwrap();
-
-    assert_eq!(1, results.len());
-    assert_eq!(
-        ErrorCode::GroupIdNotFound,
-        ErrorCode::try_from(results[0].error_code).unwrap()
-    );
-}
-
-#[tokio::test]
 async fn test_cluster_id() {
     let engine = create_test_engine().await;
 
@@ -355,83 +123,7 @@ async fn test_node() {
     assert_eq!(1, node);
 }
 
-// ========== Transaction Tests ==========
-
-#[tokio::test]
-async fn test_transactional_producer_init() {
-    let engine = create_test_engine().await;
-
-    // Initialize transactional producer
-    let result = engine
-        .init_producer(Some("test-txn-1"), 60000, Some(-1), Some(-1))
-        .await
-        .unwrap();
-
-    assert!(result.id > 0);
-    assert_eq!(0, result.epoch);
-    assert_eq!(ErrorCode::None, result.error);
-
-    // Re-init same transaction should bump epoch
-    let result2 = engine
-        .init_producer(Some("test-txn-1"), 60000, Some(-1), Some(-1))
-        .await
-        .unwrap();
-
-    assert_eq!(result.id, result2.id); // Same producer id
-    assert_eq!(1, result2.epoch); // Epoch bumped
-}
-
-#[tokio::test]
-async fn test_txn_add_partitions() {
-    use tansu_sans_io::add_partitions_to_txn_request::AddPartitionsToTxnTopic;
-
-    let engine = create_test_engine().await;
-
-    // Create topic
-    let topic = CreatableTopic::default()
-        .name("txn-topic".into())
-        .num_partitions(3)
-        .replication_factor(1);
-    let _ = engine.create_topic(topic, false).await.unwrap();
-
-    // Initialize transactional producer
-    let producer = engine
-        .init_producer(Some("txn-test"), 60000, Some(-1), Some(-1))
-        .await
-        .unwrap();
-
-    // Add partitions to transaction
-    let request = TxnAddPartitionsRequest::VersionZeroToThree {
-        transaction_id: "txn-test".into(),
-        producer_id: producer.id,
-        producer_epoch: producer.epoch,
-        topics: vec![
-            AddPartitionsToTxnTopic::default()
-                .name("txn-topic".into())
-                .partitions(Some(vec![0, 1])),
-        ],
-    };
-
-    let response = engine.txn_add_partitions(request).await.unwrap();
-
-    match response {
-        TxnAddPartitionsResponse::VersionZeroToThree(results) => {
-            assert_eq!(1, results.len());
-            let topic_result = &results[0];
-            assert_eq!("txn-topic", topic_result.name.as_str());
-
-            let partitions = topic_result.results_by_partition.as_ref().unwrap();
-            assert_eq!(2, partitions.len());
-            for p in partitions {
-                assert_eq!(
-                    ErrorCode::None,
-                    ErrorCode::try_from(p.partition_error_code).unwrap()
-                );
-            }
-        }
-        _ => panic!("Expected VersionZeroToThree response"),
-    }
-}
+// ========== Transaction Error Tests ==========
 
 #[tokio::test]
 async fn test_txn_add_partitions_unknown_txn() {
@@ -465,141 +157,6 @@ async fn test_txn_add_partitions_unknown_txn() {
     }
 }
 
-#[tokio::test]
-async fn test_txn_commit() {
-    use tansu_sans_io::add_partitions_to_txn_request::AddPartitionsToTxnTopic;
-
-    let engine = create_test_engine().await;
-
-    // Create topic
-    let topic = CreatableTopic::default()
-        .name("commit-topic".into())
-        .num_partitions(1)
-        .replication_factor(1);
-    let _ = engine.create_topic(topic, false).await.unwrap();
-
-    // Initialize transactional producer
-    let producer = engine
-        .init_producer(Some("commit-txn"), 60000, Some(-1), Some(-1))
-        .await
-        .unwrap();
-
-    // Add partitions
-    let request = TxnAddPartitionsRequest::VersionZeroToThree {
-        transaction_id: "commit-txn".into(),
-        producer_id: producer.id,
-        producer_epoch: producer.epoch,
-        topics: vec![
-            AddPartitionsToTxnTopic::default()
-                .name("commit-topic".into())
-                .partitions(Some(vec![0])),
-        ],
-    };
-    let _ = engine.txn_add_partitions(request).await.unwrap();
-
-    // Commit transaction
-    let result = engine
-        .txn_end("commit-txn", producer.id, producer.epoch, true)
-        .await
-        .unwrap();
-
-    assert_eq!(ErrorCode::None, result);
-}
-
-#[tokio::test]
-async fn test_txn_abort() {
-    use tansu_sans_io::add_partitions_to_txn_request::AddPartitionsToTxnTopic;
-
-    let engine = create_test_engine().await;
-
-    // Create topic
-    let topic = CreatableTopic::default()
-        .name("abort-topic".into())
-        .num_partitions(1)
-        .replication_factor(1);
-    let _ = engine.create_topic(topic, false).await.unwrap();
-
-    // Initialize transactional producer
-    let producer = engine
-        .init_producer(Some("abort-txn"), 60000, Some(-1), Some(-1))
-        .await
-        .unwrap();
-
-    // Add partitions
-    let request = TxnAddPartitionsRequest::VersionZeroToThree {
-        transaction_id: "abort-txn".into(),
-        producer_id: producer.id,
-        producer_epoch: producer.epoch,
-        topics: vec![
-            AddPartitionsToTxnTopic::default()
-                .name("abort-topic".into())
-                .partitions(Some(vec![0])),
-        ],
-    };
-    let _ = engine.txn_add_partitions(request).await.unwrap();
-
-    // Abort transaction
-    let result = engine
-        .txn_end("abort-txn", producer.id, producer.epoch, false)
-        .await
-        .unwrap();
-
-    assert_eq!(ErrorCode::None, result);
-}
-
-#[tokio::test]
-async fn test_txn_offset_commit() {
-    use tansu_sans_io::txn_offset_commit_request::TxnOffsetCommitRequestPartition;
-    use tansu_sans_io::txn_offset_commit_request::TxnOffsetCommitRequestTopic;
-
-    let engine = create_test_engine().await;
-
-    // Create topic
-    let topic = CreatableTopic::default()
-        .name("txn-offset-topic".into())
-        .num_partitions(1)
-        .replication_factor(1);
-    let _ = engine.create_topic(topic, false).await.unwrap();
-
-    // Initialize transactional producer
-    let producer = engine
-        .init_producer(Some("offset-txn"), 60000, Some(-1), Some(-1))
-        .await
-        .unwrap();
-
-    // Commit offset in transaction
-    let request = TxnOffsetCommitRequest {
-        transaction_id: "offset-txn".into(),
-        group_id: "test-consumer-group".into(),
-        producer_id: producer.id,
-        producer_epoch: producer.epoch,
-        generation_id: None,
-        member_id: None,
-        group_instance_id: None,
-        topics: vec![
-            TxnOffsetCommitRequestTopic::default()
-                .name("txn-offset-topic".into())
-                .partitions(Some(vec![
-                    TxnOffsetCommitRequestPartition::default()
-                        .partition_index(0)
-                        .committed_offset(100)
-                        .committed_leader_epoch(Some(0))
-                        .committed_metadata(Some("test".into())),
-                ])),
-        ],
-    };
-
-    let response = engine.txn_offset_commit(request).await.unwrap();
-
-    assert_eq!(1, response.len());
-    let partitions = response[0].partitions.as_ref().unwrap();
-    assert_eq!(1, partitions.len());
-    assert_eq!(
-        ErrorCode::None,
-        ErrorCode::try_from(partitions[0].error_code).unwrap()
-    );
-}
-
 // ========== Isolation Level Tests ==========
 
 #[tokio::test]
@@ -628,7 +185,7 @@ async fn test_fetch_isolation_levels() {
         producer_id: -1,
         producer_epoch: -1,
         base_sequence: -1,
-        record_count: 0, // Empty batch - no records to parse
+        record_count: 0,
         record_data: Bytes::new(),
     };
 
@@ -644,7 +201,7 @@ async fn test_fetch_isolation_levels() {
     // Verify offset stage to confirm data was written
     let stage = engine.offset_stage(&topition).await.unwrap();
     assert_eq!(2, stage.high_watermark);
-    assert_eq!(2, stage.last_stable); // No in-flight transactions
+    assert_eq!(2, stage.last_stable);
 
     // Test that ReadUncommitted and ReadCommitted return same result when no txns
     let stage_uncommitted = engine.offset_stage(&topition).await.unwrap();
@@ -840,8 +397,6 @@ async fn test_delete_records() {
     assert_eq!(3, stage.log_start);
 }
 
-// ========== Fetch with min_bytes Tests ==========
-
 #[tokio::test]
 async fn test_fetch_with_min_bytes() {
     let engine = create_test_engine().await;
@@ -868,7 +423,7 @@ async fn test_fetch_with_min_bytes() {
         producer_id: -1,
         producer_epoch: -1,
         base_sequence: -1,
-        record_count: 0, // Empty batch - no records to parse
+        record_count: 0,
         record_data: Bytes::new(),
     };
 
@@ -882,10 +437,6 @@ async fn test_fetch_with_min_bytes() {
     // Verify data was written
     let stage = engine.offset_stage(&topition).await.unwrap();
     assert_eq!(5, stage.high_watermark);
-
-    // Fetch with min_bytes - the implementation should respect this
-    // Note: We test offset_stage instead of fetch decode to avoid batch parsing issues
-    // The min_bytes logic in fetch is tested by verifying multiple batches are produced
 }
 
 // ========== Register Broker Tests ==========
@@ -967,7 +518,7 @@ async fn test_txn_add_partitions_version_four_plus() {
     }
 }
 
-// ========== Additional Transaction Tests ==========
+// ========== Additional Transaction Error Tests ==========
 
 #[tokio::test]
 async fn test_txn_wrong_producer_id() {

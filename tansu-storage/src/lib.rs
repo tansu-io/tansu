@@ -216,7 +216,7 @@ pub use service::{
 };
 
 #[cfg(feature = "slatedb")]
-mod slate;
+pub mod slate;
 
 #[cfg(any(feature = "libsql", feature = "postgres", feature = "turso"))]
 pub(crate) mod sql;
