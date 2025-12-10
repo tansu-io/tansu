@@ -31,5 +31,5 @@ mod types;
 #[cfg(test)]
 mod tests;
 
-// Re-export types for crate use
-pub(crate) use engine::Engine;
+// Re-export types for public use
+pub use engine::Engine;

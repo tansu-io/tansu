@@ -7517,6 +7517,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "slatedb",
  "tansu-model",
  "tansu-sans-io",
  "tansu-schema",

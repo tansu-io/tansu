@@ -73,6 +73,7 @@ pub(crate) enum StorageType {
     InMemory,
     Lite,
     Postgres,
+    SlateDb,
     Turso,
 }
 
@@ -203,6 +204,32 @@ where
                 .build()
                 .await
                 .map_err(Into::into)
+        }
+
+        StorageType::SlateDb => {
+            use object_store::memory::InMemory;
+            use slatedb::Db;
+            use std::sync::Arc;
+            use tansu_storage::slate;
+
+            let cluster_id: String = cluster.into();
+            let object_store = Arc::new(InMemory::new());
+
+            let db_path = thread::current()
+                .name()
+                .ok_or(Error::Message(String::from("unnamed thread")))
+                .map(|name| format!("{}::{name}.slatedb", env!("CARGO_CRATE_NAME")))?;
+
+            let db = Db::open(db_path, object_store)
+                .await
+                .map_err(|e| Error::Message(format!("Failed to open SlateDB: {}", e)))?;
+
+            Ok(StorageContainer::Slate(slate::Engine::new(
+                cluster_id.as_str(),
+                node,
+                advertised_listener,
+                Arc::new(db),
+            )))
         }
     }
 }
