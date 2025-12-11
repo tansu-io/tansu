@@ -230,6 +230,31 @@ impl BatchKey {
     }
 }
 
+/// Prefix key for scanning all batches in a topic partition: `b/{topic_uuid}/{partition}`
+///
+/// This is a separate struct from `BatchKey` because we need to check if a scanned key
+/// still belongs to the same topic/partition before decoding the batch data.
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+pub(super) struct BatchKeyPrefix {
+    /// Type prefix 'b' for batch
+    pub prefix: char,
+    /// Topic UUID (16 bytes, fixed)
+    pub topic: Uuid,
+    /// Partition number (big-endian for correct ordering)
+    #[serde(with = "postcard::fixint::be")]
+    pub partition: Partition,
+}
+
+impl BatchKeyPrefix {
+    pub(super) fn new(topic: Uuid, partition: Partition) -> Self {
+        Self {
+            prefix: 'b',
+            topic,
+            partition,
+        }
+    }
+}
+
 /// Key for storing committed offsets: `c/{group}/{topic}/{partition:be32}`
 ///
 /// Consumer group offsets are accessed by group, then by topic-partition.
@@ -271,14 +296,26 @@ impl OffsetCommitKey {
             partition,
         }
     }
+}
 
-    /// Create a prefix key for scanning all offsets in a group
-    pub(super) fn group_prefix(group: impl Into<String>) -> Self {
+/// Prefix key for scanning all offsets in a consumer group: `c/{group}`
+///
+/// This is a separate struct from `OffsetCommitKey` because postcard serialization
+/// includes length prefixes for strings, so we can't use an `OffsetCommitKey` with
+/// empty topic as a scan prefix - it would include the empty string's length marker.
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+pub(super) struct OffsetCommitKeyPrefix {
+    /// Type prefix 'c' for commit
+    pub prefix: char,
+    /// Consumer group ID
+    pub group: String,
+}
+
+impl OffsetCommitKeyPrefix {
+    pub(super) fn new(group: impl Into<String>) -> Self {
         Self {
             prefix: 'c',
             group: group.into(),
-            topic: String::new(),
-            partition: 0,
         }
     }
 }
@@ -316,13 +353,22 @@ impl GroupKey {
             group_id: group_id.into(),
         }
     }
+}
 
-    /// Create a prefix key for scanning all groups
-    pub(super) fn scan_prefix() -> Self {
-        Self {
-            prefix: 'g',
-            group_id: String::new(),
-        }
+/// Prefix key for scanning all groups: `g`
+///
+/// This is a separate struct from `GroupKey` because postcard serialization
+/// includes length prefixes for strings, so we can't use a `GroupKey` with
+/// empty group_id as a scan prefix.
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+pub(super) struct GroupKeyPrefix {
+    /// Type prefix 'g' for group
+    pub prefix: char,
+}
+
+impl GroupKeyPrefix {
+    pub(super) fn new() -> Self {
+        Self { prefix: 'g' }
     }
 }
 

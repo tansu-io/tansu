@@ -272,14 +272,16 @@ async fn test_offset_stage_with_transaction() {
     let _ = engine.txn_add_partitions(request).await.unwrap();
 
     // After committing the transaction, offset stage should still be consistent
+    // Note: txn_end now writes a commit marker batch, incrementing high_watermark by 1
     let _ = engine
         .txn_end("stage-test-txn", producer.id, producer.epoch, true)
         .await
         .unwrap();
 
     let stage = engine.offset_stage(&topition).await.unwrap();
-    assert_eq!(1, stage.high_watermark);
-    assert_eq!(1, stage.last_stable);
+    // high_watermark increased by 1 due to commit marker batch
+    assert_eq!(2, stage.high_watermark);
+    assert_eq!(2, stage.last_stable);
 }
 
 // ========== Idempotent Producer Tests ==========

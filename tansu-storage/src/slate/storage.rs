@@ -25,12 +25,12 @@ use async_trait::async_trait;
 use bytes::{BufMut, Bytes, BytesMut};
 use serde::Serialize;
 use tansu_sans_io::{
-    BatchAttribute, ConfigResource, ConfigSource, ConfigType, Encoder, ErrorCode, IsolationLevel,
-    ListOffset,
+    BatchAttribute, ConfigResource, ConfigSource, ControlBatch, Encoder, EndTransactionMarker,
+    ErrorCode, IsolationLevel, ListOffset, OpType,
     add_partitions_to_txn_response::{
         AddPartitionsToTxnPartitionResult, AddPartitionsToTxnTopicResult,
     },
-    create_topics_request::CreatableTopic,
+    create_topics_request::{CreatableTopic, CreatableTopicConfig},
     delete_groups_response::DeletableGroupResult,
     delete_records_request::DeleteRecordsTopic,
     delete_records_response::{DeleteRecordsPartitionResult, DeleteRecordsTopicResult},
@@ -43,7 +43,7 @@ use tansu_sans_io::{
     incremental_alter_configs_response::AlterConfigsResourceResponse,
     list_groups_response::ListedGroup,
     metadata_response::{MetadataResponseBroker, MetadataResponsePartition, MetadataResponseTopic},
-    record::{deflated::Batch, inflated::Batch as InflatedBatch},
+    record::{Record, deflated::Batch, inflated::Batch as InflatedBatch},
     to_system_time,
     txn_offset_commit_response::{TxnOffsetCommitResponsePartition, TxnOffsetCommitResponseTopic},
 };
@@ -60,9 +60,9 @@ use crate::{
 
 use super::engine::Engine;
 use super::types::{
-    BatchKey, BrokerInfo, Brokers, GroupDetailVersion, GroupKey, OffsetCommitKey,
-    OffsetCommitValue, Producers, TopicMetadata, Topics, Transactions, Txn, TxnCommitOffset,
-    TxnDetail, TxnProduceOffset, Watermark, WatermarkKey,
+    BatchKey, BatchKeyPrefix, BrokerInfo, Brokers, GroupDetailVersion, GroupKey, GroupKeyPrefix,
+    OffsetCommitKey, OffsetCommitKeyPrefix, OffsetCommitValue, Producers, TopicMetadata, Topics,
+    Transactions, Txn, TxnCommitOffset, TxnDetail, TxnProduceOffset, Watermark, WatermarkKey,
 };
 
 #[async_trait]
@@ -302,13 +302,75 @@ impl Storage for Engine {
         &self,
         resource: AlterConfigsResource,
     ) -> Result<AlterConfigsResourceResponse> {
-        // For now, just return success for all resource types
-        // This matches the simple behavior in dynostore
-        Ok(AlterConfigsResourceResponse::default()
-            .error_code(ErrorCode::None.into())
-            .error_message(Some("".into()))
-            .resource_type(resource.resource_type)
-            .resource_name(resource.resource_name))
+        match ConfigResource::from(resource.resource_type) {
+            ConfigResource::Topic => {
+                let tx = self
+                    .db
+                    .begin(slatedb::IsolationLevel::SerializableSnapshot)
+                    .await
+                    .inspect_err(|err| debug!(?err))?;
+
+                let mut topics: Topics = self.load_metadata(&tx, Self::TOPICS).await?;
+
+                if let Some(metadata) = topics.get_mut(&resource.resource_name[..]) {
+                    // Build current config map
+                    let mut configuration: BTreeMap<&str, Option<&str>> = metadata
+                        .topic
+                        .configs
+                        .as_deref()
+                        .unwrap_or_default()
+                        .iter()
+                        .fold(BTreeMap::new(), |mut acc, item| {
+                            _ = acc.insert(item.name.as_str(), item.value.as_deref());
+                            acc
+                        });
+
+                    // Apply changes
+                    for change in resource.configs.as_deref().unwrap_or_default() {
+                        match OpType::try_from(change.config_operation)? {
+                            OpType::Set => {
+                                _ = configuration
+                                    .insert(change.name.as_str(), change.value.as_deref());
+                            }
+                            OpType::Delete => {
+                                _ = configuration.remove(change.name.as_str());
+                            }
+                            OpType::Append | OpType::Subtract => {
+                                // Not implemented yet
+                                debug!("Append/Subtract operations not implemented");
+                            }
+                        }
+                    }
+
+                    // Convert back to configs vec
+                    _ = metadata.topic.configs.replace(
+                        configuration
+                            .into_iter()
+                            .map(|(key, value)| {
+                                CreatableTopicConfig::default()
+                                    .name(key.to_owned())
+                                    .value(value.map(|v| v.to_owned()))
+                            })
+                            .collect(),
+                    );
+
+                    self.save_metadata(&tx, Self::TOPICS, &topics)?;
+                    tx.commit().await.map_err(Error::from)?;
+                }
+
+                Ok(AlterConfigsResourceResponse::default()
+                    .error_code(ErrorCode::None.into())
+                    .error_message(Some("".into()))
+                    .resource_type(resource.resource_type)
+                    .resource_name(resource.resource_name))
+            }
+            // For other resource types, just return success
+            _ => Ok(AlterConfigsResourceResponse::default()
+                .error_code(ErrorCode::None.into())
+                .error_message(Some("".into()))
+                .resource_type(resource.resource_type)
+                .resource_name(resource.resource_name)),
+        }
     }
 
     async fn produce(
@@ -395,51 +457,6 @@ impl Storage for Engine {
             self.save_metadata(&tx, Self::PRODUCERS, &producers)?;
         }
 
-        // Handle transactional produce
-        if let Some(transaction_id) = transaction_id {
-            // NOTE: Contention Hotspot
-            // Loading all transactions to update state is not scalable.
-            // Also, there is no cleanup mechanism for completed transactions, leading to unbounded growth of this blob.
-            let mut transactions: Transactions =
-                self.load_metadata(&tx, Self::TRANSACTIONS).await?;
-
-            if let Some(txn) = transactions.get_mut(transaction_id)
-                && let Some(txn_detail) = txn.epochs.get_mut(&deflated.producer_epoch)
-            {
-                let offset_start = self
-                    .db
-                    .get(postcard::to_stdvec(&WatermarkKey::new(
-                        metadata.id,
-                        topition.partition,
-                    ))?)
-                    .await
-                    .map_err(Error::from)
-                    .and_then(|watermark| {
-                        watermark.map_or(Ok(Watermark::default()), |encoded| {
-                            postcard::from_bytes(&encoded[..]).map_err(Into::into)
-                        })
-                    })?
-                    .high
-                    .unwrap_or(0);
-
-                let offset_end = offset_start + deflated.last_offset_delta as i64;
-
-                _ = txn_detail
-                    .produces
-                    .entry(topition.topic.clone())
-                    .or_default()
-                    .insert(
-                        topition.partition,
-                        Some(TxnProduceOffset {
-                            offset_start,
-                            offset_end,
-                        }),
-                    );
-
-                self.save_metadata(&tx, Self::TRANSACTIONS, &transactions)?;
-            }
-        }
-
         let mut watermark = tx
             .get(postcard::to_stdvec(&WatermarkKey::new(
                 metadata.id,
@@ -454,6 +471,39 @@ impl Storage for Engine {
             })?;
 
         let offset = watermark.high.unwrap_or_default();
+        let offset_end = offset + deflated.last_offset_delta as i64;
+
+        // Handle transactional produce - update transaction state with offset range
+        if let Some(transaction_id) = transaction_id {
+            let mut transactions: Transactions =
+                self.load_metadata(&tx, Self::TRANSACTIONS).await?;
+
+            if let Some(txn) = transactions.get_mut(transaction_id)
+                && let Some(txn_detail) = txn.epochs.get_mut(&deflated.producer_epoch)
+            {
+                // Get or create the partition entry in produces map
+                let partition_entry = txn_detail
+                    .produces
+                    .entry(topition.topic.clone())
+                    .or_default()
+                    .entry(topition.partition)
+                    .or_insert(None);
+
+                // Update offset range - keep original offset_start if already set
+                if let Some(existing) = partition_entry {
+                    // Just update offset_end
+                    existing.offset_end = offset_end;
+                } else {
+                    // First produce to this partition - set both start and end
+                    *partition_entry = Some(TxnProduceOffset {
+                        offset_start: offset,
+                        offset_end,
+                    });
+                }
+
+                self.save_metadata(&tx, Self::TRANSACTIONS, &transactions)?;
+            }
+        }
 
         watermark.high = watermark
             .high
@@ -554,6 +604,8 @@ impl Storage for Engine {
             return Err(Error::Api(ErrorCode::UnknownTopicOrPartition));
         }
 
+        let prefix = postcard::to_stdvec(&BatchKeyPrefix::new(metadata.id, topition.partition))?;
+
         let mut i = {
             let from = postcard::to_stdvec(&BatchKey::scan_from(
                 metadata.id,
@@ -570,6 +622,11 @@ impl Storage for Engine {
         let max_bytes = max_bytes as usize;
 
         while let Some(kv) = i.next().await? {
+            // Check if the key still belongs to the same topic/partition
+            if !kv.key.starts_with(&prefix) {
+                break;
+            }
+
             let size = kv.value.len();
 
             let key: BatchKey = postcard::from_bytes(&kv.key)?;
@@ -631,8 +688,15 @@ impl Storage for Engine {
 
         for txn in transactions.values() {
             for txn_detail in txn.epochs.values() {
-                // Only consider transactions that are in-progress (Begin state)
-                if txn_detail.state == Some(TxnState::Begin) {
+                // Consider transactions that are in-progress (Begin, PrepareCommit, or PrepareAbort)
+                // These states indicate the transaction is not yet fully committed/aborted
+                let is_in_progress = matches!(
+                    txn_detail.state,
+                    Some(TxnState::Begin)
+                        | Some(TxnState::PrepareCommit)
+                        | Some(TxnState::PrepareAbort)
+                );
+                if is_in_progress {
                     // Check if this transaction has produced to this topic/partition
                     if let Some(partitions) = txn_detail.produces.get(&topition.topic)
                         && let Some(Some(offset_range)) = partitions.get(&topition.partition)
@@ -675,11 +739,25 @@ impl Storage for Engine {
             .await
             .inspect_err(|err| debug!(?err))?;
 
+        let mut group_inserted = false;
+
         for (topition, offset_commit) in offsets {
             // Verify topic exists
             if !topics.contains_key(&topition.topic[..]) {
                 responses.push((topition.clone(), ErrorCode::UnknownTopicOrPartition));
                 continue;
+            }
+
+            // Insert group entry if not already done in this transaction
+            if !group_inserted {
+                let group_key = postcard::to_stdvec(&GroupKey::new(group))?;
+                // Check if group already exists
+                if tx.get(&group_key).await?.is_none() {
+                    // Create a minimal group entry for offset tracking
+                    let group_value = postcard::to_stdvec(&GroupDetailVersion::default())?;
+                    tx.put(group_key, group_value)?;
+                }
+                group_inserted = true;
             }
 
             let key = postcard::to_stdvec(&OffsetCommitKey::new(
@@ -704,7 +782,7 @@ impl Storage for Engine {
     }
 
     async fn committed_offset_topitions(&self, group_id: &str) -> Result<BTreeMap<Topition, i64>> {
-        let prefix = postcard::to_stdvec(&OffsetCommitKey::group_prefix(group_id))?;
+        let prefix = postcard::to_stdvec(&OffsetCommitKeyPrefix::new(group_id))?;
 
         let mut topitions = BTreeMap::new();
         let mut scan = self.db.scan(prefix.clone()..).await?;
@@ -741,7 +819,16 @@ impl Storage for Engine {
         let mut responses = BTreeMap::new();
 
         if let Some(group_id) = group_id {
+            // Get current topics to check existence
+            let existing_topics = self.get_topics().await?;
+
             for topition in topics {
+                // If the topic doesn't exist, return -1 (mimics PG behavior with JOINs)
+                if !existing_topics.contains_key(&topition.topic[..]) {
+                    _ = responses.insert(topition.clone(), -1);
+                    continue;
+                }
+
                 let key = postcard::to_stdvec(&OffsetCommitKey::new(
                     group_id,
                     &topition.topic,
@@ -772,12 +859,6 @@ impl Storage for Engine {
         isolation_level: IsolationLevel,
         offsets: &[(Topition, ListOffset)],
     ) -> Result<Vec<(Topition, ListOffsetResponse)>> {
-        // TODO: Implement isolation_level for list_offsets
-        // For IsolationLevel::ReadCommitted, we must return the Last Stable Offset.
-        // Returning High Watermark here can expose uncommitted data to consumers.
-        if isolation_level == IsolationLevel::ReadCommitted {
-            tracing::warn!("list_offsets ignores isolation_level, always returns high_watermark");
-        }
         let topics = self.get_topics().await?;
         let mut responses = Vec::with_capacity(offsets.len());
 
@@ -841,7 +922,13 @@ impl Storage for Engine {
                     }
                 }
                 ListOffset::Latest => {
-                    let offset = watermark.high.unwrap_or(0);
+                    // For ReadCommitted, return Last Stable Offset instead of High Watermark
+                    let offset = if isolation_level == IsolationLevel::ReadCommitted {
+                        let offset_stage = self.offset_stage(topition).await?;
+                        offset_stage.last_stable
+                    } else {
+                        watermark.high.unwrap_or(0)
+                    };
                     let timestamp = watermark
                         .timestamps
                         .as_ref()
@@ -874,9 +961,10 @@ impl Storage for Engine {
                             offset: Some(offset),
                             timestamp: to_system_time(ts).ok(),
                         },
+                        // Match PostgreSQL behavior: return offset 0 when no match found
                         None => ListOffsetResponse {
                             error_code: ErrorCode::None,
-                            offset: Some(watermark.high.unwrap_or(0)),
+                            offset: Some(0),
                             timestamp: None,
                         },
                     }
@@ -890,12 +978,6 @@ impl Storage for Engine {
     }
 
     async fn metadata(&self, topics: Option<&[TopicId]>) -> Result<MetadataResponse> {
-        // TODO: Implement topic filtering
-        // Currently returns metadata for ALL topics in the cluster, which is inefficient.
-        // Should respect the `topics` argument and only return requested metadata.
-        if topics.is_some() {
-            tracing::warn!("metadata topic filtering is not implemented, returning all topics");
-        }
         let brokers = vec![
             MetadataResponseBroker::default()
                 .node_id(self.node)
@@ -909,65 +991,104 @@ impl Storage for Engine {
                 .rack(None),
         ];
 
-        let existing = self
-            .db
-            .get(Self::TOPICS)
-            .await
-            .map_err(Error::from)
-            .and_then(|existing| {
-                existing.map_or(Ok(Topics::default()), |encoded| {
-                    postcard::from_bytes(&encoded[..]).map_err(Into::into)
-                })
-            })
-            .map(|existing| {
-                existing
-                    .into_values()
-                    .map(|topic_metadata| {
-                        let name = Some(topic_metadata.topic.name.to_owned());
-                        let error_code = ErrorCode::None.into();
-                        let topic_id = Some(topic_metadata.id.into_bytes());
-                        let is_internal = Some(false);
-                        let partitions = topic_metadata.topic.num_partitions;
-                        let replication_factor = topic_metadata.topic.replication_factor;
+        let existing_topics = self.get_topics().await?;
 
-                        let partitions = Some(
-                            (0..partitions)
-                                .map(|partition_index| {
-                                    let leader_id = self.node;
-                                    let replica_nodes = Some(
-                                        iter::repeat_n(self.node, replication_factor as usize)
-                                            .collect(),
-                                    );
-                                    let isr_nodes = replica_nodes.clone();
+        let topic_to_response = |topic_metadata: &TopicMetadata| {
+            let name = Some(topic_metadata.topic.name.to_owned());
+            let error_code = ErrorCode::None.into();
+            let topic_id = Some(topic_metadata.id.into_bytes());
+            let is_internal = Some(false);
+            let num_partitions = topic_metadata.topic.num_partitions;
+            let replication_factor = topic_metadata.topic.replication_factor;
 
-                                    MetadataResponsePartition::default()
-                                        .error_code(error_code)
-                                        .partition_index(partition_index)
-                                        .leader_id(leader_id)
-                                        .leader_epoch(Some(-1))
-                                        .replica_nodes(replica_nodes)
-                                        .isr_nodes(isr_nodes)
-                                        .offline_replicas(Some([].into()))
-                                })
-                                .collect(),
-                        );
+            let partitions = Some(
+                (0..num_partitions)
+                    .map(|partition_index| {
+                        let leader_id = self.node;
+                        let replica_nodes =
+                            Some(iter::repeat_n(self.node, replication_factor as usize).collect());
+                        let isr_nodes = replica_nodes.clone();
 
-                        MetadataResponseTopic::default()
+                        MetadataResponsePartition::default()
                             .error_code(error_code)
-                            .name(name)
-                            .topic_id(topic_id)
-                            .is_internal(is_internal)
-                            .partitions(partitions)
-                            .topic_authorized_operations(Some(i32::MIN))
+                            .partition_index(partition_index)
+                            .leader_id(leader_id)
+                            .leader_epoch(Some(-1))
+                            .replica_nodes(replica_nodes)
+                            .isr_nodes(isr_nodes)
+                            .offline_replicas(Some([].into()))
                     })
-                    .collect()
-            })?;
+                    .collect(),
+            );
+
+            MetadataResponseTopic::default()
+                .error_code(error_code)
+                .name(name)
+                .topic_id(topic_id)
+                .is_internal(is_internal)
+                .partitions(partitions)
+                .topic_authorized_operations(Some(i32::MIN))
+        };
+
+        let topic_responses = match topics {
+            Some(topic_ids) if !topic_ids.is_empty() => {
+                // Filter by requested topics
+                let mut responses = Vec::with_capacity(topic_ids.len());
+
+                for topic_id in topic_ids {
+                    match topic_id {
+                        TopicId::Name(name) => {
+                            if let Some(metadata) = existing_topics.get(name.as_str()) {
+                                responses.push(topic_to_response(metadata));
+                            } else {
+                                // Topic not found - return error response
+                                responses.push(
+                                    MetadataResponseTopic::default()
+                                        .error_code(ErrorCode::UnknownTopicOrPartition.into())
+                                        .name(Some(name.clone()))
+                                        .topic_id(Some(NULL_TOPIC_ID))
+                                        .is_internal(Some(false))
+                                        .partitions(Some([].into()))
+                                        .topic_authorized_operations(Some(i32::MIN)),
+                                );
+                            }
+                        }
+                        TopicId::Id(id) => {
+                            // Find topic by UUID
+                            let found =
+                                existing_topics.values().find(|metadata| metadata.id == *id);
+
+                            if let Some(metadata) = found {
+                                responses.push(topic_to_response(metadata));
+                            } else {
+                                // Topic not found - return error response
+                                responses.push(
+                                    MetadataResponseTopic::default()
+                                        .error_code(ErrorCode::UnknownTopicOrPartition.into())
+                                        .name(None)
+                                        .topic_id(Some(id.into_bytes()))
+                                        .is_internal(Some(false))
+                                        .partitions(Some([].into()))
+                                        .topic_authorized_operations(Some(i32::MIN)),
+                                );
+                            }
+                        }
+                    }
+                }
+
+                responses
+            }
+            _ => {
+                // Return all topics
+                existing_topics.values().map(topic_to_response).collect()
+            }
+        };
 
         Ok(MetadataResponse {
             cluster: Some(self.cluster.clone()),
             controller: Some(self.node),
             brokers,
-            topics: existing,
+            topics: topic_responses,
         })
     }
 
@@ -1005,8 +1126,8 @@ impl Storage for Engine {
                                         .config_source(Some(ConfigSource::DefaultConfig.into()))
                                         .is_sensitive(false)
                                         .synonyms(Some([].into()))
-                                        .config_type(Some(ConfigType::String.into()))
-                                        .documentation(None)
+                                        .config_type(Some(ConfigResource::Topic.into()))
+                                        .documentation(Some("".into()))
                                 })
                                 .collect()
                         })))
@@ -1145,7 +1266,7 @@ impl Storage for Engine {
         if states_filter.is_some() {
             tracing::warn!("list_groups state filtering is not implemented, returning all groups");
         }
-        let prefix = postcard::to_stdvec(&GroupKey::scan_prefix())?;
+        let prefix = postcard::to_stdvec(&GroupKeyPrefix::new())?;
         let mut groups = vec![];
 
         let mut scan = self.db.scan(prefix.clone()..).await?;
@@ -1192,7 +1313,7 @@ impl Storage for Engine {
                 }
 
                 // Delete committed offsets for this group
-                let offset_prefix = postcard::to_stdvec(&OffsetCommitKey::group_prefix(group_id))?;
+                let offset_prefix = postcard::to_stdvec(&OffsetCommitKeyPrefix::new(group_id))?;
                 let mut deleted_offsets = false;
 
                 // Note: SlateDB doesn't support range deletes directly,
@@ -1348,13 +1469,104 @@ impl Storage for Engine {
             // Check if transaction already exists
             if transactions.contains_key(transaction_id) {
                 let existing_txn = transactions.get_mut(transaction_id).unwrap();
-                // Bump epoch for existing transaction
-                let new_epoch = existing_txn
+                let producer_id = existing_txn.producer;
+
+                // Check if there's an active epoch that needs to be aborted
+                let (old_epoch, needs_abort) = existing_txn
                     .epochs
                     .last_key_value()
-                    .map(|(e, _)| e + 1)
-                    .unwrap_or(0);
+                    .map(|(e, detail)| (*e, detail.state == Some(TxnState::Begin)))
+                    .unwrap_or((0, false));
 
+                // If old epoch is in Begin state, we need to abort it
+                if needs_abort && let Some(old_detail) = existing_txn.epochs.get_mut(&old_epoch) {
+                    // Write abort markers for all partitions this transaction produced to
+                    let topics = self.get_topics().await?;
+                    for (topic_name, partitions) in &old_detail.produces {
+                        for partition in partitions.keys() {
+                            let Some(metadata) = topics.get(topic_name.as_str()) else {
+                                continue;
+                            };
+
+                            // Create abort marker batch
+                            let control_batch: Bytes =
+                                ControlBatch::default().abort().try_into()?;
+                            let end_transaction_marker: Bytes =
+                                EndTransactionMarker::default().try_into()?;
+
+                            let batch: Batch = InflatedBatch::builder()
+                                .record(
+                                    Record::builder()
+                                        .key(control_batch.into())
+                                        .value(end_transaction_marker.into()),
+                                )
+                                .attributes(
+                                    BatchAttribute::default()
+                                        .control(true)
+                                        .transaction(true)
+                                        .into(),
+                                )
+                                .producer_id(producer_id)
+                                .producer_epoch(old_epoch)
+                                .base_sequence(-1)
+                                .build()
+                                .and_then(TryInto::try_into)?;
+
+                            // Get current watermark and increment it
+                            let watermark_key =
+                                postcard::to_stdvec(&WatermarkKey::new(metadata.id, *partition))?;
+                            let mut watermark =
+                                tx.get(&watermark_key).await.map_err(Error::from).and_then(
+                                    |watermark| {
+                                        watermark.map_or(Ok(Watermark::default()), |encoded| {
+                                            postcard::from_bytes(&encoded[..]).map_err(Into::into)
+                                        })
+                                    },
+                                )?;
+
+                            let offset = watermark.high.unwrap_or_default();
+
+                            watermark.high = watermark
+                                .high
+                                .map_or(Some(batch.last_offset_delta as i64 + 1i64), |high| {
+                                    Some(high + batch.last_offset_delta as i64 + 1i64)
+                                });
+
+                            _ = watermark
+                                .timestamps
+                                .get_or_insert_default()
+                                .insert(batch.base_timestamp, offset);
+
+                            // Encode and store the batch
+                            let encoded = {
+                                let mut writer = BytesMut::new().writer();
+                                let mut encoder = Encoder::new(&mut writer);
+                                batch.serialize(&mut encoder)?;
+                                Bytes::from(writer.into_inner())
+                            };
+
+                            let batch_key = postcard::to_stdvec(&BatchKey::new(
+                                metadata.id,
+                                *partition,
+                                offset,
+                            ))?;
+                            tx.put(batch_key, &encoded[..])?;
+
+                            // Save updated watermark
+                            let watermark_value = postcard::to_stdvec(&watermark)?;
+                            tx.put(watermark_key, watermark_value)?;
+                        }
+                    }
+
+                    // Mark old epoch as aborted
+                    old_detail.state = Some(TxnState::Aborted);
+                }
+
+                // Bump epoch for existing transaction
+                let new_epoch = old_epoch + 1;
+
+                // Re-get mutable reference after potential modification
+                let existing_txn = transactions.get_mut(transaction_id).unwrap();
                 _ = existing_txn.epochs.insert(
                     new_epoch,
                     TxnDetail {
@@ -1365,9 +1577,13 @@ impl Storage for Engine {
                     },
                 );
 
-                let producer_id = existing_txn.producer;
+                // Also update producer's sequences with the new epoch
+                if let Some(producer_detail) = producers.get_mut(&producer_id) {
+                    _ = producer_detail.sequences.insert(new_epoch, BTreeMap::new());
+                }
 
                 self.save_metadata(&tx, Self::TRANSACTIONS, &transactions)?;
+                self.save_metadata(&tx, Self::PRODUCERS, &producers)?;
 
                 tx.commit().await.map_err(Error::from)?;
 
@@ -1786,59 +2002,245 @@ impl Storage for Engine {
 
         let mut transactions: Transactions = self.load_metadata(&tx, Self::TRANSACTIONS).await?;
 
-        let Some(transaction) = transactions.get_mut(transaction_id) else {
-            return Err(Error::Api(ErrorCode::TransactionalIdNotFound));
+        // First, validate the transaction and collect necessary information
+        let (current_produces, current_offsets) = {
+            let Some(transaction) = transactions.get_mut(transaction_id) else {
+                return Err(Error::Api(ErrorCode::TransactionalIdNotFound));
+            };
+
+            if transaction.producer != producer_id {
+                return Err(Error::Api(ErrorCode::UnknownProducerId));
+            }
+
+            let Some(mut current_epoch_entry) = transaction.epochs.last_entry() else {
+                return Err(Error::Api(ErrorCode::ProducerFenced));
+            };
+
+            if &producer_epoch != current_epoch_entry.key() {
+                return Err(Error::Api(ErrorCode::ProducerFenced));
+            }
+
+            let txn_detail = current_epoch_entry.get_mut();
+
+            if txn_detail.state == Some(TxnState::Begin) {
+                txn_detail.state = Some(if committed {
+                    TxnState::PrepareCommit
+                } else {
+                    TxnState::PrepareAbort
+                });
+            }
+
+            // Clone the produces and offsets for later use
+            let produces = txn_detail.produces.clone();
+            let offsets = txn_detail.offsets.clone();
+
+            (produces, offsets)
         };
 
-        if transaction.producer != producer_id {
-            return Err(Error::Api(ErrorCode::UnknownProducerId));
-        }
+        // Produce commit/abort marker batches for each partition
+        // Track the maximum offset after producing control batches (for overlap detection)
+        let topics = self.get_topics().await?;
+        let mut current_offset_end: i64 = 0;
 
-        let Some(mut current_epoch) = transaction.epochs.last_entry() else {
-            return Err(Error::Api(ErrorCode::ProducerFenced));
-        };
+        for (topic_name, partitions) in &current_produces {
+            for partition in partitions.keys() {
+                let Some(metadata) = topics.get(topic_name.as_str()) else {
+                    continue;
+                };
 
-        if &producer_epoch != current_epoch.key() {
-            return Err(Error::Api(ErrorCode::ProducerFenced));
-        }
+                let topition = Topition::new(topic_name.clone(), *partition);
 
-        let txn_detail = current_epoch.get_mut();
+                // Create the control batch marker
+                let control_batch: Bytes = if committed {
+                    ControlBatch::default().commit().try_into()?
+                } else {
+                    ControlBatch::default().abort().try_into()?
+                };
+                let end_transaction_marker: Bytes = EndTransactionMarker::default().try_into()?;
 
-        if txn_detail.state == Some(TxnState::Begin) {
-            txn_detail.state = Some(if committed {
-                TxnState::PrepareCommit
-            } else {
-                TxnState::PrepareAbort
-            });
-        }
+                let batch: Batch = InflatedBatch::builder()
+                    .record(
+                        Record::builder()
+                            .key(control_batch.into())
+                            .value(end_transaction_marker.into()),
+                    )
+                    .attributes(
+                        BatchAttribute::default()
+                            .control(true)
+                            .transaction(true)
+                            .into(),
+                    )
+                    .producer_id(producer_id)
+                    .producer_epoch(producer_epoch)
+                    .base_sequence(-1)
+                    .build()
+                    .and_then(TryInto::try_into)?;
 
-        // If committing, apply the offset commits
-        if committed {
-            for (group_id, topics) in &txn_detail.offsets {
-                for (topic_name, partitions) in topics {
-                    for (partition, commit_offset) in partitions {
-                        let key = postcard::to_stdvec(&OffsetCommitKey::new(
-                            group_id, topic_name, *partition,
-                        ))?;
-
-                        let value = postcard::to_stdvec(&OffsetCommitValue {
-                            offset: commit_offset.committed_offset,
-                            leader_epoch: commit_offset.leader_epoch,
-                            metadata: commit_offset.metadata.clone(),
+                // Get current watermark and increment it
+                let watermark_key =
+                    postcard::to_stdvec(&WatermarkKey::new(metadata.id, *partition))?;
+                let mut watermark =
+                    tx.get(&watermark_key)
+                        .await
+                        .map_err(Error::from)
+                        .and_then(|watermark| {
+                            watermark.map_or(Ok(Watermark::default()), |encoded| {
+                                postcard::from_bytes(&encoded[..]).map_err(Into::into)
+                            })
                         })?;
 
-                        tx.put(key, value)?;
+                let offset = watermark.high.unwrap_or_default();
+
+                // Track the control batch offset (this is the new offset_end for overlap detection)
+                current_offset_end = current_offset_end.max(offset);
+
+                watermark.high = watermark
+                    .high
+                    .map_or(Some(batch.last_offset_delta as i64 + 1i64), |high| {
+                        Some(high + batch.last_offset_delta as i64 + 1i64)
+                    });
+
+                _ = watermark
+                    .timestamps
+                    .get_or_insert_default()
+                    .insert(batch.base_timestamp, offset);
+
+                // Encode and store the batch
+                let encoded = {
+                    let mut writer = BytesMut::new().writer();
+                    let mut encoder = Encoder::new(&mut writer);
+                    batch.serialize(&mut encoder)?;
+                    Bytes::from(writer.into_inner())
+                };
+
+                let batch_key =
+                    postcard::to_stdvec(&BatchKey::new(metadata.id, topition.partition, offset))?;
+                tx.put(batch_key, &encoded[..])?;
+
+                // Save updated watermark
+                let watermark_value = postcard::to_stdvec(&watermark)?;
+                tx.put(watermark_key, watermark_value)?;
+            }
+        }
+
+        // Check for overlapping transactions and collect prepared ones
+        // An overlapping transaction is one whose offset range intersects with this transaction
+        let mut prepared_overlaps: Vec<(String, i16)> = vec![]; // (transaction_id, epoch)
+        let mut has_unprepared_overlap = false;
+
+        for (other_txn_id, other_txn) in transactions.iter() {
+            if other_txn_id == transaction_id {
+                continue;
+            }
+
+            for (other_epoch, other_detail) in &other_txn.epochs {
+                // Check if there's any partition overlap where other's offset_start < current's offset_end
+                let has_overlap = other_detail
+                    .produces
+                    .iter()
+                    .any(|(topic, other_partitions)| {
+                        if let Some(current_partitions) = current_produces.get(topic) {
+                            other_partitions.iter().any(|(partition, other_range)| {
+                                if current_partitions.contains_key(partition)
+                                    && let Some(range) = other_range
+                                {
+                                    return range.offset_start < current_offset_end;
+                                }
+                                false
+                            })
+                        } else {
+                            false
+                        }
+                    });
+
+                if has_overlap {
+                    match other_detail.state {
+                        Some(TxnState::Begin) => {
+                            has_unprepared_overlap = true;
+                        }
+                        Some(TxnState::PrepareCommit) | Some(TxnState::PrepareAbort) => {
+                            prepared_overlaps.push((other_txn_id.clone(), *other_epoch));
+                        }
+                        _ => {}
                     }
                 }
             }
         }
 
-        // Mark transaction as complete
-        txn_detail.state = Some(if committed {
-            TxnState::Committed
-        } else {
-            TxnState::Aborted
-        });
+        // If there are unprepared overlapping transactions, only mark as PrepareCommit/PrepareAbort
+        // Otherwise, complete all prepared overlapping transactions and the current transaction
+        if !has_unprepared_overlap {
+            // First, apply offset commits for the current transaction
+            if committed {
+                for (group_id, group_topics) in &current_offsets {
+                    for (topic_name, partitions) in group_topics {
+                        for (partition, commit_offset) in partitions {
+                            let key = postcard::to_stdvec(&OffsetCommitKey::new(
+                                group_id, topic_name, *partition,
+                            ))?;
+
+                            let value = postcard::to_stdvec(&OffsetCommitValue {
+                                offset: commit_offset.committed_offset,
+                                leader_epoch: commit_offset.leader_epoch,
+                                metadata: commit_offset.metadata.clone(),
+                            })?;
+
+                            tx.put(key, value)?;
+                        }
+                    }
+                }
+            }
+
+            // Mark current transaction as complete
+            {
+                let transaction = transactions.get_mut(transaction_id).unwrap();
+                let txn_detail = transaction.epochs.get_mut(&producer_epoch).unwrap();
+                txn_detail.state = Some(if committed {
+                    TxnState::Committed
+                } else {
+                    TxnState::Aborted
+                });
+            }
+
+            // Also complete all prepared overlapping transactions
+            for (overlap_txn_id, overlap_epoch) in &prepared_overlaps {
+                let Some(overlap_txn) = transactions.get_mut(overlap_txn_id) else {
+                    continue;
+                };
+                let Some(overlap_detail) = overlap_txn.epochs.get_mut(overlap_epoch) else {
+                    continue;
+                };
+
+                // Apply offset commits for PrepareCommit transactions
+                if overlap_detail.state == Some(TxnState::PrepareCommit) {
+                    for (group_id, group_topics) in &overlap_detail.offsets {
+                        for (topic_name, partitions) in group_topics {
+                            for (partition, commit_offset) in partitions {
+                                let key = postcard::to_stdvec(&OffsetCommitKey::new(
+                                    group_id, topic_name, *partition,
+                                ))?;
+
+                                let value = postcard::to_stdvec(&OffsetCommitValue {
+                                    offset: commit_offset.committed_offset,
+                                    leader_epoch: commit_offset.leader_epoch,
+                                    metadata: commit_offset.metadata.clone(),
+                                })?;
+
+                                tx.put(key, value)?;
+                            }
+                        }
+                    }
+                }
+
+                // Update state to final
+                overlap_detail.state =
+                    Some(if overlap_detail.state == Some(TxnState::PrepareCommit) {
+                        TxnState::Committed
+                    } else {
+                        TxnState::Aborted
+                    });
+            }
+        }
 
         self.save_metadata(&tx, Self::TRANSACTIONS, &transactions)?;
 
