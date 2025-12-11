@@ -121,11 +121,11 @@ use dynostore::DynoStore;
 
 use glob::{GlobError, PatternError};
 
+#[cfg(feature = "dynostore")]
+use object_store::memory::InMemory;
+
 #[cfg(any(feature = "dynostore", feature = "slatedb"))]
-use object_store::{
-    aws::{AmazonS3Builder, S3ConditionalPut},
-    memory::InMemory,
-};
+use object_store::aws::{AmazonS3Builder, S3ConditionalPut};
 
 use opentelemetry::{
     InstrumentationScope, KeyValue, global,
@@ -1748,26 +1748,36 @@ impl Builder<i32, String, Url, Url> {
 
             #[cfg(feature = "slatedb")]
             "slatedb" => {
+                use object_store::memory::InMemory;
                 use slatedb::Db;
 
-                let bucket_name = self.storage.host_str().unwrap_or("tansu");
+                let host = self.storage.host_str().unwrap_or("tansu");
+                let db_path = format!("tansu-{}.slatedb", self.cluster_id);
 
-                let object_store = AmazonS3Builder::from_env()
-                    .with_bucket_name(bucket_name)
-                    .with_conditional_put(S3ConditionalPut::ETagMatch)
-                    .build()
-                    .map(Arc::new)?;
+                // Support memory backend for testing: slatedb://memory
+                let object_store: Arc<dyn object_store::ObjectStore> = if host == "memory" {
+                    Arc::new(InMemory::new())
+                } else {
+                    // Use S3 backend with host as bucket name
+                    AmazonS3Builder::from_env()
+                        .with_bucket_name(host)
+                        .with_conditional_put(S3ConditionalPut::ETagMatch)
+                        .build()
+                        .map(Arc::new)?
+                };
 
-                Db::open(format!("tansu-{}.slatedb", self.cluster_id), object_store)
+                Db::open(db_path, object_store)
                     .await
                     .map(Arc::new)
                     .map(|db| {
-                        slate::Engine::new(
-                            self.cluster_id.as_str(),
-                            self.node_id,
-                            self.advertised_listener,
-                            db,
-                        )
+                        slate::Engine::builder()
+                            .cluster(self.cluster_id.clone())
+                            .node(self.node_id)
+                            .advertised_listener(self.advertised_listener.clone())
+                            .db(db)
+                            .schemas(self.schema_registry)
+                            .lake(self.lake_house)
+                            .build()
                     })
                     .map(StorageContainer::Slate)
                     .map_err(Into::into)
@@ -1775,7 +1785,7 @@ impl Builder<i32, String, Url, Url> {
 
             #[cfg(not(feature = "slatedb"))]
             "slatedb" => Err(Error::FeatureNotEnabled {
-                feature: "libsql".into(),
+                feature: "slatedb".into(),
                 message: self.storage.to_string(),
             }),
 

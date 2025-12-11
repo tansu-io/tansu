@@ -77,12 +77,12 @@
 //!
 //! 4. **Large Partition Scans**: Very large partitions may benefit from skip-list indexing.
 
-use std::{cmp::Ordering, fmt, io::Cursor, sync::Arc};
+use std::{cmp::Ordering, fmt, sync::Arc};
 
 use bytes::Bytes;
 use serde::Deserialize;
 use slatedb::Db;
-use tansu_sans_io::{Decoder, ErrorCode, record::deflated::Batch};
+use tansu_sans_io::{ErrorCode, de::BatchDecoder, record::deflated::Batch};
 use tansu_schema::{Registry, lake::House};
 use tracing::debug;
 use url::Url;
@@ -239,9 +239,8 @@ impl Engine {
     }
 
     pub(super) fn decode(&self, encoded: Bytes) -> Result<Batch> {
-        let mut c = Cursor::new(encoded);
-        let mut decoder = Decoder::new(&mut c);
-        Batch::deserialize(&mut decoder).map_err(Into::into)
+        let decoder = BatchDecoder::new(encoded);
+        Batch::deserialize(decoder).map_err(Into::into)
     }
 
     pub(super) async fn load_metadata<T>(
