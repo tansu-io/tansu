@@ -28,7 +28,7 @@ use object_store::{
     PutMultipartOptions, PutOptions, PutPayload, PutResult, UpdateVersion, path::Path,
 };
 use opentelemetry::{KeyValue, metrics::Counter};
-use tracing::debug;
+use tracing::{debug, instrument};
 
 use crate::{Error, dynostore::object_store_error_name};
 
@@ -252,12 +252,13 @@ where
             })
     }
 
+    #[instrument(skip_all, fields(%location), ret)]
     async fn get_opts(
         &self,
         location: &Path,
         options: GetOptions,
     ) -> Result<GetResult, object_store::Error> {
-        debug!(%location, ?options);
+        debug!(?options);
 
         let method = KeyValue::new("method", "get_opts");
 
@@ -267,13 +268,13 @@ where
             self.evict(&mut guard, from_ref(&method));
 
             if let Some(entry) = guard.deref_mut().get_mut(location) {
-                debug!(%location, ?entry);
+                debug!(?entry);
 
                 if let Some(ref cached_e_tag) = entry.version.e_tag {
-                    debug!(%location, cached_e_tag);
+                    debug!(cached_e_tag);
 
                     if let Some(ref presented) = options.if_none_match {
-                        debug!(%location, cached_e_tag, presented);
+                        debug!(cached_e_tag, presented);
 
                         if cached_e_tag == presented {
                             entry.hit();
@@ -281,7 +282,7 @@ where
                             let outcome = "hit";
 
                             OUTCOMES.add(1, &[method, KeyValue::new("outcome", outcome)]);
-                            debug!(%location, outcome);
+                            debug!(outcome);
 
                             return Err(object_store::Error::NotModified {
                                 path: location.to_string(),
@@ -289,26 +290,26 @@ where
                             });
                         } else {
                             let outcome = "no_match";
-                            debug!(%location, outcome);
+                            debug!(outcome);
 
                             OUTCOMES.add(1, &[method.clone(), KeyValue::new("outcome", outcome)]);
                         }
                     } else {
                         let outcome = "miss";
 
-                        debug!(%location, outcome);
+                        debug!(outcome);
                         OUTCOMES.add(1, &[method.clone(), KeyValue::new("outcome", outcome)]);
                     }
                 } else {
                     let outcome = "miss";
 
-                    debug!(%location, outcome);
+                    debug!(outcome);
                     OUTCOMES.add(1, &[method.clone(), KeyValue::new("outcome", outcome)]);
                 }
             } else {
                 let outcome = "miss";
 
-                debug!(%location, outcome);
+                debug!(outcome);
                 OUTCOMES.add(1, &[method.clone(), KeyValue::new("outcome", outcome)]);
             }
         }

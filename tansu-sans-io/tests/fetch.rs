@@ -32,13 +32,15 @@ fn request() {
     assert_eq!(MessageKind::Request, message.message_kind);
 
     let structures = message.structures();
-    let keys: Vec<&&str> = structures.keys().collect();
+    let mut keys: Vec<_> = structures.into_iter().map(|(name, _)| name).collect();
+    keys.sort();
+
     assert_eq!(
         vec![
-            &"FetchPartition",
-            &"FetchTopic",
-            &"ForgottenTopic",
-            &"ReplicaState"
+            "FetchPartition",
+            "FetchTopic",
+            "ForgottenTopic",
+            "ReplicaState"
         ],
         keys
     );

@@ -11,11 +11,13 @@ cargo-build +args:
 license:
     cargo about generate about.hbs > license.html
 
-build: (cargo-build "--bin" "tansu" "--no-default-features" "--features" "delta,dynostore,iceberg,libsql,parquet,postgres")
+build profile="dev" features="delta,dynostore,iceberg,libsql,parquet,postgres" bin="tansu": (cargo-build "--profile" profile "--timings" "--bin" bin "--no-default-features" "--features" features)
 
 build-examples: (cargo-build "--examples")
 
 release: (cargo-build "--release" "--bin" "tansu" "--no-default-features" "--features" "delta,dynostore,iceberg,libsql,parquet,postgres")
+
+release-sqlite: (cargo-build "--release" "--bin" "tansu" "--no-default-features" "--features" "libsql")
 
 test: test-workspace test-doc
 
@@ -232,7 +234,7 @@ search-topic-produce:
 search-duckdb-parquet: (duckdb-parquet "search")
 
 tansu-server:
-    target/debug/tansu broker --schema-registry file://./etc/schema 2>&1 | tee tansu.log
+    target/debug/tansu broker --schema-registry file://./etc/schema 2>&1 | tee broker.log
 
 kafka-proxy:
     docker run -d -p 19092:9092 apache/kafka:3.9.0
@@ -287,18 +289,18 @@ flamegraph *args:
     cargo flamegraph {{args}}
 
 benchmark-flamegraph: build docker-compose-down minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up
-	flamegraph -- target/debug/tansu broker 2>&1  | tee tansu.log
+	flamegraph -- target/debug/tansu broker 2>&1  | tee broker.log
 
 benchmark: build docker-compose-down minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up
-	target/debug/tansu broker 2>&1  | tee tansu.log
+	target/debug/tansu broker 2>&1  | tee broker.log
 
 otel: build docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up
-	target/debug/tansu broker 2>&1  | tee tansu.log
+	target/debug/tansu broker 2>&1  | tee broker.log
 
 otel-up: docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up tansu-up
 
-tansu-broker kind *args:
-    target/{{kind}}/tansu broker {{args}} 2>&1 | tee broker.log
+tansu-broker profile *args:
+    target/{{replace(profile, "dev", "debug")}}/tansu broker {{args}} 2>&1 | tee broker.log
 
 # run a debug broker with configuration from .env
 broker *args: build docker-compose-down prometheus-up grafana-up db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket lakehouse-catalog-up (tansu-broker "debug" args)
@@ -314,7 +316,7 @@ proxy *args:
 
 # teardown compose, rebuild: minio, db, tansu and lake buckets
 server: (cargo-build "--bin" "tansu") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket lakehouse-catalog-up
-	target/debug/tansu broker 2>&1  | tee tansu.log
+	target/debug/tansu broker 2>&1  | tee broker.log
 
 gdb: (cargo-build "--bin" "tansu") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket
     rust-gdb --args target/debug/tansu broker
@@ -374,10 +376,110 @@ employee-produce: (cat-produce "employee" "etc/data/employees.json")
 # employee duckdb delta lake
 employee-duckdb-delta: (duckdb "\"select * from delta_scan('s3://lake/tansu.employee');\"")
 
-
 # create customer topic with schema etc/schema/customer.proto
 customer-topic-create *args: (topic-create "customer" "--partitions=1"  "--config=tansu.lake.normalize=true" "--config=tansu.lake.partition=meta.day" "--config=tansu.lake.sink=true" "--config=tansu.batch=true" "--config=tansu.batch.max_records=200" "--config=tansu.batch.timeout_ms=1000" args)
 
 customer-topic-generator *args: (generator "customer" args)
 
 customer-duckdb-delta: (duckdb "\"select * from delta_scan('s3://lake/tansu.customer');\"")
+
+broker-null profile="profiling":
+    cargo build --profile {{profile}} --bin tansu
+    ./target/{{replace(profile, "dev", "debug")}}/tansu --storage-engine=null://sink 2>&1 | tee broker.log
+
+broker-sqlite profile="profiling":
+    rm -f tansu.db*
+    cargo build --profile {{profile}} --features libsql --bin tansu
+    ./target/{{replace(profile, "dev", "debug")}}/tansu --storage-engine=sqlite://tansu.db 2>&1 | tee broker.log
+
+broker-postgres profile="profiling": docker-compose-down db-up
+    cargo build --profile {{profile}} --features postgres --bin tansu
+    ./target/{{replace(profile, "dev", "debug")}}/tansu --storage-engine=postgres://postgres:postgres@localhost 2>&1 | tee broker.log
+
+samply-null profile="profiling":
+    cargo build --profile {{profile}} --bin tansu
+    RUST_LOG=warn samply record ./target/{{replace(profile, "dev", "debug")}}/tansu --storage-engine=null://sink
+
+flamegraph-null profile="profiling":
+    cargo build --profile {{profile}} --bin tansu
+    RUST_LOG=warn flamegraph -- ./target/{{replace(profile, "dev", "debug")}}/tansu --storage-engine=null://sink
+
+flamegraph-sqlite profile="profiling":
+    rm -f tansu.db*
+    cargo build --profile {{profile}} --features libsql --bin tansu
+    RUST_LOG=warn flamegraph -- ./target/{{replace(profile, "dev", "debug")}}/tansu --storage-engine=sqlite://tansu.db 2>&1
+
+flamegraph-postgres profile="profiling": docker-compose-down db-up
+    RUSTFLAGS="-C force-frame-pointers=yes" cargo build --profile {{profile}} --features postgres --bin tansu
+    RUST_LOG=warn flamegraph -- ./target/{{replace(profile, "dev", "debug")}}/tansu --storage-engine=postgres://postgres:postgres@localhost
+
+flamegraph-s3 profile="profiling": docker-compose-down minio-up minio-ready-local minio-local-alias minio-tansu-bucket
+    RUSTFLAGS="-C force-frame-pointers=yes" cargo build --profile {{profile}} --features dynostore --bin tansu
+    RUST_LOG=warn flamegraph -- ./target/{{replace(profile, "dev", "debug")}}/tansu --storage-engine=s3://tansu/
+
+samply-produce profile="profiling":
+    cargo build --profile {{profile}} --bin bench_produce_v11
+    RUST_LOG=warn samply record ./target/{{replace(profile, "dev", "debug")}}/bench_produce_v11
+
+flamegraph-produce profile="profiling":
+    cargo build --profile {{profile}} --bin bench_produce_v11
+    RUST_LOG=warn flamegraph -- ./target/{{replace(profile, "dev", "debug")}}/bench_produce_v11
+
+bench-hyperfine profile="release": (build profile "libsql" "bench")
+    hyperfine -N ./target/{{replace(profile, "dev", "debug")}}/bench
+
+bench-dhat mode="heap" profile="release": (build profile "libsql" "bench")
+    valgrind --tool=dhat --mode={{mode}} ./target/{{replace(profile, "dev", "debug")}}/bench
+
+bench-flamegraph profile="profiling": (build profile "libsql" "bench")
+    RUST_LOG=warn flamegraph -- ./target/{{replace(profile, "dev", "debug")}}/bench
+
+bench-flamegraph-produce profile="profiling": (build profile "libsql" "bench")
+    RUST_LOG=warn flamegraph -- ./target/{{replace(profile, "dev", "debug")}}/bench --api-key=0
+
+bench-flamegraph-fetch profile="profiling": (build profile "libsql" "bench")
+    RUST_LOG=warn flamegraph -- ./target/{{replace(profile, "dev", "debug")}}/bench --api-key=1
+
+bench-perf profile="profiling": (build profile "libsql" "bench")
+    RUST_LOG=warn perf record --call-graph dwarf ./target/{{replace(profile, "dev", "debug")}}/bench 2>&1 >/dev/null
+
+producer-perf  throughput="1000" record_size="1024" num_records="100000":
+    kafka-producer-perf-test --topic test --num-records {{num_records}} --record-size {{record_size}} --throughput {{throughput}} --producer-props bootstrap.servers=${ADVERTISED_LISTENER}
+
+producer-perf-10: (producer-perf "10")
+
+producer-perf-1000: (producer-perf "1000")
+
+producer-perf-2000: (producer-perf "2000")
+
+producer-perf-3000: (producer-perf "3000")
+
+producer-perf-5000: (producer-perf "5000" "1024" "125000")
+
+producer-perf-6000: (producer-perf "6000" "1024" "150000")
+
+producer-perf-7000: (producer-perf "7000" "1024" "175000")
+
+producer-perf-8000: (producer-perf "8000" "1024" "200000")
+
+producer-perf-9000: (producer-perf "9000" "1024" "225000")
+
+producer-perf-10000: (producer-perf "10000" "1024" "250000")
+
+producer-perf-15000: (producer-perf "15000" "1024" "375000")
+
+producer-perf-20000: (producer-perf "20000" "1024" "500000")
+
+producer-perf-40000: (producer-perf "40000" "1024" "1000000")
+
+producer-perf-45000: (producer-perf "45000" "1024" "1100000")
+
+producer-perf-50000: (producer-perf "50000" "1024" "1250000")
+
+producer-perf-100000: (producer-perf "100000" "1024" "2500000")
+
+producer-perf-200000: (producer-perf "200000" "1024" "5000000")
+
+producer-perf-500000: (producer-perf "500000" "1024" "12500000")
+
+producer-perf-1000000: (producer-perf "1000000" "1024" "25000000")

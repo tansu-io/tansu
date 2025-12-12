@@ -153,19 +153,20 @@ pub mod header;
 pub mod inflated;
 
 use crate::{
-    Result,
+    Decode, Encode, Result,
     primitive::{
         ByteSize,
         varint::{LongVarInt, VarInt},
     },
 };
-use bytes::Bytes;
+use bytes::{Buf as _, BufMut as _, Bytes, BytesMut};
 use codec::{Octets, VarIntSequence};
 pub use header::Header;
 use serde::{
     Deserialize, Serialize, Serializer,
     ser::{self, SerializeSeq},
 };
+use tracing::{debug, instrument};
 
 /// A Kafka API Record.
 ///
@@ -197,6 +198,62 @@ pub struct Record {
     #[serde(serialize_with = "VarIntSequence::<Header>::serialize")]
     #[serde(deserialize_with = "VarIntSequence::<Header>::deserialize")]
     pub headers: Vec<Header>,
+}
+
+impl ByteSize for Record {
+    fn size_in_bytes(&self) -> Result<usize> {
+        let size = VarInt::from(self.length).size_in_bytes()?
+            + 1
+            + LongVarInt::from(self.timestamp_delta).size_in_bytes()?
+            + VarInt::from(self.offset_delta).size_in_bytes()?
+            + Octets(self.key.clone()).size_in_bytes()?
+            + Octets(self.value.clone()).size_in_bytes()?
+            + VarIntSequence(self.headers.clone()).size_in_bytes()?;
+
+        Ok(size)
+    }
+}
+
+impl Encode for Record {
+    fn encode(&self) -> Result<Bytes> {
+        let mut encoded = self.size_in_bytes().map(BytesMut::with_capacity)?;
+
+        let length = VarInt::from(self.length);
+        encoded.put(length.encode()?);
+        encoded.put_u8(self.attributes);
+        encoded.put(LongVarInt::from(self.timestamp_delta).encode()?);
+        encoded.put(VarInt::from(self.offset_delta).encode()?);
+        encoded.put(Octets(self.key.clone()).encode()?);
+        encoded.put(Octets(self.value.clone()).encode()?);
+        encoded.put(VarIntSequence(self.headers.clone()).encode()?);
+
+        Ok(encoded.into())
+    }
+}
+
+impl Decode for Record {
+    #[instrument(skip_all)]
+    fn decode(encoded: &mut Bytes) -> Result<Self> {
+        debug!(encoded = ?encoded[..]);
+
+        let length = VarInt::decode(encoded).map(Into::into)?;
+        let attributes = encoded.get_u8();
+        let timestamp_delta = LongVarInt::decode(encoded).map(Into::into)?;
+        let offset_delta = VarInt::decode(encoded).map(Into::into)?;
+        let key = Octets::decode(encoded).map(Into::into)?;
+        let value = Octets::decode(encoded).map(Into::into)?;
+        let headers = VarIntSequence::decode(encoded).map(Into::into)?;
+
+        Ok(Self {
+            length,
+            attributes,
+            timestamp_delta,
+            offset_delta,
+            key,
+            value,
+            headers,
+        })
+    }
 }
 
 impl Record {
@@ -380,6 +437,35 @@ mod tests {
     }
 
     #[test]
+    fn encode_record_builder() -> Result<()> {
+        let rb = Record::builder()
+            .value(Some(Bytes::from_static(b"def")))
+            .build()?;
+
+        let encoded = rb.encode()?;
+        assert_eq!(
+            Bytes::from(vec![18, 0, 0, 0, 1, 6, 100, 101, 102, 0]),
+            encoded
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn decode_record_builder() -> Result<()> {
+        let mut encoded = Bytes::from(vec![18, 0, 0, 0, 1, 6, 100, 101, 102, 0]);
+        let actual = Record::decode(&mut encoded)?;
+
+        let expected = Record::builder()
+            .value(Some(Bytes::from_static(b"def")))
+            .build()?;
+
+        assert_eq!(expected, actual);
+
+        Ok(())
+    }
+
+    #[test]
     fn try_from_record_builder() -> Result<()> {
         let record =
             Record::try_from(Record::builder().value(Some(Bytes::from(vec![100, 101, 102]))))?;
@@ -407,17 +493,13 @@ mod tests {
 
     #[test]
     fn crc_check() {
-        use crc::CRC_32_ISCSI;
-        use crc::Crc;
+        let mut digester = crc_fast::Digest::new(crc_fast::CrcAlgorithm::Crc32Iscsi);
 
-        let b = [
+        digester.update(&[
             0, 0, 0, 0, 0, 0, 0, 0, 1, 141, 116, 152, 137, 53, 0, 0, 1, 141, 116, 152, 137, 53, 0,
             0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 18, 0, 0, 0, 1, 6, 100, 101, 102, 0,
-        ];
+        ]);
 
-        let crc = Crc::<u32>::new(&CRC_32_ISCSI);
-        let mut digester = crc.digest();
-        digester.update(&b);
         assert_eq!(1_126_819_645, digester.finalize());
     }
 }

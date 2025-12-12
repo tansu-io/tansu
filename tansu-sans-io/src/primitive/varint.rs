@@ -13,14 +13,15 @@
 // limitations under the License.
 
 use super::ByteSize;
-use crate::{Error, Result};
+use crate::{Decode, Encode, Error, Result};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use serde::{
     Deserialize, Deserializer, Serialize, Serializer,
     de::{self, SeqAccess, Visitor},
     ser::SerializeSeq,
 };
 use std::{any::type_name_of_val, fmt::Formatter, ops::Deref};
-use tracing::debug;
+use tracing::{debug, instrument};
 
 const CONTINUATION: u8 = 0b1000_0000;
 const MASK: u8 = 0b0111_1111;
@@ -28,11 +29,61 @@ const MASK: u8 = 0b0111_1111;
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct VarInt(pub i32);
 
+impl From<VarInt> for i32 {
+    fn from(value: VarInt) -> Self {
+        value.0
+    }
+}
+
 impl Deref for VarInt {
     type Target = i32;
 
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+impl Decode for VarInt {
+    #[instrument(skip_all, ret)]
+    fn decode(encoded: &mut Bytes) -> Result<Self> {
+        let mut shift = 0u8;
+        let mut accumulator = 0u32;
+        let mut done = false;
+
+        while !done {
+            let byte = encoded.get_u8();
+
+            if byte & CONTINUATION == CONTINUATION {
+                let intermediate = u32::from(byte & MASK);
+                accumulator += intermediate << shift;
+                shift += 7;
+            } else {
+                accumulator += u32::from(byte) << shift;
+                done = true;
+            }
+        }
+
+        Ok(Self(Self::de_zigzag(accumulator)))
+    }
+}
+
+impl Encode for VarInt {
+    #[instrument]
+    fn encode(&self) -> Result<Bytes> {
+        let mut encoded = self.size_in_bytes().map(BytesMut::with_capacity)?;
+
+        let mut v = Self::en_zigzag(self.0);
+
+        while v >= u32::from(CONTINUATION) {
+            #[allow(clippy::cast_possible_truncation)]
+            encoded.put_u8(v as u8 | CONTINUATION);
+            v >>= 7;
+        }
+
+        #[allow(clippy::cast_possible_truncation)]
+        encoded.put_u8(v as u8);
+
+        Ok(encoded.into()).inspect(|encoded: &Bytes| debug!(encoded = ?encoded[..]))
     }
 }
 
@@ -170,11 +221,59 @@ impl<'de> Deserialize<'de> for VarInt {
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct LongVarInt(pub i64);
 
+impl From<LongVarInt> for i64 {
+    fn from(value: LongVarInt) -> Self {
+        value.0
+    }
+}
+
 impl Deref for LongVarInt {
     type Target = i64;
 
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+impl Encode for LongVarInt {
+    fn encode(&self) -> Result<Bytes> {
+        let mut encoded = self.size_in_bytes().map(BytesMut::with_capacity)?;
+
+        let mut v = Self::en_zigzag(self.0);
+
+        while v >= u64::from(CONTINUATION) {
+            #[allow(clippy::cast_possible_truncation)]
+            encoded.put_u8(v as u8 | CONTINUATION);
+            v >>= 7;
+        }
+
+        #[allow(clippy::cast_possible_truncation)]
+        encoded.put_u8(v as u8);
+        Ok(encoded.into())
+    }
+}
+
+impl Decode for LongVarInt {
+    #[instrument(skip_all, ret)]
+    fn decode(encoded: &mut Bytes) -> Result<Self> {
+        let mut shift = 0u8;
+        let mut accumulator = 0u64;
+        let mut done = false;
+
+        while !done {
+            let byte = encoded.get_u8();
+
+            if byte & CONTINUATION == CONTINUATION {
+                let intermediate = u64::from(byte & MASK);
+                accumulator += intermediate << shift;
+                shift += 7;
+            } else {
+                accumulator += u64::from(byte) << shift;
+                done = true;
+            }
+        }
+
+        Ok(Self(Self::de_zigzag(accumulator)))
     }
 }
 
@@ -487,6 +586,19 @@ mod tests {
     //     check(&UnsignedVarInt(u32::MAX))?;
     //     Ok(())
     // }
+
+    #[test]
+    fn encode_decode() -> Result<()> {
+        let expected = 1;
+
+        let mut encoded = VarInt(expected).encode()?;
+        assert_eq!(Bytes::from(vec![2u8]), encoded);
+
+        let actual = VarInt::decode(&mut encoded).map(i32::from)?;
+        assert_eq!(expected, actual);
+
+        Ok(())
+    }
 
     #[test]
     fn encode_varint_signed_one() -> Result<()> {

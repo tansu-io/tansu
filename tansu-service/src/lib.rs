@@ -241,7 +241,7 @@ use opentelemetry::{
 };
 use opentelemetry_semantic_conventions::SCHEMA_URL;
 use tansu_sans_io::{Body, Frame};
-use tokio::{net::lookup_host, sync::oneshot};
+use tokio::{net::lookup_host, sync::oneshot, task::JoinError};
 use tracing::debug;
 use url::Url;
 
@@ -273,6 +273,7 @@ pub enum Error {
     DuplicateRoute(i16),
     FrameTooBig(usize),
     Io(Arc<io::Error>),
+    Join(Arc<JoinError>),
     Message(String),
     OneshotRecv(oneshot::error::RecvError),
     Parse(#[from] url::ParseError),
@@ -286,6 +287,12 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{self:?}")
+    }
+}
+
+impl From<JoinError> for Error {
+    fn from(value: JoinError) -> Self {
+        Self::Join(Arc::new(value))
     }
 }
 
