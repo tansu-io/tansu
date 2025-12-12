@@ -16,6 +16,7 @@
 Cargo.lock
 cargo-flamegraph.trace
 debug
+dhat.*
 flamegraph*.svg
 license.html
 perf.data*
