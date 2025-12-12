@@ -421,7 +421,13 @@ bench-dhat mode="heap" profile="release": (build profile "libsql" "bench")
     valgrind --tool=dhat --mode={{mode}} ./target/{{replace(profile, "dev", "debug")}}/bench
 
 bench-flamegraph profile="profiling": (build profile "libsql" "bench")
-    RUST_LOG=warn flamegraph -- ./target/{{replace(profile, "dev", "debug")}}/bench 2>&1 >/dev/null
+    RUST_LOG=warn flamegraph -- ./target/{{replace(profile, "dev", "debug")}}/bench
+
+bench-flamegraph-produce profile="profiling": (build profile "libsql" "bench")
+    RUST_LOG=warn flamegraph -- ./target/{{replace(profile, "dev", "debug")}}/bench --api-key=0
+
+bench-flamegraph-fetch profile="profiling": (build profile "libsql" "bench")
+    RUST_LOG=warn flamegraph -- ./target/{{replace(profile, "dev", "debug")}}/bench --api-key=1
 
 bench-perf profile="profiling": (build profile "libsql" "bench")
     RUST_LOG=warn perf record --call-graph dwarf ./target/{{replace(profile, "dev", "debug")}}/bench 2>&1 >/dev/null
