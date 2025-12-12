@@ -376,7 +376,6 @@ employee-produce: (cat-produce "employee" "etc/data/employees.json")
 # employee duckdb delta lake
 employee-duckdb-delta: (duckdb "\"select * from delta_scan('s3://lake/tansu.employee');\"")
 
-
 # create customer topic with schema etc/schema/customer.proto
 customer-topic-create *args: (topic-create "customer" "--partitions=1"  "--config=tansu.lake.normalize=true" "--config=tansu.lake.partition=meta.day" "--config=tansu.lake.sink=true" "--config=tansu.batch=true" "--config=tansu.batch.max_records=200" "--config=tansu.batch.timeout_ms=1000" args)
 
@@ -393,6 +392,10 @@ broker-sqlite profile="profiling":
     cargo build --profile {{profile}} --features libsql --bin tansu
     ./target/{{replace(profile, "dev", "debug")}}/tansu --storage-engine=sqlite://tansu.db 2>&1 | tee broker.log
 
+broker-postgres profile="profiling": docker-compose-down db-up
+    cargo build --profile {{profile}} --features postgres --bin tansu
+    ./target/{{replace(profile, "dev", "debug")}}/tansu --storage-engine=postgres://postgres:postgres@localhost 2>&1 | tee broker.log
+
 samply-null profile="profiling":
     cargo build --profile {{profile}} --bin tansu
     RUST_LOG=warn samply record ./target/{{replace(profile, "dev", "debug")}}/tansu --storage-engine=null://sink
@@ -405,6 +408,14 @@ flamegraph-sqlite profile="profiling":
     rm -f tansu.db*
     cargo build --profile {{profile}} --features libsql --bin tansu
     RUST_LOG=warn flamegraph -- ./target/{{replace(profile, "dev", "debug")}}/tansu --storage-engine=sqlite://tansu.db 2>&1
+
+flamegraph-postgres profile="profiling": docker-compose-down db-up
+    RUSTFLAGS="-C force-frame-pointers=yes" cargo build --profile {{profile}} --features postgres --bin tansu
+    RUST_LOG=warn flamegraph -- ./target/{{replace(profile, "dev", "debug")}}/tansu --storage-engine=postgres://postgres:postgres@localhost
+
+flamegraph-s3 profile="profiling": docker-compose-down minio-up minio-ready-local minio-local-alias minio-tansu-bucket
+    RUSTFLAGS="-C force-frame-pointers=yes" cargo build --profile {{profile}} --features dynostore --bin tansu
+    RUST_LOG=warn flamegraph -- ./target/{{replace(profile, "dev", "debug")}}/tansu --storage-engine=s3://tansu/
 
 samply-produce profile="profiling":
     cargo build --profile {{profile}} --bin bench_produce_v11
@@ -435,15 +446,27 @@ bench-perf profile="profiling": (build profile "libsql" "bench")
 producer-perf  throughput="1000" record_size="1024" num_records="100000":
     kafka-producer-perf-test --topic test --num-records {{num_records}} --record-size {{record_size}} --throughput {{throughput}} --producer-props bootstrap.servers=${ADVERTISED_LISTENER}
 
+producer-perf-10: (producer-perf "10")
+
 producer-perf-1000: (producer-perf "1000")
 
 producer-perf-2000: (producer-perf "2000")
 
 producer-perf-3000: (producer-perf "3000")
 
-producer-perf-5000: (producer-perf "5000")
+producer-perf-5000: (producer-perf "5000" "1024" "125000")
 
-producer-perf-10000: (producer-perf "10000" "1024" "100000")
+producer-perf-6000: (producer-perf "6000" "1024" "150000")
+
+producer-perf-7000: (producer-perf "7000" "1024" "175000")
+
+producer-perf-8000: (producer-perf "8000" "1024" "200000")
+
+producer-perf-9000: (producer-perf "9000" "1024" "225000")
+
+producer-perf-10000: (producer-perf "10000" "1024" "250000")
+
+producer-perf-15000: (producer-perf "15000" "1024" "375000")
 
 producer-perf-20000: (producer-perf "20000" "1024" "500000")
 
