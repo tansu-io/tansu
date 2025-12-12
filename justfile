@@ -11,7 +11,7 @@ cargo-build +args:
 license:
     cargo about generate about.hbs > license.html
 
-build: (cargo-build "--bin" "tansu" "--no-default-features" "--features" "delta,dynostore,iceberg,libsql,parquet,postgres")
+build profile="dev" features="delta,dynostore,iceberg,libsql,parquet,postgres" bin="tansu": (cargo-build "--profile" profile "--timings" "--bin" bin "--no-default-features" "--features" features)
 
 build-examples: (cargo-build "--examples")
 
@@ -299,8 +299,8 @@ otel: build docker-compose-down db-up minio-up minio-ready-local minio-local-ali
 
 otel-up: docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up tansu-up
 
-tansu-broker kind *args:
-    target/{{kind}}/tansu broker {{args}} 2>&1 | tee broker.log
+tansu-broker profile *args:
+    target/{{replace(profile, "dev", "debug")}}/tansu broker {{args}} 2>&1 | tee broker.log
 
 # run a debug broker with configuration from .env
 broker *args: build docker-compose-down prometheus-up grafana-up db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket lakehouse-catalog-up (tansu-broker "debug" args)
@@ -384,50 +384,53 @@ customer-topic-generator *args: (generator "customer" args)
 
 customer-duckdb-delta: (duckdb "\"select * from delta_scan('s3://lake/tansu.customer');\"")
 
-broker-null-debug:
-    ./target/debug/tansu --storage-engine=null://sink 2>&1 | tee broker.log
-
 broker-null profile="profiling":
     cargo build --profile {{profile}} --bin tansu
-    ./target/{{profile}}/tansu --storage-engine=null://sink 2>&1 | tee broker.log
+    ./target/{{replace(profile, "dev", "debug")}}/tansu --storage-engine=null://sink 2>&1 | tee broker.log
 
 broker-sqlite profile="profiling":
     rm -f tansu.db*
     cargo build --profile {{profile}} --features libsql --bin tansu
-    ./target/{{profile}}/tansu --storage-engine=sqlite://tansu.db 2>&1 | tee broker.log
+    ./target/{{replace(profile, "dev", "debug")}}/tansu --storage-engine=sqlite://tansu.db 2>&1 | tee broker.log
 
 samply-null profile="profiling":
     cargo build --profile {{profile}} --bin tansu
-    RUST_LOG=warn samply record ./target/{{profile}}/tansu --storage-engine=null://sink
-
-flamegraph-null-debug:
-    cargo build --bin tansu
-    RUST_LOG=warn flamegraph -- ./target/debug/tansu --storage-engine=null://sink
+    RUST_LOG=warn samply record ./target/{{replace(profile, "dev", "debug")}}/tansu --storage-engine=null://sink
 
 flamegraph-null profile="profiling":
-    RUSTFLAGS="-C force-frame-pointers=yes" cargo build --profile {{profile}} --bin tansu
-    RUST_LOG=warn flamegraph -- ./target/{{profile}}/tansu --storage-engine=null://sink
-
-flamegraph-sqlite-debug:
-    rm -f tansu.db*
-    cargo build --bin tansu --features libsql
-    RUST_LOG=warn flamegraph -- ./target/debug/tansu --storage-engine=sqlite://tansu.db
+    cargo build --profile {{profile}} --bin tansu
+    RUST_LOG=warn flamegraph -- ./target/{{replace(profile, "dev", "debug")}}/tansu --storage-engine=null://sink
 
 flamegraph-sqlite profile="profiling":
     rm -f tansu.db*
-    RUSTFLAGS="-C force-frame-pointers=yes" cargo build --profile {{profile}} --features libsql --bin tansu
-    RUST_LOG=warn flamegraph -- ./target/{{profile}}/tansu --storage-engine=sqlite://tansu.db 2>&1
+    cargo build --profile {{profile}} --features libsql --bin tansu
+    RUST_LOG=warn flamegraph -- ./target/{{replace(profile, "dev", "debug")}}/tansu --storage-engine=sqlite://tansu.db 2>&1
 
 samply-produce profile="profiling":
-    RUSTFLAGS="-C force-frame-pointers=yes" cargo build --profile {{profile}} --bin bench_produce_v11
-    RUST_LOG=warn samply record ./target/{{profile}}/bench_produce_v11
+    cargo build --profile {{profile}} --bin bench_produce_v11
+    RUST_LOG=warn samply record ./target/{{replace(profile, "dev", "debug")}}/bench_produce_v11
 
 flamegraph-produce profile="profiling":
-    RUSTFLAGS="-C force-frame-pointers=yes" cargo build --profile {{profile}} --bin bench_produce_v11
-    RUST_LOG=warn flamegraph -- ./target/{{profile}}/bench_produce_v11
+    cargo build --profile {{profile}} --bin bench_produce_v11
+    RUST_LOG=warn flamegraph -- ./target/{{replace(profile, "dev", "debug")}}/bench_produce_v11
 
-bench:
-    cargo bench --profile profiling --all-features --package tansu-sans-io --quiet
+bench-hyperfine profile="release": (build profile "libsql" "bench")
+    hyperfine -N ./target/{{replace(profile, "dev", "debug")}}/bench
+
+bench-dhat mode="heap" profile="release": (build profile "libsql" "bench")
+    valgrind --tool=dhat --mode={{mode}} ./target/{{replace(profile, "dev", "debug")}}/bench
+
+bench-flamegraph profile="profiling": (build profile "libsql" "bench")
+    RUST_LOG=warn flamegraph -- ./target/{{replace(profile, "dev", "debug")}}/bench
+
+bench-flamegraph-produce profile="profiling": (build profile "libsql" "bench")
+    RUST_LOG=warn flamegraph -- ./target/{{replace(profile, "dev", "debug")}}/bench --api-key=0
+
+bench-flamegraph-fetch profile="profiling": (build profile "libsql" "bench")
+    RUST_LOG=warn flamegraph -- ./target/{{replace(profile, "dev", "debug")}}/bench --api-key=1
+
+bench-perf profile="profiling": (build profile "libsql" "bench")
+    RUST_LOG=warn perf record --call-graph dwarf ./target/{{replace(profile, "dev", "debug")}}/bench 2>&1 >/dev/null
 
 producer-perf  throughput="1000" record_size="1024" num_records="100000":
     kafka-producer-perf-test --topic test --num-records {{num_records}} --record-size {{record_size}} --throughput {{throughput}} --producer-props bootstrap.servers=${ADVERTISED_LISTENER}
@@ -455,3 +458,5 @@ producer-perf-100000: (producer-perf "100000" "1024" "2500000")
 producer-perf-200000: (producer-perf "200000" "1024" "5000000")
 
 producer-perf-500000: (producer-perf "500000" "1024" "12500000")
+
+producer-perf-1000000: (producer-perf "1000000" "1024" "25000000")
