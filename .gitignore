@@ -15,6 +15,7 @@
 .zed
 Cargo.lock
 debug
+dhat.*
 flamegraph*.svg
 license.html
 perf.data*
