@@ -420,7 +420,7 @@ bench-hyperfine profile="release": (build profile "libsql" "bench")
 bench-dhat mode="heap" profile="release": (build profile "libsql" "bench")
     valgrind --tool=dhat --mode={{mode}} ./target/{{replace(profile, "dev", "debug")}}/bench
 
-flamegraph-bench profile="profiling": (build profile "libsql" "bench")
+bench-flamegraph profile="profiling": (build profile "libsql" "bench")
     RUST_LOG=warn flamegraph -- ./target/{{replace(profile, "dev", "debug")}}/bench 2>&1 >/dev/null
 
 bench-perf profile="profiling": (build profile "libsql" "bench")
