@@ -384,47 +384,35 @@ customer-topic-generator *args: (generator "customer" args)
 
 customer-duckdb-delta: (duckdb "\"select * from delta_scan('s3://lake/tansu.customer');\"")
 
-broker-null-debug:
-    ./target/debug/tansu --storage-engine=null://sink 2>&1 | tee broker.log
-
 broker-null profile="profiling":
     cargo build --profile {{profile}} --bin tansu
-    ./target/{{profile}}/tansu --storage-engine=null://sink 2>&1 | tee broker.log
+    ./target/{{replace(profile, "dev", "debug")}}/tansu --storage-engine=null://sink 2>&1 | tee broker.log
 
 broker-sqlite profile="profiling":
     rm -f tansu.db*
     cargo build --profile {{profile}} --features libsql --bin tansu
-    ./target/{{profile}}/tansu --storage-engine=sqlite://tansu.db 2>&1 | tee broker.log
+    ./target/{{replace(profile, "dev", "debug")}}/tansu --storage-engine=sqlite://tansu.db 2>&1 | tee broker.log
 
 samply-null profile="profiling":
     cargo build --profile {{profile}} --bin tansu
-    RUST_LOG=warn samply record ./target/{{profile}}/tansu --storage-engine=null://sink
-
-flamegraph-null-debug:
-    cargo build --bin tansu
-    RUST_LOG=warn flamegraph -- ./target/debug/tansu --storage-engine=null://sink
+    RUST_LOG=warn samply record ./target/{{replace(profile, "dev", "debug")}}/tansu --storage-engine=null://sink
 
 flamegraph-null profile="profiling":
-    RUSTFLAGS="-C force-frame-pointers=yes" cargo build --profile {{profile}} --bin tansu
-    RUST_LOG=warn flamegraph -- ./target/{{profile}}/tansu --storage-engine=null://sink
-
-flamegraph-sqlite-debug:
-    rm -f tansu.db*
-    cargo build --bin tansu --features libsql
-    RUST_LOG=warn flamegraph -- ./target/debug/tansu --storage-engine=sqlite://tansu.db
+    cargo build --profile {{profile}} --bin tansu
+    RUST_LOG=warn flamegraph -- ./target/{{replace(profile, "dev", "debug")}}/tansu --storage-engine=null://sink
 
 flamegraph-sqlite profile="profiling":
     rm -f tansu.db*
-    RUSTFLAGS="-C force-frame-pointers=yes" cargo build --profile {{profile}} --features libsql --bin tansu
-    RUST_LOG=warn flamegraph -- ./target/{{profile}}/tansu --storage-engine=sqlite://tansu.db 2>&1
+    cargo build --profile {{profile}} --features libsql --bin tansu
+    RUST_LOG=warn flamegraph -- ./target/{{replace(profile, "dev", "debug")}}/tansu --storage-engine=sqlite://tansu.db 2>&1
 
 samply-produce profile="profiling":
-    RUSTFLAGS="-C force-frame-pointers=yes" cargo build --profile {{profile}} --bin bench_produce_v11
-    RUST_LOG=warn samply record ./target/{{profile}}/bench_produce_v11
+    cargo build --profile {{profile}} --bin bench_produce_v11
+    RUST_LOG=warn samply record ./target/{{replace(profile, "dev", "debug")}}/bench_produce_v11
 
 flamegraph-produce profile="profiling":
-    RUSTFLAGS="-C force-frame-pointers=yes" cargo build --profile {{profile}} --bin bench_produce_v11
-    RUST_LOG=warn flamegraph -- ./target/{{profile}}/bench_produce_v11
+    cargo build --profile {{profile}} --bin bench_produce_v11
+    RUST_LOG=warn flamegraph -- ./target/{{replace(profile, "dev", "debug")}}/bench_produce_v11
 
 bench-hyperfine profile="release": (build profile "libsql" "bench")
     hyperfine -N ./target/{{replace(profile, "dev", "debug")}}/bench
@@ -458,3 +446,5 @@ producer-perf-100000: (producer-perf "100000" "1024" "2500000")
 producer-perf-200000: (producer-perf "200000" "1024" "5000000")
 
 producer-perf-500000: (producer-perf "500000" "1024" "12500000")
+
+producer-perf-1000000: (producer-perf "1000000" "1024" "25000000")
