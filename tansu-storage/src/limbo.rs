@@ -332,6 +332,10 @@ impl Engine {
 
             SQL_REQUESTS.add(1, &attributes);
 
+            while let Some(another) = rows.next().await? {
+                debug!(?another);
+            }
+
             Ok(row).inspect(|row| debug!(?row))
         } else {
             panic!("more or less than one row");
@@ -1071,13 +1075,13 @@ impl Builder<String, i32, Url, Url> {
     }
 }
 
+#[instrument]
 fn unique_constraint(error_code: ErrorCode) -> impl Fn(turso::Error) -> Error {
     debug!(?error_code);
-
     let _ = error_code;
     move |err| {
-        let _ = err;
-        todo!()
+        debug!(?err);
+
         // if let turso::Error::SqliteFailure(code, ref reason) = err {
         //     debug!(code, reason);
 
@@ -1089,6 +1093,9 @@ fn unique_constraint(error_code: ErrorCode) -> impl Fn(turso::Error) -> Error {
         // } else {
         //     err.into()
         // }
+        //
+
+        Error::Api(error_code)
     }
 }
 
