@@ -115,9 +115,6 @@ fn api_versions_response_v1_000() -> Result<()> {
         0, 0, 0, 0, 37, 0, 0, 0, 0, 0, 0, 0, 0,
     ];
 
-    // let mut c = Cursor::new(v);
-    // let mut deserializer = Decoder::response(&mut c, 18, 1);
-
     assert_eq!(
         Frame {
             size: 242,

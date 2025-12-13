@@ -22,13 +22,13 @@ use std::{
     hash::{DefaultHasher, Hash, Hasher as _},
 };
 
-#[cfg(any(feature = "libsql", feature = "turso"))]
+#[cfg(any(feature = "libsql", feature = "postgres", feature = "turso"))]
 use std::{collections::BTreeMap, ops::Deref, sync::LazyLock};
 
-#[cfg(any(feature = "libsql", feature = "turso"))]
+#[cfg(any(feature = "libsql", feature = "postgres", feature = "turso"))]
 pub(crate) struct Cache(pub BTreeMap<&'static str, String>);
 
-#[cfg(any(feature = "libsql", feature = "turso"))]
+#[cfg(any(feature = "libsql", feature = "postgres", feature = "turso"))]
 impl Deref for Cache {
     type Target = BTreeMap<&'static str, String>;
 
@@ -37,13 +37,13 @@ impl Deref for Cache {
     }
 }
 
-#[cfg(any(feature = "libsql", feature = "turso"))]
+#[cfg(any(feature = "libsql", feature = "postgres", feature = "turso"))]
 impl Cache {
     pub(crate) fn new(inner: BTreeMap<&'static str, String>) -> Self {
         Self(inner)
     }
 
-    #[cfg(feature = "turso")]
+    #[cfg(any(feature = "postgres", feature = "turso"))]
     pub(crate) fn get(&self, key: &str) -> Result<&str> {
         self.0
             .get(key)
@@ -52,14 +52,14 @@ impl Cache {
     }
 }
 
-#[cfg(any(feature = "libsql", feature = "turso"))]
+#[cfg(any(feature = "libsql", feature = "postgres", feature = "turso"))]
 macro_rules! include_sql {
     ($e: expr) => {
         remove_comments(include_str!($e))
     };
 }
 
-#[cfg(any(feature = "libsql", feature = "turso"))]
+#[cfg(any(feature = "libsql", feature = "postgres", feature = "turso"))]
 pub(crate) static SQL: LazyLock<Cache> = LazyLock::new(|| {
     let mapping = [
         (
@@ -114,6 +114,7 @@ pub(crate) static SQL: LazyLock<Cache> = LazyLock::new(|| {
             "consumer_offset_select.sql",
             include_sql!("pg/consumer_offset_select.sql"),
         ),
+        ("header_copy.sql", include_sql!("pg/header_copy.sql")),
         (
             "lite/freelist_count.sql",
             include_sql!("lite/freelist_count.sql"),
@@ -182,6 +183,7 @@ pub(crate) static SQL: LazyLock<Cache> = LazyLock::new(|| {
             "producer_update_sequence.sql",
             include_sql!("pg/producer_update_sequence.sql"),
         ),
+        ("record_copy.sql", include_sql!("pg/record_copy.sql")),
         (
             "record_delete_by_topic.sql",
             include_sql!("pg/record_delete_by_topic.sql"),
@@ -238,6 +240,10 @@ pub(crate) static SQL: LazyLock<Cache> = LazyLock::new(|| {
         (
             "topition_select.sql",
             include_sql!("pg/topition_select.sql"),
+        ),
+        (
+            "topition_select_id.sql",
+            include_sql!("pg/topition_select_id.sql"),
         ),
         (
             "txn_detail_insert.sql",

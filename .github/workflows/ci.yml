@@ -56,14 +56,18 @@ jobs:
           cache: false
       - run: just check
       - run: df -h
+      - run: du -sh target
       - run: just build
       - run: df -h
       - run: just fmt
       - run: just clippy
       - run: df -h
       - run: docker system df
+      - run: du -sh target
+      - run: cargo clean
       - run: just test
-        continue-on-error: true
+      - run: du -sh target
+      - run: docker system df
       - run: df -h
   build-storage:
     runs-on: ${{matrix.os}}
