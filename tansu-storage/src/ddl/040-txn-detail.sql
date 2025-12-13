@@ -24,7 +24,7 @@ create table if not exists txn_detail (
     -- BEGIN, PREPARE_COMMIT, PREPARE_ABORT, COMMITTED or ABORTED
     --
     status text,
-    last_updated text default current_timestamp not null,
-    created_at text default current_timestamp not null,
+    last_updated datetime default current_timestamp not null,
+    created_at datetime default current_timestamp not null,
     unique ("transaction", producer_epoch)
 );

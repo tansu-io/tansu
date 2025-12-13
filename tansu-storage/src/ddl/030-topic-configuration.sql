@@ -14,10 +14,10 @@
 
 create table if not exists topic_configuration (
     id integer primary key autoincrement,
-    topic int references topic (id),
+    topic int references topic (id) on delete cascade,
     name text not null,
     value text,
-    last_updated text default current_timestamp not null,
-    created_at text default current_timestamp not null,
+    last_updated datetime default current_timestamp not null,
+    created_at datetime default current_timestamp not null,
     unique (topic, name)
 );
