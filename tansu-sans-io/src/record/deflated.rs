@@ -85,6 +85,77 @@ pub struct Batch {
     pub record_data: Bytes,
 }
 
+impl TryFrom<Vec<u8>> for Batch {
+    type Error = Error;
+
+    fn try_from(encoded: Vec<u8>) -> result::Result<Self, Self::Error> {
+        let mut encoded = Bytes::from(encoded);
+
+        let base_offset = encoded.try_get_i64()?;
+        let batch_length = encoded.try_get_i32()?;
+
+        let partition_leader_epoch = encoded.try_get_i32()?;
+        let magic = encoded.try_get_i8()?;
+        let crc = encoded.try_get_u32()?;
+
+        let crc_data_size = usize::try_from(batch_length).map(|batch_length| {
+            batch_length
+            // partition leader epoch
+            - size_of::<i32>()
+            // magic
+            - size_of::<i8>()
+            // crc
+            - size_of::<u32>()
+        })?;
+
+        let crc_data = &encoded[..crc_data_size];
+
+        let computed = {
+            let mut digest = crc_fast::Digest::new(crc_fast::CrcAlgorithm::Crc32Iscsi);
+            digest.update(crc_data);
+
+            digest.finalize() as u32
+        };
+
+        if computed != crc {
+            error!(crc, computed);
+        }
+
+        let attributes = encoded.try_get_i16()?;
+        let last_offset_delta = encoded.try_get_i32()?;
+        let base_timestamp = encoded.try_get_i64()?;
+        let max_timestamp = encoded.try_get_i64()?;
+        let producer_id = encoded.try_get_i64()?;
+        let producer_epoch = encoded.try_get_i16()?;
+        let base_sequence = encoded.try_get_i32()?;
+        let record_count = encoded.try_get_u32()?;
+
+        let record_data_size =
+            usize::try_from(batch_length).map(|batch_length| batch_length - FIXED_BATCH_LENGTH)?;
+
+        let record_data = encoded.split_to(record_data_size);
+
+        let batch = Batch {
+            base_offset,
+            batch_length,
+            partition_leader_epoch,
+            magic,
+            crc,
+            attributes,
+            last_offset_delta,
+            base_timestamp,
+            max_timestamp,
+            producer_id,
+            producer_epoch,
+            base_sequence,
+            record_count,
+            record_data,
+        };
+
+        Ok(batch)
+    }
+}
+
 impl TryFrom<&[u8]> for Batch {
     type Error = Error;
 
@@ -419,7 +490,7 @@ impl<'de> Deserialize<'de> for Batch {
                 formatter.write_str(stringify!(Batch))
             }
 
-            fn visit_bytes<E>(self, v: &[u8]) -> result::Result<Self::Value, E>
+            fn visit_byte_buf<E>(self, v: Vec<u8>) -> result::Result<Self::Value, E>
             where
                 E: de::Error,
             {
@@ -428,7 +499,7 @@ impl<'de> Deserialize<'de> for Batch {
             }
         }
 
-        deserializer.deserialize_bytes(V)
+        deserializer.deserialize_byte_buf(V)
     }
 }
 

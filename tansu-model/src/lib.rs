@@ -27,7 +27,7 @@ use proc_macro2::{Ident, Span, TokenStream};
 use quote::ToTokens;
 use regex::Regex;
 use serde_json::Value;
-use std::{collections::BTreeMap, fmt, str::FromStr};
+use std::{fmt, str::FromStr};
 use syn::{Expr, Type};
 use tracing::debug;
 use wv::{As, AsOption, Wv};
@@ -795,27 +795,26 @@ impl MessageMeta {
     }
 
     #[must_use]
-    pub fn structures(&self) -> BTreeMap<&str, &FieldMeta> {
-        self.fields.iter().filter(|(_, fm)| fm.is_structure()).fold(
-            BTreeMap::new(),
-            |mut acc, (name, fm)| {
+    pub fn structures(&self) -> Vec<(&str, &FieldMeta)> {
+        self.fields
+            .iter()
+            .filter(|(_, fm)| fm.is_structure())
+            .flat_map(|(name, fm)| {
                 debug!(name = self.name, field = ?name, kind = ?fm.kind.0);
+
+                let mut children = fm.structures();
 
                 if let Some(kind) = fm.kind.kind_of_sequence() {
                     if !kind.is_primitive() {
-                        _ = acc.insert(kind.name(), fm);
+                        children.push((kind.name(), *fm));
                     }
                 } else {
-                    _ = acc.insert(fm.kind.name(), fm);
+                    children.push((fm.kind.name(), *fm));
                 }
 
-                let mut children = fm.structures();
-                debug!(name = self.name, field = ?name, children = ?children.keys().collect::<Vec<_>>());
-                acc.append(&mut children);
-
-                acc
-            },
-        )
+                children
+            })
+            .collect()
     }
 
     #[must_use]
@@ -864,21 +863,22 @@ impl FieldMeta {
     }
 
     #[must_use]
-    pub fn structures(&self) -> BTreeMap<&str, &FieldMeta> {
-        self.fields.iter().filter(|(_, fm)| fm.is_structure()).fold(
-            BTreeMap::new(),
-            |mut acc, (_name, fm)| {
+    pub fn structures(&self) -> Vec<(&str, &FieldMeta)> {
+        self.fields
+            .iter()
+            .filter(|(_, fm)| fm.is_structure())
+            .flat_map(|(_, fm)| {
+                let mut children = fm.structures();
+
                 if let Some(kind) = fm.kind.kind_of_sequence()
                     && !kind.is_primitive()
                 {
-                    _ = acc.insert(kind.name(), fm);
+                    children.push((kind.name(), *fm));
                 }
 
-                let mut children = fm.structures();
-                acc.append(&mut children);
-                acc
-            },
-        )
+                children
+            })
+            .collect()
     }
 
     pub fn field(&self, name: &str) -> Option<&FieldMeta> {

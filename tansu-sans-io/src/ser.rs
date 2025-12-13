@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use std::{
-    any::type_name_of_val,
     collections::VecDeque,
     fmt,
     io::{Cursor, Write},
@@ -80,14 +79,24 @@ impl FieldLookup {
     }
 }
 
-#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+const PARSE_DEPTH: usize = 6;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct Meta {
     message: Option<&'static MessageMeta>,
     field: Option<&'static FieldMeta>,
     parse: VecDeque<FieldLookup>,
 }
 
-const PARSE_DEPTH: usize = 6;
+impl Default for Meta {
+    fn default() -> Self {
+        Self {
+            message: Default::default(),
+            field: Default::default(),
+            parse: VecDeque::with_capacity(PARSE_DEPTH),
+        }
+    }
+}
 
 /// Serialize the serde data model into the Kafka protocol.
 pub struct Encoder<'a> {
@@ -169,6 +178,7 @@ impl<'a> Encoder<'a> {
             .or(self.meta.message.and_then(|mm| mm.field(name)))
     }
 
+    #[allow(dead_code)]
     fn field_name(&self) -> String {
         self.containers.iter().fold(
             self.field.map_or_else(String::new, str::to_owned),
@@ -197,9 +207,13 @@ impl<'a> Encoder<'a> {
     }
 
     fn in_header(&self) -> bool {
-        self.containers
-            .front()
-            .is_some_and(|c| c.name().starts_with("HeaderMezzanine::"))
+        matches!(
+            self.containers.front(),
+            Some(Container::StructVariant {
+                name: "HeaderMezzanine",
+                ..
+            })
+        )
     }
 
     #[must_use]
@@ -281,34 +295,16 @@ impl Serializer for &mut Encoder<'_> {
     type SerializeStructVariant = Self;
 
     fn serialize_bool(self, v: bool) -> Result<Self::Ok, Self::Error> {
-        debug!(
-            "name: {}, v: {v:?}:{}",
-            self.field_name(),
-            type_name_of_val(&v)
-        );
-
         let buf: [u8; 1] = [u8::from(v); 1];
         self.writer.write_all(&buf).map_err(Into::into)
     }
 
     fn serialize_i8(self, v: i8) -> Result<Self::Ok, Self::Error> {
-        debug!(
-            "name: {}, v: {v:?}:{}",
-            self.field_name(),
-            type_name_of_val(&v)
-        );
-
         let buf = v.to_be_bytes();
         self.writer.write_all(&buf).map_err(Into::into)
     }
 
     fn serialize_i16(self, v: i16) -> Result<Self::Ok, Self::Error> {
-        debug!(
-            "name: {}, v: {v:?}:{}",
-            self.field_name(),
-            type_name_of_val(&v)
-        );
-
         match (self.containers.front(), self.field) {
             (
                 Some(Container::StructVariant {
@@ -345,110 +341,50 @@ impl Serializer for &mut Encoder<'_> {
     }
 
     fn serialize_i32(self, v: i32) -> Result<Self::Ok, Self::Error> {
-        debug!(
-            "name: {}, v: {v:?}:{}",
-            self.field_name(),
-            type_name_of_val(&v)
-        );
-
         let buf = v.to_be_bytes();
         self.writer.write_all(&buf).map_err(Into::into)
     }
 
     fn serialize_i64(self, v: i64) -> Result<Self::Ok, Self::Error> {
-        debug!(
-            "name: {}, v: {v:?}:{}",
-            self.field_name(),
-            type_name_of_val(&v)
-        );
-
         let buf = v.to_be_bytes();
         self.writer.write_all(&buf).map_err(Into::into)
     }
 
     fn serialize_u8(self, v: u8) -> Result<Self::Ok, Self::Error> {
-        debug!(
-            "name: {}, v: {v:?}:{}",
-            self.field_name(),
-            type_name_of_val(&v)
-        );
-
         let buf = v.to_be_bytes();
         self.writer.write_all(&buf).map_err(Into::into)
     }
 
     fn serialize_u16(self, v: u16) -> Result<Self::Ok, Self::Error> {
-        debug!(
-            "name: {}, v: {v:?}:{}",
-            self.field_name(),
-            type_name_of_val(&v)
-        );
-
         let buf = v.to_be_bytes();
         self.writer.write_all(&buf).map_err(Into::into)
     }
 
     fn serialize_u32(self, v: u32) -> Result<Self::Ok, Self::Error> {
-        debug!(
-            "name: {}, v: {v:?}:{}",
-            self.field_name(),
-            type_name_of_val(&v)
-        );
-
         let buf = v.to_be_bytes();
         self.writer.write_all(&buf).map_err(Into::into)
     }
 
     fn serialize_u64(self, v: u64) -> Result<Self::Ok, Self::Error> {
-        debug!(
-            "name: {}, v: {v:?}:{}",
-            self.field_name(),
-            type_name_of_val(&v)
-        );
-
         let buf = v.to_be_bytes();
         self.writer.write_all(&buf).map_err(Into::into)
     }
 
     fn serialize_f32(self, v: f32) -> Result<Self::Ok, Self::Error> {
-        debug!(
-            "name: {}, v: {v:?}:{}",
-            self.field_name(),
-            type_name_of_val(&v)
-        );
-
         let buf = v.to_be_bytes();
         self.writer.write_all(&buf).map_err(Into::into)
     }
 
     fn serialize_f64(self, v: f64) -> Result<Self::Ok, Self::Error> {
-        debug!(
-            "name: {}, v: {v:?}:{}",
-            self.field_name(),
-            type_name_of_val(&v)
-        );
-
         let buf = v.to_be_bytes();
         self.writer.write_all(&buf).map_err(Into::into)
     }
 
     fn serialize_char(self, v: char) -> Result<Self::Ok, Self::Error> {
-        debug!(
-            "name: {}, v: {v:?}:{}",
-            self.field_name(),
-            type_name_of_val(&v)
-        );
-        todo!()
+        unimplemented!()
     }
 
     fn serialize_str(self, v: &str) -> Result<Self::Ok, Self::Error> {
-        debug!(
-            "name: {}, v: {v:?}:{}, valid: {}",
-            self.field_name(),
-            type_name_of_val(&v),
-            self.is_valid()
-        );
-
         if self.in_header()
             && self.kind.is_some_and(|kind| kind == Kind::Request)
             && self.field.is_some_and(|field| field == "client_id")
@@ -478,12 +414,6 @@ impl Serializer for &mut Encoder<'_> {
     }
 
     fn serialize_bytes(self, v: &[u8]) -> Result<Self::Ok, Self::Error> {
-        debug!(
-            "name: {}, v: {v:?}:{}",
-            self.field_name(),
-            type_name_of_val(&v)
-        );
-
         if self.is_valid() {
             if self.is_flexible() {
                 (v.len() + 1)
@@ -553,7 +483,6 @@ impl Serializer for &mut Encoder<'_> {
 
             u32::try_from(c.position())
                 .map_err(Into::into)
-                .inspect(|length| debug!(?length))
                 .and_then(|length| {
                     if self.is_flexible() {
                         self.unsigned_varint(length + 1)
@@ -570,12 +499,11 @@ impl Serializer for &mut Encoder<'_> {
     }
 
     fn serialize_unit(self) -> Result<Self::Ok, Self::Error> {
-        todo!()
+        unimplemented!()
     }
 
     fn serialize_unit_struct(self, name: &'static str) -> Result<Self::Ok, Self::Error> {
-        debug!(?name);
-        todo!()
+        unimplemented!("{name}")
     }
 
     fn serialize_unit_variant(
@@ -584,8 +512,7 @@ impl Serializer for &mut Encoder<'_> {
         variant_index: u32,
         variant: &'static str,
     ) -> Result<Self::Ok, Self::Error> {
-        debug!(?name, ?variant_index, ?variant);
-        todo!()
+        unimplemented!("{name}, {variant_index}, {variant}")
     }
 
     fn serialize_newtype_struct<T>(
@@ -659,7 +586,6 @@ impl Serializer for &mut Encoder<'_> {
         len: usize,
     ) -> Result<Self::SerializeTupleVariant, Self::Error> {
         debug!(?name, ?variant_index, ?variant, ?len);
-        let _ = variant_index;
         Ok(self)
     }
 
@@ -733,11 +659,6 @@ impl SerializeTuple for &mut Encoder<'_> {
         T: Serialize,
         T: ?Sized,
     {
-        debug!(
-            "serialize_field, name: {}, value: {}",
-            self.field_name(),
-            type_name_of_val(value)
-        );
         value.serialize(&mut **self)
     }
 
@@ -756,16 +677,11 @@ impl SerializeTupleStruct for &mut Encoder<'_> {
         T: Serialize,
         T: ?Sized,
     {
-        debug!(
-            "SerializeTupleStruct::serialize_field, value: {}",
-            type_name_of_val(value)
-        );
-        todo!()
+        unimplemented!()
     }
 
     fn end(self) -> Result<Self::Ok, Self::Error> {
-        debug!("SerializeTupleStruct::end");
-        todo!()
+        unimplemented!()
     }
 }
 
@@ -779,16 +695,11 @@ impl SerializeTupleVariant for &mut Encoder<'_> {
         T: Serialize,
         T: ?Sized,
     {
-        debug!(
-            "SerializeTupleVariant::serialize_field, value: {}",
-            type_name_of_val(value)
-        );
-        todo!()
+        unimplemented!()
     }
 
     fn end(self) -> Result<Self::Ok, Self::Error> {
-        debug!("SerializeTupleVariant::end");
-        todo!()
+        unimplemented!()
     }
 }
 
@@ -802,11 +713,7 @@ impl SerializeMap for &mut Encoder<'_> {
         T: Serialize,
         T: ?Sized,
     {
-        debug!(
-            "SerializeMap::serialize_key, key: {}",
-            type_name_of_val(key)
-        );
-        todo!()
+        unimplemented!()
     }
 
     fn serialize_value<T>(&mut self, value: &T) -> Result<(), Self::Error>
@@ -814,16 +721,11 @@ impl SerializeMap for &mut Encoder<'_> {
         T: Serialize,
         T: ?Sized,
     {
-        debug!(
-            "SerializeMap::serialize_value, value: {}",
-            type_name_of_val(value)
-        );
-        todo!()
+        unimplemented!()
     }
 
     fn end(self) -> Result<Self::Ok, Self::Error> {
-        debug!("SerializeMap::end");
-        todo!()
+        unimplemented!()
     }
 }
 
@@ -837,11 +739,6 @@ impl SerializeStruct for &mut Encoder<'_> {
         T: ?Sized,
     {
         _ = self.field.replace(key);
-
-        debug!(
-            field = self.field_name(),
-            type_name = type_name_of_val(value)
-        );
 
         if let Some(fm) = self.field_meta(key) {
             debug!(field = self.field_name(), meta = ?fm, is_valid = self.is_valid());
@@ -860,7 +757,7 @@ impl SerializeStruct for &mut Encoder<'_> {
             debug!(field = self.field_name());
 
             _ = self.meta.field.take();
-            self.meta.parse.push_front(FieldLookup(&[]));
+            self.meta.parse.push_front(FieldLookup::default());
             let outcome = value.serialize(&mut **self);
             _ = self.meta.parse.pop_front();
             outcome
@@ -908,10 +805,8 @@ impl SerializeStructVariant for &mut Encoder<'_> {
                 Ok(())
             }
         } else {
-            debug!("field name: {}, has no field meta", self.field_name());
-
             _ = self.meta.field.take();
-            self.meta.parse.push_front(FieldLookup(&[]));
+            self.meta.parse.push_front(FieldLookup::default());
             let outcome = value.serialize(&mut **self);
             _ = self.meta.parse.pop_front();
             outcome
