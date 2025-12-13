@@ -13,7 +13,7 @@
 -- limitations under the License.
 
 create table if not exists consumer_offset (
-    id integer primary key autoincrement,
+    id integer primary key autoincrement not null,
     consumer_group integer references consumer_group (id),
     topition integer references topition (id),
     committed_offset integer,

@@ -13,7 +13,7 @@
 -- limitations under the License.
 
 create table if not exists producer_detail (
-    id integer primary key autoincrement,
+    id integer primary key autoincrement not null,
     producer_epoch integer references producer_epoch (id),
     topition integer references topition (id),
     sequence integer default 0 not null,

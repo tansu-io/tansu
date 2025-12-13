@@ -15,8 +15,8 @@
 -- non transactional idempotent producer
 --
 create table if not exists producer (
-    id integer primary key autoincrement,
-    cluster int references cluster (id) not null,
+    id integer primary key autoincrement not null,
+    cluster int references cluster (id),
     last_updated text default current_timestamp not null,
     created_at text default current_timestamp not null
 );
