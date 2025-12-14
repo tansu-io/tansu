@@ -189,6 +189,7 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
   smoke:
+    if: ${{github.actor == 'shortishly'}}
     needs: [package]
     strategy:
       fail-fast: false
