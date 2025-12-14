@@ -239,6 +239,26 @@ fn body_enum(messages: &[Message], include_tag: bool) -> TokenStream {
             }
         };
 
+        let with_capacity = {
+            let matches = messages.iter().map(|message| {
+                let name = message.type_name();
+
+                quote! {
+                    Self::#name(m) => m.capacity_in_bytes(),
+                }
+            });
+
+            quote! {
+                impl crate::primitive::WithCapacity for Body {
+                    fn capacity_in_bytes(&self) -> Result<usize> {
+                        match self {
+                            #(#matches)*
+                        }
+                    }
+                }
+            }
+        };
+
         quote! {
             #[non_exhaustive]
             #[derive(Clone, Debug, PartialEq, PartialOrd, serde::Deserialize, serde::Serialize)]
@@ -248,6 +268,8 @@ fn body_enum(messages: &[Message], include_tag: bool) -> TokenStream {
             pub enum Body {
                 #(#variants),*
             }
+
+            #with_capacity
 
             #from_mezzanine
         }
@@ -549,6 +571,8 @@ fn message_struct(
             }
         });
 
+        let with_capacity = with_capacity(name, fields);
+
         let derived = if fields.iter().any(Field::has_float) {
             quote! {
                 #[derive(Clone, Debug, Default, PartialEq, PartialOrd, serde::Deserialize, serde::Serialize)]
@@ -577,6 +601,8 @@ fn message_struct(
             }
 
             #from_mezzanine
+
+            #with_capacity
 
             impl #name {
                 #(#builders)*
@@ -724,6 +750,42 @@ fn message_struct(
     }
 }
 
+fn with_capacity(name: &Type, fields: &[Field]) -> TokenStream {
+    if fields.len() > 1 {
+        let fields = fields.iter().map(|field| {
+            let ident = field.ident();
+
+            quote! {
+                self.#ident.capacity_in_bytes()?
+            }
+        });
+
+        quote! {
+            impl crate::primitive::WithCapacity for #name {
+                fn capacity_in_bytes(&self) -> Result<usize> {
+                    Ok(#(#fields)+*)
+                }
+            }
+        }
+    } else {
+        let fields = fields.iter().map(|field| {
+            let ident = field.ident();
+
+            quote! {
+                self.#ident.capacity_in_bytes()
+            }
+        });
+
+        quote! {
+            impl crate::primitive::WithCapacity for #name {
+                fn capacity_in_bytes(&self) -> Result<usize> {
+                    #(#fields)*
+                }
+            }
+        }
+    }
+}
+
 #[allow(clippy::too_many_lines)]
 fn common_struct(
     parent: Option<&Field>,
@@ -800,12 +862,16 @@ fn common_struct(
             }
         };
 
+        let with_capacity = with_capacity(name, fields);
+
         quote! {
             #[non_exhaustive]
             #derived
             #visibility struct #name {
                 #(#vfk,)*
             }
+
+            #with_capacity
 
             impl #name {
                 #(#builders)*

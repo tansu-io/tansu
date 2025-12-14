@@ -1064,7 +1064,10 @@ impl<'de> SeqAccess<'de> for Batch {
             let batch_length = self.encoded.try_get_i32()?;
             debug!(base_offset, batch_length);
 
-            let mut batch = BytesMut::new();
+            let mut batch = BytesMut::with_capacity(
+                size_of::<i64>() + size_of::<i32>() + batch_length as usize,
+            );
+
             batch.put_i64(base_offset);
             batch.put_i32(batch_length);
             batch.put(self.encoded.split_to(batch_length as usize));

@@ -477,7 +477,7 @@ impl Serializer for &mut Encoder<'_> {
         if self.field.is_some_and(|field| field == "tag_buffer") && !self.is_flexible() {
             Ok(())
         } else if self.is_records() {
-            let mut c = Cursor::new(vec![]);
+            let mut c = Cursor::new(Vec::with_capacity(8_192));
             let mut e = Encoder::new(&mut c);
             value.serialize(&mut e)?;
 
