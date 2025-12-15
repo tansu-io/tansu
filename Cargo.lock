@@ -6781,6 +6781,8 @@ dependencies = [
  "tansu-broker",
  "tansu-cli",
  "tansu-sans-io",
+ "tansu-schema",
+ "tansu-storage",
  "tokio",
  "tracing",
 ]
