@@ -375,7 +375,7 @@ where
     type Response = Response;
     type Error = ServiceError;
 
-    #[instrument(skip(ctx), ret)]
+    #[instrument(skip_all)]
     async fn serve(
         &self,
         ctx: Context<State>,
@@ -447,7 +447,7 @@ static STORAGE_CHANNEL_ERROR: LazyLock<Counter<u64>> = LazyLock::new(|| {
 
 #[async_trait]
 impl Storage for RequestChannelService {
-    #[instrument(ret)]
+    #[instrument(skip_all)]
     async fn register_broker(&self, broker_registration: BrokerRegistrationRequest) -> Result<()> {
         self.serve(
             Context::default(),
@@ -464,7 +464,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip_all)]
     async fn incremental_alter_resource(
         &self,
         resource: AlterConfigsResource,
@@ -484,7 +484,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip_all)]
     async fn create_topic(&self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {
         self.serve(
             Context::default(),
@@ -504,7 +504,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip_all)]
     async fn delete_records(
         &self,
         topics: &[DeleteRecordsTopic],
@@ -524,7 +524,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip_all)]
     async fn delete_topic(&self, topic: &TopicId) -> Result<ErrorCode> {
         self.serve(Context::default(), Request::DeleteTopic(topic.to_owned()))
             .await
@@ -538,7 +538,7 @@ impl Storage for RequestChannelService {
             .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip_all)]
     async fn brokers(&self) -> Result<Vec<DescribeClusterBroker>> {
         self.serve(Context::default(), Request::Brokers)
             .await
@@ -552,7 +552,7 @@ impl Storage for RequestChannelService {
             .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip_all)]
     async fn produce(
         &self,
         transaction_id: Option<&str>,
@@ -581,7 +581,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip_all)]
     async fn fetch(
         &self,
         topition: &'_ Topition,
@@ -613,7 +613,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip_all)]
     async fn offset_stage(&self, topition: &Topition) -> Result<OffsetStage> {
         self.serve(
             Context::default(),
@@ -630,7 +630,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip_all)]
     async fn list_offsets(
         &self,
         isolation_level: IsolationLevel,
@@ -656,7 +656,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip_all)]
     async fn offset_commit(
         &self,
         group_id: &str,
@@ -685,7 +685,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip_all)]
     async fn committed_offset_topitions(&self, group_id: &str) -> Result<BTreeMap<Topition, i64>> {
         let group_id = group_id.to_string();
 
@@ -704,7 +704,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip_all)]
     async fn offset_fetch(
         &self,
         group_id: Option<&str>,
@@ -733,7 +733,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip_all)]
     async fn metadata(&self, topics: Option<&[TopicId]>) -> Result<MetadataResponse> {
         let topics = topics.map(Vec::from);
 
@@ -749,7 +749,7 @@ impl Storage for RequestChannelService {
             .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip_all)]
     async fn describe_config(
         &self,
         name: &str,
@@ -778,7 +778,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip_all)]
     async fn describe_topic_partitions(
         &self,
         topics: Option<&[TopicId]>,
@@ -806,7 +806,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip_all)]
     async fn list_groups(&self, states_filter: Option<&[String]>) -> Result<Vec<ListedGroup>> {
         let states_filter = states_filter.map(Vec::from);
 
@@ -822,7 +822,7 @@ impl Storage for RequestChannelService {
             .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip_all)]
     async fn delete_groups(
         &self,
         group_ids: Option<&[String]>,
@@ -841,7 +841,7 @@ impl Storage for RequestChannelService {
             .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip_all)]
     async fn describe_groups(
         &self,
         group_ids: Option<&[String]>,
@@ -867,7 +867,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip_all)]
     async fn update_group(
         &self,
         group_id: &str,
@@ -895,7 +895,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip_all)]
     async fn init_producer(
         &self,
         transaction_id: Option<&str>,
@@ -925,7 +925,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip_all)]
     async fn txn_add_offsets(
         &self,
         transaction_id: &str,
@@ -956,7 +956,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip_all)]
     async fn txn_add_partitions(
         &self,
         partitions: TxnAddPartitionsRequest,
@@ -973,7 +973,7 @@ impl Storage for RequestChannelService {
             .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip_all)]
     async fn txn_offset_commit(
         &self,
         offsets: TxnOffsetCommitRequest,
@@ -990,7 +990,7 @@ impl Storage for RequestChannelService {
             .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip_all)]
     async fn txn_end(
         &self,
         transaction_id: &str,
@@ -1020,7 +1020,7 @@ impl Storage for RequestChannelService {
         .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip_all)]
     async fn maintain(&self) -> Result<()> {
         self.serve(Context::default(), Request::Maintain)
             .await
@@ -1034,7 +1034,7 @@ impl Storage for RequestChannelService {
             .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip_all)]
     async fn cluster_id(&self) -> Result<String> {
         self.serve(Context::default(), Request::ClusterId)
             .await
@@ -1048,7 +1048,7 @@ impl Storage for RequestChannelService {
             .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip_all)]
     async fn node(&self) -> Result<i32> {
         self.serve(Context::default(), Request::Node)
             .await
@@ -1062,7 +1062,7 @@ impl Storage for RequestChannelService {
             .map_err(Into::into)
     }
 
-    #[instrument(ret)]
+    #[instrument(skip_all)]
     async fn advertised_listener(&self) -> Result<Url> {
         self.serve(Context::default(), Request::AdvertisedListener)
             .await
@@ -1121,8 +1121,6 @@ where
         loop {
             tokio::select! {
                 Some((request, tx)) = req.recv() => {
-                    debug!(?request, ?tx);
-
                     self.inner
                     .serve(ctx.clone(), request)
                     .await

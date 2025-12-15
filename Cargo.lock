@@ -1537,6 +1537,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19d374276b40fb8bbdee95aef7c7fa6b5316ec764510eb64b8dd0e2ed0d7e7f5"
 
 [[package]]
+name = "crc-fast"
+version = "1.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a2f7c8d397a6353ef0c1d6217ab91b3ddb5431daf57fd013f506b967dcf44458"
+dependencies = [
+ "crc",
+ "digest",
+ "rustversion",
+ "spin 0.10.0",
+]
+
+[[package]]
 name = "crc32c"
 version = "0.6.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6555,6 +6567,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "spin"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d5fe4ccb98d9c292d56fec89a5e07da7fc4cf0dc11e156b41793132775d3e591"
+
+[[package]]
 name = "spinning_top"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6966,7 +6984,7 @@ dependencies = [
  "bytes",
  "clap",
  "convert_case",
- "crc",
+ "crc-fast",
  "criterion",
  "flate2",
  "glob",
@@ -7040,6 +7058,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "deadpool",
+ "nanoid",
  "opentelemetry 0.30.0",
  "opentelemetry-semantic-conventions",
  "rama",

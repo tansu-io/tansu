@@ -12,9 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{Result, primitive::ByteSize, record::codec::Octets};
-use bytes::Bytes;
+use crate::{Decode, Encode, Result, primitive::ByteSize, record::codec::Octets};
+use bytes::{BufMut as _, Bytes, BytesMut};
 use serde::{Deserialize, Serialize};
+use tracing::instrument;
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct Header {
@@ -25,6 +26,42 @@ pub struct Header {
     #[serde(serialize_with = "Octets::serialize")]
     #[serde(deserialize_with = "Octets::deserialize")]
     pub value: Option<Bytes>,
+}
+
+impl ByteSize for Header {
+    fn size_in_bytes(&self) -> Result<usize> {
+        Octets(self.key.clone())
+            .size_in_bytes()
+            .and_then(|key_octets| {
+                Octets(self.value.clone())
+                    .size_in_bytes()
+                    .map(|value_octets| key_octets + value_octets)
+            })
+    }
+}
+
+impl Encode for Header {
+    #[instrument(skip_all)]
+    fn encode(&self) -> Result<Bytes> {
+        let mut encoded = self.size_in_bytes().map(BytesMut::with_capacity)?;
+
+        encoded.put(Octets(self.key.clone()).encode()?);
+        encoded.put(Octets(self.value.clone()).encode()?);
+
+        Ok(encoded.into())
+    }
+}
+
+impl Decode for Header {
+    #[instrument(skip_all)]
+    fn decode(encoded: &mut Bytes) -> Result<Self> {
+        Octets::decode(encoded).and_then(|key| {
+            Octets::decode(encoded).map(|value| Self {
+                key: key.into(),
+                value: value.into(),
+            })
+        })
+    }
 }
 
 impl Header {

@@ -120,6 +120,7 @@ use tansu_service::{FrameBytesLayer, FrameBytesService, host_port};
 use tokio::{
     io::{AsyncReadExt as _, AsyncWriteExt as _},
     net::TcpStream,
+    task::JoinError,
 };
 use tracing::{Instrument, Level, debug, span};
 use tracing_subscriber::filter::ParseError;
@@ -130,6 +131,7 @@ use url::Url;
 pub enum Error {
     DeadPoolBuild(#[from] BuildError),
     Io(Arc<io::Error>),
+    Join(Arc<JoinError>),
     Message(String),
     ParseFilter(Arc<ParseError>),
     ParseUrl(#[from] url::ParseError),
@@ -143,6 +145,12 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{self:?}")
+    }
+}
+
+impl From<JoinError> for Error {
+    fn from(value: JoinError) -> Self {
+        Self::Join(Arc::new(value))
     }
 }
 

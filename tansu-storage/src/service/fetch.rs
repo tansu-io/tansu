@@ -25,7 +25,7 @@ use tansu_sans_io::{
     record::deflated::{Batch, Frame},
 };
 use tokio::time::sleep;
-use tracing::{debug, error};
+use tracing::{debug, error, instrument};
 
 use crate::{Error, Result, Storage, Topition};
 
@@ -372,6 +372,7 @@ where
     type Response = FetchResponse;
     type Error = Error;
 
+    #[instrument(skip(ctx, req))]
     async fn serve(
         &self,
         ctx: Context<G>,
