@@ -30,6 +30,7 @@ include = [
     "LICENSE",
     "benches/*.rs",
     "build.rs",
+    "examples/*.rs",
     "message/*.json",
     "src/**/*.avsc",
     "src/**/*.json",
