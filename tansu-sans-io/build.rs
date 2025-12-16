@@ -571,7 +571,7 @@ fn message_struct(
             }
         });
 
-        let with_capacity = with_capacity(name, fields);
+        let with_capacity = with_capacity(parent, name, fields);
 
         let derived = if fields.iter().any(Field::has_float) {
             quote! {
@@ -750,15 +750,24 @@ fn message_struct(
     }
 }
 
-fn with_capacity(name: &Type, fields: &[Field]) -> TokenStream {
-    if fields.len() > 1 {
-        let fields = fields.iter().map(|field| {
-            let ident = field.ident();
+fn with_capacity(parent: Option<&Field>, name: &Type, fields: &[Field]) -> TokenStream {
+    if fields.len() > 1 || parent.is_none() {
+        let fields = fields
+            .iter()
+            .map(|field| {
+                let ident = field.ident();
 
-            quote! {
-                self.#ident.capacity_in_bytes()?
-            }
-        });
+                quote! {
+                    self.#ident.capacity_in_bytes()?
+                }
+            })
+            .chain(if parent.is_none() {
+                Some(quote! {
+                    1
+                })
+            } else {
+                None
+            });
 
         quote! {
             impl crate::primitive::WithCapacity for #name {
@@ -862,7 +871,7 @@ fn common_struct(
             }
         };
 
-        let with_capacity = with_capacity(name, fields);
+        let with_capacity = with_capacity(parent, name, fields);
 
         quote! {
             #[non_exhaustive]

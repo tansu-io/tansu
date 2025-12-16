@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::iter::once;
+
 use bytes::Bytes;
 
 use crate::Result;
@@ -100,7 +102,10 @@ where
     fn capacity_in_bytes(&self) -> Result<usize> {
         self.iter()
             .map(WithCapacity::capacity_in_bytes)
-            .chain(Some(Ok(size_of::<i32>())))
+            // length of the vector
+            .chain(once(Ok(size_of::<i32>())))
+            // empty tag buffer
+            .chain(once(Ok(size_of::<i8>())))
             .collect::<Result<Vec<_>>>()
             .map(|items| items.iter().sum())
     }

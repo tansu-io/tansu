@@ -448,6 +448,7 @@ impl Frame {
             if encoded.len() > capacity {
                 warn!(
                     capacity,
+                    api_key = frame.api_key().ok(),
                     len = encoded.len(),
                     elapsed_millis = Self::elapsed_millis(start)
                 )
@@ -504,6 +505,8 @@ impl Frame {
                 warn!(
                     len = encoded.len(),
                     capacity,
+                    api_key,
+                    api_version,
                     elapsed_millis = Self::elapsed_millis(start)
                 )
             } else {
@@ -610,6 +613,8 @@ impl WithCapacity for Header {
                 + client_id.capacity_in_bytes()?),
             Self::Response { correlation_id } => correlation_id.capacity_in_bytes(),
         }
+        // empty tag buffer at the end of the header
+        .map(|capacity| capacity + 1)
         .inspect(|capacity| debug!(capacity))
     }
 }

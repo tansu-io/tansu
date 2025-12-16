@@ -123,9 +123,12 @@ fn api_versions_response_v1_000() -> Result<()> {
         0, 0, 0, 0, 37, 0, 0, 0, 0, 0, 0, 0, 0,
     ];
 
+    let frame = Frame::response_from_bytes(&v[..], ApiVersionsResponse::KEY, 1)?;
+    let size = 242;
+
     assert_eq!(
         Frame {
-            size: 242,
+            size,
             header: Header::Response { correlation_id: 0 },
             body: Body::ApiVersionsResponse(
                 ApiVersionsResponse::default()
@@ -175,7 +178,14 @@ fn api_versions_response_v1_000() -> Result<()> {
                     .throttle_time_ms(Some(0)),
             ),
         },
-        Frame::response_from_bytes(&v[..], ApiVersionsResponse::KEY, 1)?
+        frame
+    );
+
+    assert!(
+        frame
+            .capacity_in_bytes()
+            .inspect(|capacity| debug!(capacity, len = v.len()))?
+            >= size as usize,
     );
 
     Ok(())
@@ -411,9 +421,10 @@ fn create_topics_response_v7_000() -> Result<()> {
 
     let api_key = 19;
     let api_version = 7;
+    let size = 1116;
 
     let frame = Frame {
-        size: 1116,
+        size,
         header: Header::Response {
             correlation_id: 298,
         },
@@ -566,6 +577,13 @@ fn create_topics_response_v7_000() -> Result<()> {
         frame,
         Frame::response_from_bytes(&encoded[..], api_key, api_version)
             .inspect(|frame| debug!(?frame))?
+    );
+
+    assert!(
+        frame
+            .capacity_in_bytes()
+            .inspect(|capacity| debug!(capacity, len = encoded.len()))?
+            >= size as usize,
     );
 
     Ok(())
