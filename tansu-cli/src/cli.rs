@@ -100,7 +100,7 @@ enum Command {
     /// Apache Kafka compatible proxy
     Proxy(Box<proxy::Arg>),
 
-    /// Create or delete topics managed by the broker
+    /// Create, list or delete topics managed by the broker
     Topic {
         #[command(subcommand)]
         command: topic::Command,
