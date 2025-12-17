@@ -156,10 +156,10 @@ impl Produce {
         data: &Value,
         offset_delta: &mut i32,
     ) -> Result<inflated::Builder> {
-        if let Some(ref schema) = schema {
+        if let Some(schema) = schema {
             batch = batch.record(
                 schema
-                    .as_kafka_record(&data)
+                    .as_kafka_record(data)
                     .map(|record| record.offset_delta(*offset_delta))?,
             );
 
