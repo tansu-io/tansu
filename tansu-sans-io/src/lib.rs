@@ -478,7 +478,7 @@ impl Frame {
     pub fn response(header: Header, body: Body, api_key: i16, api_version: i16) -> Result<Bytes> {
         let start = SystemTime::now();
 
-        let capacity = header.capacity_in_bytes()? + body.capacity_in_bytes()?;
+        let capacity = size_of::<i32>() + header.capacity_in_bytes()? + body.capacity_in_bytes()?;
         let mut c = Cursor::new(Vec::with_capacity(capacity));
         let mut serializer = Encoder::response(&mut c, api_key, api_version);
 
