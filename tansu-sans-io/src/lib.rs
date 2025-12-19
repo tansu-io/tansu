@@ -144,6 +144,8 @@ use tansu_model::{MessageKind, MessageMeta};
 use tracing::{debug, error, instrument, warn};
 use tracing_subscriber::filter::ParseError;
 
+use crate::primitive::WithCapacity;
+
 /// The null topic identifier.
 pub const NULL_TOPIC_ID: [u8; 16] = [0; 16];
 
@@ -403,6 +405,15 @@ pub struct Frame {
     pub body: Body,
 }
 
+impl WithCapacity for Frame {
+    fn capacity_in_bytes(&self) -> Result<usize> {
+        Ok(self.size.capacity_in_bytes()?
+            + self.header.capacity_in_bytes()?
+            + self.body.capacity_in_bytes()?)
+        .inspect(|capacity| debug!(capacity))
+    }
+}
+
 impl Frame {
     fn elapsed_millis(start: SystemTime) -> u64 {
         start
@@ -415,7 +426,8 @@ impl Frame {
     pub fn request(header: Header, body: Body) -> Result<Bytes> {
         let start = SystemTime::now();
 
-        let mut c = Cursor::new(vec![]);
+        let capacity = header.capacity_in_bytes()? + body.capacity_in_bytes()?;
+        let mut c = Cursor::new(Vec::with_capacity(capacity));
 
         let mut serializer = Encoder::request(&mut c);
 
@@ -433,10 +445,20 @@ impl Frame {
         c.write_all(&buf)?;
 
         Ok(Bytes::from(c.into_inner())).inspect(|encoded| {
-            debug!(
-                len = encoded.len(),
-                elapsed_millis = Self::elapsed_millis(start)
-            )
+            if encoded.len() > capacity {
+                warn!(
+                    capacity,
+                    api_key = frame.api_key().ok(),
+                    len = encoded.len(),
+                    elapsed_millis = Self::elapsed_millis(start)
+                )
+            } else {
+                debug!(
+                    capacity,
+                    len = encoded.len(),
+                    elapsed_millis = Self::elapsed_millis(start)
+                )
+            }
         })
     }
 
@@ -456,7 +478,8 @@ impl Frame {
     pub fn response(header: Header, body: Body, api_key: i16, api_version: i16) -> Result<Bytes> {
         let start = SystemTime::now();
 
-        let mut c = Cursor::new(vec![]);
+        let capacity = size_of::<i32>() + header.capacity_in_bytes()? + body.capacity_in_bytes()?;
+        let mut c = Cursor::new(Vec::with_capacity(capacity));
         let mut serializer = Encoder::response(&mut c, api_key, api_version);
 
         let frame = Frame {
@@ -478,10 +501,21 @@ impl Frame {
         c.write_all(&buf)?;
 
         Ok(Bytes::from(c.into_inner())).inspect(|encoded| {
-            debug!(
-                len = encoded.len(),
-                elapsed_millis = Self::elapsed_millis(start)
-            )
+            if encoded.len() > capacity {
+                warn!(
+                    len = encoded.len(),
+                    capacity,
+                    api_key,
+                    api_version,
+                    elapsed_millis = Self::elapsed_millis(start)
+                )
+            } else {
+                debug!(
+                    len = encoded.len(),
+                    capacity,
+                    elapsed_millis = Self::elapsed_millis(start)
+                )
+            }
         })
     }
 
@@ -563,6 +597,26 @@ pub enum Header {
         /// The correlation ID for the corresponding request.
         correlation_id: i32,
     },
+}
+
+impl WithCapacity for Header {
+    fn capacity_in_bytes(&self) -> Result<usize> {
+        match self {
+            Self::Request {
+                api_key,
+                api_version,
+                correlation_id,
+                client_id,
+            } => Ok(api_key.capacity_in_bytes()?
+                + api_version.capacity_in_bytes()?
+                + correlation_id.capacity_in_bytes()?
+                + client_id.capacity_in_bytes()?),
+            Self::Response { correlation_id } => correlation_id.capacity_in_bytes(),
+        }
+        // empty tag buffer at the end of the header
+        .map(|capacity| capacity + 1)
+        .inspect(|capacity| debug!(capacity))
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, PartialOrd, Serialize)]

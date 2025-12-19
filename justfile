@@ -426,10 +426,13 @@ flamegraph-produce profile="profiling":
     RUST_LOG=warn flamegraph -- ./target/{{replace(profile, "dev", "debug")}}/bench_produce_v11
 
 bench-hyperfine profile="release": (build profile "libsql" "bench")
-    hyperfine -N ./target/{{replace(profile, "dev", "debug")}}/bench
+    RUSTLOG=warn hyperfine -N ./target/{{replace(profile, "dev", "debug")}}/bench
 
 bench-dhat mode="heap" profile="release": (build profile "libsql" "bench")
-    valgrind --tool=dhat --mode={{mode}} ./target/{{replace(profile, "dev", "debug")}}/bench
+    RUSTLOG=warn valgrind --tool=dhat --mode={{mode}} ./target/{{replace(profile, "dev", "debug")}}/bench
+
+bench profile="profiling": (build profile "libsql" "bench")
+    ./target/{{replace(profile, "dev", "debug")}}/bench
 
 bench-flamegraph profile="profiling": (build profile "libsql" "bench")
     RUST_LOG=warn flamegraph -- ./target/{{replace(profile, "dev", "debug")}}/bench

@@ -24,12 +24,21 @@ use serde::{
 use tracing::{debug, error, instrument};
 
 use crate::{
-    Compression, Decode as _, Decoder, Encoder, Error, Result, primitive::ByteSize, record::Record,
+    Compression, Decode as _, Decoder, Encoder, Error, Result,
+    primitive::{ByteSize, WithCapacity},
+    record::Record,
 };
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct Frame {
     pub batches: Vec<Batch>,
+}
+
+impl WithCapacity for Frame {
+    fn capacity_in_bytes(&self) -> Result<usize> {
+        self.size_in_bytes()
+            .map(|batches| size_of::<u32>() + batches)
+    }
 }
 
 impl ByteSize for Frame {

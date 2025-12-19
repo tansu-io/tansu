@@ -36,6 +36,7 @@ use tansu_sans_io::{
     metadata_request::MetadataRequestTopic,
     metadata_response::{MetadataResponseBroker, MetadataResponsePartition, MetadataResponseTopic},
     offset_fetch_response::{OffsetFetchResponsePartition, OffsetFetchResponseTopic},
+    primitive::WithCapacity,
     record::{self, Record, deflated, inflated},
 };
 use tracing::debug;
@@ -46,6 +47,8 @@ pub mod common;
 fn api_versions_request_v0_000() -> Result<()> {
     let _guard = init_tracing()?;
 
+    let size = 25;
+
     let v = [
         0, 0, 0, 25, 0, 18, 0, 0, 0, 0, 0, 1, 0, 15, 97, 105, 111, 107, 97, 102, 107, 97, 45, 48,
         46, 49, 50, 46, 48,
@@ -53,7 +56,7 @@ fn api_versions_request_v0_000() -> Result<()> {
 
     assert_eq!(
         Frame {
-            size: 25,
+            size,
             header: Header::Request {
                 api_key: 18,
                 api_version: 0,
@@ -63,6 +66,11 @@ fn api_versions_request_v0_000() -> Result<()> {
             body: Body::ApiVersionsRequest(ApiVersionsRequest::default())
         },
         Frame::request_from_bytes(&v[..])?
+    );
+
+    assert!(
+        Frame::request_from_bytes(&v[..]).and_then(|frame| frame.capacity_in_bytes())?
+            >= size as usize,
     );
 
     Ok(())
@@ -115,9 +123,12 @@ fn api_versions_response_v1_000() -> Result<()> {
         0, 0, 0, 0, 37, 0, 0, 0, 0, 0, 0, 0, 0,
     ];
 
+    let frame = Frame::response_from_bytes(&v[..], ApiVersionsResponse::KEY, 1)?;
+    let size = 242;
+
     assert_eq!(
         Frame {
-            size: 242,
+            size,
             header: Header::Response { correlation_id: 0 },
             body: Body::ApiVersionsResponse(
                 ApiVersionsResponse::default()
@@ -167,7 +178,14 @@ fn api_versions_response_v1_000() -> Result<()> {
                     .throttle_time_ms(Some(0)),
             ),
         },
-        Frame::response_from_bytes(&v[..], ApiVersionsResponse::KEY, 1)?
+        frame
+    );
+
+    assert!(
+        frame
+            .capacity_in_bytes()
+            .inspect(|capacity| debug!(capacity, len = v.len()))?
+            >= size as usize,
     );
 
     Ok(())
@@ -403,9 +421,10 @@ fn create_topics_response_v7_000() -> Result<()> {
 
     let api_key = 19;
     let api_version = 7;
+    let size = 1116;
 
     let frame = Frame {
-        size: 1116,
+        size,
         header: Header::Response {
             correlation_id: 298,
         },
@@ -558,6 +577,13 @@ fn create_topics_response_v7_000() -> Result<()> {
         frame,
         Frame::response_from_bytes(&encoded[..], api_key, api_version)
             .inspect(|frame| debug!(?frame))?
+    );
+
+    assert!(
+        frame
+            .capacity_in_bytes()
+            .inspect(|capacity| debug!(capacity, len = encoded.len()))?
+            >= size as usize,
     );
 
     Ok(())
@@ -4760,9 +4786,11 @@ fn produce_request_v3_000() -> Result<()> {
         53, 54, 55, 56, 57, 0,
     ];
 
+    let size = 196;
+
     assert_eq!(
         Frame {
-            size: 196,
+            size,
             header: Header::Request {
                 api_key: 0,
                 api_version: 3,
@@ -4854,6 +4882,11 @@ fn produce_request_v3_000() -> Result<()> {
         Frame::request_from_bytes(&v[..])?
     );
 
+    assert!(
+        Frame::request_from_bytes(&v[..]).and_then(|frame| frame.capacity_in_bytes())?
+            >= size as usize,
+    );
+
     Ok(())
 }
 
@@ -4874,9 +4907,11 @@ fn produce_request_v7_000() -> Result<()> {
         108, 117, 101,
     ];
 
+    let size = 158;
+
     assert_eq!(
         Frame {
-            size: 158,
+            size,
             header: Header::Request {
                 api_key: 0,
                 api_version: 7,
@@ -4934,6 +4969,11 @@ fn produce_request_v7_000() -> Result<()> {
         Frame::request_from_bytes(&v[..])?
     );
 
+    assert!(
+        Frame::request_from_bytes(&v[..]).and_then(|frame| frame.capacity_in_bytes())?
+            >= size as usize,
+    );
+
     Ok(())
 }
 
@@ -4952,9 +4992,11 @@ fn produce_request_v9_000() -> Result<()> {
         0, 0,
     ];
 
+    let size = 120;
+
     assert_eq!(
         Frame {
-            size: 120,
+            size,
             header: Header::Request {
                 api_key: 0,
                 api_version: 9,
@@ -5008,6 +5050,11 @@ fn produce_request_v9_000() -> Result<()> {
         Frame::request_from_bytes(&v[..])?
     );
 
+    assert!(
+        Frame::request_from_bytes(&v[..]).and_then(|frame| frame.capacity_in_bytes())?
+            >= size as usize,
+    );
+
     Ok(())
 }
 
@@ -5030,9 +5077,11 @@ fn produce_request_v9_001() -> Result<()> {
         6, 118, 49, 48, 0, 22, 0, 0, 20, 4, 107, 54, 6, 118, 49, 49, 0, 0, 0, 0,
     ];
 
+    let size = 234;
+
     assert_eq!(
         Frame {
-            size: 234,
+            size,
             header: Header::Request {
                 api_key: 0,
                 api_version: 9,
@@ -5178,6 +5227,11 @@ fn produce_request_v9_001() -> Result<()> {
         Frame::request_from_bytes(&v[..])?
     );
 
+    assert!(
+        Frame::request_from_bytes(&v[..]).and_then(|frame| frame.capacity_in_bytes())?
+            >= size as usize,
+    );
+
     Ok(())
 }
 
@@ -5197,9 +5251,11 @@ fn produce_request_v10_000() -> Result<()> {
         107, 108, 4, 104, 51, 6, 117, 105, 111, 0, 0, 0,
     ];
 
+    let size = 149;
+
     assert_eq!(
         Frame {
-            size: 149,
+            size,
             header: Header::Request {
                 api_key: 0,
                 api_version: 10,
@@ -5277,6 +5333,11 @@ fn produce_request_v10_000() -> Result<()> {
         Frame::request_from_bytes(&v[..])?
     );
 
+    assert!(
+        Frame::request_from_bytes(&v[..]).and_then(|frame| frame.capacity_in_bytes())?
+            >= size as usize,
+    );
+
     Ok(())
 }
 
@@ -5306,9 +5367,11 @@ fn produce_request_v10_001() -> Result<()> {
         0, 0,
     ];
 
+    let size = 340;
+
     assert_eq!(
         Frame {
-            size: 340,
+            size,
             header: Header::Request {
                 api_key: 0,
                 api_version: 10,
@@ -5523,6 +5586,11 @@ fn produce_request_v10_001() -> Result<()> {
         Frame::request_from_bytes(&v[..])?
     );
 
+    assert!(
+        Frame::request_from_bytes(&v[..]).and_then(|frame| frame.capacity_in_bytes())?
+            >= size as usize,
+    );
+
     Ok(())
 }
 
@@ -5597,9 +5665,11 @@ sunt\x01uXculpa qui officia deser\x01\x1e\x1cmollit a!!<id est laborum.\0");
         record_data,
     };
 
+    let size = 571;
+
     assert_eq!(
         Frame {
-            size: 571,
+            size,
             header: Header::Request {
                 api_key: 0,
                 api_version: 10,
@@ -5626,6 +5696,11 @@ sunt\x01uXculpa qui officia deser\x01\x1e\x1cmollit a!!<id est laborum.\0");
                 .into()
         },
         Frame::request_from_bytes(&v[..])?
+    );
+
+    assert!(
+        Frame::request_from_bytes(&v[..]).and_then(|frame| frame.capacity_in_bytes())?
+            >= size as usize,
     );
 
     assert_eq!(
