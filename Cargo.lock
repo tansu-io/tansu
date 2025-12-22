@@ -4744,6 +4744,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "83d059a296a47436748557a353c5e6c5705b9470ef6c95cfc52c21a8814ddac2"
 
 [[package]]
+name = "opentelemetry-stdout"
+version = "0.30.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "447191061af41c3943e082ea359ab8b64ff27d6d34d30d327df309ddef1eef6f"
+dependencies = [
+ "chrono",
+ "opentelemetry 0.30.0",
+ "opentelemetry_sdk 0.30.0",
+]
+
+[[package]]
 name = "opentelemetry_sdk"
 version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6862,6 +6873,7 @@ dependencies = [
  "tansu-broker",
  "tansu-cat",
  "tansu-generator",
+ "tansu-perf",
  "tansu-proxy",
  "tansu-sans-io",
  "tansu-schema",
@@ -6949,6 +6961,34 @@ dependencies = [
  "opentelemetry_sdk 0.30.0",
  "thiserror 2.0.17",
  "tracing",
+ "url",
+]
+
+[[package]]
+name = "tansu-perf"
+version = "0.5.9"
+dependencies = [
+ "bytes",
+ "futures",
+ "futures-core",
+ "futures-util",
+ "getrandom 0.3.3",
+ "governor",
+ "nonzero_ext",
+ "opentelemetry 0.30.0",
+ "opentelemetry-otlp",
+ "opentelemetry-semantic-conventions",
+ "opentelemetry-stdout",
+ "opentelemetry_sdk 0.30.0",
+ "rama",
+ "serde_json",
+ "tansu-client",
+ "tansu-sans-io",
+ "thiserror 2.0.17",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
  "url",
 ]
 
