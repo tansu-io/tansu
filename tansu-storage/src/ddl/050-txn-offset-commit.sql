@@ -13,7 +13,7 @@
 -- limitations under the License.
 
 create table if not exists txn_offset_commit (
-    id integer primary key autoincrement,
+    id integer primary key autoincrement not null,
     txn_detail integer references txn_detail (id),
     consumer_group integer references consumer_group (id),
     generation_id integer,

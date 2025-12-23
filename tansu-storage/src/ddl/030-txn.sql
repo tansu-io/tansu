@@ -15,7 +15,7 @@
 -- transactional, including idempotent producer
 --
 create table if not exists txn (
-    id integer primary key autoincrement,
+    id integer primary key autoincrement not null,
     cluster integer references cluster (id),
     name text,
     producer integer references producer (id),

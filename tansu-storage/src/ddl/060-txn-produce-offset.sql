@@ -13,7 +13,7 @@
 -- limitations under the License.
 
 create table if not exists txn_produce_offset (
-    id integer primary key autoincrement,
+    id integer primary key autoincrement not null,
     txn_topition integer references txn_topition (id) unique,
     offset_start integer,
     offset_end integer,
