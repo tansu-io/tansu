@@ -507,4 +507,9 @@ impl Storage for Engine {
     async fn advertised_listener(&self) -> Result<Url> {
         Ok(self.advertised_listener.clone())
     }
+
+    #[instrument(skip_all)]
+    async fn ping(&self) -> Result<()> {
+        Ok(())
+    }
 }
