@@ -1634,7 +1634,7 @@ impl Storage for DynoStore {
                                             .error_code(error_code)
                                             .partition_index(partition_index)
                                             .leader_id(leader_id)
-                                            .leader_epoch(Some(-1))
+                                            .leader_epoch(Some(0))
                                             .replica_nodes(replica_nodes)
                                             .isr_nodes(isr_nodes)
                                             .offline_replicas(Some([].into()))
