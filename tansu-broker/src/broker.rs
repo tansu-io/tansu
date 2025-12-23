@@ -26,7 +26,7 @@ use std::{
     marker::PhantomData,
     net::{IpAddr, Ipv6Addr, SocketAddr},
     str::FromStr,
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 use tansu_sans_io::{ErrorCode, RootMessageMeta};
 use tansu_schema::{Registry, lake::House};
@@ -257,7 +257,7 @@ where
                         let span = span!(Level::DEBUG, "maintenance");
 
                         async move {
-                            _ = storage.maintain().await.inspect(|maintain|debug!(?maintain)).inspect_err(|err|debug!(?err)).ok();
+                            _ = storage.maintain(SystemTime::now()).await.inspect(|maintain|debug!(?maintain)).inspect_err(|err|debug!(?err)).ok();
 
                         }.instrument(span).await
 
