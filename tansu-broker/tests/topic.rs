@@ -115,7 +115,7 @@ pub async fn create_describe_topic_partitions_by_id(
     for partition in responses[0].partitions.as_deref().unwrap_or_default() {
         assert_eq!(ErrorCode::None, ErrorCode::try_from(partition.error_code)?);
         assert_eq!(broker_id, partition.leader_id);
-        assert_eq!(-1, partition.leader_epoch);
+        assert_eq!(0, partition.leader_epoch);
         assert_eq!(
             Some(vec![broker_id; replication_factor as usize]),
             partition.replica_nodes
@@ -186,7 +186,7 @@ pub async fn create_describe_topic_partitions_by_name(
     for partition in responses[0].partitions.as_deref().unwrap_or_default() {
         assert_eq!(ErrorCode::None, ErrorCode::try_from(partition.error_code)?);
         assert_eq!(broker_id, partition.leader_id);
-        assert_eq!(-1, partition.leader_epoch);
+        assert_eq!(0, partition.leader_epoch);
         assert_eq!(
             Some(vec![broker_id; replication_factor as usize]),
             partition.replica_nodes

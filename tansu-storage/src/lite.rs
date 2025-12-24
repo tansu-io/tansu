@@ -2839,7 +2839,7 @@ impl Storage for Delegate {
                                                     .error_code(error_code)
                                                     .partition_index(partition_index)
                                                     .leader_id(leader_id)
-                                                    .leader_epoch(Some(-1))
+                                                    .leader_epoch(Some(0))
                                                     .replica_nodes(replica_nodes)
                                                     .isr_nodes(isr_nodes)
                                                     .offline_replicas(Some([].into()))
@@ -2933,7 +2933,7 @@ impl Storage for Delegate {
                                                     .error_code(error_code)
                                                     .partition_index(partition_index)
                                                     .leader_id(leader_id)
-                                                    .leader_epoch(Some(-1))
+                                                    .leader_epoch(Some(0))
                                                     .replica_nodes(replica_nodes)
                                                     .isr_nodes(isr_nodes)
                                                     .offline_replicas(Some([].into()))
@@ -3026,7 +3026,7 @@ impl Storage for Delegate {
                                     .error_code(error_code)
                                     .partition_index(partition_index)
                                     .leader_id(leader_id)
-                                    .leader_epoch(Some(-1))
+                                    .leader_epoch(Some(0))
                                     .replica_nodes(replica_nodes)
                                     .isr_nodes(isr_nodes)
                                     .offline_replicas(Some([].into()))
@@ -3200,7 +3200,7 @@ impl Storage for Delegate {
                                                 .error_code(ErrorCode::None.into())
                                                 .partition_index(partition_index)
                                                 .leader_id(self.node)
-                                                .leader_epoch(-1)
+                                                .leader_epoch(0)
                                                 .replica_nodes(Some(vec![
                                                     self.node;
                                                     replication_factor
@@ -3291,7 +3291,7 @@ impl Storage for Delegate {
                                                 .error_code(ErrorCode::None.into())
                                                 .partition_index(partition_index)
                                                 .leader_id(self.node)
-                                                .leader_epoch(-1)
+                                                .leader_epoch(0)
                                                 .replica_nodes(Some(vec![
                                                     self.node;
                                                     replication_factor

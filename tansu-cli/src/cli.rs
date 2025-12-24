@@ -31,6 +31,7 @@ use tracing::debug;
 mod broker;
 mod cat;
 mod generator;
+mod perf;
 mod proxy;
 mod topic;
 
@@ -97,6 +98,9 @@ enum Command {
     /// Traffic Generator for schema backed topics
     Generator(Box<generator::Arg>),
 
+    /// Performance
+    Perf(Box<perf::Arg>),
+
     /// Apache Kafka compatible proxy
     Proxy(Box<proxy::Arg>),
 
@@ -127,6 +131,12 @@ impl Cli {
             Command::Cat { command } => command.main().await,
 
             Command::Generator(arg) => arg
+                .main()
+                .await
+                .inspect(|result| debug!(?result))
+                .inspect_err(|err| debug!(?err)),
+
+            Command::Perf(arg) => arg
                 .main()
                 .await
                 .inspect(|result| debug!(?result))

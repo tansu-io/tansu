@@ -93,7 +93,7 @@ pub async fn topics_none(
             .iter()
             .map(|partition| partition.leader_epoch)
             .inspect(|leader_epoch| debug!(leader_epoch))
-            .all(|leader_epoch| leader_epoch == Some(-1))
+            .all(|leader_epoch| leader_epoch == Some(0))
     );
 
     assert!(
@@ -202,7 +202,7 @@ pub async fn topics_some_empty(
             .iter()
             .map(|partition| partition.leader_epoch)
             .inspect(|leader_epoch| debug!(leader_epoch))
-            .all(|leader_epoch| leader_epoch == Some(-1))
+            .all(|leader_epoch| leader_epoch == Some(0))
     );
 
     assert!(
@@ -311,7 +311,7 @@ pub async fn topics_some_matching_by_name(
             .iter()
             .map(|partition| partition.leader_epoch)
             .inspect(|leader_epoch| debug!(leader_epoch))
-            .all(|leader_epoch| leader_epoch == Some(-1))
+            .all(|leader_epoch| leader_epoch == Some(0))
     );
 
     assert!(
@@ -459,7 +459,7 @@ pub async fn topics_some_matching_by_id(
             .iter()
             .map(|partition| partition.leader_epoch)
             .inspect(|leader_epoch| debug!(leader_epoch))
-            .all(|leader_epoch| leader_epoch == Some(-1))
+            .all(|leader_epoch| leader_epoch == Some(0))
     );
 
     assert!(

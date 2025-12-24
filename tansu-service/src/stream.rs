@@ -32,7 +32,9 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, instrument};
 
-use crate::{Error, REQUEST_DURATION, REQUEST_SIZE, RESPONSE_SIZE, frame_length};
+use crate::{
+    BYTES_RECEIVED, BYTES_SENT, Error, REQUEST_DURATION, REQUEST_SIZE, RESPONSE_SIZE, frame_length,
+};
 
 /// A [`Layer`] that listens for TCP connections
 #[derive(Clone, Debug, Default)]
@@ -222,6 +224,7 @@ impl Service<TcpStream, Bytes> for BytesTcpService {
         let stream = ctx.state_mut();
 
         stream.write_all(&req[..]).await?;
+        BYTES_SENT.add(req.len() as u64, &[]);
 
         let mut size = [0u8; 4];
         _ = stream.read_exact(&mut size).await?;
@@ -229,6 +232,7 @@ impl Service<TcpStream, Bytes> for BytesTcpService {
         let mut buffer: Vec<u8> = vec![0u8; frame_length(size)];
         buffer[0..size.len()].copy_from_slice(&size[..]);
         _ = stream.read_exact(&mut buffer[4..]).await?;
+        BYTES_RECEIVED.add(buffer.len() as u64, &[]);
 
         Ok(Bytes::from(buffer))
     }
@@ -310,6 +314,7 @@ where
             .read_exact(&mut request[4..])
             .await
             .inspect_err(|err| error!(?err))?;
+        BYTES_RECEIVED.add(request.len() as u64, &[]);
 
         Ok(Bytes::from(request))
     }
@@ -343,6 +348,7 @@ where
     async fn write(&self, req: &mut TcpStream, frame: Bytes) -> Result<(), S::Error> {
         let mut w = BufWriter::new(req);
         w.write_all(&frame).await.inspect_err(|err| error!(?err))?;
+        BYTES_SENT.add(frame.len() as u64, &[]);
         w.flush().await.map_err(Into::into)
     }
 
