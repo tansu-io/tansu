@@ -12,9 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::time::Duration;
-
-use clap::Args;
+use clap::{Args, Subcommand};
 use human_units::iec::iec_unit;
 use tansu_perf::Perf;
 use tansu_sans_io::ErrorCode;
@@ -22,72 +20,87 @@ use url::Url;
 
 use crate::{EnvVarExp, Result, cli::DEFAULT_BROKER};
 
+#[derive(Clone, Debug, Subcommand)]
+pub(super) enum Command {
+    /// Produce messages
+    Produce {
+        /// The partition to produce messages into
+        #[arg(long, default_value = "0")]
+        partition: i32,
+
+        /// Message batch size used by every producer
+        #[arg(long, default_value = "1")]
+        batch_size: u32,
+
+        /// Message batch size used by every producer
+        #[arg(long, default_value = "1k", value_parser=clap::value_parser!(human_units::Size))]
+        record_size: human_units::Size,
+
+        /// The maximum number of messages per second
+        #[clap(long, group = "output")]
+        per_second: Option<u32>,
+
+        /// Message throughput
+        #[clap(long, group = "output")]
+        throughput: Option<Throughput>,
+
+        /// The number of producers generating messages
+        #[arg(long, default_value = "1")]
+        producers: u32,
+
+        /// Stop sending messages after this time
+        #[arg(long, default_value = "1m", value_parser=clap::value_parser!(human_units::Duration))]
+        duration: Option<human_units::Duration>,
+    },
+
+    Consume,
+}
+
 #[iec_unit(symbol = "B/s")]
 #[derive(Copy, Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-struct Throughput(pub u32);
+pub(super) struct Throughput(pub u32);
 
 #[derive(Args, Clone, Debug)]
 pub(super) struct Arg {
-    /// The URL of the broker to produce messages into
+    #[command(subcommand)]
+    command: Command,
+
+    /// The URL of the broker
     #[arg(long, default_value = DEFAULT_BROKER, env = "ADVERTISED_LISTENER_URL")]
     broker: EnvVarExp<Url>,
 
     /// The topic to generate messages into
     #[clap(value_parser)]
     topic: String,
-
-    /// The partition to produce messages into
-    #[arg(long, default_value = "0")]
-    partition: i32,
-
-    /// Message batch size used by every producer
-    #[arg(long, default_value = "1")]
-    batch_size: u32,
-
-    /// Message batch size used by every producer
-    #[arg(long, default_value = "1024")]
-    record_size: usize,
-
-    /// The maximum number of messages per second
-    #[clap(long, group = "output")]
-    per_second: Option<u32>,
-
-    /// Message throughput
-    #[clap(long, group = "output")]
-    throughput: Option<Throughput>,
-
-    /// The number of producers generating messages
-    #[arg(long, default_value = "1")]
-    producers: u32,
-
-    /// Stop sending messages after this time
-    #[arg(long)]
-    duration_seconds: Option<u64>,
-
-    /// OTEL Exporter OTLP endpoint
-    #[arg(long, env = "OTEL_EXPORTER_OTLP_ENDPOINT")]
-    otlp_endpoint_url: Option<EnvVarExp<Url>>,
 }
 
 impl Arg {
     pub(super) async fn main(self) -> Result<ErrorCode> {
-        Perf::builder()
-            .broker(self.broker.into_inner())
-            .topic(self.topic)
-            .partition(self.partition)
-            .batch_size(self.batch_size)
-            .record_size(self.record_size)
-            .per_second(self.per_second)
-            .throughput(self.throughput.map(|throughput| throughput.0))
-            .producers(self.producers)
-            .duration(self.duration_seconds.map(Duration::from_secs))
-            .otlp_endpoint_url(
-                self.otlp_endpoint_url
-                    .map(|expression| expression.into_inner()),
-            )
-            .build()
-            .main()
-            .await
-            .map_err(Into::into)
+        match self.command {
+            Command::Produce {
+                partition,
+                batch_size,
+                record_size,
+                per_second,
+                throughput,
+                producers,
+                duration,
+            } => Perf::builder()
+                .broker(self.broker.into_inner())
+                .topic(self.topic)
+                .partition(partition)
+                .batch_size(batch_size)
+                .record_size(record_size.0 as usize)
+                .per_second(per_second)
+                .throughput(throughput.map(|throughput| throughput.0))
+                .producers(producers)
+                .duration(duration.map(|duration| duration.0))
+                .build()
+                .main()
+                .await
+                .map_err(Into::into),
+
+            Command::Consume => todo!(),
+        }
     }
 }

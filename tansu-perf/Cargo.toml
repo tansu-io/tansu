@@ -17,6 +17,7 @@ futures-util.workspace = true
 futures.workspace = true
 getrandom.workspace = true
 governor.workspace = true
+human-units.workspace = true
 nonzero_ext.workspace = true
 opentelemetry-otlp.workspace = true
 opentelemetry-semantic-conventions.workspace = true

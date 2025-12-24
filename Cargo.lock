@@ -6974,6 +6974,7 @@ dependencies = [
  "futures-util",
  "getrandom 0.3.3",
  "governor",
+ "human-units",
  "nonzero_ext",
  "opentelemetry 0.30.0",
  "opentelemetry-otlp",
