@@ -199,26 +199,25 @@ impl Builder {
 }
 
 impl Engine {
-    // CRITICAL ARCHITECTURAL ISSUE: Global Metadata Contention
-    // The following keys store all metadata of a given type in a single value (serialized BTreeMap).
-    // This creates severe contention and scalability bottlenecks:
-    // 1. O(N) serialization/deserialization cost for every update.
-    // 2. High probability of transaction conflicts (optimistic concurrency control) under concurrent writes.
-    // 3. Memory pressure when loading large metadata maps.
+    // Global Metadata Keys
     //
-    // TODO: Refactor to use prefix-based keys for individual entries (e.g., "brokers/{id}", "topics/{name}").
+    // The following keys store all metadata of a given type in a single value (serialized BTreeMap).
+    // This is simple and works well for small to medium scale deployments.
+    //
+    // At large scale (1000s of topics), consider splitting into per-topic keys:
+    // - Instead of a single `topics.pc.bin`, use `topics/{name}` keys.
+    // - Retrieving the list of topics would be a scan of all matching keys.
+    // - This would also enable SlateDB's writer partitioning feature.
+    // - The main challenge is that a transaction can enlist multiple topics,
+    //   which could be in different partitions.
 
     /// Key for storing all broker registrations.
-    /// WARNING: See "Global Metadata Contention" note above.
     pub(super) const BROKERS: &[u8] = b"brokers.pc.bin";
     /// Key for storing all producer states (idempotent/transactional).
-    /// WARNING: See "Global Metadata Contention" note above.
     pub(super) const PRODUCERS: &[u8] = b"producers.pc.bin";
     /// Key for storing all topic metadata.
-    /// WARNING: See "Global Metadata Contention" note above.
     pub(super) const TOPICS: &[u8] = b"topics.pc.bin";
     /// Key for storing all transaction states.
-    /// WARNING: See "Global Metadata Contention" note above.
     pub(super) const TRANSACTIONS: &[u8] = b"transactions.pc.bin";
 
     /// Create a new Engine with the simple constructor (without optional features)

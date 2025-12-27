@@ -145,6 +145,7 @@ jobs:
           - dynostore
           - libsql
           - postgres
+          - slatedb
         lake:
           - delta
           - iceberg
@@ -154,7 +155,7 @@ jobs:
         with:
           components: clippy, rustfmt
           cache: false
-      - run: cargo build --features ${{matrix.storage}} --features ${{matrix.lake}}
+      - run: cargo build --no-default-features --features ${{matrix.storage}},${{matrix.lake}}
   cargo-publish-dry-run:
     runs-on: ${{matrix.os}}
     strategy:

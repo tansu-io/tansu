@@ -1570,6 +1570,9 @@ impl Debug for StorageContainer {
             #[cfg(feature = "libsql")]
             Self::Lite(_) => f.debug_tuple(stringify!(StorageContainer::Lite)).finish(),
 
+            #[cfg(feature = "slatedb")]
+            Self::Slate(_) => f.debug_tuple(stringify!(StorageContainer::Slate)).finish(),
+
             #[cfg(feature = "turso")]
             Self::Turso(_) => f.debug_tuple(stringify!(StorageContainer::Turso)).finish(),
         }

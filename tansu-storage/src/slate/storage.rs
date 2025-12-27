@@ -69,12 +69,13 @@ use super::types::{
 impl Storage for Engine {
     /// Register a broker in the cluster.
     ///
-    /// Persists broker information to SlateDB under the `BROKERS` key.
+    /// NOTE: This should be a null operation for SlateDB. All brokers are the same
+    /// (single-node cluster), so there is no need to store broker information.
+    /// The Postgres engine needs to store broker records to be able to join on them,
+    /// but for SlateDB this is unnecessary overhead.
     ///
-    /// # TODO
-    /// - **Scalability**: Loading/Saving the entire `BROKERS` map is inefficient and causes contention.
-    /// - **Liveness**: Implement broker liveness tracking (heartbeat/TTL mechanism).
-    /// - **Cleanup**: Currently brokers are never removed from storage, causing stale entries to accumulate.
+    /// Currently persists broker information to SlateDB under the `BROKERS` key,
+    /// but this could be removed in favor of a no-op implementation.
     async fn register_broker(&self, broker_registration: BrokerRegistrationRequest) -> Result<()> {
         debug!(?broker_registration);
 
@@ -183,6 +184,10 @@ impl Storage for Engine {
         tx.commit().await.map_err(Error::from).and(Ok(id))
     }
 
+    /// Delete records up to a specified offset.
+    ///
+    /// Physically deletes batch data below the specified offset and updates
+    /// the low watermark. This aligns with PG's delete_records implementation.
     async fn delete_records(
         &self,
         topics: &[DeleteRecordsTopic],
@@ -204,13 +209,46 @@ impl Storage for Engine {
 
             if let Some(partitions) = topic.partitions.as_ref() {
                 for partition in partitions {
-                    let error_code = if let Some(metadata) = topic_metadata {
+                    let (error_code, low_watermark) = if let Some(metadata) = topic_metadata {
                         if partition.partition_index < 0
                             || partition.partition_index >= metadata.topic.num_partitions
                         {
-                            ErrorCode::UnknownTopicOrPartition
+                            (ErrorCode::UnknownTopicOrPartition, 0)
                         } else {
-                            // Update the low watermark for this partition
+                            // Delete batches below the specified offset
+                            let batch_prefix = postcard::to_stdvec(&BatchKeyPrefix::new(
+                                metadata.id,
+                                partition.partition_index,
+                            ))?;
+                            let scan_start = postcard::to_stdvec(&BatchKey::scan_from(
+                                metadata.id,
+                                partition.partition_index,
+                                0,
+                            ))?;
+
+                            let mut scan = self.db.scan(scan_start..).await?;
+                            while let Some(kv) = scan.next().await? {
+                                if !kv.key.starts_with(&batch_prefix) {
+                                    break;
+                                }
+
+                                let batch_key: BatchKey = match postcard::from_bytes(&kv.key) {
+                                    Ok(key) => key,
+                                    Err(_) => continue,
+                                };
+
+                                // Delete batches with offset < specified offset
+                                if batch_key.offset >= partition.offset {
+                                    break;
+                                }
+
+                                tx.delete(&kv.key)?;
+                            }
+
+                            // The new low watermark is the requested offset
+                            let new_low_watermark = partition.offset;
+
+                            // Update the watermark
                             let watermark_key = postcard::to_stdvec(&WatermarkKey::new(
                                 metadata.id,
                                 partition.partition_index,
@@ -225,31 +263,26 @@ impl Storage for Engine {
                                     },
                                 )?;
 
-                            // Update low watermark to the requested offset
-                            // Only if it's greater than current low watermark
-                            let new_low = partition.offset;
-                            if new_low > watermark.low.unwrap_or(0) {
-                                watermark.low = Some(new_low);
+                            watermark.low = Some(new_low_watermark);
 
-                                // Remove timestamps before the new low watermark
-                                if let Some(ref mut timestamps) = watermark.timestamps {
-                                    timestamps.retain(|_, offset| *offset >= new_low);
-                                }
-
-                                let watermark_value = postcard::to_stdvec(&watermark)?;
-                                tx.put(&watermark_key, watermark_value)?;
+                            // Remove timestamps before the new low watermark
+                            if let Some(ref mut timestamps) = watermark.timestamps {
+                                timestamps.retain(|_, offset| *offset >= new_low_watermark);
                             }
 
-                            ErrorCode::None
+                            let watermark_value = postcard::to_stdvec(&watermark)?;
+                            tx.put(&watermark_key, watermark_value)?;
+
+                            (ErrorCode::None, new_low_watermark)
                         }
                     } else {
-                        ErrorCode::UnknownTopicOrPartition
+                        (ErrorCode::UnknownTopicOrPartition, 0)
                     };
 
                     partition_results.push(
                         DeleteRecordsPartitionResult::default()
                             .partition_index(partition.partition_index)
-                            .low_watermark(partition.offset)
+                            .low_watermark(low_watermark)
                             .error_code(error_code.into()),
                     );
                 }
@@ -267,6 +300,11 @@ impl Storage for Engine {
         Ok(results)
     }
 
+    /// Delete a topic from the cluster.
+    ///
+    /// Deletes all associated data: batches, watermarks, consumer offsets,
+    /// producer sequences, and transaction data. This aligns with PG's
+    /// delete_topic implementation.
     async fn delete_topic(&self, topic: &TopicId) -> Result<ErrorCode> {
         let tx = self
             .db
@@ -276,21 +314,86 @@ impl Storage for Engine {
 
         let mut topics: Topics = self.load_metadata(&tx, Self::TOPICS).await?;
 
-        let topic_name = match topic {
-            TopicId::Name(name) => name.clone(),
+        let (topic_name, topic_metadata) = match topic {
+            TopicId::Name(name) => {
+                if let Some(metadata) = topics.get(&name[..]) {
+                    (name.clone(), metadata.clone())
+                } else {
+                    return Ok(ErrorCode::UnknownTopicOrPartition);
+                }
+            }
             TopicId::Id(id) => {
-                if let Some((name, _)) = topics.iter().find(|(_, tm)| tm.id == *id) {
-                    name.clone()
+                if let Some((name, metadata)) = topics.iter().find(|(_, tm)| tm.id == *id) {
+                    (name.clone(), metadata.clone())
                 } else {
                     return Ok(ErrorCode::UnknownTopicOrPartition);
                 }
             }
         };
 
-        if topics.remove(&topic_name).is_none() {
-            return Ok(ErrorCode::UnknownTopicOrPartition);
+        // 1. Delete all batches for this topic
+        for partition in 0..topic_metadata.topic.num_partitions {
+            let batch_prefix =
+                postcard::to_stdvec(&BatchKeyPrefix::new(topic_metadata.id, partition))?;
+            let scan_start =
+                postcard::to_stdvec(&BatchKey::scan_from(topic_metadata.id, partition, 0))?;
+
+            let mut scan = self.db.scan(scan_start..).await?;
+            while let Some(kv) = scan.next().await? {
+                if !kv.key.starts_with(&batch_prefix) {
+                    break;
+                }
+                tx.delete(&kv.key)?;
+            }
         }
 
+        // 2. Delete all watermarks for this topic
+        for partition in 0..topic_metadata.topic.num_partitions {
+            let watermark_key =
+                postcard::to_stdvec(&WatermarkKey::new(topic_metadata.id, partition))?;
+            tx.delete(&watermark_key)?;
+        }
+
+        // 3. Delete consumer offsets for this topic (scan all groups)
+        // Use just the prefix character 'c' to scan all consumer offsets
+        let scan_start = vec![b'c'];
+        let mut scan = self.db.scan(scan_start..).await?;
+        while let Some(kv) = scan.next().await? {
+            // Stop if we've moved past the 'c' prefix
+            if kv.key.first() != Some(&b'c') {
+                break;
+            }
+            // Try to decode and check if it's for this topic
+            if let Ok(key) = postcard::from_bytes::<OffsetCommitKey>(&kv.key) {
+                if key.topic == topic_name {
+                    tx.delete(&kv.key)?;
+                }
+            }
+        }
+
+        // 4. Clean up producer sequences for this topic
+        let mut producers: Producers = self.load_metadata(&tx, Self::PRODUCERS).await?;
+        for producer_detail in producers.values_mut() {
+            for epoch_sequences in producer_detail.sequences.values_mut() {
+                _ = epoch_sequences.remove(&topic_name);
+            }
+        }
+        self.save_metadata(&tx, Self::PRODUCERS, &producers)?;
+
+        // 5. Clean up transaction data for this topic
+        let mut transactions: Transactions = self.load_metadata(&tx, Self::TRANSACTIONS).await?;
+        for txn in transactions.values_mut() {
+            for txn_detail in txn.epochs.values_mut() {
+                _ = txn_detail.produces.remove(&topic_name);
+                for group_offsets in txn_detail.offsets.values_mut() {
+                    _ = group_offsets.remove(&topic_name);
+                }
+            }
+        }
+        self.save_metadata(&tx, Self::TRANSACTIONS, &transactions)?;
+
+        // 6. Remove topic from metadata
+        _ = topics.remove(&topic_name);
         self.save_metadata(&tx, Self::TOPICS, &topics)?;
 
         tx.commit().await.map_err(Error::from)?;
@@ -2249,7 +2352,15 @@ impl Storage for Engine {
         Ok(ErrorCode::None)
     }
 
+    /// Maintenance callback for periodic cleanup operations.
+    ///
+    /// Runs lake maintenance if configured. This aligns with PG's maintain
+    /// implementation.
     async fn maintain(&self) -> Result<()> {
+        if let Some(ref lake) = self.lake {
+            return lake.maintain().await.map_err(Into::into);
+        }
+
         Ok(())
     }
 
