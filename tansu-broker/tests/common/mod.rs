@@ -73,6 +73,7 @@ pub(crate) enum StorageType {
     InMemory,
     Lite,
     Postgres,
+    SlateDb,
     Turso,
 }
 
@@ -204,6 +205,17 @@ where
                 .await
                 .map_err(Into::into)
         }
+
+        // Uses slatedb://memory for in-memory testing, no external S3 needed
+        StorageType::SlateDb => StorageContainer::builder()
+            .cluster_id(cluster)
+            .node_id(node)
+            .advertised_listener(advertised_listener)
+            .schema_registry(schemas)
+            .storage(Url::parse("slatedb://memory")?)
+            .build()
+            .await
+            .map_err(Into::into),
     }
 }
 

@@ -919,3 +919,63 @@ mod lite {
         .await
     }
 }
+
+#[cfg(feature = "slatedb")]
+mod slatedb {
+    use super::*;
+
+    async fn storage_container(cluster: impl Into<String>, node: i32) -> Result<StorageContainer> {
+        common::storage_container(
+            StorageType::SlateDb,
+            cluster,
+            node,
+            Url::parse("tcp://127.0.0.1/")?,
+            None,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn multiple_record() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        let sc = storage_container(cluster_id, broker_id).await?;
+        register_broker(cluster_id, broker_id, &sc).await?;
+
+        let broker = broker(sc)?;
+        super::multiple_record(broker).await
+    }
+
+    #[tokio::test]
+    async fn new_topic() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        super::new_topic(
+            cluster_id,
+            broker_id,
+            storage_container(cluster_id, broker_id).await?,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn single_record() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        super::single_record(
+            cluster_id,
+            broker_id,
+            storage_container(cluster_id, broker_id).await?,
+        )
+        .await
+    }
+}
