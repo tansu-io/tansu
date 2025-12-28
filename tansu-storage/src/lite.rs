@@ -1706,6 +1706,15 @@ impl Storage for Engine {
             )
         })
     }
+
+    #[instrument(skip_all)]
+    async fn ping(&self) -> Result<()> {
+        let start = SystemTime::now();
+        self.inner.ping().await.inspect(|_| {
+            ENGINE_REQUEST_DURATION
+                .record(elapsed_millis(start), &[KeyValue::new("operation", "ping")])
+        })
+    }
 }
 
 impl Builder<String, i32, Url, Url> {
@@ -4178,6 +4187,16 @@ impl Storage for Delegate {
                 &[KeyValue::new("operation", "advertised_listener")],
             )
         })
+    }
+
+    #[instrument(skip_all)]
+    async fn ping(&self) -> Result<()> {
+        let start = SystemTime::now();
+        let c = self.pool.get().await?;
+        let _ = c.query("ping.sql", ()).await?;
+        DELEGATE_REQUEST_DURATION
+            .record(elapsed_millis(start), &[KeyValue::new("operation", "ping")]);
+        Ok(())
     }
 }
 

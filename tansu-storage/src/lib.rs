@@ -1435,6 +1435,8 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
     async fn node(&self) -> Result<i32>;
 
     async fn advertised_listener(&self) -> Result<Url>;
+
+    async fn ping(&self) -> Result<()>;
 }
 
 /// Conditional Update Errors
@@ -1638,7 +1640,7 @@ impl<N, C, A, S> Builder<N, C, A, S> {
 
 impl Builder<i32, String, Url, Url> {
     pub async fn build(self) -> Result<StorageContainer> {
-        match self.storage.scheme() {
+        let storage = match self.storage.scheme() {
             #[cfg(feature = "postgres")]
             "postgres" | "postgresql" => Postgres::builder(self.storage.to_string().as_str())
                 .map(|builder| builder.cluster(self.cluster_id.as_str()))
@@ -1749,7 +1751,10 @@ impl Builder<i32, String, Url, Url> {
                 feature = "turso"
             ))]
             _unsupported => Err(Error::UnsupportedStorageUrl(self.storage.clone())),
-        }
+        }?;
+
+        storage.ping().await?;
+        Ok(storage)
     }
 }
 
@@ -2700,6 +2705,34 @@ impl Storage for StorageContainer {
             #[cfg(feature = "turso")]
             Self::Turso(engine) => engine.advertised_listener().await,
         }
+    }
+
+    #[instrument(skip_all)]
+    async fn ping(&self) -> Result<()> {
+        let attributes = [KeyValue::new("method", "ping")];
+
+        match self {
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.ping(),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.ping(),
+
+            Self::Null(engine) => engine.ping(),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.ping(),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.ping(),
+        }
+        .await
+        .inspect(|_| {
+            STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
+        })
+        .inspect_err(|_| {
+            STORAGE_CONTAINER_ERRORS.add(1, &attributes);
+        })
     }
 }
 
