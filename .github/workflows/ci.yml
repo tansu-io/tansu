@@ -67,11 +67,12 @@ jobs:
       - run: du -sh target
       - run: cargo clean
       - run: just test
+      - run: tar --create --verbose --gzip --file=logs.tar.gz -C "logs"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: logs-${{env.PG_IMAGE_DASH}}
-          path: logs
+          name: logs-${{env.PG_IMAGE_DASH}}.tar.gz
+          path: logs.tar.gz
           if-no-files-found: error
       - run: du -sh target
       - run: docker system df
