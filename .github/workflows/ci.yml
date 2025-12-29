@@ -66,6 +66,12 @@ jobs:
       - run: du -sh target
       - run: cargo clean
       - run: just test
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: logs-${{matrix.pg}}
+          path: logs
+          if-no-files-found: error
       - run: du -sh target
       - run: docker system df
       - run: df -h
