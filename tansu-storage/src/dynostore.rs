@@ -63,7 +63,6 @@ use tansu_sans_io::{
     list_groups_response::ListedGroup,
     metadata_response::{MetadataResponseBroker, MetadataResponsePartition, MetadataResponseTopic},
     record::{Record, deflated, inflated},
-    to_system_time, to_timestamp,
     txn_offset_commit_response::{TxnOffsetCommitResponsePartition, TxnOffsetCommitResponseTopic},
 };
 use tansu_schema::{
@@ -400,6 +399,8 @@ impl DynoStore {
     }
 
     fn encode(&self, deflated: deflated::Batch) -> Result<PutPayload> {
+        // Ok(PutPayload::from(Bytes::from(deflated)))
+
         let mut encoded = Cursor::new(vec![]);
         let mut encoder = Encoder::new(&mut encoded);
         deflated.serialize(&mut encoder)?;
@@ -835,7 +836,7 @@ impl Storage for DynoStore {
             let watermark = self.watermarks.lock().map(|mut locked| {
                 locked
                     .entry(topition.to_owned())
-                    .or_insert(OptiCon::<Watermark>::new(self.cluster.as_str(), topition))
+                    .or_insert_with(|| OptiCon::<Watermark>::new(self.cluster.as_str(), topition))
                     .to_owned()
             })?;
 
@@ -844,16 +845,12 @@ impl Storage for DynoStore {
                     debug!(?watermark);
 
                     let offset = watermark.high.unwrap_or_default();
-                    watermark.high = watermark
-                        .high
-                        .map_or(Some(deflated.last_offset_delta as i64 + 1i64), |high| {
-                            Some(high + deflated.last_offset_delta as i64 + 1i64)
-                        });
+                    watermark.high = watermark.high.map_or_else(
+                        || Some(deflated.last_offset_delta as i64 + 1i64),
+                        |high| Some(high + deflated.last_offset_delta as i64 + 1i64),
+                    );
 
-                    _ = watermark
-                        .timestamps
-                        .get_or_insert_default()
-                        .insert(deflated.base_timestamp, offset);
+                    watermark.timestamps = None;
 
                     debug!(?watermark);
 
@@ -1153,179 +1150,108 @@ impl Storage for DynoStore {
         let mut responses = vec![];
 
         for (topition, offset_request) in offsets {
-            responses.push((
-                topition.to_owned(),
-                match offset_request {
-                    ListOffset::Timestamp(target) => {
-                        debug!(?target);
-
-                        let watermark = self
-                            .watermarks
-                            .lock()
-                            .map(|mut locked| {
-                                locked
-                                    .entry(topition.to_owned())
-                                    .or_insert(OptiCon::<Watermark>::new(
-                                        self.cluster.as_str(),
-                                        topition,
-                                    ))
-                                    .to_owned()
-                            })
-                            .inspect(|watermark| debug!(?watermark))?;
-
-                        let target = to_timestamp(target).inspect(|target| debug!(target))?;
-
-                        watermark
-                            .with(&self.object_store, |watermark| {
-                                debug!(?watermark.timestamps);
-                                watermark
-                                    .timestamps
-                                    .as_ref()
-                                    .and_then(|timestamps| {
-                                        timestamps
-                                            .range(target..)
-                                            .next()
-                                            .or(watermark
-                                                .timestamps
-                                                .as_ref()
-                                                .and_then(|timestamps| timestamps.last_key_value()))
-                                            .inspect(|(timestamp, offset)| {
-                                                debug!(target, timestamp, offset)
-                                            })
-                                            .map(|(timestamp, offset)| {
-                                                to_system_time(*timestamp)
-                                                    .map_err(Into::into)
-                                                    .map(|timestamp| (*offset, timestamp))
-                                            })
-                                    })
-                                    .transpose()
-                            })
-                            .await
-                            .inspect(|timestamp| debug!(?timestamp))
-                            .map(|timestamp| {
-                                timestamp.map_or(
-                                    ListOffsetResponse {
-                                        error_code: ErrorCode::None,
-                                        offset: Some(0),
-                                        ..Default::default()
-                                    },
-                                    |(offset, timestamp)| ListOffsetResponse {
-                                        error_code: ErrorCode::None,
-                                        offset: Some(offset),
-                                        timestamp: Some(timestamp),
-                                    },
-                                )
-                            })?
-                    }
-                    ListOffset::Earliest => {
-                        let watermark = self
-                            .watermarks
-                            .lock()
-                            .map(|mut locked| {
-                                locked
-                                    .entry(topition.to_owned())
-                                    .or_insert(OptiCon::<Watermark>::new(
-                                        self.cluster.as_str(),
-                                        topition,
-                                    ))
-                                    .to_owned()
-                            })
-                            .inspect(|watermark| debug!(?watermark))?;
-
-                        watermark
-                            .with(&self.object_store, |watermark| {
-                                watermark
-                                    .timestamps
-                                    .as_ref()
-                                    .and_then(|timestamps| {
-                                        timestamps.first_key_value().map(|(timestamp, offset)| {
-                                            to_system_time(*timestamp)
-                                                .map_err(Into::into)
-                                                .map(|timestamp| (*offset, timestamp))
-                                        })
-                                    })
-                                    .transpose()
-                            })
-                            .await
-                            .inspect(|timestamp| debug!(?timestamp))
-                            .map(|timestamp| {
-                                timestamp.map_or(
-                                    ListOffsetResponse {
-                                        error_code: ErrorCode::None,
-                                        offset: Some(0),
-                                        ..Default::default()
-                                    },
-                                    |(offset, timestamp)| ListOffsetResponse {
-                                        error_code: ErrorCode::None,
-                                        offset: Some(offset),
-                                        timestamp: Some(timestamp),
-                                    },
-                                )
-                            })?
-                    }
-                    ListOffset::Latest => {
-                        if let Some(offset) = stable.get(topition) {
-                            ListOffsetResponse {
-                                error_code: ErrorCode::None,
-                                timestamp: None,
-                                offset: Some(*offset),
-                            }
-                        } else {
-                            let watermark = self
-                                .watermarks
-                                .lock()
-                                .map(|mut locked| {
-                                    locked
-                                        .entry(topition.to_owned())
-                                        .or_insert(OptiCon::<Watermark>::new(
-                                            self.cluster.as_str(),
-                                            topition,
-                                        ))
-                                        .to_owned()
-                                })
-                                .inspect(|watermark| debug!(?watermark))?;
-
-                            watermark
-                                .with(&self.object_store, |watermark| {
-                                    watermark
-                                        .timestamps
-                                        .as_ref()
-                                        .and_then(|timestamps| {
-                                            timestamps.last_key_value().map(
-                                                |(timestamp, offset)| {
-                                                    to_system_time(*timestamp)
-                                                        .map_err(Into::into)
-                                                        .map(|timestamp| {
-                                                            (
-                                                                watermark.high.unwrap_or(*offset),
-                                                                timestamp,
-                                                            )
-                                                        })
-                                                },
-                                            )
-                                        })
-                                        .transpose()
-                                })
-                                .await
-                                .inspect(|timestamp| debug!(?timestamp))
-                                .map(|timestamp| {
-                                    timestamp.map_or(
-                                        ListOffsetResponse {
-                                            error_code: ErrorCode::None,
-                                            offset: Some(0),
-                                            ..Default::default()
-                                        },
-                                        |(offset, timestamp)| ListOffsetResponse {
-                                            error_code: ErrorCode::None,
-                                            offset: Some(offset),
-                                            timestamp: Some(timestamp),
-                                        },
-                                    )
-                                })?
-                        }
-                    }
-                },
+            let location = Path::from(format!(
+                "clusters/{}/topics/{}/partitions/{:0>10}/records",
+                self.cluster, topition.topic, topition.partition,
             ));
+
+            let mut list_stream = self.object_store.list(Some(&location));
+
+            let mut candidate: Option<ObjectMeta> = None;
+
+            while let Some(meta) = list_stream
+                .next()
+                .await
+                .inspect(|meta| debug!(?meta))
+                .transpose()
+                .inspect_err(|error| error!(?error))
+                .map_err(|_| Error::Api(ErrorCode::UnknownServerError))?
+            {
+                if let Some(last) = stable.get(topition)
+                    && offset_request == &ListOffset::Latest
+                {
+                    let Some(found_offset) = candidate
+                        .as_ref()
+                        .and_then(|found| found.location.parts().last())
+                        .and_then(|offset| i64::from_str(&offset.as_ref()[0..20]).ok())
+                    else {
+                        continue;
+                    };
+
+                    let Some(meta_offset) = meta
+                        .location
+                        .parts()
+                        .last()
+                        .and_then(|offset| i64::from_str(&offset.as_ref()[0..20]).ok())
+                    else {
+                        continue;
+                    };
+
+                    if meta_offset >= *last && found_offset > meta_offset {
+                        _ = candidate.replace(meta);
+                    }
+                } else {
+                    match offset_request {
+                        ListOffset::Earliest
+                            if candidate
+                                .as_ref()
+                                .is_none_or(|found| found.last_modified > meta.last_modified) =>
+                        {
+                            _ = candidate.replace(meta);
+                        }
+
+                        ListOffset::Latest
+                            if candidate
+                                .as_ref()
+                                .is_none_or(|found| meta.last_modified > found.last_modified) =>
+                        {
+                            _ = candidate.replace(meta);
+                        }
+
+                        ListOffset::Timestamp(system_time)
+                            if SystemTime::from(meta.last_modified) > *system_time
+                                && candidate.as_ref().is_none_or(|found| {
+                                    found.last_modified > meta.last_modified
+                                }) =>
+                        {
+                            _ = candidate.replace(meta);
+                        }
+                        _ => continue,
+                    }
+                }
+            }
+
+            debug!(?candidate);
+
+            if let Some(ref found) = candidate {
+                let Some(offset) = found.location.parts().last() else {
+                    continue;
+                };
+
+                let offset = i64::from_str(&offset.as_ref()[0..20])?;
+                debug!(offset);
+
+                responses.push((
+                    topition.to_owned(),
+                    ListOffsetResponse {
+                        error_code: ErrorCode::None,
+                        offset: Some(match offset_request {
+                            ListOffset::Latest => offset + 1,
+                            _ => offset,
+                        }),
+                        timestamp: Some(found.last_modified.into()),
+                    },
+                ))
+            } else {
+                responses.push((
+                    topition.to_owned(),
+                    ListOffsetResponse {
+                        error_code: ErrorCode::None,
+                        offset: Some(0),
+                        ..Default::default()
+                    },
+                ))
+            }
         }
 
         Ok(responses)
@@ -2968,6 +2894,7 @@ where
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
 
     #[test]
