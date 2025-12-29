@@ -13,15 +13,15 @@
 // limitations under the License.
 
 use std::{
-    collections::HashMap,
-    fmt::Display,
-    ops::{Deref, DerefMut},
+    fmt::{Debug, Display},
+    ops::DerefMut,
     slice::from_ref,
-    sync::{Arc, LazyLock, Mutex, MutexGuard},
+    sync::{Arc, LazyLock, Mutex},
     time::{Duration, SystemTime},
 };
 
 use async_trait::async_trait;
+use cached::stores::ExpiringSizedCache;
 use futures::stream::BoxStream;
 use object_store::{
     GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
@@ -68,17 +68,19 @@ impl From<&GetResult> for CacheEntry {
     }
 }
 
-impl CacheEntry {
-    fn hit(&mut self) {
-        self.tagged_at = SystemTime::now();
-    }
-}
-
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub(super) struct Cache<O> {
-    entries: Arc<Mutex<HashMap<Path, CacheEntry>>>,
+    entries: Arc<Mutex<ExpiringSizedCache<Path, CacheEntry>>>,
     object_store: O,
     retention: Duration,
+}
+
+impl<O> Debug for Cache<O> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Cache")
+            .field("retention", &self.retention)
+            .finish()
+    }
 }
 
 impl<O> Display for Cache<O> {
@@ -87,13 +89,12 @@ impl<O> Display for Cache<O> {
     }
 }
 
-#[allow(dead_code)]
 impl<O> Cache<O>
 where
     O: ObjectStore,
 {
     pub(super) fn new(object_store: O, retention: Duration) -> Self {
-        let entries = Arc::new(Mutex::new(HashMap::new()));
+        let entries = Arc::new(Mutex::new(ExpiringSizedCache::new(retention)));
 
         Self {
             entries,
@@ -102,34 +103,9 @@ where
         }
     }
 
-    fn into_inner(self) -> O {
-        self.object_store
-    }
-
+    #[cfg(test)]
     fn inner(&self) -> &O {
         &self.object_store
-    }
-
-    fn evict(
-        &self,
-        guard: &mut MutexGuard<'_, HashMap<Path, CacheEntry>>,
-        attributes: &[KeyValue],
-    ) {
-        let now = SystemTime::now();
-
-        let original = guard.deref().len();
-        guard.deref_mut().retain(|_location, entry| {
-            now.duration_since(entry.tagged_at)
-                .is_ok_and(|elapsed| elapsed.as_millis() < self.retention.as_millis())
-        });
-
-        let mut a = vec![KeyValue::new("outcome", "evict")];
-        a.extend_from_slice(attributes);
-
-        ENTRIES.add(
-            u64::try_from(original - guard.deref().len()).unwrap_or_default(),
-            &a,
-        );
     }
 }
 
@@ -184,37 +160,10 @@ where
             .inspect(|put_result| {
                 debug!(?put_result);
                 if let Ok(mut guard) = self.entries.lock() {
-                    self.evict(&mut guard, from_ref(&method));
-
-                    let replacement = CacheEntry::from(put_result);
-
-                    let outcome = match guard
-                        .deref_mut()
-                        .insert(location.to_owned(), replacement.clone())
-                    {
-                        None => "add",
-
-                        Some(existing) if existing == replacement => "existing",
-
-                        Some(_) => "replace",
-                    };
-
-                    debug!(%location, outcome);
-
-                    ENTRIES.add(1, &[method.clone(), KeyValue::new("outcome", outcome)]);
+                    _ = guard.insert_evict(location.to_owned(), CacheEntry::from(put_result), true);
                 }
             })
             .inspect_err(|error| {
-                debug!(%location, ?error);
-
-                if let Ok(mut guard) = self.entries.lock() {
-                    self.evict(&mut guard, from_ref(&method));
-
-                    if guard.deref_mut().remove(location).is_some() {
-                        ENTRIES.add(1, &[method.clone(), KeyValue::new("outcome", "error")]);
-                    }
-                }
-
                 ERRORS.add(
                     1,
                     &[
@@ -265,9 +214,7 @@ where
         REQUESTS.add(1, from_ref(&method));
 
         if let Ok(mut guard) = self.entries.lock() {
-            self.evict(&mut guard, from_ref(&method));
-
-            if let Some(entry) = guard.deref_mut().get_mut(location) {
+            if let Some(entry) = guard.deref_mut().get(location) {
                 debug!(?entry);
 
                 if let Some(ref cached_e_tag) = entry.version.e_tag {
@@ -277,8 +224,6 @@ where
                         debug!(cached_e_tag, presented);
 
                         if cached_e_tag == presented {
-                            entry.hit();
-
                             let outcome = "hit";
 
                             OUTCOMES.add(1, &[method, KeyValue::new("outcome", outcome)]);
@@ -328,7 +273,9 @@ where
 
                     let outcome = match guard
                         .deref_mut()
-                        .insert(location.to_owned(), replacement.clone())
+                        .insert_evict(location.to_owned(), replacement.clone(), true)
+                        .ok()
+                        .flatten()
                     {
                         None => "add",
 
@@ -342,15 +289,6 @@ where
             })
             .inspect_err(|error| {
                 debug!(%location, ?error);
-
-                if let Ok(mut guard) = self.entries.lock() {
-                    debug!(%location);
-                    self.evict(&mut guard, from_ref(&method));
-
-                    if guard.deref_mut().remove(location).is_some() {
-                        ENTRIES.add(1, &[method.clone(), KeyValue::new("outcome", "error")]);
-                    }
-                }
 
                 ERRORS.add(
                     1,
@@ -492,17 +430,11 @@ mod tests {
         }
 
         fn put_opts(&self) -> Result<u64> {
-            self.put_opts
-                .lock()
-                .map(|guard| *guard.deref())
-                .map_err(Into::into)
+            self.put_opts.lock().map(|guard| *guard).map_err(Into::into)
         }
 
         fn get_opts(&self) -> Result<u64> {
-            self.get_opts
-                .lock()
-                .map(|guard| *guard.deref())
-                .map_err(Into::into)
+            self.get_opts.lock().map(|guard| *guard).map_err(Into::into)
         }
     }
 

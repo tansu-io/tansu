@@ -85,6 +85,29 @@ pub struct Batch {
     pub record_data: Bytes,
 }
 
+impl From<Batch> for Bytes {
+    fn from(value: Batch) -> Self {
+        let mut encoded =
+            BytesMut::with_capacity(value.batch_length as usize + size_of_val(&value.base_offset));
+
+        encoded.put_i64(value.base_offset);
+        encoded.put_i32(value.batch_length);
+        encoded.put_i8(value.magic);
+        encoded.put_u32(value.crc);
+        encoded.put_i16(value.attributes);
+        encoded.put_i32(value.last_offset_delta);
+        encoded.put_i64(value.base_timestamp);
+        encoded.put_i64(value.max_timestamp);
+        encoded.put_i64(value.producer_id);
+        encoded.put_i16(value.producer_epoch);
+        encoded.put_i32(value.base_sequence);
+        encoded.put_u32(value.record_count);
+        encoded.put(value.record_data);
+
+        Bytes::from(encoded)
+    }
+}
+
 impl TryFrom<Vec<u8>> for Batch {
     type Error = Error;
 
@@ -100,12 +123,9 @@ impl TryFrom<Vec<u8>> for Batch {
 
         let crc_data_size = usize::try_from(batch_length).map(|batch_length| {
             batch_length
-            // partition leader epoch
-            - size_of::<i32>()
-            // magic
-            - size_of::<i8>()
-            // crc
-            - size_of::<u32>()
+                - size_of_val(&partition_leader_epoch)
+                - size_of_val(&magic)
+                - size_of_val(&crc)
         })?;
 
         let crc_data = &encoded[..crc_data_size];

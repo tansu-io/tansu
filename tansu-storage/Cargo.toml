@@ -23,6 +23,7 @@ workspace = true
 [dependencies]
 async-trait.workspace = true
 bytes.workspace = true
+cached.workspace = true
 chrono.workspace = true
 deadpool-postgres = { workspace = true, optional = true }
 deadpool = { workspace = true, optional = true }
@@ -55,6 +56,7 @@ uuid.workspace = true
 [dev-dependencies]
 assert_matches.workspace = true
 criterion.workspace = true
+dotenv.workspace = true
 pretty_assertions.workspace = true
 tansu-schema.workspace = true
 tempfile.workspace = true
