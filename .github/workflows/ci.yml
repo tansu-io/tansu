@@ -68,6 +68,7 @@ jobs:
       - run: cargo clean
       - run: just test
       - run: tar --create --verbose --gzip --file=logs.tar.gz -C "logs"
+        if: always()
       - uses: actions/upload-artifact@v4
         if: always()
         with:
