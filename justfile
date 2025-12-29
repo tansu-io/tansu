@@ -302,6 +302,12 @@ otel-up: docker-compose-down db-up minio-up minio-ready-local minio-local-alias 
 tansu-broker profile *args:
     target/{{replace(profile, "dev", "debug")}}/tansu broker {{args}} 2>&1 | tee broker.log
 
+flamegraph-tansu-broker profile *args:
+    #!/usr/bin/env zsh
+    unset SCHEMA_REGISTRY
+    export RUST_LOG=warn
+    flamegraph -- ./target/{{ replace(profile, "dev", "debug") }}/tansu broker {{ args }}
+
 # run a debug broker with configuration from .env
 broker *args: build docker-compose-down prometheus-up grafana-up db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket lakehouse-catalog-up (tansu-broker "debug" args)
 
@@ -387,19 +393,33 @@ broker-null profile="profiling":
     cargo build --profile {{profile}} --bin tansu
     ./target/{{replace(profile, "dev", "debug")}}/tansu --storage-engine=null://sink 2>&1 | tee broker.log
 
-broker-sqlite profile="profiling":
+clean-tansu-db:
     rm -f tansu.db*
+<<<<<<< Updated upstream
     cargo build --profile {{profile}} --features libsql --bin tansu
     ./target/{{replace(profile, "dev", "debug")}}/tansu --storage-engine=sqlite://tansu.db 2>&1 | tee broker.log
 
 broker-postgres profile="profiling": docker-compose-down db-up
     cargo build --profile {{profile}} --features postgres --bin tansu
     ./target/{{replace(profile, "dev", "debug")}}/tansu --storage-engine=postgres://postgres:postgres@localhost 2>&1 | tee broker.log
+=======
+
+broker-sqlite profile="profiling": clean-tansu-db
+    cargo build --profile {{ profile }} --features libsql --bin tansu
+    ./target/{{ replace(profile, "dev", "debug") }}/tansu broker --storage-engine=sqlite://tansu.db 2>&1 | tee broker.log
+
+broker-s3 profile="profiling": (build profile "dynostore") docker-compose-down minio-up minio-ready-local minio-local-alias minio-tansu-bucket (tansu-broker profile "--storage-engine=s3://tansu/")
+
+broker-postgres profile="profiling":
+    cargo build --profile {{ profile }} --features postgres --bin tansu
+    ./target/{{ replace(profile, "dev", "debug") }}/tansu broker --storage-engine=postgres://pmorgan@localhost 2>&1 | tee broker.log
+>>>>>>> Stashed changes
 
 samply-null profile="profiling":
     cargo build --profile {{profile}} --bin tansu
     RUST_LOG=warn samply record ./target/{{replace(profile, "dev", "debug")}}/tansu --storage-engine=null://sink
 
+<<<<<<< Updated upstream
 flamegraph-null profile="profiling":
     cargo build --profile {{profile}} --bin tansu
     RUST_LOG=warn flamegraph -- ./target/{{replace(profile, "dev", "debug")}}/tansu --storage-engine=null://sink
@@ -416,6 +436,17 @@ flamegraph-postgres profile="profiling": docker-compose-down db-up
 flamegraph-s3 profile="profiling": docker-compose-down minio-up minio-ready-local minio-local-alias minio-tansu-bucket
     RUSTFLAGS="-C force-frame-pointers=yes" cargo build --profile {{profile}} --features dynostore --bin tansu
     RUST_LOG=warn flamegraph -- ./target/{{replace(profile, "dev", "debug")}}/tansu --storage-engine=s3://tansu/
+=======
+flamegraph-null profile="profiling": (build profile "default") (flamegraph-tansu-broker profile "--storage-engine=null://sink")
+
+flamegraph-sqlite profile="profiling": (build profile "libsql") clean-tansu-db (flamegraph-tansu-broker profile "--storage-engine=sqlite://tansu.db")
+
+flamegraph-postgres profile="profiling": (build profile "postgres") docker-compose-down db-up (flamegraph-tansu-broker profile "--storage-engine=postgres://postgres:postgres@localhost")
+
+flamegraph-memory profile="profiling": (build profile "dynostore") (flamegraph-tansu-broker profile "--storage-engine=memory://tansu/")
+
+flamegraph-s3 profile="profiling": (build profile "dynostore") docker-compose-down minio-up minio-ready-local minio-local-alias minio-tansu-bucket (flamegraph-tansu-broker profile "--storage-engine=s3://tansu/")
+>>>>>>> Stashed changes
 
 samply-produce profile="profiling":
     cargo build --profile {{profile}} --bin bench_produce_v11
