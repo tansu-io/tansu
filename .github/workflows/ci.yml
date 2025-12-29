@@ -46,6 +46,7 @@ jobs:
       STORAGE_ENGINE: s3://tansu/
       TANSU_IMAGE: ghcr.io/tansu-io/tansu
     steps:
+      - run: echo "PG_IMAGE_DASH=${POSTGRES_IMAGE/:/-}" >> $GITHUB_ENV.
       - run: df -h
       - uses: actions/checkout@v5
       - uses: extractions/setup-just@v3
@@ -69,7 +70,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: logs-${{matrix.pg}}
+          name: logs-${{env.PG_IMAGE_DASH}}
           path: logs
           if-no-files-found: error
       - run: du -sh target
