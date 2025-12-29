@@ -19,7 +19,7 @@ use core::{
 use std::{
     io,
     marker::PhantomData,
-    num::NonZeroU32,
+    num::{NonZero, NonZeroU32},
     ops::AddAssign,
     pin::Pin,
     sync::{Arc, LazyLock, Mutex, PoisonError},
@@ -27,7 +27,7 @@ use std::{
 };
 
 use bytes::Bytes;
-use governor::{InsufficientCapacity, Jitter, Quota, RateLimiter};
+use governor::{DefaultDirectRateLimiter, InsufficientCapacity, Jitter, Quota, RateLimiter};
 use human_units::{
     FormatDuration,
     iec::{Byte, Prefix},
@@ -60,7 +60,7 @@ use tokio::{
     time::sleep,
 };
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument as _, Level, debug, instrument, span, warn};
+use tracing::{debug, instrument};
 use url::Url;
 
 pub type Result<T, E = Error> = result::Result<T, E>;
@@ -258,66 +258,6 @@ static PRODUCE_API_DURATION: LazyLock<opentelemetry::metrics::Histogram<u64>> =
             .build()
     });
 
-#[instrument(skip(record_data), fields(record_data_len = record_data.len()))]
-fn frame(batch_size: i32, record_data: Bytes) -> Result<deflated::Frame> {
-    let mut batch = inflated::Batch::builder();
-    let offset_deltas = 0..batch_size;
-
-    for offset_delta in offset_deltas {
-        batch = batch.record(
-            Record::builder()
-                .value(Some(record_data.clone()))
-                .offset_delta(offset_delta),
-        )
-    }
-
-    batch
-        .last_offset_delta(batch_size)
-        .build()
-        .map(|batch| inflated::Frame {
-            batches: vec![batch],
-        })
-        .and_then(deflated::Frame::try_from)
-        .map_err(Into::into)
-}
-
-#[instrument(skip(client, frame))]
-pub async fn produce(
-    client: Client,
-    name: String,
-    index: i32,
-    batch_size: i32,
-    frame: deflated::Frame,
-) -> Result<()> {
-    let req = ProduceRequest::default().topic_data(Some(
-        [TopicProduceData::default().name(name).partition_data(Some(
-            [PartitionProduceData::default()
-                .index(index)
-                .records(Some(frame))]
-            .into(),
-        ))]
-        .into(),
-    ));
-
-    let response = client.call(req).await?;
-
-    assert!(
-        response
-            .responses
-            .unwrap_or_default()
-            .into_iter()
-            .all(|topic| {
-                topic
-                    .partition_responses
-                    .unwrap_or_default()
-                    .iter()
-                    .all(|partition| partition.error_code == i16::from(ErrorCode::None))
-            })
-    );
-
-    Ok(())
-}
-
 impl Perf {
     pub fn builder() -> Builder<PhantomData<Url>, PhantomData<String>> {
         Builder::default()
@@ -371,69 +311,27 @@ impl Perf {
             .inspect(|pool| debug!(?pool))
             .map(Client::new)?;
 
-        for producer in 0..self.producers {
-            let rate_limiter = rate_limiter.clone();
-            let topic = self.topic.clone();
-            let partition = self.partition;
-            let record_data = record_data.clone();
-            let token = token.clone();
-            let client = client.clone();
+        for id in 0..self.producers {
+            let producer = Producer {
+                id,
+                rate_limiter: rate_limiter.clone(),
+                topic: self.topic.clone(),
+                partition: self.partition,
+                record_data: record_data.clone(),
+                token: token.clone(),
+                client: client.clone(),
+                batch_size,
+                throughput: self.throughput,
+            };
 
             _ = set.spawn(async move {
-                    let span = span!(Level::DEBUG, "producer", producer);
-
-                    async move {
-                        let attributes = [KeyValue::new("producer", producer.to_string())];
-
-                        loop {
-                           let Ok(frame) = frame(batch_size.get() as i32, record_data.clone()) else {
-                               break
-                           };
-
-                           if let Some(ref rate_limiter) = rate_limiter {
-                                let rate_limit_start = SystemTime::now();
-
-
-                                let cells = self.throughput.and(frame.size_in_bytes().ok().and_then(|bytes|NonZeroU32::new(bytes as u32))).unwrap_or(batch_size);
-
-
-                                tokio::select! {
-                                    cancelled = token.cancelled() => {
-                                        debug!(?cancelled);
-                                        break
-                                    },
-
-                                    Ok(_) = rate_limiter.until_n_ready_with_jitter(cells, Jitter::up_to(Duration::from_millis(10))) => {
-                                        RATE_LIMIT_DURATION.record(
-                                        rate_limit_start
-                                            .elapsed()
-                                            .inspect(|duration|debug!(rate_limit_duration_ms = duration.as_millis()))
-                                            .map_or(0, |duration| duration.as_millis() as u64),
-                                            &attributes)
-
-                                    },
-                                }
-                            }
-
-                            let produce_start = SystemTime::now();
-
-                            tokio::select! {
-                                cancelled = token.cancelled() => {
-                                    debug!(?cancelled);
-                                    break
-                                },
-
-                                Ok(_) = produce(client.clone(), topic.clone(), partition,  batch_size.get() as i32, frame) => {
-                                    PRODUCE_RECORD_COUNT.add(batch_size.get() as u64, &attributes);
-                                    PRODUCE_API_DURATION.record(produce_start.elapsed().inspect(|duration|debug!(produce_duration_ms = duration.as_millis())).map_or(0, |duration| duration.as_millis() as u64), &attributes);
-                                },
-                            }
-                        }
-
-                    }.instrument(span).await;
-
-
-                });
+                loop {
+                    match producer.rate_limited().await {
+                        Ok(false) | Err(_) => break,
+                        _ => continue,
+                    }
+                }
+            });
         }
 
         let join_all = async {
@@ -493,6 +391,131 @@ impl Perf {
         }
 
         Ok(ErrorCode::None)
+    }
+}
+
+#[derive(Clone, Debug)]
+struct Producer {
+    id: u32,
+    rate_limiter: Option<Arc<DefaultDirectRateLimiter>>,
+    topic: String,
+    partition: i32,
+    record_data: Bytes,
+    token: CancellationToken,
+    client: Client,
+    batch_size: NonZero<u32>,
+    throughput: Option<u32>,
+}
+
+impl Producer {
+    #[instrument(skip_all, fields(record_data_len = self.record_data.len()))]
+    fn frame(&self) -> Result<deflated::Frame> {
+        let mut batch = inflated::Batch::builder();
+        let offset_deltas = 0..(self.batch_size.get() as i32);
+
+        for offset_delta in offset_deltas {
+            batch = batch.record(
+                Record::builder()
+                    .value(Some(self.record_data.clone()))
+                    .offset_delta(offset_delta),
+            )
+        }
+
+        batch
+            .last_offset_delta(self.batch_size.get() as i32)
+            .build()
+            .map(|batch| inflated::Frame {
+                batches: vec![batch],
+            })
+            .and_then(deflated::Frame::try_from)
+            .map_err(Into::into)
+    }
+
+    #[instrument(skip_all)]
+    async fn produce(&self, frame: deflated::Frame) -> Result<()> {
+        let req = ProduceRequest::default().topic_data(Some(
+            [TopicProduceData::default()
+                .name(self.topic.clone())
+                .partition_data(Some(
+                    [PartitionProduceData::default()
+                        .index(self.partition)
+                        .records(Some(frame))]
+                    .into(),
+                ))]
+            .into(),
+        ));
+
+        let response = self.client.call(req).await?;
+
+        assert!(
+            response
+                .responses
+                .unwrap_or_default()
+                .into_iter()
+                .all(|topic| {
+                    topic
+                        .partition_responses
+                        .unwrap_or_default()
+                        .iter()
+                        .all(|partition| partition.error_code == i16::from(ErrorCode::None))
+                })
+        );
+
+        Ok(())
+    }
+
+    #[instrument(skip_all, fields(id = self.id))]
+    async fn rate_limited(&self) -> Result<bool> {
+        let attributes = [KeyValue::new("producer", self.id.to_string())];
+
+        let frame = self.frame()?;
+
+        if let Some(ref rate_limiter) = self.rate_limiter {
+            let rate_limit_start = SystemTime::now();
+
+            let cells = self
+                .throughput
+                .and(
+                    frame
+                        .size_in_bytes()
+                        .ok()
+                        .and_then(|bytes| NonZeroU32::new(bytes as u32)),
+                )
+                .unwrap_or(self.batch_size);
+
+            tokio::select! {
+                cancelled = self.token.cancelled() => {
+                    debug!(?cancelled);
+                    return Ok(false)
+                },
+
+                Ok(_) = rate_limiter.until_n_ready_with_jitter(cells, Jitter::up_to(Duration::from_millis(10))) => {
+                    RATE_LIMIT_DURATION.record(
+                    rate_limit_start
+                        .elapsed()
+                        .inspect(|duration|debug!(rate_limit_duration_ms = duration.as_millis()))
+                        .map_or(0, |duration| duration.as_millis() as u64),
+                        &attributes)
+
+                },
+            }
+        }
+
+        let produce_start = SystemTime::now();
+
+        tokio::select! {
+            cancelled = self.token.cancelled() => {
+                debug!(?cancelled);
+                return Ok(false)
+            },
+
+            Ok(_) = self.produce(frame) => {
+                PRODUCE_RECORD_COUNT.add(self.batch_size.get() as u64, &attributes);
+                PRODUCE_API_DURATION.record(produce_start.elapsed().inspect(|duration|debug!(produce_duration_ms = duration.as_millis())).map_or(0, |duration| duration.as_millis() as u64), &attributes);
+            },
+        }
+
+        Ok(!self.token.is_cancelled())
     }
 }
 
