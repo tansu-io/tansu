@@ -393,7 +393,7 @@ broker-memory profile="profiling":
 
 broker-null profile="profiling":
     cargo build --profile {{ profile }} --bin tansu
-    ./target/{{ replace(profile, "dev", "debug") }}/tansu broker --storage-engine=null://sink 2>&1 | tee broker.log
+    ./target/{{ replace(profile, "dev", "debug") }}/tansu --storage-engine=null://sink 2>&1 | tee broker.log
 
 clean-tansu-db:
     rm -f tansu.db*
@@ -401,6 +401,8 @@ clean-tansu-db:
 broker-sqlite profile="profiling": clean-tansu-db
     cargo build --profile {{ profile }} --features libsql --bin tansu
     ./target/{{ replace(profile, "dev", "debug") }}/tansu broker --storage-engine=sqlite://tansu.db 2>&1 | tee broker.log
+
+broker-s3 profile="profiling": (build profile "dynostore") docker-compose-down minio-up minio-ready-local minio-local-alias minio-tansu-bucket (tansu-broker profile "--storage-engine=s3://tansu/")
 
 broker-postgres profile="profiling":
     cargo build --profile {{ profile }} --features postgres --bin tansu
