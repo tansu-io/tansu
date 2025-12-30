@@ -177,8 +177,8 @@ pub async fn multiple_record(broker: Broker) -> Result<()> {
         assert_eq!(Some(-1), partition.timestamp);
     }
 
-    let first = SystemTime::now();
     sleep(Duration::from_millis(500)).await;
+    let first = SystemTime::now();
 
     let frame = inflated::Batch::builder()
         .record(Record::builder().value(Some(Bytes::from_static(b"one"))))
@@ -220,8 +220,8 @@ pub async fn multiple_record(broker: Broker) -> Result<()> {
     assert_eq!(i16::from(ErrorCode::None), partitions[0].error_code);
     assert_eq!(0, partitions[0].base_offset);
 
-    let second = SystemTime::now();
     sleep(Duration::from_millis(500)).await;
+    let second = SystemTime::now();
 
     let frame = inflated::Batch::builder()
         .record(Record::builder().value(Some(Bytes::from_static(b"two"))))
@@ -261,8 +261,8 @@ pub async fn multiple_record(broker: Broker) -> Result<()> {
     assert_eq!(i16::from(ErrorCode::None), partitions[0].error_code);
     assert_eq!(1, partitions[0].base_offset);
 
-    let third = SystemTime::now();
     sleep(Duration::from_millis(500)).await;
+    let third = SystemTime::now();
 
     let frame = inflated::Batch::builder()
         .record(Record::builder().value(Some(Bytes::from_static(b"three"))))
