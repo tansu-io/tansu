@@ -71,7 +71,7 @@ jobs:
         if: always()
       - run: ls -l
         if: always()
-      - run: tar --create --verbose --gzip --file=logs.tar.gz -C "logs"
+      - run: tar --create --verbose --gzip --file=logs.tar.gz logs
         if: always()
       - uses: actions/upload-artifact@v4
         if: always()
