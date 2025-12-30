@@ -404,3 +404,17 @@ pub(crate) static API_ERRORS: LazyLock<Counter<u64>> = LazyLock::new(|| {
         .with_description("The number of API errors")
         .build()
 });
+
+pub(crate) static BYTES_SENT: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    METER
+        .u64_counter("tansu_bytes_sent")
+        .with_description("The number of bytes sent")
+        .build()
+});
+
+pub(crate) static BYTES_RECEIVED: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    METER
+        .u64_counter("tansu_bytes_received")
+        .with_description("The number of bytes received")
+        .build()
+});

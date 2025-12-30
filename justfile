@@ -387,6 +387,10 @@ customer-topic-generator *args: (generator "customer" args)
 
 customer-duckdb-delta: (duckdb "\"select * from delta_scan('s3://lake/tansu.customer');\"")
 
+broker-memory profile="profiling":
+    cargo build --profile {{ profile }} --bin tansu
+    ./target/{{ replace(profile, "dev", "debug") }}/tansu broker --storage-engine=memory:// 2>&1 | tee broker.log
+
 broker-null profile="profiling":
     cargo build --profile {{ profile }} --bin tansu
     ./target/{{ replace(profile, "dev", "debug") }}/tansu --storage-engine=null://sink 2>&1 | tee broker.log
@@ -449,11 +453,13 @@ producer-perf throughput="1000" record_size="1024" num_records="100000":
 
 producer-perf-10: (producer-perf "10")
 
-producer-perf-1000: (producer-perf "1000")
+producer-perf-1000: (producer-perf "1000" "1024" "25000")
 
-producer-perf-2000: (producer-perf "2000")
+producer-perf-2000: (producer-perf "2000" "1024" "50000")
 
-producer-perf-3000: (producer-perf "3000")
+producer-perf-3000: (producer-perf "3000" "1024" "75000")
+
+producer-perf-4000: (producer-perf "4000" "1024" "100000")
 
 producer-perf-5000: (producer-perf "5000" "1024" "125000")
 
@@ -471,16 +477,35 @@ producer-perf-15000: (producer-perf "15000" "1024" "375000")
 
 producer-perf-20000: (producer-perf "20000" "1024" "500000")
 
+producer-perf-30000: (producer-perf "30000" "1024" "750000")
+
 producer-perf-40000: (producer-perf "40000" "1024" "1000000")
 
 producer-perf-45000: (producer-perf "45000" "1024" "1100000")
 
 producer-perf-50000: (producer-perf "50000" "1024" "1250000")
 
+producer-perf-60000: (producer-perf "60000" "1024" "1500000")
+
+producer-perf-70000: (producer-perf "70000" "1024" "1750000")
+
+producer-perf-80000: (producer-perf "80000" "1024" "2000000")
+
+producer-perf-90000: (producer-perf "90000" "1024" "2250000")
+
 producer-perf-100000: (producer-perf "100000" "1024" "2500000")
 
 producer-perf-200000: (producer-perf "200000" "1024" "5000000")
 
+producer-perf-300000: (producer-perf "300000" "1024" "7500000")
+
+producer-perf-400000: (producer-perf "400000" "1024" "10000000")
+
 producer-perf-500000: (producer-perf "500000" "1024" "12500000")
 
+producer-perf-600000: (producer-perf "600000" "1024" "15000000")
+
 producer-perf-1000000: (producer-perf "1000000" "1024" "25000000")
+
+ps-tansu-rss:
+    ps -p $(pgrep tansu) -o rss= | awk '{print $1/1024 " MB"}'
