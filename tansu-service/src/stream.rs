@@ -442,6 +442,6 @@ where
         self.inner
             .serve(ctx, req)
             .await
-            .inspect(|response| debug!(?response))
+            .inspect(|response| debug!(response = ?&response[..]))
     }
 }

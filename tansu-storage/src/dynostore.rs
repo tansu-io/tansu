@@ -17,7 +17,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet, btree_map::Entry},
     fmt::{Debug, Display},
-    io::Cursor,
     str::FromStr,
     sync::{Arc, Mutex},
     time::{Duration, SystemTime},
@@ -43,8 +42,8 @@ use opticon::OptiCon;
 use rand::{prelude::*, rng};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tansu_sans_io::{
-    BatchAttribute, ConfigResource, ConfigSource, ConfigType, ControlBatch, Encoder,
-    EndTransactionMarker, ErrorCode, IsolationLevel, ListOffset, NULL_TOPIC_ID, OpType,
+    BatchAttribute, ConfigResource, ConfigSource, ConfigType, ControlBatch, EndTransactionMarker,
+    ErrorCode, IsolationLevel, ListOffset, NULL_TOPIC_ID, OpType,
     add_partitions_to_txn_response::{
         AddPartitionsToTxnPartitionResult, AddPartitionsToTxnTopicResult,
     },
@@ -399,13 +398,7 @@ impl DynoStore {
     }
 
     fn encode(&self, deflated: deflated::Batch) -> Result<PutPayload> {
-        // Ok(PutPayload::from(Bytes::from(deflated)))
-
-        let mut encoded = Cursor::new(vec![]);
-        let mut encoder = Encoder::new(&mut encoded);
-        deflated.serialize(&mut encoder)?;
-
-        Ok(PutPayload::from(Bytes::from(encoded.into_inner())))
+        Ok(PutPayload::from(Bytes::from(deflated)))
     }
 
     fn decode(&self, encoded: Bytes) -> Result<deflated::Batch> {
