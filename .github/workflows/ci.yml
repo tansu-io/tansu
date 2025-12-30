@@ -15,8 +15,8 @@ env:
   REGISTRY: ghcr.io
   CLICOLOR: 1
 jobs:
-  build:
-    needs: [build-storage, build-storage-lake]
+  test:
+    needs: [check, fmt, clippy, build-storage, build-storage-lake]
     runs-on: ${{matrix.os}}
     strategy:
       fail-fast: false
@@ -26,6 +26,7 @@ jobs:
         pg:
           - postgres:16
           - postgres:17
+          - postgres:18
     env:
       ADVERTISED_LISTENER_URL: tcp://localhost:9092
       AWS_ACCESS_KEY_ID: minioadmin
@@ -56,17 +57,7 @@ jobs:
         with:
           components: clippy, rustfmt
           cache: false
-      - run: just check
       - run: df -h
-      - run: du -sh target
-      - run: just build
-      - run: df -h
-      - run: just fmt
-      - run: just clippy
-      - run: df -h
-      - run: docker system df
-      - run: du -sh target
-      - run: cargo clean
       - run: just test
       - run: df -h
         if: always()
@@ -83,6 +74,48 @@ jobs:
       - run: du -sh target
       - run: docker system df
       - run: df -h
+  check:
+    runs-on: ${{matrix.os}}
+    strategy:
+      matrix:
+        os:
+          - ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: extractions/setup-just@v3
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: clippy, rustfmt
+          cache: false
+      - run: just check
+  fmt:
+    runs-on: ${{matrix.os}}
+    strategy:
+      matrix:
+        os:
+          - ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: extractions/setup-just@v3
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: clippy, rustfmt
+          cache: false
+      - run: just fmt
+  clippy:
+    runs-on: ${{matrix.os}}
+    strategy:
+      matrix:
+        os:
+          - ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: extractions/setup-just@v3
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: clippy, rustfmt
+          cache: false
+      - run: just clippy
   build-storage:
     runs-on: ${{matrix.os}}
     strategy:
@@ -167,7 +200,7 @@ jobs:
           path: ${{runner.temp}}/src.tar.gz
           if-no-files-found: error
   package:
-    needs: [build, cargo-publish-dry-run, third-party-license, typos]
+    needs: [test, cargo-publish-dry-run, third-party-license, typos]
     runs-on: ${{matrix.os}}
     permissions:
       packages: write
@@ -286,7 +319,7 @@ jobs:
         env:
           TANSU_IMAGE: ghcr.io/tansu-io/tansu:${{steps.meta.outputs.version}}
   release:
-    needs: [build, src, third-party-license, typos]
+    needs: [test, src, third-party-license, typos]
     runs-on: ${{matrix.os}}
     strategy:
       fail-fast: false
