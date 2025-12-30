@@ -67,6 +67,10 @@ jobs:
       - run: du -sh target
       - run: cargo clean
       - run: just test
+      - run: df -h
+        if: always()
+      - run: ls -l
+        if: always()
       - run: tar --create --verbose --gzip --file=logs.tar.gz -C "logs"
         if: always()
       - uses: actions/upload-artifact@v4
