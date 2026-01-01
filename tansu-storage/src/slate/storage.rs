@@ -364,10 +364,10 @@ impl Storage for Engine {
                 break;
             }
             // Try to decode and check if it's for this topic
-            if let Ok(key) = postcard::from_bytes::<OffsetCommitKey>(&kv.key) {
-                if key.topic == topic_name {
-                    tx.delete(&kv.key)?;
-                }
+            if let Ok(key) = postcard::from_bytes::<OffsetCommitKey>(&kv.key)
+                && key.topic == topic_name
+            {
+                tx.delete(&kv.key)?;
             }
         }
 
