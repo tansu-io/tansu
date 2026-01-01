@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -48,7 +48,6 @@ use tansu_sans_io::{
         AddPartitionsToTxnPartitionResult, AddPartitionsToTxnTopicResult,
     },
     create_topics_request::{CreatableTopic, CreatableTopicConfig},
-    de::BatchDecoder,
     delete_groups_response::DeletableGroupResult,
     delete_records_request::DeleteRecordsTopic,
     delete_records_response::DeleteRecordsTopicResult,
@@ -402,8 +401,7 @@ impl DynoStore {
     }
 
     fn decode(&self, encoded: Bytes) -> Result<deflated::Batch> {
-        let decoder = BatchDecoder::new(encoded);
-        deflated::Batch::deserialize(decoder).map_err(Into::into)
+        deflated::Batch::try_from(encoded).map_err(Into::into)
     }
 
     async fn get<V>(&self, location: &Path) -> Result<(V, Version)>
@@ -555,6 +553,7 @@ impl Storage for DynoStore {
         }
     }
 
+    #[instrument(skip_all, fields(topic = %topic.name))]
     async fn create_topic(&self, topic: CreatableTopic, _validate_only: bool) -> Result<Uuid> {
         match self
             .meta
@@ -564,6 +563,8 @@ impl Storage for DynoStore {
                 }
 
                 let id = Uuid::now_v7();
+                debug!(%id);
+
                 let td = TopicMetadata {
                     id,
                     topic: topic.clone(),

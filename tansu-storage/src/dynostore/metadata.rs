@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,7 +17,7 @@ use std::{
     ops::DerefMut,
     slice::from_ref,
     sync::{Arc, LazyLock, Mutex},
-    time::{Duration, SystemTime},
+    time::Duration,
 };
 
 use async_trait::async_trait;
@@ -37,7 +37,17 @@ use super::METER;
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct CacheEntry {
     version: UpdateVersion,
-    tagged_at: SystemTime,
+}
+
+impl From<GetOptions> for CacheEntry {
+    fn from(value: GetOptions) -> Self {
+        Self {
+            version: UpdateVersion {
+                e_tag: value.if_none_match,
+                version: None,
+            },
+        }
+    }
 }
 
 impl From<&PutResult> for CacheEntry {
@@ -49,7 +59,6 @@ impl From<&PutResult> for CacheEntry {
 
         Self {
             version: UpdateVersion { e_tag, version },
-            tagged_at: SystemTime::now(),
         }
     }
 }
@@ -63,7 +72,6 @@ impl From<&GetResult> for CacheEntry {
 
         Self {
             version: UpdateVersion { e_tag, version },
-            tagged_at: SystemTime::now(),
         }
     }
 }
@@ -142,14 +150,13 @@ impl<O> ObjectStore for Cache<O>
 where
     O: ObjectStore,
 {
+    #[instrument(skip_all, fields(location = %location))]
     async fn put_opts(
         &self,
         location: &Path,
         payload: PutPayload,
         opts: PutOptions,
     ) -> Result<PutResult, object_store::Error> {
-        debug!(%location, ?opts);
-
         let method = KeyValue::new("method", "put_opts");
 
         REQUESTS.add(1, from_ref(&method));
@@ -174,6 +181,7 @@ where
             })
     }
 
+    #[instrument(skip_all, fields(location = %location))]
     async fn put_multipart_opts(
         &self,
         location: &Path,
@@ -201,7 +209,7 @@ where
             })
     }
 
-    #[instrument(skip_all, fields(%location), ret)]
+    #[instrument(skip_all, fields(%location, if_none_match = options.if_none_match), ret)]
     async fn get_opts(
         &self,
         location: &Path,
@@ -260,14 +268,14 @@ where
         }
 
         self.object_store
-            .get_opts(location, options)
+            .get_opts(location, options.clone())
             .await
             .inspect(|get_result| {
                 let e_tag = get_result.meta.e_tag.clone();
                 let version = get_result.meta.version.clone();
 
                 if let Ok(mut guard) = self.entries.lock() {
-                    debug!(%location, e_tag, version);
+                    debug!(e_tag, version);
 
                     let replacement = CacheEntry::from(get_result);
 
@@ -284,22 +292,48 @@ where
                         Some(_) => "replace",
                     };
 
+                    debug!(outcome);
+
                     ENTRIES.add(1, &[method.clone(), KeyValue::new("outcome", outcome)]);
                 }
             })
             .inspect_err(|error| {
                 debug!(%location, ?error);
 
-                ERRORS.add(
-                    1,
-                    &[
-                        method,
-                        KeyValue::new("error", object_store_error_name(error)),
-                    ],
-                );
+                if matches!(error, object_store::Error::NotModified { .. }) {
+                    if let Ok(mut guard) = self.entries.lock() {
+                        let replacement = CacheEntry::from(options);
+
+                        let outcome = match guard
+                            .deref_mut()
+                            .insert_evict(location.to_owned(), replacement.clone(), true)
+                            .ok()
+                            .flatten()
+                        {
+                            None => "add",
+
+                            Some(existing) if existing == replacement => "existing",
+
+                            Some(_) => "replace",
+                        };
+
+                        debug!(outcome);
+
+                        ENTRIES.add(1, &[method.clone(), KeyValue::new("outcome", outcome)]);
+                    }
+                } else {
+                    ERRORS.add(
+                        1,
+                        &[
+                            method,
+                            KeyValue::new("error", object_store_error_name(error)),
+                        ],
+                    );
+                }
             })
     }
 
+    #[instrument(skip_all, fields(location = %location))]
     async fn delete(&self, location: &Path) -> Result<(), object_store::Error> {
         debug!(%location);
 
@@ -328,6 +362,7 @@ where
             })
     }
 
+    #[instrument(skip_all, fields(prefix))]
     fn list(
         &self,
         prefix: Option<&Path>,
@@ -337,6 +372,7 @@ where
         self.object_store.list(prefix)
     }
 
+    #[instrument(skip_all, fields(prefix))]
     async fn list_with_delimiter(
         &self,
         prefix: Option<&Path>,
@@ -359,6 +395,7 @@ where
             })
     }
 
+    #[instrument(skip_all, fields(from = %from, to = %to))]
     async fn copy(&self, from: &Path, to: &Path) -> Result<(), object_store::Error> {
         debug!(%from, %to);
         REQUESTS.add(1, &[KeyValue::new("method", "copy")]);
@@ -375,6 +412,7 @@ where
         })
     }
 
+    #[instrument(skip_all, fields(from = %from, to = %to))]
     async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<(), object_store::Error> {
         debug!(%from, %to);
         REQUESTS.add(1, &[KeyValue::new("method", "copy_if_not_exists")]);

@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -155,6 +155,71 @@ impl TryFrom<Vec<u8>> for Batch {
             usize::try_from(batch_length).map(|batch_length| batch_length - FIXED_BATCH_LENGTH)?;
 
         let record_data = encoded.split_to(record_data_size);
+
+        let batch = Batch {
+            base_offset,
+            batch_length,
+            partition_leader_epoch,
+            magic,
+            crc,
+            attributes,
+            last_offset_delta,
+            base_timestamp,
+            max_timestamp,
+            producer_id,
+            producer_epoch,
+            base_sequence,
+            record_count,
+            record_data,
+        };
+
+        Ok(batch)
+    }
+}
+
+impl TryFrom<Bytes> for Batch {
+    type Error = Error;
+    fn try_from(mut encoded: Bytes) -> result::Result<Self, Self::Error> {
+        let base_offset = encoded.try_get_i64()?;
+        let batch_length = encoded.try_get_i32()?;
+
+        let partition_leader_epoch = encoded.try_get_i32()?;
+        let magic = encoded.try_get_i8()?;
+        let crc = encoded.try_get_u32()?;
+
+        let crc_data_size = usize::try_from(batch_length).map(|batch_length| {
+            batch_length
+                - size_of_val(&partition_leader_epoch)
+                - size_of_val(&magic)
+                - size_of_val(&crc)
+        })?;
+
+        let crc_data = &encoded[..crc_data_size];
+
+        let computed = {
+            let mut digest = crc_fast::Digest::new(crc_fast::CrcAlgorithm::Crc32Iscsi);
+            digest.update(crc_data);
+
+            digest.finalize() as u32
+        };
+
+        if computed != crc {
+            error!(crc, computed);
+        }
+
+        let attributes = encoded.try_get_i16()?;
+        let last_offset_delta = encoded.try_get_i32()?;
+        let base_timestamp = encoded.try_get_i64()?;
+        let max_timestamp = encoded.try_get_i64()?;
+        let producer_id = encoded.try_get_i64()?;
+        let producer_epoch = encoded.try_get_i16()?;
+        let base_sequence = encoded.try_get_i32()?;
+        let record_count = encoded.try_get_u32()?;
+
+        let record_data_size =
+            usize::try_from(batch_length).map(|batch_length| batch_length - FIXED_BATCH_LENGTH)?;
+
+        let record_data = encoded.slice(..record_data_size);
 
         let batch = Batch {
             base_offset,

@@ -387,26 +387,18 @@ customer-topic-generator *args: (generator "customer" args)
 
 customer-duckdb-delta: (duckdb "\"select * from delta_scan('s3://lake/tansu.customer');\"")
 
-broker-memory profile="profiling":
-    cargo build --profile {{ profile }} --bin tansu
-    ./target/{{ replace(profile, "dev", "debug") }}/tansu broker --storage-engine=memory:// 2>&1 | tee broker.log
+broker-memory profile="profiling": (build profile "dynostore") (tansu-broker profile "--storage-engine=memory://")
 
-broker-null profile="profiling":
-    cargo build --profile {{ profile }} --bin tansu
-    ./target/{{ replace(profile, "dev", "debug") }}/tansu --storage-engine=null://sink 2>&1 | tee broker.log
+broker-null profile="profiling": (build profile "default") (tansu-broker profile "--storage-engine=null://")
 
 clean-tansu-db:
     rm -f tansu.db*
 
-broker-sqlite profile="profiling": clean-tansu-db
-    cargo build --profile {{ profile }} --features libsql --bin tansu
-    ./target/{{ replace(profile, "dev", "debug") }}/tansu broker --storage-engine=sqlite://tansu.db 2>&1 | tee broker.log
+broker-sqlite profile="profiling": clean-tansu-db (build profile "libsql") (tansu-broker profile "--storage-engine=sqlite://tansu.db")
 
 broker-s3 profile="profiling": (build profile "dynostore") docker-compose-down minio-up minio-ready-local minio-local-alias minio-tansu-bucket (tansu-broker profile "--storage-engine=s3://tansu/")
 
-broker-postgres profile="profiling":
-    cargo build --profile {{ profile }} --features postgres --bin tansu
-    ./target/{{ replace(profile, "dev", "debug") }}/tansu broker --storage-engine=postgres://pmorgan@localhost 2>&1 | tee broker.log
+broker-postgres profile="profiling": (build profile "postgres") docker-compose-down db-up (tansu-broker profile "--storage-engine=postgres://pmorgan@localhost")
 
 samply-null profile="profiling":
     cargo build --profile {{ profile }} --bin tansu
