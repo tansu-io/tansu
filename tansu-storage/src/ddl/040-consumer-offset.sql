@@ -14,13 +14,13 @@
 
 create table if not exists consumer_offset (
     id integer primary key autoincrement,
-    consumer_group integer references consumer_group (id),
-    topition integer references topition (id),
+    consumer_group integer references consumer_group (id) on delete cascade,
+    topition integer references topition (id) on delete cascade,
     committed_offset integer,
     leader_epoch integer,
     timestamp text,
     metadata text,
-    last_updated text default current_timestamp not null,
-    created_at text default current_timestamp not null,
+    last_updated datetime default current_timestamp not null,
+    created_at datetime default current_timestamp not null,
     unique (consumer_group, topition)
 );

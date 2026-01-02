@@ -1426,7 +1426,7 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
     ) -> Result<ErrorCode>;
 
     /// Run periodic maintenance on this storage.
-    async fn maintain(&self) -> Result<()> {
+    async fn maintain(&self, _now: SystemTime) -> Result<()> {
         Ok(())
     }
 
@@ -2616,23 +2616,23 @@ impl Storage for StorageContainer {
     }
 
     #[instrument(skip_all)]
-    async fn maintain(&self) -> Result<()> {
+    async fn maintain(&self, now: SystemTime) -> Result<()> {
         let attributes = [KeyValue::new("method", "maintain")];
 
         match self {
             #[cfg(feature = "dynostore")]
-            Self::DynoStore(engine) => engine.maintain(),
+            Self::DynoStore(engine) => engine.maintain(now),
 
             #[cfg(feature = "libsql")]
-            Self::Lite(engine) => engine.maintain(),
+            Self::Lite(engine) => engine.maintain(now),
 
-            Self::Null(engine) => engine.maintain(),
+            Self::Null(engine) => engine.maintain(now),
 
             #[cfg(feature = "postgres")]
-            Self::Postgres(engine) => engine.maintain(),
+            Self::Postgres(engine) => engine.maintain(now),
 
             #[cfg(feature = "turso")]
-            Self::Turso(engine) => engine.maintain(),
+            Self::Turso(engine) => engine.maintain(now),
         }
         .await
         .inspect(|maintain| {
