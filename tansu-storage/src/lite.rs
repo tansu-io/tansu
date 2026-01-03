@@ -4131,7 +4131,7 @@ impl Storage for Delegate {
         {
             let connection = self.pool.get().await?;
 
-            let mut rows = connection.query("select freelist_count, page_size FROM pragma_freelist_count(), pragma_page_size()", ()).await?;
+            let mut rows = connection.query("maintain-vacuum.sql", ()).await?;
 
             if let Some(row) = rows.next().await.inspect_err(|err| error!(?err))? {
                 debug!(
