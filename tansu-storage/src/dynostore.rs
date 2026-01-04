@@ -2582,6 +2582,13 @@ impl Storage for DynoStore {
     async fn advertised_listener(&self) -> Result<Url> {
         Ok(self.advertised_listener.clone())
     }
+
+    #[instrument(skip_all)]
+    async fn ping(&self) -> Result<()> {
+        // Verify connectivity by listing objects at the root
+        let _ = self.object_store.list(Some(&Path::from("/"))).next().await;
+        Ok(())
+    }
 }
 
 fn object_store_error_name(error: &object_store::Error) -> &'static str {

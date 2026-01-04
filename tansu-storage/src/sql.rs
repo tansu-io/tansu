@@ -137,6 +137,7 @@ pub(crate) static SQL: LazyLock<Cache> = LazyLock::new(|| {
             "list_latest_offset_uncommitted.sql",
             include_sql!("pg/list_latest_offset_uncommitted.sql"),
         ),
+        ("ping.sql", "select 1 + 1".to_string()),
         (
             "producer_detail_delete_by_topic.sql",
             include_sql!("pg/producer_detail_delete_by_topic.sql"),
