@@ -13,7 +13,7 @@
 -- limitations under the License.
 
 create table if not exists consumer_group_detail (
-    id integer primary key autoincrement,
+    id integer primary key autoincrement not null,
     consumer_group int references consumer_group (id) unique,
     e_tag text not null,
     detail text not null,

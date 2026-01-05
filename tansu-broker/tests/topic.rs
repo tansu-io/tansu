@@ -583,7 +583,6 @@ mod turso {
         .await
     }
 
-    #[ignore]
     #[tokio::test]
     async fn create_describe_topic_partitions_by_id() -> Result<()> {
         let _guard = init_tracing()?;
@@ -599,7 +598,6 @@ mod turso {
         .await
     }
 
-    #[ignore]
     #[tokio::test]
     async fn create_describe_topic_partitions_by_name() -> Result<()> {
         let _guard = init_tracing()?;
@@ -615,7 +613,6 @@ mod turso {
         .await
     }
 
-    #[ignore]
     #[tokio::test]
     async fn describe_non_existing_topic_partitions_by_name() -> Result<()> {
         let _guard = init_tracing()?;
