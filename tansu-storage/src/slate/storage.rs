@@ -2375,4 +2375,10 @@ impl Storage for Engine {
     async fn advertised_listener(&self) -> Result<url::Url> {
         Ok(self.advertised_listener.clone())
     }
+
+    async fn ping(&self) -> Result<()> {
+        // Verify connectivity by attempting a simple read operation
+        let _ = self.db.get(Self::BROKERS).await?;
+        Ok(())
+    }
 }

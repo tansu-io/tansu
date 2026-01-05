@@ -2911,6 +2911,9 @@ impl Storage for StorageContainer {
 
             #[cfg(feature = "turso")]
             Self::Turso(engine) => engine.ping(),
+
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.ping(),
         }
         .await
         .inspect(|_| {
