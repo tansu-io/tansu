@@ -3428,6 +3428,13 @@ impl Storage for Postgres {
     async fn advertised_listener(&self) -> Result<Url> {
         Ok(self.advertised_listener.clone())
     }
+
+    #[instrument(skip_all)]
+    async fn ping(&self) -> Result<()> {
+        let c = self.pool.get().await?;
+        let _ = self.prepare_query(&c, "ping.sql", &[]).await?;
+        Ok(())
+    }
 }
 
 static SQL_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {

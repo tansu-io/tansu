@@ -3641,6 +3641,12 @@ impl Storage for Engine {
     async fn advertised_listener(&self) -> Result<Url> {
         Ok(self.advertised_listener.clone())
     }
+
+    async fn ping(&self) -> Result<()> {
+        let c = self.connection().await?;
+        let _ = c.query("ping.sql", ()).await?;
+        Ok(())
+    }
 }
 
 #[derive(Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
