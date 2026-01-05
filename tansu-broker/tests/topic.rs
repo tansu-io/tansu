@@ -375,6 +375,7 @@ mod pg {
     }
 }
 
+#[cfg(feature = "dynostore")]
 mod in_memory {
     use common::{StorageType, init_tracing};
     use rand::{prelude::*, rng};

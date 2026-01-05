@@ -665,6 +665,7 @@ mod pg {
     }
 }
 
+#[cfg(feature = "dynostore")]
 mod in_memory {
     use super::*;
 
