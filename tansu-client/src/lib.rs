@@ -106,7 +106,7 @@ use std::{
     time::SystemTime,
 };
 
-use backoff::{ExponentialBackoff, future::retry};
+use backoff::{ExponentialBackoffBuilder, future::retry};
 use bytes::Bytes;
 use deadpool::managed::{self, BuildError, Object, PoolError};
 use opentelemetry::{
@@ -121,6 +121,7 @@ use tokio::{
     io::{AsyncReadExt as _, AsyncWriteExt as _},
     net::TcpStream,
     task::JoinError,
+    time::Duration,
 };
 use tracing::{Instrument, Level, debug, span};
 use tracing_subscriber::filter::ParseError;
@@ -219,6 +220,8 @@ impl ConnectionManager {
     }
 }
 
+const INITIAL_CONNECTION_TIMEOUT_MILLIS: u64 = 30_000;
+
 impl managed::Manager for ConnectionManager {
     type Type = Connection;
     type Error = Error;
@@ -231,7 +234,12 @@ impl managed::Manager for ConnectionManager {
 
         let addr = host_port(self.broker.clone()).await?;
 
-        retry(ExponentialBackoff::default(), || async {
+        let backoff = ExponentialBackoffBuilder::new()
+            .with_max_elapsed_time(Some(Duration::from_millis(
+                INITIAL_CONNECTION_TIMEOUT_MILLIS,
+            )))
+            .build();
+        retry(backoff, || async {
             Ok(TcpStream::connect(addr)
                 .await
                 .inspect(|_| {
