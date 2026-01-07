@@ -18,6 +18,7 @@ use crate::Result;
 use clap::Subcommand;
 use tansu_sans_io::ErrorCode;
 use tansu_topic::Topic;
+use tracing::{debug, error, info};
 use url::Url;
 
 use super::DEFAULT_BROKER;
@@ -83,9 +84,32 @@ impl From<Command> for Topic {
     }
 }
 
+const CLIENT_ERROR_MESSAGE: &str = "A client error occurred. Possible causes:
+  • No network connection
+  • The server is down or unreachable
+  • Incorrect hostname or port
+  • Firewall or proxy blocking the connection
+  • TLS/SSL certificate issues (if applicable)
+
+Check your internet connection, verify the server address, and try again.";
+
 impl Command {
     pub(super) async fn main(self) -> Result<ErrorCode> {
-        Topic::from(self).main().await.map_err(Into::into)
+        Topic::from(self)
+            .main()
+            .await
+            .map_err(Into::into)
+            .inspect(|res| match res {
+                ErrorCode::None => info!("Topic command exited successfully."),
+                _ => error!("{}", res),
+            })
+            .inspect_err(|e| match e {
+                crate::Error::Topic(error) => match error {
+                    tansu_topic::Error::Client(_) => error!("{}", CLIENT_ERROR_MESSAGE),
+                    _ => error!("Unknown error occurred during command: {}", error),
+                },
+                _ => debug!(?e),
+            })
     }
 }
 
