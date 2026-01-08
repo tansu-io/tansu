@@ -122,26 +122,10 @@ impl Cli {
         let cli = Cli::parse();
 
         match cli.command.unwrap_or(Command::Broker(Box::new(cli.broker))) {
-            Command::Broker(arg) => arg
-                .main()
-                .await
-                .inspect(|result| debug!(?result))
-                .inspect_err(|err| debug!(?err)),
-
+            Command::Broker(arg) => arg.main().await,
             Command::Cat { command } => command.main().await,
-
-            Command::Generator(arg) => arg
-                .main()
-                .await
-                .inspect(|result| debug!(?result))
-                .inspect_err(|err| debug!(?err)),
-
-            Command::Perf(arg) => arg
-                .main()
-                .await
-                .inspect(|result| debug!(?result))
-                .inspect_err(|err| debug!(?err)),
-
+            Command::Generator(arg) => arg.main().await,
+            Command::Perf(arg) => arg.main().await,
             Command::Proxy(arg) => tansu_proxy::Proxy::main(
                 arg.listener_url.into_inner(),
                 arg.advertised_listener_url.into_inner(),
@@ -151,7 +135,6 @@ impl Cli {
             )
             .await
             .map_err(Into::into),
-
             Command::Topic { command } => command.main().await,
         }
     }

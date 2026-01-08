@@ -6823,10 +6823,15 @@ version = "0.5.11"
 dependencies = [
  "dotenv",
  "tansu-broker",
+ "tansu-cat",
  "tansu-cli",
+ "tansu-generator",
+ "tansu-perf",
+ "tansu-proxy",
  "tansu-sans-io",
  "tansu-schema",
  "tansu-storage",
+ "tansu-topic",
  "tokio",
  "tracing",
 ]
