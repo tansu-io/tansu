@@ -725,7 +725,33 @@ impl Storage for DynoStore {
                 })
                 .unwrap_or(false)
         {
-            let offset = 0;
+            // Get watermark to calculate proper offset for lake sink
+            let watermark = self.watermarks.lock().map(|mut locked| {
+                locked
+                    .entry(topition.to_owned())
+                    .or_insert_with(|| OptiCon::<Watermark>::new(self.cluster.as_str(), topition))
+                    .to_owned()
+            })?;
+
+            let offset = watermark
+                .with_mut(&self.object_store, |watermark| {
+                    debug!(?watermark);
+
+                    let offset = watermark.high.unwrap_or_default();
+                    watermark.high = watermark.high.map_or_else(
+                        || Some(deflated.last_offset_delta as i64 + 1i64),
+                        |high| Some(high + deflated.last_offset_delta as i64 + 1i64),
+                    );
+
+                    watermark.timestamps = None;
+
+                    debug!(?watermark);
+
+                    Ok(offset)
+                })
+                .await
+                .inspect(|offset| debug!(offset, transaction_id, ?topition))
+                .inspect_err(|err| error!(?err, transaction_id, ?topition))?;
 
             if let Some(ref registry) = self.schemas {
                 let batch_attribute = BatchAttribute::try_from(deflated.attributes)
