@@ -17,10 +17,11 @@ workspace = true
 default = []
 delta = []
 dynostore = []
+iceberg = []
 libsql = []
 parquet = []
 postgres = []
-iceberg = []
+slatedb = []
 turso = []
 
 [dependencies]

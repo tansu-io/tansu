@@ -1039,11 +1039,7 @@ impl Storage for DynoStore {
                 .inspect_err(|error| error!(?error, ?topition, ?offset, ?min_bytes, ?max_bytes))
                 .map_err(|_| Error::Api(ErrorCode::UnknownServerError))?;
 
-            if get_result.meta.size > bytes {
-                break;
-            } else {
-                bytes = bytes.saturating_sub(get_result.meta.size);
-            }
+            let size = get_result.meta.size;
 
             let mut batch = get_result
                 .bytes()
@@ -1053,6 +1049,12 @@ impl Storage for DynoStore {
                 .and_then(|encoded| self.decode(encoded))?;
             batch.base_offset = offset;
             batches.push(batch);
+
+            if size > bytes {
+                break;
+            } else {
+                bytes = bytes.saturating_sub(size);
+            }
         }
 
         Ok(batches)

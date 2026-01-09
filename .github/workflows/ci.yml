@@ -145,6 +145,7 @@ jobs:
           - dynostore
           - libsql
           - postgres
+          - slatedb
         lake:
           - delta
           - iceberg
