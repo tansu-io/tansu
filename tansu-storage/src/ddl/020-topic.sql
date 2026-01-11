@@ -13,8 +13,8 @@
 -- limitations under the License.
 
 create table if not exists topic (
-    id integer primary key autoincrement,
-    cluster int references cluster (id) not null,
+    id integer primary key autoincrement not null,
+    cluster int references cluster (id),
     name text not null,
     uuid text not null,
     partitions int not null,

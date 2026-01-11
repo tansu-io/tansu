@@ -13,7 +13,7 @@
 -- limitations under the License.
 
 create table if not exists producer_epoch (
-    id integer primary key autoincrement,
+    id integer primary key autoincrement not null,
     producer integer references producer (id),
     epoch integer default 0 not null,
     last_updated text default current_timestamp not null,

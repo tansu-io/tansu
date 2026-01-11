@@ -13,7 +13,7 @@
 -- limitations under the License.
 
 create table if not exists cluster (
-    id integer primary key autoincrement,
+    id integer primary key autoincrement not null,
     name text not null unique,
     last_updated text default current_timestamp not null,
     created_at text default current_timestamp not null
