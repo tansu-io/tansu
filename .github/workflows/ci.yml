@@ -379,9 +379,13 @@ jobs:
           cp LICENSE "$dist"
           cp artifacts/* "$dist"
           tar --create --verbose --gzip --file=tansu-"${TARGET}".tar.gz -C "$dist" .
-      - if: ${{matrix.enabled}}
+      - if: ${{matrix.enabled && github.ref_type != 'tag'}}
         uses: actions/upload-artifact@v6
         with:
           name: tansu-${{matrix.target}}
           path: tansu-${{matrix.target}}.tar.gz
           if-no-files-found: error
+      - if: ${{matrix.enabled && github.ref_type == 'tag'}}
+        uses: softprops/action-gh-release@v1
+        with:
+          files: tansu-${{matrix.target}}.tar.gz
