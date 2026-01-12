@@ -1,3 +1,4 @@
+-- -*- mode: sql; sql-product: postgres; -*-
 -- Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 --
 -- Licensed under the Apache License, Version 2.0 (the "License");
@@ -12,12 +13,8 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-create table if not exists producer_detail (
-    id integer primary key autoincrement,
-    producer_epoch integer references producer_epoch (id) on delete cascade,
-    topition integer references topition (id) on delete cascade,
-    sequence integer default 0 not null,
-    last_updated datetime default current_timestamp not null,
-    created_at datetime default current_timestamp not null,
-    unique (producer_epoch, topition)
-);
+select freelist_count, page_size
+
+FROM
+
+pragma_freelist_count(), pragma_page_size()

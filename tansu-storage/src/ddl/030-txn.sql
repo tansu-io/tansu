@@ -16,10 +16,10 @@
 --
 create table if not exists txn (
     id integer primary key autoincrement,
-    cluster integer references cluster (id),
+    cluster integer references cluster (id) on delete cascade,
     name text,
-    producer integer references producer (id),
-    last_updated text default current_timestamp not null,
-    created_at text default current_timestamp not null,
+    producer integer references producer (id) on delete cascade,
+    last_updated datetime default current_timestamp not null,
+    created_at datetime default current_timestamp not null,
     unique (cluster, name)
 );

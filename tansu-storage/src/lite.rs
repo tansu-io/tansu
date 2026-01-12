@@ -1084,6 +1084,58 @@ impl Delegate {
 
         Ok(ErrorCode::None)
     }
+
+    #[instrument(skip(self), ret)]
+    async fn policy_compact(&self) -> Result<u64> {
+        let start = SystemTime::now();
+
+        let pc = self.connection().await?;
+        let tx = pc.transaction().await?;
+
+        let compacted = pc
+            .execute("policy_compact.sql", [self.cluster.as_str()])
+            .await? as u64;
+
+        tx.commit()
+            .await
+            .map_err(Into::into)
+            .and(Ok(compacted))
+            .inspect(|_| {
+                DELEGATE_REQUEST_DURATION.record(
+                    elapsed_millis(start),
+                    &[KeyValue::new("operation", "policy_compact")],
+                )
+            })
+    }
+
+    #[instrument(skip(self), ret)]
+    async fn policy_delete(&self, now: SystemTime) -> Result<u64> {
+        let start = SystemTime::now();
+
+        let now = to_timestamp(&now)?;
+        let retention_ms = u64::try_from(Duration::from_hours(7 * 24).as_millis())?;
+
+        let pc = self.connection().await?;
+        let tx = pc.transaction().await?;
+
+        let deleted = pc
+            .execute(
+                "lite/policy_delete.sql",
+                (self.cluster.as_str(), now, retention_ms),
+            )
+            .await? as u64;
+
+        tx.commit()
+            .await
+            .map_err(Into::into)
+            .and(Ok(deleted))
+            .inspect(|_| {
+                DELEGATE_REQUEST_DURATION.record(
+                    elapsed_millis(start),
+                    &[KeyValue::new("operation", "policy_delete")],
+                )
+            })
+    }
 }
 
 #[derive(Clone, Default, Debug)]
@@ -1666,9 +1718,9 @@ impl Storage for Engine {
     }
 
     #[instrument(skip_all)]
-    async fn maintain(&self) -> Result<()> {
+    async fn maintain(&self, now: SystemTime) -> Result<()> {
         let start = SystemTime::now();
-        self.inner.maintain().await.inspect(|_| {
+        self.inner.maintain(now).await.inspect(|_| {
             ENGINE_REQUEST_DURATION.record(
                 elapsed_millis(start),
                 &[KeyValue::new("operation", "maintain")],
@@ -4134,8 +4186,14 @@ impl Storage for Delegate {
         })
     }
 
-    async fn maintain(&self) -> Result<()> {
+    async fn maintain(&self, now: SystemTime) -> Result<()> {
         let start = SystemTime::now();
+
+        let deleted = self.policy_delete(now).await?;
+        debug!(deleted);
+
+        let compacted = self.policy_compact().await?;
+        debug!(compacted);
 
         {
             let connection = self.pool.get().await?;

@@ -15,7 +15,7 @@
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 
 use async_trait::async_trait;
@@ -489,7 +489,7 @@ impl Storage for Engine {
     }
 
     #[instrument(skip_all)]
-    async fn maintain(&self) -> Result<()> {
+    async fn maintain(&self, _now: SystemTime) -> Result<()> {
         Ok(())
     }
 

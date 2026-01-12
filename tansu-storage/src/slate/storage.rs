@@ -2356,7 +2356,7 @@ impl Storage for Engine {
     ///
     /// Runs lake maintenance if configured. This aligns with PG's maintain
     /// implementation.
-    async fn maintain(&self) -> Result<()> {
+    async fn maintain(&self, _now: SystemTime) -> Result<()> {
         if let Some(ref lake) = self.lake {
             return lake.maintain().await.map_err(Into::into);
         }

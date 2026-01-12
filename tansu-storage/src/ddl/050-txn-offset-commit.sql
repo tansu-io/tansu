@@ -14,11 +14,11 @@
 
 create table if not exists txn_offset_commit (
     id integer primary key autoincrement,
-    txn_detail integer references txn_detail (id),
-    consumer_group integer references consumer_group (id),
+    txn_detail integer references txn_detail (id) on delete cascade,
+    consumer_group integer references consumer_group (id) on delete cascade,
     generation_id integer,
     member_id text,
-    last_updated text default current_timestamp not null,
-    created_at text default current_timestamp not null,
+    last_updated datetime default current_timestamp not null,
+    created_at datetime default current_timestamp not null,
     unique (txn_detail, consumer_group)
 );

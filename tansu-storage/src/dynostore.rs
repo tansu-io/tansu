@@ -2586,7 +2586,7 @@ impl Storage for DynoStore {
         Ok(ErrorCode::None)
     }
 
-    async fn maintain(&self) -> Result<()> {
+    async fn maintain(&self, _now: SystemTime) -> Result<()> {
         if let Some(ref lake) = self.lake {
             return lake
                 .maintain()
