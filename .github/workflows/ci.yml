@@ -320,7 +320,10 @@ jobs:
         env:
           TANSU_IMAGE: ghcr.io/tansu-io/tansu:${{steps.meta.outputs.version}}
   release:
+    if: ${{github.actor == 'shortishly'}}
     needs: [test, src, third-party-license, typos]
+    permissions:
+      contents: write
     runs-on: ${{matrix.os}}
     strategy:
       fail-fast: false
