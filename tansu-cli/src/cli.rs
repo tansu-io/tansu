@@ -45,6 +45,8 @@ fn storage_engines() -> Vec<&'static str> {
         "libsql",
         #[cfg(feature = "postgres")]
         "postgres",
+        #[cfg(feature = "slatedb")]
+        "slatedb",
         #[cfg(feature = "turso")]
         "turso",
     ]
