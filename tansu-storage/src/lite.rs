@@ -1758,6 +1758,15 @@ impl Storage for Engine {
             )
         })
     }
+
+    #[instrument(skip_all)]
+    async fn ping(&self) -> Result<()> {
+        let start = SystemTime::now();
+        self.inner.ping().await.inspect(|_| {
+            ENGINE_REQUEST_DURATION
+                .record(elapsed_millis(start), &[KeyValue::new("operation", "ping")])
+        })
+    }
 }
 
 impl Builder<String, i32, Url, Url> {
@@ -2891,7 +2900,7 @@ impl Storage for Delegate {
                                                     .error_code(error_code)
                                                     .partition_index(partition_index)
                                                     .leader_id(leader_id)
-                                                    .leader_epoch(Some(-1))
+                                                    .leader_epoch(Some(0))
                                                     .replica_nodes(replica_nodes)
                                                     .isr_nodes(isr_nodes)
                                                     .offline_replicas(Some([].into()))
@@ -2985,7 +2994,7 @@ impl Storage for Delegate {
                                                     .error_code(error_code)
                                                     .partition_index(partition_index)
                                                     .leader_id(leader_id)
-                                                    .leader_epoch(Some(-1))
+                                                    .leader_epoch(Some(0))
                                                     .replica_nodes(replica_nodes)
                                                     .isr_nodes(isr_nodes)
                                                     .offline_replicas(Some([].into()))
@@ -3078,7 +3087,7 @@ impl Storage for Delegate {
                                     .error_code(error_code)
                                     .partition_index(partition_index)
                                     .leader_id(leader_id)
-                                    .leader_epoch(Some(-1))
+                                    .leader_epoch(Some(0))
                                     .replica_nodes(replica_nodes)
                                     .isr_nodes(isr_nodes)
                                     .offline_replicas(Some([].into()))
@@ -3252,7 +3261,7 @@ impl Storage for Delegate {
                                                 .error_code(ErrorCode::None.into())
                                                 .partition_index(partition_index)
                                                 .leader_id(self.node)
-                                                .leader_epoch(-1)
+                                                .leader_epoch(0)
                                                 .replica_nodes(Some(vec![
                                                     self.node;
                                                     replication_factor
@@ -3343,7 +3352,7 @@ impl Storage for Delegate {
                                                 .error_code(ErrorCode::None.into())
                                                 .partition_index(partition_index)
                                                 .leader_id(self.node)
-                                                .leader_epoch(-1)
+                                                .leader_epoch(0)
                                                 .replica_nodes(Some(vec![
                                                     self.node;
                                                     replication_factor
@@ -4189,7 +4198,7 @@ impl Storage for Delegate {
         {
             let connection = self.pool.get().await?;
 
-            let mut rows = connection.query("lite/freelist_count.sql", ()).await?;
+            let mut rows = connection.query("maintain-vacuum.sql", ()).await?;
 
             if let Some(row) = rows.next().await.inspect_err(|err| error!(?err))? {
                 debug!(
@@ -4236,6 +4245,16 @@ impl Storage for Delegate {
                 &[KeyValue::new("operation", "advertised_listener")],
             )
         })
+    }
+
+    #[instrument(skip_all)]
+    async fn ping(&self) -> Result<()> {
+        let start = SystemTime::now();
+        let c = self.pool.get().await?;
+        let _ = c.query("ping.sql", ()).await?;
+        DELEGATE_REQUEST_DURATION
+            .record(elapsed_millis(start), &[KeyValue::new("operation", "ping")]);
+        Ok(())
     }
 }
 

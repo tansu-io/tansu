@@ -15,8 +15,8 @@ env:
   REGISTRY: ghcr.io
   CLICOLOR: 1
 jobs:
-  build:
-    needs: [build-storage, build-storage-lake]
+  test:
+    needs: [check, fmt, clippy, build-storage, build-storage-lake]
     runs-on: ${{matrix.os}}
     strategy:
       fail-fast: false
@@ -26,6 +26,7 @@ jobs:
         pg:
           - postgres:16
           - postgres:17
+          - postgres:18
     env:
       ADVERTISED_LISTENER_URL: tcp://localhost:9092
       AWS_ACCESS_KEY_ID: minioadmin
@@ -41,11 +42,13 @@ jobs:
       POSTGRES_IMAGE: ${{matrix.pg}}
       PROMETHEUS_LISTENER_URL: tcp://[::]:9100
       RUST_BACKTRACE: 1
-      RUST_LOG: warn
+      RUST_LOG: debug,tansu_sans_io=warn,tansu_model=warn
       SCHEMA_REGISTRY: file://./etc/schema
       STORAGE_ENGINE: s3://tansu/
       TANSU_IMAGE: ghcr.io/tansu-io/tansu
     steps:
+      - run: echo "PG_IMAGE_DASH=${POSTGRES_IMAGE/:/-}" >> $GITHUB_ENV
+      - run: echo ${PG_IMAGE_DASH}
       - run: df -h
       - uses: actions/checkout@v5
       - uses: extractions/setup-just@v3
@@ -54,21 +57,65 @@ jobs:
         with:
           components: clippy, rustfmt
           cache: false
-      - run: just check
       - run: df -h
-      - run: du -sh target
-      - run: just build
-      - run: df -h
-      - run: just fmt
-      - run: just clippy
-      - run: df -h
-      - run: docker system df
-      - run: du -sh target
-      - run: cargo clean
       - run: just test
+      - run: df -h
+        if: always()
+      - run: ls -l
+        if: always()
+      - run: tar --create --verbose --gzip --file=logs-${{env.PG_IMAGE_DASH}}.tar.gz logs
+        if: always()
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: logs-${{env.PG_IMAGE_DASH}}.tar.gz
+          path: logs-${{env.PG_IMAGE_DASH}}.tar.gz
+          if-no-files-found: error
       - run: du -sh target
       - run: docker system df
       - run: df -h
+  check:
+    runs-on: ${{matrix.os}}
+    strategy:
+      matrix:
+        os:
+          - ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: extractions/setup-just@v3
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: clippy, rustfmt
+          cache: false
+      - run: just check
+  fmt:
+    runs-on: ${{matrix.os}}
+    strategy:
+      matrix:
+        os:
+          - ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: extractions/setup-just@v3
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: clippy, rustfmt
+          cache: false
+      - run: just fmt
+  clippy:
+    runs-on: ${{matrix.os}}
+    strategy:
+      matrix:
+        os:
+          - ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: extractions/setup-just@v3
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: clippy, rustfmt
+          cache: false
+      - run: just clippy
   build-storage:
     runs-on: ${{matrix.os}}
     strategy:
@@ -98,6 +145,7 @@ jobs:
           - dynostore
           - libsql
           - postgres
+          - slatedb
         lake:
           - delta
           - iceberg
@@ -136,7 +184,7 @@ jobs:
         run: |
           cargo install "cargo-about@$CARGO_ABOUT_VERSION"
           cargo about generate about.hbs >THIRD-PARTY-LICENSE.html
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: third-party-license
           path: THIRD-PARTY-LICENSE.html
@@ -147,13 +195,13 @@ jobs:
       - uses: actions/checkout@v5
       - run: |
           git archive --format=tar.gz HEAD >${{runner.temp}}/src.tar.gz
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: src
           path: ${{runner.temp}}/src.tar.gz
           if-no-files-found: error
   package:
-    needs: [build, cargo-publish-dry-run, third-party-license, typos]
+    needs: [test, cargo-publish-dry-run, third-party-license, typos]
     runs-on: ${{matrix.os}}
     permissions:
       packages: write
@@ -189,6 +237,7 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
   smoke:
+    if: ${{github.actor == 'shortishly'}}
     needs: [package]
     strategy:
       fail-fast: false
@@ -271,7 +320,7 @@ jobs:
         env:
           TANSU_IMAGE: ghcr.io/tansu-io/tansu:${{steps.meta.outputs.version}}
   release:
-    needs: [build, src, third-party-license, typos]
+    needs: [test, src, third-party-license, typos]
     runs-on: ${{matrix.os}}
     strategy:
       fail-fast: false
@@ -331,7 +380,7 @@ jobs:
           cp artifacts/* "$dist"
           tar --create --verbose --gzip --file=tansu-"${TARGET}".tar.gz -C "$dist" .
       - if: ${{matrix.enabled}}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: tansu-${{matrix.target}}
           path: tansu-${{matrix.target}}.tar.gz

@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -85,6 +85,30 @@ pub struct Batch {
     pub record_data: Bytes,
 }
 
+impl From<Batch> for Bytes {
+    fn from(value: Batch) -> Self {
+        let mut encoded =
+            BytesMut::with_capacity(value.batch_length as usize + size_of_val(&value.base_offset));
+
+        encoded.put_i64(value.base_offset);
+        encoded.put_i32(value.batch_length);
+        encoded.put_i32(value.partition_leader_epoch);
+        encoded.put_i8(value.magic);
+        encoded.put_u32(value.crc);
+        encoded.put_i16(value.attributes);
+        encoded.put_i32(value.last_offset_delta);
+        encoded.put_i64(value.base_timestamp);
+        encoded.put_i64(value.max_timestamp);
+        encoded.put_i64(value.producer_id);
+        encoded.put_i16(value.producer_epoch);
+        encoded.put_i32(value.base_sequence);
+        encoded.put_u32(value.record_count);
+        encoded.put(value.record_data);
+
+        Bytes::from(encoded)
+    }
+}
+
 impl TryFrom<Vec<u8>> for Batch {
     type Error = Error;
 
@@ -100,12 +124,9 @@ impl TryFrom<Vec<u8>> for Batch {
 
         let crc_data_size = usize::try_from(batch_length).map(|batch_length| {
             batch_length
-            // partition leader epoch
-            - size_of::<i32>()
-            // magic
-            - size_of::<i8>()
-            // crc
-            - size_of::<u32>()
+                - size_of_val(&partition_leader_epoch)
+                - size_of_val(&magic)
+                - size_of_val(&crc)
         })?;
 
         let crc_data = &encoded[..crc_data_size];
@@ -156,6 +177,71 @@ impl TryFrom<Vec<u8>> for Batch {
     }
 }
 
+impl TryFrom<Bytes> for Batch {
+    type Error = Error;
+    fn try_from(mut encoded: Bytes) -> result::Result<Self, Self::Error> {
+        let base_offset = encoded.try_get_i64()?;
+        let batch_length = encoded.try_get_i32()?;
+
+        let partition_leader_epoch = encoded.try_get_i32()?;
+        let magic = encoded.try_get_i8()?;
+        let crc = encoded.try_get_u32()?;
+
+        let crc_data_size = usize::try_from(batch_length).map(|batch_length| {
+            batch_length
+                - size_of_val(&partition_leader_epoch)
+                - size_of_val(&magic)
+                - size_of_val(&crc)
+        })?;
+
+        let crc_data = &encoded[..crc_data_size];
+
+        let computed = {
+            let mut digest = crc_fast::Digest::new(crc_fast::CrcAlgorithm::Crc32Iscsi);
+            digest.update(crc_data);
+
+            digest.finalize() as u32
+        };
+
+        if computed != crc {
+            error!(crc, computed);
+        }
+
+        let attributes = encoded.try_get_i16()?;
+        let last_offset_delta = encoded.try_get_i32()?;
+        let base_timestamp = encoded.try_get_i64()?;
+        let max_timestamp = encoded.try_get_i64()?;
+        let producer_id = encoded.try_get_i64()?;
+        let producer_epoch = encoded.try_get_i16()?;
+        let base_sequence = encoded.try_get_i32()?;
+        let record_count = encoded.try_get_u32()?;
+
+        let record_data_size =
+            usize::try_from(batch_length).map(|batch_length| batch_length - FIXED_BATCH_LENGTH)?;
+
+        let record_data = encoded.slice(..record_data_size);
+
+        let batch = Batch {
+            base_offset,
+            batch_length,
+            partition_leader_epoch,
+            magic,
+            crc,
+            attributes,
+            last_offset_delta,
+            base_timestamp,
+            max_timestamp,
+            producer_id,
+            producer_epoch,
+            base_sequence,
+            record_count,
+            record_data,
+        };
+
+        Ok(batch)
+    }
+}
+
 impl TryFrom<&[u8]> for Batch {
     type Error = Error;
 
@@ -169,12 +255,9 @@ impl TryFrom<&[u8]> for Batch {
 
         let crc_data_size = usize::try_from(batch_length).map(|batch_length| {
             batch_length
-            // partition leader epoch
-            - size_of::<i32>()
-            // magic
-            - size_of::<i8>()
-            // crc
-            - size_of::<u32>()
+                - size_of_val(&partition_leader_epoch)
+                - size_of_val(&magic)
+                - size_of_val(&crc)
         })?;
 
         let crc_data = &encoded[..crc_data_size];
@@ -505,6 +588,7 @@ impl<'de> Deserialize<'de> for Batch {
 
 #[cfg(test)]
 mod tests {
+
     use crate::{
         BatchAttribute, ControlBatch, EndTransactionMarker, de::BatchDecoder, record::inflated,
     };
@@ -959,6 +1043,53 @@ mod tests {
         assert_eq!(attributes, batch.attributes);
         assert_eq!(1, batch.record_count);
         assert_eq!(base_offset, batch.base_offset);
+
+        Ok(())
+    }
+
+    #[test]
+    fn encode_decode() -> Result<()> {
+        let key = Bytes::copy_from_slice("Lorem ipsum dolor sit amet".as_bytes());
+        let value = Bytes::copy_from_slice("consectetur adipiscing elit".as_bytes());
+
+        let producer_id = 54345;
+        let producer_epoch = 32123;
+        let base_sequence = 78987;
+        let base_offset = 9876789;
+        let attributes: i16 = BatchAttribute::default().transaction(true).into();
+
+        let batch: Batch = inflated::Batch::builder()
+            .record(
+                Record::builder()
+                    .key(key.clone().into())
+                    .value(value.clone().into()),
+            )
+            .attributes(attributes)
+            .producer_id(producer_id)
+            .producer_epoch(producer_epoch)
+            .base_offset(base_offset)
+            .base_sequence(base_sequence)
+            .build()
+            .and_then(TryInto::try_into)
+            .inspect(|deflated| debug!(?deflated))?;
+
+        let expected = batch.batch_length as usize;
+
+        let encoded = Bytes::from(batch);
+
+        let deflated = Batch::try_from(&encoded[..])?;
+
+        assert_eq!(deflated.producer_id, producer_id);
+        assert_eq!(deflated.producer_epoch, producer_epoch);
+        assert_eq!(deflated.base_sequence, base_sequence);
+        assert_eq!(deflated.base_offset, base_offset);
+        assert_eq!(deflated.attributes, attributes);
+
+        let inflated = inflated::Batch::try_from(deflated)?;
+        assert_eq!(1, inflated.records.len());
+
+        assert_eq!(Some(key), inflated.records[0].key);
+        assert_eq!(Some(value), inflated.records[0].value);
 
         Ok(())
     }

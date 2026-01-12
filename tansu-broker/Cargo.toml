@@ -14,6 +14,7 @@ version.workspace = true
 dynostore = ["dep:object_store"]
 libsql = ["dep:libsql"]
 postgres = ["dep:deadpool-postgres", "dep:tokio-postgres"]
+slatedb = ["dep:object_store", "dep:slatedb", "tansu-storage/slatedb"]
 turso = ["dep:turso"]
 
 [lints]
@@ -41,6 +42,7 @@ rand.workspace = true
 regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+slatedb = { workspace = true, optional = true }
 tansu-model.workspace = true
 tansu-sans-io.workspace = true
 tansu-schema.workspace = true
@@ -58,6 +60,8 @@ url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+object_store = { workspace = true }
 pretty_assertions.workspace = true
+slatedb = { workspace = true }
 tansu-schema = { workspace = true }
 tansu-storage = { workspace = true }

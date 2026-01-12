@@ -2265,7 +2265,7 @@ impl Storage for Postgres {
                                                     .error_code(error_code)
                                                     .partition_index(partition_index)
                                                     .leader_id(leader_id)
-                                                    .leader_epoch(Some(-1))
+                                                    .leader_epoch(Some(0))
                                                     .replica_nodes(replica_nodes)
                                                     .isr_nodes(isr_nodes)
                                                     .offline_replicas(Some([].into()))
@@ -2357,7 +2357,7 @@ impl Storage for Postgres {
                                                     .error_code(error_code)
                                                     .partition_index(partition_index)
                                                     .leader_id(leader_id)
-                                                    .leader_epoch(Some(-1))
+                                                    .leader_epoch(Some(0))
                                                     .replica_nodes(replica_nodes)
                                                     .isr_nodes(isr_nodes)
                                                     .offline_replicas(Some([].into()))
@@ -2443,7 +2443,7 @@ impl Storage for Postgres {
                                             .error_code(error_code)
                                             .partition_index(partition_index)
                                             .leader_id(leader_id)
-                                            .leader_epoch(Some(-1))
+                                            .leader_epoch(Some(0))
                                             .replica_nodes(replica_nodes)
                                             .isr_nodes(isr_nodes)
                                             .offline_replicas(Some([].into()))
@@ -2619,7 +2619,7 @@ impl Storage for Postgres {
                                                 .error_code(ErrorCode::None.into())
                                                 .partition_index(partition_index)
                                                 .leader_id(self.node)
-                                                .leader_epoch(-1)
+                                                .leader_epoch(0)
                                                 .replica_nodes(Some(vec![
                                                     self.node;
                                                     replication_factor
@@ -2704,7 +2704,7 @@ impl Storage for Postgres {
                                                 .error_code(ErrorCode::None.into())
                                                 .partition_index(partition_index)
                                                 .leader_id(self.node)
-                                                .leader_epoch(-1)
+                                                .leader_epoch(0)
                                                 .replica_nodes(Some(vec![
                                                     self.node;
                                                     replication_factor
@@ -3463,6 +3463,13 @@ impl Storage for Postgres {
 
     async fn advertised_listener(&self) -> Result<Url> {
         Ok(self.advertised_listener.clone())
+    }
+
+    #[instrument(skip_all)]
+    async fn ping(&self) -> Result<()> {
+        let c = self.pool.get().await?;
+        let _ = self.prepare_query(&c, "ping.sql", &[]).await?;
+        Ok(())
     }
 }
 

@@ -63,6 +63,10 @@ macro_rules! include_sql {
 pub(crate) static SQL: LazyLock<Cache> = LazyLock::new(|| {
     let mapping = [
         (
+            "maintain-vacuum.sql",
+            include_sql!("pg/maintain-vacuum.sql"),
+        ),
+        (
             "consumer_group_delete.sql",
             include_sql!("pg/consumer_group_delete.sql"),
         ),
@@ -116,10 +120,6 @@ pub(crate) static SQL: LazyLock<Cache> = LazyLock::new(|| {
         ),
         ("header_copy.sql", include_sql!("pg/header_copy.sql")),
         (
-            "lite/freelist_count.sql",
-            include_sql!("lite/freelist_count.sql"),
-        ),
-        (
             "header_delete_by_topic.sql",
             include_sql!("pg/header_delete_by_topic.sql"),
         ),
@@ -147,6 +147,7 @@ pub(crate) static SQL: LazyLock<Cache> = LazyLock::new(|| {
             include_sql!("lite/policy_delete.sql"),
         ),
         ("policy_delete.sql", include_sql!("pg/policy_delete.sql")),
+        ("ping.sql", "select 1 + 1".to_string()),
         (
             "producer_detail_delete_by_topic.sql",
             include_sql!("pg/producer_detail_delete_by_topic.sql"),

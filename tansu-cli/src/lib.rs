@@ -25,6 +25,7 @@ pub enum Error {
     Cat(Box<tansu_cat::Error>),
     DotEnv(#[from] dotenv::Error),
     Generate(#[from] tansu_generator::Error),
+    Perf(#[from] tansu_perf::Error),
     Proxy(#[from] tansu_proxy::Error),
     Regex(#[from] regex::Error),
     Schema(Box<tansu_schema::Error>),

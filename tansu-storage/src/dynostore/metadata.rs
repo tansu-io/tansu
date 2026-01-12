@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,15 +13,15 @@
 // limitations under the License.
 
 use std::{
-    collections::HashMap,
-    fmt::Display,
-    ops::{Deref, DerefMut},
+    fmt::{Debug, Display},
+    ops::DerefMut,
     slice::from_ref,
-    sync::{Arc, LazyLock, Mutex, MutexGuard},
-    time::{Duration, SystemTime},
+    sync::{Arc, LazyLock, Mutex},
+    time::Duration,
 };
 
 use async_trait::async_trait;
+use cached::stores::ExpiringSizedCache;
 use futures::stream::BoxStream;
 use object_store::{
     GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
@@ -37,7 +37,17 @@ use super::METER;
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct CacheEntry {
     version: UpdateVersion,
-    tagged_at: SystemTime,
+}
+
+impl From<GetOptions> for CacheEntry {
+    fn from(value: GetOptions) -> Self {
+        Self {
+            version: UpdateVersion {
+                e_tag: value.if_none_match,
+                version: None,
+            },
+        }
+    }
 }
 
 impl From<&PutResult> for CacheEntry {
@@ -49,7 +59,6 @@ impl From<&PutResult> for CacheEntry {
 
         Self {
             version: UpdateVersion { e_tag, version },
-            tagged_at: SystemTime::now(),
         }
     }
 }
@@ -63,22 +72,23 @@ impl From<&GetResult> for CacheEntry {
 
         Self {
             version: UpdateVersion { e_tag, version },
-            tagged_at: SystemTime::now(),
         }
     }
 }
 
-impl CacheEntry {
-    fn hit(&mut self) {
-        self.tagged_at = SystemTime::now();
-    }
-}
-
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub(super) struct Cache<O> {
-    entries: Arc<Mutex<HashMap<Path, CacheEntry>>>,
+    entries: Arc<Mutex<ExpiringSizedCache<Path, CacheEntry>>>,
     object_store: O,
     retention: Duration,
+}
+
+impl<O> Debug for Cache<O> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Cache")
+            .field("retention", &self.retention)
+            .finish()
+    }
 }
 
 impl<O> Display for Cache<O> {
@@ -87,13 +97,12 @@ impl<O> Display for Cache<O> {
     }
 }
 
-#[allow(dead_code)]
 impl<O> Cache<O>
 where
     O: ObjectStore,
 {
     pub(super) fn new(object_store: O, retention: Duration) -> Self {
-        let entries = Arc::new(Mutex::new(HashMap::new()));
+        let entries = Arc::new(Mutex::new(ExpiringSizedCache::new(retention)));
 
         Self {
             entries,
@@ -102,34 +111,9 @@ where
         }
     }
 
-    fn into_inner(self) -> O {
-        self.object_store
-    }
-
+    #[cfg(test)]
     fn inner(&self) -> &O {
         &self.object_store
-    }
-
-    fn evict(
-        &self,
-        guard: &mut MutexGuard<'_, HashMap<Path, CacheEntry>>,
-        attributes: &[KeyValue],
-    ) {
-        let now = SystemTime::now();
-
-        let original = guard.deref().len();
-        guard.deref_mut().retain(|_location, entry| {
-            now.duration_since(entry.tagged_at)
-                .is_ok_and(|elapsed| elapsed.as_millis() < self.retention.as_millis())
-        });
-
-        let mut a = vec![KeyValue::new("outcome", "evict")];
-        a.extend_from_slice(attributes);
-
-        ENTRIES.add(
-            u64::try_from(original - guard.deref().len()).unwrap_or_default(),
-            &a,
-        );
     }
 }
 
@@ -166,14 +150,13 @@ impl<O> ObjectStore for Cache<O>
 where
     O: ObjectStore,
 {
+    #[instrument(skip_all, fields(location = %location))]
     async fn put_opts(
         &self,
         location: &Path,
         payload: PutPayload,
         opts: PutOptions,
     ) -> Result<PutResult, object_store::Error> {
-        debug!(%location, ?opts);
-
         let method = KeyValue::new("method", "put_opts");
 
         REQUESTS.add(1, from_ref(&method));
@@ -184,37 +167,10 @@ where
             .inspect(|put_result| {
                 debug!(?put_result);
                 if let Ok(mut guard) = self.entries.lock() {
-                    self.evict(&mut guard, from_ref(&method));
-
-                    let replacement = CacheEntry::from(put_result);
-
-                    let outcome = match guard
-                        .deref_mut()
-                        .insert(location.to_owned(), replacement.clone())
-                    {
-                        None => "add",
-
-                        Some(existing) if existing == replacement => "existing",
-
-                        Some(_) => "replace",
-                    };
-
-                    debug!(%location, outcome);
-
-                    ENTRIES.add(1, &[method.clone(), KeyValue::new("outcome", outcome)]);
+                    _ = guard.insert_evict(location.to_owned(), CacheEntry::from(put_result), true);
                 }
             })
             .inspect_err(|error| {
-                debug!(%location, ?error);
-
-                if let Ok(mut guard) = self.entries.lock() {
-                    self.evict(&mut guard, from_ref(&method));
-
-                    if guard.deref_mut().remove(location).is_some() {
-                        ENTRIES.add(1, &[method.clone(), KeyValue::new("outcome", "error")]);
-                    }
-                }
-
                 ERRORS.add(
                     1,
                     &[
@@ -225,6 +181,7 @@ where
             })
     }
 
+    #[instrument(skip_all, fields(location = %location))]
     async fn put_multipart_opts(
         &self,
         location: &Path,
@@ -252,7 +209,7 @@ where
             })
     }
 
-    #[instrument(skip_all, fields(%location), ret)]
+    #[instrument(skip_all, fields(%location, if_none_match = options.if_none_match), ret)]
     async fn get_opts(
         &self,
         location: &Path,
@@ -265,9 +222,7 @@ where
         REQUESTS.add(1, from_ref(&method));
 
         if let Ok(mut guard) = self.entries.lock() {
-            self.evict(&mut guard, from_ref(&method));
-
-            if let Some(entry) = guard.deref_mut().get_mut(location) {
+            if let Some(entry) = guard.deref_mut().get(location) {
                 debug!(?entry);
 
                 if let Some(ref cached_e_tag) = entry.version.e_tag {
@@ -277,8 +232,6 @@ where
                         debug!(cached_e_tag, presented);
 
                         if cached_e_tag == presented {
-                            entry.hit();
-
                             let outcome = "hit";
 
                             OUTCOMES.add(1, &[method, KeyValue::new("outcome", outcome)]);
@@ -315,20 +268,22 @@ where
         }
 
         self.object_store
-            .get_opts(location, options)
+            .get_opts(location, options.clone())
             .await
             .inspect(|get_result| {
                 let e_tag = get_result.meta.e_tag.clone();
                 let version = get_result.meta.version.clone();
 
                 if let Ok(mut guard) = self.entries.lock() {
-                    debug!(%location, e_tag, version);
+                    debug!(e_tag, version);
 
                     let replacement = CacheEntry::from(get_result);
 
                     let outcome = match guard
                         .deref_mut()
-                        .insert(location.to_owned(), replacement.clone())
+                        .insert_evict(location.to_owned(), replacement.clone(), true)
+                        .ok()
+                        .flatten()
                     {
                         None => "add",
 
@@ -337,31 +292,48 @@ where
                         Some(_) => "replace",
                     };
 
+                    debug!(outcome);
+
                     ENTRIES.add(1, &[method.clone(), KeyValue::new("outcome", outcome)]);
                 }
             })
             .inspect_err(|error| {
                 debug!(%location, ?error);
 
-                if let Ok(mut guard) = self.entries.lock() {
-                    debug!(%location);
-                    self.evict(&mut guard, from_ref(&method));
+                if matches!(error, object_store::Error::NotModified { .. }) {
+                    if let Ok(mut guard) = self.entries.lock() {
+                        let replacement = CacheEntry::from(options);
 
-                    if guard.deref_mut().remove(location).is_some() {
-                        ENTRIES.add(1, &[method.clone(), KeyValue::new("outcome", "error")]);
+                        let outcome = match guard
+                            .deref_mut()
+                            .insert_evict(location.to_owned(), replacement.clone(), true)
+                            .ok()
+                            .flatten()
+                        {
+                            None => "add",
+
+                            Some(existing) if existing == replacement => "existing",
+
+                            Some(_) => "replace",
+                        };
+
+                        debug!(outcome);
+
+                        ENTRIES.add(1, &[method.clone(), KeyValue::new("outcome", outcome)]);
                     }
+                } else {
+                    ERRORS.add(
+                        1,
+                        &[
+                            method,
+                            KeyValue::new("error", object_store_error_name(error)),
+                        ],
+                    );
                 }
-
-                ERRORS.add(
-                    1,
-                    &[
-                        method,
-                        KeyValue::new("error", object_store_error_name(error)),
-                    ],
-                );
             })
     }
 
+    #[instrument(skip_all, fields(location = %location))]
     async fn delete(&self, location: &Path) -> Result<(), object_store::Error> {
         debug!(%location);
 
@@ -390,6 +362,7 @@ where
             })
     }
 
+    #[instrument(skip_all, fields(prefix))]
     fn list(
         &self,
         prefix: Option<&Path>,
@@ -399,6 +372,7 @@ where
         self.object_store.list(prefix)
     }
 
+    #[instrument(skip_all, fields(prefix))]
     async fn list_with_delimiter(
         &self,
         prefix: Option<&Path>,
@@ -421,6 +395,7 @@ where
             })
     }
 
+    #[instrument(skip_all, fields(from = %from, to = %to))]
     async fn copy(&self, from: &Path, to: &Path) -> Result<(), object_store::Error> {
         debug!(%from, %to);
         REQUESTS.add(1, &[KeyValue::new("method", "copy")]);
@@ -437,6 +412,7 @@ where
         })
     }
 
+    #[instrument(skip_all, fields(from = %from, to = %to))]
     async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<(), object_store::Error> {
         debug!(%from, %to);
         REQUESTS.add(1, &[KeyValue::new("method", "copy_if_not_exists")]);
@@ -492,17 +468,11 @@ mod tests {
         }
 
         fn put_opts(&self) -> Result<u64> {
-            self.put_opts
-                .lock()
-                .map(|guard| *guard.deref())
-                .map_err(Into::into)
+            self.put_opts.lock().map(|guard| *guard).map_err(Into::into)
         }
 
         fn get_opts(&self) -> Result<u64> {
-            self.get_opts
-                .lock()
-                .map(|guard| *guard.deref())
-                .map_err(Into::into)
+            self.get_opts.lock().map(|guard| *guard).map_err(Into::into)
         }
     }
 

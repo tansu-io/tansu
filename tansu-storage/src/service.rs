@@ -181,6 +181,7 @@ pub enum Request {
     ClusterId,
     Node,
     AdvertisedListener,
+    Ping,
 }
 
 impl Display for Request {
@@ -215,6 +216,7 @@ impl Display for Request {
             Self::TxnEnd { .. } => f.write_str("TxnEnd"),
             Self::TxnOffsetCommit(_) => f.write_str("TxnOffsetCommit"),
             Self::UpdateGroup { .. } => f.write_str("UpdateGroup"),
+            Self::Ping => f.write_str("Ping"),
         }
     }
 }
@@ -250,6 +252,7 @@ pub enum Response {
     ClusterId(Result<String>),
     Node(Result<i32>),
     AdvertisedListener(Result<Url>),
+    Ping(Result<()>),
 }
 
 pub type RequestSender = mpsc::Sender<(Request, oneshot::Sender<Response>)>;
@@ -1075,6 +1078,20 @@ impl Storage for RequestChannelService {
             })
             .map_err(Into::into)
     }
+
+    #[instrument(skip_all)]
+    async fn ping(&self) -> Result<()> {
+        self.serve(Context::default(), Request::Ping)
+            .await
+            .and_then(|response| {
+                if let Response::Ping(inner) = response {
+                    inner.map_err(Into::into)
+                } else {
+                    Err(Error::UnexpectedServiceResponse(Box::new(response)).into())
+                }
+            })
+            .map_err(Into::into)
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1340,6 +1357,7 @@ where
             Request::AdvertisedListener => Ok(Response::AdvertisedListener(
                 self.storage.advertised_listener().await,
             )),
+            Request::Ping => Ok(Response::Ping(self.storage.ping().await)),
         }
     }
 }
