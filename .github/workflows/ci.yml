@@ -34,6 +34,7 @@ jobs:
       AWS_DEFAULT_REGION: eu-west-2
       AWS_ENDPOINT: http://localhost:9000
       AWS_SECRET_ACCESS_KEY: minioadmin
+      CARGO_BUILD_BUILD_DIR: /mnt/build
       CLUSTER_ID: tansu-ci
       DATA_LAKE: s3://lake
       ICEBERG_CATALOG: http://localhost:8181/catalog
@@ -47,6 +48,7 @@ jobs:
       STORAGE_ENGINE: s3://tansu/
       TANSU_IMAGE: ghcr.io/tansu-io/tansu
     steps:
+      - run: mkdir /mnt/build
       - run: echo "PG_IMAGE_DASH=${POSTGRES_IMAGE/:/-}" >> $GITHUB_ENV
       - run: echo ${PG_IMAGE_DASH}
       - run: df -h
