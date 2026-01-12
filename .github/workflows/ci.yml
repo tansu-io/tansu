@@ -48,7 +48,8 @@ jobs:
       STORAGE_ENGINE: s3://tansu/
       TANSU_IMAGE: ghcr.io/tansu-io/tansu
     steps:
-      - run: mkdir /mnt/build
+      - run: sudo mkdir /mnt/build
+      - run: sudo chmod a+rwxt /mnt/build
       - run: echo "PG_IMAGE_DASH=${POSTGRES_IMAGE/:/-}" >> $GITHUB_ENV
       - run: echo ${PG_IMAGE_DASH}
       - run: df -h
