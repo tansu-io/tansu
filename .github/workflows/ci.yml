@@ -382,8 +382,9 @@ jobs:
           dist=$(mktemp -d -p ${{runner.temp}})
           mkdir "$dist"/bin
           cp target/"${TARGET}"/release/tansu "$dist"/bin
-          cp LICENSE "$dist"
-          cp artifacts/* "$dist"
+          cp compose.yaml example.env LICENSE README.md "$dist"
+          cp -r etc "$dist"
+          cp artifacts/THIRD-PARTY-LICENSE.html "$dist"
           tar --create --verbose --gzip --file=tansu-"${TARGET}".tar.gz -C "$dist" .
       - if: ${{matrix.enabled && github.ref_type != 'tag'}}
         uses: actions/upload-artifact@v6
