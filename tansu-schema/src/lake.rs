@@ -12,21 +12,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Data Lake: Delta, Iceberg or Parquet
+//! Data Lake: Delta, Iceberg, Lance or Parquet
 
 use crate::{METER, Result};
 use async_trait::async_trait;
 use opentelemetry::{KeyValue, metrics::Histogram};
 
 #[cfg_attr(
-    not(any(feature = "parquet", feature = "iceberg", feature = "delta")),
+    not(any(
+        feature = "parquet",
+        feature = "iceberg",
+        feature = "delta",
+        feature = "lance"
+    )),
     allow(unused_imports)
 )]
 use std::{fmt::Debug, marker::PhantomData, sync::LazyLock, time::SystemTime};
 use tansu_sans_io::{describe_configs_response::DescribeConfigsResult, record::inflated::Batch};
 use tracing::instrument;
 
-#[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
+#[cfg(any(
+    feature = "parquet",
+    feature = "iceberg",
+    feature = "delta",
+    feature = "lance"
+))]
 use url::Url;
 
 #[cfg(feature = "iceberg")]
@@ -35,6 +45,9 @@ pub mod berg;
 #[cfg(feature = "delta")]
 pub mod delta;
 
+#[cfg(feature = "lance")]
+pub mod lance;
+
 #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
 pub mod quet;
 
@@ -42,7 +55,12 @@ pub mod quet;
 ///
 /// Wrapper enum for the each Data Lake implementation
 #[cfg_attr(
-    not(any(feature = "parquet", feature = "iceberg", feature = "delta")),
+    not(any(
+        feature = "parquet",
+        feature = "iceberg",
+        feature = "delta",
+        feature = "lance"
+    )),
     allow(missing_copy_implementations)
 )]
 #[derive(Clone, Debug, Default)]
@@ -55,6 +73,9 @@ pub enum House {
 
     #[cfg(feature = "iceberg")]
     Iceberg(berg::Iceberg),
+
+    #[cfg(feature = "lance")]
+    Lance(lance::Lance),
 
     #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
     Parquet(quet::Parquet),
@@ -72,6 +93,9 @@ pub enum LakeHouseType {
     #[cfg(feature = "iceberg")]
     Iceberg,
 
+    #[cfg(feature = "lance")]
+    Lance,
+
     #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
     Parquet,
 
@@ -87,6 +111,9 @@ impl From<&House> for LakeHouseType {
 
             #[cfg(feature = "iceberg")]
             House::Iceberg(_) => Self::Iceberg,
+
+            #[cfg(feature = "lance")]
+            House::Lance(_) => Self::Lance,
 
             #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
             House::Parquet(_) => Self::Parquet,
@@ -117,6 +144,16 @@ impl LakeHouseType {
         false
     }
 
+    #[cfg(feature = "lance")]
+    pub fn is_lance(&self) -> bool {
+        matches!(self, Self::Lance)
+    }
+
+    #[cfg(not(feature = "lance"))]
+    pub fn is_lance(&self) -> bool {
+        false
+    }
+
     #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
     pub fn is_parquet(&self) -> bool {
         matches!(self, Self::Parquet)
@@ -130,7 +167,7 @@ impl LakeHouseType {
 
 /// Lake House
 ///
-/// This trait is implemented by [`delta::Delta`], [`berg::Iceberg`] and [`quet::Parquet`].
+/// This trait is implemented by [`delta::Delta`], [`berg::Iceberg`], [`lance::Lance`] and [`quet::Parquet`].
 #[async_trait]
 pub trait LakeHouse: Clone + Debug + Send + Sync + 'static {
     /// Store a batch of records in this lake house
@@ -150,7 +187,12 @@ pub trait LakeHouse: Clone + Debug + Send + Sync + 'static {
     async fn lake_type(&self) -> Result<LakeHouseType>;
 }
 
-#[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
+#[cfg(any(
+    feature = "parquet",
+    feature = "iceberg",
+    feature = "delta",
+    feature = "lance"
+))]
 pub(crate) static AS_ARROW_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
     METER
         .u64_histogram("registry_as_arrow_duration")
@@ -205,6 +247,13 @@ impl LakeHouse for House {
                     .await
             }
 
+            #[cfg(feature = "lance")]
+            House::Lance(inner) => {
+                inner
+                    .store(topic, partition, offset, inflated, configs)
+                    .await
+            }
+
             #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
             House::Parquet(inner) => {
                 inner
@@ -234,6 +283,9 @@ impl LakeHouse for House {
 
             #[cfg(feature = "iceberg")]
             House::Iceberg(inner) => inner.maintain().await,
+
+            #[cfg(feature = "lance")]
+            House::Lance(inner) => inner.maintain().await,
 
             #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
             House::Parquet(inner) => inner.maintain().await,
@@ -265,6 +317,11 @@ impl House {
     #[cfg(feature = "delta")]
     pub fn delta() -> delta::Builder {
         delta::Builder::default()
+    }
+
+    #[cfg(feature = "lance")]
+    pub fn lance() -> lance::Builder {
+        lance::Builder::default()
     }
 
     #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]

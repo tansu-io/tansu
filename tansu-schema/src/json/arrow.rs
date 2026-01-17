@@ -31,6 +31,7 @@ use arrow::{
 
 use chrono::{DateTime, Datelike};
 
+#[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
 use serde_json::{Map, Value, json};

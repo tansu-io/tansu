@@ -13,6 +13,7 @@ version.workspace = true
 [features]
 delta = ["dep:arrow", "dep:delta_kernel", "dep:deltalake", "dep:datafusion", "dep:parquet"]
 iceberg = ["dep:arrow", "dep:iceberg-catalog-rest", "dep:iceberg-datafusion", "dep:iceberg", "dep:datafusion", "dep:parquet"]
+lance = ["dep:arrow", "dep:lance", "dep:arrow-ipc_v56"]
 parquet = ["dep:arrow", "dep:parquet"]
 
 
@@ -37,6 +38,8 @@ iceberg-catalog-rest = { workspace = true, optional = true }
 iceberg-datafusion = { workspace = true, optional = true }
 iceberg = { workspace = true, optional = true }
 jsonschema.workspace = true
+lance = { workspace = true, optional = true }
+arrow-ipc_v56 = { workspace = true, optional = true }
 num-bigint.workspace = true
 object_store.workspace = true
 opentelemetry-semantic-conventions.workspace = true
@@ -68,3 +71,7 @@ rand.workspace = true
 [[test]]
 name = "berg"
 required-features = ["iceberg"]
+
+[[test]]
+name = "lance"
+required-features = ["lance"]

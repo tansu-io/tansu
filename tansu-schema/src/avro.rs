@@ -27,10 +27,20 @@ use uuid::Uuid;
 
 use crate::{AsJsonValue, AsKafkaRecord, Error, Generator, Result, Validator};
 
-#[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
+#[cfg(any(
+    feature = "parquet",
+    feature = "iceberg",
+    feature = "delta",
+    feature = "lance"
+))]
 use apache_avro::schema::RecordSchema;
 
-#[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
+#[cfg(any(
+    feature = "parquet",
+    feature = "iceberg",
+    feature = "delta",
+    feature = "lance"
+))]
 mod arrow;
 
 #[derive(Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -53,13 +63,23 @@ impl AsRef<str> for MessageKind {
 /// AVRO Schema
 #[derive(Clone, Debug, Default)]
 pub struct Schema {
-    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
+    #[cfg(any(
+        feature = "parquet",
+        feature = "iceberg",
+        feature = "delta",
+        feature = "lance"
+    ))]
     complete: Option<RecordSchema>,
     pub(crate) key: Option<AvroSchema>,
     pub(crate) value: Option<AvroSchema>,
     pub(crate) meta: Option<AvroSchema>,
 
-    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
+    #[cfg(any(
+        feature = "parquet",
+        feature = "iceberg",
+        feature = "delta",
+        feature = "lance"
+    ))]
     ids: HashMap<String, i32>,
 }
 
@@ -139,12 +159,22 @@ impl From<JsonValue> for Schema {
             .inspect(|fields| debug!(?fields))
             .map_or(
                 Self {
-                    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
+                    #[cfg(any(
+                        feature = "parquet",
+                        feature = "iceberg",
+                        feature = "delta",
+                        feature = "lance"
+                    ))]
                     complete: None,
                     key: None,
                     value: None,
                     meta: None,
-                    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
+                    #[cfg(any(
+                        feature = "parquet",
+                        feature = "iceberg",
+                        feature = "delta",
+                        feature = "lance"
+                    ))]
                     ids: HashMap::new(),
                 },
                 |fields| {
@@ -154,7 +184,8 @@ impl From<JsonValue> for Schema {
                         #[cfg(not(any(
                             feature = "parquet",
                             feature = "iceberg",
-                            feature = "delta"
+                            feature = "delta",
+                            feature = "lance"
                         )))]
                         let _ = schema;
 
@@ -162,14 +193,16 @@ impl From<JsonValue> for Schema {
                             #[cfg(any(
                                 feature = "parquet",
                                 feature = "iceberg",
-                                feature = "delta"
+                                feature = "delta",
+                                feature = "lance"
                             ))]
                             ids: field_ids(&schema),
 
                             #[cfg(any(
                                 feature = "parquet",
                                 feature = "iceberg",
-                                feature = "delta"
+                                feature = "delta",
+                                feature = "lance"
                             ))]
                             complete: if let AvroSchema::Record(record) = schema {
                                 Some(record)
@@ -224,7 +257,8 @@ impl From<JsonValue> for Schema {
                             #[cfg(any(
                                 feature = "parquet",
                                 feature = "iceberg",
-                                feature = "delta"
+                                feature = "delta",
+                                feature = "lance"
                             ))]
                             complete: None,
                             key: None,
@@ -233,7 +267,8 @@ impl From<JsonValue> for Schema {
                             #[cfg(any(
                                 feature = "parquet",
                                 feature = "iceberg",
-                                feature = "delta"
+                                feature = "delta",
+                                feature = "lance"
                             ))]
                             ids: HashMap::new(),
                         }
@@ -259,7 +294,12 @@ impl Schema {
     }
 }
 
-#[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
+#[cfg(any(
+    feature = "parquet",
+    feature = "iceberg",
+    feature = "delta",
+    feature = "lance"
+))]
 fn field_ids(schema: &AvroSchema) -> HashMap<String, i32> {
     use crate::ARROW_LIST_FIELD_NAME;
 
