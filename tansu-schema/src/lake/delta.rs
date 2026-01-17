@@ -28,9 +28,10 @@ use arrow::{
     datatypes::{Field, Schema as ArrowSchema},
 };
 use async_trait::async_trait;
+use datafusion::datasource::TableProvider;
 use deltalake::{
     DeltaOps, DeltaTable, DeltaTableBuilder, aws,
-    kernel::{ColumnMetadataKey, StructField},
+    kernel::{ColumnMetadataKey, StructField, engine::arrow_conversion::TryFromArrow},
     operations::optimize::OptimizeType,
     protocol::SaveMode,
     writer::{DeltaWriter, RecordBatchWriter},
@@ -262,7 +263,7 @@ impl Config {
     fn generated(&self) -> Result<Vec<StructField>> {
         self.generated_fields()
             .iter()
-            .map(|field| StructField::try_from(field.as_ref()).map_err(Into::into))
+            .map(|field| StructField::try_from_arrow(field.as_ref()).map_err(Into::into))
             .collect::<Result<Vec<_>>>()
     }
 
@@ -301,13 +302,13 @@ impl Delta {
             .fields()
             .iter()
             .inspect(|field| debug!(?field))
-            .map(|field| StructField::try_from(field.as_ref()).map_err(Into::into))
+            .map(|field| StructField::try_from_arrow(field.as_ref()).map_err(Into::into))
             .inspect(|struct_field| debug!(?struct_field))
             .collect::<Result<Vec<_>>>()
             .inspect(|columns| debug!(?columns))
             .inspect_err(|err| debug!(?err))?;
 
-        let table = match DeltaOps::try_from_uri(&self.table_uri(name))
+        let table = match DeltaOps::try_from_url(Url::parse(&self.table_uri(name))?)
             .await
             .inspect_err(|err| debug!(?err))?
             .create()
@@ -323,7 +324,7 @@ impl Delta {
                     return Ok(table.delta_table);
                 }
 
-                let mut table = DeltaTableBuilder::from_uri(self.table_uri(name)).build()?;
+                let mut table = DeltaTableBuilder::from_url(Url::parse(&self.table_uri(name))?)?.build()?;
                 table
                     .load()
                     .await
@@ -365,7 +366,7 @@ impl Delta {
     ) -> Result<()> {
         let start = SystemTime::now();
 
-        let table = DeltaOps::try_from_uri(&self.table_uri(name))
+        let table = DeltaOps::try_from_url(Url::parse(&self.table_uri(name))?)
             .await
             .inspect_err(|err| debug!(?err))?
             .write(batches)
@@ -376,7 +377,7 @@ impl Delta {
                     start
                         .elapsed()
                         .map_or(0, |duration| duration.as_millis() as u64),
-                    &[KeyValue::new("table_uri", table.table_uri())],
+                    &[KeyValue::new("table_uri", table.table_url().to_string())],
                 )
             })?;
 
@@ -421,10 +422,10 @@ impl Delta {
     }
 
     async fn write(&self, name: &str, mut table: DeltaTable, batch: RecordBatch) -> Result<()> {
-        let properties = [KeyValue::new("table_uri", table.table_uri())];
+        let properties = [KeyValue::new("table_uri", table.table_url().to_string())];
 
         if let Some(num_rows) = NonZeroU32::new(batch.num_rows() as u32) {
-            self.rate_limit(table.table_uri(), num_rows).await?;
+            self.rate_limit(table.table_url().to_string(), num_rows).await?;
         }
 
         let num_rows = batch.num_rows() as u64;
@@ -464,7 +465,7 @@ impl Delta {
                         start
                             .elapsed()
                             .map_or(0, |duration| duration.as_millis() as u64),
-                        &[KeyValue::new("table", table.table_uri())],
+                        &[KeyValue::new("table", table.table_url().to_string())],
                     )
                 })?;
         }
@@ -512,14 +513,14 @@ impl Delta {
             },
         );
 
-        let (table, metrics) = DeltaOps::try_from_uri(&self.table_uri(name))
+        let (table, metrics) = DeltaOps::try_from_url(Url::parse(&self.table_uri(name))?)
             .await?
             .optimize()
             .with_type(optimize_type)
             .await?;
 
         let properties = [
-            KeyValue::new("table_uri", table.table_uri()),
+            KeyValue::new("table_uri", table.table_url().to_string()),
             optimize_type_label,
         ];
 
@@ -538,7 +539,7 @@ impl Delta {
             .fields()
             .iter()
             .inspect(|field| debug!(?field))
-            .map(|field| StructField::try_from(field.as_ref()).map_err(Into::into))
+            .map(|field| StructField::try_from_arrow(field.as_ref()).map_err(Into::into))
             .inspect(|struct_field| debug!(?struct_field))
             .collect::<Result<VecDeque<_>>>()
             .inspect(|columns| debug!(?columns))
@@ -546,7 +547,10 @@ impl Delta {
 
         let mut actual = table
             .schema()
-            .map(|schema| schema.fields().collect::<VecDeque<_>>())
+            .fields()
+            .iter()
+            .map(|field| StructField::try_from_arrow(field.as_ref()))
+            .collect::<std::result::Result<VecDeque<_>, _>>()
             .unwrap_or_default();
         debug!(?actual);
 

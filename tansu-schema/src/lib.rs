@@ -48,8 +48,8 @@ use iceberg::spec::DataFileBuilderError;
 
 use jsonschema::ValidationError;
 use object_store::{
-    DynObjectStore, ObjectStore, aws::AmazonS3Builder, local::LocalFileSystem, memory::InMemory,
-    path::Path,
+    DynObjectStore, ObjectStore, ObjectStoreExt, aws::AmazonS3Builder, local::LocalFileSystem,
+    memory::InMemory, path::Path,
 };
 use opentelemetry::{
     InstrumentationScope, KeyValue, global,
@@ -161,7 +161,7 @@ pub enum Error {
 
     SerdeJson(#[from] serde_json::Error),
 
-    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
+    #[cfg(any(feature = "iceberg", feature = "delta"))]
     SqlParser(#[from] datafusion::logical_expr::sqlparser::parser::ParserError),
 
     TopicWithoutSchema(String),
