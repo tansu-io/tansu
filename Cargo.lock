@@ -1396,9 +1396,9 @@ checksum = "18758054972164c3264f7c8386f5fc6da6114cb46b619fd365d4e3b2dc3ae487"
 
 [[package]]
 name = "chrono"
-version = "0.4.42"
+version = "0.4.43"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "145052bdd345b87320e369255277e3fb5152762ad123a901ef5c262dd38fe8d2"
+checksum = "fac4744fb15ae8337dc853fee7fb3f4e48c0fbaa23d0afe49c447b4fab126118"
 dependencies = [
  "iana-time-zone",
  "js-sys",
@@ -3981,7 +3981,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.62.2",
+ "windows-core",
 ]
 
 [[package]]
@@ -7479,7 +7479,7 @@ checksum = "7b2093cf4c8eb1e67749a6762251bc9cd836b6fc171623bd0a9d324d37af2417"
 
 [[package]]
 name = "tansu"
-version = "0.6.0-pre.5"
+version = "0.6.0-pre.6"
 dependencies = [
  "dotenv",
  "tansu-broker",
@@ -7498,7 +7498,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-broker"
-version = "0.6.0-pre.5"
+version = "0.6.0-pre.6"
 dependencies = [
  "async-trait",
  "bytes",
@@ -7542,7 +7542,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-cat"
-version = "0.6.0-pre.5"
+version = "0.6.0-pre.6"
 dependencies = [
  "bytes",
  "futures",
@@ -7562,7 +7562,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-cli"
-version = "0.6.0-pre.5"
+version = "0.6.0-pre.6"
 dependencies = [
  "clap",
  "dotenv",
@@ -7588,7 +7588,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-client"
-version = "0.6.0-pre.5"
+version = "0.6.0-pre.6"
 dependencies = [
  "backoff",
  "bytes",
@@ -7610,7 +7610,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-generator"
-version = "0.6.0-pre.5"
+version = "0.6.0-pre.6"
 dependencies = [
  "futures",
  "futures-core",
@@ -7637,7 +7637,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-model"
-version = "0.6.0-pre.5"
+version = "0.6.0-pre.6"
 dependencies = [
  "convert_case",
  "lazy_static",
@@ -7652,7 +7652,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-otel"
-version = "0.6.0-pre.5"
+version = "0.6.0-pre.6"
 dependencies = [
  "opentelemetry 0.30.0",
  "opentelemetry-otlp",
@@ -7665,7 +7665,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-perf"
-version = "0.6.0-pre.5"
+version = "0.6.0-pre.6"
 dependencies = [
  "bytes",
  "futures",
@@ -7694,7 +7694,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-proxy"
-version = "0.6.0-pre.5"
+version = "0.6.0-pre.6"
 dependencies = [
  "async-trait",
  "bytes",
@@ -7719,7 +7719,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-sans-io"
-version = "0.6.0-pre.5"
+version = "0.6.0-pre.6"
 dependencies = [
  "bytes",
  "clap",
@@ -7747,7 +7747,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-schema"
-version = "0.6.0-pre.5"
+version = "0.6.0-pre.6"
 dependencies = [
  "anyhow",
  "apache-avro",
@@ -7793,7 +7793,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-service"
-version = "0.6.0-pre.5"
+version = "0.6.0-pre.6"
 dependencies = [
  "async-trait",
  "bytes",
@@ -7814,7 +7814,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-storage"
-version = "0.6.0-pre.5"
+version = "0.6.0-pre.6"
 dependencies = [
  "assert_matches",
  "async-trait",
@@ -7859,7 +7859,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-topic"
-version = "0.6.0-pre.5"
+version = "0.6.0-pre.6"
 dependencies = [
  "futures",
  "futures-core",
@@ -8991,7 +8991,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9babd3a767a4c1aef6900409f85f5d53ce2544ccdfaa86dad48c91782c6d6893"
 dependencies = [
  "windows-collections",
- "windows-core 0.61.2",
+ "windows-core",
  "windows-future",
  "windows-link 0.1.3",
  "windows-numerics",
@@ -9003,7 +9003,7 @@ version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3beeceb5e5cfd9eb1d76b381630e82c4241ccd0d27f1a39ed41b2760b255c5e8"
 dependencies = [
- "windows-core 0.61.2",
+ "windows-core",
 ]
 
 [[package]]
@@ -9015,21 +9015,8 @@ dependencies = [
  "windows-implement",
  "windows-interface",
  "windows-link 0.1.3",
- "windows-result 0.3.4",
- "windows-strings 0.4.2",
-]
-
-[[package]]
-name = "windows-core"
-version = "0.62.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b8e83a14d34d0623b51dce9581199302a221863196a1dde71a7663a4c2be9deb"
-dependencies = [
- "windows-implement",
- "windows-interface",
- "windows-link 0.2.1",
- "windows-result 0.4.1",
- "windows-strings 0.5.1",
+ "windows-result",
+ "windows-strings",
 ]
 
 [[package]]
@@ -9038,7 +9025,7 @@ version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc6a41e98427b19fe4b73c550f060b59fa592d7d686537eebf9385621bfbad8e"
 dependencies = [
- "windows-core 0.61.2",
+ "windows-core",
  "windows-link 0.1.3",
  "windows-threading",
 ]
@@ -9083,7 +9070,7 @@ version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9150af68066c4c5c07ddc0ce30421554771e528bde427614c61038bc2c92c2b1"
 dependencies = [
- "windows-core 0.61.2",
+ "windows-core",
  "windows-link 0.1.3",
 ]
 
@@ -9094,8 +9081,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5b8a9ed28765efc97bbc954883f4e6796c33a06546ebafacbabee9696967499e"
 dependencies = [
  "windows-link 0.1.3",
- "windows-result 0.3.4",
- "windows-strings 0.4.2",
+ "windows-result",
+ "windows-strings",
 ]
 
 [[package]]
@@ -9108,30 +9095,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "windows-result"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7781fa89eaf60850ac3d2da7af8e5242a5ea78d1a11c49bf2910bb5a73853eb5"
-dependencies = [
- "windows-link 0.2.1",
-]
-
-[[package]]
 name = "windows-strings"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "56e6c93f3a0c3b36176cb1327a4958a0353d5d166c2a35cb268ace15e91d3b57"
 dependencies = [
  "windows-link 0.1.3",
-]
-
-[[package]]
-name = "windows-strings"
-version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7837d08f69c77cf6b07689544538e017c1bfcf57e34b4c0ff58e6c2cd3b37091"
-dependencies = [
- "windows-link 0.2.1",
 ]
 
 [[package]]
