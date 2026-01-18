@@ -130,6 +130,7 @@ jobs:
           - dynostore
           - libsql
           - postgres
+          - slatedb
     steps:
       - uses: actions/checkout@v5
       - uses: actions-rust-lang/setup-rust-toolchain@v1

@@ -20,8 +20,8 @@ use std::{
 use crate::{Result, dynostore::object_store_error_name};
 use bytes::Bytes;
 use object_store::{
-    Attributes, GetOptions, ObjectStore, PutMode, PutOptions, PutPayload, TagSet, UpdateVersion,
-    path::Path,
+    Attributes, GetOptions, ObjectStore, ObjectStoreExt, PutMode, PutOptions, PutPayload, TagSet,
+    UpdateVersion, path::Path,
 };
 use opentelemetry::{KeyValue, metrics::Counter};
 use serde::{Serialize, de::DeserializeOwned};

@@ -30,9 +30,9 @@ use arrow::{
 use async_trait::async_trait;
 use datafusion::datasource::TableProvider;
 use deltalake::{
-    DeltaOps, DeltaTable, DeltaTableBuilder, aws,
+    DeltaTable, DeltaTableBuilder, aws,
     kernel::{ColumnMetadataKey, StructField, engine::arrow_conversion::TryFromArrow},
-    operations::optimize::OptimizeType,
+    operations::{create::CreateBuilder, optimize::OptimizeType, write::WriteBuilder},
     protocol::SaveMode,
     writer::{DeltaWriter, RecordBatchWriter},
 };
@@ -308,10 +308,10 @@ impl Delta {
             .inspect(|columns| debug!(?columns))
             .inspect_err(|err| debug!(?err))?;
 
-        let table = match DeltaOps::try_from_url(Url::parse(&self.table_uri(name))?)
-            .await
-            .inspect_err(|err| debug!(?err))?
-            .create()
+        let table_url = Url::parse(&self.table_uri(name))?;
+
+        let table = match CreateBuilder::new()
+            .with_location(table_url.to_string())
             .with_save_mode(SaveMode::Ignore)
             .with_columns(columns.into_iter().chain(config.generated()?.into_iter()))
             .with_partition_columns(config.partition())
@@ -324,7 +324,7 @@ impl Delta {
                     return Ok(table.delta_table);
                 }
 
-                let mut table = DeltaTableBuilder::from_url(Url::parse(&self.table_uri(name))?)?.build()?;
+                let mut table = DeltaTableBuilder::from_url(table_url)?.build()?;
                 table
                     .load()
                     .await
@@ -366,10 +366,13 @@ impl Delta {
     ) -> Result<()> {
         let start = SystemTime::now();
 
-        let table = DeltaOps::try_from_url(Url::parse(&self.table_uri(name))?)
-            .await
-            .inspect_err(|err| debug!(?err))?
-            .write(batches)
+        let table_url = Url::parse(&self.table_uri(name))?;
+        let mut table = DeltaTableBuilder::from_url(table_url)?.build()?;
+        table.load().await.inspect_err(|err| debug!(?err))?;
+
+        let snapshot = table.snapshot().ok().map(|s| s.snapshot().clone());
+        let table = WriteBuilder::new(table.log_store(), snapshot)
+            .with_input_batches(batches)
             .await
             .inspect_err(|err| debug!(?err))
             .inspect(|table| {
@@ -425,7 +428,8 @@ impl Delta {
         let properties = [KeyValue::new("table_uri", table.table_url().to_string())];
 
         if let Some(num_rows) = NonZeroU32::new(batch.num_rows() as u32) {
-            self.rate_limit(table.table_url().to_string(), num_rows).await?;
+            self.rate_limit(table.table_url().to_string(), num_rows)
+                .await?;
         }
 
         let num_rows = batch.num_rows() as u64;
@@ -513,11 +517,11 @@ impl Delta {
             },
         );
 
-        let (table, metrics) = DeltaOps::try_from_url(Url::parse(&self.table_uri(name))?)
-            .await?
-            .optimize()
-            .with_type(optimize_type)
-            .await?;
+        let table_url = Url::parse(&self.table_uri(name))?;
+        let mut table = DeltaTableBuilder::from_url(table_url)?.build()?;
+        table.load().await?;
+
+        let (table, metrics) = table.optimize().with_type(optimize_type).await?;
 
         let properties = [
             KeyValue::new("table_uri", table.table_url().to_string()),
@@ -589,7 +593,7 @@ impl Delta {
         if additional.is_empty() {
             Ok(table)
         } else {
-            DeltaOps::from(table)
+            table
                 .add_columns()
                 .with_fields(additional.into_iter())
                 .await
@@ -705,7 +709,7 @@ mod tests {
     use bytes::Bytes;
     use datafusion::execution::context::SessionContext;
     use deltalake::DeltaTableBuilder;
-    use object_store::{ObjectStore as _, PutPayload, memory::InMemory, path::Path};
+    use object_store::{ObjectStoreExt as _, PutPayload, memory::InMemory, path::Path};
     use serde_json::json;
     use std::{fs::File, marker::PhantomData, str::FromStr as _, sync::Arc, thread};
     use tansu_sans_io::{
@@ -915,9 +919,10 @@ mod tests {
                 .inspect_err(|err| debug!(?err))?;
 
             let table = {
-                let mut table =
-                    DeltaTableBuilder::from_uri(format!("{location}/{database}.{topic}"))
-                        .build()?;
+                let mut table = DeltaTableBuilder::from_url(Url::parse(&format!(
+                    "{location}/{database}.{topic}"
+                ))?)?
+                .build()?;
                 table.load().await?;
                 table
             };
@@ -1007,9 +1012,10 @@ mod tests {
                 .inspect_err(|err| debug!(?err))?;
 
             let table = {
-                let mut table =
-                    DeltaTableBuilder::from_uri(format!("{location}/{database}.{topic}"))
-                        .build()?;
+                let mut table = DeltaTableBuilder::from_url(Url::parse(&format!(
+                    "{location}/{database}.{topic}"
+                ))?)?
+                .build()?;
                 table.load().await?;
                 table
             };
@@ -1110,9 +1116,10 @@ mod tests {
                 .inspect_err(|err| debug!(?err))?;
 
             let table = {
-                let mut table =
-                    DeltaTableBuilder::from_uri(format!("{location}/{database}.{topic}"))
-                        .build()?;
+                let mut table = DeltaTableBuilder::from_url(Url::parse(&format!(
+                    "{location}/{database}.{topic}"
+                ))?)?
+                .build()?;
                 table.load().await?;
                 table
             };
@@ -1223,9 +1230,10 @@ mod tests {
                 .inspect_err(|err| debug!(?err))?;
 
             let table = {
-                let mut table =
-                    DeltaTableBuilder::from_uri(format!("{location}/{database}.{topic}"))
-                        .build()?;
+                let mut table = DeltaTableBuilder::from_url(Url::parse(&format!(
+                    "{location}/{database}.{topic}"
+                ))?)?
+                .build()?;
                 table.load().await?;
                 table
             };
@@ -1336,9 +1344,10 @@ mod tests {
                 .inspect_err(|err| debug!(?err))?;
 
             let table = {
-                let mut table =
-                    DeltaTableBuilder::from_uri(format!("{location}/{database}.{topic}"))
-                        .build()?;
+                let mut table = DeltaTableBuilder::from_url(Url::parse(&format!(
+                    "{location}/{database}.{topic}"
+                ))?)?
+                .build()?;
                 table.load().await?;
                 table
             };
@@ -1439,9 +1448,10 @@ mod tests {
                 .inspect_err(|err| debug!(?err))?;
 
             let table = {
-                let mut table =
-                    DeltaTableBuilder::from_uri(format!("{location}/{database}.{topic}"))
-                        .build()?;
+                let mut table = DeltaTableBuilder::from_url(Url::parse(&format!(
+                    "{location}/{database}.{topic}"
+                ))?)?
+                .build()?;
                 table.load().await?;
                 table
             };
@@ -1552,9 +1562,10 @@ mod tests {
                 .inspect_err(|err| debug!(?err))?;
 
             let table = {
-                let mut table =
-                    DeltaTableBuilder::from_uri(format!("{location}/{database}.{topic}"))
-                        .build()?;
+                let mut table = DeltaTableBuilder::from_url(Url::parse(&format!(
+                    "{location}/{database}.{topic}"
+                ))?)?
+                .build()?;
                 table.load().await?;
                 table
             };
@@ -1775,9 +1786,10 @@ mod tests {
                 .inspect_err(|err| debug!(?err))?;
 
             let table = {
-                let mut table =
-                    DeltaTableBuilder::from_uri(format!("{location}/{database}.{topic}"))
-                        .build()?;
+                let mut table = DeltaTableBuilder::from_url(Url::parse(&format!(
+                    "{location}/{database}.{topic}"
+                ))?)?
+                .build()?;
                 table.load().await?;
                 table
             };
@@ -1869,9 +1881,10 @@ mod tests {
                 .inspect_err(|err| debug!(?err))?;
 
             let table = {
-                let mut table =
-                    DeltaTableBuilder::from_uri(format!("{location}/{database}.{topic}"))
-                        .build()?;
+                let mut table = DeltaTableBuilder::from_url(Url::parse(&format!(
+                    "{location}/{database}.{topic}"
+                ))?)?
+                .build()?;
                 table.load().await?;
                 table
             };
@@ -1961,9 +1974,10 @@ mod tests {
                 .inspect_err(|err| debug!(?err))?;
 
             let table = {
-                let mut table =
-                    DeltaTableBuilder::from_uri(format!("{location}/{database}.{topic}"))
-                        .build()?;
+                let mut table = DeltaTableBuilder::from_url(Url::parse(&format!(
+                    "{location}/{database}.{topic}"
+                ))?)?
+                .build()?;
                 table.load().await?;
                 table
             };
@@ -2026,9 +2040,10 @@ mod tests {
                 .inspect_err(|err| debug!(?err))?;
 
             let table = {
-                let mut table =
-                    DeltaTableBuilder::from_uri(format!("{location}/{database}.{topic}"))
-                        .build()?;
+                let mut table = DeltaTableBuilder::from_url(Url::parse(&format!(
+                    "{location}/{database}.{topic}"
+                ))?)?
+                .build()?;
                 table.load().await?;
                 table
             };
@@ -2092,9 +2107,10 @@ mod tests {
                 .inspect_err(|err| debug!(?err))?;
 
             let table = {
-                let mut table =
-                    DeltaTableBuilder::from_uri(format!("{location}/{database}.{topic}"))
-                        .build()?;
+                let mut table = DeltaTableBuilder::from_url(Url::parse(&format!(
+                    "{location}/{database}.{topic}"
+                ))?)?
+                .build()?;
                 table.load().await?;
                 table
             };
@@ -2234,9 +2250,10 @@ mod tests {
                 .inspect_err(|err| debug!(?err))?;
 
             let table = {
-                let mut table =
-                    DeltaTableBuilder::from_uri(format!("{location}/{database}.{topic}"))
-                        .build()?;
+                let mut table = DeltaTableBuilder::from_url(Url::parse(&format!(
+                    "{location}/{database}.{topic}"
+                ))?)?
+                .build()?;
                 table.load().await?;
                 table
             };
@@ -2359,9 +2376,10 @@ mod tests {
                 .inspect_err(|err| debug!(?err))?;
 
             let table = {
-                let mut table =
-                    DeltaTableBuilder::from_uri(format!("{location}/{database}.{topic}"))
-                        .build()?;
+                let mut table = DeltaTableBuilder::from_url(Url::parse(&format!(
+                    "{location}/{database}.{topic}"
+                ))?)?
+                .build()?;
                 table.load().await?;
                 table
             };
