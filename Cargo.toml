@@ -91,7 +91,7 @@ futures-core = "0.3.31"
 futures-util = "0.3.31"
 getrandom = "0.3"
 glob = "0.3.2"
-governor = "0.10.0"
+governor = "0.10.4"
 http-body-util = "0.1"
 human-units = {version = "0.5.3", features = ["iec-units"]}
 humantime = "2.2.0"
