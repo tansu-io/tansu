@@ -3063,9 +3063,9 @@ checksum = "2acce4a10f12dc2fb14a218589d4f1f62ef011b2d0cc4b3cb1bba8e94da14649"
 
 [[package]]
 name = "fancy-regex"
-version = "0.14.0"
+version = "0.16.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e24cb5a94bcae1e5408b0effca5cd7172ea3c5755049c5f3af4cd283a165298"
+checksum = "998b056554fbe42e03ae0e152895cd1a7e1002aec800fdc6635d20270260c46f"
 dependencies = [
  "bit-set",
  "regex-automata",
@@ -4360,9 +4360,9 @@ dependencies = [
 
 [[package]]
 name = "jsonschema"
-version = "0.26.2"
+version = "0.33.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "26a960f0c34d5423581d858ce94815cc11f0171b09939409097969ed269ede1b"
+checksum = "d46662859bc5f60a145b75f4632fbadc84e829e45df6c5de74cfc8e05acb96b5"
 dependencies = [
  "ahash 0.8.12",
  "base64 0.22.1",
@@ -4373,9 +4373,11 @@ dependencies = [
  "idna",
  "itoa",
  "num-cmp",
+ "num-traits",
  "once_cell",
  "percent-encoding",
  "referencing",
+ "regex",
  "regex-syntax",
  "reqwest",
  "serde",
@@ -6386,13 +6388,14 @@ dependencies = [
 
 [[package]]
 name = "referencing"
-version = "0.26.2"
+version = "0.33.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb8e15af8558cb157432dd3d88c1d1e982d0a5755cf80ce593b6499260aebc49"
+checksum = "9e9c261f7ce75418b3beadfb3f0eb1299fe8eb9640deba45ffa2cb783098697d"
 dependencies = [
  "ahash 0.8.12",
  "fluent-uri",
  "once_cell",
+ "parking_lot",
  "percent-encoding",
  "serde_json",
 ]
@@ -7479,7 +7482,7 @@ checksum = "7b2093cf4c8eb1e67749a6762251bc9cd836b6fc171623bd0a9d324d37af2417"
 
 [[package]]
 name = "tansu"
-version = "0.6.0-pre.5"
+version = "0.6.0-pre.6"
 dependencies = [
  "dotenv",
  "tansu-broker",
@@ -7498,7 +7501,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-broker"
-version = "0.6.0-pre.5"
+version = "0.6.0-pre.6"
 dependencies = [
  "async-trait",
  "bytes",
@@ -7542,7 +7545,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-cat"
-version = "0.6.0-pre.5"
+version = "0.6.0-pre.6"
 dependencies = [
  "bytes",
  "futures",
@@ -7562,7 +7565,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-cli"
-version = "0.6.0-pre.5"
+version = "0.6.0-pre.6"
 dependencies = [
  "clap",
  "dotenv",
@@ -7588,7 +7591,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-client"
-version = "0.6.0-pre.5"
+version = "0.6.0-pre.6"
 dependencies = [
  "backoff",
  "bytes",
@@ -7610,7 +7613,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-generator"
-version = "0.6.0-pre.5"
+version = "0.6.0-pre.6"
 dependencies = [
  "futures",
  "futures-core",
@@ -7637,7 +7640,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-model"
-version = "0.6.0-pre.5"
+version = "0.6.0-pre.6"
 dependencies = [
  "convert_case",
  "lazy_static",
@@ -7652,7 +7655,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-otel"
-version = "0.6.0-pre.5"
+version = "0.6.0-pre.6"
 dependencies = [
  "opentelemetry 0.30.0",
  "opentelemetry-otlp",
@@ -7665,7 +7668,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-perf"
-version = "0.6.0-pre.5"
+version = "0.6.0-pre.6"
 dependencies = [
  "bytes",
  "futures",
@@ -7694,7 +7697,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-proxy"
-version = "0.6.0-pre.5"
+version = "0.6.0-pre.6"
 dependencies = [
  "async-trait",
  "bytes",
@@ -7719,7 +7722,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-sans-io"
-version = "0.6.0-pre.5"
+version = "0.6.0-pre.6"
 dependencies = [
  "bytes",
  "clap",
@@ -7747,7 +7750,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-schema"
-version = "0.6.0-pre.5"
+version = "0.6.0-pre.6"
 dependencies = [
  "anyhow",
  "apache-avro",
@@ -7793,7 +7796,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-service"
-version = "0.6.0-pre.5"
+version = "0.6.0-pre.6"
 dependencies = [
  "async-trait",
  "bytes",
@@ -7814,7 +7817,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-storage"
-version = "0.6.0-pre.5"
+version = "0.6.0-pre.6"
 dependencies = [
  "assert_matches",
  "async-trait",
@@ -7859,7 +7862,7 @@ dependencies = [
 
 [[package]]
 name = "tansu-topic"
-version = "0.6.0-pre.5"
+version = "0.6.0-pre.6"
 dependencies = [
  "futures",
  "futures-core",
