@@ -1295,6 +1295,7 @@ mod tests {
         ))
     }
 
+    #[cfg(all(feature = "parquet", feature = "iceberg"))]
     async fn iceberg_write(record_batch: RecordBatch) -> Result<Vec<DataFile>> {
         debug!(?record_batch);
         debug!(schema = ?record_batch.schema());
@@ -1328,7 +1329,19 @@ mod tests {
             DefaultFileNameGenerator::new("pqr".into(), None, Parquet),
         );
 
-        let mut data_file_writer = DataFileWriterBuilder::new(rolling_writer_builder)
+        use iceberg::writer::base_writer::data_file_writer::DataFileWriter;
+
+        let data_file_writer_builder: DataFileWriterBuilder<
+            ParquetWriterBuilder,
+            Location,
+            DefaultFileNameGenerator,
+        > = DataFileWriterBuilder::new(rolling_writer_builder);
+
+        let mut data_file_writer: DataFileWriter<
+            ParquetWriterBuilder,
+            Location,
+            DefaultFileNameGenerator,
+        > = data_file_writer_builder
             .build(None)
             .await
             .inspect_err(|err| error!(?err))?;

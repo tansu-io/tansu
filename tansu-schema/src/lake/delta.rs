@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::HashMap,
     marker::PhantomData,
     num::NonZeroU32,
     sync::{Arc, LazyLock, Mutex},
@@ -28,10 +28,10 @@ use arrow::{
     datatypes::{Field, Schema as ArrowSchema},
 };
 use async_trait::async_trait;
-use datafusion::datasource::TableProvider;
+use datafusion::{datasource::TableProvider, prelude::SessionContext};
 use deltalake::{
     DeltaTable, DeltaTableBuilder, aws,
-    kernel::{ColumnMetadataKey, StructField, engine::arrow_conversion::TryFromArrow},
+    kernel::{StructField, engine::arrow_conversion::TryFromArrow},
     operations::{create::CreateBuilder, optimize::OptimizeType, write::WriteBuilder},
     protocol::SaveMode,
     writer::{DeltaWriter, RecordBatchWriter},
@@ -233,10 +233,6 @@ impl Config {
         self.as_columns("tansu.lake.z_order")
     }
 
-    fn quote(s: &str) -> String {
-        format!("\"{s}\"")
-    }
-
     fn generated_fields(&self) -> Vec<Arc<Field>> {
         self.0
             .iter()
@@ -245,12 +241,9 @@ impl Config {
                     .and_then(|suffix| {
                         typeof_sql_expr(value)
                             .map(|data_type| {
-                                Arc::new(Field::new(suffix, data_type, true).with_metadata(
-                                    HashMap::from_iter([(
-                                        ColumnMetadataKey::GenerationExpression.as_ref().into(),
-                                        Self::quote(value),
-                                    )]),
-                                ))
+                                // Create as a regular nullable column without generation expression
+                                // The values will be computed by write_with_datafusion
+                                Arc::new(Field::new(suffix, data_type, true))
                             })
                             .inspect_err(|err| debug!(?err, %value))
                             .ok()
@@ -265,6 +258,17 @@ impl Config {
             .iter()
             .map(|field| StructField::try_from_arrow(field.as_ref()).map_err(Into::into))
             .collect::<Result<Vec<_>>>()
+    }
+
+    /// Returns a list of (column_name, sql_expression) pairs for generated columns
+    fn generated_expressions(&self) -> Vec<(String, String)> {
+        self.0
+            .iter()
+            .filter_map(|(name, value)| {
+                name.strip_prefix("tansu.lake.generate.")
+                    .map(|suffix| (suffix.to_string(), value.clone()))
+            })
+            .collect()
     }
 
     fn is_normalized(&self) -> bool {
@@ -308,12 +312,31 @@ impl Delta {
             .inspect(|columns| debug!(?columns))
             .inspect_err(|err| debug!(?err))?;
 
+        // Validate partition columns exist in schema before creating table
+        let generated_columns = config.generated()?;
+        let all_column_names: std::collections::HashSet<_> = columns
+            .iter()
+            .chain(generated_columns.iter())
+            .map(|c| c.name.as_str())
+            .collect();
+
+        for partition_col in config.partition() {
+            if !all_column_names.contains(partition_col.as_str()) {
+                return Err(Error::DeltaTable(Box::new(
+                    deltalake::errors::DeltaTableError::Generic(format!(
+                        "Partition column {} not found in schema",
+                        partition_col
+                    )),
+                )));
+            }
+        }
+
         let table_url = Url::parse(&self.table_uri(name))?;
 
         let table = match CreateBuilder::new()
             .with_location(table_url.to_string())
             .with_save_mode(SaveMode::Ignore)
-            .with_columns(columns.into_iter().chain(config.generated()?.into_iter()))
+            .with_columns(columns.into_iter().chain(generated_columns.into_iter()))
             .with_partition_columns(config.partition())
             .await
             .inspect(|table| debug!(?table))
@@ -363,16 +386,76 @@ impl Delta {
         &self,
         name: &str,
         batches: impl Iterator<Item = RecordBatch>,
+        config: &Config,
     ) -> Result<()> {
+        // Transform dot notation struct access to bracket notation
+        // e.g., "meta.timestamp" -> "t.meta['timestamp']"
+        fn transform_struct_access(expr: &str) -> String {
+            use regex::Regex;
+            // Match patterns like "word.word" but not inside strings
+            let re = Regex::new(r"\b([a-zA-Z_][a-zA-Z0-9_]*)\.([a-zA-Z_][a-zA-Z0-9_]*)\b").unwrap();
+            re.replace_all(expr, |caps: &regex::Captures<'_>| {
+                format!("t.{}['{}']", &caps[1], &caps[2])
+            })
+            .to_string()
+        }
+
         let start = SystemTime::now();
 
         let table_url = Url::parse(&self.table_uri(name))?;
         let mut table = DeltaTableBuilder::from_url(table_url)?.build()?;
         table.load().await.inspect_err(|err| debug!(?err))?;
 
+        // Compute generated columns using DataFusion
+        let generated_exprs = config.generated_expressions();
+        let batches_with_generated: Vec<RecordBatch> = if generated_exprs.is_empty() {
+            batches.collect()
+        } else {
+            let ctx = SessionContext::new();
+            let mut result_batches = Vec::new();
+
+            for batch in batches {
+                // Register the batch as a table
+                _ = ctx.register_batch("t", batch.clone())?;
+
+                // Build SQL query with generated columns
+                let select_cols: Vec<String> = batch
+                    .schema()
+                    .fields()
+                    .iter()
+                    .map(|f| format!("t.\"{}\"", f.name()))
+                    .collect();
+
+                // Transform expressions to use struct field access syntax
+                // e.g., "cast(meta.timestamp as date)" -> "cast(t.meta['timestamp'] as date)"
+                let generated_cols: Vec<String> = generated_exprs
+                    .iter()
+                    .map(|(col_name, expr)| {
+                        // Convert dot notation to bracket notation for struct access
+                        let transformed_expr = transform_struct_access(expr);
+                        format!("{} AS \"{}\"", transformed_expr, col_name)
+                    })
+                    .collect();
+
+                let all_cols = [select_cols, generated_cols].concat().join(", ");
+                let sql = format!("SELECT {} FROM t", all_cols);
+                debug!(%sql);
+
+                let df = ctx.sql(&sql).await?;
+                let computed_batches = df.collect().await?;
+                result_batches.extend(computed_batches);
+
+                // Deregister the table for the next iteration
+                _ = ctx.deregister_table("t")?;
+            }
+
+            result_batches
+        };
+
+        // Write using WriteBuilder
         let snapshot = table.snapshot().ok().map(|s| s.snapshot().clone());
         let table = WriteBuilder::new(table.log_store(), snapshot)
-            .with_input_batches(batches)
+            .with_input_batches(batches_with_generated.into_iter())
             .await
             .inspect_err(|err| debug!(?err))
             .inspect(|table| {
@@ -539,56 +622,38 @@ impl Delta {
     }
 
     async fn migrate_schema(&self, table: DeltaTable, schema: &ArrowSchema) -> Result<DeltaTable> {
-        let mut expected = schema
+        let expected = schema
             .fields()
             .iter()
             .inspect(|field| debug!(?field))
             .map(|field| StructField::try_from_arrow(field.as_ref()).map_err(Into::into))
             .inspect(|struct_field| debug!(?struct_field))
-            .collect::<Result<VecDeque<_>>>()
+            .collect::<Result<Vec<_>>>()
             .inspect(|columns| debug!(?columns))
             .inspect_err(|err| debug!(?err))?;
 
-        let mut actual = table
+        // Build a set of existing column names (order-independent comparison)
+        let actual_names: std::collections::HashSet<_> = table
             .schema()
             .fields()
             .iter()
-            .map(|field| StructField::try_from_arrow(field.as_ref()))
-            .collect::<std::result::Result<VecDeque<_>, _>>()
-            .unwrap_or_default();
-        debug!(?actual);
+            .map(|field| field.name().clone())
+            .collect();
+        debug!(?actual_names);
 
-        let additional = {
-            let mut additional = vec![];
-
-            while !expected.is_empty() {
-                match (expected.pop_front(), actual.pop_front()) {
-                    (Some(expected_field), Some(actual_field))
-                        if expected_field.name == actual_field.name =>
-                    {
-                        debug!(unchanged = expected_field.name);
-
-                        continue;
-                    }
-
-                    (Some(expected_field), None) => {
-                        debug!(additional = expected_field.name);
-                        additional.push(expected_field);
-                    }
-
-                    (Some(expected_field), Some(actual_field)) => {
-                        debug!(expected = expected_field.name, actual = actual_field.name);
-                        todo!("{expected_field:?}, {actual_field:?}")
-                    }
-
-                    (expected_field, actual_field) => {
-                        todo!("{expected_field:?}, {actual_field:?}")
-                    }
+        // Find columns in expected that don't exist in actual
+        let additional: Vec<_> = expected
+            .into_iter()
+            .filter(|field| {
+                if actual_names.contains(&field.name) {
+                    debug!(unchanged = field.name);
+                    false
+                } else {
+                    debug!(additional = field.name);
+                    true
                 }
-            }
-
-            additional
-        };
+            })
+            .collect();
 
         if additional.is_empty() {
             Ok(table)
@@ -645,7 +710,7 @@ impl LakeHouse for Delta {
             _ = self.write(topic, table, record_batch).await?;
         } else {
             _ = self
-                .write_with_datafusion(topic, [record_batch].into_iter())
+                .write_with_datafusion(topic, [record_batch].into_iter(), &config)
                 .await
                 .inspect(|delta_table| debug!(?delta_table))
                 .inspect_err(|err| debug!(?err))?;

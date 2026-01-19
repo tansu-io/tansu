@@ -48,9 +48,18 @@ pub(crate) fn init_tracing() -> Result<DefaultGuard> {
 }
 
 pub(crate) fn alphanumeric_string(length: usize) -> String {
-    rng()
+    // Ensure first character is a letter (valid SQL identifier)
+    let first: char = rng()
         .sample_iter(&Alphanumeric)
-        .take(length)
         .map(char::from)
-        .collect()
+        .find(|c| c.is_ascii_alphabetic())
+        .unwrap_or('a');
+
+    let rest: String = rng()
+        .sample_iter(&Alphanumeric)
+        .take(length.saturating_sub(1))
+        .map(char::from)
+        .collect();
+
+    format!("{first}{rest}").to_lowercase()
 }
