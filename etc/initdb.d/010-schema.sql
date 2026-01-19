@@ -107,6 +107,7 @@ create table if not exists record (
     topition int references topition (id) on delete cascade,
     offset_id bigint not null,
     primary key (topition, offset_id),
+    transaction_id xid8 default pg_current_xact_id() not null,
     attributes smallint,
     producer_id bigint,
     producer_epoch smallint,
