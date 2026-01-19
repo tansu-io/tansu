@@ -159,7 +159,7 @@ tokio-postgres = { version = "0.7.13", features = [
 ] }
 tracing = "0.1"
 tracing-core = { version = "0.1" }
-tracing-opentelemetry = "0.29.0"
+tracing-opentelemetry = "0.32.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 turso = "0.1.4"
 url = { version = "2.5.4", features = ["serde"] }
