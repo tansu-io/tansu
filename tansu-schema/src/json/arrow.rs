@@ -624,6 +624,7 @@ mod tests {
             file_writer::{
                 ParquetWriterBuilder,
                 location_generator::{DefaultFileNameGenerator, LocationGenerator},
+                rolling_writer::RollingFileWriterBuilder,
             },
         },
     };
@@ -675,21 +676,27 @@ mod tests {
         struct Location;
 
         impl LocationGenerator for Location {
-            fn generate_location(&self, file_name: &str) -> String {
+            fn generate_location(
+                &self,
+                _partition_key: Option<&iceberg::spec::PartitionKey>,
+                file_name: &str,
+            ) -> String {
                 format!("abc/{file_name}")
             }
         }
 
-        let writer = ParquetWriterBuilder::new(
-            WriterProperties::default(),
-            iceberg_schema,
+        let parquet_writer_builder =
+            ParquetWriterBuilder::new(WriterProperties::default(), iceberg_schema);
+
+        let rolling_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
+            parquet_writer_builder,
             memory,
             Location,
             DefaultFileNameGenerator::new("pqr".into(), None, Parquet),
         );
 
-        let mut data_file_writer = DataFileWriterBuilder::new(writer, None, 0)
-            .build()
+        let mut data_file_writer = DataFileWriterBuilder::new(rolling_writer_builder)
+            .build(None)
             .await
             .inspect_err(|err| error!(?err))?;
 

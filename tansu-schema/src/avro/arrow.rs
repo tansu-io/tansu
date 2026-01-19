@@ -174,10 +174,11 @@ impl Schema {
                         .inspect(|fields| debug!(?fields))
                         .and_then(|fields| {
                             i8::try_from(schema.variants().len())
-                                .map(|type_ids| {
-                                    UnionFields::new((1..=type_ids).collect::<Vec<_>>(), fields)
-                                })
                                 .map_err(Into::into)
+                                .and_then(|type_ids| {
+                                    UnionFields::try_new((1..=type_ids).collect::<Vec<_>>(), fields)
+                                        .map_err(Into::into)
+                                })
                         })
                         .inspect(|union_fields| debug!(?union_fields))
                         .map(|fields| DataType::Union(fields, UnionMode::Dense))
@@ -1253,6 +1254,7 @@ mod tests {
             file_writer::{
                 ParquetWriterBuilder,
                 location_generator::{DefaultFileNameGenerator, LocationGenerator},
+                rolling_writer::RollingFileWriterBuilder,
             },
         },
     };
@@ -1293,6 +1295,7 @@ mod tests {
         ))
     }
 
+    #[cfg(all(feature = "parquet", feature = "iceberg"))]
     async fn iceberg_write(record_batch: RecordBatch) -> Result<Vec<DataFile>> {
         debug!(?record_batch);
         debug!(schema = ?record_batch.schema());
@@ -1307,21 +1310,39 @@ mod tests {
         struct Location;
 
         impl LocationGenerator for Location {
-            fn generate_location(&self, file_name: &str) -> String {
+            fn generate_location(
+                &self,
+                _partition_key: Option<&iceberg::spec::PartitionKey>,
+                file_name: &str,
+            ) -> String {
                 format!("abc/{file_name}")
             }
         }
 
-        let writer = ParquetWriterBuilder::new(
-            WriterProperties::default(),
-            iceberg_schema,
+        let parquet_writer_builder =
+            ParquetWriterBuilder::new(WriterProperties::default(), iceberg_schema);
+
+        let rolling_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
+            parquet_writer_builder,
             memory,
             Location,
             DefaultFileNameGenerator::new("pqr".into(), None, Parquet),
         );
 
-        let mut data_file_writer = DataFileWriterBuilder::new(writer, None, 0)
-            .build()
+        use iceberg::writer::base_writer::data_file_writer::DataFileWriter;
+
+        let data_file_writer_builder: DataFileWriterBuilder<
+            ParquetWriterBuilder,
+            Location,
+            DefaultFileNameGenerator,
+        > = DataFileWriterBuilder::new(rolling_writer_builder);
+
+        let mut data_file_writer: DataFileWriter<
+            ParquetWriterBuilder,
+            Location,
+            DefaultFileNameGenerator,
+        > = data_file_writer_builder
+            .build(None)
             .await
             .inspect_err(|err| error!(?err))?;
 

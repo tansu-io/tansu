@@ -30,9 +30,9 @@ use futures::{
 };
 use metadata::Cache;
 use object_store::{
-    Attribute, AttributeValue, Attributes, DynObjectStore, GetOptions, GetResult, ListResult,
-    MultipartUpload, ObjectMeta, ObjectStore, PutMode, PutMultipartOptions, PutOptions, PutPayload,
-    PutResult, UpdateVersion, path::Path,
+    Attribute, AttributeValue, Attributes, CopyOptions, DynObjectStore, GetOptions, GetResult,
+    ListResult, MultipartUpload, ObjectMeta, ObjectStore, ObjectStoreExt, PutMode,
+    PutMultipartOptions, PutOptions, PutPayload, PutResult, UpdateVersion, path::Path,
 };
 use opentelemetry::{
     KeyValue,
@@ -638,30 +638,36 @@ impl Storage for DynoStore {
 
             let prefix = Path::from(format!("clusters/{}/groups/consumers/", self.cluster));
 
+            let topic_name = metadata.topic.name.clone();
+            let prefix_clone = prefix.clone();
             let locations = self
                 .object_store
                 .list(Some(&prefix))
-                .filter_map(|m| async {
-                    m.map_or(None, |m| {
-                        debug!(?m.location);
+                .filter_map(move |m| {
+                    let prefix = prefix_clone.clone();
+                    let topic_name = topic_name.clone();
+                    async move {
+                        m.map_or(None, |m| {
+                            debug!(?m.location);
 
-                        m.location.prefix_match(&prefix).and_then(|mut i| {
-                            // skip over the consumer group name
-                            _ = i.next();
+                            m.location.prefix_match(&prefix).and_then(|mut i| {
+                                // skip over the consumer group name
+                                _ = i.next();
 
-                            let sub = Path::from_iter(i);
-                            debug!(?sub);
+                                let sub = Path::from_iter(i);
+                                debug!(?sub);
 
-                            if sub.prefix_matches(&Path::from(format!(
-                                "offsets/{}/partitions/",
-                                metadata.topic.name
-                            ))) {
-                                Some(Ok(m.location.clone()))
-                            } else {
-                                None
-                            }
+                                if sub.prefix_matches(&Path::from(format!(
+                                    "offsets/{}/partitions/",
+                                    topic_name
+                                ))) {
+                                    Some(Ok(m.location.clone()))
+                                } else {
+                                    None
+                                }
+                            })
                         })
-                    })
+                    }
                 })
                 .boxed();
 
@@ -1007,7 +1013,7 @@ impl Storage for DynoStore {
                 .inspect_err(|error| error!(?error, ?topition, ?offset, ?min_bytes, ?max_bytes))
                 .map_err(|_| Error::Api(ErrorCode::UnknownServerError))?
             {
-                let Some(offset) = meta.location.parts().last() else {
+                let Some(offset) = meta.location.parts().next_back() else {
                     continue;
                 };
 
@@ -1194,7 +1200,7 @@ impl Storage for DynoStore {
                 {
                     let Some(found_offset) = candidate
                         .as_ref()
-                        .and_then(|found| found.location.parts().last())
+                        .and_then(|found| found.location.parts().next_back())
                         .and_then(|offset| i64::from_str(&offset.as_ref()[0..20]).ok())
                     else {
                         continue;
@@ -1203,7 +1209,7 @@ impl Storage for DynoStore {
                     let Some(meta_offset) = meta
                         .location
                         .parts()
-                        .last()
+                        .next_back()
                         .and_then(|offset| i64::from_str(&offset.as_ref()[0..20]).ok())
                     else {
                         continue;
@@ -1246,7 +1252,7 @@ impl Storage for DynoStore {
             debug!(?candidate);
 
             if let Some(ref found) = candidate {
-                let Some(offset) = found.location.parts().last() else {
+                let Some(offset) = found.location.parts().next_back() else {
                     continue;
                 };
 
@@ -1767,7 +1773,7 @@ impl Storage for DynoStore {
         let mut listed_groups = vec![];
 
         for prefix in list_result.common_prefixes {
-            if let Some(group_id) = prefix.parts().last() {
+            if let Some(group_id) = prefix.parts().next_back() {
                 listed_groups.push(
                     ListedGroup::default()
                         .group_id(group_id.as_ref().into())
@@ -2781,34 +2787,32 @@ where
             })
     }
 
-    async fn delete(&self, location: &Path) -> Result<(), object_store::Error> {
-        debug!(%location);
+    fn delete_stream(
+        &self,
+        locations: BoxStream<'static, Result<Path, object_store::Error>>,
+    ) -> BoxStream<'static, Result<Path, object_store::Error>> {
+        debug!("delete_stream");
 
-        let execute_start = SystemTime::now();
-        let mut attributes = vec![
-            KeyValue::new("method", "delete"),
-            KeyValue::new("cluster", self.cluster.clone()),
-        ];
+        let cluster = self.cluster.clone();
+        let request_duration = self.request_duration.clone();
+        let request_error = self.request_error.clone();
 
-        self.object_store
-            .delete(location)
-            .await
-            .inspect(|_| {
-                debug!(%location);
+        let inner = self.object_store.delete_stream(locations);
 
-                self.request_duration.record(
-                    execute_start
-                        .elapsed()
-                        .map_or(0, |duration| duration.as_millis() as u64),
-                    attributes.as_ref(),
-                )
-            })
-            .inspect_err(|err| {
-                debug!(%location, ?err);
+        Box::pin(inner.inspect(move |result| {
+            let attributes = vec![
+                KeyValue::new("method", "delete_stream"),
+                KeyValue::new("cluster", cluster.clone()),
+            ];
+
+            if let Err(err) = result {
                 let mut additional = vec![KeyValue::new("reason", object_store_error_name(err))];
-                additional.append(&mut attributes);
-                self.request_error.add(1, &additional[..]);
-            })
+                additional.extend(attributes);
+                request_error.add(1, &additional[..]);
+            } else {
+                request_duration.record(0, attributes.as_ref());
+            }
+        }))
     }
 
     fn list(
@@ -2858,48 +2862,22 @@ where
             })
     }
 
-    async fn copy(&self, from: &Path, to: &Path) -> Result<(), object_store::Error> {
-        debug!(%from, %to);
+    async fn copy_opts(
+        &self,
+        from: &Path,
+        to: &Path,
+        opts: CopyOptions,
+    ) -> Result<(), object_store::Error> {
+        debug!(%from, %to, ?opts);
 
         let execute_start = SystemTime::now();
         let mut attributes = vec![
-            KeyValue::new("method", "copy"),
+            KeyValue::new("method", "copy_opts"),
             KeyValue::new("cluster", self.cluster.clone()),
         ];
 
         self.object_store
-            .copy(from, to)
-            .await
-            .inspect(|_| {
-                debug!(%from, %to);
-
-                self.request_duration.record(
-                    execute_start
-                        .elapsed()
-                        .map_or(0, |duration| duration.as_millis() as u64),
-                    attributes.as_ref(),
-                )
-            })
-            .inspect_err(|err| {
-                debug!(%from, %to, err = ?err);
-
-                let mut additional = vec![KeyValue::new("reason", object_store_error_name(err))];
-                additional.append(&mut attributes);
-                self.request_error.add(1, &additional[..]);
-            })
-    }
-
-    async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<(), object_store::Error> {
-        debug!(%from, %to);
-
-        let execute_start = SystemTime::now();
-        let mut attributes = vec![
-            KeyValue::new("method", "copy_if_not_exists"),
-            KeyValue::new("cluster", self.cluster.clone()),
-        ];
-
-        self.object_store
-            .copy_if_not_exists(from, to)
+            .copy_opts(from, to, opts)
             .await
             .inspect(|_| {
                 debug!(%from, %to);

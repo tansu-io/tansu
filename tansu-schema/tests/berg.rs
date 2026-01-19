@@ -18,11 +18,14 @@ use bytes::Bytes;
 use common::init_tracing;
 use datafusion::prelude::SessionContext;
 use dotenv::dotenv;
-use iceberg::{Catalog, TableIdent};
-use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
-use iceberg_datafusion::IcebergTableProvider;
-use object_store::{ObjectStore as _, PutPayload, memory::InMemory, path::Path};
+use iceberg::CatalogBuilder;
+use iceberg_catalog_rest::{
+    REST_CATALOG_PROP_URI, REST_CATALOG_PROP_WAREHOUSE, RestCatalogBuilder,
+};
+use iceberg_datafusion::IcebergCatalogProvider;
+use object_store::{ObjectStoreExt as _, PutPayload, memory::InMemory, path::Path};
 use serde_json::{Value as JsonValue, json};
+use std::collections::HashMap;
 use std::{env::var, sync::Arc};
 use tansu_sans_io::{
     ConfigResource, ErrorCode,
@@ -58,7 +61,8 @@ pub async fn lake_store(
         .namespace(Some(namespace.to_owned()))
         .warehouse(warehouse.clone())
         .schema_registry(schema_registry)
-        .build()?;
+        .build()
+        .await?;
 
     let offset = 543212345;
 
@@ -68,27 +72,19 @@ pub async fn lake_store(
         .inspect(|result| debug!(?result))
         .inspect_err(|err| debug!(?err))?;
 
-    let catalog = Arc::new(RestCatalog::new(
-        RestCatalogConfig::builder()
-            .uri(catalog_uri.to_string())
-            .warehouse_opt(warehouse)
-            .props(env_s3_props().collect())
-            .build(),
-    ));
+    let mut props: HashMap<String, String> = env_s3_props().collect();
+    _ = props.insert(REST_CATALOG_PROP_URI.to_string(), catalog_uri.to_string());
+    if let Some(wh) = warehouse.clone() {
+        _ = props.insert(REST_CATALOG_PROP_WAREHOUSE.to_string(), wh);
+    }
+    let catalog = Arc::new(RestCatalogBuilder::default().load("rest", props).await?);
 
-    let table = catalog
-        .load_table(&TableIdent::from_strs([namespace, topic])?)
-        .await?;
-
-    let table_provider = IcebergTableProvider::try_new_from_table(table)
-        .await
-        .map(Arc::new)?;
+    let catalog_provider = IcebergCatalogProvider::try_new(catalog).await?;
 
     let ctx = SessionContext::new();
+    _ = ctx.register_catalog("iceberg", Arc::new(catalog_provider));
 
-    _ = ctx.register_table("t", table_provider)?;
-
-    ctx.sql("select * from t")
+    ctx.sql(&format!("select * from iceberg.{namespace}.{topic}"))
         .await?
         .collect()
         .await

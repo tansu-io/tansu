@@ -23,8 +23,9 @@ use std::{
 use async_trait::async_trait;
 use cached::stores::ExpiringSizedCache;
 use futures::stream::BoxStream;
+use futures::stream::StreamExt;
 use object_store::{
-    GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
+    CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
     PutMultipartOptions, PutOptions, PutPayload, PutResult, UpdateVersion, path::Path,
 };
 use opentelemetry::{KeyValue, metrics::Counter};
@@ -333,33 +334,23 @@ where
             })
     }
 
-    #[instrument(skip_all, fields(location = %location))]
-    async fn delete(&self, location: &Path) -> Result<(), object_store::Error> {
-        debug!(%location);
+    fn delete_stream(
+        &self,
+        locations: BoxStream<'static, Result<Path, object_store::Error>>,
+    ) -> BoxStream<'static, Result<Path, object_store::Error>> {
+        REQUESTS.add(1, &[KeyValue::new("method", "delete_stream")]);
 
-        REQUESTS.add(1, &[KeyValue::new("method", "delete")]);
+        let entries = self.entries.clone();
+        let inner = self.object_store.delete_stream(locations);
 
-        self.object_store
-            .delete(location)
-            .await
-            .inspect(|_| {
-                if let Ok(mut guard) = self.entries.lock()
-                    && guard.deref_mut().remove(location).is_some()
-                {
-                    ENTRIES.add(1, &[KeyValue::new("outcome", "delete")]);
-                }
-            })
-            .inspect_err(|error| {
-                debug!(%location, ?error);
-
-                ERRORS.add(
-                    1,
-                    &[
-                        KeyValue::new("method", "delete"),
-                        KeyValue::new("error", object_store_error_name(error)),
-                    ],
-                );
-            })
+        Box::pin(inner.inspect(move |result| {
+            if let Ok(location) = result
+                && let Ok(mut guard) = entries.lock()
+                && guard.deref_mut().remove(location).is_some()
+            {
+                ENTRIES.add(1, &[KeyValue::new("outcome", "delete")]);
+            }
+        }))
     }
 
     #[instrument(skip_all, fields(prefix))]
@@ -396,28 +387,16 @@ where
     }
 
     #[instrument(skip_all, fields(from = %from, to = %to))]
-    async fn copy(&self, from: &Path, to: &Path) -> Result<(), object_store::Error> {
-        debug!(%from, %to);
-        REQUESTS.add(1, &[KeyValue::new("method", "copy")]);
-        self.object_store.copy(from, to).await.inspect_err(|error| {
-            debug!(%from, %to, ?error);
-
-            ERRORS.add(
-                1,
-                &[
-                    KeyValue::new("method", "copy"),
-                    KeyValue::new("error", object_store_error_name(error)),
-                ],
-            );
-        })
-    }
-
-    #[instrument(skip_all, fields(from = %from, to = %to))]
-    async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<(), object_store::Error> {
-        debug!(%from, %to);
-        REQUESTS.add(1, &[KeyValue::new("method", "copy_if_not_exists")]);
+    async fn copy_opts(
+        &self,
+        from: &Path,
+        to: &Path,
+        opts: CopyOptions,
+    ) -> Result<(), object_store::Error> {
+        debug!(%from, %to, ?opts);
+        REQUESTS.add(1, &[KeyValue::new("method", "copy_opts")]);
         self.object_store
-            .copy_if_not_exists(from, to)
+            .copy_opts(from, to, opts)
             .await
             .inspect_err(|error| {
                 debug!(%from, %to, ?error);
@@ -425,7 +404,7 @@ where
                 ERRORS.add(
                     1,
                     &[
-                        KeyValue::new("method", "copy_if_not_exists"),
+                        KeyValue::new("method", "copy_opts"),
                         KeyValue::new("error", object_store_error_name(error)),
                     ],
                 );
@@ -437,7 +416,7 @@ where
 mod tests {
     use crate::Result;
     use bytes::Bytes;
-    use object_store::memory::InMemory;
+    use object_store::{ObjectStoreExt, memory::InMemory};
     use serde::{Deserialize, Serialize};
     use tokio::time::sleep;
     use tracing::subscriber::DefaultGuard;
@@ -520,8 +499,11 @@ mod tests {
             self.object_store.get_opts(location, options).await
         }
 
-        async fn delete(&self, location: &Path) -> Result<(), object_store::Error> {
-            self.object_store.delete(location).await
+        fn delete_stream(
+            &self,
+            locations: BoxStream<'static, Result<Path, object_store::Error>>,
+        ) -> BoxStream<'static, Result<Path, object_store::Error>> {
+            self.object_store.delete_stream(locations)
         }
 
         fn list(
@@ -538,16 +520,13 @@ mod tests {
             self.object_store.list_with_delimiter(prefix).await
         }
 
-        async fn copy(&self, from: &Path, to: &Path) -> Result<(), object_store::Error> {
-            self.object_store.copy(from, to).await
-        }
-
-        async fn copy_if_not_exists(
+        async fn copy_opts(
             &self,
             from: &Path,
             to: &Path,
+            opts: CopyOptions,
         ) -> Result<(), object_store::Error> {
-            self.object_store.copy_if_not_exists(from, to).await
+            self.object_store.copy_opts(from, to, opts).await
         }
     }
 

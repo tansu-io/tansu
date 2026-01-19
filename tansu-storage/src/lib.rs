@@ -124,7 +124,7 @@ use glob::{GlobError, PatternError};
 #[cfg(feature = "dynostore")]
 use object_store::memory::InMemory;
 
-#[cfg(any(feature = "dynostore", feature = "slatedb"))]
+#[cfg(feature = "dynostore")]
 use object_store::aws::{AmazonS3Builder, S3ConditionalPut};
 
 use opentelemetry::{
@@ -1753,22 +1753,30 @@ impl Builder<i32, String, Url, Url> {
 
             #[cfg(feature = "slatedb")]
             "slatedb" => {
-                use object_store::memory::InMemory;
                 use slatedb::Db;
+                use slatedb::object_store::{
+                    ObjectStore as SlateObjectStore,
+                    aws::{
+                        AmazonS3Builder as SlateS3Builder,
+                        S3ConditionalPut as SlateS3ConditionalPut,
+                    },
+                    memory::InMemory as SlateInMemory,
+                };
 
                 let host = self.storage.host_str().unwrap_or("tansu");
                 let db_path = format!("tansu-{}.slatedb", self.cluster_id);
 
                 // Support memory backend for testing: slatedb://memory
-                let object_store: Arc<dyn object_store::ObjectStore> = if host == "memory" {
-                    Arc::new(InMemory::new())
+                let object_store: Arc<dyn SlateObjectStore> = if host == "memory" {
+                    Arc::new(SlateInMemory::new())
                 } else {
                     // Use S3 backend with host as bucket name
-                    AmazonS3Builder::from_env()
+                    SlateS3Builder::from_env()
                         .with_bucket_name(host)
-                        .with_conditional_put(S3ConditionalPut::ETagMatch)
+                        .with_conditional_put(SlateS3ConditionalPut::ETagMatch)
                         .build()
-                        .map(Arc::new)?
+                        .map(Arc::new)
+                        .map_err(|e| Error::Message(e.to_string()))?
                 };
 
                 Db::open(db_path, object_store)

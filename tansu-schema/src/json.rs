@@ -250,7 +250,7 @@ mod tests {
     use super::*;
 
     use jsonschema::BasicOutput;
-    use object_store::{ObjectStore, PutPayload, memory::InMemory, path::Path};
+    use object_store::{ObjectStoreExt, PutPayload, memory::InMemory, path::Path};
 
     use serde_json::json;
     use std::{collections::VecDeque, fs::File, ops::Deref, sync::Arc, thread};

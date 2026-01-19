@@ -161,42 +161,48 @@ impl Arg {
             .transpose()?;
 
         #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
-        let lake_house = self
-            .command
-            .map(|command| match command {
-                #[cfg(feature = "iceberg")]
-                Command::Iceberg {
-                    location,
-                    catalog,
-                    namespace,
-                    warehouse,
-                } => tansu_schema::lake::House::iceberg()
+        let lake_house = match self.command {
+            #[cfg(feature = "iceberg")]
+            Some(Command::Iceberg {
+                location,
+                catalog,
+                namespace,
+                warehouse,
+            }) => Some(
+                tansu_schema::lake::House::iceberg()
                     .location(location.into_inner())
                     .catalog(catalog.into_inner())
                     .schema_registry(schema_registry.clone().unwrap())
                     .namespace(namespace)
                     .warehouse(warehouse)
-                    .build(),
+                    .build()
+                    .await?,
+            ),
 
-                #[cfg(feature = "delta")]
-                Command::Delta {
-                    location,
-                    database,
-                    records_per_second,
-                } => tansu_schema::lake::House::delta()
+            #[cfg(feature = "delta")]
+            Some(Command::Delta {
+                location,
+                database,
+                records_per_second,
+            }) => Some(
+                tansu_schema::lake::House::delta()
                     .location(location.into_inner())
                     .schema_registry(schema_registry.clone().unwrap())
                     .database(database)
                     .records_per_second(records_per_second)
-                    .build(),
+                    .build()?,
+            ),
 
-                #[cfg(feature = "parquet")]
-                Command::Parquet { location } => tansu_schema::lake::House::parquet()
+            #[cfg(feature = "parquet")]
+            Some(Command::Parquet { location }) => Some(
+                tansu_schema::lake::House::parquet()
                     .location(location.into_inner())
                     .schema_registry(schema_registry.clone().unwrap())
-                    .build(),
-            })
-            .transpose()?;
+                    .build()?,
+            ),
+
+            None => None,
+        };
 
         let broker = Broker::<Controller<StorageContainer>, StorageContainer>::builder()
             .node_id(NODE_ID)

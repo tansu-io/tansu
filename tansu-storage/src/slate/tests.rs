@@ -26,8 +26,7 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
-use object_store::memory::InMemory;
-use slatedb::Db;
+use slatedb::{Db, object_store::memory::InMemory};
 use tansu_sans_io::{ErrorCode, create_topics_request::CreatableTopic, record::deflated::Batch};
 use url::Url;
 

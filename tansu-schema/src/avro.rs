@@ -669,7 +669,7 @@ mod tests {
     use super::*;
     use apache_avro::{Reader, types::Value};
 
-    use object_store::{ObjectStore, PutPayload, memory::InMemory, path::Path};
+    use object_store::{ObjectStoreExt, PutPayload, memory::InMemory, path::Path};
 
     use serde_json::json;
     use tansu_sans_io::record::Record;
