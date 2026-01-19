@@ -1710,7 +1710,7 @@ impl Storage for Postgres {
         let records = self
             .prepare_query(
                 &c,
-                "record_fetch.sql",
+                "record_fetch_pg.sql",
                 &[
                     &self.cluster,
                     &topition.topic(),
