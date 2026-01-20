@@ -394,6 +394,6 @@ jobs:
           path: tansu-${{matrix.target}}.tar.gz
           if-no-files-found: error
       - if: ${{matrix.enabled && github.ref_type == 'tag'}}
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: tansu-${{matrix.target}}.tar.gz
