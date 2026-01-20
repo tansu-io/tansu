@@ -5513,20 +5513,6 @@ checksum = "9f50d9b3dabb09ecd771ad0aa242ca6894994c130308ca3d7684634df8037391"
 
 [[package]]
 name = "opentelemetry"
-version = "0.28.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "236e667b670a5cdf90c258f5a55794ec5ac5027e960c224bff8367a59e1e6426"
-dependencies = [
- "futures-core",
- "futures-sink",
- "js-sys",
- "pin-project-lite",
- "thiserror 2.0.18",
- "tracing",
-]
-
-[[package]]
-name = "opentelemetry"
 version = "0.31.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b84bcd6ae87133e903af7ef497404dda70c60d0ea14895fc8a5e6722754fc2a0"
@@ -5548,7 +5534,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "http 1.4.0",
- "opentelemetry 0.31.0",
+ "opentelemetry",
  "reqwest",
 ]
 
@@ -5559,10 +5545,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a2366db2dca4d2ad033cad11e6ee42844fd727007af5ad04a1730f4cb8163bf"
 dependencies = [
  "http 1.4.0",
- "opentelemetry 0.31.0",
+ "opentelemetry",
  "opentelemetry-http",
  "opentelemetry-proto",
- "opentelemetry_sdk 0.31.0",
+ "opentelemetry_sdk",
  "prost",
  "reqwest",
  "thiserror 2.0.18",
@@ -5575,8 +5561,8 @@ version = "0.31.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a7175df06de5eaee9909d4805a3d07e28bb752c34cab57fa9cff549da596b30f"
 dependencies = [
- "opentelemetry 0.31.0",
- "opentelemetry_sdk 0.31.0",
+ "opentelemetry",
+ "opentelemetry_sdk",
  "prost",
  "tonic",
  "tonic-prost",
@@ -5595,25 +5581,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bc8887887e169414f637b18751487cce4e095be787d23fad13c454e2fb1b3811"
 dependencies = [
  "chrono",
- "opentelemetry 0.31.0",
- "opentelemetry_sdk 0.31.0",
-]
-
-[[package]]
-name = "opentelemetry_sdk"
-version = "0.28.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "84dfad6042089c7fc1f6118b7040dc2eb4ab520abbf410b79dc481032af39570"
-dependencies = [
- "async-trait",
- "futures-channel",
- "futures-executor",
- "futures-util",
- "glob",
- "opentelemetry 0.28.0",
- "percent-encoding",
- "rand 0.8.5",
- "thiserror 2.0.18",
+ "opentelemetry",
+ "opentelemetry_sdk",
 ]
 
 [[package]]
@@ -5625,7 +5594,7 @@ dependencies = [
  "futures-channel",
  "futures-executor",
  "futures-util",
- "opentelemetry 0.31.0",
+ "opentelemetry",
  "percent-encoding",
  "rand 0.9.2",
  "thiserror 2.0.18",
@@ -7925,10 +7894,10 @@ dependencies = [
  "jsonschema",
  "libsql",
  "object_store 0.13.0",
- "opentelemetry 0.31.0",
+ "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry-semantic-conventions",
- "opentelemetry_sdk 0.31.0",
+ "opentelemetry_sdk",
  "pretty_assertions",
  "rama",
  "rand 0.9.2",
@@ -8008,7 +7977,7 @@ dependencies = [
  "clap",
  "deadpool",
  "dotenv",
- "opentelemetry 0.31.0",
+ "opentelemetry",
  "opentelemetry-semantic-conventions",
  "rama",
  "tansu-sans-io",
@@ -8030,10 +7999,10 @@ dependencies = [
  "futures-util",
  "governor",
  "nonzero_ext",
- "opentelemetry 0.31.0",
+ "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry-semantic-conventions",
- "opentelemetry_sdk 0.31.0",
+ "opentelemetry_sdk",
  "rama",
  "serde_json",
  "tansu-client",
@@ -8067,10 +8036,10 @@ dependencies = [
 name = "tansu-otel"
 version = "0.6.0-pre.9"
 dependencies = [
- "opentelemetry 0.31.0",
+ "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry-semantic-conventions",
- "opentelemetry_sdk 0.31.0",
+ "opentelemetry_sdk",
  "thiserror 2.0.18",
  "tracing",
  "url",
@@ -8088,11 +8057,11 @@ dependencies = [
  "governor",
  "human-units",
  "nonzero_ext",
- "opentelemetry 0.31.0",
+ "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry-semantic-conventions",
  "opentelemetry-stdout",
- "opentelemetry_sdk 0.31.0",
+ "opentelemetry_sdk",
  "rama",
  "serde_json",
  "tansu-client",
@@ -8112,10 +8081,10 @@ dependencies = [
  "async-trait",
  "bytes",
  "clap",
- "opentelemetry 0.31.0",
+ "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry-semantic-conventions",
- "opentelemetry_sdk 0.31.0",
+ "opentelemetry_sdk",
  "rama",
  "tansu-client",
  "tansu-otel",
@@ -8181,7 +8150,7 @@ dependencies = [
  "jsonschema",
  "num-bigint",
  "object_store 0.13.0",
- "opentelemetry 0.31.0",
+ "opentelemetry",
  "opentelemetry-semantic-conventions",
  "ordered-float 5.1.0",
  "parquet",
@@ -8213,7 +8182,7 @@ dependencies = [
  "bytes",
  "deadpool",
  "nanoid",
- "opentelemetry 0.31.0",
+ "opentelemetry",
  "opentelemetry-semantic-conventions",
  "rama",
  "tansu-sans-io",
@@ -8245,7 +8214,7 @@ dependencies = [
  "glob",
  "libsql",
  "object_store 0.13.0",
- "opentelemetry 0.31.0",
+ "opentelemetry",
  "opentelemetry-semantic-conventions",
  "postcard",
  "pretty_assertions",
@@ -8780,14 +8749,12 @@ dependencies = [
 
 [[package]]
 name = "tracing-opentelemetry"
-version = "0.29.0"
+version = "0.32.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "721f2d2569dce9f3dfbbddee5906941e953bfcdf736a62da3377f5751650cc36"
+checksum = "1ac28f2d093c6c477eaa76b23525478f38de514fa9aeb1285738d4b97a9552fc"
 dependencies = [
  "js-sys",
- "once_cell",
- "opentelemetry 0.28.0",
- "opentelemetry_sdk 0.28.0",
+ "opentelemetry",
  "smallvec",
  "tracing",
  "tracing-core",
