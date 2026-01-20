@@ -157,7 +157,14 @@ mod json {
 
         schema_registry.validate(topic, &record_batch).await?;
 
-        let results = lake_store(topic, partition, schema_registry, empty_config(topic), &record_batch).await?;
+        let results = lake_store(
+            topic,
+            partition,
+            schema_registry,
+            empty_config(topic),
+            &record_batch,
+        )
+        .await?;
 
         assert!(!results.is_empty());
         assert!(results[0].num_rows() > 0);
@@ -183,9 +190,9 @@ mod json {
             Registry::new(object_store)
         };
 
-        let kv = if let JsonValue::Array(values) = serde_json::from_slice::<JsonValue>(
-            include_bytes!("../../etc/data/grades.json"),
-        )? {
+        let kv = if let JsonValue::Array(values) =
+            serde_json::from_slice::<JsonValue>(include_bytes!("../../etc/data/grades.json"))?
+        {
             values
                 .into_iter()
                 .map(|value| {
@@ -219,7 +226,14 @@ mod json {
 
         schema_registry.validate(topic, &record_batch).await?;
 
-        let results = lake_store(topic, partition, schema_registry, empty_config(topic), &record_batch).await?;
+        let results = lake_store(
+            topic,
+            partition,
+            schema_registry,
+            empty_config(topic),
+            &record_batch,
+        )
+        .await?;
 
         assert!(!results.is_empty());
         assert!(results[0].num_rows() > 0);
@@ -275,7 +289,14 @@ mod json {
 
         schema_registry.validate(topic, &record_batch).await?;
 
-        let results = lake_store(topic, partition, schema_registry, empty_config(topic), &record_batch).await?;
+        let results = lake_store(
+            topic,
+            partition,
+            schema_registry,
+            empty_config(topic),
+            &record_batch,
+        )
+        .await?;
 
         assert!(!results.is_empty());
         assert!(results[0].num_rows() > 0);
@@ -339,7 +360,14 @@ mod json {
 
         schema_registry.validate(topic, &record_batch).await?;
 
-        let results = lake_store(topic, partition, schema_registry, empty_config(topic), &record_batch).await?;
+        let results = lake_store(
+            topic,
+            partition,
+            schema_registry,
+            empty_config(topic),
+            &record_batch,
+        )
+        .await?;
 
         assert!(!results.is_empty());
         assert!(results[0].num_rows() > 0);
@@ -406,7 +434,14 @@ mod json {
 
         schema_registry.validate(topic, &record_batch).await?;
 
-        let results = lake_store(topic, partition, schema_registry, empty_config(topic), &record_batch).await?;
+        let results = lake_store(
+            topic,
+            partition,
+            schema_registry,
+            empty_config(topic),
+            &record_batch,
+        )
+        .await?;
 
         assert!(!results.is_empty());
         assert!(results[0].num_rows() > 0);
@@ -490,7 +525,14 @@ mod json {
 
         schema_registry.validate(topic, &record_batch).await?;
 
-        let results = lake_store(topic, partition, schema_registry, empty_config(topic), &record_batch).await?;
+        let results = lake_store(
+            topic,
+            partition,
+            schema_registry,
+            empty_config(topic),
+            &record_batch,
+        )
+        .await?;
 
         assert!(!results.is_empty());
         assert!(results[0].num_rows() > 0);
@@ -569,7 +611,14 @@ mod json {
 
         schema_registry.validate(topic, &record_batch).await?;
 
-        let results = lake_store(topic, partition, schema_registry, empty_config(topic), &record_batch).await?;
+        let results = lake_store(
+            topic,
+            partition,
+            schema_registry,
+            empty_config(topic),
+            &record_batch,
+        )
+        .await?;
 
         assert!(!results.is_empty());
         assert!(results[0].num_rows() > 0);
@@ -665,7 +714,14 @@ mod proto {
 
         schema_registry.validate(topic, &record_batch).await?;
 
-        let results = lake_store(topic, partition, schema_registry, empty_config(topic), &record_batch).await?;
+        let results = lake_store(
+            topic,
+            partition,
+            schema_registry,
+            empty_config(topic),
+            &record_batch,
+        )
+        .await?;
 
         assert!(!results.is_empty());
         assert!(results[0].num_rows() > 0);
@@ -713,7 +769,14 @@ mod proto {
 
         schema_registry.validate(topic, &record_batch).await?;
 
-        let results = lake_store(topic, partition, schema_registry, empty_config(topic), &record_batch).await?;
+        let results = lake_store(
+            topic,
+            partition,
+            schema_registry,
+            empty_config(topic),
+            &record_batch,
+        )
+        .await?;
 
         assert!(!results.is_empty());
         assert!(results[0].num_rows() > 0);
@@ -762,7 +825,14 @@ mod proto {
 
         schema_registry.validate(topic, &record_batch).await?;
 
-        let results = lake_store(topic, partition, schema_registry, empty_config(topic), &record_batch).await?;
+        let results = lake_store(
+            topic,
+            partition,
+            schema_registry,
+            empty_config(topic),
+            &record_batch,
+        )
+        .await?;
 
         assert!(!results.is_empty());
         assert!(results[0].num_rows() > 0);
@@ -821,7 +891,14 @@ mod proto {
 
         schema_registry.validate(topic, &record_batch).await?;
 
-        let results = lake_store(topic, partition, schema_registry, empty_config(topic), &record_batch).await?;
+        let results = lake_store(
+            topic,
+            partition,
+            schema_registry,
+            empty_config(topic),
+            &record_batch,
+        )
+        .await?;
 
         assert!(!results.is_empty());
         assert!(results[0].num_rows() > 0);
@@ -875,7 +952,14 @@ mod proto {
 
         schema_registry.validate(topic, &record_batch).await?;
 
-        let results = lake_store(topic, partition, schema_registry, empty_config(topic), &record_batch).await?;
+        let results = lake_store(
+            topic,
+            partition,
+            schema_registry,
+            empty_config(topic),
+            &record_batch,
+        )
+        .await?;
 
         assert!(!results.is_empty());
         assert!(results[0].num_rows() > 0);
@@ -934,7 +1018,14 @@ mod proto {
 
         schema_registry.validate(topic, &record_batch).await?;
 
-        let results = lake_store(topic, partition, schema_registry, empty_config(topic), &record_batch).await?;
+        let results = lake_store(
+            topic,
+            partition,
+            schema_registry,
+            empty_config(topic),
+            &record_batch,
+        )
+        .await?;
 
         assert!(!results.is_empty());
         assert!(results[0].num_rows() > 0);
@@ -973,17 +1064,29 @@ mod proto {
         let schema = Schema::try_from(proto)?;
 
         let record_batch = Batch::builder()
-            .record(Record::builder().value(
-                schema
-                    .encode_from_value(MessageKind::Value, &json!({"email_address": "test@example.com"}))?
-                    .into(),
-            ))
+            .record(
+                Record::builder().value(
+                    schema
+                        .encode_from_value(
+                            MessageKind::Value,
+                            &json!({"email_address": "test@example.com"}),
+                        )?
+                        .into(),
+                ),
+            )
             .base_timestamp(119_731_017_000)
             .build()?;
 
         schema_registry.validate(topic, &record_batch).await?;
 
-        let results = lake_store(topic, partition, schema_registry, empty_config(topic), &record_batch).await?;
+        let results = lake_store(
+            topic,
+            partition,
+            schema_registry,
+            empty_config(topic),
+            &record_batch,
+        )
+        .await?;
 
         assert!(!results.is_empty());
         assert!(results[0].num_rows() > 0);
@@ -1070,7 +1173,14 @@ mod avro {
 
         schema_registry.validate(topic, &record_batch).await?;
 
-        let results = lake_store(topic, partition, schema_registry, empty_config(topic), &record_batch).await?;
+        let results = lake_store(
+            topic,
+            partition,
+            schema_registry,
+            empty_config(topic),
+            &record_batch,
+        )
+        .await?;
 
         assert!(!results.is_empty());
         assert!(results[0].num_rows() > 0);
@@ -1165,7 +1275,14 @@ mod avro {
 
         schema_registry.validate(topic, &record_batch).await?;
 
-        let results = lake_store(topic, partition, schema_registry, empty_config(topic), &record_batch).await?;
+        let results = lake_store(
+            topic,
+            partition,
+            schema_registry,
+            empty_config(topic),
+            &record_batch,
+        )
+        .await?;
 
         assert!(!results.is_empty());
         assert!(results[0].num_rows() > 0);
@@ -1225,7 +1342,14 @@ mod avro {
 
         schema_registry.validate(topic, &record_batch).await?;
 
-        let results = lake_store(topic, partition, schema_registry, empty_config(topic), &record_batch).await?;
+        let results = lake_store(
+            topic,
+            partition,
+            schema_registry,
+            empty_config(topic),
+            &record_batch,
+        )
+        .await?;
 
         assert!(!results.is_empty());
         assert!(results[0].num_rows() > 0);
@@ -1290,7 +1414,14 @@ mod avro {
 
         schema_registry.validate(topic, &record_batch).await?;
 
-        let results = lake_store(topic, partition, schema_registry, empty_config(topic), &record_batch).await?;
+        let results = lake_store(
+            topic,
+            partition,
+            schema_registry,
+            empty_config(topic),
+            &record_batch,
+        )
+        .await?;
 
         assert!(!results.is_empty());
         assert!(results[0].num_rows() > 0);
@@ -1360,7 +1491,14 @@ mod avro {
 
         schema_registry.validate(topic, &record_batch).await?;
 
-        let results = lake_store(topic, partition, schema_registry, empty_config(topic), &record_batch).await?;
+        let results = lake_store(
+            topic,
+            partition,
+            schema_registry,
+            empty_config(topic),
+            &record_batch,
+        )
+        .await?;
 
         assert!(!results.is_empty());
         assert!(results[0].num_rows() > 0);
@@ -1419,7 +1557,14 @@ mod avro {
 
         schema_registry.validate(topic, &record_batch).await?;
 
-        let results = lake_store(topic, partition, schema_registry, empty_config(topic), &record_batch).await?;
+        let results = lake_store(
+            topic,
+            partition,
+            schema_registry,
+            empty_config(topic),
+            &record_batch,
+        )
+        .await?;
 
         assert!(!results.is_empty());
         assert!(results[0].num_rows() > 0);
@@ -1477,7 +1622,14 @@ mod avro {
 
         schema_registry.validate(topic, &record_batch).await?;
 
-        let results = lake_store(topic, partition, schema_registry, empty_config(topic), &record_batch).await?;
+        let results = lake_store(
+            topic,
+            partition,
+            schema_registry,
+            empty_config(topic),
+            &record_batch,
+        )
+        .await?;
 
         assert!(!results.is_empty());
         assert!(results[0].num_rows() > 0);
@@ -1558,7 +1710,14 @@ mod avro {
 
         schema_registry.validate(topic, &record_batch).await?;
 
-        let results = lake_store(topic, partition, schema_registry, empty_config(topic), &record_batch).await?;
+        let results = lake_store(
+            topic,
+            partition,
+            schema_registry,
+            empty_config(topic),
+            &record_batch,
+        )
+        .await?;
 
         assert!(!results.is_empty());
         assert!(results[0].num_rows() > 0);
@@ -1625,7 +1784,14 @@ mod avro {
 
         schema_registry.validate(topic, &record_batch).await?;
 
-        let results = lake_store(topic, partition, schema_registry, empty_config(topic), &record_batch).await?;
+        let results = lake_store(
+            topic,
+            partition,
+            schema_registry,
+            empty_config(topic),
+            &record_batch,
+        )
+        .await?;
 
         assert!(!results.is_empty());
         assert!(results[0].num_rows() > 0);
@@ -1692,7 +1858,14 @@ mod avro {
 
         schema_registry.validate(topic, &record_batch).await?;
 
-        let results = lake_store(topic, partition, schema_registry, empty_config(topic), &record_batch).await?;
+        let results = lake_store(
+            topic,
+            partition,
+            schema_registry,
+            empty_config(topic),
+            &record_batch,
+        )
+        .await?;
 
         assert!(!results.is_empty());
         assert!(results[0].num_rows() > 0);
@@ -1759,7 +1932,14 @@ mod avro {
 
         schema_registry.validate(topic, &record_batch).await?;
 
-        let results = lake_store(topic, partition, schema_registry, empty_config(topic), &record_batch).await?;
+        let results = lake_store(
+            topic,
+            partition,
+            schema_registry,
+            empty_config(topic),
+            &record_batch,
+        )
+        .await?;
 
         assert!(!results.is_empty());
         assert!(results[0].num_rows() > 0);
@@ -1829,7 +2009,14 @@ mod avro {
 
         schema_registry.validate(topic, &record_batch).await?;
 
-        let results = lake_store(topic, partition, schema_registry, empty_config(topic), &record_batch).await?;
+        let results = lake_store(
+            topic,
+            partition,
+            schema_registry,
+            empty_config(topic),
+            &record_batch,
+        )
+        .await?;
 
         assert!(!results.is_empty());
         assert!(results[0].num_rows() > 0);
@@ -1899,7 +2086,14 @@ mod avro {
 
         schema_registry.validate(topic, &record_batch).await?;
 
-        let results = lake_store(topic, partition, schema_registry, empty_config(topic), &record_batch).await?;
+        let results = lake_store(
+            topic,
+            partition,
+            schema_registry,
+            empty_config(topic),
+            &record_batch,
+        )
+        .await?;
 
         assert!(!results.is_empty());
         assert!(results[0].num_rows() > 0);
@@ -1969,7 +2163,14 @@ mod avro {
 
         schema_registry.validate(topic, &record_batch).await?;
 
-        let results = lake_store(topic, partition, schema_registry, empty_config(topic), &record_batch).await?;
+        let results = lake_store(
+            topic,
+            partition,
+            schema_registry,
+            empty_config(topic),
+            &record_batch,
+        )
+        .await?;
 
         assert!(!results.is_empty());
         assert!(results[0].num_rows() > 0);
@@ -2060,7 +2261,14 @@ mod avro {
 
         schema_registry.validate(topic, &record_batch).await?;
 
-        let results = lake_store(topic, partition, schema_registry, empty_config(topic), &record_batch).await?;
+        let results = lake_store(
+            topic,
+            partition,
+            schema_registry,
+            empty_config(topic),
+            &record_batch,
+        )
+        .await?;
 
         assert!(!results.is_empty());
         assert!(results[0].num_rows() > 0);
@@ -2130,7 +2338,14 @@ mod avro {
 
         schema_registry.validate(topic, &record_batch).await?;
 
-        let results = lake_store(topic, partition, schema_registry, empty_config(topic), &record_batch).await?;
+        let results = lake_store(
+            topic,
+            partition,
+            schema_registry,
+            empty_config(topic),
+            &record_batch,
+        )
+        .await?;
 
         assert!(!results.is_empty());
         assert!(results[0].num_rows() > 0);
@@ -2204,7 +2419,14 @@ mod avro {
 
         schema_registry.validate(topic, &record_batch).await?;
 
-        let results = lake_store(topic, partition, schema_registry, empty_config(topic), &record_batch).await?;
+        let results = lake_store(
+            topic,
+            partition,
+            schema_registry,
+            empty_config(topic),
+            &record_batch,
+        )
+        .await?;
 
         assert!(!results.is_empty());
         assert!(results[0].num_rows() > 0);
@@ -2271,7 +2493,14 @@ mod avro {
 
         schema_registry.validate(topic, &record_batch).await?;
 
-        let results = lake_store(topic, partition, schema_registry, empty_config(topic), &record_batch).await?;
+        let results = lake_store(
+            topic,
+            partition,
+            schema_registry,
+            empty_config(topic),
+            &record_batch,
+        )
+        .await?;
 
         assert!(!results.is_empty());
         assert!(results[0].num_rows() > 0);
@@ -2337,7 +2566,14 @@ mod avro {
 
         schema_registry.validate(topic, &record_batch).await?;
 
-        let results = lake_store(topic, partition, schema_registry, empty_config(topic), &record_batch).await?;
+        let results = lake_store(
+            topic,
+            partition,
+            schema_registry,
+            empty_config(topic),
+            &record_batch,
+        )
+        .await?;
 
         assert!(!results.is_empty());
         assert!(results[0].num_rows() > 0);
@@ -2404,7 +2640,14 @@ mod avro {
 
         schema_registry.validate(topic, &record_batch).await?;
 
-        let results = lake_store(topic, partition, schema_registry, empty_config(topic), &record_batch).await?;
+        let results = lake_store(
+            topic,
+            partition,
+            schema_registry,
+            empty_config(topic),
+            &record_batch,
+        )
+        .await?;
 
         assert!(!results.is_empty());
         assert!(results[0].num_rows() > 0);
@@ -2470,7 +2713,14 @@ mod avro {
 
         schema_registry.validate(topic, &record_batch).await?;
 
-        let results = lake_store(topic, partition, schema_registry, empty_config(topic), &record_batch).await?;
+        let results = lake_store(
+            topic,
+            partition,
+            schema_registry,
+            empty_config(topic),
+            &record_batch,
+        )
+        .await?;
 
         assert!(!results.is_empty());
         assert!(results[0].num_rows() > 0);
