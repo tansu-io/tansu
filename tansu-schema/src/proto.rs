@@ -44,7 +44,12 @@ use tansu_sans_io::{ErrorCode, record::inflated::Batch};
 use tempfile::{NamedTempFile, tempdir};
 use tracing::{debug, error};
 
-#[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
+#[cfg(any(
+    feature = "parquet",
+    feature = "iceberg",
+    feature = "delta",
+    feature = "lance"
+))]
 mod arrow;
 
 #[derive(Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]

@@ -60,6 +60,9 @@ jobs:
         with:
           components: clippy, rustfmt
           cache: false
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{secrets.GITHUB_TOKEN}}
       - run: df -h
       - run: just test
       - run: df -h
@@ -90,6 +93,9 @@ jobs:
         with:
           components: clippy, rustfmt
           cache: false
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{secrets.GITHUB_TOKEN}}
       - run: just check
   fmt:
     runs-on: ${{matrix.os}}
@@ -118,6 +124,9 @@ jobs:
         with:
           components: clippy, rustfmt
           cache: false
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{secrets.GITHUB_TOKEN}}
       - run: just clippy
   build-storage:
     runs-on: ${{matrix.os}}
@@ -153,12 +162,16 @@ jobs:
         lake:
           - delta
           - iceberg
+          - lance
     steps:
       - uses: actions/checkout@v6
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: clippy, rustfmt
           cache: false
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{secrets.GITHUB_TOKEN}}
       - run: cargo build --features ${{matrix.storage}} --features ${{matrix.lake}}
   cargo-publish-dry-run:
     runs-on: ${{matrix.os}}
@@ -170,6 +183,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{secrets.GITHUB_TOKEN}}
       - run: cargo publish --dry-run --workspace
   typos:
     runs-on: ubuntu-latest

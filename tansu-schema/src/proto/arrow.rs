@@ -32,6 +32,7 @@ use arrow::{
 use bytes::Bytes;
 use chrono::{DateTime, Datelike};
 
+#[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
 use protobuf::{
@@ -98,6 +99,7 @@ impl Schema {
         self.new_nullable_field(ids, path, name, data_type, NULLABLE)
     }
 
+    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
     fn new_nullable_field(
         &self,
         ids: &BTreeMap<String, i32>,
@@ -117,6 +119,21 @@ impl Schema {
                 .into_iter()
                 .collect(),
         )
+    }
+
+    #[cfg(not(any(feature = "parquet", feature = "iceberg", feature = "delta")))]
+    fn new_nullable_field(
+        &self,
+        ids: &BTreeMap<String, i32>,
+        path: &[&str],
+        name: &str,
+        data_type: DataType,
+        nullable: bool,
+    ) -> Field {
+        let _ = ids;
+        debug!(?path, name, ?data_type, ?nullable);
+
+        Field::new(name.to_owned(), data_type, nullable)
     }
     fn field(&self, ids: &BTreeMap<String, i32>, message_kind: MessageKind) -> Option<Field> {
         debug!(?message_kind);
@@ -1277,7 +1294,7 @@ mod tests {
     #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
     use ::arrow::util::pretty::pretty_format_batches;
 
-    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
+    #[cfg(any(feature = "iceberg", feature = "delta"))]
     use datafusion::prelude::*;
 
     #[cfg(feature = "iceberg")]

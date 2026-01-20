@@ -33,6 +33,7 @@ default = ["dep:tansu-broker", "dep:tansu-cli", "dep:tansu-schema", "dep:tansu-s
 delta = ["dep:tansu-broker", "dep:tansu-cli", "dep:tansu-schema", "dep:tansu-storage", "tansu-cli/delta", "tansu-schema/delta"]
 dynostore = ["dep:tansu-broker", "dep:tansu-cli", "dep:tansu-schema", "dep:tansu-storage", "tansu-broker/dynostore", "tansu-cli/dynostore", "tansu-storage/dynostore"]
 iceberg = ["dep:tansu-broker", "dep:tansu-cli", "dep:tansu-schema", "dep:tansu-storage", "tansu-cli/iceberg", "tansu-schema/iceberg"]
+lance = ["dep:tansu-broker", "dep:tansu-cli", "dep:tansu-schema", "dep:tansu-storage", "tansu-cli/lance", "tansu-schema/lance"]
 libsql = ["dep:tansu-broker", "dep:tansu-cli", "dep:tansu-schema", "dep:tansu-storage", "tansu-broker/libsql", "tansu-cli/libsql", "tansu-storage/libsql"]
 parquet = ["dep:tansu-broker", "dep:tansu-cli", "dep:tansu-schema", "dep:tansu-storage", "tansu-cli/parquet", "tansu-schema/parquet"]
 postgres = ["dep:tansu-broker", "dep:tansu-cli", "dep:tansu-schema", "dep:tansu-storage", "tansu-broker/postgres", "tansu-cli/postgres", "tansu-storage/postgres"]

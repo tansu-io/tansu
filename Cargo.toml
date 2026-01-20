@@ -101,6 +101,9 @@ iceberg = "0.8"
 iceberg-catalog-rest = "0.8"
 iceberg-datafusion = "0.8"
 jsonschema = "0.33.0"
+lance = "1.0.1"
+# arrow-ipc v56 for lance IPC compatibility (lance 1.0.1 uses arrow 56)
+arrow-ipc_v56 = { package = "arrow-ipc", version = "56" }
 lazy_static = "1.4.0"
 libsql = { version = "0.9.18", default-features = false, features = ["core"] }
 lz4 = "1.28.1"

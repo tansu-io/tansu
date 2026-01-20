@@ -36,6 +36,7 @@ use arrow::{
 use bytes::Bytes;
 use chrono::{DateTime, Datelike};
 use num_bigint::BigInt;
+#[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use tansu_sans_io::{ErrorCode, record::inflated::Batch};
 use tracing::{debug, error, instrument};
@@ -87,6 +88,7 @@ impl Schema {
         self.new_nullable_field(path, name, data_type, NULLABLE)
     }
 
+    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
     fn new_nullable_field(
         &self,
         path: &[&str],
@@ -106,6 +108,19 @@ impl Schema {
                 .into_iter()
                 .collect(),
         )
+    }
+
+    #[cfg(not(any(feature = "parquet", feature = "iceberg", feature = "delta")))]
+    fn new_nullable_field(
+        &self,
+        path: &[&str],
+        name: &str,
+        data_type: DataType,
+        nullable: bool,
+    ) -> Field {
+        debug!(?path, name, ?data_type, ?nullable);
+
+        Field::new(name.to_owned(), data_type, nullable)
     }
 
     fn schema_data_type(&self, path: &[&str], schema: &AvroSchema) -> Result<DataType> {
@@ -1239,9 +1254,12 @@ mod tests {
     use super::*;
     use apache_avro::{Decimal, types::Value};
 
+    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
     use arrow::util::pretty::pretty_format_batches;
+    #[cfg(any(feature = "iceberg", feature = "delta"))]
     use datafusion::prelude::*;
 
+    #[cfg(feature = "iceberg")]
     use iceberg::{
         io::FileIOBuilder,
         spec::{
@@ -1261,6 +1279,7 @@ mod tests {
 
     use num_bigint::BigInt;
 
+    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
     use parquet::file::properties::WriterProperties;
 
     use serde_json::json;
@@ -1269,6 +1288,7 @@ mod tests {
     use tracing_subscriber::EnvFilter;
     use uuid::Uuid;
 
+    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
     use crate::AsKafkaRecord as _;
 
     fn init_tracing() -> Result<DefaultGuard> {

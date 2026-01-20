@@ -27,7 +27,12 @@ use serde_json::Value;
 use tansu_sans_io::{ErrorCode, record::inflated::Batch};
 use tracing::{debug, instrument, warn};
 
-#[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
+#[cfg(any(
+    feature = "parquet",
+    feature = "iceberg",
+    feature = "delta",
+    feature = "lance"
+))]
 mod arrow;
 
 #[derive(Debug, Default)]

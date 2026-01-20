@@ -30,7 +30,12 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-#[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
+#[cfg(any(
+    feature = "parquet",
+    feature = "iceberg",
+    feature = "delta",
+    feature = "lance"
+))]
 use arrow::{datatypes::DataType, error::ArrowError, record_batch::RecordBatch};
 
 use bytes::Bytes;
@@ -84,7 +89,12 @@ pub enum Error {
 
     Api(ErrorCode),
 
-    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
+    #[cfg(any(
+        feature = "parquet",
+        feature = "iceberg",
+        feature = "delta",
+        feature = "lance"
+    ))]
     Arrow(#[from] ArrowError),
 
     Avro(Box<apache_avro::Error>),
@@ -117,6 +127,9 @@ pub enum Error {
     #[cfg(feature = "iceberg")]
     Iceberg(Box<::iceberg::Error>),
 
+    #[cfg(feature = "lance")]
+    Lance(Box<::lance::Error>),
+
     InvalidValue(apache_avro::types::Value),
 
     InsufficientCapacity(#[from] InsufficientCapacity),
@@ -135,7 +148,12 @@ pub enum Error {
 
     Message(String),
 
-    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
+    #[cfg(any(
+        feature = "parquet",
+        feature = "iceberg",
+        feature = "delta",
+        feature = "lance"
+    ))]
     NoCommonType(Vec<DataType>),
 
     ObjectStore(#[from] object_store::Error),
@@ -174,7 +192,12 @@ pub enum Error {
 
     UnsupportedSchemaRegistryUrl(Url),
 
-    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
+    #[cfg(any(
+        feature = "parquet",
+        feature = "iceberg",
+        feature = "delta",
+        feature = "lance"
+    ))]
     UnsupportedSchemaRuntimeValue(DataType, Value),
 
     Uuid(#[from] uuid::Error),
@@ -197,6 +220,13 @@ impl From<DataFusionError> for Error {
 impl From<::iceberg::Error> for Error {
     fn from(value: ::iceberg::Error) -> Self {
         Self::Iceberg(Box::new(value))
+    }
+}
+
+#[cfg(feature = "lance")]
+impl From<::lance::Error> for Error {
+    fn from(value: ::lance::Error) -> Self {
+        Self::Lance(Box::new(value))
     }
 }
 
@@ -233,7 +263,12 @@ pub trait Validator {
 }
 
 /// Represent a Batch in the Arrow columnar data format
-#[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
+#[cfg(any(
+    feature = "parquet",
+    feature = "iceberg",
+    feature = "delta",
+    feature = "lance"
+))]
 trait AsArrow {
     async fn as_arrow(
         &self,
@@ -307,7 +342,12 @@ impl Validator for Schema {
     }
 }
 
-#[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
+#[cfg(any(
+    feature = "parquet",
+    feature = "iceberg",
+    feature = "delta",
+    feature = "lance"
+))]
 impl AsArrow for Schema {
     #[instrument(skip(self, batch), ret)]
     async fn as_arrow(
@@ -599,7 +639,12 @@ impl Registry {
     }
 }
 
-#[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
+#[cfg(any(
+    feature = "parquet",
+    feature = "iceberg",
+    feature = "delta",
+    feature = "lance"
+))]
 impl AsArrow for Registry {
     #[instrument(skip(self, batch), ret)]
     async fn as_arrow(
