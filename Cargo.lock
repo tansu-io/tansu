@@ -1679,6 +1679,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "convert_case"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "633458d4ef8c78b72454de2d54fd6ab2e60f9e02be22f3c6104cdc8a4e0fceb9"
+dependencies = [
+ "unicode-segmentation",
+]
+
+[[package]]
 name = "core-foundation"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2966,7 +2975,7 @@ version = "0.30.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3963d9fe965af7b1dea433271389e1e39c6a97ffdbc2e81d808f5b329e4577b3"
 dependencies = [
- "convert_case",
+ "convert_case 0.9.0",
  "itertools 0.14.0",
  "proc-macro2",
  "quote",
@@ -8021,7 +8030,7 @@ dependencies = [
 name = "tansu-model"
 version = "0.6.0-pre.9"
 dependencies = [
- "convert_case",
+ "convert_case 0.10.0",
  "lazy_static",
  "proc-macro2",
  "quote",
@@ -8105,7 +8114,7 @@ version = "0.6.0-pre.9"
 dependencies = [
  "bytes",
  "clap",
- "convert_case",
+ "convert_case 0.10.0",
  "crc-fast",
  "criterion",
  "flate2",
