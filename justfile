@@ -22,7 +22,7 @@ release-sqlite: (cargo-build "--release" "--bin" "tansu" "--no-default-features"
 test: test-workspace test-doc
 
 test-workspace:
-    cargo test --workspace --all-targets --all-features --no-fail-fast
+    cargo test --workspace --all-targets --all-features
 
 test-doc:
     cargo test --workspace --doc --all-features

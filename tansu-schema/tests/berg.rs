@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -1429,21 +1429,28 @@ mod avro {
         let topic = &alphanumeric_string(5)[..];
 
         let avro = json!({
-            "type": "record",
-            "name": "Message",
-            "fields": [
-                {"name": "value", "type": "record", "fields": [
-                // {"name": "a", "type": "null"},
-                {"name": "b", "type": "boolean"},
-                {"name": "c", "type": "int"},
-                {"name": "d", "type": "long"},
-                {"name": "e", "type": "float"},
-                {"name": "f", "type": "double"},
-                {"name": "g", "type": "bytes"},
-                {"name": "h", "type": "string"}
-                ]}
-            ]
-        });
+                  "type": "record",
+                  "name": "Message",
+                  "fields": [
+                    {
+                      "name": "value",
+                      "type": {
+                        "name": "sub",
+                        "type": "record",
+                        "fields": [
+                          { "name": "b", "type": "boolean" },
+                          { "name": "c", "type": "int" },
+                          { "name": "d", "type": "long" },
+                          { "name": "e", "type": "float" },
+                          { "name": "f", "type": "double" },
+                          { "name": "g", "type": "bytes" },
+                          { "name": "h", "type": "string" }
+                        ]
+                      }
+                    }
+                  ]
+                }
+        );
 
         let schema_registry = {
             let object_store = InMemory::new();
@@ -1527,19 +1534,26 @@ mod avro {
         let topic = &alphanumeric_string(5)[..];
 
         let avro = json!({
-            "type": "record",
-            "name": "Message",
-            "fields": [
-                {"name": "value", "type": "record", "fields": [
-                    {"name": "b", "type": "array", "items": "boolean"},
-                    {"name": "c", "type": "array", "items": "int"},
-                    {"name": "d", "type": "array", "items": "long"},
-                    {"name": "e", "type": "array", "items": "float"},
-                    {"name": "f", "type": "array", "items": "double"},
-                    {"name": "g", "type": "array", "items": "bytes"},
-                    {"name": "h", "type": "array", "items": "string"}
-                ]}
-            ]
+          "type": "record",
+          "name": "Message",
+          "fields": [
+            {
+              "name": "value",
+              "type": {
+                "name": "sub",
+                "type": "record",
+                "fields": [
+                  { "name": "b", "type": "array", "items": "boolean" },
+                  { "name": "c", "type": "array", "items": "int" },
+                  { "name": "d", "type": "array", "items": "long" },
+                  { "name": "e", "type": "array", "items": "float" },
+                  { "name": "f", "type": "array", "items": "double" },
+                  { "name": "g", "type": "array", "items": "bytes" },
+                  { "name": "h", "type": "array", "items": "string" }
+                ]
+              }
+            }
+          ]
         });
 
         let schema_registry = {
@@ -1807,21 +1821,23 @@ mod avro {
         let topic = &alphanumeric_string(5)[..];
 
         let avro = json!({
-            "type": "record",
-            "name": "observation",
-            "fields": [
-                { "name": "key", "type": "string", "logicalType": "uuid" },
-                {
-                    "name": "value",
-                    "type": "record",
-                    "fields": [
-                        { "name": "amount", "type": "double" },
-                        { "name": "unit", "type": "enum", "symbols": ["CELSIUS", "MILLIBAR"] }
-                    ]
-                }
-            ]
-        }
-        );
+          "type": "record",
+          "name": "observation",
+          "fields": [
+            { "name": "key", "type": "string", "logicalType": "uuid" },
+            {
+              "name": "value",
+              "type": {
+                "name": "sub",
+                "type": "record",
+                "fields": [
+                  { "name": "amount", "type": "double" },
+                  { "name": "unit", "type": "enum", "symbols": ["CELSIUS", "MILLIBAR"] }
+                ]
+              }
+            }
+          ]
+        });
 
         let schema_registry = {
             let object_store = InMemory::new();
@@ -2055,17 +2071,23 @@ mod avro {
         let topic = &alphanumeric_string(5)[..];
 
         let avro = json!({
-            "type": "record",
-            "name": "Person",
-            "fields": [{
-                "name": "value",
+          "type": "record",
+          "name": "Person",
+          "fields": [
+            {
+              "name": "value",
+              "type": {
+                "name": "sub",
+
                 "type": "record",
                 "fields": [
-                    {"name": "id", "type": "int"},
-                    {"name": "name", "type": "string"},
-                    {"name": "lucky", "type": "array", "items": "int", "default": []}
-                ]}
-            ]
+                  { "name": "id", "type": "int" },
+                  { "name": "name", "type": "string" },
+                  { "name": "lucky", "type": "array", "items": "int", "default": [] }
+                ]
+              }
+            }
+          ]
         });
 
         let schema_registry = {
