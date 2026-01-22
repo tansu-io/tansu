@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -2213,19 +2213,27 @@ mod tests {
             let _guard = init_tracing()?;
 
             let definition = json!({
-                "type": "record",
-                "name": "Message",
-                "fields": [
-                    {"name": "value", "type": "record", "fields": [
-                    {"name": "b", "type": "boolean"},
-                    {"name": "c", "type": "int"},
-                    {"name": "d", "type": "long"},
-                    {"name": "e", "type": "float"},
-                    {"name": "f", "type": "double"},
-                    {"name": "h", "type": "string"}
-                    ]}
-                ]
-            });
+                          "type": "record",
+                          "name": "Message",
+                          "fields": [
+                            {
+                              "name": "value",
+                              "type": {
+                                "name": "sub",
+                                "type": "record",
+                                "fields": [
+                                  { "name": "b", "type": "boolean" },
+                                  { "name": "c", "type": "int" },
+                                  { "name": "d", "type": "long" },
+                                  { "name": "e", "type": "float" },
+                                  { "name": "f", "type": "double" },
+                                  { "name": "h", "type": "string" }
+                                ]
+                              }
+                            }
+                          ]
+                        }
+            );
 
             let topic = "abc";
             let partition = 32123;

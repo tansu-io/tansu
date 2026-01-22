@@ -5,11 +5,14 @@
     { "name": "key", "type": "string", "logicalType": "uuid" },
     {
       "name": "value",
-      "type": "record",
-      "fields": [
-        { "name": "amount", "type": "double" },
-        { "name": "unit", "type": "enum", "symbols": ["CELSIUS", "MILLIBAR"] }
-      ]
+      "type": {
+        "name": "sub",
+        "type": "record",
+        "fields": [
+          { "name": "amount", "type": "double" },
+          { "name": "unit", "type": "enum", "symbols": ["CELSIUS", "MILLIBAR"] }
+        ]
+      }
     }
   ]
 }

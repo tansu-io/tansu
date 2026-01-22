@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -1365,21 +1365,28 @@ mod tests {
         let _guard = init_tracing()?;
 
         let schema = Schema::from(json!({
-            "type": "record",
-            "name": "Message",
-            "fields": [
-                {"name": "value", "type": "record", "fields": [
-                // {"name": "a", "type": "null"},
-                {"name": "b", "type": "boolean"},
-                {"name": "c", "type": "int"},
-                {"name": "d", "type": "long"},
-                {"name": "e", "type": "float"},
-                {"name": "f", "type": "double"},
-                {"name": "g", "type": "bytes"},
-                {"name": "h", "type": "string"}
-                ]}
-            ]
-        }));
+                  "name": "Message",
+                  "type": "record",
+                  "fields": [
+                    {
+                      "name": "value",
+                      "type": {
+                        "name": "sub",
+                        "type": "record",
+                        "fields": [
+                          { "name": "b", "type": "boolean" },
+                          { "name": "c", "type": "int" },
+                          { "name": "d", "type": "long" },
+                          { "name": "e", "type": "float" },
+                          { "name": "f", "type": "double" },
+                          { "name": "g", "type": "bytes" },
+                          { "name": "h", "type": "string" }
+                        ]
+                      }
+                    }
+                  ]
+                }
+        ));
 
         let batch = {
             let mut batch = Batch::builder().base_timestamp(1_234_567_890 * 1_000);
@@ -1444,20 +1451,28 @@ mod tests {
         let _guard = init_tracing()?;
 
         let schema = Schema::from(json!({
-            "type": "record",
-            "name": "Message",
-            "fields": [
-                {"name": "value", "type": "record", "fields": [
-                    {"name": "b", "type": "array", "items": "boolean"},
-                    {"name": "c", "type": "array", "items": "int"},
-                    {"name": "d", "type": "array", "items": "long"},
-                    {"name": "e", "type": "array", "items": "float"},
-                    {"name": "f", "type": "array", "items": "double"},
-                    {"name": "g", "type": "array", "items": "bytes"},
-                    {"name": "h", "type": "array", "items": "string"}
-                ]}
-            ]
-        }));
+                  "type": "record",
+                  "name": "Message",
+                  "fields": [
+                    {
+                      "name": "value",
+                      "type": {
+                        "type": "record",
+                        "name": "sub",
+                        "fields": [
+                          { "name": "b", "type": "array", "items": "boolean" },
+                          { "name": "c", "type": "array", "items": "int" },
+                          { "name": "d", "type": "array", "items": "long" },
+                          { "name": "e", "type": "array", "items": "float" },
+                          { "name": "f", "type": "array", "items": "double" },
+                          { "name": "g", "type": "array", "items": "bytes" },
+                          { "name": "h", "type": "array", "items": "string" }
+                        ]
+                      }
+                    }
+                  ]
+                }
+        ));
 
         let batch = {
             let mut batch = Batch::builder().base_timestamp(1_234_567_890 * 1_000);
@@ -1665,21 +1680,24 @@ mod tests {
         let _guard = init_tracing()?;
 
         let schema = Schema::from(json!({
-            "type": "record",
-            "name": "observation",
-            "fields": [
-                { "name": "key", "type": "string", "logicalType": "uuid" },
-                {
-                    "name": "value",
-                    "type": "record",
-                    "fields": [
-                        { "name": "amount", "type": "double" },
-                        { "name": "unit", "type": "enum", "symbols": ["CELSIUS", "MILLIBAR"] }
-                    ]
-                }
-            ]
-        }
-        ));
+          "type": "record",
+          "name": "observation",
+          "fields": [
+            { "name": "key", "type": "string", "logicalType": "uuid" },
+            {
+              "name": "value",
+              "type": {
+                "name": "sub",
+                "type": "record",
+
+                "fields": [
+                  { "name": "amount", "type": "double" },
+                  { "name": "unit", "type": "enum", "symbols": ["CELSIUS", "MILLIBAR"] }
+                ]
+              }
+            }
+          ]
+        }));
 
         let batch = {
             let mut batch = Batch::builder().base_timestamp(1_234_567_890 * 1_000);
@@ -1871,18 +1889,24 @@ mod tests {
         let _guard = init_tracing()?;
 
         let schema = Schema::from(json!({
-            "type": "record",
-            "name": "Person",
-            "fields": [{
-                "name": "value",
-                "type": "record",
-                "fields": [
-                    {"name": "id", "type": "int"},
-                    {"name": "name", "type": "string"},
-                    {"name": "lucky", "type": "array", "items": "int", "default": []}
-                ]}
-            ]
-        }));
+                  "type": "record",
+                  "name": "Person",
+                  "fields": [
+                    {
+                      "name": "value",
+                      "type": {
+                        "type": "record",
+                        "name": "sub",
+                        "fields": [
+                          { "name": "id", "type": "int" },
+                          { "name": "name", "type": "string" },
+                          { "name": "lucky", "type": "array", "items": "int", "default": [] }
+                        ]
+                      }
+                    }
+                  ]
+                }
+        ));
 
         let batch = {
             let mut batch = Batch::builder().base_timestamp(1_234_567_890 * 1_000);
@@ -3301,28 +3325,33 @@ mod tests {
         let _guard = init_tracing()?;
 
         let schema = Schema::from(json!({
-            "type": "record",
-            "name": "test",
-            "fields": [{
-                "name": "key",
-                "type": "string",
-            },
-            {
-                "name": "value",
-                "type": "record",
-                "fields": [
-                    {"name": "first", "type": "string"},
-                    {"name": "last", "type": "string"},
-                    {"name": "test1", "type": "double"},
-                    {"name": "test2", "type": "double"},
-                    {"name": "test3", "type": "double"},
-                    {"name": "test4", "type": "double"},
-                    {"name": "final", "type": "double"},
-                    {"name": "grade", "type": "string"}
-                ]
-            }]
-
-        }));
+                  "type": "record",
+                  "name": "test",
+                  "fields": [
+                    {
+                      "name": "key",
+                      "type": "string"
+                    },
+                    {
+                      "name": "value",
+                      "type": {
+                        "name": "sub",
+                        "type": "record",
+                        "fields": [
+                          { "name": "first", "type": "string" },
+                          { "name": "last", "type": "string" },
+                          { "name": "test1", "type": "double" },
+                          { "name": "test2", "type": "double" },
+                          { "name": "test3", "type": "double" },
+                          { "name": "test4", "type": "double" },
+                          { "name": "final", "type": "double" },
+                          { "name": "grade", "type": "string" }
+                        ]
+                      }
+                    }
+                  ]
+                }
+        ));
 
         // https://people.math.sc.edu/Burkardt/datasets/csv/csv.html
         let grades = [
