@@ -5341,9 +5341,9 @@ dependencies = [
 
 [[package]]
 name = "object_store"
-version = "0.13.0"
+version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d180d5469872facb82dec7e233ff850d615330ea3044a7813550b22ffa4f05ce"
+checksum = "c2858065e55c148d294a9f3aae3b0fa9458edadb41a108397094566f4e3c0dfb"
 dependencies = [
  "async-trait",
  "base64",
@@ -7824,7 +7824,7 @@ dependencies = [
  "hyper-util",
  "jsonschema",
  "libsql",
- "object_store 0.13.0",
+ "object_store 0.13.1",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry-semantic-conventions",
@@ -8080,7 +8080,7 @@ dependencies = [
  "iceberg-datafusion",
  "jsonschema",
  "num-bigint",
- "object_store 0.13.0",
+ "object_store 0.13.1",
  "opentelemetry",
  "opentelemetry-semantic-conventions",
  "ordered-float 5.1.0",
@@ -8144,7 +8144,7 @@ dependencies = [
  "futures-util",
  "glob",
  "libsql",
- "object_store 0.13.0",
+ "object_store 0.13.1",
  "opentelemetry",
  "opentelemetry-semantic-conventions",
  "postcard",
