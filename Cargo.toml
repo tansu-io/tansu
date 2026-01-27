@@ -150,7 +150,7 @@ tansu-storage = { version = "0.6.0-pre.9", path = "tansu-storage", default-featu
 tansu-topic = { version = "0.6.0-pre.9", path = "tansu-topic", default-features = false }
 tempfile = "3"
 thiserror = "2.0"
-time = { version = "0.3.37", features = ["formatting", "macros"] }
+time = { version = "0.3.46", features = ["formatting", "macros"] }
 tokio-util = { version = "0.7", features = ["full"] }
 tokio = { version = "1", features = ["full", "test-util"] }
 tokio-postgres = { version = "0.7.13", features = [
