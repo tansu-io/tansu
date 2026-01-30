@@ -100,7 +100,7 @@ hyper-util = { version = "0.1", features = ["full"] }
 iceberg = "0.8"
 iceberg-catalog-rest = "0.8"
 iceberg-datafusion = "0.8"
-jsonschema = "0.40.0"
+jsonschema = "0.40.2"
 lazy_static = "1.4.0"
 libsql = { version = "0.9.18", default-features = false, features = ["core"] }
 lz4 = "1.28.1"
