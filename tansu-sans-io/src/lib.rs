@@ -1565,14 +1565,15 @@ impl Compression {
                         if input.starts_with(b"\x82SNAPPY\0") {
                             if let (b"\x82SNAPPY\0", remainder) = input.split_at(8) {
                                 let (version, remainder) = remainder.split_at(4);
-                                let version = version.try_into().map(i32::from_be_bytes)?;
+                                let version: i32 = version.try_into().map(i32::from_be_bytes)?;
 
                                 let (compatible_version, remainder) = remainder.split_at(4);
-                                let compatible_version =
+                                let compatible_version: i32 =
                                     compatible_version.try_into().map(i32::from_be_bytes)?;
 
                                 let (block_size, _) = remainder.split_at(4);
-                                let block_size = block_size.try_into().map(i32::from_be_bytes)?;
+                                let block_size: i32 =
+                                    block_size.try_into().map(i32::from_be_bytes)?;
 
                                 debug!(version, compatible_version, block_size);
                             }
