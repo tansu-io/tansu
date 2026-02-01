@@ -13,9 +13,28 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
--- retention.ms
-
 with
+
+deletion as (
+    select tp.id as topition
+    from topition tp
+    join topic t on t.id = tp.topic
+    join cluster c on t.cluster = c.id
+    join topic_configuration tc on tc.topic = t.id
+    where c.name = $1
+    and tc.name = 'cleanup.policy'
+    and tc.value like '%delete%'
+),
+
+retention as (
+    select tp.id as topition, tc.value
+    from topition tp
+    join topic t on t.id = tp.topic
+    join cluster c on t.cluster = c.id
+    left join topic_configuration tc on tc.topic = t.id
+    where c.name = $1
+    and tc.name = 'retention.ms'
+),
 
 ancient as (
     select tp.id as topition, r.offset_id as offset_id
@@ -23,13 +42,10 @@ ancient as (
     join topition tp on tp.id = r.topition
     join topic t on t.id = tp.topic
     join cluster c on t.cluster = c.id
-    join topic_configuration tc_policy on tc_policy.topic = t.id
-    left join topic_configuration tc_retention on tc_retention.topic = t.id
+    join deletion del on del.topition = tp.id
+    left join retention ret on ret.topition = tp.id
     where c.name = $1
-    and tc_policy.name = 'cleanup.policy'
-    and tc_policy.value like '%delete%'
-    and tc_retention.name = 'retention.ms'
-    and (extract(epoch from cast($2 as timestamp)) - extract(epoch from r.timestamp)) > coalesce(cast(tc_retention.value as integer) / 1000, $3)
+    and (extract(epoch from cast($2 as timestamp)) - extract(epoch from r.timestamp)) > coalesce(cast(ret.value as integer) / 1000, $3)
 )
 
 delete from record

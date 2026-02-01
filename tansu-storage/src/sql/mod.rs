@@ -138,11 +138,15 @@ pub(crate) static SQL: LazyLock<Cache> = LazyLock::new(|| {
             "list_latest_offset_uncommitted.sql",
             include_sql!("list_latest_offset_uncommitted.sql"),
         ),
-        ("policy_compact.sql", include_sql!("policy_compact.sql")),
         (
             "lite/policy_delete.sql",
             include_sql!("../lite/policy_delete.sql"),
         ),
+        (
+            "lite/vacuum_into.sql",
+            include_sql!("../lite/vacuum_into.sql"),
+        ),
+        ("policy_compact.sql", include_sql!("policy_compact.sql")),
         ("policy_delete.sql", include_sql!("policy_delete.sql")),
         ("ping.sql", "select 1 + 1".to_string()),
         (

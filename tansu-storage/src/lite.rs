@@ -211,6 +211,8 @@ pub(crate) struct Delegate {
     schemas: Option<Registry>,
 
     lake: Option<House>,
+
+    vacuum_into: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -1109,6 +1111,17 @@ impl Delegate {
     }
 
     #[instrument(skip(self), ret)]
+    async fn vacuum_into(&self) -> Result<()> {
+        if let Some(vacuum_into) = self.vacuum_into.as_deref() {
+            let pc = self.connection().await?;
+            let rows = pc.execute("lite/vacuum_into.sql", [vacuum_into]).await? as u64;
+            debug!(vacuum_into, rows);
+        }
+
+        Ok(())
+    }
+
+    #[instrument(skip(self), ret)]
     async fn policy_delete(&self, now: SystemTime) -> Result<u64> {
         let start = SystemTime::now();
 
@@ -1787,6 +1800,14 @@ impl Builder<String, i32, Url, Url> {
 
         debug!(?path);
 
+        let vacuum_into = self.storage.query_pairs().find_map(|(k, v)| {
+            if k == "vacuum_into" {
+                Some(v.to_string())
+            } else {
+                None
+            }
+        });
+
         let db = libsql::Builder::new_local(path).build().await?;
 
         let connection = db.connect()?;
@@ -1815,6 +1836,7 @@ impl Builder<String, i32, Url, Url> {
                 .build()?,
                 schemas: self.schemas,
                 lake: self.lake,
+                vacuum_into,
             };
 
             server.spawn(async move {
@@ -4194,6 +4216,8 @@ impl Storage for Delegate {
 
         let compacted = self.policy_compact().await?;
         debug!(compacted);
+
+        self.vacuum_into().await?;
 
         {
             let connection = self.pool.get().await?;

@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -2990,8 +2990,10 @@ impl Storage for Postgres {
             transaction_id, producer_id, producer_epoch
         );
 
-        match (producer_id, producer_epoch, transaction_id) {
-            (Some(-1), Some(-1), Some(transaction_id)) => {
+        if producer_id.is_some_and(|producer_id| producer_id == -1)
+            && producer_epoch.is_some_and(|producer_epoch| producer_epoch == -1)
+        {
+            if let Some(transaction_id) = transaction_id {
                 let mut c = self.connection().await.inspect_err(|err| error!(?err))?;
                 let tx = c.transaction().await.inspect_err(|err| error!(?err))?;
 
@@ -3136,9 +3138,7 @@ impl Storage for Postgres {
                     id: producer,
                     epoch,
                 })
-            }
-
-            (Some(-1), Some(-1), None) => {
+            } else {
                 let mut c = self.connection().await.inspect_err(|err| error!(?err))?;
                 let tx = c.transaction().await.inspect_err(|err| error!(?err))?;
 
@@ -3147,7 +3147,7 @@ impl Storage for Postgres {
                     .await
                     .inspect_err(|err| error!(self.cluster, ?err))?;
 
-                let producer = row.try_get(0)?;
+                let producer: i64 = row.try_get(0)?;
 
                 let row = self
                     .tx_prepare_query_one(
@@ -3175,8 +3175,8 @@ impl Storage for Postgres {
                     epoch,
                 })
             }
-
-            (_, _, _) => todo!(),
+        } else {
+            todo!()
         }
     }
 

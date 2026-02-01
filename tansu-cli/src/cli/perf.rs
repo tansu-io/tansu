@@ -32,7 +32,7 @@ pub(super) enum Command {
         #[arg(long, default_value = "1")]
         batch_size: u32,
 
-        /// Message batch size used by every producer
+        /// Record size used by every producer
         #[arg(long, default_value = "1k", value_parser=clap::value_parser!(human_units::Size))]
         record_size: human_units::Size,
 
