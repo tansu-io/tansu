@@ -81,7 +81,7 @@ criterion = { version = "0.8.1", features = ["async_tokio", "html_reports"] }
 datafusion = "51"
 deadpool = "0.12.2"
 deadpool-postgres = "0.14.1"
-delta_kernel = { version = "0.19.1", default-features = false, features = ["arrow-57"] }
+delta_kernel = { version = "0.19.2", default-features = false, features = ["arrow-57"] }
 deltalake = { version = "0.30", features = ["datafusion", "s3"] }
 dotenv = "0.15.0"
 fake = "4.3.0"
