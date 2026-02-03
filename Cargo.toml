@@ -125,7 +125,7 @@ protobuf = { version = "3.7.1", features = ["with-bytes"] }
 quote = "1.0"
 rama = { version = "0.2.0", features = ["http", "tcp"] }
 rand = "0.9"
-regex = "1.11.1"
+regex = "1.12.3"
 rhai = { version = "1.24.0", features = ["sync"] }
 rhai-rand = "0.1"
 serde = { version = "1.0", features = ["derive"] }
