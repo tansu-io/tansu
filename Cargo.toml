@@ -85,7 +85,7 @@ delta_kernel = { version = "0.19.2", default-features = false, features = ["arro
 deltalake = { version = "0.30", features = ["datafusion", "s3"] }
 dotenv = "0.15.0"
 fake = "4.3.0"
-flate2 = "1.0"
+flate2 = "1.1"
 futures = "0.3"
 futures-core = "0.3.31"
 futures-util = "0.3.31"
