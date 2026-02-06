@@ -22,7 +22,7 @@ use std::{
     any::{type_name, type_name_of_val},
     collections::VecDeque,
     fmt,
-    io::{self, Read},
+    io::Read,
     str::from_utf8,
 };
 use tansu_model::{FieldMeta, MessageMeta};
@@ -57,39 +57,9 @@ impl Container {
     }
 }
 
-struct ReadPosition<'a> {
-    reader: &'a mut dyn Read,
-    position: u64,
-}
-
-impl<'a> ReadPosition<'a> {
-    fn new(reader: &'a mut dyn Read) -> Self {
-        Self {
-            reader,
-            position: 0,
-        }
-    }
-}
-
-impl Read for ReadPosition<'_> {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        match self.reader.read(buf) {
-            Ok(count) => {
-                let delta = u64::try_from(count)
-                    .map_err(|err| Box::new(err) as Box<dyn std::error::Error + Send + Sync>)
-                    .map_err(io::Error::other)?;
-                self.position += delta;
-                Ok(count)
-            }
-
-            Err(error) => Err(error),
-        }
-    }
-}
-
 /// Deserialize the Kafka protocol into the serde data model.
 pub struct Decoder<'de> {
-    reader: ReadPosition<'de>,
+    reader: &'de mut dyn Read,
     containers: VecDeque<Container>,
     field: Option<&'static str>,
     kind: Option<Kind>,
@@ -143,7 +113,7 @@ impl Default for Meta {
 impl<'de> Decoder<'de> {
     pub fn new(reader: &'de mut dyn Read) -> Self {
         Self {
-            reader: ReadPosition::new(reader),
+            reader,
             containers: VecDeque::with_capacity(PARSE_DEPTH),
             field: None,
             kind: None,
@@ -159,7 +129,7 @@ impl<'de> Decoder<'de> {
 
     pub(crate) fn request(reader: &'de mut dyn Read) -> Self {
         Self {
-            reader: ReadPosition::new(reader),
+            reader,
             containers: VecDeque::with_capacity(PARSE_DEPTH),
             field: None,
             kind: Some(Kind::Request),
@@ -175,7 +145,7 @@ impl<'de> Decoder<'de> {
 
     pub(crate) fn response(reader: &'de mut dyn Read, api_key: i16, api_version: i16) -> Self {
         Self {
-            reader: ReadPosition::new(reader),
+            reader,
             containers: VecDeque::with_capacity(PARSE_DEPTH),
             field: None,
             kind: Some(Kind::Response),
