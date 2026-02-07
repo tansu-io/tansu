@@ -8,10 +8,15 @@ about:
 cargo-build +args:
     cargo build {{ args }}
 
+clean-workspace:
+    cargo clean --workspace
+
 license:
     cargo about generate about.hbs > license.html
 
 build profile="dev" features="delta,dynostore,iceberg,libsql,parquet,postgres,slatedb" bin="tansu": (cargo-build "--profile" profile "--timings" "--bin" bin "--no-default-features" "--features" features)
+
+build-storage: clean-workspace (build "dev" "libsql") clean-workspace (build "dev" "postgres") clean-workspace (build "dev" "slatedb")
 
 build-examples: (cargo-build "--examples")
 
