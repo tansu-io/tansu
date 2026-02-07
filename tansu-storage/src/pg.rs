@@ -61,7 +61,7 @@ use tansu_schema::{
     lake::{House, LakeHouse as _},
 };
 use tokio_postgres::{
-    Config, NoTls, Row, RowStream,
+    Config, Row, RowStream,
     binary_copy::BinaryCopyInWriter,
     error::SqlState,
     types::{BorrowToSql, ToSql, Type},
