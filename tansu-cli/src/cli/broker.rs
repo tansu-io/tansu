@@ -133,6 +133,14 @@ pub(super) enum Command {
     },
 }
 
+fn redact_password(mut url: Url) -> Url {
+    if url.password().is_some() {
+        _ = url.set_password(None).ok();
+    }
+
+    url
+}
+
 impl Arg {
     pub(super) async fn main(self) -> Result<ErrorCode> {
         let started = Instant::now();
@@ -251,7 +259,8 @@ impl Arg {
             println!(
                 "{}{} {:?}",
                 Emoji("💾", "storage: "),
-                storage_engine.if_supports_color(Stream::Stdout, |text| text.style(sheet.storage)),
+                redact_password(storage_engine)
+                    .if_supports_color(Stream::Stdout, |text| text.style(sheet.storage)),
                 storage_engines()
                     .iter()
                     .map(|storage_engine| storage_engine
