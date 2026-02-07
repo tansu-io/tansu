@@ -60,6 +60,7 @@ jobs:
         with:
           components: clippy, rustfmt
           cache: false
+      - run: cargo install cargo-nextest --locked
       - run: df -h
       - run: just test
       - run: df -h
