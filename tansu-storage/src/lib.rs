@@ -295,6 +295,8 @@ pub enum Error {
     Regex(#[from] regex::Error),
     Schema(Arc<tansu_schema::Error>),
 
+    Rustls(#[from] rustls::Error),
+
     SegmentEmpty(Topition),
 
     SegmentMissing {

@@ -60,6 +60,7 @@ syn.workspace = true
 tansu-model.workspace = true
 
 [dev-dependencies]
+bytes.workspace = true
 criterion.workspace = true
 pretty_assertions.workspace = true
 
