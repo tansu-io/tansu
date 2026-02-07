@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,14 +14,17 @@
 
 use std::time::Duration;
 
-use crate::{EnvVarExp, Result};
+use crate::{EnvVarExp, Result, cli::storage_engines};
 
 use super::DEFAULT_BROKER;
 use clap::Parser;
+use console::Emoji;
+use owo_colors::{OwoColorize as _, Stream, Style};
 use tansu_broker::{NODE_ID, broker::Broker, coordinator::group::administrator::Controller};
 use tansu_sans_io::ErrorCode;
 use tansu_schema::Registry;
 use tansu_storage::StorageContainer;
+use tokio::time::Instant;
 use tracing::debug;
 use url::Url;
 use uuid::Uuid;
@@ -77,6 +80,9 @@ pub(super) struct Arg {
     /// OTEL Exporter OTLP endpoint
     #[arg(long, env = "OTEL_EXPORTER_OTLP_ENDPOINT")]
     otlp_endpoint_url: Option<EnvVarExp<Url>>,
+
+    #[arg(long, default_value = "true")]
+    interactive: bool,
 }
 
 #[derive(Clone, Debug, Subcommand)]
@@ -129,9 +135,10 @@ pub(super) enum Command {
 
 impl Arg {
     pub(super) async fn main(self) -> Result<ErrorCode> {
+        let started = Instant::now();
         self.build()
             .await?
-            .main()
+            .main(started)
             .await
             .inspect(|result| debug!(?result))
             .inspect_err(|err| debug!(?err))
@@ -148,9 +155,13 @@ impl Arg {
         let storage_engine = self.storage_engine.into_inner();
         let advertised_listener = self.advertised_listener_url.into_inner();
         let listener = self.listener_url.into_inner();
-        let schema_registry = self
+
+        let schema_registry_url = self
             .schema_registry
-            .map(|env_var_exp| env_var_exp.into_inner())
+            .map(|env_var_exp| env_var_exp.into_inner());
+
+        let schema_registry = schema_registry_url
+            .clone()
             .map(|object_store| {
                 Registry::builder_try_from_url(&object_store).map(|registry| {
                     registry
@@ -208,15 +219,78 @@ impl Arg {
             .node_id(NODE_ID)
             .cluster_id(cluster_id)
             .incarnation_id(incarnation_id)
-            .advertised_listener(advertised_listener)
+            .advertised_listener(advertised_listener.clone())
             .otlp_endpoint_url(otlp_endpoint_url)
-            .schema_registry(schema_registry)
-            .storage(storage_engine)
-            .listener(listener);
+            .schema_registry(schema_registry.clone())
+            .storage(storage_engine.clone())
+            .listener(listener.clone())
+            .interactive(self.interactive);
 
         #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
         let broker = broker.lake_house(lake_house);
 
+        if self.interactive {
+            let sheet = Sheet::default();
+
+            println!(
+                "tansu {} {}",
+                "broker".if_supports_color(Stream::Stdout, |text| text.style(sheet.headline)),
+                env!("CARGO_PKG_VERSION")
+                    .if_supports_color(Stream::Stdout, |text| text.style(sheet.version))
+            );
+
+            println!(
+                "{}{} {}{}",
+                Emoji("👂", "listener: "),
+                listener.if_supports_color(Stream::Stdout, |text| text.style(sheet.listener)),
+                Emoji("📢", "advertised: "),
+                advertised_listener.if_supports_color(Stream::Stdout, |text| text
+                    .style(sheet.advertised_listener))
+            );
+
+            println!(
+                "{}{} {:?}",
+                Emoji("💾", "storage: "),
+                storage_engine.if_supports_color(Stream::Stdout, |text| text.style(sheet.storage)),
+                storage_engines()
+                    .iter()
+                    .map(|storage_engine| storage_engine
+                        .if_supports_color(Stream::Stdout, |text| text.style(sheet.storage)))
+                    .collect::<Vec<_>>()
+            );
+
+            if let Some(schema_registry) = schema_registry_url {
+                println!(
+                    "{}{}",
+                    Emoji("🛂", "schema registry: "),
+                    schema_registry.if_supports_color(Stream::Stdout, |text| text
+                        .style(sheet.schema_registry))
+                );
+            }
+        }
+
         broker.build().await.map_err(Into::into)
+    }
+}
+
+struct Sheet {
+    advertised_listener: Style,
+    headline: Style,
+    listener: Style,
+    schema_registry: Style,
+    storage: Style,
+    version: Style,
+}
+
+impl Default for Sheet {
+    fn default() -> Self {
+        Self {
+            advertised_listener: Style::new().magenta().bold(),
+            headline: Style::new().green().bold(),
+            listener: Style::new().magenta().bold(),
+            schema_registry: Style::new().magenta().bold(),
+            storage: Style::new().magenta().bold(),
+            version: Style::new().magenta().bold(),
+        }
     }
 }

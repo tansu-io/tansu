@@ -1307,7 +1307,7 @@ impl Storage for Postgres {
                 ],
             )
             .await
-            .inspect_err(|err| error!(?err, ?topic, ?validate_only))
+            .inspect_err(|err| debug!(?err, ?topic, ?validate_only))
             .map(|row| row.get(0))
             .map_err(|error| {
                 if let Error::TokioPostgres(ref error) = error
