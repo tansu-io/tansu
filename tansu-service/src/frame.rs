@@ -18,6 +18,7 @@ use std::{
 };
 
 use bytes::Bytes;
+use indicatif::ProgressBar;
 use opentelemetry::KeyValue;
 use rama::{Context, Layer, Service, context::Extensions, matcher::Matcher, service::BoxService};
 use tansu_sans_io::{ApiKey, Body, Frame, Header, Request, Response, RootMessageMeta};
@@ -242,6 +243,13 @@ where
         let api_key = req.api_key()?;
         let api_version = req.api_version()?;
         let correlation_id = req.correlation_id()?;
+
+        if let Some(pb) = ctx.get::<ProgressBar>() {
+            let api_name = req.api_name();
+
+            pb.set_message(format!("{api_name} v{api_version}/{correlation_id}"));
+            pb.tick();
+        }
 
         let attributes = vec![
             KeyValue::new("api_key", api_key as i64),

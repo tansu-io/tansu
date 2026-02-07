@@ -25,6 +25,7 @@ workspace = true
 async-trait.workspace = true
 bytes.workspace = true
 cached.workspace = true
+console.workspace = true
 chrono.workspace = true
 deadpool-postgres = { workspace = true, optional = true }
 deadpool = { workspace = true, optional = true }
@@ -32,6 +33,7 @@ futures-core.workspace = true
 futures-util.workspace = true
 futures.workspace = true
 glob.workspace = true
+indicatif.workspace = true
 libsql = { workspace = true, optional = true }
 object_store = { workspace = true, optional = true }
 opentelemetry-semantic-conventions.workspace = true
