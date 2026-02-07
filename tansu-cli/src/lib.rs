@@ -1,17 +1,16 @@
-// Copyright ⓒ 2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
+// http://www.apache.org/licenses/LICENSE-2.0
 //
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::{collections::HashMap, env::vars, fmt, result, str::FromStr};
 
@@ -22,18 +21,40 @@ use regex::{Regex, Replacer};
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
-    Cat(#[from] tansu_cat::Error),
+    Box(#[from] Box<dyn std::error::Error + Send + Sync>),
+    Cat(Box<tansu_cat::Error>),
     DotEnv(#[from] dotenv::Error),
+    Generate(#[from] tansu_generator::Error),
+    Perf(#[from] tansu_perf::Error),
     Proxy(#[from] tansu_proxy::Error),
     Regex(#[from] regex::Error),
-    Server(#[from] tansu_server::Error),
+    Schema(Box<tansu_schema::Error>),
+    Server(Box<tansu_broker::Error>),
     Topic(#[from] tansu_topic::Error),
     Url(#[from] url::ParseError),
 }
 
+impl From<tansu_cat::Error> for Error {
+    fn from(value: tansu_cat::Error) -> Self {
+        Self::Cat(Box::new(value))
+    }
+}
+
+impl From<tansu_schema::Error> for Error {
+    fn from(value: tansu_schema::Error) -> Self {
+        Self::Schema(Box::new(value))
+    }
+}
+
+impl From<tansu_broker::Error> for Error {
+    fn from(value: tansu_broker::Error) -> Self {
+        Self::Server(Box::new(value))
+    }
+}
+
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?}", self)
+        write!(f, "{self:?}")
     }
 }
 
@@ -58,10 +79,10 @@ impl VarRep {
 
 impl Replacer for &VarRep {
     fn replace_append(&mut self, caps: &regex::Captures<'_>, dst: &mut String) {
-        if let Some(variable) = caps.name("var") {
-            if let Some(value) = self.0.get(variable.as_str()) {
-                dst.push_str(value);
-            }
+        if let Some(variable) = caps.name("var")
+            && let Some(value) = self.0.get(variable.as_str())
+        {
+            dst.push_str(value);
         }
     }
 }

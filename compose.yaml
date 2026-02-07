@@ -28,7 +28,7 @@ services:
     ports:
       - 5432:5432
     volumes:
-      - db:/var/lib/postgresql/data
+      - db:/var/lib/postgresql
       - ./etc/initdb.d/:/docker-entrypoint-initdb.d/
     healthcheck:
       test: /usr/bin/pg_isready
@@ -64,12 +64,12 @@ services:
       AWS_ALLOW_HTTP: ${AWS_ALLOW_HTTP}
     volumes:
       - ./etc/schema/:/schema/
+      - ./data:/data/
     command: |
       --kafka-cluster-id ${CLUSTER_ID}
       --kafka-listener-url tcp://0.0.0.0:9092/
       --kafka-advertised-listener-url ${ADVERTISED_LISTENER_URL}
       --storage-engine ${STORAGE_ENGINE}
-      --prometheus-listener-url ${PROMETHEUS_LISTENER_URL}
       --schema-registry file:///schema
     ports:
       - 9092:9092
@@ -92,22 +92,41 @@ services:
     configs:
       - source: prometheus_yaml
         target: /prometheus/prometheus.yml
-  iceberg-catalog:
-    image: apache/iceberg-rest-fixture
+  lakehouse-catalog:
+    image: ${LAKEKEEPER_IMAGE}
     environment:
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
-      AWS_REGION: ${AWS_DEFAULT_REGION}
-      CATALOG_CATALOG__IMPL: org.apache.iceberg.jdbc.JdbcCatalog
-      CATALOG_URI: jdbc:sqlite:file:/tmp/iceberg_rest_mode=memory
-      CATALOG_WAREHOUSE: ${DATA_LAKE}
-      CATALOG_IO__IMPL: org.apache.iceberg.aws.s3.S3FileIO
-      CATALOG_S3_ENDPOINT: http://minio:9000
-      CATALOG_S3_PATH__STYLE__ACCESS: true
+      - LAKEKEEPER__PG_ENCRYPTION_KEY=This-is-NOT-Secure!
+      - LAKEKEEPER__PG_DATABASE_URL_READ=postgresql://postgres:postgres@db:5432/postgres
+      - LAKEKEEPER__PG_DATABASE_URL_WRITE=postgresql://postgres:postgres@db:5432/postgres
+      - RUST_LOG=trace,axum=trace,sqlx=trace,iceberg-catalog=trace
+    command: ["serve"]
+    healthcheck:
+      test: ["CMD", "/home/nonroot/iceberg-catalog", "healthcheck"]
+      interval: 1s
+      timeout: 10s
+      retries: 3
+      start_period: 3s
+    depends_on:
+      lakehouse-migrate:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
     ports:
-      - 8181:8181
-    links:
-      - minio
+      - "8181:8181"
+  lakehouse-migrate:
+    image: ${LAKEKEEPER_IMAGE}
+    environment:
+      - LAKEKEEPER__PG_ENCRYPTION_KEY=This-is-NOT-Secure!
+      - LAKEKEEPER__PG_DATABASE_URL_READ=postgresql://postgres:postgres@db:5432/postgres
+      - LAKEKEEPER__PG_DATABASE_URL_WRITE=postgresql://postgres:postgres@db:5432/postgres
+      - RUST_LOG=info
+    restart: "no"
+    command: ["migrate"]
+    depends_on:
+      db:
+        condition: service_healthy
 configs:
   prometheus_yaml:
     file: etc/prometheus.yaml

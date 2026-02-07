@@ -19,3 +19,13 @@ SET
 
 SET
     s3_use_ssl = 'false';
+
+CREATE SECRET my_secret (
+    TYPE s3,
+    KEY_ID 'minioadmin',
+    SECRET 'minioadmin',
+    REGION 'eu-west-2',
+    URL_STYLE 'path',
+    USE_SSL false,
+    ENDPOINT 'localhost:9000'
+);

@@ -1,30 +1,145 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
+// http://www.apache.org/licenses/LICENSE-2.0
 //
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+//! Tansu Storage Abstraction
+//!
+//! [`StorageContainer`] provides an abstraction over [`Storage`] and can
+//! be configured to use memory, [S3](https://en.wikipedia.org/wiki/Amazon_S3),
+//! [PostgreSQL](https://postgresql.org/),
+//! [libSQL](https://github.com/tursodatabase/libsql) and
+//! [Turso](https://github.com/tursodatabase/turso) (alpha: currently feature locked).
+//!
+//! ## Memory
+//!
+//! ```
+//! # use tansu_storage::{Error, StorageContainer};
+//! # use url::Url;
+//! # #[tokio::main]
+//! # async fn main() -> Result<(), Error> {
+//! let storage = StorageContainer::builder()
+//!     .cluster_id("tansu")
+//!     .node_id(111)
+//!     .advertised_listener(Url::parse("tcp://localhost:9092")?)
+//!     .storage(Url::parse("memory://tansu/")?)
+//!     .build()
+//!     .await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## S3
+//!
+//! ```no_run
+//! # use tansu_storage::{Error, StorageContainer};
+//! # use url::Url;
+//! # #[tokio::main]
+//! # async fn main() -> Result<(), Error> {
+//! let storage = StorageContainer::builder()
+//!     .cluster_id("tansu")
+//!     .node_id(111)
+//!     .advertised_listener(Url::parse("tcp://localhost:9092")?)
+//!     .storage(Url::parse("s3://tansu/")?)
+//!     .build()
+//!     .await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## PostgreSQL
+//!
+//! ```no_run
+//! # use tansu_storage::{Error, StorageContainer};
+//! # use url::Url;
+//! # #[tokio::main]
+//! # async fn main() -> Result<(), Error> {
+//! let storage = StorageContainer::builder()
+//!     .cluster_id("tansu")
+//!     .node_id(111)
+//!     .advertised_listener(Url::parse("tcp://localhost:9092")?)
+//!     .storage(Url::parse("postgres://postgres:postgres@localhost")?)
+//!     .build()
+//!     .await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## libSQL (SQLite)
+//!
+//! ```no_run
+//! # use tansu_storage::{Error, StorageContainer};
+//! # use url::Url;
+//! # #[tokio::main]
+//! # async fn main() -> Result<(), Error> {
+//! let storage = StorageContainer::builder()
+//!     .cluster_id("tansu")
+//!     .node_id(111)
+//!     .advertised_listener(Url::parse("tcp://localhost:9092")?)
+//!     .storage(Url::parse("sqlite://tansu.db")?)
+//!     .build()
+//!     .await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## Turso
+//!
+//! ```no_run
+//! # use tansu_storage::{Error, StorageContainer};
+//! # use url::Url;
+//! # #[tokio::main]
+//! # async fn main() -> Result<(), Error> {
+//! let storage = StorageContainer::builder()
+//!     .cluster_id("tansu")
+//!     .node_id(111)
+//!     .advertised_listener(Url::parse("tcp://localhost:9092")?)
+//!     .storage(Url::parse("turso://tansu.db")?)
+//!     .build()
+//!     .await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
 
 use async_trait::async_trait;
-use bytes::Bytes;
+use bytes::{Bytes, TryGetError};
+
+#[cfg(any(feature = "libsql", feature = "postgres"))]
+use deadpool::managed::PoolError;
+#[cfg(feature = "dynostore")]
 use dynostore::DynoStore;
+
 use glob::{GlobError, PatternError};
+
+#[cfg(feature = "dynostore")]
+use object_store::memory::InMemory;
+
+#[cfg(feature = "dynostore")]
+use object_store::aws::{AmazonS3Builder, S3ConditionalPut};
+
 use opentelemetry::{
     InstrumentationScope, KeyValue, global,
     metrics::{Counter, Meter},
 };
 use opentelemetry_semantic_conventions::SCHEMA_URL;
+
+#[cfg(feature = "postgres")]
 use pg::Postgres;
+
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+#[cfg(any(feature = "libsql", feature = "postgres"))]
+use std::error;
 use std::{
     array::TryFromSliceError,
     collections::BTreeMap,
@@ -32,16 +147,19 @@ use std::{
     fmt::{self, Debug, Display, Formatter},
     fs::DirEntry,
     io,
+    marker::PhantomData,
     num::{ParseIntError, TryFromIntError},
     path::PathBuf,
     result,
     str::FromStr,
-    sync::{LazyLock, PoisonError},
+    sync::{Arc, LazyLock, PoisonError},
     time::{Duration, SystemTime, SystemTimeError},
 };
-use tansu_kafka_sans_io::{
-    Body, ConfigResource, ErrorCode, IsolationLevel, NULL_TOPIC_ID,
-    add_partitions_to_txn_request::{AddPartitionsToTxnTopic, AddPartitionsToTxnTransaction},
+use tansu_sans_io::{
+    Body, ConfigResource, ErrorCode, IsolationLevel, ListOffset, NULL_TOPIC_ID,
+    add_partitions_to_txn_request::{
+        AddPartitionsToTxnRequest, AddPartitionsToTxnTopic, AddPartitionsToTxnTransaction,
+    },
     add_partitions_to_txn_response::{AddPartitionsToTxnResult, AddPartitionsToTxnTopicResult},
     consumer_group_describe_response,
     create_topics_request::CreatableTopic,
@@ -67,122 +185,172 @@ use tansu_kafka_sans_io::{
     txn_offset_commit_request::TxnOffsetCommitRequestTopic,
     txn_offset_commit_response::TxnOffsetCommitResponseTopic,
 };
-use tracing::{Instrument, debug, debug_span};
+use tansu_schema::{Registry, lake::House};
+use tokio_util::sync::CancellationToken;
+use tracing::{debug, instrument};
 use tracing_subscriber::filter::ParseError;
+use url::Url;
 use uuid::Uuid;
 
-pub mod dynostore;
-pub mod index;
-pub mod os;
-pub mod pg;
-pub mod segment;
+#[cfg(feature = "dynostore")]
+mod dynostore;
 
-#[derive(thiserror::Error, Debug)]
+mod null;
+
+#[cfg(feature = "postgres")]
+mod pg;
+
+mod proxy;
+mod service;
+
+pub use service::{
+    ChannelRequestLayer, ChannelRequestService, ConsumerGroupDescribeService, CreateTopicsService,
+    DeleteGroupsService, DeleteRecordsService, DeleteTopicsService, DescribeClusterService,
+    DescribeConfigsService, DescribeGroupsService, DescribeTopicPartitionsService, FetchService,
+    FindCoordinatorService, GetTelemetrySubscriptionsService, IncrementalAlterConfigsService,
+    InitProducerIdService, ListGroupsService, ListOffsetsService,
+    ListPartitionReassignmentsService, MetadataService, ProduceService, Request,
+    RequestChannelService, RequestLayer, RequestReceiver, RequestSender, RequestService,
+    RequestStorageService, Response, TxnAddOffsetsService, TxnAddPartitionService,
+    TxnOffsetCommitService, bounded_channel,
+};
+
+#[cfg(feature = "slatedb")]
+pub mod slate;
+
+#[cfg(any(feature = "libsql", feature = "postgres", feature = "turso"))]
+pub(crate) mod sql;
+
+#[cfg(feature = "libsql")]
+mod lite;
+
+#[cfg(feature = "dynostore")]
+mod os;
+
+#[cfg(feature = "turso")]
+mod limbo;
+
+/// Storage Errors
+#[derive(Clone, Debug, thiserror::Error)]
 pub enum Error {
-    #[error("api")]
     Api(ErrorCode),
 
-    #[error("build")]
+    ChronoParse(#[from] chrono::ParseError),
+
+    #[cfg(any(feature = "postgres", feature = "libsql"))]
     DeadPoolBuild(#[from] deadpool::managed::BuildError),
 
-    #[error("glob")]
-    Glob(#[from] GlobError),
+    Decode(Bytes),
 
-    #[error("io")]
-    Io(#[from] io::Error),
+    FeatureNotEnabled {
+        feature: String,
+        message: String,
+    },
 
-    #[error("kafka sans io")]
-    KafkaSansIo(#[from] tansu_kafka_sans_io::Error),
-
-    #[error("offset: {offset}, is less than base offset: {base_offset}")]
-    LessThanBaseOffset { offset: i64, base_offset: i64 },
-
-    #[error("offset: {offset}, is less than last offset: {last_offset:?}")]
+    Glob(Arc<GlobError>),
+    Io(Arc<io::Error>),
+    KafkaSansIo(#[from] tansu_sans_io::Error),
+    LessThanBaseOffset {
+        offset: i64,
+        base_offset: i64,
+    },
     LessThanLastOffset {
         offset: i64,
         last_offset: Option<i64>,
     },
 
-    #[error("time: {time}, is less than max time: {max_time:?}")]
-    LessThanMaxTime { time: i64, max_time: Option<i64> },
+    #[cfg(feature = "libsql")]
+    LibSql(Arc<libsql::Error>),
 
-    #[error("time: {time}, is less than min time: {min_time:?}")]
-    LessThanMinTime { time: i64, min_time: Option<i64> },
-
-    #[error("message: {0}")]
+    LessThanMaxTime {
+        time: i64,
+        max_time: Option<i64>,
+    },
+    LessThanMinTime {
+        time: i64,
+        min_time: Option<i64>,
+    },
     Message(String),
-
-    #[error("no such entry nth: {nth}")]
-    NoSuchEntry { nth: u32 },
-
-    #[error("no such offset: {0}")]
+    NoSuchEntry {
+        nth: u32,
+    },
     NoSuchOffset(i64),
-
-    #[error("os string {0:?}")]
     OsString(OsString),
 
-    #[error("object store: {0:?}")]
-    ObjectStore(#[from] object_store::Error),
+    #[cfg(any(feature = "dynostore", feature = "slatedb"))]
+    ObjectStore(Arc<object_store::Error>),
 
-    #[error("parse filter: {0:?}")]
-    ParseFilter(#[from] ParseError),
-
-    #[error("pattern")]
-    Pattern(#[from] PatternError),
-
-    #[error("parse int: {0}")]
+    ParseFilter(Arc<ParseError>),
+    Pattern(Arc<PatternError>),
     ParseInt(#[from] ParseIntError),
-
-    #[error("phantom cached")]
     PhantomCached(),
-
-    #[error("poision")]
     Poison,
 
-    #[error("pool")]
-    Pool(#[from] deadpool_postgres::PoolError),
+    #[cfg(any(feature = "libsql", feature = "postgres"))]
+    Pool(Arc<Box<dyn error::Error + Send + Sync>>),
 
-    #[error("regex")]
+    #[cfg(feature = "slatedb")]
+    Postcard(#[from] postcard::Error),
+
     Regex(#[from] regex::Error),
+    Schema(Arc<tansu_schema::Error>),
 
-    #[error("rustls: {0}")]
     Rustls(#[from] rustls::Error),
 
-    #[error("schema registry")]
-    SchemaRegistry(tansu_schema_registry::Error),
-
-    #[error("segment empty: {0:?}")]
     SegmentEmpty(Topition),
 
-    #[error("segment missing: {topition:?}, at offset: {offset:?}")]
     SegmentMissing {
         topition: Topition,
         offset: Option<i64>,
     },
 
-    #[error("json: {0}")]
-    SerdeJson(#[from] serde_json::Error),
+    SerdeJson(Arc<serde_json::Error>),
 
-    #[error("system time: {0}")]
+    #[cfg(feature = "slatedb")]
+    Slate(Arc<slatedb::Error>),
+
     SystemTime(#[from] SystemTimeError),
 
-    #[error("postgres")]
-    TokioPostgres(#[from] tokio_postgres::error::Error),
-
-    #[error("try from int: {0}")]
+    #[cfg(feature = "postgres")]
+    TokioPostgres(Arc<tokio_postgres::error::Error>),
     TryFromInt(#[from] TryFromIntError),
-
-    #[error("try from slice: {0}")]
     TryFromSlice(#[from] TryFromSliceError),
 
-    #[error("body: {0:?}")]
-    UnexpectedBody(Body),
+    TryGet(Arc<TryGetError>),
 
-    #[error("url: {0}")]
+    #[cfg(feature = "turso")]
+    Turso(Arc<turso::Error>),
+
+    UnexpectedBody(Box<Body>),
+
+    UnexpectedServiceResponse(Box<Response>),
+
+    #[cfg(feature = "turso")]
+    UnexpectedValue(turso::Value),
+
+    UnknownCacheKey(String),
+
+    UnsupportedStorageUrl(Url),
+    UnexpectedAddPartitionsToTxnRequest(Box<AddPartitionsToTxnRequest>),
     Url(#[from] url::ParseError),
-
-    #[error("state: {0}")]
     UnknownTxnState(String),
+
+    Uuid(#[from] uuid::Error),
+
+    UnableToSend,
+    OneshotRecv,
+}
+
+impl Display for Error {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{self:?}")
+    }
+}
+
+impl From<TryGetError> for Error {
+    fn from(value: TryGetError) -> Self {
+        Self::TryGet(Arc::new(value))
+    }
 }
 
 impl<T> From<PoisonError<T>> for Error {
@@ -191,18 +359,116 @@ impl<T> From<PoisonError<T>> for Error {
     }
 }
 
-impl From<tansu_schema_registry::Error> for Error {
-    fn from(value: tansu_schema_registry::Error) -> Self {
-        if let tansu_schema_registry::Error::Api(error_code) = value {
+#[cfg(any(feature = "libsql", feature = "postgres"))]
+impl<E> From<PoolError<E>> for Error
+where
+    E: error::Error + Send + Sync + 'static,
+{
+    fn from(value: PoolError<E>) -> Self {
+        Self::Pool(Arc::new(Box::new(value)))
+    }
+}
+
+#[cfg(feature = "libsql")]
+impl From<libsql::Error> for Error {
+    fn from(value: libsql::Error) -> Self {
+        Self::LibSql(Arc::new(value))
+    }
+}
+
+#[cfg(feature = "slatedb")]
+impl From<slatedb::Error> for Error {
+    fn from(value: slatedb::Error) -> Self {
+        Self::Slate(Arc::new(value))
+    }
+}
+
+#[cfg(feature = "turso")]
+impl From<turso::Error> for Error {
+    fn from(value: turso::Error) -> Self {
+        Self::Turso(Arc::new(value))
+    }
+}
+
+impl From<GlobError> for Error {
+    fn from(value: GlobError) -> Self {
+        Self::Glob(Arc::new(value))
+    }
+}
+
+impl From<io::Error> for Error {
+    fn from(value: io::Error) -> Self {
+        Self::Io(Arc::new(value))
+    }
+}
+
+#[cfg(any(feature = "dynostore", feature = "slatedb"))]
+impl From<Arc<object_store::Error>> for Error {
+    fn from(value: Arc<object_store::Error>) -> Self {
+        Self::ObjectStore(value)
+    }
+}
+
+#[cfg(any(feature = "dynostore", feature = "slatedb"))]
+impl From<object_store::Error> for Error {
+    fn from(value: object_store::Error) -> Self {
+        Self::from(Arc::new(value))
+    }
+}
+
+impl From<ParseError> for Error {
+    fn from(value: ParseError) -> Self {
+        Self::ParseFilter(Arc::new(value))
+    }
+}
+
+impl From<PatternError> for Error {
+    fn from(value: PatternError) -> Self {
+        Self::Pattern(Arc::new(value))
+    }
+}
+
+impl From<serde_json::Error> for Error {
+    fn from(value: serde_json::Error) -> Self {
+        Self::from(Arc::new(value))
+    }
+}
+
+impl From<Arc<serde_json::Error>> for Error {
+    fn from(value: Arc<serde_json::Error>) -> Self {
+        Self::SerdeJson(value)
+    }
+}
+
+#[cfg(feature = "postgres")]
+impl From<tokio_postgres::error::Error> for Error {
+    fn from(value: tokio_postgres::error::Error) -> Self {
+        Self::from(Arc::new(value))
+    }
+}
+
+#[cfg(feature = "postgres")]
+impl From<Arc<tokio_postgres::error::Error>> for Error {
+    fn from(value: Arc<tokio_postgres::error::Error>) -> Self {
+        Self::TokioPostgres(value)
+    }
+}
+
+impl From<tansu_schema::Error> for Error {
+    fn from(value: tansu_schema::Error) -> Self {
+        if let tansu_schema::Error::Api(error_code) = value {
             Self::Api(error_code)
         } else {
-            Self::SchemaRegistry(value)
+            Self::Schema(Arc::new(value))
         }
     }
 }
 
 pub type Result<T, E = Error> = result::Result<T, E>;
 
+/// Topic Partition (topition)
+///
+/// A topic partition pair.
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct Topition {
     topic: String,
@@ -290,6 +556,9 @@ impl From<&Topition> for PathBuf {
     }
 }
 
+/// Topic Partition Offset
+///
+/// A topic partition with an offset.
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct TopitionOffset {
     topition: Topition,
@@ -317,13 +586,7 @@ impl From<&TopitionOffset> for PathBuf {
     }
 }
 
-#[derive(Copy, Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub enum ListOffsetRequest {
-    #[default]
-    Earliest,
-    Latest,
-    Timestamp(SystemTime),
-}
+pub type ListOffsetRequest = ListOffset;
 
 #[derive(Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ListOffsetResponse {
@@ -349,7 +612,7 @@ impl ListOffsetResponse {
 
     pub fn timestamp(&self) -> Result<Option<i64>> {
         self.timestamp.map_or(Ok(None), |system_time| {
-            to_timestamp(system_time).map(Some).map_err(Into::into)
+            to_timestamp(&system_time).map(Some).map_err(Into::into)
         })
     }
 
@@ -358,32 +621,9 @@ impl ListOffsetResponse {
     }
 }
 
-impl TryFrom<ListOffsetRequest> for i64 {
-    type Error = Error;
-
-    fn try_from(value: ListOffsetRequest) -> Result<Self, Self::Error> {
-        match value {
-            ListOffsetRequest::Earliest => Ok(-2),
-            ListOffsetRequest::Latest => Ok(-1),
-            ListOffsetRequest::Timestamp(timestamp) => to_timestamp(timestamp).map_err(Into::into),
-        }
-    }
-}
-
-impl TryFrom<i64> for ListOffsetRequest {
-    type Error = Error;
-
-    fn try_from(value: i64) -> Result<Self, Self::Error> {
-        match value {
-            -2 => Ok(ListOffsetRequest::Earliest),
-            -1 => Ok(ListOffsetRequest::Latest),
-            timestamp => to_system_time(timestamp)
-                .map(ListOffsetRequest::Timestamp)
-                .map_err(Into::into),
-        }
-    }
-}
-
+/// Offset Commit Request
+///
+/// A structure representing an [`tansu_sans_io::OffsetCommitRequestPartition](OffsetCommitRequestPartition).
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct OffsetCommitRequest {
     offset: i64,
@@ -418,6 +658,9 @@ impl TryFrom<&OffsetCommitRequestPartition> for OffsetCommitRequest {
     }
 }
 
+/// Topic Id
+///
+/// An enumeration of either the name or UUID of a topic.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum TopicId {
     Name(String),
@@ -495,6 +738,7 @@ impl From<DeleteTopicState> for TopicId {
             DeleteTopicState {
                 name: Some(name),
                 topic_id,
+                ..
             } if topic_id == NULL_TOPIC_ID => name.into(),
 
             DeleteTopicState { topic_id, .. } => topic_id.into(),
@@ -514,6 +758,9 @@ impl From<&Topition> for TopicId {
     }
 }
 
+/// Broker Registration Request
+///
+/// A broker will register with storage using this structure.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct BrokerRegistrationRequest {
     pub broker_id: i32,
@@ -548,6 +795,9 @@ impl MetadataResponse {
     }
 }
 
+/// Offset Stage
+///
+/// An offset stage structure represents the `last_stable`, `high_watermark` and `log_start` offsets.
 #[derive(
     Clone, Copy, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize,
 )]
@@ -571,12 +821,16 @@ impl OffsetStage {
     }
 }
 
+/// Group Member
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct GroupMember {
     pub join_response: JoinGroupResponseMember,
     pub last_contact: Option<SystemTime>,
 }
 
+/// Group State
+///
+/// A group is either in the process of [`GroupState::Forming`] or has [`GroupState::Formed`].
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum GroupState {
     Forming {
@@ -633,6 +887,9 @@ impl Default for GroupState {
     }
 }
 
+/// Consumer Group State
+///
+/// A helper type for conversion into [`consumer_group_describe_response::DescribedGroup`].
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum ConsumerGroupState {
     Unknown,
@@ -660,6 +917,9 @@ impl Display for ConsumerGroupState {
     }
 }
 
+/// Group Detail
+///
+/// A helper type that can be easily converted into [`consumer_group_describe_response::DescribedGroup`].
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct GroupDetail {
     pub session_timeout_ms: i32,
@@ -717,17 +977,16 @@ impl From<&GroupDetail> for consumer_group_describe_response::DescribedGroup {
 
         let group_state = ConsumerGroupState::from(value).to_string();
 
-        Self {
-            error_code: ErrorCode::None.into(),
-            error_message: Some(ErrorCode::None.to_string()),
-            group_id: Default::default(),
-            group_state,
-            group_epoch: -1,
-            assignment_epoch: -1,
-            assignor_name,
-            members: Some([].into()),
-            authorized_operations: -1,
-        }
+        Self::default()
+            .error_code(ErrorCode::None.into())
+            .error_message(Some(ErrorCode::None.to_string()))
+            .group_id(Default::default())
+            .group_state(group_state)
+            .group_epoch(-1)
+            .assignment_epoch(-1)
+            .assignor_name(assignor_name)
+            .members(Some([].into()))
+            .authorized_operations(-1)
     }
 }
 
@@ -737,6 +996,10 @@ pub enum GroupDetailResponse {
     Found(GroupDetail),
 }
 
+/// NamedGroupDetail
+///
+/// A helper type that can be easily converted into [`consumer_group_describe_response::DescribedGroup`]
+/// or [`describe_groups_response::DescribedGroup`].
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct NamedGroupDetail {
     name: String,
@@ -773,33 +1036,31 @@ impl From<&NamedGroupDetail> for consumer_group_describe_response::DescribedGrou
 
                 let group_state = ConsumerGroupState::from(group_detail).to_string();
 
-                Self {
-                    error_code: ErrorCode::None.into(),
-                    error_message: Some(ErrorCode::None.to_string()),
-                    group_id: name.into(),
-                    group_state,
-                    group_epoch: -1,
-                    assignment_epoch: -1,
-                    assignor_name,
-                    members: Some([].into()),
-                    authorized_operations: -1,
-                }
+                Self::default()
+                    .error_code(ErrorCode::None.into())
+                    .error_message(Some(ErrorCode::None.to_string()))
+                    .group_id(name.into())
+                    .group_state(group_state)
+                    .group_epoch(-1)
+                    .assignment_epoch(-1)
+                    .assignor_name(assignor_name)
+                    .members(Some([].into()))
+                    .authorized_operations(-1)
             }
 
             NamedGroupDetail {
                 name,
                 response: GroupDetailResponse::ErrorCode(error_code),
-            } => Self {
-                error_code: (*error_code).into(),
-                error_message: Some(error_code.to_string()),
-                group_id: name.into(),
-                group_state: "Unknown".into(),
-                group_epoch: -1,
-                assignment_epoch: -1,
-                assignor_name: "".into(),
-                members: Some([].into()),
-                authorized_operations: -1,
-            },
+            } => Self::default()
+                .error_code((*error_code).into())
+                .error_message(Some(error_code.to_string()))
+                .group_id(name.into())
+                .group_state("Unknown".into())
+                .group_epoch(-1)
+                .assignment_epoch(-1)
+                .assignor_name("".into())
+                .members(Some([].into()))
+                .authorized_operations(-1),
         }
     }
 }
@@ -816,43 +1077,43 @@ impl From<&NamedGroupDetail> for describe_groups_response::DescribedGroup {
                 let members = group_detail
                     .members
                     .keys()
-                    .map(|member_id| describe_groups_response::DescribedGroupMember {
-                        member_id: member_id.into(),
-                        group_instance_id: None,
-                        client_id: "".into(),
-                        client_host: "".into(),
-                        member_metadata: Bytes::new(),
-                        member_assignment: Bytes::new(),
+                    .map(|member_id| {
+                        describe_groups_response::DescribedGroupMember::default()
+                            .member_id(member_id.into())
+                            .group_instance_id(None)
+                            .client_id("".into())
+                            .client_host("".into())
+                            .member_metadata(Bytes::new())
+                            .member_assignment(Bytes::new())
                     })
                     .collect::<Vec<_>>();
 
-                Self {
-                    error_code: ErrorCode::None.into(),
-                    group_id: name.clone(),
-                    group_state,
-                    protocol_type: group_detail.state.protocol_type().unwrap_or_default(),
-                    protocol_data: "".into(),
-                    members: Some(members),
-                    authorized_operations: Some(-1),
-                }
+                Self::default()
+                    .error_code(ErrorCode::None.into())
+                    .group_id(name.clone())
+                    .group_state(group_state)
+                    .protocol_type(group_detail.state.protocol_type().unwrap_or_default())
+                    .protocol_data("".into())
+                    .members(Some(members))
+                    .authorized_operations(Some(-1))
             }
 
             NamedGroupDetail {
                 name,
                 response: GroupDetailResponse::ErrorCode(error_code),
-            } => Self {
-                error_code: (*error_code).into(),
-                group_id: name.clone(),
-                group_state: "Unknown".into(),
-                protocol_type: "".into(),
-                protocol_data: "".into(),
-                members: Some(vec![]),
-                authorized_operations: Some(-1),
-            },
+            } => Self::default()
+                .error_code((*error_code).into())
+                .group_id(name.clone())
+                .group_state("Unknown".into())
+                .protocol_type("".into())
+                .protocol_data("".into())
+                .members(Some(vec![]))
+                .authorized_operations(Some(-1)),
         }
     }
 }
 
+/// Topition (topic partition) Detail
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct TopitionDetail {
     error: ErrorCode,
@@ -860,18 +1121,30 @@ pub struct TopitionDetail {
     partitions: Option<Vec<PartitionDetail>>,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+/// Partition Detail
+#[derive(Copy, Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct PartitionDetail {
     error: ErrorCode,
     partition_index: i32,
 }
 
+/// Version representing an `e_tag` and `version` used in conditional writes to an object store.
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct Version {
     e_tag: Option<String>,
     version: Option<String>,
 }
 
+impl From<&Uuid> for Version {
+    fn from(value: &Uuid) -> Self {
+        Self {
+            e_tag: Some(value.to_string()),
+            version: None,
+        }
+    }
+}
+
+/// Producer Id Response
 #[derive(Copy, Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct ProducerIdResponse {
     pub error: ErrorCode,
@@ -889,6 +1162,8 @@ impl Default for ProducerIdResponse {
     }
 }
 
+/// For protocol versions 0..=3 using [`AddPartitionsToTxnTopic`],
+/// thereafter using [`AddPartitionsToTxnTransaction`].
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum TxnAddPartitionsRequest {
     VersionZeroToThree {
@@ -903,17 +1178,18 @@ pub enum TxnAddPartitionsRequest {
     },
 }
 
-impl TryFrom<Body> for TxnAddPartitionsRequest {
+impl TryFrom<AddPartitionsToTxnRequest> for TxnAddPartitionsRequest {
     type Error = Error;
 
-    fn try_from(value: Body) -> result::Result<Self, Self::Error> {
+    fn try_from(value: AddPartitionsToTxnRequest) -> result::Result<Self, Self::Error> {
         match value {
-            Body::AddPartitionsToTxnRequest {
+            AddPartitionsToTxnRequest {
                 transactions: None,
                 v_3_and_below_transactional_id: Some(transactional_id),
                 v_3_and_below_producer_id: Some(producer_id),
                 v_3_and_below_producer_epoch: Some(producer_epoch),
                 v_3_and_below_topics: Some(topics),
+                ..
             } => Ok(Self::VersionZeroToThree {
                 transaction_id: transactional_id,
                 producer_id,
@@ -921,19 +1197,25 @@ impl TryFrom<Body> for TxnAddPartitionsRequest {
                 topics,
             }),
 
-            Body::AddPartitionsToTxnRequest {
+            AddPartitionsToTxnRequest {
                 transactions: Some(transactions),
                 v_3_and_below_transactional_id: None,
                 v_3_and_below_producer_id: None,
                 v_3_and_below_producer_epoch: None,
                 v_3_and_below_topics: None,
+                ..
             } => Ok(Self::VersionFourPlus { transactions }),
 
-            unexpected => Err(Error::UnexpectedBody(unexpected)),
+            unexpected => Err(Error::UnexpectedAddPartitionsToTxnRequest(Box::new(
+                unexpected,
+            ))),
         }
     }
 }
 
+/// Transaction Add Partitions Response
+///
+/// For protocol versions 0..=3 using `AddPartitionsToTxnTopic`, thereafter using `AddPartitionsToTxnTransaction`.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum TxnAddPartitionsResponse {
     VersionZeroToThree(Vec<AddPartitionsToTxnTopicResult>),
@@ -956,6 +1238,7 @@ impl TxnAddPartitionsResponse {
     }
 }
 
+/// Transaction Offset Commit Request
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct TxnOffsetCommitRequest {
     pub transaction_id: String,
@@ -968,6 +1251,7 @@ pub struct TxnOffsetCommitRequest {
     pub topics: Vec<TxnOffsetCommitRequestTopic>,
 }
 
+/// Transaction State
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum TxnState {
     Begin,
@@ -1021,43 +1305,46 @@ impl From<TxnState> for String {
     }
 }
 
-#[async_trait]
-pub trait StorageProvider {
-    async fn provide_storage(&mut self) -> impl Storage;
-}
-
+/// Storage
+///
+/// The Core storage abstraction. All storage engines implement this type.
 #[async_trait]
 pub trait Storage: Clone + Debug + Send + Sync + 'static {
-    async fn register_broker(
-        &mut self,
-        broker_registration: BrokerRegistrationRequest,
-    ) -> Result<()>;
+    /// On startup a broker will register with storage.
+    async fn register_broker(&self, broker_registration: BrokerRegistrationRequest) -> Result<()>;
 
-    async fn create_topic(&mut self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid>;
+    /// Create a topic on this storage.
+    async fn create_topic(&self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid>;
 
+    /// Incrementally alter a resource on this storage.
     async fn incremental_alter_resource(
-        &mut self,
+        &self,
         resource: AlterConfigsResource,
     ) -> Result<AlterConfigsResourceResponse>;
 
+    /// Delete records on this storage.
     async fn delete_records(
-        &mut self,
+        &self,
         topics: &[DeleteRecordsTopic],
     ) -> Result<Vec<DeleteRecordsTopicResult>>;
 
-    async fn delete_topic(&mut self, topic: &TopicId) -> Result<ErrorCode>;
+    /// Delete a topic from this storage.
+    async fn delete_topic(&self, topic: &TopicId) -> Result<ErrorCode>;
 
-    async fn brokers(&mut self) -> Result<Vec<DescribeClusterBroker>>;
+    /// Query the brokers registered with this storage.
+    async fn brokers(&self) -> Result<Vec<DescribeClusterBroker>>;
 
+    /// Produce a deflated batch to this storage.
     async fn produce(
-        &mut self,
+        &self,
         transaction_id: Option<&str>,
         topition: &Topition,
         batch: deflated::Batch,
     ) -> Result<i64>;
 
+    /// Fetch deflated batches from storage.
     async fn fetch(
-        &mut self,
+        &self,
         topition: &'_ Topition,
         offset: i64,
         min_bytes: u32,
@@ -1065,119 +1352,508 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
         isolation: IsolationLevel,
     ) -> Result<Vec<deflated::Batch>>;
 
-    async fn offset_stage(&mut self, topition: &Topition) -> Result<OffsetStage>;
+    /// Query the offset stage for a topic partition.
+    async fn offset_stage(&self, topition: &Topition) -> Result<OffsetStage>;
 
+    /// Query the offsets for one or more topic partitions.
     async fn list_offsets(
-        &mut self,
+        &self,
         isolation_level: IsolationLevel,
-        offsets: &[(Topition, ListOffsetRequest)],
+        offsets: &[(Topition, ListOffset)],
     ) -> Result<Vec<(Topition, ListOffsetResponse)>>;
 
+    /// Commit offsets for one or more topic partitions in a consumer group.
     async fn offset_commit(
-        &mut self,
+        &self,
         group_id: &str,
         retention_time_ms: Option<Duration>,
         offsets: &[(Topition, OffsetCommitRequest)],
     ) -> Result<Vec<(Topition, ErrorCode)>>;
 
+    /// Fetch committed offsets for one or more topic partitions in a consumer group.
     async fn offset_fetch(
-        &mut self,
+        &self,
         group_id: Option<&str>,
         topics: &[Topition],
         require_stable: Option<bool>,
     ) -> Result<BTreeMap<Topition, i64>>;
 
-    async fn committed_offset_topitions(
-        &mut self,
-        group_id: &str,
-    ) -> Result<BTreeMap<Topition, i64>>;
+    /// Fetch all committed offsets in a consumer group.
+    async fn committed_offset_topitions(&self, group_id: &str) -> Result<BTreeMap<Topition, i64>>;
 
-    async fn metadata(&mut self, topics: Option<&[TopicId]>) -> Result<MetadataResponse>;
+    /// Query broker and topic metadata.
+    async fn metadata(&self, topics: Option<&[TopicId]>) -> Result<MetadataResponse>;
 
+    /// Query the configuration of a resource in this storage.
     async fn describe_config(
-        &mut self,
+        &self,
         name: &str,
         resource: ConfigResource,
         keys: Option<&[String]>,
     ) -> Result<DescribeConfigsResult>;
 
-    async fn list_groups(&mut self, states_filter: Option<&[String]>) -> Result<Vec<ListedGroup>>;
+    /// Query available groups optionally with a state filter.
+    async fn list_groups(&self, states_filter: Option<&[String]>) -> Result<Vec<ListedGroup>>;
 
+    /// Delete one or more groups from storage.
     async fn delete_groups(
-        &mut self,
+        &self,
         group_ids: Option<&[String]>,
     ) -> Result<Vec<DeletableGroupResult>>;
 
+    /// Describe the groups found in this storage.
     async fn describe_groups(
-        &mut self,
+        &self,
         group_ids: Option<&[String]>,
         include_authorized_operations: bool,
     ) -> Result<Vec<NamedGroupDetail>>;
 
+    /// Describe the topic partitions found in this storage.
     async fn describe_topic_partitions(
-        &mut self,
+        &self,
         topics: Option<&[TopicId]>,
         partition_limit: i32,
         cursor: Option<Topition>,
     ) -> Result<Vec<DescribeTopicPartitionsResponseTopic>>;
 
+    /// Conditionally update the state of a group in this storage.
     async fn update_group(
-        &mut self,
+        &self,
         group_id: &str,
         detail: GroupDetail,
         version: Option<Version>,
     ) -> Result<Version, UpdateError<GroupDetail>>;
 
+    /// Initialise a transactional or idempotent producer in this storage.
     async fn init_producer(
-        &mut self,
+        &self,
         transaction_id: Option<&str>,
         transaction_timeout_ms: i32,
         producer_id: Option<i64>,
         producer_epoch: Option<i16>,
     ) -> Result<ProducerIdResponse>;
 
+    /// Add offsets to a transaction for a producer.
     async fn txn_add_offsets(
-        &mut self,
+        &self,
         transaction_id: &str,
         producer_id: i64,
         producer_epoch: i16,
         group_id: &str,
     ) -> Result<ErrorCode>;
 
+    /// Add partitions to a transaction.
     async fn txn_add_partitions(
-        &mut self,
+        &self,
         partitions: TxnAddPartitionsRequest,
     ) -> Result<TxnAddPartitionsResponse>;
 
+    /// Commit an offset within a transaction.
     async fn txn_offset_commit(
-        &mut self,
+        &self,
         offsets: TxnOffsetCommitRequest,
     ) -> Result<Vec<TxnOffsetCommitResponseTopic>>;
 
+    /// Commit or abort a running transaction.
     async fn txn_end(
-        &mut self,
+        &self,
         transaction_id: &str,
         producer_id: i64,
         producer_epoch: i16,
         committed: bool,
     ) -> Result<ErrorCode>;
+
+    /// Run periodic maintenance on this storage.
+    async fn maintain(&self, _now: SystemTime) -> Result<()> {
+        Ok(())
+    }
+
+    async fn cluster_id(&self) -> Result<String>;
+
+    async fn node(&self) -> Result<i32>;
+
+    async fn advertised_listener(&self) -> Result<Url>;
+
+    async fn ping(&self) -> Result<()>;
 }
 
-#[derive(Debug, thiserror::Error)]
+/// Conditional Update Errors
+#[derive(Clone, Debug, thiserror::Error)]
 pub enum UpdateError<T> {
     Error(#[from] Error),
-    ObjectStore(#[from] object_store::Error),
-    Outdated { current: T, version: Version },
-    SerdeJson(#[from] serde_json::Error),
-    TokioPostgres(#[from] tokio_postgres::error::Error),
+
     MissingEtag,
+
+    Outdated { current: T, version: Version },
+
+    SerdeJson(Arc<serde_json::Error>),
+
     Uuid(#[from] uuid::Error),
 }
 
-#[derive(Clone, Debug)]
+#[cfg(feature = "libsql")]
+impl<T> From<libsql::Error> for UpdateError<T> {
+    fn from(value: libsql::Error) -> Self {
+        Self::Error(Error::from(value))
+    }
+}
+
+#[cfg(feature = "turso")]
+impl<T> From<turso::Error> for UpdateError<T> {
+    fn from(value: turso::Error) -> Self {
+        Self::Error(Error::from(value))
+    }
+}
+
+#[cfg(any(feature = "dynostore", feature = "slatedb"))]
+impl<T> From<object_store::Error> for UpdateError<T> {
+    fn from(value: object_store::Error) -> Self {
+        Self::Error(Error::from(value))
+    }
+}
+
+impl<T> From<serde_json::Error> for UpdateError<T> {
+    fn from(value: serde_json::Error) -> Self {
+        Self::SerdeJson(Arc::new(value))
+    }
+}
+
+#[cfg(feature = "postgres")]
+impl<T> From<tokio_postgres::error::Error> for UpdateError<T> {
+    fn from(value: tokio_postgres::error::Error) -> Self {
+        Self::Error(Error::from(value))
+    }
+}
+
+/// Storage Container
+#[derive(Clone)]
+#[cfg_attr(
+    not(any(
+        feature = "dynostore",
+        feature = "libsql",
+        feature = "postgres",
+        feature = "slatedb",
+        feature = "turso"
+    )),
+    allow(missing_copy_implementations)
+)]
 pub enum StorageContainer {
+    Null(null::Engine),
+
+    #[cfg(feature = "postgres")]
     Postgres(Postgres),
+
+    #[cfg(feature = "dynostore")]
     DynoStore(DynoStore),
+
+    #[cfg(feature = "libsql")]
+    Lite(lite::Engine),
+
+    #[cfg(feature = "slatedb")]
+    Slate(slate::Engine),
+
+    #[cfg(feature = "turso")]
+    Turso(limbo::Engine),
+}
+
+impl Debug for StorageContainer {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Null(_) => f.debug_tuple(stringify!(StorageContainer::Null)).finish(),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(_) => f
+                .debug_tuple(stringify!(StorageContainer::Postgres))
+                .finish(),
+
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(_) => f
+                .debug_tuple(stringify!(StorageContainer::DynoStore))
+                .finish(),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(_) => f.debug_tuple(stringify!(StorageContainer::Lite)).finish(),
+
+            #[cfg(feature = "slatedb")]
+            Self::Slate(_) => f.debug_tuple(stringify!(StorageContainer::Slate)).finish(),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(_) => f.debug_tuple(stringify!(StorageContainer::Turso)).finish(),
+        }
+    }
+}
+
+impl StorageContainer {
+    pub fn builder() -> PhantomBuilder {
+        PhantomBuilder::default()
+    }
+}
+
+/// A [`StorageContainer`] builder
+#[derive(Clone, Debug, Default)]
+pub struct Builder<N, C, A, S> {
+    node_id: N,
+    cluster_id: C,
+    advertised_listener: A,
+    storage: S,
+    schema_registry: Option<Registry>,
+    lake_house: Option<House>,
+
+    cancellation: CancellationToken,
+}
+
+type PhantomBuilder =
+    Builder<PhantomData<i32>, PhantomData<String>, PhantomData<Url>, PhantomData<Url>>;
+
+impl<N, C, A, S> Builder<N, C, A, S> {
+    pub fn node_id(self, node_id: i32) -> Builder<i32, C, A, S> {
+        Builder {
+            node_id,
+            cluster_id: self.cluster_id,
+            advertised_listener: self.advertised_listener,
+            storage: self.storage,
+            schema_registry: self.schema_registry,
+            lake_house: self.lake_house,
+            cancellation: self.cancellation,
+        }
+    }
+
+    pub fn cluster_id(self, cluster_id: impl Into<String>) -> Builder<N, String, A, S> {
+        Builder {
+            node_id: self.node_id,
+            cluster_id: cluster_id.into(),
+            advertised_listener: self.advertised_listener,
+            storage: self.storage,
+            schema_registry: self.schema_registry,
+            lake_house: self.lake_house,
+            cancellation: self.cancellation,
+        }
+    }
+
+    pub fn advertised_listener(self, advertised_listener: impl Into<Url>) -> Builder<N, C, Url, S> {
+        Builder {
+            node_id: self.node_id,
+            cluster_id: self.cluster_id,
+            advertised_listener: advertised_listener.into(),
+            storage: self.storage,
+            schema_registry: self.schema_registry,
+            lake_house: self.lake_house,
+            cancellation: self.cancellation,
+        }
+    }
+
+    pub fn storage(self, storage: Url) -> Builder<N, C, A, Url> {
+        debug!(%storage);
+
+        Builder {
+            node_id: self.node_id,
+            cluster_id: self.cluster_id,
+            advertised_listener: self.advertised_listener,
+            storage,
+            schema_registry: self.schema_registry,
+            lake_house: self.lake_house,
+            cancellation: self.cancellation,
+        }
+    }
+
+    pub fn schema_registry(self, schema_registry: Option<Registry>) -> Self {
+        _ = schema_registry
+            .as_ref()
+            .inspect(|schema_registry| debug!(?schema_registry));
+
+        Self {
+            schema_registry,
+            ..self
+        }
+    }
+
+    pub fn lake_house(self, lake_house: Option<House>) -> Self {
+        _ = lake_house
+            .as_ref()
+            .inspect(|lake_house| debug!(?lake_house));
+
+        Self { lake_house, ..self }
+    }
+
+    pub fn cancellation(self, cancellation: CancellationToken) -> Self {
+        Self {
+            cancellation,
+            ..self
+        }
+    }
+}
+
+impl Builder<i32, String, Url, Url> {
+    pub async fn build(self) -> Result<StorageContainer> {
+        let storage = match self.storage.scheme() {
+            #[cfg(feature = "postgres")]
+            "postgres" | "postgresql" => Postgres::builder(self.storage.to_string().as_str())
+                .map(|builder| builder.cluster(self.cluster_id.as_str()))
+                .map(|builder| builder.node(self.node_id))
+                .map(|builder| builder.advertised_listener(self.advertised_listener.clone()))
+                .map(|builder| builder.schemas(self.schema_registry))
+                .map(|builder| builder.lake(self.lake_house.clone()))
+                .map(|builder| builder.build())
+                .map(StorageContainer::Postgres),
+
+            #[cfg(not(feature = "postgres"))]
+            "postgres" | "postgresql" => Err(Error::FeatureNotEnabled {
+                feature: "postgres".into(),
+                message: self.storage.to_string(),
+            }),
+
+            #[cfg(feature = "dynostore")]
+            "s3" => {
+                let bucket_name = self.storage.host_str().unwrap_or("tansu");
+
+                AmazonS3Builder::from_env()
+                    .with_bucket_name(bucket_name)
+                    .with_conditional_put(S3ConditionalPut::ETagMatch)
+                    .build()
+                    .map(|object_store| {
+                        DynoStore::new(self.cluster_id.as_str(), self.node_id, object_store)
+                            .advertised_listener(self.advertised_listener.clone())
+                            .schemas(self.schema_registry)
+                            .lake(self.lake_house.clone())
+                    })
+                    .map(StorageContainer::DynoStore)
+                    .map_err(Into::into)
+            }
+
+            #[cfg(feature = "dynostore")]
+            "memory" => Ok(StorageContainer::DynoStore(
+                DynoStore::new(self.cluster_id.as_str(), self.node_id, InMemory::new())
+                    .advertised_listener(self.advertised_listener.clone())
+                    .schemas(self.schema_registry)
+                    .lake(self.lake_house.clone()),
+            )),
+
+            #[cfg(not(feature = "dynostore"))]
+            "s3" | "memory" => Err(Error::FeatureNotEnabled {
+                feature: "dynostore".into(),
+                message: self.storage.to_string(),
+            }),
+
+            #[cfg(feature = "libsql")]
+            "sqlite" => lite::Engine::builder()
+                .storage(self.storage.clone())
+                .node(self.node_id)
+                .cluster(self.cluster_id.clone())
+                .advertised_listener(self.advertised_listener.clone())
+                .schemas(self.schema_registry)
+                .lake(self.lake_house.clone())
+                .cancellation(self.cancellation.clone())
+                .build()
+                .await
+                .map(StorageContainer::Lite),
+
+            #[cfg(not(feature = "libsql"))]
+            "sqlite" => Err(Error::FeatureNotEnabled {
+                feature: "libsql".into(),
+                message: self.storage.to_string(),
+            }),
+
+            #[cfg(feature = "slatedb")]
+            "slatedb" => {
+                use slatedb::Db;
+                use slatedb::object_store::{
+                    ObjectStore as SlateObjectStore,
+                    aws::{
+                        AmazonS3Builder as SlateS3Builder,
+                        S3ConditionalPut as SlateS3ConditionalPut,
+                    },
+                    memory::InMemory as SlateInMemory,
+                };
+
+                let host = self.storage.host_str().unwrap_or("tansu");
+                let db_path = format!("tansu-{}.slatedb", self.cluster_id);
+
+                // Support memory backend for testing: slatedb://memory
+                let object_store: Arc<dyn SlateObjectStore> = if host == "memory" {
+                    Arc::new(SlateInMemory::new())
+                } else {
+                    // Use S3 backend with host as bucket name
+                    SlateS3Builder::from_env()
+                        .with_bucket_name(host)
+                        .with_conditional_put(SlateS3ConditionalPut::ETagMatch)
+                        .build()
+                        .map(Arc::new)
+                        .map_err(|e| Error::Message(e.to_string()))?
+                };
+
+                Db::open(db_path, object_store)
+                    .await
+                    .map(Arc::new)
+                    .map(|db| {
+                        slate::Engine::builder()
+                            .cluster(self.cluster_id.clone())
+                            .node(self.node_id)
+                            .advertised_listener(self.advertised_listener.clone())
+                            .db(db)
+                            .schemas(self.schema_registry)
+                            .lake(self.lake_house)
+                            .build()
+                    })
+                    .map(StorageContainer::Slate)
+                    .map_err(Into::into)
+            }
+
+            #[cfg(not(feature = "slatedb"))]
+            "slatedb" => Err(Error::FeatureNotEnabled {
+                feature: "slatedb".into(),
+                message: self.storage.to_string(),
+            }),
+
+            #[cfg(feature = "turso")]
+            "turso" => limbo::Engine::builder()
+                .storage(self.storage.clone())
+                .node(self.node_id)
+                .cluster(self.cluster_id.clone())
+                .advertised_listener(self.advertised_listener.clone())
+                .schemas(self.schema_registry)
+                .lake(self.lake_house.clone())
+                .build()
+                .await
+                .map(StorageContainer::Turso),
+
+            #[cfg(not(feature = "turso"))]
+            "turso" => Err(Error::FeatureNotEnabled {
+                feature: "turso".into(),
+                message: self.storage.to_string(),
+            }),
+
+            "null" => Ok(StorageContainer::Null(null::Engine::new(
+                self.cluster_id.clone(),
+                self.node_id,
+                self.advertised_listener.clone(),
+            ))),
+
+            #[cfg(not(any(
+                feature = "dynostore",
+                feature = "libsql",
+                feature = "postgres",
+                feature = "slatedb",
+                feature = "turso"
+            )))]
+            _storage => Ok(StorageContainer::Null(null::Engine::new(
+                self.cluster_id.clone(),
+                self.node_id,
+                self.advertised_listener.clone(),
+            ))),
+
+            #[cfg(any(
+                feature = "dynostore",
+                feature = "libsql",
+                feature = "postgres",
+                feature = "slatedb",
+                feature = "turso"
+            ))]
+            _unsupported => Err(Error::UnsupportedStorageUrl(self.storage.clone())),
+        }?;
+
+        storage.ping().await?;
+        Ok(storage)
+    }
 }
 
 pub(crate) static METER: LazyLock<Meter> = LazyLock::new(|| {
@@ -1205,54 +1881,28 @@ static STORAGE_CONTAINER_ERRORS: LazyLock<Counter<u64>> = LazyLock::new(|| {
 
 #[async_trait]
 impl Storage for StorageContainer {
-    async fn register_broker(
-        &mut self,
-        broker_registration: BrokerRegistrationRequest,
-    ) -> Result<()> {
+    #[instrument(skip_all)]
+    async fn register_broker(&self, broker_registration: BrokerRegistrationRequest) -> Result<()> {
         let attributes = [KeyValue::new("method", "register_broker")];
 
         match self {
-            Self::Postgres(pg) => pg.register_broker(broker_registration).await,
-            Self::DynoStore(dyn_store) => dyn_store.register_broker(broker_registration).await,
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.register_broker(broker_registration),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.register_broker(broker_registration),
+
+            Self::Null(engine) => engine.register_broker(broker_registration),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.register_broker(broker_registration),
+
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.register_broker(broker_registration),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.register_broker(broker_registration),
         }
-        .inspect(|_| {
-            STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
-        })
-        .inspect_err(|_| {
-            STORAGE_CONTAINER_ERRORS.add(1, &attributes);
-        })
-    }
-
-    async fn incremental_alter_resource(
-        &mut self,
-        resource: AlterConfigsResource,
-    ) -> Result<AlterConfigsResourceResponse> {
-        let attributes = [KeyValue::new("method", "incremental_alter_resource")];
-
-        match self {
-            Self::Postgres(pg) => pg.incremental_alter_resource(resource).await,
-            Self::DynoStore(dyn_store) => dyn_store.incremental_alter_resource(resource).await,
-        }
-        .inspect(|_| {
-            STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
-        })
-        .inspect_err(|_| {
-            STORAGE_CONTAINER_ERRORS.add(1, &attributes);
-        })
-    }
-
-    async fn create_topic(&mut self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {
-        let attributes = [KeyValue::new("method", "create_topic")];
-        let span = debug_span!("create_topic", ?topic, validate_only);
-
-        async move {
-            match self {
-                Self::Postgres(pg) => pg.create_topic(topic, validate_only),
-                Self::DynoStore(dyn_store) => dyn_store.create_topic(topic, validate_only),
-            }
-            .await
-        }
-        .instrument(span)
         .await
         .inspect(|_| {
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
@@ -1262,16 +1912,97 @@ impl Storage for StorageContainer {
         })
     }
 
+    #[instrument(skip_all)]
+    async fn incremental_alter_resource(
+        &self,
+        resource: AlterConfigsResource,
+    ) -> Result<AlterConfigsResourceResponse> {
+        let attributes = [KeyValue::new("method", "incremental_alter_resource")];
+
+        match self {
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.incremental_alter_resource(resource),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.incremental_alter_resource(resource),
+
+            Self::Null(engine) => engine.incremental_alter_resource(resource),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.incremental_alter_resource(resource),
+
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.incremental_alter_resource(resource),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.incremental_alter_resource(resource),
+        }
+        .await
+        .inspect(|_| {
+            STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
+        })
+        .inspect_err(|_| {
+            STORAGE_CONTAINER_ERRORS.add(1, &attributes);
+        })
+    }
+
+    #[instrument(skip_all)]
+    async fn create_topic(&self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {
+        let attributes = [KeyValue::new("method", "create_topic")];
+
+        match self {
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.create_topic(topic, validate_only),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.create_topic(topic, validate_only),
+
+            Self::Null(engine) => engine.create_topic(topic, validate_only),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.create_topic(topic, validate_only),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.create_topic(topic, validate_only),
+
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.create_topic(topic, validate_only),
+        }
+        .await
+        .inspect(|_| {
+            STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
+        })
+        .inspect_err(|_| {
+            STORAGE_CONTAINER_ERRORS.add(1, &attributes);
+        })
+    }
+
+    #[instrument(skip_all)]
     async fn delete_records(
-        &mut self,
+        &self,
         topics: &[DeleteRecordsTopic],
     ) -> Result<Vec<DeleteRecordsTopicResult>> {
         let attributes = [KeyValue::new("method", "delete_records")];
 
         match self {
-            Self::Postgres(pg) => pg.delete_records(topics).await,
-            Self::DynoStore(dyn_store) => dyn_store.delete_records(topics).await,
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.delete_records(topics),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.delete_records(topics),
+
+            Self::Null(engine) => engine.delete_records(topics),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.delete_records(topics),
+
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.delete_records(topics),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.delete_records(topics),
         }
+        .await
         .inspect(|_| {
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
         })
@@ -1280,13 +2011,29 @@ impl Storage for StorageContainer {
         })
     }
 
-    async fn delete_topic(&mut self, topic: &TopicId) -> Result<ErrorCode> {
+    #[instrument(skip_all)]
+    async fn delete_topic(&self, topic: &TopicId) -> Result<ErrorCode> {
         let attributes = [KeyValue::new("method", "delete_topic")];
 
         match self {
-            Self::Postgres(pg) => pg.delete_topic(topic).await,
-            Self::DynoStore(dyn_store) => dyn_store.delete_topic(topic).await,
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.delete_topic(topic),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.delete_topic(topic),
+
+            Self::Null(engine) => engine.delete_topic(topic),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.delete_topic(topic),
+
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.delete_topic(topic),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.delete_topic(topic),
         }
+        .await
         .inspect(|_| {
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
         })
@@ -1295,13 +2042,29 @@ impl Storage for StorageContainer {
         })
     }
 
-    async fn brokers(&mut self) -> Result<Vec<DescribeClusterBroker>> {
+    #[instrument(skip_all)]
+    async fn brokers(&self) -> Result<Vec<DescribeClusterBroker>> {
         let attributes = [KeyValue::new("method", "brokers")];
 
         match self {
-            Self::Postgres(pg) => pg.brokers().await,
-            Self::DynoStore(dyn_store) => dyn_store.brokers().await,
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.brokers(),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.brokers(),
+
+            Self::Null(engine) => engine.brokers(),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.brokers(),
+
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.brokers(),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.brokers(),
         }
+        .await
         .inspect(|_| {
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
         })
@@ -1310,8 +2073,9 @@ impl Storage for StorageContainer {
         })
     }
 
+    #[instrument(skip_all)]
     async fn produce(
-        &mut self,
+        &self,
         transaction_id: Option<&str>,
         topition: &Topition,
         batch: deflated::Batch,
@@ -1319,9 +2083,24 @@ impl Storage for StorageContainer {
         let attributes = [KeyValue::new("method", "produce")];
 
         match self {
-            Self::Postgres(pg) => pg.produce(transaction_id, topition, batch).await,
-            Self::DynoStore(dyn_store) => dyn_store.produce(transaction_id, topition, batch).await,
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.produce(transaction_id, topition, batch),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.produce(transaction_id, topition, batch),
+
+            Self::Null(engine) => engine.produce(transaction_id, topition, batch),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.produce(transaction_id, topition, batch),
+
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.produce(transaction_id, topition, batch),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.produce(transaction_id, topition, batch),
         }
+        .await
         .inspect(|_| {
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
         })
@@ -1330,8 +2109,9 @@ impl Storage for StorageContainer {
         })
     }
 
+    #[instrument(skip_all)]
     async fn fetch(
-        &mut self,
+        &self,
         topition: &'_ Topition,
         offset: i64,
         min_bytes: u32,
@@ -1341,16 +2121,28 @@ impl Storage for StorageContainer {
         let attributes = [KeyValue::new("method", "fetch")];
 
         match self {
-            Self::Postgres(pg) => {
-                pg.fetch(topition, offset, min_bytes, max_bytes, isolation)
-                    .await
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => {
+                engine.fetch(topition, offset, min_bytes, max_bytes, isolation)
             }
-            Self::DynoStore(dyn_store) => {
-                dyn_store
-                    .fetch(topition, offset, min_bytes, max_bytes, isolation)
-                    .await
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.fetch(topition, offset, min_bytes, max_bytes, isolation),
+
+            Self::Null(engine) => engine.fetch(topition, offset, min_bytes, max_bytes, isolation),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => {
+                engine.fetch(topition, offset, min_bytes, max_bytes, isolation)
             }
+
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.fetch(topition, offset, min_bytes, max_bytes, isolation),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.fetch(topition, offset, min_bytes, max_bytes, isolation),
         }
+        .await
         .inspect(|_| {
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
         })
@@ -1359,13 +2151,29 @@ impl Storage for StorageContainer {
         })
     }
 
-    async fn offset_stage(&mut self, topition: &Topition) -> Result<OffsetStage> {
+    #[instrument(skip_all)]
+    async fn offset_stage(&self, topition: &Topition) -> Result<OffsetStage> {
         let attributes = [KeyValue::new("method", "offset_stage")];
 
         match self {
-            Self::Postgres(pg) => pg.offset_stage(topition).await,
-            Self::DynoStore(dyn_store) => dyn_store.offset_stage(topition).await,
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.offset_stage(topition),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.offset_stage(topition),
+
+            Self::Null(engine) => engine.offset_stage(topition),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.offset_stage(topition),
+
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.offset_stage(topition),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.offset_stage(topition),
         }
+        .await
         .inspect(|_| {
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
         })
@@ -1374,17 +2182,33 @@ impl Storage for StorageContainer {
         })
     }
 
+    #[instrument(skip_all)]
     async fn list_offsets(
-        &mut self,
+        &self,
         isolation_level: IsolationLevel,
-        offsets: &[(Topition, ListOffsetRequest)],
+        offsets: &[(Topition, ListOffset)],
     ) -> Result<Vec<(Topition, ListOffsetResponse)>> {
         let attributes = [KeyValue::new("method", "list_offsets")];
 
         match self {
-            Self::Postgres(pg) => pg.list_offsets(isolation_level, offsets).await,
-            Self::DynoStore(dyn_store) => dyn_store.list_offsets(isolation_level, offsets).await,
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.list_offsets(isolation_level, offsets),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.list_offsets(isolation_level, offsets),
+
+            Self::Null(engine) => engine.list_offsets(isolation_level, offsets),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.list_offsets(isolation_level, offsets),
+
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.list_offsets(isolation_level, offsets),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.list_offsets(isolation_level, offsets),
         }
+        .await
         .inspect(|_| {
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
         })
@@ -1393,8 +2217,9 @@ impl Storage for StorageContainer {
         })
     }
 
+    #[instrument(skip_all)]
     async fn offset_commit(
-        &mut self,
+        &self,
         group_id: &str,
         retention_time_ms: Option<Duration>,
         offsets: &[(Topition, OffsetCommitRequest)],
@@ -1402,13 +2227,24 @@ impl Storage for StorageContainer {
         let attributes = [KeyValue::new("method", "offset_commit")];
 
         match self {
-            Self::Postgres(pg) => pg.offset_commit(group_id, retention_time_ms, offsets).await,
-            Self::DynoStore(dyn_store) => {
-                dyn_store
-                    .offset_commit(group_id, retention_time_ms, offsets)
-                    .await
-            }
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.offset_commit(group_id, retention_time_ms, offsets),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.offset_commit(group_id, retention_time_ms, offsets),
+
+            Self::Null(engine) => engine.offset_commit(group_id, retention_time_ms, offsets),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.offset_commit(group_id, retention_time_ms, offsets),
+
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.offset_commit(group_id, retention_time_ms, offsets),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.offset_commit(group_id, retention_time_ms, offsets),
         }
+        .await
         .inspect(|_| {
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
         })
@@ -1417,16 +2253,29 @@ impl Storage for StorageContainer {
         })
     }
 
-    async fn committed_offset_topitions(
-        &mut self,
-        group_id: &str,
-    ) -> Result<BTreeMap<Topition, i64>> {
+    #[instrument(skip_all)]
+    async fn committed_offset_topitions(&self, group_id: &str) -> Result<BTreeMap<Topition, i64>> {
         let attributes = [KeyValue::new("method", "committed_offset_topitions")];
 
         match self {
-            Self::Postgres(inner) => inner.committed_offset_topitions(group_id).await,
-            Self::DynoStore(inner) => inner.committed_offset_topitions(group_id).await,
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.committed_offset_topitions(group_id),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.committed_offset_topitions(group_id),
+
+            Self::Null(engine) => engine.committed_offset_topitions(group_id),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.committed_offset_topitions(group_id),
+
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.committed_offset_topitions(group_id),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.committed_offset_topitions(group_id),
         }
+        .await
         .inspect(|_| {
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
         })
@@ -1435,8 +2284,9 @@ impl Storage for StorageContainer {
         })
     }
 
+    #[instrument(skip_all)]
     async fn offset_fetch(
-        &mut self,
+        &self,
         group_id: Option<&str>,
         topics: &[Topition],
         require_stable: Option<bool>,
@@ -1444,13 +2294,24 @@ impl Storage for StorageContainer {
         let attributes = [KeyValue::new("method", "offset_fetch")];
 
         match self {
-            Self::Postgres(pg) => pg.offset_fetch(group_id, topics, require_stable).await,
-            Self::DynoStore(dyn_store) => {
-                dyn_store
-                    .offset_fetch(group_id, topics, require_stable)
-                    .await
-            }
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.offset_fetch(group_id, topics, require_stable),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.offset_fetch(group_id, topics, require_stable),
+
+            Self::Null(engine) => engine.offset_fetch(group_id, topics, require_stable),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.offset_fetch(group_id, topics, require_stable),
+
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.offset_fetch(group_id, topics, require_stable),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.offset_fetch(group_id, topics, require_stable),
         }
+        .await
         .inspect(|_| {
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
         })
@@ -1459,13 +2320,29 @@ impl Storage for StorageContainer {
         })
     }
 
-    async fn metadata(&mut self, topics: Option<&[TopicId]>) -> Result<MetadataResponse> {
+    #[instrument(skip_all)]
+    async fn metadata(&self, topics: Option<&[TopicId]>) -> Result<MetadataResponse> {
         let attributes = [KeyValue::new("method", "metadata")];
 
         match self {
-            Self::Postgres(pg) => pg.metadata(topics).await,
-            Self::DynoStore(dyn_store) => dyn_store.metadata(topics).await,
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.metadata(topics),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.metadata(topics),
+
+            Self::Null(engine) => engine.metadata(topics),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.metadata(topics),
+
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.metadata(topics),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.metadata(topics),
         }
+        .await
         .inspect(|_| {
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
         })
@@ -1474,8 +2351,9 @@ impl Storage for StorageContainer {
         })
     }
 
+    #[instrument(skip_all)]
     async fn describe_config(
-        &mut self,
+        &self,
         name: &str,
         resource: ConfigResource,
         keys: Option<&[String]>,
@@ -1483,9 +2361,24 @@ impl Storage for StorageContainer {
         let attributes = [KeyValue::new("method", "describe_config")];
 
         match self {
-            Self::Postgres(pg) => pg.describe_config(name, resource, keys).await,
-            Self::DynoStore(dyn_store) => dyn_store.describe_config(name, resource, keys).await,
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.describe_config(name, resource, keys),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.describe_config(name, resource, keys),
+
+            Self::Null(engine) => engine.describe_config(name, resource, keys),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.describe_config(name, resource, keys),
+
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.describe_config(name, resource, keys),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.describe_config(name, resource, keys),
         }
+        .await
         .inspect(|_| {
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
         })
@@ -1494,8 +2387,9 @@ impl Storage for StorageContainer {
         })
     }
 
+    #[instrument(skip_all)]
     async fn describe_topic_partitions(
-        &mut self,
+        &self,
         topics: Option<&[TopicId]>,
         partition_limit: i32,
         cursor: Option<Topition>,
@@ -1503,16 +2397,32 @@ impl Storage for StorageContainer {
         let attributes = [KeyValue::new("method", "describe_topic_partitions")];
 
         match self {
-            Self::Postgres(pg) => {
-                pg.describe_topic_partitions(topics, partition_limit, cursor)
-                    .await
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => {
+                engine.describe_topic_partitions(topics, partition_limit, cursor)
             }
-            Self::DynoStore(dyn_store) => {
-                dyn_store
-                    .describe_topic_partitions(topics, partition_limit, cursor)
-                    .await
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.describe_topic_partitions(topics, partition_limit, cursor),
+
+            Self::Null(engine) => engine.describe_topic_partitions(topics, partition_limit, cursor),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => {
+                engine.describe_topic_partitions(topics, partition_limit, cursor)
+            }
+
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => {
+                engine.describe_topic_partitions(topics, partition_limit, cursor)
+            }
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => {
+                engine.describe_topic_partitions(topics, partition_limit, cursor)
             }
         }
+        .await
         .inspect(|_| {
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
         })
@@ -1521,13 +2431,29 @@ impl Storage for StorageContainer {
         })
     }
 
-    async fn list_groups(&mut self, states_filter: Option<&[String]>) -> Result<Vec<ListedGroup>> {
+    #[instrument(skip_all)]
+    async fn list_groups(&self, states_filter: Option<&[String]>) -> Result<Vec<ListedGroup>> {
         let attributes = [KeyValue::new("method", "list_groups")];
 
         match self {
-            Self::Postgres(pg) => pg.list_groups(states_filter).await,
-            Self::DynoStore(dyn_store) => dyn_store.list_groups(states_filter).await,
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.list_groups(states_filter),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.list_groups(states_filter),
+
+            Self::Null(engine) => engine.list_groups(states_filter),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.list_groups(states_filter),
+
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.list_groups(states_filter),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.list_groups(states_filter),
         }
+        .await
         .inspect(|_| {
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
         })
@@ -1536,16 +2462,32 @@ impl Storage for StorageContainer {
         })
     }
 
+    #[instrument(skip_all)]
     async fn delete_groups(
-        &mut self,
+        &self,
         group_ids: Option<&[String]>,
     ) -> Result<Vec<DeletableGroupResult>> {
         let attributes = [KeyValue::new("method", "delete_groups")];
 
         match self {
-            Self::Postgres(inner) => inner.delete_groups(group_ids).await,
-            Self::DynoStore(inner) => inner.delete_groups(group_ids).await,
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.delete_groups(group_ids),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.delete_groups(group_ids),
+
+            Self::Null(engine) => engine.delete_groups(group_ids),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.delete_groups(group_ids),
+
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.delete_groups(group_ids),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.delete_groups(group_ids),
         }
+        .await
         .inspect(|_| {
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
         })
@@ -1554,25 +2496,37 @@ impl Storage for StorageContainer {
         })
     }
 
+    #[instrument(skip_all)]
     async fn describe_groups(
-        &mut self,
+        &self,
         group_ids: Option<&[String]>,
         include_authorized_operations: bool,
     ) -> Result<Vec<NamedGroupDetail>> {
         let attributes = [KeyValue::new("method", "describe_groups")];
 
         match self {
-            Self::Postgres(inner) => {
-                inner
-                    .describe_groups(group_ids, include_authorized_operations)
-                    .await
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => {
+                engine.describe_groups(group_ids, include_authorized_operations)
             }
-            Self::DynoStore(inner) => {
-                inner
-                    .describe_groups(group_ids, include_authorized_operations)
-                    .await
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.describe_groups(group_ids, include_authorized_operations),
+
+            Self::Null(engine) => engine.describe_groups(group_ids, include_authorized_operations),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => {
+                engine.describe_groups(group_ids, include_authorized_operations)
             }
+
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.describe_groups(group_ids, include_authorized_operations),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.describe_groups(group_ids, include_authorized_operations),
         }
+        .await
         .inspect(|_| {
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
         })
@@ -1581,8 +2535,9 @@ impl Storage for StorageContainer {
         })
     }
 
+    #[instrument(skip_all)]
     async fn update_group(
-        &mut self,
+        &self,
         group_id: &str,
         detail: GroupDetail,
         version: Option<Version>,
@@ -1590,9 +2545,24 @@ impl Storage for StorageContainer {
         let attributes = [KeyValue::new("method", "update_group")];
 
         match self {
-            Self::Postgres(pg) => pg.update_group(group_id, detail, version).await,
-            Self::DynoStore(dyn_store) => dyn_store.update_group(group_id, detail, version).await,
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.update_group(group_id, detail, version),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.update_group(group_id, detail, version),
+
+            Self::Null(engine) => engine.update_group(group_id, detail, version),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.update_group(group_id, detail, version),
+
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.update_group(group_id, detail, version),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.update_group(group_id, detail, version),
         }
+        .await
         .inspect(|_| {
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
         })
@@ -1601,43 +2571,65 @@ impl Storage for StorageContainer {
         })
     }
 
+    #[instrument(skip_all)]
     async fn init_producer(
-        &mut self,
+        &self,
         transaction_id: Option<&str>,
         transaction_timeout_ms: i32,
         producer_id: Option<i64>,
         producer_epoch: Option<i16>,
     ) -> Result<ProducerIdResponse> {
-        debug!(
-            ?transaction_id,
-            ?transaction_timeout_ms,
-            ?producer_id,
-            ?producer_epoch
-        );
-
         let attributes = [KeyValue::new("method", "init_producer")];
 
         match self {
-            Self::Postgres(pg) => {
-                pg.init_producer(
-                    transaction_id,
-                    transaction_timeout_ms,
-                    producer_id,
-                    producer_epoch,
-                )
-                .await
-            }
-            Self::DynoStore(dyn_store) => {
-                dyn_store
-                    .init_producer(
-                        transaction_id,
-                        transaction_timeout_ms,
-                        producer_id,
-                        producer_epoch,
-                    )
-                    .await
-            }
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.init_producer(
+                transaction_id,
+                transaction_timeout_ms,
+                producer_id,
+                producer_epoch,
+            ),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.init_producer(
+                transaction_id,
+                transaction_timeout_ms,
+                producer_id,
+                producer_epoch,
+            ),
+
+            Self::Null(engine) => engine.init_producer(
+                transaction_id,
+                transaction_timeout_ms,
+                producer_id,
+                producer_epoch,
+            ),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.init_producer(
+                transaction_id,
+                transaction_timeout_ms,
+                producer_id,
+                producer_epoch,
+            ),
+
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.init_producer(
+                transaction_id,
+                transaction_timeout_ms,
+                producer_id,
+                producer_epoch,
+            ),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.init_producer(
+                transaction_id,
+                transaction_timeout_ms,
+                producer_id,
+                producer_epoch,
+            ),
         }
+        .await
         .inspect(|_| {
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
         })
@@ -1646,8 +2638,9 @@ impl Storage for StorageContainer {
         })
     }
 
+    #[instrument(skip_all)]
     async fn txn_add_offsets(
-        &mut self,
+        &self,
         transaction_id: &str,
         producer_id: i64,
         producer_epoch: i16,
@@ -1656,16 +2649,36 @@ impl Storage for StorageContainer {
         let attributes = [KeyValue::new("method", "txn_add_offsets")];
 
         match self {
-            Self::Postgres(pg) => {
-                pg.txn_add_offsets(transaction_id, producer_id, producer_epoch, group_id)
-                    .await
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => {
+                engine.txn_add_offsets(transaction_id, producer_id, producer_epoch, group_id)
             }
-            Self::DynoStore(dyn_store) => {
-                dyn_store
-                    .txn_add_offsets(transaction_id, producer_id, producer_epoch, group_id)
-                    .await
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => {
+                engine.txn_add_offsets(transaction_id, producer_id, producer_epoch, group_id)
+            }
+
+            Self::Null(engine) => {
+                engine.txn_add_offsets(transaction_id, producer_id, producer_epoch, group_id)
+            }
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => {
+                engine.txn_add_offsets(transaction_id, producer_id, producer_epoch, group_id)
+            }
+
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => {
+                engine.txn_add_offsets(transaction_id, producer_id, producer_epoch, group_id)
+            }
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => {
+                engine.txn_add_offsets(transaction_id, producer_id, producer_epoch, group_id)
             }
         }
+        .await
         .inspect(|_| {
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
         })
@@ -1674,16 +2687,32 @@ impl Storage for StorageContainer {
         })
     }
 
+    #[instrument(skip_all)]
     async fn txn_add_partitions(
-        &mut self,
+        &self,
         partitions: TxnAddPartitionsRequest,
     ) -> Result<TxnAddPartitionsResponse> {
         let attributes = [KeyValue::new("method", "txn_add_partitions")];
 
         match self {
-            Self::Postgres(pg) => pg.txn_add_partitions(partitions).await,
-            Self::DynoStore(dyn_store) => dyn_store.txn_add_partitions(partitions).await,
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.txn_add_partitions(partitions),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.txn_add_partitions(partitions),
+
+            Self::Null(engine) => engine.txn_add_partitions(partitions),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.txn_add_partitions(partitions),
+
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.txn_add_partitions(partitions),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.txn_add_partitions(partitions),
         }
+        .await
         .inspect(|_| {
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
         })
@@ -1692,16 +2721,32 @@ impl Storage for StorageContainer {
         })
     }
 
+    #[instrument(skip_all)]
     async fn txn_offset_commit(
-        &mut self,
+        &self,
         offsets: TxnOffsetCommitRequest,
     ) -> Result<Vec<TxnOffsetCommitResponseTopic>> {
         let attributes = [KeyValue::new("method", "txn_offset_commit")];
 
         match self {
-            Self::Postgres(pg) => pg.txn_offset_commit(offsets).await,
-            Self::DynoStore(dyn_store) => dyn_store.txn_offset_commit(offsets).await,
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.txn_offset_commit(offsets),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.txn_offset_commit(offsets),
+
+            Self::Null(engine) => engine.txn_offset_commit(offsets),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.txn_offset_commit(offsets),
+
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.txn_offset_commit(offsets),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.txn_offset_commit(offsets),
         }
+        .await
         .inspect(|_| {
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
         })
@@ -1710,8 +2755,9 @@ impl Storage for StorageContainer {
         })
     }
 
+    #[instrument(skip_all)]
     async fn txn_end(
-        &mut self,
+        &self,
         transaction_id: &str,
         producer_id: i64,
         producer_epoch: i16,
@@ -1720,16 +2766,166 @@ impl Storage for StorageContainer {
         let attributes = [KeyValue::new("method", "txn_end")];
 
         match self {
-            Self::Postgres(pg) => {
-                pg.txn_end(transaction_id, producer_id, producer_epoch, committed)
-                    .await
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => {
+                engine.txn_end(transaction_id, producer_id, producer_epoch, committed)
             }
-            Self::DynoStore(dyn_store) => {
-                dyn_store
-                    .txn_end(transaction_id, producer_id, producer_epoch, committed)
-                    .await
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => {
+                engine.txn_end(transaction_id, producer_id, producer_epoch, committed)
+            }
+
+            Self::Null(engine) => {
+                engine.txn_end(transaction_id, producer_id, producer_epoch, committed)
+            }
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => {
+                engine.txn_end(transaction_id, producer_id, producer_epoch, committed)
+            }
+
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => {
+                engine.txn_end(transaction_id, producer_id, producer_epoch, committed)
+            }
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => {
+                engine.txn_end(transaction_id, producer_id, producer_epoch, committed)
             }
         }
+        .await
+        .inspect(|_| {
+            STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
+        })
+        .inspect_err(|_| {
+            STORAGE_CONTAINER_ERRORS.add(1, &attributes);
+        })
+    }
+
+    #[instrument(skip_all)]
+    async fn maintain(&self, now: SystemTime) -> Result<()> {
+        let attributes = [KeyValue::new("method", "maintain")];
+
+        match self {
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.maintain(now),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.maintain(now),
+
+            Self::Null(engine) => engine.maintain(now),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.maintain(now),
+
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.maintain(now),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.maintain(now),
+        }
+        .await
+        .inspect(|maintain| {
+            debug!(?maintain);
+            STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
+        })
+        .inspect_err(|err| {
+            debug!(?err);
+            STORAGE_CONTAINER_ERRORS.add(1, &attributes);
+        })
+    }
+
+    #[instrument(skip_all)]
+    async fn cluster_id(&self) -> Result<String> {
+        match self {
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.cluster_id().await,
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.cluster_id().await,
+
+            Self::Null(engine) => engine.cluster_id().await,
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.cluster_id().await,
+
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.cluster_id().await,
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.cluster_id().await,
+        }
+    }
+
+    #[instrument(skip_all)]
+    async fn node(&self) -> Result<i32> {
+        match self {
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.node().await,
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.node().await,
+
+            Self::Null(engine) => engine.node().await,
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.node().await,
+
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.node().await,
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.node().await,
+        }
+    }
+
+    #[instrument(skip_all)]
+    async fn advertised_listener(&self) -> Result<Url> {
+        match self {
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.advertised_listener().await,
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.advertised_listener().await,
+
+            Self::Null(engine) => engine.advertised_listener().await,
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.advertised_listener().await,
+
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.advertised_listener().await,
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.advertised_listener().await,
+        }
+    }
+
+    #[instrument(skip_all)]
+    async fn ping(&self) -> Result<()> {
+        let attributes = [KeyValue::new("method", "ping")];
+
+        match self {
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.ping(),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.ping(),
+
+            Self::Null(engine) => engine.ping(),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.ping(),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.ping(),
+
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.ping(),
+        }
+        .await
         .inspect(|_| {
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
         })

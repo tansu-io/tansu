@@ -1,39 +1,38 @@
-// Copyright ⓒ 2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
+// http://www.apache.org/licenses/LICENSE-2.0
 //
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::marker::PhantomData;
 
 use crate::{Error, Result};
 
+use bytes::Bytes;
 use futures::SinkExt;
-use tansu_kafka_sans_io::{
-    Body, ErrorCode, Frame, Header,
-    fetch_request::{FetchPartition, FetchTopic},
-    fetch_response::FetchableTopicResponse,
+use serde_json::{Value, json};
+use tansu_client::{Client, ConnectionManager};
+use tansu_sans_io::{
+    ErrorCode, MetadataRequest, NULL_TOPIC_ID,
+    fetch_request::{FetchPartition, FetchRequest, FetchTopic, ReplicaState},
+    metadata_request::MetadataRequestTopic,
     record::inflated,
 };
-use tansu_schema_registry::{AsJsonValue, Registry};
-use tokio::{
-    io::{self, AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
-};
+use tansu_schema::{AsJsonValue, Registry};
+use tokio::io::stdout;
 use tokio_util::codec::{FramedWrite, LinesCodec};
 use tracing::debug;
 use url::Url;
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Builder<B, T, P, S> {
     broker: B,
     topic: T,
@@ -46,7 +45,7 @@ pub struct Builder<B, T, P, S> {
     partition_max_bytes: i32,
 }
 
-pub type PhantomBuilder =
+pub(crate) type PhantomBuilder =
     Builder<PhantomData<Url>, PhantomData<String>, PhantomData<i32>, PhantomData<Option<Url>>>;
 
 impl<B, T, P, S> Builder<B, T, P, S> {
@@ -172,7 +171,7 @@ pub struct Configuration {
 }
 
 #[derive(Clone, Debug)]
-pub struct Consume {
+pub(crate) struct Consume {
     configuration: Configuration,
     registry: Option<Registry>,
 }
@@ -184,7 +183,7 @@ impl TryFrom<Configuration> for Consume {
         configuration
             .schema_registry
             .as_ref()
-            .map(Registry::try_from)
+            .map(|url| Registry::builder_try_from_url(url).map(|builder| builder.build()))
             .transpose()
             .map(|registry| Self {
                 configuration,
@@ -195,8 +194,8 @@ impl TryFrom<Configuration> for Consume {
 }
 
 impl Consume {
-    pub async fn main(self) -> Result<ErrorCode> {
-        let stdout = io::stdout();
+    pub(crate) async fn main(self) -> Result<ErrorCode> {
+        let stdout = stdout();
 
         let mut writer = FramedWrite::new(stdout, LinesCodec::new());
 
@@ -209,19 +208,68 @@ impl Consume {
             None
         };
 
-        let mut connection = Connection::open(&self.configuration.broker).await?;
+        let client = ConnectionManager::builder(self.configuration.broker.clone())
+            .client_id(Some(env!("CARGO_PKG_NAME").into()))
+            .build()
+            .await
+            .inspect(|pool| debug!(?pool))
+            .map(Client::new)?;
 
-        for response in connection
-            .consume(
-                self.configuration.topic.as_str(),
-                self.configuration.partition,
-                self.configuration.fetch_offset,
-                self.configuration.max_wait_time_ms,
-                self.configuration.min_bytes,
-                self.configuration.max_bytes,
+        let metadata = client
+            .call(
+                MetadataRequest::default()
+                    .allow_auto_topic_creation(Some(false))
+                    .include_cluster_authorized_operations(Some(false))
+                    .include_topic_authorized_operations(Some(false))
+                    .topics(Some(
+                        [MetadataRequestTopic::default()
+                            .name(Some(self.configuration.topic.clone()))
+                            .topic_id(Some(NULL_TOPIC_ID))]
+                        .into(),
+                    )),
             )
-            .await?
-        {
+            .await?;
+
+        let response = client
+            .call(
+                FetchRequest::default()
+                    .cluster_id(Some("".into()))
+                    .replica_id(Some(-1))
+                    .replica_state(Some(ReplicaState::default()))
+                    .max_wait_ms(self.configuration.max_wait_time_ms)
+                    .min_bytes(self.configuration.min_bytes)
+                    .max_bytes(self.configuration.max_bytes)
+                    .isolation_level(Some(1))
+                    .session_id(Some(-1))
+                    .session_epoch(Some(-1))
+                    .topics(Some(vec![
+                        FetchTopic::default()
+                            .topic(Some(self.configuration.topic.clone()))
+                            .topic_id(
+                                metadata
+                                    .topics
+                                    .unwrap_or_default()
+                                    .into_iter()
+                                    .find(|topic| {
+                                        topic.name.as_ref().is_some_and(|name| {
+                                            self.configuration.topic.as_str() == name
+                                        })
+                                    })
+                                    .and_then(|topic| topic.topic_id),
+                            )
+                            .partitions(Some(vec![
+                                FetchPartition::default()
+                                    .partition(self.configuration.partition)
+                                    .log_start_offset(Some(self.configuration.fetch_offset))
+                                    .partition_max_bytes(4096),
+                            ])),
+                    ]))
+                    .forgotten_topics_data(Some([].into()))
+                    .rack_id(Some("".into())),
+            )
+            .await?;
+
+        for response in response.responses.unwrap_or_default() {
             debug!(?response);
 
             for partition in response.partitions.unwrap_or_default() {
@@ -238,6 +286,15 @@ impl Consume {
                             writer
                                 .send(schema.as_json_value(&batch).map(|kv| kv.to_string())?)
                                 .await?;
+                        } else {
+                            writer.send( Value::from(
+                                batch
+                                    .records
+                                    .iter()
+                                    .map(|record| json!({"key": self.maybe_json(record.key.clone()), "value": self.maybe_json(record.value.clone())}))
+                                    .collect::<Vec<_>>(),
+                            )
+                            .to_string()).await?
                         }
                     }
                 }
@@ -246,136 +303,8 @@ impl Consume {
 
         Ok(ErrorCode::None)
     }
-}
 
-#[derive(Debug)]
-struct Connection {
-    broker: TcpStream,
-    correlation_id: i32,
-}
-
-impl Connection {
-    async fn open(broker: &Url) -> Result<Self> {
-        debug!(%broker);
-
-        TcpStream::connect(format!(
-            "{}:{}",
-            broker.host_str().unwrap(),
-            broker.port().unwrap()
-        ))
-        .await
-        .map(|broker| Self {
-            broker,
-            correlation_id: 0,
-        })
-        .map_err(Into::into)
-    }
-
-    async fn consume(
-        &mut self,
-        topic: &str,
-        partition: i32,
-        fetch_offset: i64,
-        max_wait_ms: i32,
-        min_bytes: i32,
-        max_bytes: Option<i32>,
-    ) -> Result<Vec<FetchableTopicResponse>> {
-        let _ = (fetch_offset, max_wait_ms, min_bytes, max_bytes);
-
-        debug!(%topic, partition);
-
-        let api_key = 1;
-        let api_version = 6;
-
-        let header = Header::Request {
-            api_key,
-            api_version,
-            correlation_id: self.correlation_id,
-            client_id: None,
-        };
-
-        let body = Body::FetchRequest {
-            cluster_id: None,
-            replica_state: None,
-            replica_id: Some(-1),
-            max_wait_ms,
-            min_bytes,
-            max_bytes,
-            isolation_level: Some(1),
-            session_id: None,
-            session_epoch: None,
-            topics: Some(
-                [FetchTopic {
-                    topic: Some(topic.into()),
-                    topic_id: None,
-                    partitions: Some(
-                        [FetchPartition {
-                            partition: 0,
-                            current_leader_epoch: None,
-                            fetch_offset: 0,
-                            last_fetched_epoch: None,
-                            log_start_offset: Some(0),
-                            partition_max_bytes: 4096,
-                            replica_directory_id: None,
-                        }]
-                        .into(),
-                    ),
-                }]
-                .into(),
-            ),
-            forgotten_topics_data: None,
-            rack_id: None,
-        };
-
-        debug!(?header, ?body);
-
-        let encoded = Frame::request(header, body)?;
-
-        self.broker
-            .write_all(&encoded[..])
-            .await
-            .inspect_err(|err| debug!(?err))?;
-
-        let mut size = [0u8; 4];
-        _ = self.broker.read_exact(&mut size).await?;
-
-        let mut response_buffer: Vec<u8> = vec![0u8; Self::frame_length(size)];
-        response_buffer[0..size.len()].copy_from_slice(&size[..]);
-        _ = self
-            .broker
-            .read_exact(&mut response_buffer[size.len()..])
-            .await
-            .inspect_err(|err| debug!(?err))?;
-
-        let response = Frame::response_from_bytes(&response_buffer, api_key, api_version)
-            .inspect_err(|err| debug!(?err))?;
-
-        debug!(?response);
-
-        match response {
-            Frame {
-                body:
-                    Body::FetchResponse {
-                        responses: Some(responses),
-                        ..
-                    },
-                ..
-            } => Ok(responses),
-
-            Frame {
-                body:
-                    Body::FetchResponse {
-                        error_code: Some(error_code),
-                        ..
-                    },
-                ..
-            } => Err(Error::Api(ErrorCode::try_from(error_code)?)),
-
-            frame @ Frame { .. } => unreachable!("{frame:?}"),
-        }
-    }
-
-    fn frame_length(encoded: [u8; 4]) -> usize {
-        i32::from_be_bytes(encoded) as usize + encoded.len()
+    fn maybe_json(&self, data: Option<Bytes>) -> Option<Value> {
+        data.and_then(|data| serde_json::from_slice::<Value>(&data[..]).ok())
     }
 }

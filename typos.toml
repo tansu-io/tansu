@@ -4,5 +4,5 @@ ignore-hidden = true
 extend-exclude = [
     # not our typos
     "license.html",
-    "tansu-kafka-sans-io/message",
+    "tansu-sans-io/message",
 ]

@@ -1,17 +1,27 @@
 [package]
 name = "tansu-cat"
+description = "Fetch or produce (with validation when backed by a schema) messages to a topic"
+authors.workspace = true
 edition.workspace = true
-version.workspace = true
+homepage.workspace = true
+include.workspace = true
+keywords.workspace = true
 license.workspace = true
-publish = false
+repository.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true
 
 [dependencies]
+bytes.workspace = true
 futures-core.workspace = true
 futures-util.workspace = true
 futures.workspace = true
 serde_json.workspace = true
-tansu-kafka-sans-io = { path = "../tansu-kafka-sans-io" }
-tansu-schema-registry = { path = "../tansu-schema-registry" }
+tansu-client.workspace = true
+tansu-sans-io.workspace = true
+tansu-schema.workspace = true
 thiserror.workspace = true
 tokio-util.workspace = true
 tokio.workspace = true

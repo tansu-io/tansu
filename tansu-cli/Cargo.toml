@@ -1,20 +1,44 @@
 [package]
 name = "tansu-cli"
+description = "Tansu CLI"
+authors.workspace = true
 edition.workspace = true
-version.workspace = true
+homepage.workspace = true
+include.workspace = true
+keywords.workspace = true
 license.workspace = true
-publish = false
+repository.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = []
+delta = []
+dynostore = []
+iceberg = []
+libsql = []
+parquet = []
+postgres = []
+slatedb = []
+turso = []
 
 [dependencies]
 clap.workspace = true
 dotenv.workspace = true
+human-units.workspace = true
+humantime.workspace = true
 regex.workspace = true
-tansu-cat = { path = "../tansu-cat" }
-tansu-kafka-sans-io = { path = "../tansu-kafka-sans-io" }
-tansu-proxy = { path = "../tansu-proxy" }
-tansu-server = { path = "../tansu-server" }
-tansu-storage = { path = "../tansu-storage" }
-tansu-topic = { path = "../tansu-topic" }
+tansu-broker.workspace = true
+tansu-cat.workspace = true
+tansu-generator.workspace = true
+tansu-perf.workspace = true
+tansu-proxy.workspace = true
+tansu-sans-io.workspace = true
+tansu-schema.workspace = true
+tansu-storage.workspace = true
+tansu-topic.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing-subscriber.workspace = true

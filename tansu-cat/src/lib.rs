@@ -1,23 +1,26 @@
-// Copyright ⓒ 2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
+// http://www.apache.org/licenses/LICENSE-2.0
 //
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Tansu Cat
+//!
+//! Fetch or Produce (with validation when backed by a schema) messages to a topic
 
 use std::{fmt, io, result, sync::Arc};
 
 use consume::Consume;
 use produce::Produce;
-use tansu_kafka_sans_io::ErrorCode;
+use tansu_sans_io::ErrorCode;
 use tokio_util::codec::LinesCodecError;
 
 mod consume;
@@ -28,10 +31,11 @@ pub type Result<T, E = Error> = result::Result<T, E>;
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
     Api(ErrorCode),
+    Client(#[from] tansu_client::Error),
     Io(Arc<io::Error>),
     LinesCodec(#[from] LinesCodecError),
-    Protocol(#[from] tansu_kafka_sans_io::Error),
-    Schema(#[from] tansu_schema_registry::Error),
+    Protocol(#[from] tansu_sans_io::Error),
+    Schema(#[from] tansu_schema::Error),
     SerdeJson(#[from] serde_json::Error),
 }
 
@@ -43,7 +47,7 @@ impl From<io::Error> for Error {
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?}", self)
+        write!(f, "{self:?}")
     }
 }
 
@@ -70,7 +74,7 @@ impl Cat {
     }
 }
 
-#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Copy, Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Builder;
 
 impl Builder {

@@ -1,0 +1,58 @@
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = 'proto3';
+
+import "google/protobuf/descriptor.proto";
+
+
+extend google.protobuf.FieldOptions {
+  Generator generate = 51215;
+}
+
+message Generator {
+    oneof apply {
+        bool skip = 1;
+        string script = 2;
+        Repeated repeated = 3;
+    }
+}
+
+message Repeated {
+    oneof size {
+        uint32 len = 1;
+        Range range = 2;
+    }
+    string script = 3;
+}
+
+message Range {
+    uint32 min = 1;
+    uint32 max = 2;
+}
+
+message Address {
+    string building_number = 1 [(generate).script = "\"dolor\""];
+    string street_name = 2 [(generate).script = "\"sit\""];
+    string city = 3 [(generate).script = "\"amet\""];
+    string post_code = 4 [(generate).script = "\"consectetur\""];
+    string country_name = 5 [(generate).script = "\"adipiscing\""];
+}
+
+message Value {
+    string email_address = 1 [(generate).script = "\"lorem\""];
+    string full_name = 2 [(generate).script = "\"ipsum\""];
+    Address home = 3;
+    repeated string industry = 4 [(generate).repeated = {script: "\"elit\"", len: 3}];
+}

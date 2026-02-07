@@ -1,22 +1,23 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
+// http://www.apache.org/licenses/LICENSE-2.0
 //
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! PostgreSQL Storage engine
 
 use std::{
-    cmp::Ordering,
     collections::BTreeMap,
-    hash::{DefaultHasher, Hash, Hasher},
+    fmt::Debug,
+    hash::Hash,
     marker::PhantomData,
     str::FromStr,
     sync::{Arc, LazyLock},
@@ -25,15 +26,16 @@ use std::{
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use deadpool_postgres::{Manager, ManagerConfig, Object, Pool, RecyclingMethod};
-use object_store::ObjectStore;
+use deadpool_postgres::{Manager, ManagerConfig, Object, Pool, RecyclingMethod, Transaction};
+use futures::pin_mut;
+use futures_util::future;
 use opentelemetry::metrics::Histogram;
 use opentelemetry::{KeyValue, metrics::Counter};
 use rand::{prelude::*, rng};
 use serde_json::Value;
-use tansu_kafka_sans_io::{
+use tansu_sans_io::{
     BatchAttribute, ConfigResource, ConfigSource, ConfigType, ControlBatch, EndTransactionMarker,
-    ErrorCode, IsolationLevel, NULL_TOPIC_ID, OpType,
+    ErrorCode, IsolationLevel, ListOffset, NULL_TOPIC_ID, OpType,
     add_partitions_to_txn_response::{
         AddPartitionsToTxnPartitionResult, AddPartitionsToTxnTopicResult,
     },
@@ -50,29 +52,33 @@ use tansu_kafka_sans_io::{
     incremental_alter_configs_response::AlterConfigsResourceResponse,
     list_groups_response::ListedGroup,
     metadata_response::{MetadataResponseBroker, MetadataResponsePartition, MetadataResponseTopic},
-    record::{Header, Record, deflated, inflated},
+    record::{Header, Record, deflated, inflated::Batch},
     to_system_time, to_timestamp,
     txn_offset_commit_response::{TxnOffsetCommitResponsePartition, TxnOffsetCommitResponseTopic},
 };
-use tansu_schema_registry::Registry;
-use tokio_postgres::{Config, Row, Transaction, error::SqlState, types::ToSql};
-use tracing::{debug, error};
+use tansu_schema::{
+    Registry,
+    lake::{House, LakeHouse as _},
+};
+use tokio_postgres::{
+    Config, NoTls, Row, RowStream,
+    binary_copy::BinaryCopyInWriter,
+    error::SqlState,
+    types::{BorrowToSql, ToSql, Type},
+};
+use tracing::{debug, error, instrument};
 use url::Url;
 use uuid::Uuid;
 
 use crate::{
-    BrokerRegistrationRequest, Error, GroupDetail, ListOffsetRequest, ListOffsetResponse, METER,
-    MetadataResponse, NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse,
-    Result, Storage, TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse,
-    TxnOffsetCommitRequest, TxnState, UpdateError, Version,
+    BrokerRegistrationRequest, Error, GroupDetail, ListOffsetResponse, METER, MetadataResponse,
+    NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse, Result, Storage,
+    TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse, TxnOffsetCommitRequest,
+    TxnState, UpdateError, Version,
+    sql::{default_hash, idempotent_sequence_check},
 };
 
-macro_rules! include_sql {
-    ($e: expr) => {
-        remove_comments(include_str!($e))
-    };
-}
-
+/// PostgreSQL Storage Engine
 #[derive(Clone, Debug)]
 pub struct Postgres {
     cluster: String,
@@ -80,11 +86,10 @@ pub struct Postgres {
     advertised_listener: Url,
     pool: Pool,
     schemas: Option<Registry>,
-    lake: Option<Arc<dyn ObjectStore>>,
-    iceberg_catalog: Option<Url>,
-    iceberg_namespace: Option<String>,
+    lake: Option<House>,
 }
 
+/// PostgreSQL Storage Builder
 #[derive(Clone, Default, Debug)]
 pub struct Builder<C, N, L, P> {
     cluster: C,
@@ -92,9 +97,7 @@ pub struct Builder<C, N, L, P> {
     advertised_listener: L,
     pool: P,
     schemas: Option<Registry>,
-    lake: Option<Arc<dyn ObjectStore>>,
-    iceberg_catalog: Option<Url>,
-    iceberg_namespace: Option<String>,
+    lake: Option<House>,
 }
 
 impl<C, N, L, P> Builder<C, N, L, P> {
@@ -106,13 +109,9 @@ impl<C, N, L, P> Builder<C, N, L, P> {
             pool: self.pool,
             schemas: self.schemas,
             lake: self.lake,
-            iceberg_catalog: self.iceberg_catalog,
-            iceberg_namespace: self.iceberg_namespace,
         }
     }
-}
 
-impl<C, N, L, P> Builder<C, N, L, P> {
     pub fn node(self, node: i32) -> Builder<C, i32, L, P> {
         Builder {
             cluster: self.cluster,
@@ -121,13 +120,9 @@ impl<C, N, L, P> Builder<C, N, L, P> {
             pool: self.pool,
             schemas: self.schemas,
             lake: self.lake,
-            iceberg_catalog: self.iceberg_catalog,
-            iceberg_namespace: self.iceberg_namespace,
         }
     }
-}
 
-impl<C, N, L, P> Builder<C, N, L, P> {
     pub fn advertised_listener(self, advertised_listener: Url) -> Builder<C, N, Url, P> {
         Builder {
             cluster: self.cluster,
@@ -136,8 +131,6 @@ impl<C, N, L, P> Builder<C, N, L, P> {
             pool: self.pool,
             schemas: self.schemas,
             lake: self.lake,
-            iceberg_catalog: self.iceberg_catalog,
-            iceberg_namespace: self.iceberg_namespace,
         }
     }
 
@@ -145,23 +138,8 @@ impl<C, N, L, P> Builder<C, N, L, P> {
         Self { schemas, ..self }
     }
 
-    pub fn lake(self, lake: Option<impl ObjectStore>) -> Self {
-        let lake = lake.map(|lake| Arc::new(lake) as Arc<dyn ObjectStore>);
+    pub fn lake(self, lake: Option<House>) -> Self {
         Self { lake, ..self }
-    }
-
-    pub fn iceberg_catalog(self, iceberg_catalog: Option<Url>) -> Self {
-        Self {
-            iceberg_catalog,
-            ..self
-        }
-    }
-
-    pub fn iceberg_namespace(self, iceberg_namespace: Option<String>) -> Self {
-        Self {
-            iceberg_namespace,
-            ..self
-        }
     }
 }
 
@@ -174,8 +152,6 @@ impl Builder<String, i32, Url, Pool> {
             pool: self.pool,
             schemas: self.schemas,
             lake: self.lake,
-            iceberg_catalog: self.iceberg_catalog,
-            iceberg_namespace: self.iceberg_namespace,
         }
     }
 }
@@ -224,8 +200,6 @@ where
                 cluster: C::default(),
                 schemas: None,
                 lake: None,
-                iceberg_catalog: None,
-                iceberg_namespace: None,
             })
             .map_err(Into::into)
     }
@@ -275,48 +249,24 @@ impl Postgres {
         self.pool.get().await.map_err(Into::into)
     }
 
-    fn idempotent_sequence_check(
-        producer_epoch: &i16,
-        sequence: &i32,
-        deflated: &deflated::Batch,
-    ) -> Result<i32> {
-        debug!(?producer_epoch, ?sequence, ?deflated);
-
-        match producer_epoch.cmp(&deflated.producer_epoch) {
-            Ordering::Equal => match sequence.cmp(&deflated.base_sequence) {
-                Ordering::Equal => Ok(deflated.last_offset_delta + 1),
-
-                Ordering::Greater => {
-                    debug!(?sequence, ?deflated.base_sequence);
-                    Err(Error::Api(ErrorCode::DuplicateSequenceNumber))
-                }
-
-                Ordering::Less => {
-                    debug!(?sequence, ?deflated.base_sequence);
-                    Err(Error::Api(ErrorCode::OutOfOrderSequenceNumber))
-                }
-            },
-
-            Ordering::Greater => Err(Error::Api(ErrorCode::ProducerFenced)),
-
-            Ordering::Less => Err(Error::Api(ErrorCode::InvalidProducerEpoch)),
-        }
+    fn sql_lookup(&self, key: &str) -> Result<&str> {
+        crate::sql::SQL.get(key)
     }
 
     async fn idempotent_message_check(
-        &mut self,
+        &self,
         transaction_id: Option<&str>,
         topition: &Topition,
         deflated: &deflated::Batch,
         tx: &Transaction<'_>,
     ) -> Result<()> {
         debug!(transaction_id, ?deflated);
+
         if let Some(row) = self
             .tx_prepare_query_opt(
                 tx,
-                include_sql!("pg/producer_epoch_current_for_producer.sql").as_str(),
+                "producer_epoch_current_for_producer.sql",
                 &[&self.cluster, &deflated.producer_id],
-                "idempotent_message_check",
             )
             .await
             .inspect_err(|err| error!(?err))?
@@ -328,7 +278,7 @@ impl Postgres {
             let row = self
                 .tx_prepare_query_one(
                     tx,
-                    include_sql!("pg/producer_select_for_update.sql").as_str(),
+                    "producer_select_for_update.sql",
                     &[
                         &self.cluster,
                         &topition.topic(),
@@ -336,7 +286,6 @@ impl Postgres {
                         &deflated.producer_id,
                         &deflated.producer_epoch,
                     ],
-                    "idempotent_message_check",
                 )
                 .await
                 .inspect_err(|err| {
@@ -360,7 +309,7 @@ impl Postgres {
                 sequence,
             );
 
-            let increment = Self::idempotent_sequence_check(&current_epoch, &sequence, deflated)?;
+            let increment = idempotent_sequence_check(&current_epoch, &sequence, deflated)?;
 
             debug!(increment);
 
@@ -368,7 +317,7 @@ impl Postgres {
                 1,
                 self.tx_prepare_execute(
                     tx,
-                    include_sql!("pg/producer_detail_insert.sql").as_str(),
+                    "producer_detail_insert.sql",
                     &[
                         &self.cluster,
                         &topition.topic(),
@@ -377,7 +326,6 @@ impl Postgres {
                         &deflated.producer_epoch,
                         &increment,
                     ],
-                    "idempotent_message_check",
                 )
                 .await?
             );
@@ -389,16 +337,15 @@ impl Postgres {
     }
 
     async fn watermark_select_for_update(
-        &mut self,
+        &self,
         topition: &Topition,
         tx: &Transaction<'_>,
     ) -> Result<(Option<i64>, Option<i64>)> {
         if let Some(row) = self
             .tx_prepare_query_opt(
                 tx,
-                include_sql!("pg/watermark_select_for_update.sql").as_str(),
+                "watermark_select_for_update.sql",
                 &[&self.cluster, &topition.topic(), &topition.partition()],
-                "watermark_select_for_update",
             )
             .await
             .inspect_err(|err| error!(?err, cluster = ?self.cluster, ?topition))?
@@ -445,14 +392,19 @@ impl Postgres {
         attributes
     }
 
+    #[instrument(skip(self, c, params))]
     async fn prepare_execute(
         &self,
         c: &Object,
         sql: &str,
         params: &[&(dyn ToSql + Sync)],
-        _nickname: &str,
-    ) -> Result<u64, tokio_postgres::error::Error> {
-        let prepared = c.prepare(sql).await.inspect_err(|err| error!(?err))?;
+    ) -> Result<u64, Error> {
+        let sql = self.sql_lookup(sql)?;
+
+        let prepared = c
+            .prepare_cached(sql)
+            .await
+            .inspect_err(|err| error!(?err))?;
 
         let execute_start = SystemTime::now();
         c.execute(&prepared, params)
@@ -479,18 +431,22 @@ impl Postgres {
             .inspect_err(|err| {
                 SQL_ERROR.add(1, &self.attributes_for_error(sql, err)[..]);
             })
+            .map_err(Into::into)
     }
 
+    #[instrument(skip(self, c, params))]
     async fn prepare_query(
         &self,
         c: &Object,
         sql: &str,
         params: &[&(dyn ToSql + Sync)],
-        _nickname: &str,
-    ) -> Result<Vec<Row>, tokio_postgres::error::Error> {
-        debug!(sql);
+    ) -> Result<Vec<Row>, Error> {
+        let sql = self.sql_lookup(sql)?;
 
-        let prepared = c.prepare(sql).await.inspect_err(|err| error!(?err))?;
+        let prepared = c
+            .prepare_cached(sql)
+            .await
+            .inspect_err(|err| error!(?err))?;
 
         let execute_start = SystemTime::now();
 
@@ -518,18 +474,22 @@ impl Postgres {
             .inspect_err(|err| {
                 SQL_ERROR.add(1, &self.attributes_for_error(sql, err)[..]);
             })
+            .map_err(Into::into)
     }
 
+    #[instrument(skip(self, c, params))]
     async fn prepare_query_one(
         &self,
         c: &Object,
         sql: &str,
         params: &[&(dyn ToSql + Sync)],
-        _nickname: &str,
-    ) -> Result<Row, tokio_postgres::error::Error> {
-        debug!(sql);
+    ) -> Result<Row, Error> {
+        let sql = self.sql_lookup(sql)?;
 
-        let prepared = c.prepare(sql).await.inspect_err(|err| error!(?err))?;
+        let prepared = c
+            .prepare_cached(sql)
+            .await
+            .inspect_err(|err| error!(?err))?;
 
         let execute_start = SystemTime::now();
 
@@ -557,18 +517,22 @@ impl Postgres {
             .inspect_err(|err| {
                 SQL_ERROR.add(1, &self.attributes_for_error(sql, err)[..]);
             })
+            .map_err(Into::into)
     }
 
+    #[instrument(skip(self, c, params))]
     async fn prepare_query_opt(
         &self,
         c: &Object,
         sql: &str,
         params: &[&(dyn ToSql + Sync)],
-        _nickname: &str,
-    ) -> Result<Option<Row>, tokio_postgres::error::Error> {
-        debug!(sql);
+    ) -> Result<Option<Row>, Error> {
+        let sql = self.sql_lookup(sql)?;
 
-        let prepared = c.prepare(sql).await.inspect_err(|err| error!(?err))?;
+        let prepared = c
+            .prepare_cached(sql)
+            .await
+            .inspect_err(|err| error!(?err))?;
 
         let execute_start = SystemTime::now();
 
@@ -596,18 +560,22 @@ impl Postgres {
             .inspect_err(|err| {
                 SQL_ERROR.add(1, &self.attributes_for_error(sql, err)[..]);
             })
+            .map_err(Into::into)
     }
 
+    #[instrument(skip(self, tx, params))]
     async fn tx_prepare_execute(
         &self,
         tx: &Transaction<'_>,
         sql: &str,
         params: &[&(dyn ToSql + Sync)],
-        _nickname: &str,
-    ) -> Result<u64, tokio_postgres::error::Error> {
-        debug!(sql);
+    ) -> Result<u64, Error> {
+        let sql = self.sql_lookup(sql)?;
 
-        let prepared = tx.prepare(sql).await.inspect_err(|err| error!(?err))?;
+        let prepared = tx
+            .prepare_cached(sql)
+            .await
+            .inspect_err(|err| error!(?err))?;
 
         let execute_start = SystemTime::now();
 
@@ -635,18 +603,22 @@ impl Postgres {
             .inspect_err(|err| {
                 SQL_ERROR.add(1, &self.attributes_for_error(sql, err)[..]);
             })
+            .map_err(Into::into)
     }
 
+    #[instrument(skip(self, tx, params))]
     async fn tx_prepare_query(
         &self,
         tx: &Transaction<'_>,
         sql: &str,
         params: &[&(dyn ToSql + Sync)],
-        _nickname: &str,
-    ) -> Result<Vec<Row>, tokio_postgres::error::Error> {
-        debug!(sql);
+    ) -> Result<Vec<Row>, Error> {
+        let sql = self.sql_lookup(sql)?;
 
-        let prepared = tx.prepare(sql).await.inspect_err(|err| error!(?err))?;
+        let prepared = tx
+            .prepare_cached(sql)
+            .await
+            .inspect_err(|err| error!(?err))?;
 
         let execute_start = SystemTime::now();
         tx.query(&prepared, params)
@@ -673,18 +645,22 @@ impl Postgres {
             .inspect_err(|err| {
                 SQL_ERROR.add(1, &self.attributes_for_error(sql, err)[..]);
             })
+            .map_err(Into::into)
     }
 
+    #[instrument(skip(self, tx, params))]
     async fn tx_prepare_query_one(
         &self,
         tx: &Transaction<'_>,
         sql: &str,
         params: &[&(dyn ToSql + Sync)],
-        _nickname: &str,
-    ) -> Result<Row, tokio_postgres::error::Error> {
-        debug!(sql);
+    ) -> Result<Row, Error> {
+        let sql = self.sql_lookup(sql)?;
 
-        let prepared = tx.prepare(sql).await.inspect_err(|err| error!(?err))?;
+        let prepared = tx
+            .prepare_cached(sql)
+            .await
+            .inspect_err(|err| error!(?err))?;
 
         let execute_start = SystemTime::now();
         tx.query_one(&prepared, params)
@@ -711,18 +687,22 @@ impl Postgres {
             .inspect_err(|err| {
                 SQL_ERROR.add(1, &self.attributes_for_error(sql, err)[..]);
             })
+            .map_err(Into::into)
     }
 
+    #[instrument(skip(self, tx, params))]
     async fn tx_prepare_query_opt(
         &self,
         tx: &Transaction<'_>,
         sql: &str,
         params: &[&(dyn ToSql + Sync)],
-        _nickname: &str,
-    ) -> Result<Option<Row>, tokio_postgres::error::Error> {
-        debug!(sql);
+    ) -> Result<Option<Row>, Error> {
+        let sql = self.sql_lookup(sql)?;
 
-        let prepared = tx.prepare(sql).await.inspect_err(|err| error!(?err))?;
+        let prepared = tx
+            .prepare_cached(sql)
+            .await
+            .inspect_err(|err| error!(?err))?;
 
         let execute_start = SystemTime::now();
         tx.query_opt(&prepared, params)
@@ -749,10 +729,34 @@ impl Postgres {
             .inspect_err(|err| {
                 SQL_ERROR.add(1, &self.attributes_for_error(sql, err)[..]);
             })
+            .map_err(Into::into)
     }
 
+    #[instrument(skip(self, tx, params))]
+    async fn tx_prepare_query_raw<P, I>(
+        &self,
+        tx: &Transaction<'_>,
+        sql: &str,
+        params: I,
+    ) -> Result<RowStream, Error>
+    where
+        P: BorrowToSql,
+        I: IntoIterator<Item = P>,
+        I::IntoIter: ExactSizeIterator,
+    {
+        let sql = self.sql_lookup(sql)?;
+
+        let prepared = tx
+            .prepare_cached(sql)
+            .await
+            .inspect_err(|err| error!(?err))?;
+
+        tx.query_raw(&prepared, params).await.map_err(Into::into)
+    }
+
+    #[instrument(skip_all)]
     async fn produce_in_tx(
-        &mut self,
+        &self,
         transaction_id: Option<&str>,
         topition: &Topition,
         deflated: deflated::Batch,
@@ -762,6 +766,21 @@ impl Postgres {
 
         let topic = topition.topic();
         let partition = topition.partition();
+
+        let Some(row) = self
+            .tx_prepare_query_opt(
+                tx,
+                "topition_select_id.sql",
+                &[&self.cluster, &topic, &partition],
+            )
+            .await
+            .inspect_err(|err| debug!(?err))?
+        else {
+            return Err(Error::Api(ErrorCode::UnknownTopicOrPartition));
+        };
+
+        let topition_id = row.try_get::<_, i32>(0).inspect_err(|err| error!(?err))?;
+        debug!(topition_id);
 
         if deflated.is_idempotent() {
             self.idempotent_message_check(transaction_id, topition, &deflated, tx)
@@ -773,97 +792,124 @@ impl Postgres {
 
         debug!(?low, ?high);
 
-        let inflated = inflated::Batch::try_from(deflated).inspect_err(|err| error!(?err))?;
-
-        if let Some(ref schemas) = self.schemas {
-            schemas.validate(topition.topic(), &inflated).await?;
-        }
+        let inflated = Batch::try_from(deflated).inspect_err(|err| error!(?err))?;
 
         let attributes = BatchAttribute::try_from(inflated.attributes)?;
 
-        let last_offset_delta = i64::from(inflated.last_offset_delta);
-
-        for (delta, record) in inflated.records.iter().enumerate() {
-            let delta = i64::try_from(delta)?;
-            let offset = high.unwrap_or_default() + delta;
-            let key = record.key.as_deref();
-            let value = record.value.as_deref();
-
-            debug!(?delta, ?record, ?offset);
-
-            _ = self
-                .tx_prepare_execute(
-                    tx,
-                    include_sql!("pg/record_insert.sql").as_str(),
-                    &[
-                        &self.cluster,
-                        &topic,
-                        &partition,
-                        &offset,
-                        &inflated.attributes,
-                        &if transaction_id.is_none() {
-                            None
-                        } else {
-                            Some(inflated.producer_id)
-                        },
-                        &if transaction_id.is_none() {
-                            None
-                        } else {
-                            Some(inflated.producer_epoch)
-                        },
-                        &(to_system_time(inflated.base_timestamp + record.timestamp_delta)?),
-                        &key,
-                        &value,
-                    ],
-                    "produce_in_tx",
-                )
-                .await
-                .inspect_err(|err| error!(?err, ?topic, ?partition, ?offset, ?key, ?value))
-                .map_err(|error| {
-                    if let Some(db_error) = error.as_db_error() {
-                        debug!(
-                            schema = db_error.schema(),
-                            table = db_error.table(),
-                            constraint = db_error.constraint()
-                        );
-                    }
-
-                    if error
-                        .code()
-                        .is_some_and(|code| *code == SqlState::UNIQUE_VIOLATION)
-                    {
-                        Error::Api(ErrorCode::UnknownServerError)
-                    } else {
-                        error.into()
-                    }
-                })?;
-
-            for header in record.headers.iter().as_ref() {
-                let key = header.key.as_deref();
-                let value = header.value.as_deref();
-
-                _ = self
-                    .tx_prepare_execute(
-                        tx,
-                        include_sql!("pg/header_insert.sql").as_str(),
-                        &[&self.cluster, &topic, &partition, &offset, &key, &value],
-                        "produce_in_tx",
-                    )
-                    .await
-                    .inspect_err(|err| {
-                        error!(?err, ?topic, ?partition, ?offset, ?key, ?value);
-                    });
-            }
+        if !attributes.control
+            && let Some(ref schemas) = self.schemas
+        {
+            schemas.validate(topition.topic(), &inflated).await?;
         }
 
-        if let Some(transaction_id) = transaction_id {
-            if attributes.transaction {
-                let offset_start = high.unwrap_or_default();
-                let offset_end = high.map_or(last_offset_delta, |high| high + last_offset_delta);
+        let last_offset_delta = i64::from(inflated.last_offset_delta);
 
-                _ = self
+        {
+            let record_sink = tx.copy_in(self.sql_lookup("record_copy.sql")?).await?;
+
+            let record_column_types = [
+                Type::INT4,
+                Type::INT8,
+                Type::INT2,
+                Type::INT8,
+                Type::INT2,
+                Type::TIMESTAMPTZ,
+                Type::BYTEA,
+                Type::BYTEA,
+            ];
+
+            let record_writer = BinaryCopyInWriter::new(record_sink, &record_column_types);
+            pin_mut!(record_writer);
+
+            for (delta, record) in inflated.records.iter().enumerate() {
+                let delta = i64::try_from(delta)?;
+                let offset = high.unwrap_or_default() + delta;
+                let attributes = inflated.attributes;
+                let key = record.key.as_deref();
+                let value = record.value.as_deref();
+
+                let producer_id = transaction_id.and(Some(inflated.producer_id));
+                let producer_epoch = transaction_id.and(Some(inflated.producer_epoch));
+                let ts = to_system_time(inflated.base_timestamp + record.timestamp_delta)?;
+
+                {
+                    let mut row: Vec<&(dyn ToSql + Sync)> =
+                        Vec::with_capacity(record_column_types.len());
+
+                    row.push(&topition_id);
+                    row.push(&offset);
+                    row.push(&attributes);
+                    row.push(&producer_id);
+                    row.push(&producer_epoch);
+                    row.push(&ts);
+                    row.push(&key);
+                    row.push(&value);
+
+                    record_writer
+                        .as_mut()
+                        .write(&row)
+                        .await
+                        .inspect_err(|err| {
+                            error!(?err, ?topic, ?partition, ?offset, ?key, ?value)
+                        })?;
+                }
+            }
+
+            _ = record_writer
+                .finish()
+                .await
+                .inspect(|record_row_count| debug!(?record_row_count))
+                .inspect_err(|err| error!(?err))?;
+        }
+
+        {
+            let header_sink = tx.copy_in(self.sql_lookup("header_copy.sql")?).await?;
+            let header_column_types = [Type::INT4, Type::INT8, Type::BYTEA, Type::BYTEA];
+            let header_writer = BinaryCopyInWriter::new(header_sink, &header_column_types);
+            pin_mut!(header_writer);
+
+            for (delta, record) in inflated.records.iter().enumerate() {
+                let delta = i64::try_from(delta)?;
+                let offset = high.unwrap_or_default() + delta;
+
+                for header in record.headers.iter().as_ref() {
+                    let key = header.key.as_deref();
+                    let value = header.value.as_deref();
+
+                    let mut row: Vec<&(dyn ToSql + Sync)> =
+                        Vec::with_capacity(header_column_types.len());
+
+                    row.push(&topition_id);
+                    row.push(&offset);
+                    row.push(&key);
+                    row.push(&value);
+
+                    header_writer
+                        .as_mut()
+                        .write(&row)
+                        .await
+                        .inspect_err(|err| {
+                            error!(?err, ?topic, ?partition, ?offset, ?key, ?value)
+                        })?;
+                }
+            }
+
+            _ = header_writer
+                .finish()
+                .await
+                .inspect(|header_row_count| debug!(?header_row_count))
+                .inspect_err(|err| error!(?err))?;
+        }
+
+        if let Some(transaction_id) = transaction_id
+            && attributes.transaction
+        {
+            let offset_start = high.unwrap_or_default();
+            let offset_end = high.map_or(last_offset_delta, |high| high + last_offset_delta);
+
+            _ = self
                     .tx_prepare_execute(tx,
-                        include_sql!("pg/txn_produce_offset_insert.sql").as_str(),
+                        "txn_produce_offset_insert.sql",
                         &[
                             &self.cluster,
                             &transaction_id,
@@ -874,18 +920,16 @@ impl Postgres {
                             &offset_start,
                             &offset_end,
                         ],
-                        "produce_in_tx",
                     )
                     .await
                     .inspect(|n| debug!(cluster = ?self.cluster, ?transaction_id, ?inflated.producer_id, ?inflated.producer_epoch, ?topic, ?partition, ?offset_start, ?offset_end, ?n))
                     .inspect_err(|err| error!(?err))?;
-            }
         }
 
         _ = self
             .tx_prepare_execute(
                 tx,
-                include_sql!("pg/watermark_update.sql").as_str(),
+                "watermark_update.sql",
                 &[
                     &self.cluster,
                     &topic,
@@ -893,42 +937,20 @@ impl Postgres {
                     &low.unwrap_or_default(),
                     &high.map_or(last_offset_delta + 1, |high| high + last_offset_delta + 1),
                 ],
-                "produce_in_tx",
             )
             .await
             .inspect(|n| debug!(?n))
             .inspect_err(|err| error!(?err))?;
 
-        if let Some(ref registry) = self.schemas {
-            if let Some(ref catalog) = self.iceberg_catalog {
-                registry
-                    .store_as_iceberg(
-                        topition.topic(),
-                        topition.partition(),
-                        high.unwrap_or_default(),
-                        &inflated,
-                        catalog,
-                        self.iceberg_namespace.as_deref(),
-                    )
-                    .await?;
-            } else if let Some(ref lake) = self.lake {
-                registry
-                    .store_as_parquet(
-                        topition.topic(),
-                        topition.partition(),
-                        high.unwrap_or_default(),
-                        &inflated,
-                        lake,
-                    )
-                    .await?;
-            }
-        }
+        self.lake_store(&attributes, topition, high, &inflated)
+            .await?;
 
         Ok(high.unwrap_or_default())
     }
 
+    #[instrument(skip_all)]
     async fn end_in_tx(
-        &mut self,
+        &self,
         transaction_id: &str,
         producer_id: i64,
         producer_epoch: i16,
@@ -942,14 +964,13 @@ impl Postgres {
         let rows = self
             .tx_prepare_query(
                 tx,
-                include_sql!("pg/txn_select_produced_topitions.sql").as_str(),
+                "txn_select_produced_topitions.sql",
                 &[
                     &self.cluster,
                     &transaction_id,
                     &producer_id,
                     &producer_epoch,
                 ],
-                "end_in_tx",
             )
             .await?;
 
@@ -968,7 +989,7 @@ impl Postgres {
             };
             let end_transaction_marker: Bytes = EndTransactionMarker::default().try_into()?;
 
-            let batch = inflated::Batch::builder()
+            let batch = Batch::builder()
                 .record(
                     Record::builder()
                         .key(control_batch.into())
@@ -996,7 +1017,7 @@ impl Postgres {
             let row = self
                 .tx_prepare_query_one(
                     tx,
-                    include_sql!("pg/txn_produce_offset_select_offset_range.sql").as_str(),
+                    "txn_produce_offset_select_offset_range.sql",
                     &[
                         &self.cluster,
                         &transaction_id,
@@ -1005,7 +1026,6 @@ impl Postgres {
                         &topic,
                         &partition,
                     ],
-                    "end_in_tx",
                 )
                 .await?;
 
@@ -1016,7 +1036,7 @@ impl Postgres {
             let rows = self
                 .tx_prepare_query(
                     tx,
-                    include_sql!("pg/txn_produce_offset_select_overlapping_txn.sql").as_str(),
+                    "txn_produce_offset_select_overlapping_txn.sql",
                     &[
                         &self.cluster,
                         &transaction_id,
@@ -1026,7 +1046,6 @@ impl Postgres {
                         &partition,
                         &offset_end,
                     ],
-                    "end_in_tx",
                 )
                 .await?;
 
@@ -1063,28 +1082,26 @@ impl Postgres {
                 _ = self
                     .tx_prepare_execute(
                         tx,
-                        include_sql!("pg/txn_produce_offset_delete_by_txn.sql").as_str(),
+                        "txn_produce_offset_delete_by_txn.sql",
                         &[
                             &self.cluster,
                             &txn.name,
                             &txn.producer_id,
                             &txn.producer_epoch,
                         ],
-                        "end_in_tx",
                     )
                     .await?;
 
                 _ = self
                     .tx_prepare_execute(
                         tx,
-                        include_sql!("pg/txn_topition_delete_by_txn.sql").as_str(),
+                        "txn_topition_delete_by_txn.sql",
                         &[
                             &self.cluster,
                             &txn.name,
                             &txn.producer_id,
                             &txn.producer_epoch,
                         ],
-                        "end_in_tx",
                     )
                     .await?;
 
@@ -1092,14 +1109,13 @@ impl Postgres {
                     _ = self
                         .tx_prepare_execute(
                             tx,
-                            include_sql!("pg/consumer_offset_insert_from_txn.sql").as_str(),
+                            "consumer_offset_insert_from_txn.sql",
                             &[
                                 &self.cluster,
                                 &txn.name,
                                 &txn.producer_id,
                                 &txn.producer_epoch,
                             ],
-                            "end_in_tx",
                         )
                         .await?;
                 }
@@ -1107,28 +1123,26 @@ impl Postgres {
                 _ = self
                     .tx_prepare_execute(
                         tx,
-                        include_sql!("pg/txn_offset_commit_tp_delete_by_txn.sql").as_str(),
+                        "txn_offset_commit_tp_delete_by_txn.sql",
                         &[
                             &self.cluster,
                             &txn.name,
                             &txn.producer_id,
                             &txn.producer_epoch,
                         ],
-                        "end_in_tx",
                     )
                     .await?;
 
                 _ = self
                     .tx_prepare_execute(
                         tx,
-                        include_sql!("pg/txn_offset_commit_delete_by_txn.sql").as_str(),
+                        "txn_offset_commit_delete_by_txn.sql",
                         &[
                             &self.cluster,
                             &txn.name,
                             &txn.producer_id,
                             &txn.producer_epoch,
                         ],
-                        "end_in_tx",
                     )
                     .await?;
 
@@ -1143,7 +1157,7 @@ impl Postgres {
                 _ = self
                     .tx_prepare_execute(
                         tx,
-                        include_sql!("pg/txn_status_update.sql").as_str(),
+                        "txn_status_update.sql",
                         &[
                             &self.cluster,
                             &txn.name,
@@ -1151,7 +1165,6 @@ impl Postgres {
                             &txn.producer_epoch,
                             &outcome,
                         ],
-                        "end_in_tx",
                     )
                     .await?;
             }
@@ -1164,37 +1177,93 @@ impl Postgres {
                 String::from(TxnState::PrepareAbort)
             };
 
-            self.tx_prepare_execute(
-                tx,
-                include_sql!("pg/txn_status_update.sql").as_str(),
-                &[
-                    &self.cluster,
-                    &transaction_id,
-                    &producer_id,
-                    &producer_epoch,
-                    &outcome,
-                ],
-                "end_in_tx",
-            )
-            .await
-            .inspect(|n| {
-                debug!(
-                    cluster = self.cluster,
-                    transaction_id, producer_id, producer_epoch, outcome, n
+            _ = self
+                .tx_prepare_execute(
+                    tx,
+                    "txn_status_update.sql",
+                    &[
+                        &self.cluster,
+                        &transaction_id,
+                        &producer_id,
+                        &producer_epoch,
+                        &outcome,
+                    ],
                 )
-            })?;
+                .await
+                .inspect(|n| {
+                    debug!(
+                        cluster = self.cluster,
+                        transaction_id, producer_id, producer_epoch, outcome, n
+                    )
+                })?;
         }
 
         Ok(ErrorCode::None)
+    }
+
+    #[instrument(skip_all)]
+    async fn lake_store(
+        &self,
+        attributes: &BatchAttribute,
+        topition: &Topition,
+        high: Option<i64>,
+        inflated: &Batch,
+    ) -> Result<()> {
+        if !attributes.control
+            && let Some(ref lake) = self.lake
+        {
+            let config = self
+                .describe_config(topition.topic(), ConfigResource::Topic, None)
+                .await?;
+
+            lake.store(
+                topition.topic(),
+                topition.partition(),
+                high.unwrap_or_default(),
+                inflated,
+                config,
+            )
+            .await?;
+        }
+
+        Ok(())
+    }
+
+    #[instrument(skip(self), ret)]
+    async fn policy_compact(&self) -> Result<u64> {
+        let mut c = self.connection().await?;
+        let tx = c.transaction().await?;
+
+        let compacted = self
+            .tx_prepare_execute(&tx, "policy_compact.sql", &[&self.cluster])
+            .await?;
+
+        tx.commit().await.map_err(Into::into).and(Ok(compacted))
+    }
+
+    #[instrument(skip(self), ret)]
+    async fn policy_delete(&self, now: SystemTime) -> Result<u64> {
+        let retention_secs = i32::try_from(Duration::from_hours(7 * 24).as_secs())?;
+
+        let mut c = self.connection().await?;
+        let tx = c.transaction().await?;
+
+        let deleted = self
+            .tx_prepare_execute(
+                &tx,
+                "policy_delete.sql",
+                &[&self.cluster, &now, &retention_secs],
+            )
+            .await?;
+
+        tx.commit().await.map_err(Into::into).and(Ok(deleted))
     }
 }
 
 #[async_trait]
 impl Storage for Postgres {
-    async fn register_broker(
-        &mut self,
-        broker_registration: BrokerRegistrationRequest,
-    ) -> Result<()> {
+    #[instrument(skip_all)]
+    async fn register_broker(&self, broker_registration: BrokerRegistrationRequest) -> Result<()> {
         debug!(cluster = self.cluster, ?broker_registration);
 
         let c = self.connection().await?;
@@ -1202,15 +1271,8 @@ impl Storage for Postgres {
         _ = self
             .prepare_execute(
                 &c,
-                concat!(
-                    "insert into cluster",
-                    " (name) values ($1)",
-                    " on conflict (name)",
-                    " do update set",
-                    " last_updated = excluded.last_updated",
-                ),
+                "register_broker.sql",
                 &[&broker_registration.cluster_id],
-                "register_broker",
             )
             .await
             .inspect(|n| debug!(cluster = self.cluster, n))?;
@@ -1218,7 +1280,8 @@ impl Storage for Postgres {
         Ok(())
     }
 
-    async fn brokers(&mut self) -> Result<Vec<DescribeClusterBroker>> {
+    #[instrument(skip_all)]
+    async fn brokers(&self) -> Result<Vec<DescribeClusterBroker>> {
         debug!(cluster = self.cluster);
 
         let broker_id = self.node;
@@ -1230,75 +1293,77 @@ impl Storage for Postgres {
         let port = self.advertised_listener.port().unwrap_or(9092).into();
         let rack = None;
 
-        Ok(vec![DescribeClusterBroker {
-            broker_id,
-            host,
-            port,
-            rack,
-        }])
+        Ok(vec![
+            DescribeClusterBroker::default()
+                .broker_id(broker_id)
+                .host(host)
+                .port(port)
+                .rack(rack),
+        ])
     }
 
-    async fn create_topic(&mut self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {
+    #[instrument(skip_all)]
+    async fn create_topic(&self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {
         debug!(cluster = self.cluster, ?topic, validate_only);
 
         let mut c = self.connection().await?;
         let tx = c.transaction().await?;
 
+        let uuid = Uuid::new_v4();
+
         let topic_uuid = self
             .tx_prepare_query_one(
                 &tx,
-                include_sql!("pg/topic_insert.sql").as_str(),
+                "topic_insert.sql",
                 &[
                     &self.cluster,
                     &topic.name,
+                    &uuid,
                     &topic.num_partitions,
                     &(topic.replication_factor as i32),
                 ],
-                "create_topic",
             )
             .await
             .inspect_err(|err| error!(?err, ?topic, ?validate_only))
             .map(|row| row.get(0))
             .map_err(|error| {
-                if let Some(db_error) = error.as_db_error() {
-                    debug!(
-                        schema = db_error.schema(),
-                        table = db_error.table(),
-                        constraint = db_error.constraint()
-                    );
-                }
-
-                if error
-                    .code()
-                    .is_some_and(|code| *code == SqlState::UNIQUE_VIOLATION)
+                if let Error::TokioPostgres(ref error) = error
+                    && error
+                        .code()
+                        .is_some_and(|code| *code == SqlState::UNIQUE_VIOLATION)
                 {
                     Error::Api(ErrorCode::TopicAlreadyExists)
                 } else {
-                    error.into()
+                    error
                 }
             })?;
 
         debug!(?topic_uuid, cluster = self.cluster, ?topic);
 
-        for partition in 0..topic.num_partitions {
-            _ = self
-                .tx_prepare_query_one(
-                    &tx,
-                    include_sql!("pg/topition_insert.sql").as_str(),
-                    &[&self.cluster, &topic.name, &partition],
-                    "create_topic",
-                )
-                .await?;
-
-            _ = self
-                .tx_prepare_query_one(
-                    &tx,
-                    include_sql!("pg/watermark_insert.sql").as_str(),
-                    &[&self.cluster, &topic.name, &partition],
-                    "create_topic",
-                )
-                .await?;
-        }
+        _ = future::try_join_all(
+            (0..topic.num_partitions)
+                .map(|partition| {
+                    let cluster = Box::new(self.cluster.clone()) as Box<dyn ToSql + Sync + Send>;
+                    let name = Box::new(topic.name.clone()) as Box<dyn ToSql + Sync + Send>;
+                    let partition = Box::new(partition) as Box<dyn ToSql + Sync + Send>;
+                    [cluster, name, partition]
+                })
+                .map(|parameters| self.tx_prepare_query_raw(&tx, "topition_insert.sql", parameters))
+                .chain(
+                    (0..topic.num_partitions)
+                        .map(|partition| {
+                            let cluster =
+                                Box::new(self.cluster.clone()) as Box<dyn ToSql + Sync + Send>;
+                            let name = Box::new(topic.name.clone()) as Box<dyn ToSql + Sync + Send>;
+                            let partition = Box::new(partition) as Box<dyn ToSql + Sync + Send>;
+                            [cluster, name, partition]
+                        })
+                        .map(|parameters| {
+                            self.tx_prepare_query_raw(&tx, "watermark_insert.sql", parameters)
+                        }),
+                ),
+        )
+        .await?;
 
         if let Some(configs) = topic.configs {
             for config in configs {
@@ -1307,14 +1372,13 @@ impl Storage for Postgres {
                 _ = self
                     .tx_prepare_execute(
                         &tx,
-                        include_sql!("pg/topic_configuration_upsert.sql").as_str(),
+                        "topic_configuration_upsert.sql",
                         &[
                             &self.cluster,
                             &topic.name,
                             &config.name,
                             &config.value.as_deref(),
                         ],
-                        "create_topic",
                     )
                     .await
                     .inspect_err(|err| error!(?err, ?config));
@@ -1326,8 +1390,9 @@ impl Storage for Postgres {
         Ok(topic_uuid)
     }
 
+    #[instrument(skip_all)]
     async fn delete_records(
-        &mut self,
+        &self,
         topics: &[DeleteRecordsTopic],
     ) -> Result<Vec<DeleteRecordsTopicResult>> {
         debug!(cluster = self.cluster, ?topics);
@@ -1419,25 +1484,22 @@ impl Storage for Postgres {
                             error!(?err, ?cluster, ?topic, ?partition_index, ?offset)
                         })
                         .map_or(
-                            Ok(DeleteRecordsPartitionResult {
-                                partition_index: partition.partition_index,
-                                low_watermark: 0,
-                                error_code: ErrorCode::UnknownServerError.into(),
-                            }),
+                            Ok(DeleteRecordsPartitionResult::default()
+                                .partition_index(partition.partition_index)
+                                .low_watermark(0)
+                                .error_code(ErrorCode::UnknownServerError.into())),
                             |row| {
                                 row.map_or(
-                                    Ok(DeleteRecordsPartitionResult {
-                                        partition_index: partition.partition_index,
-                                        low_watermark: 0,
-                                        error_code: ErrorCode::UnknownServerError.into(),
-                                    }),
+                                    Ok(DeleteRecordsPartitionResult::default()
+                                        .partition_index(partition.partition_index)
+                                        .low_watermark(0)
+                                        .error_code(ErrorCode::UnknownServerError.into())),
                                     |row| {
                                         row.try_get::<_, i64>(0).map(|low_watermark| {
-                                            DeleteRecordsPartitionResult {
-                                                partition_index: partition.partition_index,
-                                                low_watermark,
-                                                error_code: ErrorCode::None.into(),
-                                            }
+                                            DeleteRecordsPartitionResult::default()
+                                                .partition_index(partition.partition_index)
+                                                .low_watermark(low_watermark)
+                                                .error_code(ErrorCode::None.into())
                                         })
                                     },
                                 )
@@ -1448,15 +1510,17 @@ impl Storage for Postgres {
                 }
             }
 
-            responses.push(DeleteRecordsTopicResult {
-                name: topic.name.clone(),
-                partitions: Some(partition_responses),
-            });
+            responses.push(
+                DeleteRecordsTopicResult::default()
+                    .name(topic.name.clone())
+                    .partitions(Some(partition_responses)),
+            );
         }
         Ok(responses)
     }
 
-    async fn delete_topic(&mut self, topic: &TopicId) -> Result<ErrorCode> {
+    #[instrument(skip_all)]
+    async fn delete_topic(&self, topic: &TopicId) -> Result<ErrorCode> {
         debug!(cluster = self.cluster, ?topic);
 
         let mut c = self.connection().await?;
@@ -1464,23 +1528,13 @@ impl Storage for Postgres {
 
         let row = match topic {
             TopicId::Id(id) => {
-                self.tx_prepare_query_opt(
-                    &tx,
-                    include_sql!("pg/topic_select_uuid.sql").as_str(),
-                    &[&self.cluster, &id],
-                    "delete_topic",
-                )
-                .await?
+                self.tx_prepare_query_opt(&tx, "topic_select_uuid.sql", &[&self.cluster, &id])
+                    .await?
             }
 
             TopicId::Name(name) => {
-                self.tx_prepare_query_opt(
-                    &tx,
-                    include_sql!("pg/topic_select_name.sql").as_str(),
-                    &[&self.cluster, name],
-                    "delete_topic",
-                )
-                .await?
+                self.tx_prepare_query_opt(&tx, "topic_select_name.sql", &[&self.cluster, name])
+                    .await?
             }
         };
 
@@ -1490,60 +1544,29 @@ impl Storage for Postgres {
 
         let topic_name = row.try_get::<_, String>(1)?;
 
-        for (description, sql, nickname) in [
-            (
-                "consumer_offsets",
-                include_sql!("pg/consumer_offset_delete_by_topic.sql"),
-                "delete_topic",
-            ),
+        for (description, sql) in [
+            ("consumer_offsets", "consumer_offset_delete_by_topic.sql"),
             (
                 "topic_configuration",
-                include_sql!("pg/topic_configuration_delete_by_topic.sql"),
-                "delete_topic",
+                "topic_configuration_delete_by_topic.sql",
             ),
-            (
-                "watermarks",
-                include_sql!("pg/watermark_delete_by_topic.sql"),
-                "delete_topic",
-            ),
-            (
-                "headers",
-                include_sql!("pg/header_delete_by_topic.sql"),
-                "delete_topic",
-            ),
-            (
-                "records",
-                include_sql!("pg/record_delete_by_topic.sql"),
-                "delete_topic",
-            ),
+            ("watermarks", "watermark_delete_by_topic.sql"),
+            ("headers", "header_delete_by_topic.sql"),
+            ("records", "record_delete_by_topic.sql"),
             (
                 "txn_offset_commit_tp",
-                include_sql!("pg/txn_offset_commit_tp_delete_by_topic.sql"),
-                "delete_topic",
+                "txn_offset_commit_tp_delete_by_topic.sql",
             ),
             (
                 "txn_produce_offset_delete",
-                include_sql!("pg/txn_produce_offset_delete_by_topic.sql"),
-                "delete_topic",
+                "txn_produce_offset_delete_by_topic.sql",
             ),
-            (
-                "txn_topition",
-                include_sql!("pg/txn_topition_delete_by_topic.sql"),
-                "delete_topic",
-            ),
-            (
-                "producer_detail",
-                include_sql!("pg/producer_detail_delete_by_topic.sql"),
-                "delete_topic",
-            ),
-            (
-                "topitions",
-                include_sql!("pg/topition_delete_by_topic.sql"),
-                "delete_topic",
-            ),
+            ("txn_topition", "txn_topition_delete_by_topic.sql"),
+            ("producer_detail", "producer_detail_delete_by_topic.sql"),
+            ("topitions", "topition_delete_by_topic.sql"),
         ] {
             let rows = self
-                .tx_prepare_execute(&tx, sql.as_str(), &[&self.cluster, &topic_name], nickname)
+                .tx_prepare_execute(&tx, sql, &[&self.cluster, &topic_name])
                 .await
                 .inspect_err(|err| {
                     debug!(?description, ?err);
@@ -1553,12 +1576,7 @@ impl Storage for Postgres {
         }
 
         _ = self
-            .tx_prepare_execute(
-                &tx,
-                include_sql!("pg/topic_delete_by.sql").as_str(),
-                &[&self.cluster, &topic_name],
-                "delete_topic",
-            )
+            .tx_prepare_execute(&tx, "topic_delete_by.sql", &[&self.cluster, &topic_name])
             .await?;
 
         tx.commit().await.inspect_err(|err| error!(?err))?;
@@ -1566,35 +1584,32 @@ impl Storage for Postgres {
         Ok(ErrorCode::None)
     }
 
+    #[instrument(skip_all)]
     async fn incremental_alter_resource(
-        &mut self,
+        &self,
         resource: AlterConfigsResource,
     ) -> Result<AlterConfigsResourceResponse> {
         match ConfigResource::from(resource.resource_type) {
-            ConfigResource::Group => Ok(AlterConfigsResourceResponse {
-                error_code: ErrorCode::None.into(),
-                error_message: Some("".into()),
-                resource_type: resource.resource_type,
-                resource_name: resource.resource_name,
-            }),
-            ConfigResource::ClientMetric => Ok(AlterConfigsResourceResponse {
-                error_code: ErrorCode::None.into(),
-                error_message: Some("".into()),
-                resource_type: resource.resource_type,
-                resource_name: resource.resource_name,
-            }),
-            ConfigResource::BrokerLogger => Ok(AlterConfigsResourceResponse {
-                error_code: ErrorCode::None.into(),
-                error_message: Some("".into()),
-                resource_type: resource.resource_type,
-                resource_name: resource.resource_name,
-            }),
-            ConfigResource::Broker => Ok(AlterConfigsResourceResponse {
-                error_code: ErrorCode::None.into(),
-                error_message: Some("".into()),
-                resource_type: resource.resource_type,
-                resource_name: resource.resource_name,
-            }),
+            ConfigResource::Group => Ok(AlterConfigsResourceResponse::default()
+                .error_code(ErrorCode::None.into())
+                .error_message(Some("".into()))
+                .resource_type(resource.resource_type)
+                .resource_name(resource.resource_name)),
+            ConfigResource::ClientMetric => Ok(AlterConfigsResourceResponse::default()
+                .error_code(ErrorCode::None.into())
+                .error_message(Some("".into()))
+                .resource_type(resource.resource_type)
+                .resource_name(resource.resource_name)),
+            ConfigResource::BrokerLogger => Ok(AlterConfigsResourceResponse::default()
+                .error_code(ErrorCode::None.into())
+                .error_message(Some("".into()))
+                .resource_type(resource.resource_type)
+                .resource_name(resource.resource_name)),
+            ConfigResource::Broker => Ok(AlterConfigsResourceResponse::default()
+                .error_code(ErrorCode::None.into())
+                .error_message(Some("".into()))
+                .resource_type(resource.resource_type)
+                .resource_name(resource.resource_name)),
             ConfigResource::Topic => {
                 let mut error_code = ErrorCode::None;
 
@@ -1606,14 +1621,13 @@ impl Storage for Postgres {
                             if self
                                 .prepare_query(
                                     &c,
-                                    include_sql!("pg/topic_configuration_upsert.sql").as_str(),
+                                    "topic_configuration_upsert.sql",
                                     &[
                                         &self.cluster,
                                         &resource.resource_name,
                                         &config.name,
                                         &config.value,
                                     ],
-                                    "topic_configuration",
                                 )
                                 .await
                                 .inspect_err(|err| error!(?err))
@@ -1629,9 +1643,8 @@ impl Storage for Postgres {
                             if self
                                 .prepare_query(
                                     &c,
-                                    include_sql!("pg/topic_configuration_delete.sql").as_str(),
+                                    "topic_configuration_delete.sql",
                                     &[&self.cluster, &resource.resource_name, &config.name],
-                                    "topic_configuration",
                                 )
                                 .await
                                 .inspect_err(|err| error!(?err))
@@ -1646,24 +1659,23 @@ impl Storage for Postgres {
                     }
                 }
 
-                Ok(AlterConfigsResourceResponse {
-                    error_code: error_code.into(),
-                    error_message: Some("".into()),
-                    resource_type: resource.resource_type,
-                    resource_name: resource.resource_name,
-                })
+                Ok(AlterConfigsResourceResponse::default()
+                    .error_code(error_code.into())
+                    .error_message(Some("".into()))
+                    .resource_type(resource.resource_type)
+                    .resource_name(resource.resource_name))
             }
-            ConfigResource::Unknown => Ok(AlterConfigsResourceResponse {
-                error_code: ErrorCode::None.into(),
-                error_message: Some("".into()),
-                resource_type: resource.resource_type,
-                resource_name: resource.resource_name,
-            }),
+            ConfigResource::Unknown => Ok(AlterConfigsResourceResponse::default()
+                .error_code(ErrorCode::None.into())
+                .error_message(Some("".into()))
+                .resource_type(resource.resource_type)
+                .resource_name(resource.resource_name)),
         }
     }
 
+    #[instrument(skip_all)]
     async fn produce(
-        &mut self,
+        &self,
         transaction_id: Option<&str>,
         topition: &Topition,
         deflated: deflated::Batch,
@@ -1683,8 +1695,9 @@ impl Storage for Postgres {
         Ok(high)
     }
 
+    #[instrument(skip_all)]
     async fn fetch(
-        &mut self,
+        &self,
         topition: &Topition,
         offset: i64,
         min_bytes: u32,
@@ -1714,7 +1727,7 @@ impl Storage for Postgres {
         let records = self
             .prepare_query(
                 &c,
-                include_sql!("pg/record_fetch.sql").as_str(),
+                "record_fetch_pg.sql",
                 &[
                     &self.cluster,
                     &topition.topic(),
@@ -1723,7 +1736,6 @@ impl Storage for Postgres {
                     &(max_bytes as i64),
                     &high_watermark,
                 ],
-                "fetch",
             )
             .await
             .inspect_err(|err| error!(?err))?;
@@ -1731,7 +1743,7 @@ impl Storage for Postgres {
         let mut batches = vec![];
 
         if let Some(first) = records.first() {
-            let mut batch_builder = inflated::Batch::builder()
+            let mut batch_builder = Batch::builder()
                 .base_offset(
                     first
                         .try_get::<_, i64>(0)
@@ -1748,7 +1760,7 @@ impl Storage for Postgres {
                     first
                         .try_get::<_, SystemTime>(2)
                         .map_err(Error::from)
-                        .and_then(|system_time| to_timestamp(system_time).map_err(Into::into))
+                        .and_then(|system_time| to_timestamp(&system_time).map_err(Into::into))
                         .inspect_err(|err| error!(?err))?,
                 )
                 .producer_id(
@@ -1785,7 +1797,7 @@ impl Storage for Postgres {
                 {
                     batches.push(batch_builder.build().and_then(TryInto::try_into)?);
 
-                    batch_builder = inflated::Batch::builder()
+                    batch_builder = Batch::builder()
                         .base_offset(
                             record
                                 .try_get::<_, i64>(0)
@@ -1797,7 +1809,7 @@ impl Storage for Postgres {
                                 .try_get::<_, SystemTime>(2)
                                 .map_err(Error::from)
                                 .and_then(|system_time| {
-                                    to_timestamp(system_time).map_err(Into::into)
+                                    to_timestamp(&system_time).map_err(Into::into)
                                 })
                                 .inspect_err(|err| error!(?err))?,
                         )
@@ -1812,11 +1824,11 @@ impl Storage for Postgres {
                     .inspect_err(|err| error!(?err))?;
                 let offset_delta = i32::try_from(offset - batch_builder.base_offset)?;
 
-                let timestamp_delta = first
+                let timestamp_delta = record
                     .try_get::<_, SystemTime>(2)
                     .map_err(Error::from)
                     .and_then(|system_time| {
-                        to_timestamp(system_time)
+                        to_timestamp(&system_time)
                             .map(|timestamp| timestamp - batch_builder.base_timestamp)
                             .map_err(Into::into)
                     })
@@ -1838,20 +1850,19 @@ impl Storage for Postgres {
                 let mut record_builder = Record::builder()
                     .offset_delta(offset_delta)
                     .timestamp_delta(timestamp_delta)
-                    .key(k.into())
-                    .value(v.into());
+                    .key(k)
+                    .value(v);
 
                 for header in self
                     .prepare_query(
                         &c,
-                        include_sql!("pg/header_fetch.sql").as_str(),
+                        "header_fetch.sql",
                         &[
                             &self.cluster,
                             &topition.topic(),
                             &topition.partition(),
                             &offset,
                         ],
-                        "fetch",
                     )
                     .await
                     .inspect(|row| debug!(?row))
@@ -1863,14 +1874,14 @@ impl Storage for Postgres {
                         .try_get::<_, Option<&[u8]>>(0)
                         .inspect_err(|err| error!(?err))?
                     {
-                        header_builder = header_builder.key(k.to_vec());
+                        header_builder = header_builder.key(Bytes::copy_from_slice(k));
                     }
 
                     if let Some(v) = header
                         .try_get::<_, Option<&[u8]>>(1)
                         .inspect_err(|err| error!(?err))?
                     {
-                        header_builder = header_builder.value(v.to_vec());
+                        header_builder = header_builder.value(Bytes::copy_from_slice(v));
                     }
 
                     record_builder = record_builder.header(header_builder);
@@ -1883,26 +1894,22 @@ impl Storage for Postgres {
 
             batches.push(batch_builder.build().and_then(TryInto::try_into)?);
         } else {
-            batches.push(
-                inflated::Batch::builder()
-                    .build()
-                    .and_then(TryInto::try_into)?,
-            );
+            batches.push(Batch::builder().build().and_then(TryInto::try_into)?);
         }
 
         Ok(batches)
     }
 
-    async fn offset_stage(&mut self, topition: &Topition) -> Result<OffsetStage> {
+    #[instrument(skip_all)]
+    async fn offset_stage(&self, topition: &Topition) -> Result<OffsetStage> {
         debug!(cluster = self.cluster, ?topition);
         let c = self.connection().await?;
 
         let row = self
             .prepare_query_one(
                 &c,
-                include_sql!("pg/watermark_select.sql").as_str(),
+                "watermark_select.sql",
                 &[&self.cluster, &topition.topic(), &topition.partition()],
-                "offset_stage",
             )
             .await
             .inspect_err(|err| error!(?topition, ?err))?;
@@ -1931,8 +1938,9 @@ impl Storage for Postgres {
         })
     }
 
+    #[instrument(skip_all)]
     async fn offset_commit(
-        &mut self,
+        &self,
         group: &str,
         retention: Option<Duration>,
         offsets: &[(Topition, OffsetCommitRequest)],
@@ -1952,9 +1960,8 @@ impl Storage for Postgres {
             if self
                 .tx_prepare_query_opt(
                     &tx,
-                    include_sql!("pg/topition_select.sql").as_str(),
+                    "topition_select.sql",
                     &[&self.cluster, &topition.topic(), &topition.partition()],
-                    "offset_commit",
                 )
                 .await
                 .inspect_err(|err| error!(?err))?
@@ -1964,9 +1971,8 @@ impl Storage for Postgres {
                     let rows = self
                         .tx_prepare_execute(
                             &tx,
-                            include_sql!("pg/consumer_group_insert.sql").as_str(),
+                            "consumer_group_insert.sql",
                             &[&self.cluster, &group],
-                            "offset_commit",
                         )
                         .await?;
                     debug!(rows);
@@ -1977,7 +1983,7 @@ impl Storage for Postgres {
                 let rows = self
                     .tx_prepare_execute(
                         &tx,
-                        include_sql!("pg/consumer_offset_insert.sql").as_str(),
+                        "consumer_offset_insert.sql",
                         &[
                             &self.cluster,
                             &topition.topic(),
@@ -1988,7 +1994,6 @@ impl Storage for Postgres {
                             &offset.timestamp,
                             &offset.metadata,
                         ],
-                        "offset_commit",
                     )
                     .await
                     .inspect_err(|err| error!(?err))?;
@@ -2013,10 +2018,8 @@ impl Storage for Postgres {
         Ok(responses)
     }
 
-    async fn committed_offset_topitions(
-        &mut self,
-        group_id: &str,
-    ) -> Result<BTreeMap<Topition, i64>> {
+    #[instrument(skip_all)]
+    async fn committed_offset_topitions(&self, group_id: &str) -> Result<BTreeMap<Topition, i64>> {
         debug!(group_id);
 
         let mut results = BTreeMap::new();
@@ -2026,9 +2029,8 @@ impl Storage for Postgres {
         for row in self
             .prepare_query(
                 &c,
-                include_sql!("pg/consumer_offset_select_by_group.sql").as_str(),
+                "consumer_offset_select_by_group.sql",
                 &[&self.cluster, &group_id],
-                "committed_offset_topitions",
             )
             .await
             .inspect_err(|err| error!(?err))?
@@ -2048,8 +2050,9 @@ impl Storage for Postgres {
         Ok(results)
     }
 
+    #[instrument(skip_all)]
     async fn offset_fetch(
-        &mut self,
+        &self,
         group_id: Option<&str>,
         topics: &[Topition],
         require_stable: Option<bool>,
@@ -2064,12 +2067,13 @@ impl Storage for Postgres {
             let offset = self
                 .prepare_query_opt(
                     &c,
-                    include_sql!("pg/consumer_offset_select.sql").as_str(),
+                    "consumer_offset_select.sql",
                     &[&self.cluster, &group_id, &topic.topic(), &topic.partition()],
-                    "offset_fetch",
                 )
                 .await
-                .and_then(|maybe| maybe.map_or(Ok(-1), |row| row.try_get::<_, i64>(0)))
+                .and_then(|maybe| {
+                    maybe.map_or(Ok(-1), |row| row.try_get::<_, i64>(0).map_err(Into::into))
+                })
                 .inspect(|offset| {
                     debug!(
                         cluster = self.cluster,
@@ -2095,10 +2099,11 @@ impl Storage for Postgres {
         Ok(offsets)
     }
 
+    #[instrument(skip_all)]
     async fn list_offsets(
-        &mut self,
+        &self,
         isolation_level: IsolationLevel,
-        offsets: &[(Topition, ListOffsetRequest)],
+        offsets: &[(Topition, ListOffset)],
     ) -> Result<Vec<(Topition, ListOffsetResponse)>> {
         debug!(cluster = self.cluster, ?isolation_level, ?offsets);
 
@@ -2108,42 +2113,38 @@ impl Storage for Postgres {
 
         for (topition, offset_type) in offsets {
             let query = match (offset_type, isolation_level) {
-                (ListOffsetRequest::Earliest, _) => include_sql!("pg/list_earliest_offset.sql"),
-                (ListOffsetRequest::Latest, IsolationLevel::ReadCommitted) => {
-                    include_sql!("pg/list_latest_offset_committed.sql")
+                (ListOffset::Earliest, _) => "list_earliest_offset.sql",
+                (ListOffset::Latest, IsolationLevel::ReadCommitted) => {
+                    "list_latest_offset_committed.sql"
                 }
-                (ListOffsetRequest::Latest, IsolationLevel::ReadUncommitted) => {
-                    include_sql!("pg/list_latest_offset_uncommitted.sql")
+                (ListOffset::Latest, IsolationLevel::ReadUncommitted) => {
+                    "list_latest_offset_uncommitted.sql"
                 }
-                (ListOffsetRequest::Timestamp(_), _) => {
-                    include_sql!("pg/list_latest_offset_timestamp.sql")
-                }
+                (ListOffset::Timestamp(_), _) => "list_latest_offset_timestamp.sql",
             };
 
             debug!(?query);
 
             let list_offset = match offset_type {
-                ListOffsetRequest::Earliest | ListOffsetRequest::Latest => self
+                ListOffset::Earliest | ListOffset::Latest => self
                     .prepare_query_opt(
                         &c,
-                        query.as_str(),
+                        query,
                         &[&self.cluster, &topition.topic(), &topition.partition()],
-                        "list_offsets",
                     )
                     .await
                     .inspect_err(|err| error!(?err, cluster = self.cluster, ?topition)),
 
-                ListOffsetRequest::Timestamp(timestamp) => self
+                ListOffset::Timestamp(timestamp) => self
                     .prepare_query_opt(
                         &c,
-                        query.as_str(),
+                        query,
                         &[
                             &self.cluster.as_str(),
                             &topition.topic(),
                             &topition.partition(),
                             timestamp,
                         ],
-                        "list_offsets",
                     )
                     .await
                     .inspect_err(|err| error!(?err)),
@@ -2199,21 +2200,24 @@ impl Storage for Postgres {
         Ok(responses).inspect(|r| debug!(?r))
     }
 
-    async fn metadata(&mut self, topics: Option<&[TopicId]>) -> Result<MetadataResponse> {
+    #[instrument(skip_all)]
+    async fn metadata(&self, topics: Option<&[TopicId]>) -> Result<MetadataResponse> {
         debug!(cluster = self.cluster, ?topics);
 
         let c = self.connection().await.inspect_err(|err| error!(?err))?;
 
-        let brokers = vec![MetadataResponseBroker {
-            node_id: self.node,
-            host: self
-                .advertised_listener
-                .host_str()
-                .unwrap_or("0.0.0.0")
-                .into(),
-            port: self.advertised_listener.port().unwrap_or(9092).into(),
-            rack: None,
-        }];
+        let brokers = vec![
+            MetadataResponseBroker::default()
+                .node_id(self.node)
+                .host(
+                    self.advertised_listener
+                        .host_str()
+                        .unwrap_or("0.0.0.0")
+                        .into(),
+                )
+                .port(self.advertised_listener.port().unwrap_or(9092).into())
+                .rack(None),
+        ];
 
         debug!(?brokers);
 
@@ -2227,9 +2231,8 @@ impl Storage for Postgres {
                             match self
                                 .prepare_query_opt(
                                     &c,
-                                    include_sql!("pg/topic_select_name.sql").as_str(),
+                                    "topic_select_name.sql",
                                     &[&self.cluster, &name.as_str()],
-                                    "metadata",
                                 )
                                 .await
                                 .inspect_err(|err| error!(?err))
@@ -2275,48 +2278,44 @@ impl Storage for Postgres {
                                                 );
                                                 let isr_nodes = replica_nodes.clone();
 
-                                                MetadataResponsePartition {
-                                                    error_code,
-                                                    partition_index,
-                                                    leader_id,
-                                                    leader_epoch: Some(-1),
-                                                    replica_nodes,
-                                                    isr_nodes,
-                                                    offline_replicas: Some([].into()),
-                                                }
+                                                MetadataResponsePartition::default()
+                                                    .error_code(error_code)
+                                                    .partition_index(partition_index)
+                                                    .leader_id(leader_id)
+                                                    .leader_epoch(Some(0))
+                                                    .replica_nodes(replica_nodes)
+                                                    .isr_nodes(isr_nodes)
+                                                    .offline_replicas(Some([].into()))
                                             })
                                             .collect(),
                                     );
 
-                                    MetadataResponseTopic {
-                                        error_code,
-                                        name,
-                                        topic_id,
-                                        is_internal,
-                                        partitions,
-                                        topic_authorized_operations: Some(-2147483648),
-                                    }
+                                    MetadataResponseTopic::default()
+                                        .error_code(error_code)
+                                        .name(name)
+                                        .topic_id(topic_id)
+                                        .is_internal(is_internal)
+                                        .partitions(partitions)
+                                        .topic_authorized_operations(Some(-2147483648))
                                 }
 
-                                Ok(None) => MetadataResponseTopic {
-                                    error_code: ErrorCode::UnknownTopicOrPartition.into(),
-                                    name: Some(name.into()),
-                                    topic_id: Some(NULL_TOPIC_ID),
-                                    is_internal: Some(false),
-                                    partitions: Some([].into()),
-                                    topic_authorized_operations: Some(-2147483648),
-                                },
+                                Ok(None) => MetadataResponseTopic::default()
+                                    .error_code(ErrorCode::UnknownTopicOrPartition.into())
+                                    .name(Some(name.into()))
+                                    .topic_id(Some(NULL_TOPIC_ID))
+                                    .is_internal(Some(false))
+                                    .partitions(Some([].into()))
+                                    .topic_authorized_operations(Some(-2147483648)),
 
                                 Err(reason) => {
                                     debug!(?reason);
-                                    MetadataResponseTopic {
-                                        error_code: ErrorCode::UnknownTopicOrPartition.into(),
-                                        name: Some(name.into()),
-                                        topic_id: Some(NULL_TOPIC_ID),
-                                        is_internal: Some(false),
-                                        partitions: Some([].into()),
-                                        topic_authorized_operations: Some(-2147483648),
-                                    }
+                                    MetadataResponseTopic::default()
+                                        .error_code(ErrorCode::UnknownTopicOrPartition.into())
+                                        .name(Some(name.into()))
+                                        .topic_id(Some(NULL_TOPIC_ID))
+                                        .is_internal(Some(false))
+                                        .partitions(Some([].into()))
+                                        .topic_authorized_operations(Some(-2147483648))
                                 }
                             }
                         }
@@ -2325,9 +2324,8 @@ impl Storage for Postgres {
                             match self
                                 .prepare_query_one(
                                     &c,
-                                    include_sql!("pg/topic_select_uuid.sql").as_str(),
+                                    "topic_select_uuid.sql",
                                     &[&self.cluster, &id],
-                                    "metadata",
                                 )
                                 .await
                             {
@@ -2372,38 +2370,35 @@ impl Storage for Postgres {
                                                 );
                                                 let isr_nodes = replica_nodes.clone();
 
-                                                MetadataResponsePartition {
-                                                    error_code,
-                                                    partition_index,
-                                                    leader_id,
-                                                    leader_epoch: Some(-1),
-                                                    replica_nodes,
-                                                    isr_nodes,
-                                                    offline_replicas: Some([].into()),
-                                                }
+                                                MetadataResponsePartition::default()
+                                                    .error_code(error_code)
+                                                    .partition_index(partition_index)
+                                                    .leader_id(leader_id)
+                                                    .leader_epoch(Some(0))
+                                                    .replica_nodes(replica_nodes)
+                                                    .isr_nodes(isr_nodes)
+                                                    .offline_replicas(Some([].into()))
                                             })
                                             .collect(),
                                     );
 
-                                    MetadataResponseTopic {
-                                        error_code,
-                                        name,
-                                        topic_id,
-                                        is_internal,
-                                        partitions,
-                                        topic_authorized_operations: Some(-2147483648),
-                                    }
+                                    MetadataResponseTopic::default()
+                                        .error_code(error_code)
+                                        .name(name)
+                                        .topic_id(topic_id)
+                                        .is_internal(is_internal)
+                                        .partitions(partitions)
+                                        .topic_authorized_operations(Some(-2147483648))
                                 }
                                 Err(reason) => {
                                     debug!(?reason);
-                                    MetadataResponseTopic {
-                                        error_code: ErrorCode::UnknownTopicOrPartition.into(),
-                                        name: None,
-                                        topic_id: Some(id.into_bytes()),
-                                        is_internal: Some(false),
-                                        partitions: Some([].into()),
-                                        topic_authorized_operations: Some(-2147483648),
-                                    }
+                                    MetadataResponseTopic::default()
+                                        .error_code(ErrorCode::UnknownTopicOrPartition.into())
+                                        .name(None)
+                                        .topic_id(Some(id.into_bytes()))
+                                        .is_internal(Some(false))
+                                        .partitions(Some([].into()))
+                                        .topic_authorized_operations(Some(-2147483648))
                                 }
                             }
                         }
@@ -2417,12 +2412,7 @@ impl Storage for Postgres {
                 let mut responses = vec![];
 
                 match self
-                    .prepare_query(
-                        &c,
-                        include_sql!("pg/topic_by_cluster.sql").as_str(),
-                        &[&self.cluster],
-                        "metadata",
-                    )
+                    .prepare_query(&c, "topic_by_cluster.sql", &[&self.cluster])
                     .await
                     .inspect_err(|err| error!(?err))
                 {
@@ -2466,39 +2456,40 @@ impl Storage for Postgres {
                                         );
                                         let isr_nodes = replica_nodes.clone();
 
-                                        MetadataResponsePartition {
-                                            error_code,
-                                            partition_index,
-                                            leader_id,
-                                            leader_epoch: Some(-1),
-                                            replica_nodes,
-                                            isr_nodes,
-                                            offline_replicas: Some([].into()),
-                                        }
+                                        MetadataResponsePartition::default()
+                                            .error_code(error_code)
+                                            .partition_index(partition_index)
+                                            .leader_id(leader_id)
+                                            .leader_epoch(Some(0))
+                                            .replica_nodes(replica_nodes)
+                                            .isr_nodes(isr_nodes)
+                                            .offline_replicas(Some([].into()))
                                     })
                                     .collect(),
                             );
 
-                            responses.push(MetadataResponseTopic {
-                                error_code,
-                                name,
-                                topic_id,
-                                is_internal,
-                                partitions,
-                                topic_authorized_operations: Some(-2147483648),
-                            });
+                            responses.push(
+                                MetadataResponseTopic::default()
+                                    .error_code(error_code)
+                                    .name(name)
+                                    .topic_id(topic_id)
+                                    .is_internal(is_internal)
+                                    .partitions(partitions)
+                                    .topic_authorized_operations(Some(-2147483648)),
+                            );
                         }
                     }
                     Err(reason) => {
                         debug!(?reason);
-                        responses.push(MetadataResponseTopic {
-                            error_code: ErrorCode::UnknownTopicOrPartition.into(),
-                            name: None,
-                            topic_id: Some(NULL_TOPIC_ID),
-                            is_internal: Some(false),
-                            partitions: Some([].into()),
-                            topic_authorized_operations: Some(-2147483648),
-                        });
+                        responses.push(
+                            MetadataResponseTopic::default()
+                                .error_code(ErrorCode::UnknownTopicOrPartition.into())
+                                .name(None)
+                                .topic_id(Some(NULL_TOPIC_ID))
+                                .is_internal(Some(false))
+                                .partitions(Some([].into()))
+                                .topic_authorized_operations(Some(-2147483648)),
+                        );
                     }
                 }
 
@@ -2514,8 +2505,9 @@ impl Storage for Postgres {
         })
     }
 
+    #[instrument(skip_all)]
     async fn describe_config(
-        &mut self,
+        &self,
         name: &str,
         resource: ConfigResource,
         keys: Option<&[String]>,
@@ -2525,34 +2517,22 @@ impl Storage for Postgres {
         let c = self.connection().await.inspect_err(|err| error!(?err))?;
 
         let prepared = c
-            .prepare(concat!(
-                "select topic.id",
-                " from cluster, topic",
-                " where cluster.name = $1",
-                " and topic.name = $2",
-                " and topic.cluster = cluster.id",
-            ))
+            .prepare_cached(self.sql_lookup("topic_select.sql")?)
             .await
             .inspect_err(|err| error!(?err))?;
 
-        if let Some(row) = c
-            .query_opt(&prepared, &[&self.cluster.as_str(), &name])
+        if c.query_opt(&prepared, &[&self.cluster.as_str(), &name])
             .await
             .inspect_err(|err| error!(?err))?
+            .is_some()
         {
-            let id = row.try_get::<_, i32>(0).inspect_err(|err| error!(?err))?;
-
             let prepared = c
-                .prepare(concat!(
-                    "select name, value",
-                    " from topic_configuration",
-                    " where topic_configuration.topic = $1",
-                ))
+                .prepare_cached(self.sql_lookup("topic_configuration_select.sql")?)
                 .await
                 .inspect_err(|err| error!(?err))?;
 
             let rows = c
-                .query(&prepared, &[&id])
+                .query(&prepared, &[&self.cluster.as_str(), &name])
                 .await
                 .inspect_err(|err| error!(?err))?;
 
@@ -2568,43 +2548,43 @@ impl Storage for Postgres {
                     .map(Some)
                     .inspect_err(|err| error!(?err))?;
 
-                configs.push(DescribeConfigsResourceResult {
-                    name,
-                    value,
-                    read_only: false,
-                    is_default: None,
-                    config_source: Some(ConfigSource::DefaultConfig.into()),
-                    is_sensitive: false,
-                    synonyms: Some([].into()),
-                    config_type: Some(ConfigType::String.into()),
-                    documentation: Some("".into()),
-                });
+                configs.push(
+                    DescribeConfigsResourceResult::default()
+                        .name(name)
+                        .value(value)
+                        .read_only(false)
+                        .is_default(None)
+                        .config_source(Some(ConfigSource::DefaultConfig.into()))
+                        .is_sensitive(false)
+                        .synonyms(Some([].into()))
+                        .config_type(Some(ConfigType::String.into()))
+                        .documentation(Some("".into())),
+                );
             }
 
             let error_code = ErrorCode::None;
 
-            Ok(DescribeConfigsResult {
-                error_code: error_code.into(),
-                error_message: Some(error_code.to_string()),
-                resource_type: i8::from(resource),
-                resource_name: name.into(),
-                configs: Some(configs),
-            })
+            Ok(DescribeConfigsResult::default()
+                .error_code(error_code.into())
+                .error_message(Some(error_code.to_string()))
+                .resource_type(i8::from(resource))
+                .resource_name(name.into())
+                .configs(Some(configs)))
         } else {
             let error_code = ErrorCode::UnknownTopicOrPartition;
 
-            Ok(DescribeConfigsResult {
-                error_code: error_code.into(),
-                error_message: Some(error_code.to_string()),
-                resource_type: i8::from(resource),
-                resource_name: name.into(),
-                configs: Some([].into()),
-            })
+            Ok(DescribeConfigsResult::default()
+                .error_code(error_code.into())
+                .error_message(Some(error_code.to_string()))
+                .resource_type(i8::from(resource))
+                .resource_name(name.into())
+                .configs(Some([].into())))
         }
     }
 
+    #[instrument(skip_all)]
     async fn describe_topic_partitions(
-        &mut self,
+        &self,
         topics: Option<&[TopicId]>,
         partition_limit: i32,
         cursor: Option<Topition>,
@@ -2622,9 +2602,8 @@ impl Storage for Postgres {
                     match self
                         .prepare_query_opt(
                             &c,
-                            include_sql!("pg/topic_select_name.sql").as_str(),
+                            "topic_select_name.sql",
                             &[&self.cluster, &name.as_str()],
-                            "metadata",
                         )
                         .await
                         .inspect_err(|err| error!(?err))
@@ -2645,82 +2624,73 @@ impl Storage for Postgres {
                                 ?replication_factor
                             );
 
-                            DescribeTopicPartitionsResponseTopic {
-                                error_code: ErrorCode::None.into(),
-                                name,
-                                topic_id,
-                                is_internal: false,
-                                partitions: Some(
+                            DescribeTopicPartitionsResponseTopic::default()
+                                .error_code(ErrorCode::None.into())
+                                .name(name)
+                                .topic_id(topic_id)
+                                .is_internal(false)
+                                .partitions(Some(
                                     (0..partitions)
                                         .map(|partition_index| {
-                                            DescribeTopicPartitionsResponsePartition {
-                                                error_code: ErrorCode::None.into(),
-                                                partition_index,
-                                                leader_id: self.node,
-                                                leader_epoch: -1,
-                                                replica_nodes: Some(vec![
+                                            DescribeTopicPartitionsResponsePartition::default()
+                                                .error_code(ErrorCode::None.into())
+                                                .partition_index(partition_index)
+                                                .leader_id(self.node)
+                                                .leader_epoch(0)
+                                                .replica_nodes(Some(vec![
                                                     self.node;
                                                     replication_factor
                                                         as usize
-                                                ]),
-                                                isr_nodes: Some(vec![
+                                                ]))
+                                                .isr_nodes(Some(vec![
                                                     self.node;
                                                     replication_factor as usize
-                                                ]),
-                                                eligible_leader_replicas: Some(vec![]),
-                                                last_known_elr: Some(vec![]),
-                                                offline_replicas: Some(vec![]),
-                                            }
+                                                ]))
+                                                .eligible_leader_replicas(Some(vec![]))
+                                                .last_known_elr(Some(vec![]))
+                                                .offline_replicas(Some(vec![]))
                                         })
                                         .collect(),
-                                ),
-                                topic_authorized_operations: -2147483648,
-                            }
+                                ))
+                                .topic_authorized_operations(-2147483648)
                         }
 
-                        Ok(None) => DescribeTopicPartitionsResponseTopic {
-                            error_code: ErrorCode::UnknownTopicOrPartition.into(),
-                            name: match topic {
+                        Ok(None) => DescribeTopicPartitionsResponseTopic::default()
+                            .error_code(ErrorCode::UnknownTopicOrPartition.into())
+                            .name(match topic {
                                 TopicId::Name(name) => Some(name.into()),
                                 TopicId::Id(_) => None,
-                            },
-                            topic_id: match topic {
+                            })
+                            .topic_id(match topic {
                                 TopicId::Name(_) => NULL_TOPIC_ID,
                                 TopicId::Id(id) => id.into_bytes(),
-                            },
-                            is_internal: false,
-                            partitions: Some([].into()),
-                            topic_authorized_operations: -2147483648,
-                        },
+                            })
+                            .is_internal(false)
+                            .partitions(Some([].into()))
+                            .topic_authorized_operations(-2147483648),
 
                         Err(reason) => {
                             debug!(?reason);
-                            DescribeTopicPartitionsResponseTopic {
-                                error_code: ErrorCode::UnknownServerError.into(),
-                                name: match topic {
+                            DescribeTopicPartitionsResponseTopic::default()
+                                .error_code(ErrorCode::UnknownServerError.into())
+                                .name(match topic {
                                     TopicId::Name(name) => Some(name.into()),
                                     TopicId::Id(_) => None,
-                                },
-                                topic_id: match topic {
+                                })
+                                .topic_id(match topic {
                                     TopicId::Name(_) => NULL_TOPIC_ID,
                                     TopicId::Id(id) => id.into_bytes(),
-                                },
-                                is_internal: false,
-                                partitions: Some([].into()),
-                                topic_authorized_operations: -2147483648,
-                            }
+                                })
+                                .is_internal(false)
+                                .partitions(Some([].into()))
+                                .topic_authorized_operations(-2147483648)
                         }
                     }
                 }
                 TopicId::Id(id) => {
                     debug!(?id);
                     match self
-                        .prepare_query_one(
-                            &c,
-                            include_sql!("pg/topic_select_uuid.sql").as_str(),
-                            &[&self.cluster, &id],
-                            "metadata",
-                        )
+                        .prepare_query_one(&c, "topic_select_uuid.sql", &[&self.cluster, &id])
                         .await
                     {
                         Ok(row) => {
@@ -2739,54 +2709,52 @@ impl Storage for Postgres {
                                 ?replication_factor
                             );
 
-                            DescribeTopicPartitionsResponseTopic {
-                                error_code: ErrorCode::None.into(),
-                                name,
-                                topic_id,
-                                is_internal: false,
-                                partitions: Some(
+                            DescribeTopicPartitionsResponseTopic::default()
+                                .error_code(ErrorCode::None.into())
+                                .name(name)
+                                .topic_id(topic_id)
+                                .is_internal(false)
+                                .partitions(Some(
                                     (0..partitions)
                                         .map(|partition_index| {
-                                            DescribeTopicPartitionsResponsePartition {
-                                                error_code: ErrorCode::None.into(),
-                                                partition_index,
-                                                leader_id: self.node,
-                                                leader_epoch: -1,
-                                                replica_nodes: Some(vec![
+                                            DescribeTopicPartitionsResponsePartition::default()
+                                                .error_code(ErrorCode::None.into())
+                                                .partition_index(partition_index)
+                                                .leader_id(self.node)
+                                                .leader_epoch(0)
+                                                .replica_nodes(Some(vec![
                                                     self.node;
                                                     replication_factor
                                                         as usize
-                                                ]),
-                                                isr_nodes: Some(vec![
+                                                ]))
+                                                .isr_nodes(Some(vec![
                                                     self.node;
                                                     replication_factor as usize
-                                                ]),
-                                                eligible_leader_replicas: Some(vec![]),
-                                                last_known_elr: Some(vec![]),
-                                                offline_replicas: Some(vec![]),
-                                            }
+                                                ]))
+                                                .eligible_leader_replicas(Some(vec![]))
+                                                .last_known_elr(Some(vec![]))
+                                                .offline_replicas(Some(vec![]))
                                         })
                                         .collect(),
-                                ),
-                                topic_authorized_operations: -2147483648,
-                            }
+                                ))
+                                .topic_authorized_operations(-2147483648)
                         }
+
                         Err(reason) => {
                             debug!(?reason);
-                            DescribeTopicPartitionsResponseTopic {
-                                error_code: ErrorCode::UnknownTopicOrPartition.into(),
-                                name: match topic {
+                            DescribeTopicPartitionsResponseTopic::default()
+                                .error_code(ErrorCode::UnknownTopicOrPartition.into())
+                                .name(match topic {
                                     TopicId::Name(name) => Some(name.into()),
                                     TopicId::Id(_) => None,
-                                },
-                                topic_id: match topic {
+                                })
+                                .topic_id(match topic {
                                     TopicId::Name(_) => NULL_TOPIC_ID,
                                     TopicId::Id(id) => id.into_bytes(),
-                                },
-                                is_internal: false,
-                                partitions: Some([].into()),
-                                topic_authorized_operations: -2147483648,
-                            }
+                                })
+                                .is_internal(false)
+                                .partitions(Some([].into()))
+                                .topic_authorized_operations(-2147483648)
                         }
                     }
                 }
@@ -2796,7 +2764,8 @@ impl Storage for Postgres {
         Ok(responses)
     }
 
-    async fn list_groups(&mut self, states_filter: Option<&[String]>) -> Result<Vec<ListedGroup>> {
+    #[instrument(skip_all)]
+    async fn list_groups(&self, states_filter: Option<&[String]>) -> Result<Vec<ListedGroup>> {
         debug!(?states_filter);
 
         let c = self.connection().await.inspect_err(|err| error!(?err))?;
@@ -2804,30 +2773,27 @@ impl Storage for Postgres {
         let mut listed_groups = vec![];
 
         for row in self
-            .prepare_query(
-                &c,
-                include_sql!("pg/consumer_group_select.sql").as_str(),
-                &[&self.cluster],
-                "list_groups",
-            )
+            .prepare_query(&c, "consumer_group_select.sql", &[&self.cluster])
             .await
             .inspect_err(|err| error!(?err))?
         {
             let group_id = row.try_get::<_, String>(0)?;
 
-            listed_groups.push(ListedGroup {
-                group_id,
-                protocol_type: "consumer".into(),
-                group_state: Some("unknown".into()),
-                group_type: None,
-            });
+            listed_groups.push(
+                ListedGroup::default()
+                    .group_id(group_id)
+                    .protocol_type("consumer".into())
+                    .group_state(Some("unknown".into()))
+                    .group_type(Some("classic".into())),
+            );
         }
 
         Ok(listed_groups)
     }
 
+    #[instrument(skip_all)]
     async fn delete_groups(
-        &mut self,
+        &self,
         group_ids: Option<&[String]>,
     ) -> Result<Vec<DeletableGroupResult>> {
         debug!(?group_ids);
@@ -2838,17 +2804,17 @@ impl Storage for Postgres {
             let c = self.connection().await?;
 
             let consumer_offset = c
-                .prepare(include_sql!("pg/consumer_offset_delete_by_cg.sql").as_str())
+                .prepare_cached(self.sql_lookup("consumer_offset_delete_by_cg.sql")?)
                 .await
                 .inspect_err(|err| error!(?err))?;
 
             let group_detail = c
-                .prepare(include_sql!("pg/consumer_group_detail_delete_by_cg.sql").as_str())
+                .prepare_cached(self.sql_lookup("consumer_group_detail_delete_by_cg.sql")?)
                 .await
                 .inspect_err(|err| error!(?err))?;
 
             let group = c
-                .prepare(include_sql!("pg/consumer_group_delete.sql").as_str())
+                .prepare_cached(self.sql_lookup("consumer_group_delete.sql")?)
                 .await
                 .inspect_err(|err| error!(?err))?;
 
@@ -2868,23 +2834,27 @@ impl Storage for Postgres {
                     .await
                     .inspect_err(|err| error!(?err))?;
 
-                results.push(DeletableGroupResult {
-                    group_id: group_id.into(),
-                    error_code: if rows == 0 {
-                        ErrorCode::GroupIdNotFound
-                    } else {
-                        ErrorCode::None
-                    }
-                    .into(),
-                });
+                results.push(
+                    DeletableGroupResult::default()
+                        .group_id(group_id.into())
+                        .error_code(
+                            if rows == 0 {
+                                ErrorCode::GroupIdNotFound
+                            } else {
+                                ErrorCode::None
+                            }
+                            .into(),
+                        ),
+                );
             }
         }
 
         Ok(results)
     }
 
+    #[instrument(skip_all)]
     async fn describe_groups(
-        &mut self,
+        &self,
         group_ids: Option<&[String]>,
         include_authorized_operations: bool,
     ) -> Result<Vec<NamedGroupDetail>> {
@@ -2898,9 +2868,8 @@ impl Storage for Postgres {
                 if let Some(row) = self
                     .prepare_query_opt(
                         &c,
-                        include_sql!("pg/consumer_group_select_by_name.sql").as_str(),
+                        "consumer_group_select_by_name.sql",
                         &[&self.cluster, group_id],
-                        "describe_groups",
                     )
                     .await
                     .inspect_err(|err| error!(?err, group_id))?
@@ -2925,8 +2894,9 @@ impl Storage for Postgres {
         Ok(results)
     }
 
+    #[instrument(skip_all)]
     async fn update_group(
-        &mut self,
+        &self,
         group_id: &str,
         detail: GroupDetail,
         version: Option<Version>,
@@ -2939,9 +2909,8 @@ impl Storage for Postgres {
         _ = self
             .tx_prepare_execute(
                 &tx,
-                include_sql!("pg/consumer_group_insert.sql").as_str(),
+                "consumer_group_insert.sql",
                 &[&self.cluster, &group_id],
-                "update_group",
             )
             .await?;
 
@@ -2966,7 +2935,7 @@ impl Storage for Postgres {
         let outcome = if let Some(row) = self
             .tx_prepare_query_opt(
                 &tx,
-                include_sql!("pg/consumer_group_detail_insert.sql").as_str(),
+                "consumer_group_detail_insert.sql",
                 &[
                     &self.cluster,
                     &group_id,
@@ -2974,7 +2943,6 @@ impl Storage for Postgres {
                     &new_e_tag,
                     &detail,
                 ],
-                "update_group",
             )
             .await
             .inspect(|row| debug!(?row))
@@ -2994,9 +2962,8 @@ impl Storage for Postgres {
             let row = self
                 .tx_prepare_query_one(
                     &tx,
-                    include_sql!("pg/consumer_group_detail.sql").as_str(),
+                    "consumer_group_detail.sql",
                     &[&group_id, &self.cluster.as_str()],
-                    "update_group",
                 )
                 .await
                 .inspect(|row| debug!(?row))
@@ -3027,8 +2994,9 @@ impl Storage for Postgres {
         outcome
     }
 
+    #[instrument(skip_all)]
     async fn init_producer(
-        &mut self,
+        &self,
         transaction_id: Option<&str>,
         transaction_timeout_ms: i32,
         producer_id: Option<i64>,
@@ -3039,17 +3007,18 @@ impl Storage for Postgres {
             transaction_id, producer_id, producer_epoch
         );
 
-        match (producer_id, producer_epoch, transaction_id) {
-            (Some(-1), Some(-1), Some(transaction_id)) => {
+        if producer_id.is_some_and(|producer_id| producer_id == -1)
+            && producer_epoch.is_some_and(|producer_epoch| producer_epoch == -1)
+        {
+            if let Some(transaction_id) = transaction_id {
                 let mut c = self.connection().await.inspect_err(|err| error!(?err))?;
                 let tx = c.transaction().await.inspect_err(|err| error!(?err))?;
 
                 if let Some(row) = self
                     .tx_prepare_query_opt(
                         &tx,
-                        include_sql!("pg/producer_epoch_for_current_txn.sql").as_str(),
+                        "producer_epoch_for_current_txn.sql",
                         &[&self.cluster, &transaction_id],
-                        "init_producer",
                     )
                     .await
                     .inspect_err(|err| error!(?err))?
@@ -3084,9 +3053,8 @@ impl Storage for Postgres {
                 let (producer, epoch) = if let Some(row) = self
                     .tx_prepare_query_opt(
                         &tx,
-                        include_sql!("pg/txn_select_name.sql").as_str(),
+                        "txn_select_name.sql",
                         &[&self.cluster, &transaction_id],
-                        "init_producer",
                     )
                     .await
                     .inspect_err(|err| error!(?err))?
@@ -3096,9 +3064,8 @@ impl Storage for Postgres {
                     let row = self
                         .tx_prepare_query_one(
                             &tx,
-                            include_sql!("pg/producer_epoch_insert.sql").as_str(),
+                            "producer_epoch_insert.sql",
                             &[&self.cluster, &producer],
-                            "init_producer",
                         )
                         .await
                         .inspect_err(|err| error!(self.cluster, producer, ?err))?;
@@ -3108,12 +3075,7 @@ impl Storage for Postgres {
                     (producer, epoch)
                 } else {
                     let row = self
-                        .tx_prepare_query_one(
-                            &tx,
-                            include_sql!("pg/producer_insert.sql").as_str(),
-                            &[&self.cluster],
-                            "init_producer",
-                        )
+                        .tx_prepare_query_one(&tx, "producer_insert.sql", &[&self.cluster])
                         .await
                         .inspect_err(|err| error!(?err))?;
 
@@ -3122,9 +3084,8 @@ impl Storage for Postgres {
                     let row = self
                         .tx_prepare_query_one(
                             &tx,
-                            include_sql!("pg/producer_epoch_insert.sql").as_str(),
+                            "producer_epoch_insert.sql",
                             &[&self.cluster, &producer],
-                            "init_producer",
                         )
                         .await
                         .inspect_err(|err| error!(self.cluster, producer, ?err))?;
@@ -3135,9 +3096,8 @@ impl Storage for Postgres {
                         1,
                         self.tx_prepare_execute(
                             &tx,
-                            include_sql!("pg/txn_insert.sql").as_str(),
+                            "txn_insert.sql",
                             &[&self.cluster, &transaction_id, &producer],
-                            "init_producer",
                         )
                         .await
                         .inspect_err(|err| error!(
@@ -3157,7 +3117,7 @@ impl Storage for Postgres {
                     1,
                     self.tx_prepare_execute(
                         &tx,
-                        include_sql!("pg/txn_detail_insert.sql").as_str(),
+                        "txn_detail_insert.sql",
                         &[
                             &self.cluster,
                             &transaction_id,
@@ -3165,7 +3125,6 @@ impl Storage for Postgres {
                             &epoch,
                             &transaction_timeout_ms
                         ],
-                        "init_producer",
                     )
                     .await
                     .inspect_err(|err| error!(
@@ -3196,30 +3155,22 @@ impl Storage for Postgres {
                     id: producer,
                     epoch,
                 })
-            }
-
-            (Some(-1), Some(-1), None) => {
+            } else {
                 let mut c = self.connection().await.inspect_err(|err| error!(?err))?;
                 let tx = c.transaction().await.inspect_err(|err| error!(?err))?;
 
                 let row = self
-                    .tx_prepare_query_one(
-                        &tx,
-                        include_sql!("pg/producer_insert.sql").as_str(),
-                        &[&self.cluster],
-                        "init_producer",
-                    )
+                    .tx_prepare_query_one(&tx, "producer_insert.sql", &[&self.cluster])
                     .await
                     .inspect_err(|err| error!(self.cluster, ?err))?;
 
-                let producer = row.try_get(0)?;
+                let producer: i64 = row.try_get(0)?;
 
                 let row = self
                     .tx_prepare_query_one(
                         &tx,
-                        include_sql!("pg/producer_epoch_insert.sql").as_str(),
+                        "producer_epoch_insert.sql",
                         &[&self.cluster, &producer],
-                        "init_producer",
                     )
                     .await
                     .inspect_err(|err| error!(self.cluster, producer, ?err))?;
@@ -3241,13 +3192,14 @@ impl Storage for Postgres {
                     epoch,
                 })
             }
-
-            (_, _, _) => todo!(),
+        } else {
+            todo!()
         }
     }
 
+    #[instrument(skip_all)]
     async fn txn_add_offsets(
-        &mut self,
+        &self,
         transaction_id: &str,
         producer_id: i64,
         producer_epoch: i16,
@@ -3261,8 +3213,9 @@ impl Storage for Postgres {
         Ok(ErrorCode::None)
     }
 
+    #[instrument(skip_all)]
     async fn txn_add_partitions(
-        &mut self,
+        &self,
         partitions: TxnAddPartitionsRequest,
     ) -> Result<TxnAddPartitionsResponse> {
         debug!(cluster = self.cluster, ?partitions);
@@ -3288,7 +3241,7 @@ impl Storage for Postgres {
                         _ = self
                             .tx_prepare_execute(
                                 &tx,
-                                include_sql!("pg/txn_topition_insert.sql").as_str(),
+                                "txn_topition_insert.sql",
                                 &[
                                     &self.cluster,
                                     &topic.name,
@@ -3297,7 +3250,6 @@ impl Storage for Postgres {
                                     &producer_id,
                                     &producer_epoch,
                                 ],
-                                "txn_add_partitions",
                             )
                             .await
                             .inspect_err(|err| {
@@ -3310,29 +3262,30 @@ impl Storage for Postgres {
                                 )
                             })?;
 
-                        results_by_partition.push(AddPartitionsToTxnPartitionResult {
-                            partition_index,
-                            partition_error_code: i16::from(ErrorCode::None),
-                        });
+                        results_by_partition.push(
+                            AddPartitionsToTxnPartitionResult::default()
+                                .partition_index(partition_index)
+                                .partition_error_code(i16::from(ErrorCode::None)),
+                        );
                     }
 
-                    results.push(AddPartitionsToTxnTopicResult {
-                        name: topic.name,
-                        results_by_partition: Some(results_by_partition),
-                    })
+                    results.push(
+                        AddPartitionsToTxnTopicResult::default()
+                            .name(topic.name)
+                            .results_by_partition(Some(results_by_partition)),
+                    )
                 }
 
                 _ = self
                     .tx_prepare_execute(
                         &tx,
-                        include_sql!("pg/txn_detail_update_started_at.sql").as_str(),
+                        "txn_detail_update_started_at.sql",
                         &[
                             &self.cluster,
                             &transaction_id,
                             &producer_id,
                             &producer_epoch,
                         ],
-                        "txn_add_partitions",
                     )
                     .await
                     .inspect_err(|err| {
@@ -3356,8 +3309,9 @@ impl Storage for Postgres {
         }
     }
 
+    #[instrument(skip_all)]
     async fn txn_offset_commit(
-        &mut self,
+        &self,
         offsets: TxnOffsetCommitRequest,
     ) -> Result<Vec<TxnOffsetCommitResponseTopic>> {
         debug!(cluster = self.cluster, ?offsets);
@@ -3368,9 +3322,8 @@ impl Storage for Postgres {
         let (producer_id, producer_epoch) = if let Some(row) = self
             .tx_prepare_query_opt(
                 &tx,
-                include_sql!("pg/producer_epoch_for_current_txn.sql").as_str(),
+                "producer_epoch_for_current_txn.sql",
                 &[&self.cluster, &offsets.transaction_id],
-                "txn_offset_commit",
             )
             .await
             .inspect_err(|err| error!(?err))?
@@ -3393,9 +3346,8 @@ impl Storage for Postgres {
         _ = self
             .tx_prepare_execute(
                 &tx,
-                include_sql!("pg/consumer_group_insert.sql").as_str(),
+                "consumer_group_insert.sql",
                 &[&self.cluster, &offsets.group_id],
-                "txn_offset_commit",
             )
             .await?;
 
@@ -3404,7 +3356,7 @@ impl Storage for Postgres {
         _ = self
             .tx_prepare_execute(
                 &tx,
-                include_sql!("pg/txn_offset_commit_insert.sql").as_str(),
+                "txn_offset_commit_insert.sql",
                 &[
                     &self.cluster,
                     &offsets.transaction_id,
@@ -3414,7 +3366,6 @@ impl Storage for Postgres {
                     &offsets.generation_id,
                     &offsets.member_id,
                 ],
-                "txn_offset_commit",
             )
             .await
             .inspect_err(|err| error!(?err))?;
@@ -3432,7 +3383,7 @@ impl Storage for Postgres {
                         _ = self
                             .tx_prepare_execute(
                                 &tx,
-                                include_sql!("pg/txn_offset_commit_tp_insert.sql").as_str(),
+                                "txn_offset_commit_tp_insert.sql",
                                 &[
                                     &self.cluster,
                                     &offsets.transaction_id,
@@ -3445,33 +3396,36 @@ impl Storage for Postgres {
                                     &partition.committed_leader_epoch,
                                     &partition.committed_metadata,
                                 ],
-                                "txn_offset_commit",
                             )
                             .await
                             .inspect_err(|err| error!(?err))?;
 
-                        partitions.push(TxnOffsetCommitResponsePartition {
-                            partition_index: partition.partition_index,
-                            error_code: i16::from(ErrorCode::None),
-                        });
+                        partitions.push(
+                            TxnOffsetCommitResponsePartition::default()
+                                .partition_index(partition.partition_index)
+                                .error_code(i16::from(ErrorCode::None)),
+                        );
                     } else {
-                        partitions.push(TxnOffsetCommitResponsePartition {
-                            partition_index: partition.partition_index,
-                            error_code: i16::from(ErrorCode::InvalidProducerEpoch),
-                        });
+                        partitions.push(
+                            TxnOffsetCommitResponsePartition::default()
+                                .partition_index(partition.partition_index)
+                                .error_code(i16::from(ErrorCode::InvalidProducerEpoch)),
+                        );
                     }
                 } else {
-                    partitions.push(TxnOffsetCommitResponsePartition {
-                        partition_index: partition.partition_index,
-                        error_code: i16::from(ErrorCode::UnknownProducerId),
-                    });
+                    partitions.push(
+                        TxnOffsetCommitResponsePartition::default()
+                            .partition_index(partition.partition_index)
+                            .error_code(i16::from(ErrorCode::UnknownProducerId)),
+                    );
                 }
             }
 
-            topics.push(TxnOffsetCommitResponseTopic {
-                name: topic.name,
-                partitions: Some(partitions),
-            });
+            topics.push(
+                TxnOffsetCommitResponseTopic::default()
+                    .name(topic.name)
+                    .partitions(Some(partitions)),
+            );
         }
 
         tx.commit().await?;
@@ -3479,8 +3433,9 @@ impl Storage for Postgres {
         Ok(topics)
     }
 
+    #[instrument(skip_all)]
     async fn txn_end(
-        &mut self,
+        &self,
         transaction_id: &str,
         producer_id: i64,
         producer_epoch: i16,
@@ -3499,38 +3454,40 @@ impl Storage for Postgres {
 
         Ok(error_code)
     }
-}
 
-fn default_hash<H>(h: &H) -> Uuid
-where
-    H: Hash,
-{
-    let mut s = DefaultHasher::new();
-    h.hash(&mut s);
-    Uuid::from_u128(s.finish() as u128)
-}
+    #[instrument(skip_all)]
+    async fn maintain(&self, now: SystemTime) -> Result<()> {
+        let deleted = self.policy_delete(now).await?;
+        debug!(deleted);
 
-fn remove_comments(commented: &str) -> String {
-    commented.lines().fold(String::new(), |uncommented, line| {
-        if let Some(position) = line.find("--") {
-            match line.split_at(position) {
-                ("", _) => uncommented,
-                (before, _) => {
-                    if uncommented.is_empty() {
-                        before.trim().into()
-                    } else {
-                        format!("{uncommented} {before}")
-                    }
-                }
-            }
-        } else if line.trim().is_empty() {
-            uncommented
-        } else if uncommented.is_empty() {
-            line.trim().into()
-        } else {
-            format!("{uncommented} {}", line.trim())
+        let compacted = self.policy_compact().await?;
+        debug!(compacted);
+
+        if let Some(ref lake) = self.lake {
+            return lake.maintain().await.map_err(Into::into);
         }
-    })
+
+        Ok(())
+    }
+
+    async fn cluster_id(&self) -> Result<String> {
+        Ok(self.cluster.clone())
+    }
+
+    async fn node(&self) -> Result<i32> {
+        Ok(self.node)
+    }
+
+    async fn advertised_listener(&self) -> Result<Url> {
+        Ok(self.advertised_listener.clone())
+    }
+
+    #[instrument(skip_all)]
+    async fn ping(&self) -> Result<()> {
+        let c = self.pool.get().await?;
+        let _ = self.prepare_query(&c, "ping.sql", &[]).await?;
+        Ok(())
+    }
 }
 
 static SQL_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
@@ -3554,55 +3511,3 @@ static SQL_ERROR: LazyLock<Counter<u64>> = LazyLock::new(|| {
         .with_description("The SQL error count")
         .build()
 });
-
-#[cfg(test)]
-mod tests {
-    use crate::{Error, Result};
-    use tracing::subscriber::DefaultGuard;
-    use tracing_subscriber::EnvFilter;
-
-    fn init_tracing() -> Result<DefaultGuard> {
-        use std::{fs::File, sync::Arc, thread};
-
-        Ok(tracing::subscriber::set_default(
-            tracing_subscriber::fmt()
-                .with_level(true)
-                .with_line_number(true)
-                .with_thread_names(false)
-                .with_env_filter(EnvFilter::from_default_env().add_directive(
-                    format!("{}=debug", env!("CARGO_PKG_NAME").replace("-", "_")).parse()?,
-                ))
-                .with_writer(
-                    thread::current()
-                        .name()
-                        .ok_or(Error::Message(String::from("unnamed thread")))
-                        .and_then(|name| {
-                            File::create(format!("../logs/{}/{name}.log", env!("CARGO_PKG_NAME"),))
-                                .map_err(Into::into)
-                        })
-                        .map(Arc::new)?,
-                )
-                .finish(),
-        ))
-    }
-
-    #[test]
-    fn remove_comments() -> Result<()> {
-        let _guard = init_tracing()?;
-
-        assert_eq!(String::from(""), super::remove_comments(""));
-        assert_eq!(String::from("pqr"), super::remove_comments("-- abc\npqr"));
-        assert_eq!(String::from("abc"), super::remove_comments("abc -- def"));
-        assert_eq!(String::from("abc def"), super::remove_comments("abc\ndef"));
-        assert_eq!(
-            String::from("abc def"),
-            super::remove_comments("abc\n\ndef")
-        );
-        assert_eq!(
-            String::from("abc def"),
-            super::remove_comments("abc \ndef ")
-        );
-
-        Ok(())
-    }
-}

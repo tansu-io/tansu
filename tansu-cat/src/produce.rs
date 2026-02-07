@@ -1,40 +1,41 @@
-// Copyright ⓒ 2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
+// http://www.apache.org/licenses/LICENSE-2.0
 //
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::marker::PhantomData;
 
 use crate::{Error, Result};
 
+use bytes::Bytes;
 use futures::StreamExt;
 use serde_json::Value;
-use tansu_kafka_sans_io::{
-    Body, ErrorCode, Frame, Header,
+use tansu_client::{Client, ConnectionManager};
+use tansu_sans_io::{
+    ErrorCode, ProduceRequest, ProduceResponse,
     produce_request::{PartitionProduceData, TopicProduceData},
-    record::{deflated, inflated},
+    produce_response::{PartitionProduceResponse, TopicProduceResponse},
+    record::{Record, deflated, inflated},
 };
-use tansu_schema_registry::{AsKafkaRecord, Registry};
+use tansu_schema::{AsKafkaRecord, Registry, Schema};
 use tokio::{
     fs::File,
-    io::{self, AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
+    io::{self, AsyncReadExt},
 };
 use tokio_util::codec::{FramedRead, LinesCodec};
-use tracing::debug;
+use tracing::{debug, warn};
 use url::Url;
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Builder<B, T, P, S, F> {
     broker: B,
     topic: T,
@@ -43,7 +44,7 @@ pub struct Builder<B, T, P, S, F> {
     file_name: F,
 }
 
-pub type PhantomBuilder = Builder<
+pub(crate) type PhantomBuilder = Builder<
     PhantomData<Url>,
     PhantomData<String>,
     PhantomData<i32>,
@@ -125,7 +126,7 @@ pub struct Configuration {
 }
 
 #[derive(Clone, Debug)]
-pub struct Produce {
+pub(crate) struct Produce {
     configuration: Configuration,
     registry: Option<Registry>,
 }
@@ -137,7 +138,7 @@ impl TryFrom<Configuration> for Produce {
         configuration
             .schema_registry
             .as_ref()
-            .map(Registry::try_from)
+            .map(|url| Registry::builder_try_from_url(url).map(|builder| builder.build()))
             .transpose()
             .map(|registry| Self {
                 configuration,
@@ -148,7 +149,48 @@ impl TryFrom<Configuration> for Produce {
 }
 
 impl Produce {
-    pub async fn main(self) -> Result<ErrorCode> {
+    fn add_to_batch(
+        &self,
+        mut batch: inflated::Builder,
+        schema: Option<&Schema>,
+        data: &Value,
+        offset_delta: &mut i32,
+    ) -> Result<inflated::Builder> {
+        if let Some(schema) = schema {
+            batch = batch.record(
+                schema
+                    .as_kafka_record(data)
+                    .map(|record| record.offset_delta(*offset_delta))?,
+            );
+
+            *offset_delta += 1;
+        } else {
+            let key = data
+                .get("key")
+                .and_then(|key| serde_json::to_vec(key).map(Bytes::from).ok());
+
+            let value = data
+                .get("value")
+                .and_then(|value| serde_json::to_vec(value).map(Bytes::from).ok());
+
+            if key.is_some() || value.is_some() {
+                batch = batch.record(
+                    Record::builder()
+                        .key(key)
+                        .value(value)
+                        .offset_delta(*offset_delta),
+                );
+
+                *offset_delta += 1;
+            } else {
+                warn!(ignored = %data);
+            }
+        }
+
+        Ok(batch)
+    }
+
+    pub(crate) async fn main(self) -> Result<ErrorCode> {
         debug!(%self.configuration.file_name);
 
         let schema = if let Some(ref registry) = self.registry {
@@ -175,24 +217,18 @@ impl Produce {
 
                     debug!(%line);
 
-                    let v = serde_json::from_str::<Value>(&line).inspect(|value| debug!(?value))?;
-                    debug!(%v);
-
-                    if let Some(ref schema) = schema {
-                        batch = batch.record(
-                            schema
-                                .as_kafka_record(&v)
-                                .map(|record| record.offset_delta(offset_delta))?,
-                        );
-                    }
-
-                    offset_delta += 1;
+                    batch = serde_json::from_str::<Value>(&line)
+                        .inspect(|data| debug!(%data))
+                        .map_err(Into::into)
+                        .and_then(|data| {
+                            self.add_to_batch(batch, schema.as_ref(), &data, &mut offset_delta)
+                        })?;
                 }
             } else {
-                let mut file = File::open(self.configuration.file_name).await?;
+                let mut file = File::open(self.configuration.file_name.as_str()).await?;
 
                 let mut contents = vec![];
-                file.read_to_end(&mut contents).await?;
+                _ = file.read_to_end(&mut contents).await?;
 
                 let v = serde_json::from_slice::<Value>(&contents[..])?;
 
@@ -200,15 +236,8 @@ impl Produce {
                     for record in records {
                         debug!(%record);
 
-                        if let Some(ref schema) = schema {
-                            batch = batch.record(
-                                schema
-                                    .as_kafka_record(record)
-                                    .map(|record| record.offset_delta(offset_delta))?,
-                            );
-                        }
-
-                        offset_delta += 1;
+                        batch =
+                            self.add_to_batch(batch, schema.as_ref(), record, &mut offset_delta)?;
                     }
                 }
             }
@@ -223,105 +252,44 @@ impl Produce {
 
         debug!(?frame);
 
-        let mut connection = Connection::open(&self.configuration.broker).await?;
-
-        connection
-            .produce(
-                self.configuration.topic.as_str(),
-                self.configuration.partition,
-                frame,
-            )
-            .await
-    }
-}
-
-#[derive(Debug)]
-struct Connection {
-    broker: TcpStream,
-    correlation_id: i32,
-}
-
-impl Connection {
-    async fn open(broker: &Url) -> Result<Self> {
-        debug!(%broker);
-
-        TcpStream::connect(format!(
-            "{}:{}",
-            broker.host_str().unwrap(),
-            broker.port().unwrap()
-        ))
-        .await
-        .map(|broker| Self {
-            broker,
-            correlation_id: 0,
-        })
-        .map_err(Into::into)
-    }
-
-    async fn produce(
-        &mut self,
-        topic: &str,
-        partition: i32,
-        frame: deflated::Frame,
-    ) -> Result<ErrorCode> {
-        debug!(%topic, partition, ?frame);
-
-        let api_key = 0;
-        let api_version = 9;
-
-        let header = Header::Request {
-            api_key,
-            api_version,
-            correlation_id: self.correlation_id,
-            client_id: Some("tansu".into()),
-        };
-
-        let body = Body::ProduceRequest {
-            transactional_id: None,
-            acks: -1,
-            timeout_ms: 1_500,
-            topic_data: Some(
-                [TopicProduceData {
-                    name: topic.into(),
-                    partition_data: Some(
-                        [PartitionProduceData {
-                            index: partition,
-                            records: Some(frame),
-                        }]
+        let req = ProduceRequest::default()
+            .transactional_id(None)
+            .acks(-1)
+            .timeout_ms(1_500)
+            .topic_data(Some(
+                [TopicProduceData::default()
+                    .name(self.configuration.topic)
+                    .partition_data(Some(
+                        [PartitionProduceData::default()
+                            .index(self.configuration.partition)
+                            .records(Some(frame))]
                         .into(),
-                    ),
-                }]
+                    ))]
                 .into(),
-            ),
-        };
+            ));
 
-        let encoded = Frame::request(header, body)?;
-
-        self.broker
-            .write_all(&encoded[..])
+        let client = ConnectionManager::builder(self.configuration.broker.clone())
+            .client_id(Some(env!("CARGO_PKG_NAME").into()))
+            .build()
             .await
-            .inspect_err(|err| debug!(?err))?;
+            .inspect(|pool| debug!(?pool))
+            .map(Client::new)?;
 
-        let mut size = [0u8; 4];
-        _ = self.broker.read_exact(&mut size).await?;
+        let ProduceResponse { responses, .. } = client.call(req).await?;
+        let responses = responses.unwrap_or_default();
+        assert_eq!(1, responses.len());
 
-        let mut response_buffer: Vec<u8> = vec![0u8; Self::frame_length(size)];
-        response_buffer[0..size.len()].copy_from_slice(&size[..]);
-        _ = self
-            .broker
-            .read_exact(&mut response_buffer[size.len()..])
-            .await
-            .inspect_err(|err| debug!(?err))?;
+        let TopicProduceResponse {
+            partition_responses,
+            ..
+        } = responses.first().expect("responses: {responses:?}");
+        let partition_responses = partition_responses.as_deref().unwrap_or_default();
+        assert_eq!(1, partition_responses.len());
 
-        let response = Frame::response_from_bytes(&response_buffer, api_key, api_version)
-            .inspect_err(|err| debug!(?err))?;
+        let PartitionProduceResponse { error_code, .. } = partition_responses
+            .first()
+            .expect("partition_responses: {partition_responses:?}");
 
-        debug!(?response);
-
-        Ok(ErrorCode::None)
-    }
-
-    fn frame_length(encoded: [u8; 4]) -> usize {
-        i32::from_be_bytes(encoded) as usize + encoded.len()
+        ErrorCode::try_from(*error_code).map_err(Into::into)
     }
 }

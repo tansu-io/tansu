@@ -1,17 +1,16 @@
-// Copyright ⓒ 2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
+// http://www.apache.org/licenses/LICENSE-2.0
 //
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::{
     fmt::Debug,
@@ -21,12 +20,12 @@ use std::{
 use crate::{Result, dynostore::object_store_error_name};
 use bytes::Bytes;
 use object_store::{
-    Attributes, GetOptions, ObjectStore, PutMode, PutOptions, PutPayload, TagSet, UpdateVersion,
-    path::Path,
+    Attributes, GetOptions, ObjectStore, ObjectStoreExt, PutMode, PutOptions, PutPayload, TagSet,
+    UpdateVersion, path::Path,
 };
 use opentelemetry::{KeyValue, metrics::Counter};
 use serde::{Serialize, de::DeserializeOwned};
-use tracing::debug;
+use tracing::{debug, instrument};
 
 use super::METER;
 
@@ -60,7 +59,7 @@ static ERRORS: LazyLock<Counter<u64>> = LazyLock::new(|| {
 });
 
 #[derive(Clone, Debug, Default)]
-pub struct OptiCon<D> {
+pub(super) struct OptiCon<D> {
     path: Path,
     tags: TagSet,
     attributes: Attributes,
@@ -68,7 +67,7 @@ pub struct OptiCon<D> {
 }
 
 impl<D> OptiCon<D> {
-    pub fn path(path: impl Into<Path>) -> Self {
+    pub(super) fn path(path: impl Into<Path>) -> Self {
         Self {
             path: path.into(),
             tags: Default::default(),
@@ -82,9 +81,8 @@ impl<D> OptiCon<D>
 where
     D: Clone + Debug + Default + DeserializeOwned + PartialEq + Serialize,
 {
+    #[instrument(skip_all, fields(path = %self.path))]
     async fn get(&self, object_store: &impl ObjectStore) -> Result<()> {
-        debug!(%self.path);
-
         const METHOD: &str = "get";
         REQUESTS.add(1, &[KeyValue::new("method", METHOD)]);
 
@@ -114,6 +112,8 @@ where
                 })?;
                 let data = serde_json::from_slice::<D>(&encoded)?;
 
+                debug!(?version);
+
                 self.data_version
                     .lock()
                     .map_err(Into::into)
@@ -132,12 +132,11 @@ where
         }
     }
 
-    pub async fn with<E, F>(&self, object_store: &impl ObjectStore, f: F) -> Result<E>
+    #[instrument(skip_all, fields(path = %self.path))]
+    pub(super) async fn with<E, F>(&self, object_store: &impl ObjectStore, f: F) -> Result<E>
     where
         F: Fn(&D) -> Result<E>,
     {
-        debug!(%self.path);
-
         const METHOD: &str = "with";
         REQUESTS.add(1, &[KeyValue::new("method", METHOD)]);
 
@@ -176,6 +175,8 @@ where
                     version: get_result.meta.version.clone(),
                 });
 
+                debug!(action = "out of date", ?version);
+
                 get_result
                     .bytes()
                     .await
@@ -194,14 +195,19 @@ where
                     .and(Ok(()))
             }
 
-            Err(object_store::Error::NotFound { .. }) => self
-                .data_version
-                .lock()
-                .map_err(Into::into)
-                .map(|mut guard| guard.take())
-                .and(Ok(())),
+            Err(object_store::Error::NotFound { .. }) => {
+                debug!(action = "not found");
+                self.data_version
+                    .lock()
+                    .map_err(Into::into)
+                    .map(|mut guard| guard.take())
+                    .and(Ok(()))
+            }
 
-            Err(object_store::Error::NotModified { .. }) => Ok(()),
+            Err(object_store::Error::NotModified { .. }) => {
+                debug!(action = "not modified");
+                Ok(())
+            }
 
             Err(otherwise) => Err(otherwise.into()),
         }
@@ -222,13 +228,12 @@ where
         )
     }
 
-    pub async fn with_mut<E, F>(&self, object_store: &impl ObjectStore, f: F) -> Result<E>
+    #[instrument(skip_all, fields(path = %self.path))]
+    pub(super) async fn with_mut<E, F>(&self, object_store: &impl ObjectStore, f: F) -> Result<E>
     where
         E: Debug,
         F: Fn(&mut D) -> Result<E>,
     {
-        debug!(%self.path);
-
         const METHOD: &str = "with_mut";
         REQUESTS.add(1, &[KeyValue::new("method", METHOD)]);
 
@@ -259,6 +264,7 @@ where
                 mode: PutMode::from(&dv),
                 tags: self.tags.clone(),
                 attributes: self.attributes.clone(),
+                ..Default::default()
             };
 
             match object_store

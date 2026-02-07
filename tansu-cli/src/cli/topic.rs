@@ -1,21 +1,22 @@
-// Copyright ⓒ 2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
+// http://www.apache.org/licenses/LICENSE-2.0
 //
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use std::{collections::HashMap, error::Error, str::FromStr};
 
 use crate::Result;
 use clap::Subcommand;
-use tansu_kafka_sans_io::ErrorCode;
+use tansu_sans_io::ErrorCode;
 use tansu_topic::Topic;
 use url::Url;
 
@@ -23,25 +24,40 @@ use super::DEFAULT_BROKER;
 
 #[derive(Clone, Debug, Subcommand)]
 pub(super) enum Command {
-    #[command(about = "Create a topic")]
+    /// Create a topic
     Create {
+        /// Broker URL
         #[arg(long, default_value = DEFAULT_BROKER)]
         broker: Url,
 
+        /// The name of the topic to create
         #[clap(value_parser)]
         name: String,
 
+        /// The number of partitions to create
         #[arg(long, default_value = "3")]
         partitions: i32,
+
+        #[arg(long, value_parser = parse_key_val::<String, String>)]
+        config: Vec<(String, String)>,
     },
 
-    #[command(about = "Delete an existing topic")]
+    /// Delete an existing topic
     Delete {
+        /// Broker URL
         #[arg(long, default_value = DEFAULT_BROKER)]
         broker: Url,
 
+        /// The name of the topic to delete
         #[clap(value_parser)]
         name: String,
+    },
+
+    /// List existing topics
+    List {
+        /// Broker URL
+        #[arg(long, default_value = DEFAULT_BROKER)]
+        broker: Url,
     },
 }
 
@@ -52,13 +68,17 @@ impl From<Command> for Topic {
                 broker,
                 name,
                 partitions,
+                config,
             } => Topic::create()
                 .broker(broker)
                 .name(name)
                 .partitions(partitions)
+                .config(HashMap::from_iter(config))
                 .build(),
 
             Command::Delete { broker, name } => Topic::delete().broker(broker).name(name).build(),
+
+            Command::List { broker } => Topic::list().broker(broker).build(),
         }
     }
 }
@@ -67,4 +87,18 @@ impl Command {
     pub(super) async fn main(self) -> Result<ErrorCode> {
         Topic::from(self).main().await.map_err(Into::into)
     }
+}
+
+/// Parse a single key-value pair
+fn parse_key_val<T, U>(s: &str) -> Result<(T, U), Box<dyn Error + Send + Sync + 'static>>
+where
+    T: FromStr,
+    T::Err: Error + Send + Sync + 'static,
+    U: FromStr,
+    U::Err: Error + Send + Sync + 'static,
+{
+    let pos = s
+        .find('=')
+        .ok_or_else(|| format!("invalid KEY=value: no `=` found in `{s}`"))?;
+    Ok((s[..pos].parse()?, s[pos + 1..].parse()?))
 }

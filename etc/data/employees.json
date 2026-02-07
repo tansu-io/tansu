@@ -1,0 +1,10 @@
+[
+  {
+    "key": { "id": 12321 },
+    "value": { "name": "Bob", "email": "bob@example.com" }
+  },
+  {
+    "key": { "id": 32123 },
+    "value": { "name": "Alice", "email": "alice@example.com" }
+  }
+]
