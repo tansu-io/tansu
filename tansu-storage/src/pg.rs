@@ -20,7 +20,7 @@ use std::{
     hash::Hash,
     marker::PhantomData,
     str::FromStr,
-    sync::LazyLock,
+    sync::{Arc, LazyLock},
     time::{Duration, SystemTime},
 };
 
@@ -61,7 +61,7 @@ use tansu_schema::{
     lake::{House, LakeHouse as _},
 };
 use tokio_postgres::{
-    Config, NoTls, Row, RowStream,
+    Config, Row, RowStream,
     binary_copy::BinaryCopyInWriter,
     error::SqlState,
     types::{BorrowToSql, ToSql, Type},
@@ -164,13 +164,30 @@ where
     type Err = Error;
 
     fn from_str(config: &str) -> Result<Self, Self::Err> {
-        let pg_config = Config::from_str(config)?;
+        let pg_config = Config::from_str(config).inspect(|pg_config| debug!(?pg_config))?;
 
         let mgr_config = ManagerConfig {
             recycling_method: RecyclingMethod::Fast,
         };
 
-        let mgr = Manager::from_config(pg_config, NoTls, mgr_config);
+        let root_store = {
+            let mut roots = rustls::RootCertStore::empty();
+            for cert in rustls_native_certs::load_native_certs().certs {
+                roots.add(cert).inspect_err(|err| debug!(?err))?;
+            }
+            roots
+        };
+
+        let config = rustls::ClientConfig::builder_with_provider(Arc::new(
+            rustls::crypto::aws_lc_rs::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .map(|config| config.with_root_certificates(root_store))
+        .map(|config| config.with_no_client_auth())?;
+
+        let tls = tokio_postgres_rustls::MakeRustlsConnect::new(config);
+
+        let mgr = Manager::from_config(pg_config, tls, mgr_config);
         let advertised_listener = Url::parse("tcp://127.0.0.1/")?;
 
         Pool::builder(mgr)
