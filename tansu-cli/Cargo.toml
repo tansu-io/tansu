@@ -17,10 +17,11 @@ workspace = true
 default = []
 delta = []
 dynostore = []
+iceberg = []
 libsql = []
 parquet = []
 postgres = []
-iceberg = []
+slatedb = []
 turso = []
 
 [dependencies]
@@ -32,6 +33,7 @@ regex.workspace = true
 tansu-broker.workspace = true
 tansu-cat.workspace = true
 tansu-generator.workspace = true
+tansu-perf.workspace = true
 tansu-proxy.workspace = true
 tansu-sans-io.workspace = true
 tansu-schema.workspace = true

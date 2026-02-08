@@ -1,4 +1,4 @@
-set dotenv-load
+set dotenv-load := true
 
 default: fmt build test clippy
 
@@ -6,21 +6,28 @@ about:
     cargo about generate about.hbs > license.html
 
 cargo-build +args:
-    cargo build {{args}}
+    cargo build {{ args }}
+
+clean-workspace:
+    cargo clean --workspace
 
 license:
     cargo about generate about.hbs > license.html
 
-build: (cargo-build "--bin" "tansu" "--no-default-features" "--features" "delta,dynostore,iceberg,libsql,parquet,postgres")
+build profile="dev" features="delta,dynostore,iceberg,libsql,parquet,postgres,slatedb" bin="tansu": (cargo-build "--profile" profile "--timings" "--bin" bin "--no-default-features" "--features" features)
+
+build-storage: clean-workspace (build "dev" "libsql") clean-workspace (build "dev" "postgres") clean-workspace (build "dev" "slatedb")
 
 build-examples: (cargo-build "--examples")
 
-release: (cargo-build "--release" "--bin" "tansu" "--no-default-features" "--features" "delta,dynostore,iceberg,libsql,parquet,postgres")
+release: (cargo-build "--release" "--bin" "tansu" "--no-default-features" "--features" "delta,dynostore,iceberg,libsql,parquet,postgres,slatedb")
+
+release-sqlite: (cargo-build "--release" "--bin" "tansu" "--no-default-features" "--features" "libsql")
 
 test: test-workspace test-doc
 
 test-workspace:
-    cargo test --workspace --all-targets --all-features
+    cargo nextest run --workspace --all-targets --all-features
 
 test-doc:
     cargo test --workspace --doc --all-features
@@ -51,7 +58,7 @@ minio-up: (docker-compose-up "minio")
 minio-down: (docker-compose-down "minio")
 
 minio-mc +args:
-    docker compose exec minio /usr/bin/mc {{args}}
+    docker compose exec minio /usr/bin/mc {{ args }}
 
 minio-local-alias: (minio-mc "alias" "set" "local" "http://localhost:9000" "minioadmin" "minioadmin")
 
@@ -95,16 +102,16 @@ lakehouse-migrate:
     docker compose exec lakehouse-catalog /home/nonroot/iceberg-catalog migrate
 
 docker-compose-up *args:
-    docker compose --ansi never --progress plain up --no-color --quiet-pull --wait --detach {{args}}
+    docker compose --ansi never --progress plain up --no-color --quiet-pull --wait --detach {{ args }}
 
 docker-compose-down *args:
-    docker compose down --remove-orphans --volumes {{args}}
+    docker compose down --remove-orphans --volumes {{ args }}
 
 docker-compose-ps:
     docker compose ps
 
 docker-compose-logs *args:
-    docker compose logs {{args}}
+    docker compose logs {{ args }}
 
 psql:
     docker compose exec db psql $*
@@ -140,6 +147,9 @@ list-topics-scram-256:
 list-topics-scram-512:
     kafka-topics --bootstrap-server ${ADVERTISED_LISTENER} --command-config command-scram-512.properties --list
 
+add-alice-user:
+    kafka-configs --alter --add-config "SCRAM-SHA-256=[iterations=8192,password=secret],SCRAM-SHA-512=[iterations=8192,password=secret]" --entity-type users --entity-name alice --bootstrap-server localhost:9092
+
 test-topic-describe:
     kafka-topics --bootstrap-server ${ADVERTISED_LISTENER} --describe --topic test
 
@@ -174,25 +184,25 @@ test-reset-offsets-to-earliest:
     kafka-consumer-groups --bootstrap-server ${ADVERTISED_LISTENER} --group test-consumer-group --topic test:0 --reset-offsets --to-earliest --execute
 
 topic-create topic *args:
-    target/debug/tansu topic create {{topic}} {{args}}
+    target/debug/tansu topic create {{ topic }} {{ args }}
 
 topic-delete topic:
-    target/debug/tansu topic delete {{topic}}
+    target/debug/tansu topic delete {{ topic }}
 
 cat-produce topic file:
-    target/debug/tansu cat produce {{topic}} {{file}}
+    target/debug/tansu cat produce {{ topic }} {{ file }}
 
 cat-consume topic:
-    target/debug/tansu cat consume {{topic}} --max-wait-time-ms=5000
+    target/debug/tansu cat consume {{ topic }} --max-wait-time-ms=5000
 
 generator topic *args:
-    target/debug/tansu generator {{args}} {{topic}} 2>&1 >generator.log
+    target/debug/tansu generator {{ args }} {{ topic }} 2>&1 >generator.log
 
 duckdb-k-unnest-v-parquet topic:
-    duckdb -init duckdb-init.sql :memory: "SELECT key,unnest(value) FROM '{{replace(env("DATA_LAKE"), "file://./", "")}}/{{topic}}/*/*.parquet'"
+    duckdb -init duckdb-init.sql :memory: "SELECT key,unnest(value) FROM '{{ replace(env("DATA_LAKE"), "file://./", "") }}/{{ topic }}/*/*.parquet'"
 
 duckdb-parquet topic:
-    duckdb -init duckdb-init.sql :memory: "SELECT * FROM '{{replace(env("DATA_LAKE"), "file://./", "")}}/{{topic}}/*/*.parquet'"
+    duckdb -init duckdb-init.sql :memory: "SELECT * FROM '{{ replace(env("DATA_LAKE"), "file://./", "") }}/{{ topic }}/*/*.parquet'"
 
 # create person topic with schema etc/schema/person.json
 person-topic-create: (topic-create "person")
@@ -241,7 +251,7 @@ search-topic-produce:
 search-duckdb-parquet: (duckdb-parquet "search")
 
 tansu-server:
-    target/debug/tansu broker --schema-registry file://./etc/schema 2>&1 | tee tansu.log
+    target/debug/tansu broker --schema-registry file://./etc/schema 2>&1 | tee broker.log
 
 kafka-proxy:
     docker run -d -p 19092:9092 apache/kafka:3.9.0
@@ -293,21 +303,27 @@ codespace-ssh:
 all: test miri
 
 flamegraph *args:
-    cargo flamegraph {{args}}
+    cargo flamegraph {{ args }}
 
 benchmark-flamegraph: build docker-compose-down minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up
-	flamegraph -- target/debug/tansu broker 2>&1  | tee tansu.log
+    flamegraph -- target/debug/tansu broker 2>&1  | tee broker.log
 
 benchmark: build docker-compose-down minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up
-	target/debug/tansu broker 2>&1  | tee tansu.log
+    target/debug/tansu broker 2>&1  | tee broker.log
 
 otel: build docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up
-	target/debug/tansu broker 2>&1  | tee tansu.log
+    target/debug/tansu broker 2>&1  | tee broker.log
 
 otel-up: docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up tansu-up
 
-tansu-broker kind *args:
-    target/{{kind}}/tansu broker {{args}} 2>&1 | tee broker.log
+tansu-broker profile *args:
+    target/{{ replace(profile, "dev", "debug") }}/tansu broker {{ args }} 2>&1 | tee broker.log
+
+flamegraph-tansu-broker profile *args:
+    #!/usr/bin/env zsh
+    unset SCHEMA_REGISTRY
+    export RUST_LOG=warn
+    flamegraph -- ./target/{{ replace(profile, "dev", "debug") }}/tansu broker {{ args }}
 
 # run a debug broker with configuration from .env
 broker *args: build docker-compose-down prometheus-up grafana-up db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket lakehouse-catalog-up (tansu-broker "debug" args)
@@ -315,15 +331,13 @@ broker *args: build docker-compose-down prometheus-up grafana-up db-up minio-up 
 # run a release broker with configuration from .env
 broker-release *args: release docker-compose-down prometheus-up grafana-up db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket lakehouse-catalog-up (tansu-broker "release" args)
 
-
 # run a proxy with configuration from .env
 proxy *args:
-    target/debug/tansu proxy {{args}} 2>&1 | tee proxy.log
-
+    target/debug/tansu proxy {{ args }} 2>&1 | tee proxy.log
 
 # teardown compose, rebuild: minio, db, tansu and lake buckets
 server: (cargo-build "--bin" "tansu") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket lakehouse-catalog-up
-	target/debug/tansu broker 2>&1  | tee tansu.log
+    target/debug/tansu broker 2>&1  | tee broker.log
 
 gdb: (cargo-build "--bin" "tansu") docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket
     rust-gdb --args target/debug/tansu broker
@@ -346,7 +360,7 @@ observation-topic-create: (topic-create "observation")
 observation-duckdb-parquet: (duckdb-k-unnest-v-parquet "observation")
 
 duckdb *sql:
-    duckdb -init duckdb-init.sql -markdown :memory: {{sql}}
+    duckdb -init duckdb-init.sql -markdown :memory: {{ sql }}
 
 # produce etc/data/trips.json with schema etc/schema/taxi.proto
 taxi-topic-populate: (cat-produce "taxi" "etc/data/trips.json")
@@ -355,7 +369,7 @@ taxi-topic-populate: (cat-produce "taxi" "etc/data/trips.json")
 taxi-topic-consume: (cat-consume "taxi")
 
 # create taxi topic with generated fields with schema etc/schema/taxi.proto
-taxi-topic-create: (topic-create "taxi" "--partitions=1"  "--config=tansu.lake.normalize=true" "--config=tansu.lake.partition=meta.day" "--config=tansu.lake.z_order=vendor_id" "--config=tansu.lake.sink=true" "--config=tansu.batch=true" "--config=tansu.batch.max_records=200" "--config=tansu.batch.timeout_ms=1000")
+taxi-topic-create: (topic-create "taxi" "--partitions=1" "--config=tansu.lake.normalize=true" "--config=tansu.lake.partition=meta.day" "--config=tansu.lake.z_order=vendor_id" "--config=tansu.lake.sink=true" "--config=tansu.batch=true" "--config=tansu.batch.max_records=200" "--config=tansu.batch.timeout_ms=1000")
 
 # create taxi topic with schema etc/schema/taxi.proto
 taxi-topic-create-plain: (topic-create "taxi" "--partitions" "1" "--config" "tansu.lake.sink=true")
@@ -383,10 +397,126 @@ employee-produce: (cat-produce "employee" "etc/data/employees.json")
 # employee duckdb delta lake
 employee-duckdb-delta: (duckdb "\"select * from delta_scan('s3://lake/tansu.employee');\"")
 
-
 # create customer topic with schema etc/schema/customer.proto
-customer-topic-create *args: (topic-create "customer" "--partitions=1"  "--config=tansu.lake.normalize=true" "--config=tansu.lake.partition=meta.day" "--config=tansu.lake.sink=true" "--config=tansu.batch=true" "--config=tansu.batch.max_records=200" "--config=tansu.batch.timeout_ms=1000" args)
+customer-topic-create *args: (topic-create "customer" "--partitions=1" "--config=tansu.lake.normalize=true" "--config=tansu.lake.partition=meta.day" "--config=tansu.lake.sink=true" "--config=tansu.batch=true" "--config=tansu.batch.max_records=200" "--config=tansu.batch.timeout_ms=1000" args)
 
 customer-topic-generator *args: (generator "customer" args)
 
 customer-duckdb-delta: (duckdb "\"select * from delta_scan('s3://lake/tansu.customer');\"")
+
+broker-memory profile="profiling": (build profile "dynostore") (tansu-broker profile "--storage-engine=memory://")
+
+broker-null profile="profiling": (build profile "default") (tansu-broker profile "--storage-engine=null://")
+
+clean-tansu-db:
+    rm -f tansu.db*
+
+broker-sqlite profile="profiling": clean-tansu-db (build profile "libsql") (tansu-broker profile "--storage-engine=sqlite://tansu.db")
+
+broker-sqlite-vacuum-into profile="profiling": clean-tansu-db (build profile "libsql") (tansu-broker profile "--storage-engine=sqlite://tansu.db?vacuum_into=snapshot.db")
+
+broker-s3 profile="profiling": (build profile "dynostore") docker-compose-down minio-up minio-ready-local minio-local-alias minio-tansu-bucket (tansu-broker profile "--storage-engine=s3://tansu/")
+
+broker-postgres profile="profiling": (build profile "postgres") docker-compose-down db-up (tansu-broker profile "--storage-engine=postgres://pmorgan@localhost")
+
+samply-null profile="profiling":
+    cargo build --profile {{ profile }} --bin tansu
+    RUST_LOG=warn samply record ./target/{{ replace(profile, "dev", "debug") }}/tansu --storage-engine=null://sink
+
+flamegraph-null profile="profiling": (build profile "default") (flamegraph-tansu-broker profile "--storage-engine=null://sink")
+
+flamegraph-sqlite profile="profiling": (build profile "libsql") clean-tansu-db (flamegraph-tansu-broker profile "--storage-engine=sqlite://tansu.db")
+
+flamegraph-postgres profile="profiling": (build profile "postgres") docker-compose-down db-up (flamegraph-tansu-broker profile "--storage-engine=postgres://postgres:postgres@localhost")
+
+flamegraph-memory profile="profiling": (build profile "dynostore") (flamegraph-tansu-broker profile "--storage-engine=memory://tansu/")
+
+flamegraph-s3 profile="profiling": (build profile "dynostore") docker-compose-down minio-up minio-ready-local minio-local-alias minio-tansu-bucket (flamegraph-tansu-broker profile "--storage-engine=s3://tansu/")
+
+samply-produce profile="profiling":
+    cargo build --profile {{ profile }} --bin bench_produce_v11
+    RUST_LOG=warn samply record ./target/{{ replace(profile, "dev", "debug") }}/bench_produce_v11
+
+flamegraph-produce profile="profiling":
+    cargo build --profile {{ profile }} --bin bench_produce_v11
+    RUST_LOG=warn flamegraph -- ./target/{{ replace(profile, "dev", "debug") }}/bench_produce_v11
+
+bench-hyperfine profile="release": (build profile "libsql" "bench")
+    hyperfine -N ./target/{{ replace(profile, "dev", "debug") }}/bench
+
+bench-dhat mode="heap" profile="release": (build profile "libsql" "bench")
+    valgrind --tool=dhat --mode={{ mode }} ./target/{{ replace(profile, "dev", "debug") }}/bench
+
+bench-flamegraph profile="profiling": (build profile "libsql" "bench")
+    RUST_LOG=warn flamegraph -- ./target/{{ replace(profile, "dev", "debug") }}/bench
+
+bench-flamegraph-produce profile="profiling": (build profile "libsql" "bench")
+    RUST_LOG=warn flamegraph -- ./target/{{ replace(profile, "dev", "debug") }}/bench --api-key=0
+
+bench-flamegraph-fetch profile="profiling": (build profile "libsql" "bench")
+    RUST_LOG=warn flamegraph -- ./target/{{ replace(profile, "dev", "debug") }}/bench --api-key=1
+
+bench-perf profile="profiling": (build profile "libsql" "bench")
+    RUST_LOG=warn perf record --call-graph dwarf ./target/{{ replace(profile, "dev", "debug") }}/bench 2>&1 >/dev/null
+
+producer-perf throughput="1000" record_size="1024" num_records="100000":
+    kafka-producer-perf-test --topic test --num-records {{ num_records }} --record-size {{ record_size }} --throughput {{ throughput }} --producer-props bootstrap.servers=${ADVERTISED_LISTENER}
+
+producer-perf-10: (producer-perf "10")
+
+producer-perf-1000: (producer-perf "1000" "1024" "25000")
+
+producer-perf-2000: (producer-perf "2000" "1024" "50000")
+
+producer-perf-3000: (producer-perf "3000" "1024" "75000")
+
+producer-perf-4000: (producer-perf "4000" "1024" "100000")
+
+producer-perf-5000: (producer-perf "5000" "1024" "125000")
+
+producer-perf-6000: (producer-perf "6000" "1024" "150000")
+
+producer-perf-7000: (producer-perf "7000" "1024" "175000")
+
+producer-perf-8000: (producer-perf "8000" "1024" "200000")
+
+producer-perf-9000: (producer-perf "9000" "1024" "225000")
+
+producer-perf-10000: (producer-perf "10000" "1024" "250000")
+
+producer-perf-15000: (producer-perf "15000" "1024" "375000")
+
+producer-perf-20000: (producer-perf "20000" "1024" "500000")
+
+producer-perf-30000: (producer-perf "30000" "1024" "750000")
+
+producer-perf-40000: (producer-perf "40000" "1024" "1000000")
+
+producer-perf-45000: (producer-perf "45000" "1024" "1100000")
+
+producer-perf-50000: (producer-perf "50000" "1024" "1250000")
+
+producer-perf-60000: (producer-perf "60000" "1024" "1500000")
+
+producer-perf-70000: (producer-perf "70000" "1024" "1750000")
+
+producer-perf-80000: (producer-perf "80000" "1024" "2000000")
+
+producer-perf-90000: (producer-perf "90000" "1024" "2250000")
+
+producer-perf-100000: (producer-perf "100000" "1024" "2500000")
+
+producer-perf-200000: (producer-perf "200000" "1024" "5000000")
+
+producer-perf-300000: (producer-perf "300000" "1024" "7500000")
+
+producer-perf-400000: (producer-perf "400000" "1024" "10000000")
+
+producer-perf-500000: (producer-perf "500000" "1024" "12500000")
+
+producer-perf-600000: (producer-perf "600000" "1024" "15000000")
+
+producer-perf-1000000: (producer-perf "1000000" "1024" "25000000")
+
+ps-tansu-rss:
+    ps -p $(pgrep tansu) -o rss= | awk '{print $1/1024 " MB"}'

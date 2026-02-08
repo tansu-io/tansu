@@ -17,6 +17,7 @@ workspace = true
 async-trait.workspace = true
 bytes.workspace = true
 deadpool.workspace = true
+nanoid.workspace = true
 opentelemetry-semantic-conventions.workspace = true
 opentelemetry.workspace = true
 rama.workspace = true

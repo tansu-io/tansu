@@ -22,13 +22,13 @@ use std::{
     hash::{DefaultHasher, Hash, Hasher as _},
 };
 
-#[cfg(any(feature = "libsql", feature = "turso"))]
+#[cfg(any(feature = "libsql", feature = "postgres", feature = "turso"))]
 use std::{collections::BTreeMap, ops::Deref, sync::LazyLock};
 
-#[cfg(any(feature = "libsql", feature = "turso"))]
-pub(crate) struct Cache(BTreeMap<&'static str, String>);
+#[cfg(any(feature = "libsql", feature = "postgres", feature = "turso"))]
+pub(crate) struct Cache(pub BTreeMap<&'static str, String>);
 
-#[cfg(any(feature = "libsql", feature = "turso"))]
+#[cfg(any(feature = "libsql", feature = "postgres", feature = "turso"))]
 impl Deref for Cache {
     type Target = BTreeMap<&'static str, String>;
 
@@ -37,12 +37,13 @@ impl Deref for Cache {
     }
 }
 
-#[cfg(any(feature = "libsql", feature = "turso"))]
+#[cfg(any(feature = "libsql", feature = "postgres", feature = "turso"))]
 impl Cache {
     pub(crate) fn new(inner: BTreeMap<&'static str, String>) -> Self {
         Self(inner)
     }
 
+    #[cfg(any(feature = "postgres", feature = "turso"))]
     pub(crate) fn get(&self, key: &str) -> Result<&str> {
         self.0
             .get(key)
@@ -51,324 +52,313 @@ impl Cache {
     }
 }
 
-#[cfg(any(feature = "libsql", feature = "turso"))]
+#[cfg(any(feature = "libsql", feature = "postgres", feature = "turso"))]
 macro_rules! include_sql {
     ($e: expr) => {
         remove_comments(include_str!($e))
     };
 }
 
-#[cfg(any(feature = "libsql", feature = "turso"))]
+#[cfg(any(feature = "libsql", feature = "postgres", feature = "turso"))]
 pub(crate) static SQL: LazyLock<Cache> = LazyLock::new(|| {
     let mapping = [
+        ("maintain-vacuum.sql", include_sql!("maintain-vacuum.sql")),
         (
             "consumer_group_delete.sql",
-            include_sql!("pg/consumer_group_delete.sql"),
+            include_sql!("consumer_group_delete.sql"),
         ),
         (
             "consumer_group_detail_delete_by_cg.sql",
-            include_sql!("pg/consumer_group_detail_delete_by_cg.sql"),
+            include_sql!("consumer_group_detail_delete_by_cg.sql"),
         ),
         (
             "consumer_group_detail_insert.sql",
-            include_sql!("pg/consumer_group_detail_insert.sql"),
+            include_sql!("consumer_group_detail_insert.sql"),
         ),
         (
             "consumer_group_detail.sql",
-            include_sql!("pg/consumer_group_detail.sql"),
+            include_sql!("consumer_group_detail.sql"),
         ),
         (
             "consumer_group_insert.sql",
-            include_sql!("pg/consumer_group_insert.sql"),
+            include_sql!("consumer_group_insert.sql"),
         ),
         (
             "consumer_group_select_by_name.sql",
-            include_sql!("pg/consumer_group_select_by_name.sql"),
+            include_sql!("consumer_group_select_by_name.sql"),
         ),
         (
             "consumer_group_select.sql",
-            include_sql!("pg/consumer_group_select.sql"),
+            include_sql!("consumer_group_select.sql"),
         ),
         (
             "consumer_offset_delete_by_cg.sql",
-            include_sql!("pg/consumer_offset_delete_by_cg.sql"),
+            include_sql!("consumer_offset_delete_by_cg.sql"),
         ),
         (
             "consumer_offset_delete_by_topic.sql",
-            include_sql!("pg/consumer_offset_delete_by_topic.sql"),
+            include_sql!("consumer_offset_delete_by_topic.sql"),
         ),
         (
             "consumer_offset_insert_from_txn.sql",
-            include_sql!("pg/consumer_offset_insert_from_txn.sql"),
+            include_sql!("consumer_offset_insert_from_txn.sql"),
         ),
         (
             "consumer_offset_insert.sql",
-            include_sql!("pg/consumer_offset_insert.sql"),
+            include_sql!("consumer_offset_insert.sql"),
         ),
         (
             "consumer_offset_select_by_group.sql",
-            include_sql!("pg/consumer_offset_select_by_group.sql"),
+            include_sql!("consumer_offset_select_by_group.sql"),
         ),
         (
             "consumer_offset_select.sql",
-            include_sql!("pg/consumer_offset_select.sql"),
+            include_sql!("consumer_offset_select.sql"),
         ),
+        ("header_copy.sql", include_sql!("header_copy.sql")),
         (
             "header_delete_by_topic.sql",
-            include_sql!("pg/header_delete_by_topic.sql"),
+            include_sql!("header_delete_by_topic.sql"),
         ),
-        ("header_fetch.sql", include_sql!("pg/header_fetch.sql")),
-        ("header_insert.sql", include_sql!("pg/header_insert.sql")),
+        ("header_fetch.sql", include_sql!("header_fetch.sql")),
+        ("header_insert.sql", include_sql!("header_insert.sql")),
         (
             "list_earliest_offset.sql",
-            include_sql!("pg/list_earliest_offset.sql"),
+            include_sql!("list_earliest_offset.sql"),
         ),
         (
             "list_latest_offset_committed.sql",
-            include_sql!("pg/list_latest_offset_committed.sql"),
+            include_sql!("list_latest_offset_committed.sql"),
         ),
         (
             "list_latest_offset_timestamp.sql",
-            include_sql!("pg/list_latest_offset_timestamp.sql"),
+            include_sql!("list_latest_offset_timestamp.sql"),
         ),
         (
             "list_latest_offset_uncommitted.sql",
-            include_sql!("pg/list_latest_offset_uncommitted.sql"),
+            include_sql!("list_latest_offset_uncommitted.sql"),
         ),
         (
+            "lite/policy_delete.sql",
+            include_sql!("../lite/policy_delete.sql"),
+        ),
+        (
+            "lite/vacuum_into.sql",
+            include_sql!("../lite/vacuum_into.sql"),
+        ),
+        ("policy_compact.sql", include_sql!("policy_compact.sql")),
+        ("policy_delete.sql", include_sql!("policy_delete.sql")),
+        ("ping.sql", "select 1 + 1".to_string()),
+        (
             "producer_detail_delete_by_topic.sql",
-            include_sql!("pg/producer_detail_delete_by_topic.sql"),
+            include_sql!("producer_detail_delete_by_topic.sql"),
         ),
         (
             "producer_detail_insert.sql",
-            include_sql!("pg/producer_detail_insert.sql"),
+            include_sql!("producer_detail_insert.sql"),
         ),
         (
             "producer_epoch_current_for_producer.sql",
-            include_sql!("pg/producer_epoch_current_for_producer.sql"),
+            include_sql!("producer_epoch_current_for_producer.sql"),
         ),
         (
             "producer_epoch_for_current_txn.sql",
-            include_sql!("pg/producer_epoch_for_current_txn.sql"),
+            include_sql!("producer_epoch_for_current_txn.sql"),
         ),
         (
             "producer_epoch_insert.sql",
-            include_sql!("pg/producer_epoch_insert.sql"),
+            include_sql!("producer_epoch_insert.sql"),
         ),
-        (
-            "producer_insert.sql",
-            include_sql!("pg/producer_insert.sql"),
-        ),
+        ("producer_insert.sql", include_sql!("producer_insert.sql")),
         (
             "producer_select_for_update.sql",
-            include_sql!("pg/producer_select_for_update.sql"),
+            include_sql!("producer_select_for_update.sql"),
         ),
         (
             "producer_update_epoch_with_txn.sql",
-            include_sql!("pg/producer_update_epoch_with_txn.sql"),
+            include_sql!("producer_update_epoch_with_txn.sql"),
         ),
         (
             "producer_update_sequence.sql",
-            include_sql!("pg/producer_update_sequence.sql"),
+            include_sql!("producer_update_sequence.sql"),
         ),
+        ("record_copy.sql", include_sql!("record_copy.sql")),
         (
             "record_delete_by_topic.sql",
-            include_sql!("pg/record_delete_by_topic.sql"),
+            include_sql!("record_delete_by_topic.sql"),
         ),
-        ("record_fetch.sql", include_sql!("pg/record_fetch.sql")),
-        ("record_insert.sql", include_sql!("pg/record_insert.sql")),
-        (
-            "register_broker.sql",
-            include_sql!("pg/register_broker.sql"),
-        ),
+        ("record_fetch.sql", include_sql!("record_fetch.sql")),
+        ("record_fetch_pg.sql", include_sql!("record_fetch_pg.sql")),
+        ("record_insert.sql", include_sql!("record_insert.sql")),
+        ("register_broker.sql", include_sql!("register_broker.sql")),
         (
             "scram_credential_insert.sql",
-            include_sql!("pg/scram_credential_insert.sql"),
+            include_sql!("scram_credential_insert.sql"),
         ),
         (
             "scram_credential_select.sql",
-            include_sql!("pg/scram_credential_select.sql"),
+            include_sql!("scram_credential_select.sql"),
         ),
-        (
-            "topic_by_cluster.sql",
-            include_sql!("pg/topic_by_cluster.sql"),
-        ),
-        ("topic_by_uuid.sql", include_sql!("pg/topic_by_uuid.sql")),
+        ("topic_by_cluster.sql", include_sql!("topic_by_cluster.sql")),
+        ("topic_by_uuid.sql", include_sql!("topic_by_uuid.sql")),
         (
             "topic_configuration_delete_by_topic.sql",
-            include_sql!("pg/topic_configuration_delete_by_topic.sql"),
+            include_sql!("topic_configuration_delete_by_topic.sql"),
         ),
         (
             "topic_configuration_delete.sql",
-            include_sql!("pg/topic_configuration_delete.sql"),
+            include_sql!("topic_configuration_delete.sql"),
         ),
         (
             "topic_configuration_select.sql",
-            include_sql!("pg/topic_configuration_select.sql"),
+            include_sql!("topic_configuration_select.sql"),
         ),
         (
             "topic_configuration_upsert.sql",
-            include_sql!("pg/topic_configuration_upsert.sql"),
+            include_sql!("topic_configuration_upsert.sql"),
         ),
-        (
-            "topic_delete_by.sql",
-            include_sql!("pg/topic_delete_by.sql"),
-        ),
-        ("topic_insert.sql", include_sql!("pg/topic_insert.sql")),
-        ("topic_select.sql", include_sql!("pg/topic_select.sql")),
+        ("topic_delete_by.sql", include_sql!("topic_delete_by.sql")),
+        ("topic_insert.sql", include_sql!("topic_insert.sql")),
+        ("topic_select.sql", include_sql!("topic_select.sql")),
         (
             "topic_select_name.sql",
-            include_sql!("pg/topic_select_name.sql"),
+            include_sql!("topic_select_name.sql"),
         ),
         (
             "topic_select_uuid.sql",
-            include_sql!("pg/topic_select_uuid.sql"),
+            include_sql!("topic_select_uuid.sql"),
         ),
         (
             "topition_delete_by_topic.sql",
-            include_sql!("pg/topition_delete_by_topic.sql"),
+            include_sql!("topition_delete_by_topic.sql"),
         ),
+        ("topition_insert.sql", include_sql!("topition_insert.sql")),
+        ("topition_select.sql", include_sql!("topition_select.sql")),
         (
-            "topition_insert.sql",
-            include_sql!("pg/topition_insert.sql"),
-        ),
-        (
-            "topition_select.sql",
-            include_sql!("pg/topition_select.sql"),
+            "topition_select_id.sql",
+            include_sql!("topition_select_id.sql"),
         ),
         (
             "txn_detail_insert.sql",
-            include_sql!("pg/txn_detail_insert.sql"),
+            include_sql!("txn_detail_insert.sql"),
         ),
         (
             "txn_detail_select_current.sql",
-            include_sql!("pg/txn_detail_select_current.sql"),
+            include_sql!("txn_detail_select_current.sql"),
         ),
         (
             "txn_detail_select_for_update.sql",
-            include_sql!("pg/txn_detail_select_for_update.sql"),
+            include_sql!("txn_detail_select_for_update.sql"),
         ),
         (
             "txn_detail_select.sql",
-            include_sql!("pg/txn_detail_select.sql"),
+            include_sql!("txn_detail_select.sql"),
         ),
         (
             "txn_detail_update_sequence.sql",
-            include_sql!("pg/txn_detail_update_sequence.sql"),
+            include_sql!("txn_detail_update_sequence.sql"),
         ),
         (
             "txn_detail_update_started_at.sql",
-            include_sql!("pg/txn_detail_update_started_at.sql"),
+            include_sql!("txn_detail_update_started_at.sql"),
         ),
-        ("txn_insert.sql", include_sql!("pg/txn_insert.sql")),
+        ("txn_insert.sql", include_sql!("txn_insert.sql")),
         (
             "txn_offset_commit_delete_by_txn.sql",
-            include_sql!("pg/txn_offset_commit_delete_by_txn.sql"),
+            include_sql!("txn_offset_commit_delete_by_txn.sql"),
         ),
         (
             "txn_offset_commit_insert.sql",
-            include_sql!("pg/txn_offset_commit_insert.sql"),
+            include_sql!("txn_offset_commit_insert.sql"),
         ),
         (
             "txn_offset_commit_tp_delete_by_topic.sql",
-            include_sql!("pg/txn_offset_commit_tp_delete_by_topic.sql"),
+            include_sql!("txn_offset_commit_tp_delete_by_topic.sql"),
         ),
         (
             "txn_offset_commit_tp_delete_by_txn.sql",
-            include_sql!("pg/txn_offset_commit_tp_delete_by_txn.sql"),
+            include_sql!("txn_offset_commit_tp_delete_by_txn.sql"),
         ),
         (
             "txn_offset_commit_tp_insert.sql",
-            include_sql!("pg/txn_offset_commit_tp_insert.sql"),
+            include_sql!("txn_offset_commit_tp_insert.sql"),
         ),
         (
             "txn_produce_offset_delete_by_topic.sql",
-            include_sql!("pg/txn_produce_offset_delete_by_topic.sql"),
+            include_sql!("txn_produce_offset_delete_by_topic.sql"),
         ),
         (
             "txn_produce_offset_delete_by_txn.sql",
-            include_sql!("pg/txn_produce_offset_delete_by_txn.sql"),
+            include_sql!("txn_produce_offset_delete_by_txn.sql"),
         ),
         (
             "txn_produce_offset_insert.sql",
-            include_sql!("pg/txn_produce_offset_insert.sql"),
+            include_sql!("txn_produce_offset_insert.sql"),
         ),
         (
             "txn_produce_offset_select_offset_range.sql",
-            include_sql!("pg/txn_produce_offset_select_offset_range.sql"),
+            include_sql!("txn_produce_offset_select_offset_range.sql"),
         ),
         (
             "txn_produce_offset_select_overlapping_txn.sql",
-            include_sql!("pg/txn_produce_offset_select_overlapping_txn.sql"),
+            include_sql!("txn_produce_offset_select_overlapping_txn.sql"),
         ),
-        (
-            "txn_select_name.sql",
-            include_sql!("pg/txn_select_name.sql"),
-        ),
+        ("txn_select_name.sql", include_sql!("txn_select_name.sql")),
         (
             "txn_select_produced_topitions.sql",
-            include_sql!("pg/txn_select_produced_topitions.sql"),
+            include_sql!("txn_select_produced_topitions.sql"),
         ),
         (
             "txn_select_producer_epoch.sql",
-            include_sql!("pg/txn_select_producer_epoch.sql"),
+            include_sql!("txn_select_producer_epoch.sql"),
         ),
         (
             "txn_status_update.sql",
-            include_sql!("pg/txn_status_update.sql"),
+            include_sql!("txn_status_update.sql"),
         ),
         (
             "txn_topition_delete_by_topic.sql",
-            include_sql!("pg/txn_topition_delete_by_topic.sql"),
+            include_sql!("txn_topition_delete_by_topic.sql"),
         ),
         (
             "txn_topition_delete_by_txn.sql",
-            include_sql!("pg/txn_topition_delete_by_txn.sql"),
+            include_sql!("txn_topition_delete_by_txn.sql"),
         ),
         (
             "txn_topition_insert.sql",
-            include_sql!("pg/txn_topition_insert.sql"),
+            include_sql!("txn_topition_insert.sql"),
         ),
         (
             "txn_topition_select_txns.sql",
-            include_sql!("pg/txn_topition_select_txns.sql"),
+            include_sql!("txn_topition_select_txns.sql"),
         ),
         (
             "txn_topition_select.sql",
-            include_sql!("pg/txn_topition_select.sql"),
+            include_sql!("txn_topition_select.sql"),
         ),
         (
             "watermark_delete_by_topic.sql",
-            include_sql!("pg/watermark_delete_by_topic.sql"),
+            include_sql!("watermark_delete_by_topic.sql"),
         ),
         (
             "watermark_insert_from_txn.sql",
-            include_sql!("pg/watermark_insert_from_txn.sql"),
+            include_sql!("watermark_insert_from_txn.sql"),
         ),
-        (
-            "watermark_insert.sql",
-            include_sql!("pg/watermark_insert.sql"),
-        ),
+        ("watermark_insert.sql", include_sql!("watermark_insert.sql")),
         (
             "watermark_select_for_update.sql",
-            include_sql!("pg/watermark_select_for_update.sql"),
+            include_sql!("watermark_select_for_update.sql"),
         ),
         (
             "watermark_select_no_update.sql",
-            include_sql!("pg/watermark_select_no_update.sql"),
+            include_sql!("watermark_select_no_update.sql"),
         ),
         (
             "watermark_select_stable.sql",
-            include_sql!("pg/watermark_select_stable.sql"),
+            include_sql!("watermark_select_stable.sql"),
         ),
-        (
-            "watermark_select.sql",
-            include_sql!("pg/watermark_select.sql"),
-        ),
-        (
-            "watermark_update.sql",
-            include_sql!("pg/watermark_update.sql"),
-        ),
+        ("watermark_select.sql", include_sql!("watermark_select.sql")),
+        ("watermark_update.sql", include_sql!("watermark_update.sql")),
     ];
 
     Cache::new(BTreeMap::from(mapping))
@@ -402,8 +392,6 @@ pub(crate) fn idempotent_sequence_check(
     sequence: &i32,
     deflated: &deflated::Batch,
 ) -> Result<i32> {
-    debug!(?producer_epoch, ?sequence, ?deflated);
-
     match producer_epoch.cmp(&deflated.producer_epoch) {
         Ordering::Equal => match sequence.cmp(&deflated.base_sequence) {
             Ordering::Equal => Ok(deflated.last_offset_delta + 1),

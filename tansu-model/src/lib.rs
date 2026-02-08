@@ -27,7 +27,7 @@ use proc_macro2::{Ident, Span, TokenStream};
 use quote::ToTokens;
 use regex::Regex;
 use serde_json::Value;
-use std::{collections::BTreeMap, fmt, str::FromStr};
+use std::{fmt, str::FromStr};
 use syn::{Expr, Type};
 use tracing::debug;
 use wv::{As, AsOption, Wv};
@@ -74,6 +74,7 @@ fn type_mapping(kind: &str) -> String {
 pub struct Kind(String);
 
 impl ToTokens for Kind {
+    #![allow(clippy::unwrap_used)]
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let expr = with_crate!(self);
         syn::parse_str::<Expr>(&expr).unwrap().to_tokens(tokens);
@@ -207,6 +208,7 @@ pub enum MessageKind {
 }
 
 impl ToTokens for MessageKind {
+    #[allow(clippy::unwrap_used)]
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let expr = with_crate!("MessageKind", self);
         syn::parse_str::<Expr>(&expr).unwrap().to_tokens(tokens);
@@ -283,6 +285,7 @@ impl FromStr for VersionRange {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        #![allow(clippy::expect_used)]
         lazy_static! {
             static ref RX: Regex =
                 Regex::new(r"^(?<start>\d+)(-(?<end>\d+)|(?<infinite>\+))?$").expect("regex");
@@ -329,6 +332,7 @@ pub struct Version {
 }
 
 impl ToTokens for Version {
+    #[allow(clippy::unwrap_used)]
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let expr = with_crate!(self);
         syn::parse_str::<Expr>(&expr).unwrap().to_tokens(tokens);
@@ -605,7 +609,7 @@ impl Message {
     }
 
     #[must_use]
-    #[allow(clippy::missing_panics_doc)]
+    #[allow(clippy::missing_panics_doc, clippy::unwrap_used)]
     pub fn type_name(&self) -> Type {
         syn::parse_str::<Type>(&self.name).unwrap()
     }
@@ -626,7 +630,7 @@ impl Message {
     }
 
     #[must_use]
-    #[allow(clippy::missing_panics_doc)]
+    #[allow(clippy::missing_panics_doc, clippy::unwrap_used)]
     pub fn wrapper_new_type(&self, field: &Field) -> Type {
         syn::parse_str::<Type>(&format!("{}{}", self.name, field.name).to_case(Case::Pascal))
             .unwrap()
@@ -791,27 +795,26 @@ impl MessageMeta {
     }
 
     #[must_use]
-    pub fn structures(&self) -> BTreeMap<&str, &FieldMeta> {
-        self.fields.iter().filter(|(_, fm)| fm.is_structure()).fold(
-            BTreeMap::new(),
-            |mut acc, (name, fm)| {
+    pub fn structures(&self) -> Vec<(&str, &FieldMeta)> {
+        self.fields
+            .iter()
+            .filter(|(_, fm)| fm.is_structure())
+            .flat_map(|(name, fm)| {
                 debug!(name = self.name, field = ?name, kind = ?fm.kind.0);
+
+                let mut children = fm.structures();
 
                 if let Some(kind) = fm.kind.kind_of_sequence() {
                     if !kind.is_primitive() {
-                        _ = acc.insert(kind.name(), fm);
+                        children.push((kind.name(), *fm));
                     }
                 } else {
-                    _ = acc.insert(fm.kind.name(), fm);
+                    children.push((fm.kind.name(), *fm));
                 }
 
-                let mut children = fm.structures();
-                debug!(name = self.name, field = ?name, children = ?children.keys().collect::<Vec<_>>());
-                acc.append(&mut children);
-
-                acc
-            },
-        )
+                children
+            })
+            .collect()
     }
 
     #[must_use]
@@ -860,21 +863,22 @@ impl FieldMeta {
     }
 
     #[must_use]
-    pub fn structures(&self) -> BTreeMap<&str, &FieldMeta> {
-        self.fields.iter().filter(|(_, fm)| fm.is_structure()).fold(
-            BTreeMap::new(),
-            |mut acc, (_name, fm)| {
+    pub fn structures(&self) -> Vec<(&str, &FieldMeta)> {
+        self.fields
+            .iter()
+            .filter(|(_, fm)| fm.is_structure())
+            .flat_map(|(_, fm)| {
+                let mut children = fm.structures();
+
                 if let Some(kind) = fm.kind.kind_of_sequence()
                     && !kind.is_primitive()
                 {
-                    _ = acc.insert(kind.name(), fm);
+                    children.push((kind.name(), *fm));
                 }
 
-                let mut children = fm.structures();
-                acc.append(&mut children);
-                acc
-            },
-        )
+                children
+            })
+            .collect()
     }
 
     pub fn field(&self, name: &str) -> Option<&FieldMeta> {
@@ -1754,7 +1758,7 @@ mod tests {
             m.fields()[0].versions()
         );
 
-        let node_id = &m.fields()[0].fields().unwrap()[0];
+        let node_id = &m.fields()[0].fields().unwrap_or_default()[0];
 
         assert_eq!("NodeId", node_id.name());
         assert_eq!(Kind::new("int32"), node_id.kind);

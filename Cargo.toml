@@ -8,7 +8,7 @@ members = [
     "tansu-client",
     "tansu-generator",
     "tansu-model",
-    "tansu-otel",
+    "tansu-otel", "tansu-perf",
     "tansu-proxy",
     "tansu-sans-io",
     "tansu-schema",
@@ -19,7 +19,7 @@ members = [
 
 [workspace.package]
 edition = "2024"
-version = "0.5.7"
+version = "0.6.0-pre.10"
 license = "Apache-2.0"
 homepage = "https://tansu.io"
 repository = "https://github.com/tansu-io/tansu"
@@ -30,6 +30,7 @@ include = [
     "LICENSE",
     "benches/*.rs",
     "build.rs",
+    "examples/*.rs",
     "message/*.json",
     "src/**/*.avsc",
     "src/**/*.json",
@@ -40,7 +41,7 @@ include = [
 ]
 
 [workspace.lints.clippy]
-all = "warn"
+all = { level = "warn", priority = -1 }
 
 [workspace.lints.rust]
 deprecated_in_future = "warn"
@@ -64,105 +65,115 @@ private_intra_doc_links = "deny"
 
 [workspace.dependencies]
 anyhow = "1.0.94"
-apache-avro = "0.17.0"
-arrow = { version = "55" }
+apache-avro = "0.21.0"
+arrow = { version = "57" }
 assert_matches = "1.5.0"
 async-trait = "0.1.86"
 backoff = {version = "0.4.0", features = ["tokio"]}
 bytes = { version = "1", features = ["serde"] }
+cached = "0.56.0"
 chrono = "0.4"
-clap = { version = "4.5.32", features = ["derive", "env"] }
+clap = { version = "4.5.57", features = ["derive", "env"] }
 condtype = "1.3.0"
-convert_case = "0.8.0"
-crc = "3.0.1"
-criterion = { version = "0.5.1", features = ["async_tokio", "html_reports"] }
-datafusion = "47"
+convert_case = "0.11.0"
+crc-fast = "1.8.0"
+criterion = { version = "0.8.2", features = ["async_tokio", "html_reports"] }
+datafusion = "51"
 deadpool = "0.12.2"
 deadpool-postgres = "0.14.1"
-delta_kernel = "0.10.0"
-deltalake = { version = "0.26", features = ["datafusion", "s3"] }
+delta_kernel = { version = "0.19.2", default-features = false, features = ["arrow-57"] }
+deltalake = { version = "0.30", features = ["datafusion", "s3"] }
 digest = "0.10.7"
 dotenv = "0.15.0"
 fake = "4.3.0"
-flate2 = "1.0"
+flate2 = "1.1"
 futures = "0.3"
 futures-core = "0.3.31"
 futures-util = "0.3.31"
-getrandom = "0.3"
+getrandom = "0.4"
 glob = "0.3.2"
-governor = "0.10.0"
+governor = "0.10.4"
 http-body-util = "0.1"
 human-units = {version = "0.5.3", features = ["iec-units"]}
 humantime = "2.2.0"
 hyper = { version = "1.3", features = ["full"] }
 hyper-util = { version = "0.1", features = ["full"] }
-iceberg = "0.6"
-iceberg-catalog-rest = "0.6"
-iceberg-datafusion = "0.6"
-jsonschema = "0.26.2"
+iceberg = "0.8"
+iceberg-catalog-rest = "0.8"
+iceberg-datafusion = "0.8"
+jsonschema = "0.41.0"
 lazy_static = "1.4.0"
 libsql = { version = "0.9.18", default-features = false, features = ["core"] }
 lz4 = "1.28.1"
+nanoid = "0.4.0"
 nonzero_ext = "0.3.0"
 num-bigint = "0.4"
-object_store = { version = "0.12.3", features = ["aws"] }
-opentelemetry = "0.30.0"
-opentelemetry-otlp = "0.30.0"
-opentelemetry-semantic-conventions = "0.30.0"
-opentelemetry_sdk = { version = "0.30.0", features = ["testing"] }
-ordered-float = "4.6"
-parquet = "55"
+object_store = { version = "0.13.1", features = ["aws"] }
+opentelemetry = "0.31.0"
+opentelemetry-otlp = "0.31.0"
+opentelemetry-semantic-conventions = "0.31.0"
+opentelemetry-stdout = "0.31.0"
+opentelemetry_sdk = { version = "0.31.0", features = ["testing"] }
+ordered-float = "5.1"
+parquet = "57"
+postcard = { version = "1.1.3", features = ["use-std"] }
 pretty_assertions = "1"
 prettyplease = "0.2.29"
-proc-macro2 = "1.0.93"
+proc-macro2 = "1.0.106"
 protobuf-json-mapping = "3.7.1"
 protobuf-parse = "3.7.1"
 protobuf = { version = "3.7.1", features = ["with-bytes"] }
 quote = "1.0"
 rama = { version = "0.2.0", features = ["http", "tcp"] }
 rand = "0.9"
-regex = "1.11.1"
-rhai = { version = "1.22.2", features = ["sync"] }
+regex = "1.12.3"
+rhai = { version = "1.24.0", features = ["sync"] }
 rhai-rand = "0.1"
 rsasl = { version = "2.2.0", features = ["config_builder", "oauthbearer", "provider", "scram-sha-1", "scram-sha-2"], default-features = false }
+rustls = "0.23.27"
+rustls-native-certs = "0.8.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10.9"
+slatedb = "0.10.1"
 snap = "1.1.1"
 syn = { version = "2.0", features = ["full"] }
-tansu = { version = "0.5.7", path = "tansu", default-features = false }
-tansu-auth = { version = "0.5.7", path = "tansu-auth", default-features = false }
-tansu-broker = { version = "0.5.7", path = "tansu-broker", default-features = false }
-tansu-cat = { version = "0.5.7", path = "tansu-cat", default-features = false }
-tansu-cli = { version = "0.5.7", path = "tansu-cli", default-features = false }
-tansu-client = { version = "0.5.7", path = "tansu-client", default-features = false }
-tansu-generator = { version = "0.5.7", path = "tansu-generator", default-features = false }
-tansu-model = { version = "0.5.7", path = "tansu-model", default-features = false }
-tansu-otel = { version = "0.5.7", path = "tansu-otel", default-features = false }
-tansu-proxy = { version = "0.5.7", path = "tansu-proxy", default-features = false }
-tansu-sans-io = { version = "0.5.7", path = "tansu-sans-io", default-features = false }
-tansu-schema = { version = "0.5.7", path = "tansu-schema", default-features = false }
-tansu-service = { version = "0.5.7", path = "tansu-service", default-features = false }
-tansu-storage = { version = "0.5.7", path = "tansu-storage", default-features = false }
-tansu-topic = { version = "0.5.7", path = "tansu-topic", default-features = false }
+tansu = { version = "0.6.0-pre.10", path = "tansu", default-features = false }
+tansu-auth = { version = "0.6.0-pre.10", path = "tansu-auth", default-features = false }
+tansu-broker = { version = "0.6.0-pre.10", path = "tansu-broker", default-features = false }
+tansu-cat = { version = "0.6.0-pre.10", path = "tansu-cat", default-features = false }
+tansu-cli = { version = "0.6.0-pre.10", path = "tansu-cli", default-features = false }
+tansu-client = { version = "0.6.0-pre.10", path = "tansu-client", default-features = false }
+tansu-generator = { version = "0.6.0-pre.10", path = "tansu-generator", default-features = false }
+tansu-model = { version = "0.6.0-pre.10", path = "tansu-model", default-features = false }
+tansu-otel = { version = "0.6.0-pre.10", path = "tansu-otel", default-features = false }
+tansu-perf = { version = "0.6.0-pre.10", path = "tansu-perf", default-features = false }
+tansu-proxy = { version = "0.6.0-pre.10", path = "tansu-proxy", default-features = false }
+tansu-sans-io = { version = "0.6.0-pre.10", path = "tansu-sans-io", default-features = false }
+tansu-schema = { version = "0.6.0-pre.10", path = "tansu-schema", default-features = false }
+tansu-service = { version = "0.6.0-pre.10", path = "tansu-service", default-features = false }
+tansu-storage = { version = "0.6.0-pre.10", path = "tansu-storage", default-features = false }
+tansu-topic = { version = "0.6.0-pre.10", path = "tansu-topic", default-features = false }
 tempfile = "3"
 thiserror = "2.0"
-time = { version = "0.3.37", features = ["formatting", "macros"] }
-tokio-util = { version = "0.7", features = ["full"] }
+time = { version = "0.3.47", features = ["formatting", "macros"] }
 tokio = { version = "1", features = ["full", "test-util"] }
-tokio-postgres = { version = "0.7.13", features = [
-    "with-serde_json-1",
-    "with-uuid-1",
-] }
+tokio-postgres = { version = "0.7.13", features = ["with-serde_json-1","with-uuid-1",] }
+tokio-postgres-rustls = "0.13.0"
+tokio-util = { version = "0.7", features = ["full"] }
 tracing = "0.1"
 tracing-core = { version = "0.1" }
-tracing-opentelemetry = "0.29.0"
+tracing-opentelemetry = "0.32.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 turso = "0.1.4"
 url = { version = "2.5.4", features = ["serde"] }
-uuid = { version = "1.13.2", features = ["serde", "v4", "v7"] }
+uuid = { version = "1.20.0", features = ["serde", "v4", "v7"] }
 zstd = "0.13.2"
 
 [profile.release]
 codegen-units = 1
 lto = "thin"
+
+[profile.profiling]
+inherits = "release"
+debug = true

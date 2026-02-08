@@ -14,6 +14,7 @@
 
 use rama::{Context, Service};
 use tansu_sans_io::{ApiKey, Frame, Header, JoinGroupRequest};
+use tracing::instrument;
 
 use crate::{Error, Result, coordinator::group::Coordinator};
 
@@ -31,6 +32,7 @@ where
     type Response = Frame;
     type Error = Error;
 
+    #[instrument(skip(ctx, req))]
     async fn serve(&self, mut ctx: Context<C>, req: Frame) -> Result<Self::Response, Self::Error> {
         let correlation_id = req.correlation_id()?;
         let coordinator = ctx.state_mut();

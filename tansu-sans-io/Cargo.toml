@@ -37,7 +37,7 @@ private_intra_doc_links = "deny"
 [dependencies]
 bytes.workspace = true
 clap.workspace = true
-crc.workspace = true
+crc-fast.workspace = true
 flate2.workspace = true
 lz4.workspace = true
 rama.workspace = true
@@ -60,6 +60,7 @@ syn.workspace = true
 tansu-model.workspace = true
 
 [dev-dependencies]
+bytes.workspace = true
 criterion.workspace = true
 pretty_assertions.workspace = true
 

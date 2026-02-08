@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -123,7 +123,7 @@ pub mod record;
 pub mod resource;
 pub mod ser;
 
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use bytes::{Buf, BufMut, Bytes, BytesMut, TryGetError};
 pub use de::Decoder;
 use flate2::read::GzDecoder;
 use primitive::tagged::TagBuffer;
@@ -144,7 +144,7 @@ use std::{
     time::{Duration, SystemTime, SystemTimeError},
 };
 use tansu_model::{MessageKind, MessageMeta};
-use tracing::{debug, error, warn};
+use tracing::{debug, error, instrument, warn};
 use tracing_subscriber::filter::ParseError;
 
 /// The null topic identifier.
@@ -187,12 +187,12 @@ impl RootMessageMeta {
     }
 
     #[must_use]
-    pub fn requests(&self) -> &HashMap<i16, &'static MessageMeta> {
+    pub const fn requests(&self) -> &HashMap<i16, &'static MessageMeta> {
         &self.requests
     }
 
     #[must_use]
-    pub fn responses(&self) -> &HashMap<i16, &'static MessageMeta> {
+    pub const fn responses(&self) -> &HashMap<i16, &'static MessageMeta> {
         &self.responses
     }
 }
@@ -244,6 +244,7 @@ pub enum Error {
     TansuModel(tansu_model::Error),
     TryFromInt(#[from] num::TryFromIntError),
     TryFromSlice(#[from] TryFromSliceError),
+    TryGet(Arc<TryGetError>),
     UnexpectedType(String),
     UnknownApiErrorCode(i16),
     UnknownCompressionType(i16),
@@ -277,6 +278,12 @@ impl serde::de::Error for Error {
 impl From<io::Error> for Error {
     fn from(value: io::Error) -> Self {
         Self::Io(Arc::new(value))
+    }
+}
+
+impl From<TryGetError> for Error {
+    fn from(value: TryGetError) -> Self {
+        Self::TryGet(Arc::new(value))
     }
 }
 
@@ -403,8 +410,17 @@ pub struct Frame {
 }
 
 impl Frame {
+    fn elapsed_millis(start: SystemTime) -> u64 {
+        start
+            .elapsed()
+            .map_or(0, |duration| duration.as_millis() as u64)
+    }
+
     /// serialize an API request into a frame of bytes
+    #[instrument(skip_all)]
     pub fn request(header: Header, body: Body) -> Result<Bytes> {
+        let start = SystemTime::now();
+
         let mut c = Cursor::new(vec![]);
 
         let mut serializer = Encoder::request(&mut c);
@@ -422,18 +438,30 @@ impl Frame {
         let buf = size.to_be_bytes();
         c.write_all(&buf)?;
 
-        Ok(Bytes::from(c.into_inner()))
+        Ok(Bytes::from(c.into_inner())).inspect(|encoded| {
+            debug!(
+                len = encoded.len(),
+                elapsed_millis = Self::elapsed_millis(start)
+            )
+        })
     }
 
     /// deserialize bytes into an API request frame
-    pub fn request_from_bytes(bytes: impl Buf) -> Result<Frame> {
-        let mut reader = bytes.reader();
+    #[instrument(skip_all)]
+    pub fn request_from_bytes(encoded: impl Buf) -> Result<Frame> {
+        let start = SystemTime::now();
+
+        let mut reader = encoded.reader();
         let mut deserializer = Decoder::request(&mut reader);
         Frame::deserialize(&mut deserializer)
+            .inspect(|_frame| debug!(elapsed_millis = Self::elapsed_millis(start)))
     }
 
     /// serialize an API response into a frame of bytes
+    #[instrument(skip_all)]
     pub fn response(header: Header, body: Body, api_key: i16, api_version: i16) -> Result<Bytes> {
+        let start = SystemTime::now();
+
         let mut c = Cursor::new(vec![]);
         let mut serializer = Encoder::response(&mut c, api_key, api_version);
 
@@ -455,14 +483,23 @@ impl Frame {
         let buf = size.to_be_bytes();
         c.write_all(&buf)?;
 
-        Ok(Bytes::from(c.into_inner()))
+        Ok(Bytes::from(c.into_inner())).inspect(|encoded| {
+            debug!(
+                len = encoded.len(),
+                elapsed_millis = Self::elapsed_millis(start)
+            )
+        })
     }
 
     /// deserialize bytes into an API response frame
+    #[instrument(skip_all)]
     pub fn response_from_bytes(bytes: impl Buf, api_key: i16, api_version: i16) -> Result<Frame> {
+        let start = SystemTime::now();
+
         let mut reader = bytes.reader();
         let mut deserializer = Decoder::response(&mut reader, api_key, api_version);
         Frame::deserialize(&mut deserializer)
+            .inspect(|encoded| debug!(elapsed_millis = Self::elapsed_millis(start)))
     }
 
     /// API request key
@@ -1534,14 +1571,15 @@ impl Compression {
                         if input.starts_with(b"\x82SNAPPY\0") {
                             if let (b"\x82SNAPPY\0", remainder) = input.split_at(8) {
                                 let (version, remainder) = remainder.split_at(4);
-                                let version = version.try_into().map(i32::from_be_bytes)?;
+                                let version: i32 = version.try_into().map(i32::from_be_bytes)?;
 
                                 let (compatible_version, remainder) = remainder.split_at(4);
-                                let compatible_version =
+                                let compatible_version: i32 =
                                     compatible_version.try_into().map(i32::from_be_bytes)?;
 
                                 let (block_size, _) = remainder.split_at(4);
-                                let block_size = block_size.try_into().map(i32::from_be_bytes)?;
+                                let block_size: i32 =
+                                    block_size.try_into().map(i32::from_be_bytes)?;
 
                                 debug!(version, compatible_version, block_size);
                             }
@@ -2084,9 +2122,28 @@ impl From<ScramMechanism> for i8 {
     }
 }
 
+pub trait Encode {
+    fn encode(&self) -> Result<Bytes>;
+}
+
+pub trait Decode: Sized {
+    fn decode(encoded: &mut Bytes) -> Result<Self>;
+}
+
 #[cfg(test)]
 mod tests {
+    use std::thread::sleep;
+
     use super::*;
+
+    #[test]
+    fn frame_elapsed_millis() {
+        let pause = 6;
+        let now = SystemTime::now();
+        sleep(Duration::from_millis(pause));
+
+        assert!(Frame::elapsed_millis(now) >= pause);
+    }
 
     #[test]
     fn batch_attribute() {

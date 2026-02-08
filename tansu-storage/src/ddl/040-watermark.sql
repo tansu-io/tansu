@@ -14,9 +14,9 @@
 
 create table if not exists watermark (
     id integer primary key autoincrement,
-    topition integer references topition (id),
+    topition integer references topition (id) on delete cascade,
     low integer,
     high integer,
-    last_updated text default current_timestamp not null,
-    created_at text default current_timestamp not null
+    last_updated datetime default current_timestamp not null,
+    created_at datetime default current_timestamp not null
 );

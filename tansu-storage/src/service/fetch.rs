@@ -25,7 +25,7 @@ use tansu_sans_io::{
     record::deflated::{Batch, Frame},
 };
 use tokio::time::sleep;
-use tracing::{debug, error};
+use tracing::{debug, error, instrument};
 
 use crate::{Error, Result, Storage, Topition};
 
@@ -372,13 +372,12 @@ where
     type Response = FetchResponse;
     type Error = Error;
 
+    #[instrument(skip(ctx, req))]
     async fn serve(
         &self,
         ctx: Context<G>,
         req: FetchRequest,
     ) -> Result<Self::Response, Self::Error> {
-        debug!(?req);
-
         let responses = Some(if let Some(topics) = req.topics {
             let isolation_level = req
                 .isolation_level

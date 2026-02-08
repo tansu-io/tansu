@@ -16,6 +16,7 @@ use std::marker::PhantomData;
 
 use crate::{Error, Result};
 
+use bytes::Bytes;
 use futures::StreamExt;
 use serde_json::Value;
 use tansu_client::{Client, ConnectionManager};
@@ -23,15 +24,15 @@ use tansu_sans_io::{
     ErrorCode, ProduceRequest, ProduceResponse,
     produce_request::{PartitionProduceData, TopicProduceData},
     produce_response::{PartitionProduceResponse, TopicProduceResponse},
-    record::{deflated, inflated},
+    record::{Record, deflated, inflated},
 };
-use tansu_schema::{AsKafkaRecord, Registry};
+use tansu_schema::{AsKafkaRecord, Registry, Schema};
 use tokio::{
     fs::File,
     io::{self, AsyncReadExt},
 };
 use tokio_util::codec::{FramedRead, LinesCodec};
-use tracing::debug;
+use tracing::{debug, warn};
 use url::Url;
 
 #[derive(Clone, Debug, Default)]
@@ -148,6 +149,47 @@ impl TryFrom<Configuration> for Produce {
 }
 
 impl Produce {
+    fn add_to_batch(
+        &self,
+        mut batch: inflated::Builder,
+        schema: Option<&Schema>,
+        data: &Value,
+        offset_delta: &mut i32,
+    ) -> Result<inflated::Builder> {
+        if let Some(schema) = schema {
+            batch = batch.record(
+                schema
+                    .as_kafka_record(data)
+                    .map(|record| record.offset_delta(*offset_delta))?,
+            );
+
+            *offset_delta += 1;
+        } else {
+            let key = data
+                .get("key")
+                .and_then(|key| serde_json::to_vec(key).map(Bytes::from).ok());
+
+            let value = data
+                .get("value")
+                .and_then(|value| serde_json::to_vec(value).map(Bytes::from).ok());
+
+            if key.is_some() || value.is_some() {
+                batch = batch.record(
+                    Record::builder()
+                        .key(key)
+                        .value(value)
+                        .offset_delta(*offset_delta),
+                );
+
+                *offset_delta += 1;
+            } else {
+                warn!(ignored = %data);
+            }
+        }
+
+        Ok(batch)
+    }
+
     pub(crate) async fn main(self) -> Result<ErrorCode> {
         debug!(%self.configuration.file_name);
 
@@ -175,21 +217,15 @@ impl Produce {
 
                     debug!(%line);
 
-                    let v = serde_json::from_str::<Value>(&line).inspect(|value| debug!(?value))?;
-                    debug!(%v);
-
-                    if let Some(ref schema) = schema {
-                        batch = batch.record(
-                            schema
-                                .as_kafka_record(&v)
-                                .map(|record| record.offset_delta(offset_delta))?,
-                        );
-                    }
-
-                    offset_delta += 1;
+                    batch = serde_json::from_str::<Value>(&line)
+                        .inspect(|data| debug!(%data))
+                        .map_err(Into::into)
+                        .and_then(|data| {
+                            self.add_to_batch(batch, schema.as_ref(), &data, &mut offset_delta)
+                        })?;
                 }
             } else {
-                let mut file = File::open(self.configuration.file_name).await?;
+                let mut file = File::open(self.configuration.file_name.as_str()).await?;
 
                 let mut contents = vec![];
                 _ = file.read_to_end(&mut contents).await?;
@@ -200,15 +236,8 @@ impl Produce {
                     for record in records {
                         debug!(%record);
 
-                        if let Some(ref schema) = schema {
-                            batch = batch.record(
-                                schema
-                                    .as_kafka_record(record)
-                                    .map(|record| record.offset_delta(offset_delta))?,
-                            );
-                        }
-
-                        offset_delta += 1;
+                        batch =
+                            self.add_to_batch(batch, schema.as_ref(), record, &mut offset_delta)?;
                     }
                 }
             }

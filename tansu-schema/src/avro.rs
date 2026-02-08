@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -104,14 +104,12 @@ impl TryFrom<Bytes> for Schema {
 
 impl From<JsonValue> for Schema {
     fn from(mut schema: JsonValue) -> Self {
-        debug!(?schema);
+        debug!(%schema);
 
         const FIELDS: &str = "fields";
 
         let meta =
             serde_json::from_slice::<JsonValue>(&Bytes::from_static(include_bytes!("meta.avsc")))
-                .inspect(|meta| debug!(%meta))
-                .map(|mut meta| meta[FIELDS].take())
                 .inspect(|meta| debug!(%meta))
                 .ok();
 
@@ -122,8 +120,7 @@ impl From<JsonValue> for Schema {
             {
                 array.push(JsonValue::Object(Map::from_iter([
                     ("name".into(), MessageKind::Meta.as_ref().into()),
-                    ("type".into(), "record".into()),
-                    (FIELDS.into(), meta),
+                    ("type".into(), meta),
                 ])))
             }
 
@@ -669,7 +666,7 @@ mod tests {
     use super::*;
     use apache_avro::{Reader, types::Value};
 
-    use object_store::{ObjectStore, PutPayload, memory::InMemory, path::Path};
+    use object_store::{ObjectStoreExt, PutPayload, memory::InMemory, path::Path};
 
     use serde_json::json;
     use tansu_sans_io::record::Record;

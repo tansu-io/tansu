@@ -26,9 +26,9 @@ use std::{
     marker::PhantomData,
     net::{IpAddr, Ipv6Addr, SocketAddr},
     str::FromStr,
-    time::Duration,
+    time::{Duration, SystemTime},
 };
-use tansu_sans_io::ErrorCode;
+use tansu_sans_io::{ErrorCode, RootMessageMeta};
 use tansu_schema::{Registry, lake::House};
 use tansu_storage::{BrokerRegistrationRequest, Storage, StorageContainer};
 use tokio::{
@@ -92,6 +92,18 @@ where
     }
 
     pub async fn main(mut self) -> Result<ErrorCode> {
+        {
+            let root_meta = RootMessageMeta::messages();
+            debug!(
+                messages = root_meta
+                    .requests()
+                    .values()
+                    .map(|meta| meta.name)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+
         let mut set = JoinSet::new();
 
         let mut interrupt_signal = signal(SignalKind::interrupt()).unwrap();
@@ -208,6 +220,7 @@ where
             tokio::select! {
                 Ok((stream, _addr)) = listener.accept() => {
                     let authentication = tansu_auth::Authentication::server(sasl_config.clone());
+                    stream.set_nodelay(true)?;
 
                     let service = services(
                         self.cluster_id.as_str(),
@@ -246,7 +259,7 @@ where
                         let span = span!(Level::DEBUG, "maintenance");
 
                         async move {
-                            _ = storage.maintain().await.inspect(|maintain|debug!(?maintain)).inspect_err(|err|debug!(?err)).ok();
+                            _ = storage.maintain(SystemTime::now()).await.inspect(|maintain|debug!(?maintain)).inspect_err(|err|debug!(?err)).ok();
 
                         }.instrument(span).await
 

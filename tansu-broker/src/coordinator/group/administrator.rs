@@ -1437,8 +1437,8 @@ where
                                                     OffsetFetchResponsePartition::default()
                                                         .partition_index(topition.partition())
                                                         .committed_offset(*offset)
-                                                        .committed_leader_epoch(None)
-                                                        .metadata(None)
+                                                        .committed_leader_epoch(Some(-1))
+                                                        .metadata(Some("".into()))
                                                         .error_code(ErrorCode::None.into()),
                                                 )
                                             } else {

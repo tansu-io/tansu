@@ -14,6 +14,7 @@
 
 use std::{fmt, io, sync::Arc};
 
+use dotenv::dotenv;
 use tracing::subscriber::DefaultGuard;
 use tracing_subscriber::{EnvFilter, filter::ParseError};
 
@@ -54,6 +55,8 @@ impl From<ParseError> for Error {
 
 pub(crate) fn init_tracing() -> Result<DefaultGuard, Error> {
     use std::{fs::File, sync::Arc, thread};
+
+    _ = dotenv().ok();
 
     Ok(tracing::subscriber::set_default(
         tracing_subscriber::fmt()

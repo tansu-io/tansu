@@ -16,7 +16,9 @@ use std::marker::PhantomData;
 
 use crate::{Error, Result};
 
+use bytes::Bytes;
 use futures::SinkExt;
+use serde_json::{Value, json};
 use tansu_client::{Client, ConnectionManager};
 use tansu_sans_io::{
     ErrorCode, MetadataRequest, NULL_TOPIC_ID,
@@ -284,6 +286,15 @@ impl Consume {
                             writer
                                 .send(schema.as_json_value(&batch).map(|kv| kv.to_string())?)
                                 .await?;
+                        } else {
+                            writer.send( Value::from(
+                                batch
+                                    .records
+                                    .iter()
+                                    .map(|record| json!({"key": self.maybe_json(record.key.clone()), "value": self.maybe_json(record.value.clone())}))
+                                    .collect::<Vec<_>>(),
+                            )
+                            .to_string()).await?
                         }
                     }
                 }
@@ -291,5 +302,9 @@ impl Consume {
         }
 
         Ok(ErrorCode::None)
+    }
+
+    fn maybe_json(&self, data: Option<Bytes>) -> Option<Value> {
+        data.and_then(|data| serde_json::from_slice::<Value>(&data[..]).ok())
     }
 }

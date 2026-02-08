@@ -18,6 +18,15 @@ use tansu_cli::{Cli, Result};
 use tansu_sans_io::ErrorCode;
 use tracing::{debug, error};
 
+const CLIENT_ERROR_MESSAGE: &str = "A client error occurred. Possible causes:
+  • No network connection
+  • The server is down or unreachable
+  • Incorrect hostname or port
+  • Firewall or proxy blocking the connection
+  • TLS/SSL certificate issues (if applicable)
+
+Check your internet connection, verify the server address, and try again.";
+
 #[tokio::main]
 async fn main() -> Result<ErrorCode> {
     _ = dotenv().ok();
@@ -26,6 +35,31 @@ async fn main() -> Result<ErrorCode> {
 
     Cli::main()
         .await
-        .inspect(|error_code| debug!(%error_code))
-        .inspect_err(|err| error!(%err))
+        .inspect(|error_code| match error_code {
+            ErrorCode::None => debug!("{}", error_code),
+            _ => error!("{}", error_code),
+        })
+        .inspect_err(|err| match err {
+            tansu_cli::Error::Cat(error) => match &**error {
+                tansu_cat::Error::Client(_) => error!("{}", CLIENT_ERROR_MESSAGE),
+                _ => error!("Unknown error occurred during command: {}", error),
+            },
+            tansu_cli::Error::Generate(error) => match error {
+                tansu_generator::Error::Client(_) => error!("{}", CLIENT_ERROR_MESSAGE),
+                _ => error!("Unknown error occurred during command: {}", error),
+            },
+            tansu_cli::Error::Perf(error) => match error {
+                tansu_perf::Error::Client(_) => error!("{}", CLIENT_ERROR_MESSAGE),
+                _ => error!("Unknown error occurred during command: {}", error),
+            },
+            tansu_cli::Error::Proxy(error) => match error {
+                tansu_proxy::Error::Client(_) => error!("{}", CLIENT_ERROR_MESSAGE),
+                _ => error!("Unknown error occurred during command: {}", error),
+            },
+            tansu_cli::Error::Topic(error) => match error {
+                tansu_topic::Error::Client(_) => error!("{}", CLIENT_ERROR_MESSAGE),
+                _ => error!("Unknown error occurred during command: {}", error),
+            },
+            _ => error!("Unknown error occurred during command: {}", err),
+        })
 }

@@ -48,8 +48,8 @@ use iceberg::spec::DataFileBuilderError;
 
 use jsonschema::ValidationError;
 use object_store::{
-    DynObjectStore, ObjectStore, aws::AmazonS3Builder, local::LocalFileSystem, memory::InMemory,
-    path::Path,
+    DynObjectStore, ObjectStore, ObjectStoreExt, aws::AmazonS3Builder, local::LocalFileSystem,
+    memory::InMemory, path::Path,
 };
 use opentelemetry::{
     InstrumentationScope, KeyValue, global,
@@ -161,7 +161,7 @@ pub enum Error {
 
     SerdeJson(#[from] serde_json::Error),
 
-    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
+    #[cfg(any(feature = "iceberg", feature = "delta"))]
     SqlParser(#[from] datafusion::logical_expr::sqlparser::parser::ParserError),
 
     TopicWithoutSchema(String),
@@ -784,11 +784,16 @@ mod tests {
 
         debug!(error = size_of::<Error>());
         debug!(anyhow = size_of::<anyhow::Error>());
+        #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
         debug!(arrow = size_of::<ArrowError>());
         debug!(avro_to_json = size_of::<apache_avro::types::Value>());
+        #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
         debug!(data_file_builder = size_of::<DataFileBuilderError>());
+        #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
         debug!(data_fusion = size_of::<Box<DataFusionError>>());
+        #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
         debug!(delta_table = size_of::<Box<DeltaTableError>>());
+        #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
         debug!(iceberg = size_of::<Box<::iceberg::Error>>());
         debug!(sans_io = size_of::<tansu_sans_io::Error>());
         debug!(object_store = size_of::<object_store::Error>());
@@ -801,9 +806,11 @@ mod tests {
         debug!(protobuf_json_mapping_print = size_of::<protobuf_json_mapping::PrintError>());
         debug!(protobuf = size_of::<protobuf::Error>());
         debug!(serde_json = size_of::<serde_json::Error>());
+        #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
         debug!(sql_parser = size_of::<datafusion::logical_expr::sqlparser::parser::ParserError>());
         debug!(try_from_int = size_of::<TryFromIntError>());
         debug!(url = size_of::<Url>());
+        #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
         debug!(unsupported_schema_runtime_value = size_of::<(DataType, serde_json::Value)>());
         debug!(uuid = size_of::<uuid::Error>());
         Ok(())

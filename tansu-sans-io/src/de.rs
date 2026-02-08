@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::{Error, Result, RootMessageMeta};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use serde::{
     Deserializer,
     de::{DeserializeSeed, EnumAccess, SeqAccess, VariantAccess, Visitor},
@@ -21,11 +22,13 @@ use std::{
     any::{type_name, type_name_of_val},
     collections::VecDeque,
     fmt,
-    io::{self, Read},
+    io::Read,
     str::from_utf8,
 };
 use tansu_model::{FieldMeta, MessageMeta};
 use tracing::{debug, warn};
+
+const PARSE_DEPTH: usize = 6;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 enum Kind {
@@ -54,39 +57,9 @@ impl Container {
     }
 }
 
-struct ReadPosition<'a> {
-    reader: &'a mut dyn Read,
-    position: u64,
-}
-
-impl<'a> ReadPosition<'a> {
-    fn new(reader: &'a mut dyn Read) -> Self {
-        Self {
-            reader,
-            position: 0,
-        }
-    }
-}
-
-impl Read for ReadPosition<'_> {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        match self.reader.read(buf) {
-            Ok(count) => {
-                let delta = u64::try_from(count)
-                    .map_err(|err| Box::new(err) as Box<dyn std::error::Error + Send + Sync>)
-                    .map_err(io::Error::other)?;
-                self.position += delta;
-                Ok(count)
-            }
-
-            Err(error) => Err(error),
-        }
-    }
-}
-
 /// Deserialize the Kafka protocol into the serde data model.
 pub struct Decoder<'de> {
-    reader: ReadPosition<'de>,
+    reader: &'de mut dyn Read,
     containers: VecDeque<Container>,
     field: Option<&'static str>,
     kind: Option<Kind>,
@@ -118,18 +91,30 @@ impl FieldLookup {
     }
 }
 
-#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 struct Meta {
     message: Option<&'static MessageMeta>,
+    structures: Option<Vec<(&'static str, &'static FieldMeta)>>,
     field: Option<&'static FieldMeta>,
     parse: VecDeque<FieldLookup>,
+}
+
+impl Default for Meta {
+    fn default() -> Self {
+        Self {
+            message: Default::default(),
+            structures: Default::default(),
+            field: Default::default(),
+            parse: VecDeque::with_capacity(PARSE_DEPTH),
+        }
+    }
 }
 
 impl<'de> Decoder<'de> {
     pub fn new(reader: &'de mut dyn Read) -> Self {
         Self {
-            reader: ReadPosition::new(reader),
-            containers: VecDeque::new(),
+            reader,
+            containers: VecDeque::with_capacity(PARSE_DEPTH),
             field: None,
             kind: None,
             api_key: None,
@@ -137,15 +122,15 @@ impl<'de> Decoder<'de> {
             meta: Meta::default(),
             length: None,
             in_seq_of_primitive: false,
-            path: VecDeque::new(),
+            path: VecDeque::with_capacity(PARSE_DEPTH),
             in_records: false,
         }
     }
 
     pub(crate) fn request(reader: &'de mut dyn Read) -> Self {
         Self {
-            reader: ReadPosition::new(reader),
-            containers: VecDeque::new(),
+            reader,
+            containers: VecDeque::with_capacity(PARSE_DEPTH),
             field: None,
             kind: Some(Kind::Request),
             api_key: None,
@@ -153,15 +138,15 @@ impl<'de> Decoder<'de> {
             meta: Meta::default(),
             length: None,
             in_seq_of_primitive: false,
-            path: VecDeque::new(),
+            path: VecDeque::with_capacity(PARSE_DEPTH),
             in_records: false,
         }
     }
 
     pub(crate) fn response(reader: &'de mut dyn Read, api_key: i16, api_version: i16) -> Self {
         Self {
-            reader: ReadPosition::new(reader),
-            containers: VecDeque::new(),
+            reader,
+            containers: VecDeque::with_capacity(PARSE_DEPTH),
             field: None,
             kind: Some(Kind::Response),
             api_key: Some(api_key),
@@ -170,18 +155,19 @@ impl<'de> Decoder<'de> {
                 .responses()
                 .get(&api_key)
                 .map_or_else(Meta::default, |meta| {
-                    let mut parse = VecDeque::new();
+                    let mut parse = VecDeque::with_capacity(PARSE_DEPTH);
                     parse.push_front(meta.fields.into());
 
                     Meta {
                         message: Some(*meta),
+                        structures: Some(meta.structures()),
                         parse,
                         ..Default::default()
                     }
                 }),
             length: None,
             in_seq_of_primitive: false,
-            path: VecDeque::new(),
+            path: VecDeque::with_capacity(PARSE_DEPTH),
             in_records: false,
         }
     }
@@ -408,6 +394,7 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
 
                 if let Some(meta) = RootMessageMeta::messages().requests().get(&v) {
                     self.meta.message = Some(*meta);
+                    self.meta.structures = Some(meta.structures());
                     self.meta.parse.push_front(meta.fields.into());
                 }
             }
@@ -663,7 +650,7 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
 
         let mut buf = vec![0u8; length];
         self.reader.read_exact(&mut buf)?;
-        visitor.visit_bytes(&buf[..])
+        visitor.visit_byte_buf(buf)
     }
 
     fn deserialize_option<V>(self, visitor: V) -> Result<V::Value, Self::Error>
@@ -828,6 +815,7 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
         V: Visitor<'de>,
     {
         debug!(
+            visitor = type_name::<V>(),
             type_name = type_name::<V::Value>(),
             length = self.length,
             meta_field = self.meta.field.is_some(),
@@ -847,7 +835,11 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
 
         match self.length.take() {
             Some(size_in_bytes) if self.in_records => {
-                let outcome = visitor.visit_seq(Batch::new(self, size_in_bytes as u64));
+                debug!(size_in_bytes);
+
+                let mut buf = vec![0u8; size_in_bytes];
+                self.reader.read_exact(&mut buf)?;
+                let outcome = visitor.visit_seq(Batch::new(Bytes::from(buf)));
                 self.in_seq_of_primitive = false;
                 self.in_records = false;
                 outcome
@@ -909,7 +901,14 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
             .push_front(Container::Struct { name, fields });
 
         let outcome = if let Some(mm) = self.meta.message {
-            if let Some(fm) = mm.structures().get(name) {
+            if let Some((_, fm)) = self
+                .meta
+                .structures
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .find(|(found, _)| name == *found)
+            {
                 debug!(r#struct = name);
 
                 _ = self.meta.field.replace(*fm);
@@ -1007,35 +1006,291 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
     }
 }
 
-struct Batch<'de, 'a> {
-    de: &'a mut Decoder<'de>,
-    remaining: u64,
+struct Batch {
+    encoded: Bytes,
 }
 
-impl<'de, 'a> Batch<'de, 'a> {
-    fn new(de: &'a mut Decoder<'de>, remaining: u64) -> Self {
-        Self { de, remaining }
+impl Batch {
+    fn new(encoded: Bytes) -> Self {
+        Self { encoded }
     }
 }
 
-impl<'de> SeqAccess<'de> for Batch<'de, '_> {
+impl<'de> SeqAccess<'de> for Batch {
     type Error = Error;
 
     fn next_element_seed<T>(&mut self, seed: T) -> Result<Option<T::Value>, Self::Error>
     where
         T: DeserializeSeed<'de>,
     {
-        debug!(?self.remaining);
-        if self.remaining > 0 {
-            let start = self.de.reader.position;
-            let outcome = seed.deserialize(&mut *self.de).map(Some);
-            let delta = self.de.reader.position - start;
-            debug!(?delta);
-            self.remaining -= delta;
-            outcome
+        debug!(
+            seed = type_name::<T>(),
+            value = type_name::<T::Value>(),
+            encoded = ?&self.encoded[..]
+        );
+
+        if self.encoded.has_remaining() {
+            let base_offset = self.encoded.try_get_i64()?;
+            let batch_length = self.encoded.try_get_i32()?;
+            debug!(base_offset, batch_length);
+
+            let mut batch = BytesMut::new();
+            batch.put_i64(base_offset);
+            batch.put_i32(batch_length);
+            batch.put(self.encoded.split_to(batch_length as usize));
+
+            let decoder = BatchDecoder {
+                encoded: Bytes::from(batch),
+            };
+
+            seed.deserialize(decoder).map(Some)
         } else {
             Ok(None)
         }
+    }
+}
+
+pub struct BatchDecoder {
+    encoded: Bytes,
+}
+
+impl BatchDecoder {
+    pub fn new(encoded: Bytes) -> Self {
+        Self { encoded }
+    }
+}
+
+impl<'de> Deserializer<'de> for BatchDecoder {
+    type Error = Error;
+
+    fn deserialize_any<V>(self, visitor: V) -> std::result::Result<V::Value, Self::Error>
+    where
+        V: Visitor<'de>,
+    {
+        todo!()
+    }
+
+    fn deserialize_bool<V>(self, visitor: V) -> std::result::Result<V::Value, Self::Error>
+    where
+        V: Visitor<'de>,
+    {
+        todo!()
+    }
+
+    fn deserialize_i8<V>(self, visitor: V) -> std::result::Result<V::Value, Self::Error>
+    where
+        V: Visitor<'de>,
+    {
+        todo!()
+    }
+
+    fn deserialize_i16<V>(self, visitor: V) -> std::result::Result<V::Value, Self::Error>
+    where
+        V: Visitor<'de>,
+    {
+        todo!()
+    }
+
+    fn deserialize_i32<V>(self, visitor: V) -> std::result::Result<V::Value, Self::Error>
+    where
+        V: Visitor<'de>,
+    {
+        todo!()
+    }
+
+    fn deserialize_i64<V>(self, visitor: V) -> std::result::Result<V::Value, Self::Error>
+    where
+        V: Visitor<'de>,
+    {
+        todo!()
+    }
+
+    fn deserialize_u8<V>(self, visitor: V) -> std::result::Result<V::Value, Self::Error>
+    where
+        V: Visitor<'de>,
+    {
+        todo!()
+    }
+
+    fn deserialize_u16<V>(self, visitor: V) -> std::result::Result<V::Value, Self::Error>
+    where
+        V: Visitor<'de>,
+    {
+        todo!()
+    }
+
+    fn deserialize_u32<V>(self, visitor: V) -> std::result::Result<V::Value, Self::Error>
+    where
+        V: Visitor<'de>,
+    {
+        todo!()
+    }
+
+    fn deserialize_u64<V>(self, visitor: V) -> std::result::Result<V::Value, Self::Error>
+    where
+        V: Visitor<'de>,
+    {
+        todo!()
+    }
+
+    fn deserialize_f32<V>(self, visitor: V) -> std::result::Result<V::Value, Self::Error>
+    where
+        V: Visitor<'de>,
+    {
+        todo!()
+    }
+
+    fn deserialize_f64<V>(self, visitor: V) -> std::result::Result<V::Value, Self::Error>
+    where
+        V: Visitor<'de>,
+    {
+        todo!()
+    }
+
+    fn deserialize_char<V>(self, visitor: V) -> std::result::Result<V::Value, Self::Error>
+    where
+        V: Visitor<'de>,
+    {
+        todo!()
+    }
+
+    fn deserialize_str<V>(self, visitor: V) -> std::result::Result<V::Value, Self::Error>
+    where
+        V: Visitor<'de>,
+    {
+        todo!()
+    }
+
+    fn deserialize_string<V>(self, visitor: V) -> std::result::Result<V::Value, Self::Error>
+    where
+        V: Visitor<'de>,
+    {
+        todo!()
+    }
+
+    fn deserialize_bytes<V>(self, visitor: V) -> std::result::Result<V::Value, Self::Error>
+    where
+        V: Visitor<'de>,
+    {
+        visitor.visit_bytes(&self.encoded[..])
+    }
+
+    fn deserialize_byte_buf<V>(self, visitor: V) -> std::result::Result<V::Value, Self::Error>
+    where
+        V: Visitor<'de>,
+    {
+        visitor.visit_byte_buf(Vec::from(self.encoded))
+    }
+
+    fn deserialize_option<V>(self, visitor: V) -> std::result::Result<V::Value, Self::Error>
+    where
+        V: Visitor<'de>,
+    {
+        todo!()
+    }
+
+    fn deserialize_unit<V>(self, visitor: V) -> std::result::Result<V::Value, Self::Error>
+    where
+        V: Visitor<'de>,
+    {
+        todo!()
+    }
+
+    fn deserialize_unit_struct<V>(
+        self,
+        name: &'static str,
+        visitor: V,
+    ) -> std::result::Result<V::Value, Self::Error>
+    where
+        V: Visitor<'de>,
+    {
+        todo!()
+    }
+
+    fn deserialize_newtype_struct<V>(
+        self,
+        name: &'static str,
+        visitor: V,
+    ) -> std::result::Result<V::Value, Self::Error>
+    where
+        V: Visitor<'de>,
+    {
+        todo!()
+    }
+
+    fn deserialize_seq<V>(self, visitor: V) -> std::result::Result<V::Value, Self::Error>
+    where
+        V: Visitor<'de>,
+    {
+        todo!()
+    }
+
+    fn deserialize_tuple<V>(
+        self,
+        len: usize,
+        visitor: V,
+    ) -> std::result::Result<V::Value, Self::Error>
+    where
+        V: Visitor<'de>,
+    {
+        todo!()
+    }
+
+    fn deserialize_tuple_struct<V>(
+        self,
+        name: &'static str,
+        len: usize,
+        visitor: V,
+    ) -> std::result::Result<V::Value, Self::Error>
+    where
+        V: Visitor<'de>,
+    {
+        todo!()
+    }
+
+    fn deserialize_map<V>(self, visitor: V) -> std::result::Result<V::Value, Self::Error>
+    where
+        V: Visitor<'de>,
+    {
+        todo!()
+    }
+
+    fn deserialize_struct<V>(
+        self,
+        name: &'static str,
+        fields: &'static [&'static str],
+        visitor: V,
+    ) -> std::result::Result<V::Value, Self::Error>
+    where
+        V: Visitor<'de>,
+    {
+        todo!()
+    }
+
+    fn deserialize_enum<V>(
+        self,
+        name: &'static str,
+        variants: &'static [&'static str],
+        visitor: V,
+    ) -> std::result::Result<V::Value, Self::Error>
+    where
+        V: Visitor<'de>,
+    {
+        todo!()
+    }
+
+    fn deserialize_identifier<V>(self, visitor: V) -> std::result::Result<V::Value, Self::Error>
+    where
+        V: Visitor<'de>,
+    {
+        todo!()
+    }
+
+    fn deserialize_ignored_any<V>(self, visitor: V) -> std::result::Result<V::Value, Self::Error>
+    where
+        V: Visitor<'de>,
+    {
+        todo!()
     }
 }
 

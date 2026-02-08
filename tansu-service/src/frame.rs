@@ -24,7 +24,8 @@ use tansu_sans_io::{
     ApiKey, Body, Frame, Header, Request, Response, RootMessageMeta, SaslAuthenticateRequest,
     SaslAuthenticateResponse,
 };
-use tracing::{Instrument as _, Level, debug, error, span};
+use tokio::task::spawn_blocking;
+use tracing::{debug, error, instrument};
 
 use crate::{API_ERRORS, API_REQUESTS, SaslHandshakeV0};
 
@@ -83,10 +84,16 @@ impl<S, Q> Layer<S> for RequestLayer<Q> {
 }
 
 /// A [`Service`] that handles API [`Request`]s responding with an API [`Response`]
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct RequestService<S, Q> {
     inner: S,
     request: PhantomData<Q>,
+}
+
+impl<S, Q> Debug for RequestService<S, Q> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct(stringify!(RequestService)).finish()
+    }
 }
 
 impl<State, S, Q> Service<State, Q> for RequestService<S, Q>
@@ -101,6 +108,7 @@ where
     type Response = S::Response;
     type Error = S::Error;
 
+    #[instrument(skip(ctx, req))]
     async fn serve(&self, ctx: Context<State>, req: Q) -> Result<Self::Response, Self::Error> {
         debug!(?req);
         self.inner
@@ -143,10 +151,16 @@ impl<S, Q> Layer<S> for FrameRequestLayer<Q> {
 }
 
 /// A [`Service`] that transforms a [`Frame`] into a [`Request`]
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct FrameRequestService<S, Q> {
     inner: S,
     request: PhantomData<Q>,
+}
+
+impl<S, Q> Debug for FrameRequestService<S, Q> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct(stringify!(FrameRequestService)).finish()
+    }
 }
 
 impl<S, Q, State> Service<State, Frame> for FrameRequestService<S, Q>
@@ -161,21 +175,17 @@ where
     type Response = Frame;
     type Error = S::Error;
 
+    #[instrument(skip(ctx, req))]
     async fn serve(&self, ctx: Context<State>, req: Frame) -> Result<Self::Response, Self::Error> {
-        debug!(?req);
         let correlation_id = req.correlation_id()?;
 
         let req = Q::try_from(req.body).map_err(Into::into)?;
 
-        self.inner
-            .serve(ctx, req)
-            .await
-            .map(|response| Frame {
-                size: 0,
-                header: Header::Response { correlation_id },
-                body: response.into(),
-            })
-            .inspect(|response| debug!(?response))
+        self.inner.serve(ctx, req).await.map(|response| Frame {
+            size: 0,
+            header: Header::Response { correlation_id },
+            body: response.into(),
+        })
     }
 }
 
@@ -204,21 +214,30 @@ impl<S> Layer<S> for BytesFrameLayer {
 }
 
 /// A [`Service`] transforming [`Bytes`]s into [`Frame`]s
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct BytesFrameService<S> {
     inner: S,
+}
+
+impl<S> Debug for BytesFrameService<S> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct(stringify!(BytesFrameService)).finish()
+    }
 }
 
 impl<S, State> Service<State, Bytes> for BytesFrameService<S>
 where
     S: Service<State, Frame, Response = Frame>,
     State: Clone + Send + Sync + 'static,
-    S::Error: From<tansu_sans_io::Error> + Debug,
+    S::Error: From<tansu_sans_io::Error> + From<tokio::task::JoinError> + Debug,
 {
     type Response = Bytes;
     type Error = S::Error;
 
+    #[instrument(skip(ctx, req))]
     async fn serve(&self, ctx: Context<State>, req: Bytes) -> Result<Self::Response, Self::Error> {
+        debug!(request = ?&req[..]);
+
         let sasl_handleshake_v0 = ctx
             .get::<SaslHandshakeV0>()
             .map(|handshake| handshake.0)
@@ -238,66 +257,59 @@ where
                 ),
             }
         } else {
-            Frame::request_from_bytes(req).inspect(|req| debug!(?req))?
+            spawn_blocking(|| Frame::request_from_bytes(req))
+                .await?
+                .inspect(|request| debug!(?request))?
         };
 
         let api_key = req.api_key()?;
         let api_version = req.api_version()?;
         let correlation_id = req.correlation_id()?;
 
-        let span = span!(
-            Level::DEBUG,
-            "frame",
-            api_name = req.api_name(),
-            api_version,
-            correlation_id
-        );
+        let attributes = vec![
+            KeyValue::new("api_key", api_key as i64),
+            KeyValue::new("api_version", api_version as i64),
+        ];
 
-        async move {
-            let attributes = vec![
-                KeyValue::new("api_key", api_key as i64),
-                KeyValue::new("api_version", api_version as i64),
-            ];
+        let Frame { body, .. } = self
+            .inner
+            .serve(ctx, req)
+            .await
+            .inspect(|response| debug!(?response))?;
 
-            self.inner
-                .serve(ctx, req)
-                .await
-                .inspect(|response| debug!(?response))
-                .and_then(|Frame { body, .. }| {
-                    if sasl_handleshake_v0 {
-                        SaslAuthenticateResponse::try_from(body)
-                            .and_then(|response| {
-                                i32::try_from(response.auth_bytes.len())
-                                    .map_err(Into::into)
-                                    .map(|size| {
-                                        let mut frame = BytesMut::new();
-                                        frame.put(&size.to_be_bytes()[..]);
-                                        frame.put(response.auth_bytes);
-                                        Bytes::from(frame)
-                                    })
-                            })
-                            .map_err(Into::into)
-                    } else {
-                        Frame::response(
-                            Header::Response { correlation_id },
-                            body,
-                            api_key,
-                            api_version,
-                        )
+        if sasl_handleshake_v0 {
+            SaslAuthenticateResponse::try_from(body)
+                .and_then(|response| {
+                    i32::try_from(response.auth_bytes.len())
                         .map_err(Into::into)
-                    }
+                        .map(|size| {
+                            let mut frame = BytesMut::new();
+                            frame.put(&size.to_be_bytes()[..]);
+                            frame.put(response.auth_bytes);
+                            Bytes::from(frame)
+                        })
                 })
-                .inspect(|response| {
-                    debug!(response = ?&response[..]);
-                    API_REQUESTS.add(1, &attributes);
-                })
-                .inspect_err(|err| {
-                    error!(api_key, api_version, ?err);
-                    API_ERRORS.add(1, &attributes);
-                })
+                .map_err(Into::into)
+        } else {
+            spawn_blocking(move || {
+                Frame::response(
+                    Header::Response { correlation_id },
+                    body,
+                    api_key,
+                    api_version,
+                )
+            })
+            .await?
+            .inspect(|response| {
+                debug!(response = ?response[..]);
+                API_REQUESTS.add(1, &attributes);
+            })
+            .inspect_err(|err| {
+                error!(api_key, api_version, ?err);
+                API_ERRORS.add(1, &attributes);
+            })
+            .map_err(Into::into)
         }
-        .instrument(span)
-        .await
     }
 }
 
@@ -314,9 +326,15 @@ impl<S> Layer<S> for FrameBytesLayer {
 }
 
 /// A [`Service`] that transforms [`Frame`]s into [`Bytes`]
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct FrameBytesService<S> {
     inner: S,
+}
+
+impl<S> Debug for FrameBytesService<S> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct(stringify!(FrameBytesService)).finish()
+    }
 }
 
 impl<S, State> Service<State, Frame> for FrameBytesService<S>
@@ -328,6 +346,7 @@ where
     type Response = Frame;
     type Error = S::Error;
 
+    #[instrument(skip(ctx, req), fields(api_key = req.api_key()?, api_version = req.api_version()?, correlation_id = req.correlation_id()?))]
     async fn serve(&self, ctx: Context<State>, req: Frame) -> Result<Self::Response, Self::Error> {
         debug!(?req);
 
@@ -374,6 +393,7 @@ where
 
     type Error = S::Error;
 
+    #[instrument(skip_all, fields(api_key = req.api_key()?, api_version = req.api_version()?, correlation_id = req.correlation_id()?))]
     async fn serve(&self, ctx: Context<State>, req: Frame) -> Result<Self::Response, Self::Error> {
         let correlation_id = req.correlation_id()?;
 
@@ -435,6 +455,7 @@ where
     type Response = Body;
     type Error = S::Error;
 
+    #[instrument(skip_all)]
     async fn serve(&self, ctx: Context<State>, req: Body) -> Result<Self::Response, Self::Error> {
         let req = Q::try_from(req)?;
         self.inner.serve(ctx, req).await.map(Body::from)
@@ -469,6 +490,7 @@ where
     type Response = Q::Response;
     type Error = S::Error;
 
+    #[instrument(skip_all)]
     async fn serve(&self, ctx: Context<State>, req: Q) -> Result<Self::Response, Self::Error> {
         debug!(?req);
 
@@ -562,6 +584,7 @@ where
     type Response = Frame;
     type Error = E;
 
+    #[instrument(skip_all)]
     async fn serve(&self, ctx: Context<State>, req: Frame) -> Result<Self::Response, Self::Error> {
         (self.response)(ctx, req)
     }
@@ -585,7 +608,7 @@ pub struct ResponseService<F> {
 
 impl<F> Debug for ResponseService<F> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ResponseService").finish()
+        f.debug_struct(stringify!(ResponseService)).finish()
     }
 }
 
@@ -599,6 +622,7 @@ where
     type Response = Q::Response;
     type Error = E;
 
+    #[instrument(skip(ctx, req))]
     async fn serve(&self, ctx: Context<State>, req: Q) -> Result<Self::Response, Self::Error> {
         (self.response)(ctx, req)
     }
