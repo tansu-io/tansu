@@ -26,9 +26,11 @@ turso = []
 
 [dependencies]
 clap.workspace = true
+console.workspace = true
 dotenv.workspace = true
 human-units.workspace = true
 humantime.workspace = true
+owo-colors.workspace = true
 regex.workspace = true
 tansu-broker.workspace = true
 tansu-cat.workspace = true

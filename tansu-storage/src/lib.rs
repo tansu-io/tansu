@@ -114,6 +114,7 @@
 use async_trait::async_trait;
 use bytes::{Bytes, TryGetError};
 
+use console::Emoji;
 #[cfg(any(feature = "libsql", feature = "postgres"))]
 use deadpool::managed::PoolError;
 #[cfg(feature = "dynostore")]
@@ -121,6 +122,7 @@ use dynostore::DynoStore;
 
 use glob::{GlobError, PatternError};
 
+use indicatif::{ProgressBar, ProgressStyle};
 #[cfg(feature = "dynostore")]
 use object_store::memory::InMemory;
 
@@ -1598,6 +1600,7 @@ pub struct Builder<N, C, A, S> {
     storage: S,
     schema_registry: Option<Registry>,
     lake_house: Option<House>,
+    interactive: bool,
 
     cancellation: CancellationToken,
 }
@@ -1614,6 +1617,7 @@ impl<N, C, A, S> Builder<N, C, A, S> {
             storage: self.storage,
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
+            interactive: self.interactive,
             cancellation: self.cancellation,
         }
     }
@@ -1626,6 +1630,7 @@ impl<N, C, A, S> Builder<N, C, A, S> {
             storage: self.storage,
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
+            interactive: self.interactive,
             cancellation: self.cancellation,
         }
     }
@@ -1638,6 +1643,7 @@ impl<N, C, A, S> Builder<N, C, A, S> {
             storage: self.storage,
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
+            interactive: self.interactive,
             cancellation: self.cancellation,
         }
     }
@@ -1652,6 +1658,7 @@ impl<N, C, A, S> Builder<N, C, A, S> {
             storage,
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
+            interactive: self.interactive,
             cancellation: self.cancellation,
         }
     }
@@ -1678,6 +1685,13 @@ impl<N, C, A, S> Builder<N, C, A, S> {
     pub fn cancellation(self, cancellation: CancellationToken) -> Self {
         Self {
             cancellation,
+            ..self
+        }
+    }
+
+    pub fn interactive(self, interactive: bool) -> Self {
+        Self {
+            interactive,
             ..self
         }
     }
@@ -1851,7 +1865,32 @@ impl Builder<i32, String, Url, Url> {
             _unsupported => Err(Error::UnsupportedStorageUrl(self.storage.clone())),
         }?;
 
+        let pb = if self.interactive {
+            let pb = ProgressBar::new(1);
+            pb.set_style(
+                ProgressStyle::with_template("[{elapsed}] {bar:40.cyan/blue} {msg}")
+                    .unwrap()
+                    .progress_chars("##-"),
+            );
+
+            pb.set_message(format!("connecting to {}", Emoji("💾", "storage")));
+
+            Some(pb)
+        } else {
+            None
+        };
+
         storage.ping().await?;
+
+        if let Some(pb) = pb {
+            pb.inc(1);
+            pb.finish_with_message(format!(
+                "{} connected to {}",
+                Emoji("✅", ""),
+                Emoji("💾", "storage")
+            ));
+        }
+
         Ok(storage)
     }
 }
