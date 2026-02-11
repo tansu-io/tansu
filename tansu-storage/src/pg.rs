@@ -3257,7 +3257,7 @@ impl Storage for Postgres {
                                     ?err,
                                     cluster = self.cluster,
                                     topic = topic.name,
-                                    partition_index,
+                                    ?partition_index,
                                     transaction_id
                                 )
                             })?;
@@ -3478,37 +3478,21 @@ impl Storage for Postgres {
     ) -> Result<()> {
         let c = self.connection().await?;
 
-        let prepared = c
-            .prepare(concat!(
-                "insert into scram_credential ",
-                " (username, mechanism, salt, iterations, stored_key, server_key) ",
-                " values",
-                " ($1, $2, $3, $4, $5, $6)",
-                " on conflict (username, mechanism)",
-                " do update set",
-                " salt = excluded.salt",
-                ", iterations = excluded.iterations",
-                ", stored_key = excluded.stored_key",
-                ", server_key = excluded.server_key",
-                ", last_updated = excluded.last_updated",
-            ))
-            .await
-            .inspect_err(|err| error!(?err, ?username, ?mechanism,))?;
-
-        c.execute(
-            &prepared,
+        self.prepare_execute(
+            &c,
+            "scram_credential_insert.sql",
             &[
+                &self.cluster,
                 &username,
                 &i32::from(mechanism),
-                &&credential.salt()[..],
+                &&credential.salt[..],
                 &credential.iterations,
-                &&credential.stored_key()[..],
-                &&credential.server_key()[..],
+                &&credential.stored_key[..],
+                &&credential.server_key[..],
             ],
         )
         .await
         .inspect_err(|err| error!(?err, ?username, ?mechanism,))
-        .map_err(Into::into)
         .and(Ok(()))
     }
 
@@ -3540,9 +3524,12 @@ impl Storage for Postgres {
                     let stored_key = row.try_get::<_, &[u8]>(2).map(Bytes::copy_from_slice)?;
                     let server_key = row.try_get::<_, &[u8]>(3).map(Bytes::copy_from_slice)?;
 
-                    Ok(Some(ScramCredential::new(
-                        salt, iterations, stored_key, server_key,
-                    )))
+                    Ok(Some(ScramCredential {
+                        salt,
+                        iterations,
+                        stored_key,
+                        server_key,
+                    }))
                 } else {
                     Ok(None)
                 }

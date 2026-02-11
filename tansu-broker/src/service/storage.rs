@@ -21,20 +21,21 @@ use tansu_sans_io::{
     ApiKey as _, ConsumerGroupDescribeRequest, CreateAclsRequest, CreateTopicsRequest,
     DeleteGroupsRequest, DeleteRecordsRequest, DeleteTopicsRequest, DescribeAclsRequest,
     DescribeClusterRequest, DescribeConfigsRequest, DescribeGroupsRequest,
-    DescribeTopicPartitionsRequest, FetchRequest, FindCoordinatorRequest,
-    GetTelemetrySubscriptionsRequest, IncrementalAlterConfigsRequest, InitProducerIdRequest,
-    ListGroupsRequest, ListOffsetsRequest, ListPartitionReassignmentsRequest, MetadataRequest,
-    ProduceRequest, TxnOffsetCommitRequest,
+    DescribeTopicPartitionsRequest, DescribeUserScramCredentialsRequest, FetchRequest,
+    FindCoordinatorRequest, GetTelemetrySubscriptionsRequest, IncrementalAlterConfigsRequest,
+    InitProducerIdRequest, ListGroupsRequest, ListOffsetsRequest,
+    ListPartitionReassignmentsRequest, MetadataRequest, ProduceRequest, TxnOffsetCommitRequest,
 };
 use tansu_service::{FrameRequestLayer, FrameRouteBuilder};
 use tansu_storage::{
     AlterUserScramCredentialsService, ConsumerGroupDescribeService, CreateAclsService,
     CreateTopicsService, DeleteGroupsService, DeleteRecordsService, DeleteTopicsService,
     DescribeAclsService, DescribeClusterService, DescribeConfigsService, DescribeGroupsService,
-    DescribeTopicPartitionsService, FetchService, FindCoordinatorService,
-    GetTelemetrySubscriptionsService, IncrementalAlterConfigsService, InitProducerIdService,
-    ListGroupsService, ListOffsetsService, ListPartitionReassignmentsService, MetadataService,
-    ProduceService, Storage, TxnAddOffsetsService, TxnAddPartitionService, TxnOffsetCommitService,
+    DescribeTopicPartitionsService, DescribeUserScramCredentialsService, FetchService,
+    FindCoordinatorService, GetTelemetrySubscriptionsService, IncrementalAlterConfigsService,
+    InitProducerIdService, ListGroupsService, ListOffsetsService,
+    ListPartitionReassignmentsService, MetadataService, ProduceService, Storage,
+    TxnAddOffsetsService, TxnAddPartitionService, TxnOffsetCommitService,
 };
 
 use crate::Error;
@@ -61,6 +62,7 @@ where
         describe_configs,
         describe_groups,
         describe_topic_partitions,
+        describe_user_scram_credentials,
         fetch,
         find_coordinator,
         get_telemetry_subscriptions,
@@ -95,6 +97,27 @@ where
                 FrameRequestLayer::<AlterUserScramCredentialsRequest>::new(),
             )
                 .into_layer(AlterUserScramCredentialsService)
+                .boxed(),
+        )
+        .map_err(Into::into)
+}
+
+pub fn describe_user_scram_credentials<S>(
+    builder: FrameRouteBuilder<(), Error>,
+    storage: S,
+) -> Result<FrameRouteBuilder<(), Error>, Error>
+where
+    S: Storage,
+{
+    builder
+        .with_route(
+            DescribeUserScramCredentialsRequest::KEY,
+            (
+                MapErrLayer::new(Error::from),
+                MapStateLayer::new(|_| storage),
+                FrameRequestLayer::<DescribeUserScramCredentialsRequest>::new(),
+            )
+                .into_layer(DescribeUserScramCredentialsService)
                 .boxed(),
         )
         .map_err(Into::into)

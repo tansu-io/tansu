@@ -16,7 +16,7 @@ license:
 
 build profile="dev" features="delta,dynostore,iceberg,libsql,parquet,postgres,slatedb" bin="tansu": (cargo-build "--profile" profile "--timings" "--bin" bin "--no-default-features" "--features" features)
 
-build-storage: clean-workspace (build "dev" "libsql") clean-workspace (build "dev" "postgres") clean-workspace (build "dev" "slatedb")
+build-storage: clean-workspace (build "dev" "libsql") (build "dev" "postgres") (build "dev" "slatedb")
 
 build-examples: (cargo-build "--examples")
 
@@ -412,6 +412,8 @@ clean-tansu-db:
     rm -f tansu.db*
 
 broker-sqlite profile="profiling": clean-tansu-db (build profile "libsql") (tansu-broker profile "--storage-engine=sqlite://tansu.db")
+
+broker-sqlite-authentication profile="profiling": (build profile "libsql") (tansu-broker profile "--authentication" "--storage-engine=sqlite://tansu.db")
 
 broker-sqlite-vacuum-into profile="profiling": clean-tansu-db (build profile "libsql") (tansu-broker profile "--storage-engine=sqlite://tansu.db?vacuum_into=snapshot.db")
 

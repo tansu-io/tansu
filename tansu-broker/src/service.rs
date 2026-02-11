@@ -12,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
+
 use rama::Layer;
-use tansu_auth::Authentication;
+use rsasl::config::SASLConfig;
 use tansu_service::{
     BytesFrameLayer, BytesFrameService, FrameRouteService, TcpBytesLayer, TcpBytesService,
     TcpContext, TcpContextLayer, TcpContextService,
@@ -34,7 +36,7 @@ pub fn services<C, S>(
     cluster_id: &str,
     coordinator: C,
     storage: S,
-    authentication: Authentication,
+    sasl_config: Option<Arc<SASLConfig>>,
 ) -> Result<TcpRouteFrame, Error>
 where
     S: Storage,
@@ -45,17 +47,13 @@ where
         .and_then(|builder| {
             coordinator::services(builder, coordinator).inspect(|builder| debug!(?builder))
         })
-        .and_then(|builder| auth::services(builder, authentication.clone()))
+        .and_then(auth::services)
         .and_then(|builder| builder.build().map_err(Into::into))
         .map(|route| {
             (
-                TcpContextLayer::new(
-                    TcpContext::default()
-                        .cluster_id(Some(cluster_id.into()))
-                        .authentication(authentication),
-                ),
+                TcpContextLayer::new(TcpContext::default().cluster_id(Some(cluster_id.into()))),
                 TcpBytesLayer::default(),
-                BytesFrameLayer,
+                BytesFrameLayer::default().with_sasl_config(sasl_config),
             )
                 .into_layer(route)
         })

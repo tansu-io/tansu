@@ -207,12 +207,12 @@ pub use service::{
     AlterUserScramCredentialsService, ChannelRequestLayer, ChannelRequestService,
     ConsumerGroupDescribeService, CreateAclsService, CreateTopicsService, DeleteGroupsService,
     DeleteRecordsService, DeleteTopicsService, DescribeAclsService, DescribeClusterService,
-    DescribeConfigsService, DescribeGroupsService, DescribeTopicPartitionsService, FetchService,
-    FindCoordinatorService, GetTelemetrySubscriptionsService, IncrementalAlterConfigsService,
-    InitProducerIdService, ListGroupsService, ListOffsetsService,
-    ListPartitionReassignmentsService, MetadataService, ProduceService, Request,
-    RequestChannelService, RequestLayer, RequestReceiver, RequestSender, RequestService,
-    RequestStorageService, Response, TxnAddOffsetsService, TxnAddPartitionService,
+    DescribeConfigsService, DescribeGroupsService, DescribeTopicPartitionsService,
+    DescribeUserScramCredentialsService, FetchService, FindCoordinatorService,
+    GetTelemetrySubscriptionsService, IncrementalAlterConfigsService, InitProducerIdService,
+    ListGroupsService, ListOffsetsService, ListPartitionReassignmentsService, MetadataService,
+    ProduceService, Request, RequestChannelService, RequestLayer, RequestReceiver, RequestSender,
+    RequestService, RequestStorageService, Response, TxnAddOffsetsService, TxnAddPartitionService,
     TxnOffsetCommitService, bounded_channel,
 };
 
@@ -1897,37 +1897,10 @@ static STORAGE_CONTAINER_ERRORS: LazyLock<Counter<u64>> = LazyLock::new(|| {
 
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ScramCredential {
-    salt: Bytes,
-    iterations: i32,
-    stored_key: Bytes,
-    server_key: Bytes,
-}
-
-impl ScramCredential {
-    pub fn new(salt: Bytes, iterations: i32, stored_key: Bytes, server_key: Bytes) -> Self {
-        Self {
-            salt,
-            iterations,
-            stored_key,
-            server_key,
-        }
-    }
-
-    pub fn salt(&self) -> Bytes {
-        self.salt.clone()
-    }
-
-    pub fn iterations(&self) -> i32 {
-        self.iterations
-    }
-
-    pub fn stored_key(&self) -> Bytes {
-        self.stored_key.clone()
-    }
-
-    pub fn server_key(&self) -> Bytes {
-        self.server_key.clone()
-    }
+    pub salt: Bytes,
+    pub iterations: i32,
+    pub stored_key: Bytes,
+    pub server_key: Bytes,
 }
 
 #[async_trait]

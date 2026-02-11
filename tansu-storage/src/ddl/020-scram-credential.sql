@@ -13,6 +13,8 @@
 -- limitations under the License.
 
 create table if not exists scram_credential (
+  id integer primary key autoincrement,
+  cluster integer references cluster (id) on delete cascade not null,
   username text not null,
   mechanism integer not null,
   salt blob not null,
@@ -21,5 +23,5 @@ create table if not exists scram_credential (
   server_key blob not null,
   last_updated text default current_timestamp not null,
   created_at text default current_timestamp not null,
-  primary key (username, mechanism)
+  unique(cluster, username, mechanism)
 );

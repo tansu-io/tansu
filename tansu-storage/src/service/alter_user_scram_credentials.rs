@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,6 +21,7 @@ use tansu_sans_io::{
     AlterUserScramCredentialsRequest, AlterUserScramCredentialsResponse, ApiKey, ErrorCode,
     ScramMechanism, alter_user_scram_credentials_response::AlterUserScramCredentialsResult,
 };
+use tracing::{debug, instrument};
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct AlterUserScramCredentialsService;
@@ -36,6 +37,7 @@ where
     type Response = AlterUserScramCredentialsResponse;
     type Error = Error;
 
+    #[instrument(skip(ctx, req))]
     async fn serve(
         &self,
         ctx: Context<G>,
@@ -48,34 +50,36 @@ where
         if let Some(upsertions) = req.upsertions {
             for upsertion in upsertions {
                 let (mechanism, stored_key, server_key) =
-                    ScramMechanism::try_from(upsertion.mechanism).map(|mechanism| {
-                        if mechanism == ScramMechanism::Scram256 {
-                            let (client_key, server_key) =
-                                derive_keys::<Sha256>(&upsertion.salted_password);
+                    ScramMechanism::try_from(upsertion.mechanism)
+                        .inspect(|mechanism| debug!(?mechanism))
+                        .map(|mechanism| {
+                            if mechanism == ScramMechanism::Scram256 {
+                                let (client_key, server_key) =
+                                    derive_keys::<Sha256>(&upsertion.salted_password);
 
-                            (
-                                mechanism,
-                                Bytes::copy_from_slice(&Sha256::digest(client_key)[..]),
-                                Bytes::copy_from_slice(&server_key[..]),
-                            )
-                        } else {
-                            let (client_key, server_key) =
-                                derive_keys::<Sha512>(&upsertion.salted_password);
+                                (
+                                    mechanism,
+                                    Bytes::copy_from_slice(&Sha256::digest(client_key)[..]),
+                                    Bytes::copy_from_slice(&server_key[..]),
+                                )
+                            } else {
+                                let (client_key, server_key) =
+                                    derive_keys::<Sha512>(&upsertion.salted_password);
 
-                            (
-                                mechanism,
-                                Bytes::copy_from_slice(&Sha256::digest(client_key)[..]),
-                                Bytes::copy_from_slice(&server_key[..]),
-                            )
-                        }
-                    })?;
+                                (
+                                    mechanism,
+                                    Bytes::copy_from_slice(&Sha512::digest(client_key)[..]),
+                                    Bytes::copy_from_slice(&server_key[..]),
+                                )
+                            }
+                        })?;
 
-                let credential = ScramCredential::new(
-                    upsertion.salt,
-                    upsertion.iterations,
+                let credential = ScramCredential {
+                    salt: upsertion.salt,
+                    iterations: upsertion.iterations,
                     stored_key,
                     server_key,
-                );
+                };
 
                 results.push(
                     ctx.state()

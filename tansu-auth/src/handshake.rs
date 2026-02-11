@@ -25,17 +25,21 @@ impl ApiKey for SaslHandshakeService {
     const KEY: i16 = SaslHandshakeRequest::KEY;
 }
 
-impl Service<Authentication, SaslHandshakeRequest> for SaslHandshakeService {
+impl<S> Service<S, SaslHandshakeRequest> for SaslHandshakeService
+where
+    S: Send + Sync + 'static,
+{
     type Response = SaslHandshakeResponse;
     type Error = Error;
 
     #[instrument(skip(self, ctx), ret)]
     async fn serve(
         &self,
-        ctx: Context<Authentication>,
+        ctx: Context<S>,
         req: SaslHandshakeRequest,
     ) -> Result<Self::Response, Self::Error> {
-        ctx.state().stage
+        if let Some(authentication) = ctx.get::<Authentication>().cloned() {
+            authentication.stage
             .lock()
             .map_err(Into::into)
             .and_then(|mut guard| {
@@ -63,5 +67,10 @@ impl Service<Authentication, SaslHandshakeRequest> for SaslHandshakeService {
                         .mechanisms(Some([req.mechanism].into())))
                 }
             })
+        } else {
+            Ok(SaslHandshakeResponse::default()
+                .error_code(ErrorCode::UnsupportedSaslMechanism.into())
+                .mechanisms(Some([req.mechanism].into())))
+        }
     }
 }

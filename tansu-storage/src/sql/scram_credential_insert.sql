@@ -1,4 +1,4 @@
--- Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+-- Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 --
 -- Licensed under the Apache License, Version 2.0 (the "License");
 -- you may not use this file except in compliance with the License.
@@ -12,10 +12,11 @@
 -- See the License for the specific language governing permissions and
 
 insert into scram_credential
-(username, mechanism, salt, iterations, stored_key, server_key)
-values
-($1, $2, $3, $4, $5, $6)
-on conflict (username, mechanism)
+(cluster, username, mechanism, salt, iterations, stored_key, server_key)
+
+select c.id, $2, $3, $4, $5, $6, $7
+from cluster c where c.name = $1
+on conflict (cluster, username, mechanism)
 do update set
 salt = excluded.salt,
 iterations = excluded.iterations,

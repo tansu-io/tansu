@@ -1,4 +1,4 @@
--- Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+-- Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 --
 -- Licensed under the Apache License, Version 2.0 (the "License");
 -- you may not use this file except in compliance with the License.
@@ -13,7 +13,9 @@
 
 select
 salt, iterations, stored_key, server_key
-from scram_credential
+from scram_credential sc
+join cluster c on sc.cluster = c.id
 where
-username = $1
-and mechanism = $2
+c.name = $1
+and sc.username = $2
+and sc.mechanism = $3

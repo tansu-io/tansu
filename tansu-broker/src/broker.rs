@@ -21,11 +21,13 @@ use crate::{
     service::services,
 };
 use rama::{Context, Service};
+use rsasl::config::SASLConfig;
 use std::{
     io::ErrorKind,
     marker::PhantomData,
     net::{IpAddr, Ipv6Addr, SocketAddr},
     str::FromStr,
+    sync::Arc,
     time::{Duration, SystemTime},
 };
 use tansu_sans_io::{ErrorCode, RootMessageMeta};
@@ -55,6 +57,8 @@ pub struct Broker<G, S> {
     #[allow(dead_code)]
     otlp_endpoint_url: Option<Url>,
 
+    sasl_config: Option<Arc<SASLConfig>>,
+
     cancellation: CancellationToken,
 }
 
@@ -82,6 +86,7 @@ where
             storage,
             groups,
             otlp_endpoint_url: None,
+            sasl_config: None,
 
             cancellation: CancellationToken::new(),
         }
@@ -214,19 +219,16 @@ where
 
         let mut set = JoinSet::new();
 
-        let sasl_config = tansu_auth::configuration(self.storage.clone())?;
-
         loop {
             tokio::select! {
                 Ok((stream, _addr)) = listener.accept() => {
-                    let authentication = tansu_auth::Authentication::server(sasl_config.clone());
                     stream.set_nodelay(true)?;
 
                     let service = services(
                         self.cluster_id.as_str(),
                         self.groups.clone(),
                         self.storage.clone(),
-                        authentication
+                        self.sasl_config.clone()
                     )?;
 
                     let handle = set.spawn(async move {
@@ -300,6 +302,7 @@ pub struct Builder<N, C, I, A, S, L> {
     otlp_endpoint_url: Option<Url>,
     schema_registry: Option<Registry>,
     lake_house: Option<House>,
+    authentication: bool,
 
     cancellation: CancellationToken,
 }
@@ -325,6 +328,7 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             otlp_endpoint_url: self.otlp_endpoint_url,
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
+            authentication: self.authentication,
 
             cancellation: self.cancellation,
         }
@@ -341,6 +345,7 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             otlp_endpoint_url: self.otlp_endpoint_url,
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
+            authentication: self.authentication,
 
             cancellation: self.cancellation,
         }
@@ -357,6 +362,7 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             otlp_endpoint_url: self.otlp_endpoint_url,
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
+            authentication: self.authentication,
 
             cancellation: self.cancellation,
         }
@@ -376,6 +382,7 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             otlp_endpoint_url: self.otlp_endpoint_url,
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
+            authentication: self.authentication,
 
             cancellation: self.cancellation,
         }
@@ -394,6 +401,7 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             otlp_endpoint_url: self.otlp_endpoint_url,
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
+            authentication: self.authentication,
 
             cancellation: self.cancellation,
         }
@@ -412,6 +420,7 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             otlp_endpoint_url: self.otlp_endpoint_url,
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
+            authentication: self.authentication,
 
             cancellation: self.cancellation,
         }
@@ -435,6 +444,13 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
     pub fn otlp_endpoint_url(self, otlp_endpoint_url: Option<Url>) -> Self {
         Self {
             otlp_endpoint_url,
+            ..self
+        }
+    }
+
+    pub fn authentication(self, authentication: bool) -> Self {
+        Self {
+            authentication,
             ..self
         }
     }
@@ -463,6 +479,12 @@ impl Builder<i32, String, Uuid, Url, Url, Url> {
 
         let groups = Controller::with_storage(storage.clone())?;
 
+        let sasl_config = if self.authentication {
+            tansu_auth::configuration(storage.clone()).map(Some)?
+        } else {
+            None
+        };
+
         Ok(Broker {
             node_id: self.node_id,
             cluster_id: self.cluster_id.clone(),
@@ -472,6 +494,8 @@ impl Builder<i32, String, Uuid, Url, Url, Url> {
             storage,
             groups,
             otlp_endpoint_url: self.otlp_endpoint_url,
+            sasl_config,
+
             cancellation: self.cancellation,
         })
     }

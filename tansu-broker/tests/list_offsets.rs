@@ -56,7 +56,7 @@ where
                 RequestFrameLayer,
                 FrameBytesLayer,
                 BytesLayer,
-                BytesFrameLayer,
+                BytesFrameLayer::default(),
             )
                 .into_layer(frame_route)
         })

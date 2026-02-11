@@ -29,7 +29,7 @@ use tansu_sans_io::ScramMechanism;
 use tansu_storage::Storage;
 use thiserror::Error;
 use tokio::task::JoinError;
-use tracing::debug;
+use tracing::{debug, instrument};
 
 mod authenticate;
 mod handshake;
@@ -160,11 +160,14 @@ where
         Self { storage }
     }
 
+    #[instrument(skip_all)]
     fn check(
         &self,
         session_data: &SessionData,
         context: &Context<'_>,
     ) -> Result<Result<Success, AuthError>, Error> {
+        debug!(mechanism = %session_data.mechanism().mechanism);
+
         if session_data.mechanism().mechanism == "PLAIN" {
             Ok(context
                 .get_ref::<Password>()
@@ -223,6 +226,7 @@ impl<S> SessionCallback for Callback<S>
 where
     S: Storage,
 {
+    #[instrument(skip_all)]
     fn callback(
         &self,
         session_data: &SessionData,
@@ -251,15 +255,19 @@ where
 
             if let Some(credential) = rt
                 .block_on(async { storage.user_scram_credential(auth_id, mechanism).await })
-                .inspect(|credential| debug!(?credential))
+                .inspect(|credential| {
+                    if let Some(credential) = credential {
+                        debug!(salt = ?&credential.salt[..], iterations = credential.iterations, stored_key = ?&credential.stored_key[..], server_key = ?&credential.server_key[..]);
+                    }
+                })
                 .expect("credentials")
             {
                 _ = request
                     .satisfy::<ScramStoredPassword<'_>>(&ScramStoredPassword::new(
-                        credential.iterations() as u32,
-                        &credential.salt()[..],
-                        &credential.stored_key()[..],
-                        &credential.server_key()[..],
+                        credential.iterations as u32,
+                        &credential.salt[..],
+                        &credential.stored_key[..],
+                        &credential.server_key[..],
                     ))
                     .inspect_err(|err| debug!(auth_id, ?mechanism, ?err))?;
             }
@@ -268,6 +276,7 @@ where
         Ok(())
     }
 
+    #[instrument(skip_all)]
     fn validate(
         &self,
         session_data: &SessionData,

@@ -24,7 +24,6 @@ use bytes::Bytes;
 use nanoid::nanoid;
 use opentelemetry::KeyValue;
 use rama::{Context, Layer, Service};
-use tansu_auth::Authentication;
 use tokio::{
     io::{AsyncReadExt as _, AsyncWriteExt as _, BufWriter},
     net::{TcpListener, TcpStream},
@@ -136,7 +135,6 @@ where
 pub struct TcpContext {
     cluster_id: Option<String>,
     maximum_frame_size: Option<usize>,
-    authentication: Authentication,
 }
 
 impl TcpContext {
@@ -147,13 +145,6 @@ impl TcpContext {
     pub fn maximum_frame_size(self, maximum_frame_size: Option<usize>) -> Self {
         Self {
             maximum_frame_size,
-            ..self
-        }
-    }
-
-    pub fn authentication(self, authentication: Authentication) -> Self {
-        Self {
-            authentication,
             ..self
         }
     }

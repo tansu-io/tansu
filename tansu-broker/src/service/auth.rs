@@ -13,35 +13,27 @@
 // limitations under the License.
 
 use crate::Error;
-use rama::{
-    Layer as _, Service as _,
-    layer::{MapErrLayer, MapStateLayer},
-};
-use tansu_auth::{Authentication, SaslAuthenticateService, SaslHandshakeService};
+use rama::{Layer as _, Service as _, layer::MapErrLayer};
+use tansu_auth::{SaslAuthenticateService, SaslHandshakeService};
 use tansu_sans_io::{ApiKey as _, SaslAuthenticateRequest, SaslHandshakeRequest};
 use tansu_service::{FrameRequestLayer, FrameRouteBuilder};
 
 pub fn services(
     builder: FrameRouteBuilder<(), Error>,
-    authentication: Authentication,
 ) -> Result<FrameRouteBuilder<(), Error>, Error> {
     [authenticate, handshake]
         .iter()
-        .try_fold(builder, |builder, service| {
-            service(builder, authentication.clone())
-        })
+        .try_fold(builder, |builder, service| service(builder))
 }
 
 pub fn authenticate(
     builder: FrameRouteBuilder<(), Error>,
-    authentication: Authentication,
 ) -> Result<FrameRouteBuilder<(), Error>, Error> {
     builder
         .with_route(
             SaslAuthenticateRequest::KEY,
             (
                 MapErrLayer::new(Error::from),
-                MapStateLayer::new(|_| authentication),
                 FrameRequestLayer::<SaslAuthenticateRequest>::new(),
             )
                 .into_layer(SaslAuthenticateService::default())
@@ -52,14 +44,12 @@ pub fn authenticate(
 
 pub fn handshake(
     builder: FrameRouteBuilder<(), Error>,
-    authentication: Authentication,
 ) -> Result<FrameRouteBuilder<(), Error>, Error> {
     builder
         .with_route(
             SaslHandshakeRequest::KEY,
             (
                 MapErrLayer::new(Error::from),
-                MapStateLayer::new(|_| authentication),
                 FrameRequestLayer::<SaslHandshakeRequest>::new(),
             )
                 .into_layer(SaslHandshakeService)

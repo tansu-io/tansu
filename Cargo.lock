@@ -8256,6 +8256,7 @@ dependencies = [
  "opentelemetry",
  "opentelemetry-semantic-conventions",
  "rama",
+ "rsasl",
  "tansu-auth",
  "tansu-sans-io",
  "thiserror 2.0.18",

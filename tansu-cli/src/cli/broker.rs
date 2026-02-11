@@ -77,6 +77,10 @@ pub(super) struct Arg {
     /// OTEL Exporter OTLP endpoint
     #[arg(long, env = "OTEL_EXPORTER_OTLP_ENDPOINT")]
     otlp_endpoint_url: Option<EnvVarExp<Url>>,
+
+    /// When present, client authentication is required
+    #[arg(long)]
+    authentication: bool,
 }
 
 #[derive(Clone, Debug, Subcommand)]
@@ -212,7 +216,8 @@ impl Arg {
             .otlp_endpoint_url(otlp_endpoint_url)
             .schema_registry(schema_registry)
             .storage(storage_engine)
-            .listener(listener);
+            .listener(listener)
+            .authentication(self.authentication);
 
         #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
         let broker = broker.lake_house(lake_house);

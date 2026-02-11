@@ -47,70 +47,80 @@ impl ApiKey for SaslAuthenticateService {
     const KEY: i16 = SaslAuthenticateRequest::KEY;
 }
 
-impl Service<Authentication, SaslAuthenticateRequest> for SaslAuthenticateService {
+impl<S> Service<S, SaslAuthenticateRequest> for SaslAuthenticateService
+where
+    S: Send + Sync + 'static,
+{
     type Response = SaslAuthenticateResponse;
     type Error = Error;
 
     async fn serve(
         &self,
-        ctx: Context<Authentication>,
+        ctx: Context<S>,
         req: SaslAuthenticateRequest,
     ) -> Result<Self::Response, Self::Error> {
-        let authentication = ctx.state().to_owned();
-        let session_lifetime_ms = self.session_lifetime_ms;
+        if let Some(authentication) = ctx.get::<Authentication>().cloned() {
+            let session_lifetime_ms = self.session_lifetime_ms;
 
-        task::spawn_blocking(move || {
-            authentication
-                .stage
-                .lock()
-                .map_err(Into::into)
-                .map(|mut guard| {
-                    if let Some(Stage::Session(session)) = guard.as_mut() {
-                        let mut outcome = Cursor::new(Vec::new());
+            task::spawn_blocking(move || {
+                authentication
+                    .stage
+                    .lock()
+                    .map_err(Into::into)
+                    .map(|mut guard| {
+                        if let Some(Stage::Session(session)) = guard.as_mut() {
+                            let mut outcome = Cursor::new(Vec::new());
 
-                        let Ok(state) = session
-                            .step(Some(&req.auth_bytes), &mut outcome)
-                            .inspect(|state| debug!(?state))
-                            .inspect_err(|err| debug!(?err))
-                        else {
+                            let Ok(state) = session
+                                .step(Some(&req.auth_bytes), &mut outcome)
+                                .inspect(|state| debug!(?state))
+                                .inspect_err(|err| debug!(?err))
+                            else {
+                                _ = guard.take();
+
+                                return SaslAuthenticateResponse::default()
+                                    .error_code(ErrorCode::SaslAuthenticationFailed.into())
+                                    .error_message(Some(
+                                        ErrorCode::SaslAuthenticationFailed.to_string(),
+                                    ))
+                                    .auth_bytes(Bytes::from_static(b""))
+                                    .session_lifetime_ms(Some(0));
+                            };
+
+                            let success = session
+                                .validation()
+                                .transpose()
+                                .ok()
+                                .flatten()
+                                .inspect(|success| debug!(?success));
+
+                            if let State::Finished(_) = state {
+                                _ = guard.replace(Stage::Finished(success))
+                            }
+
+                            SaslAuthenticateResponse::default()
+                                .error_code(ErrorCode::None.into())
+                                .error_message(Some("NONE".into()))
+                                .auth_bytes(Bytes::from(outcome.into_inner()))
+                                .session_lifetime_ms(session_lifetime_ms)
+                        } else {
                             _ = guard.take();
 
-                            return SaslAuthenticateResponse::default()
-                                .error_code(ErrorCode::SaslAuthenticationFailed.into())
-                                .error_message(Some(
-                                    ErrorCode::SaslAuthenticationFailed.to_string(),
-                                ))
+                            SaslAuthenticateResponse::default()
+                                .error_code(ErrorCode::IllegalSaslState.into())
+                                .error_message(Some(ErrorCode::IllegalSaslState.to_string()))
                                 .auth_bytes(Bytes::from_static(b""))
-                                .session_lifetime_ms(Some(0));
-                        };
-
-                        let success = session
-                            .validation()
-                            .transpose()
-                            .ok()
-                            .flatten()
-                            .inspect(|success| debug!(?success));
-
-                        if let State::Finished(_) = state {
-                            _ = guard.replace(Stage::Finished(success))
+                                .session_lifetime_ms(Some(0))
                         }
-
-                        SaslAuthenticateResponse::default()
-                            .error_code(ErrorCode::None.into())
-                            .error_message(Some("NONE".into()))
-                            .auth_bytes(Bytes::from(outcome.into_inner()))
-                            .session_lifetime_ms(session_lifetime_ms)
-                    } else {
-                        _ = guard.take();
-
-                        SaslAuthenticateResponse::default()
-                            .error_code(ErrorCode::IllegalSaslState.into())
-                            .error_message(Some(ErrorCode::IllegalSaslState.to_string()))
-                            .auth_bytes(Bytes::from_static(b""))
-                            .session_lifetime_ms(Some(0))
-                    }
-                })
-        })
-        .await?
+                    })
+            })
+            .await?
+        } else {
+            Ok(SaslAuthenticateResponse::default()
+                .error_code(ErrorCode::IllegalSaslState.into())
+                .error_message(Some(ErrorCode::IllegalSaslState.to_string()))
+                .auth_bytes(Bytes::from_static(b""))
+                .session_lifetime_ms(Some(0)))
+        }
     }
 }

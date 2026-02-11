@@ -234,6 +234,7 @@ pub enum Error {
     NoSuchField(&'static str),
     NoSuchMessage(&'static str),
     NoSuchRequest(i16),
+    NotAuthenticated,
     ParseFilter(Arc<ParseError>),
     ParseScram(String),
     ResponseFrame,

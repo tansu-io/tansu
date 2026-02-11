@@ -1121,7 +1121,7 @@ impl Delegate {
         Ok(())
     }
 
-    #[instrument(skip(self), ret)]
+    #[instrument(skip(self, now), ret)]
     async fn policy_delete(&self, now: SystemTime) -> Result<u64> {
         let start = SystemTime::now();
 
@@ -4325,6 +4325,7 @@ impl Storage for Delegate {
         pc.execute(
             "scram_credential_insert.sql",
             (
+                self.cluster.as_str(),
                 user,
                 i32::from(mechanism),
                 &credential.salt[..],
@@ -4354,30 +4355,36 @@ impl Storage for Delegate {
         let start = SystemTime::now();
         let pc = self.connection().await?;
 
-        pc.query_opt("scram_credential_select.sql", (user, i32::from(mechanism)))
-            .await
-            .inspect_err(|err| error!(?err))
-            .map_err(Into::into)
-            .and_then(|row| {
-                if let Some(row) = row {
-                    let salt = row.get::<Vec<u8>>(0).map(Bytes::from)?;
-                    let iterations = row.get::<i32>(1)?;
-                    let stored_key = row.get::<Vec<u8>>(2).map(Bytes::from)?;
-                    let server_key = row.get::<Vec<u8>>(3).map(Bytes::from)?;
+        pc.query_opt(
+            "scram_credential_select.sql",
+            (self.cluster.as_str(), user, i32::from(mechanism)),
+        )
+        .await
+        .inspect_err(|err| error!(?err))
+        .map_err(Into::into)
+        .and_then(|row| {
+            if let Some(row) = row {
+                let salt = row.get::<Vec<u8>>(0).map(Bytes::from)?;
+                let iterations = row.get::<i32>(1)?;
+                let stored_key = row.get::<Vec<u8>>(2).map(Bytes::from)?;
+                let server_key = row.get::<Vec<u8>>(3).map(Bytes::from)?;
 
-                    Ok(Some(ScramCredential::new(
-                        salt, iterations, stored_key, server_key,
-                    )))
-                } else {
-                    Ok(None)
-                }
-            })
-            .inspect(|_| {
-                DELEGATE_REQUEST_DURATION.record(
-                    elapsed_millis(start),
-                    &[KeyValue::new("operation", "upsert_user_scram_credential")],
-                )
-            })
+                Ok(Some(ScramCredential {
+                    salt,
+                    iterations,
+                    stored_key,
+                    server_key,
+                }))
+            } else {
+                Ok(None)
+            }
+        })
+        .inspect(|_| {
+            DELEGATE_REQUEST_DURATION.record(
+                elapsed_millis(start),
+                &[KeyValue::new("operation", "upsert_user_scram_credential")],
+            )
+        })
     }
 
     #[instrument(skip_all)]
