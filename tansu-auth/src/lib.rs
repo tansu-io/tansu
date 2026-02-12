@@ -253,14 +253,9 @@ where
 
             let storage = self.storage.clone();
 
-            if let Some(credential) = rt
+            if let Ok(Some(credential)) = rt
                 .block_on(async { storage.user_scram_credential(auth_id, mechanism).await })
-                .inspect(|credential| {
-                    if let Some(credential) = credential {
-                        debug!(salt = ?&credential.salt[..], iterations = credential.iterations, stored_key = ?&credential.stored_key[..], server_key = ?&credential.server_key[..]);
-                    }
-                })
-                .expect("credentials")
+                .inspect_err(|err| debug!(auth_id, ?mechanism, ?err))
             {
                 _ = request
                     .satisfy::<ScramStoredPassword<'_>>(&ScramStoredPassword::new(

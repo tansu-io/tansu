@@ -3503,38 +3503,31 @@ impl Storage for Postgres {
     ) -> Result<Option<ScramCredential>> {
         let c = self.connection().await?;
 
-        let prepared = c
-            .prepare(concat!(
-                "select from scram_credential",
-                " salt, iterations, stored_key, server_key",
-                " where",
-                " username = $1",
-                ", and mechanism = $2",
-            ))
-            .await
-            .inspect_err(|err| error!(?err, ?user, ?mechanism,))?;
+        self.prepare_query_opt(
+            &c,
+            "scram_credential_select.sql",
+            &[&self.cluster, &user, &i32::from(mechanism)],
+        )
+        .await
+        .map_err(Into::into)
+        .and_then(|maybe| {
+            if let Some(row) = maybe {
+                let salt = row.try_get::<_, &[u8]>(0).map(Bytes::copy_from_slice)?;
+                let iterations = row.try_get::<_, i32>(1)?;
+                let stored_key = row.try_get::<_, &[u8]>(2).map(Bytes::copy_from_slice)?;
+                let server_key = row.try_get::<_, &[u8]>(3).map(Bytes::copy_from_slice)?;
 
-        c.query_opt(&prepared, &[&user, &i32::from(mechanism)])
-            .await
-            .map_err(Into::into)
-            .and_then(|maybe| {
-                if let Some(row) = maybe {
-                    let salt = row.try_get::<_, &[u8]>(0).map(Bytes::copy_from_slice)?;
-                    let iterations = row.try_get::<_, i32>(1)?;
-                    let stored_key = row.try_get::<_, &[u8]>(2).map(Bytes::copy_from_slice)?;
-                    let server_key = row.try_get::<_, &[u8]>(3).map(Bytes::copy_from_slice)?;
-
-                    Ok(Some(ScramCredential {
-                        salt,
-                        iterations,
-                        stored_key,
-                        server_key,
-                    }))
-                } else {
-                    Ok(None)
-                }
-            })
-            .inspect_err(|err| error!(?err, ?user, ?mechanism,))
+                Ok(Some(ScramCredential {
+                    salt,
+                    iterations,
+                    stored_key,
+                    server_key,
+                }))
+            } else {
+                Ok(None)
+            }
+        })
+        .inspect_err(|err| error!(?err, ?user, ?mechanism,))
     }
 
     async fn cluster_id(&self) -> Result<String> {
