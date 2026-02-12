@@ -3509,7 +3509,6 @@ impl Storage for Postgres {
             &[&self.cluster, &user, &i32::from(mechanism)],
         )
         .await
-        .map_err(Into::into)
         .and_then(|maybe| {
             if let Some(row) = maybe {
                 let salt = row.try_get::<_, &[u8]>(0).map(Bytes::copy_from_slice)?;
