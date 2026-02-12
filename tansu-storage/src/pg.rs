@@ -35,7 +35,7 @@ use rand::{prelude::*, rng};
 use serde_json::Value;
 use tansu_sans_io::{
     BatchAttribute, ConfigResource, ConfigSource, ConfigType, ControlBatch, EndTransactionMarker,
-    ErrorCode, IsolationLevel, ListOffset, NULL_TOPIC_ID, OpType,
+    ErrorCode, IsolationLevel, ListOffset, NULL_TOPIC_ID, OpType, ScramMechanism,
     add_partitions_to_txn_response::{
         AddPartitionsToTxnPartitionResult, AddPartitionsToTxnTopicResult,
     },
@@ -72,9 +72,9 @@ use uuid::Uuid;
 
 use crate::{
     BrokerRegistrationRequest, Error, GroupDetail, ListOffsetResponse, METER, MetadataResponse,
-    NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse, Result, Storage,
-    TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse, TxnOffsetCommitRequest,
-    TxnState, UpdateError, Version,
+    NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse, Result,
+    ScramCredential, Storage, TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse,
+    TxnOffsetCommitRequest, TxnState, UpdateError, Version,
     sql::{default_hash, idempotent_sequence_check},
 };
 
@@ -3257,7 +3257,7 @@ impl Storage for Postgres {
                                     ?err,
                                     cluster = self.cluster,
                                     topic = topic.name,
-                                    partition_index,
+                                    ?partition_index,
                                     transaction_id
                                 )
                             })?;
@@ -3468,6 +3468,65 @@ impl Storage for Postgres {
         }
 
         Ok(())
+    }
+
+    async fn upsert_user_scram_credential(
+        &self,
+        username: &str,
+        mechanism: ScramMechanism,
+        credential: ScramCredential,
+    ) -> Result<()> {
+        let c = self.connection().await?;
+
+        self.prepare_execute(
+            &c,
+            "scram_credential_insert.sql",
+            &[
+                &self.cluster,
+                &username,
+                &i32::from(mechanism),
+                &&credential.salt[..],
+                &credential.iterations,
+                &&credential.stored_key[..],
+                &&credential.server_key[..],
+            ],
+        )
+        .await
+        .inspect_err(|err| error!(?err, ?username, ?mechanism,))
+        .and(Ok(()))
+    }
+
+    async fn user_scram_credential(
+        &self,
+        user: &str,
+        mechanism: ScramMechanism,
+    ) -> Result<Option<ScramCredential>> {
+        let c = self.connection().await?;
+
+        self.prepare_query_opt(
+            &c,
+            "scram_credential_select.sql",
+            &[&self.cluster, &user, &i32::from(mechanism)],
+        )
+        .await
+        .and_then(|maybe| {
+            if let Some(row) = maybe {
+                let salt = row.try_get::<_, &[u8]>(0).map(Bytes::copy_from_slice)?;
+                let iterations = row.try_get::<_, i32>(1)?;
+                let stored_key = row.try_get::<_, &[u8]>(2).map(Bytes::copy_from_slice)?;
+                let server_key = row.try_get::<_, &[u8]>(3).map(Bytes::copy_from_slice)?;
+
+                Ok(Some(ScramCredential {
+                    salt,
+                    iterations,
+                    stored_key,
+                    server_key,
+                }))
+            } else {
+                Ok(None)
+            }
+        })
+        .inspect_err(|err| error!(?err, ?user, ?mechanism,))
     }
 
     async fn cluster_id(&self) -> Result<String> {

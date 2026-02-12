@@ -26,8 +26,8 @@ async-trait.workspace = true
 bytes.workspace = true
 cached.workspace = true
 chrono.workspace = true
-deadpool-postgres = { workspace = true, optional = true }
 deadpool = { workspace = true, optional = true }
+deadpool-postgres = { workspace = true, optional = true }
 futures-core.workspace = true
 futures-util.workspace = true
 futures.workspace = true
@@ -41,18 +41,20 @@ protobuf.workspace = true
 rama.workspace = true
 rand.workspace = true
 regex.workspace = true
+rsasl.workspace = true
 rustls-native-certs.workspace = true
 rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 slatedb = {workspace = true, optional = true}
 tansu-sans-io.workspace = true
 tansu-schema.workspace = true
 thiserror.workspace = true
 tokio-postgres = { workspace = true, optional = true }
+tokio-postgres-rustls = { workspace = true, optional = true }
 tokio-util.workspace = true
 tokio.workspace = true
-tokio-postgres-rustls = { workspace = true, optional = true }
 tracing-subscriber.workspace = true
 tracing.workspace = true
 turso = { workspace = true, optional = true }

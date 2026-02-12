@@ -12,15 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod alter_user_scram_credentials;
 mod consumer_group_describe;
+mod create_acls;
 mod create_topics;
 mod delete_groups;
 mod delete_records;
 mod delete_topics;
+mod describe_acls;
 mod describe_cluster;
 mod describe_configs;
 mod describe_groups;
 mod describe_topic_partitions;
+mod describe_user_scram_credentials;
 mod fetch;
 mod find_coordinator;
 mod get_telemetry_subscriptions;
@@ -40,16 +44,20 @@ use std::{
     time::{Duration, SystemTime},
 };
 
+pub use alter_user_scram_credentials::AlterUserScramCredentialsService;
 use async_trait::async_trait;
 pub use consumer_group_describe::ConsumerGroupDescribeService;
+pub use create_acls::CreateAclsService;
 pub use create_topics::CreateTopicsService;
 pub use delete_groups::DeleteGroupsService;
 pub use delete_records::DeleteRecordsService;
 pub use delete_topics::DeleteTopicsService;
+pub use describe_acls::DescribeAclsService;
 pub use describe_cluster::DescribeClusterService;
 pub use describe_configs::DescribeConfigsService;
 pub use describe_groups::DescribeGroupsService;
 pub use describe_topic_partitions::DescribeTopicPartitionsService;
+pub use describe_user_scram_credentials::DescribeUserScramCredentialsService;
 pub use fetch::FetchService;
 pub use find_coordinator::FindCoordinatorService;
 pub use get_telemetry_subscriptions::GetTelemetrySubscriptionsService;
@@ -66,9 +74,9 @@ use opentelemetry::{
 pub use produce::ProduceService;
 use rama::{Context, Layer, Service};
 use tansu_sans_io::{
-    ConfigResource, ErrorCode, IsolationLevel, ListOffset, create_topics_request::CreatableTopic,
-    delete_groups_response::DeletableGroupResult, delete_records_request::DeleteRecordsTopic,
-    delete_records_response::DeleteRecordsTopicResult,
+    ConfigResource, ErrorCode, IsolationLevel, ListOffset, ScramMechanism,
+    create_topics_request::CreatableTopic, delete_groups_response::DeletableGroupResult,
+    delete_records_request::DeleteRecordsTopic, delete_records_response::DeleteRecordsTopicResult,
     describe_cluster_response::DescribeClusterBroker,
     describe_configs_response::DescribeConfigsResult,
     describe_topic_partitions_response::DescribeTopicPartitionsResponseTopic,
@@ -91,9 +99,9 @@ use uuid::Uuid;
 
 use crate::{
     BrokerRegistrationRequest, Error, GroupDetail, ListOffsetResponse, METER, MetadataResponse,
-    NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse, Result, Storage,
-    TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse, TxnOffsetCommitRequest,
-    UpdateError, Version,
+    NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse, Result,
+    ScramCredential, Storage, TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse,
+    TxnOffsetCommitRequest, UpdateError, Version,
 };
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -181,6 +189,15 @@ pub enum Request {
     ClusterId,
     Node,
     AdvertisedListener,
+    UpsertUserScramCredential {
+        user: String,
+        mechanism: ScramMechanism,
+        credential: ScramCredential,
+    },
+    UserScramCredential {
+        user: String,
+        mechanism: ScramMechanism,
+    },
     Ping,
 }
 
@@ -216,6 +233,8 @@ impl Display for Request {
             Self::TxnEnd { .. } => f.write_str("TxnEnd"),
             Self::TxnOffsetCommit(_) => f.write_str("TxnOffsetCommit"),
             Self::UpdateGroup { .. } => f.write_str("UpdateGroup"),
+            Self::UpsertUserScramCredential { .. } => f.write_str("UpsertUserScramCredential"),
+            Self::UserScramCredential { .. } => f.write_str("UserScramCredential"),
             Self::Ping => f.write_str("Ping"),
         }
     }
@@ -223,36 +242,38 @@ impl Display for Request {
 
 #[derive(Clone, Debug)]
 pub enum Response {
-    RegisterBroker(Result<()>),
-    IncrementalAlterResponse(Result<AlterConfigsResourceResponse>),
+    AdvertisedListener(Result<Url>),
+    Brokers(Result<Vec<DescribeClusterBroker>>),
+    ClusterId(Result<String>),
+    CommittedOffsetTopitions(Result<BTreeMap<Topition, i64>>),
     CreateTopic(Result<Uuid>),
+    DeleteGroups(Result<Vec<DeletableGroupResult>>),
     DeleteRecords(Result<Vec<DeleteRecordsTopicResult>>),
     DeleteTopic(Result<ErrorCode>),
-    Brokers(Result<Vec<DescribeClusterBroker>>),
-    Produce(Result<i64>),
-    Fetch(Result<Vec<deflated::Batch>>),
-    OffsetStage(Result<OffsetStage>),
-    ListOffsets(Result<Vec<(Topition, ListOffsetResponse)>>),
-    OffsetCommit(Result<Vec<(Topition, ErrorCode)>>),
-    CommittedOffsetTopitions(Result<BTreeMap<Topition, i64>>),
-    OffsetFetch(Result<BTreeMap<Topition, i64>>),
-    Metadata(Result<MetadataResponse>),
     DescribeConfig(Result<DescribeConfigsResult>),
-    DescribeTopicPartitions(Result<Vec<DescribeTopicPartitionsResponseTopic>>),
-    ListGroups(Result<Vec<ListedGroup>>),
-    DeleteGroups(Result<Vec<DeletableGroupResult>>),
     DescribeGroups(Result<Vec<NamedGroupDetail>>),
-    UpdateGroup(Result<Version, UpdateError<GroupDetail>>),
+    DescribeTopicPartitions(Result<Vec<DescribeTopicPartitionsResponseTopic>>),
+    Fetch(Result<Vec<deflated::Batch>>),
+    IncrementalAlterResponse(Result<AlterConfigsResourceResponse>),
     InitProducer(Result<ProducerIdResponse>),
+    ListGroups(Result<Vec<ListedGroup>>),
+    ListOffsets(Result<Vec<(Topition, ListOffsetResponse)>>),
+    Maintain(Result<()>),
+    Metadata(Result<MetadataResponse>),
+    Node(Result<i32>),
+    OffsetCommit(Result<Vec<(Topition, ErrorCode)>>),
+    OffsetFetch(Result<BTreeMap<Topition, i64>>),
+    OffsetStage(Result<OffsetStage>),
+    Ping(Result<()>),
+    Produce(Result<i64>),
+    RegisterBroker(Result<()>),
     TxnAddOffsets(Result<ErrorCode>),
     TxnAddPartitions(Result<TxnAddPartitionsResponse>),
-    TxnOffsetCommit(Result<Vec<TxnOffsetCommitResponseTopic>>),
     TxnEnd(Result<ErrorCode>),
-    Maintain(Result<()>),
-    ClusterId(Result<String>),
-    Node(Result<i32>),
-    AdvertisedListener(Result<Url>),
-    Ping(Result<()>),
+    TxnOffsetCommit(Result<Vec<TxnOffsetCommitResponseTopic>>),
+    UpdateGroup(Result<Version, UpdateError<GroupDetail>>),
+    UpsertUserScramCredential(Result<()>),
+    UserScramCredential(Result<Option<ScramCredential>>),
 }
 
 pub type RequestSender = mpsc::Sender<(Request, oneshot::Sender<Response>)>;
@@ -1080,6 +1101,57 @@ impl Storage for RequestChannelService {
     }
 
     #[instrument(skip_all)]
+    async fn upsert_user_scram_credential(
+        &self,
+        user: &str,
+        mechanism: ScramMechanism,
+        credential: ScramCredential,
+    ) -> Result<()> {
+        let user = user.to_string();
+
+        self.serve(
+            Context::default(),
+            Request::UpsertUserScramCredential {
+                user,
+                mechanism,
+                credential,
+            },
+        )
+        .await
+        .and_then(|response| {
+            if let Response::UpsertUserScramCredential(inner) = response {
+                inner.map_err(Into::into)
+            } else {
+                Err(Error::UnexpectedServiceResponse(Box::new(response)).into())
+            }
+        })
+        .map_err(Into::into)
+    }
+
+    #[instrument(skip_all)]
+    async fn user_scram_credential(
+        &self,
+        user: &str,
+        mechanism: ScramMechanism,
+    ) -> Result<Option<ScramCredential>> {
+        let user = user.to_string();
+
+        self.serve(
+            Context::default(),
+            Request::UserScramCredential { user, mechanism },
+        )
+        .await
+        .and_then(|response| {
+            if let Response::UserScramCredential(inner) = response {
+                inner.map_err(Into::into)
+            } else {
+                Err(Error::UnexpectedServiceResponse(Box::new(response)).into())
+            }
+        })
+        .map_err(Into::into)
+    }
+
+    #[instrument(skip_all)]
     async fn ping(&self) -> Result<()> {
         self.serve(Context::default(), Request::Ping)
             .await
@@ -1356,6 +1428,20 @@ where
             Request::Node => Ok(Response::Node(self.storage.node().await)),
             Request::AdvertisedListener => Ok(Response::AdvertisedListener(
                 self.storage.advertised_listener().await,
+            )),
+            Request::UpsertUserScramCredential {
+                user,
+                mechanism,
+                credential,
+            } => Ok(Response::UpsertUserScramCredential(
+                self.storage
+                    .upsert_user_scram_credential(&user[..], mechanism, credential)
+                    .await,
+            )),
+            Request::UserScramCredential { user, mechanism } => Ok(Response::UserScramCredential(
+                self.storage
+                    .user_scram_credential(&user[..], mechanism)
+                    .await,
             )),
             Request::Ping => Ok(Response::Ping(self.storage.ping().await)),
         }

@@ -27,8 +27,8 @@ use std::{
 use crate::{
     BrokerRegistrationRequest, Error, GroupDetail, ListOffsetRequest, ListOffsetResponse, METER,
     MetadataResponse, NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse,
-    Result, Storage, TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse,
-    TxnOffsetCommitRequest, TxnState, UpdateError, Version,
+    Result, ScramCredential, Storage, TopicId, Topition, TxnAddPartitionsRequest,
+    TxnAddPartitionsResponse, TxnOffsetCommitRequest, TxnState, UpdateError, Version,
     sql::{Cache, default_hash, idempotent_sequence_check, remove_comments},
 };
 use async_trait::async_trait;
@@ -42,7 +42,7 @@ use rand::{rng, seq::SliceRandom as _};
 use regex::Regex;
 use tansu_sans_io::{
     BatchAttribute, ConfigResource, ConfigSource, ConfigType, ControlBatch, EndTransactionMarker,
-    ErrorCode, IsolationLevel, NULL_TOPIC_ID, OpType,
+    ErrorCode, IsolationLevel, NULL_TOPIC_ID, OpType, ScramMechanism,
     add_partitions_to_txn_response::{
         AddPartitionsToTxnPartitionResult, AddPartitionsToTxnTopicResult,
     },
@@ -3640,6 +3640,23 @@ impl Storage for Engine {
 
     async fn advertised_listener(&self) -> Result<Url> {
         Ok(self.advertised_listener.clone())
+    }
+
+    async fn upsert_user_scram_credential(
+        &self,
+        _user: &str,
+        _mechanism: ScramMechanism,
+        _credential: ScramCredential,
+    ) -> Result<()> {
+        todo!()
+    }
+
+    async fn user_scram_credential(
+        &self,
+        _user: &str,
+        _mechanism: ScramMechanism,
+    ) -> Result<Option<ScramCredential>> {
+        todo!()
     }
 
     async fn ping(&self) -> Result<()> {

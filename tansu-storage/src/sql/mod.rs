@@ -191,6 +191,14 @@ pub(crate) static SQL: LazyLock<Cache> = LazyLock::new(|| {
         ("record_fetch_pg.sql", include_sql!("record_fetch_pg.sql")),
         ("record_insert.sql", include_sql!("record_insert.sql")),
         ("register_broker.sql", include_sql!("register_broker.sql")),
+        (
+            "scram_credential_insert.sql",
+            include_sql!("scram_credential_insert.sql"),
+        ),
+        (
+            "scram_credential_select.sql",
+            include_sql!("scram_credential_select.sql"),
+        ),
         ("topic_by_cluster.sql", include_sql!("topic_by_cluster.sql")),
         ("topic_by_uuid.sql", include_sql!("topic_by_uuid.sql")),
         (

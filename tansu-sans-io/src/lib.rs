@@ -116,9 +116,11 @@
 //! and whether any tagged fields can be present for a particular message version. Serializers
 //! map from the [Serde Data Model](https://serde.rs/data-model.html) to the Kafka protocol or vice versa.
 
+pub mod acl;
 pub mod de;
 pub mod primitive;
 pub mod record;
+pub mod resource;
 pub mod ser;
 
 use bytes::{Buf, BufMut, Bytes, BytesMut, TryGetError};
@@ -136,7 +138,8 @@ use std::{
     io::{self, BufRead, Cursor, Read, Write},
     num,
     process::{ExitCode, Termination},
-    str, string,
+    str::{self, FromStr},
+    string,
     sync::{Arc, OnceLock},
     time::{Duration, SystemTime, SystemTimeError},
 };
@@ -225,12 +228,15 @@ pub enum Error {
     InvalidCoordinatorType(i8),
     InvalidIsolationLevel(i8),
     InvalidOpType(i8),
+    InvalidScramMechanism(i8),
     Io(Arc<io::Error>),
     Message(String),
     NoSuchField(&'static str),
     NoSuchMessage(&'static str),
     NoSuchRequest(i16),
+    NotAuthenticated,
     ParseFilter(Arc<ParseError>),
+    ParseScram(String),
     ResponseFrame,
     Snap(#[from] snap::Error),
     StringWithoutApiVersion,
@@ -243,6 +249,7 @@ pub enum Error {
     UnexpectedType(String),
     UnknownApiErrorCode(i16),
     UnknownCompressionType(i16),
+    UnknownScramMechanism(i8),
     Utf8(str::Utf8Error),
 }
 
@@ -1774,8 +1781,10 @@ impl TryFrom<EndTransactionMarker> for Bytes {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 /// The endpoint type.
 pub enum EndpointType {
+    #[default]
     Unknown,
     Broker,
     Controller,
@@ -2062,6 +2071,54 @@ impl TryFrom<i64> for ListOffset {
             Self::EARLIEST_OFFSET => Ok(Self::Earliest),
             Self::LATEST_OFFSET => Ok(Self::Latest),
             timestamp => to_system_time(timestamp).map(Self::Timestamp),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum ScramMechanism {
+    Scram256,
+    Scram512,
+}
+
+impl FromStr for ScramMechanism {
+    type Err = Error;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "SCRAM-SHA-256" => Ok(ScramMechanism::Scram256),
+            "SCRAM-SHA-512" => Ok(ScramMechanism::Scram512),
+            otherwise => Err(Error::ParseScram(otherwise.to_string())),
+        }
+    }
+}
+
+impl TryFrom<i8> for ScramMechanism {
+    type Error = Error;
+
+    fn try_from(value: i8) -> std::result::Result<Self, Self::Error> {
+        match value {
+            1 => Ok(ScramMechanism::Scram256),
+            2 => Ok(ScramMechanism::Scram512),
+            otherwise => Err(Error::UnknownScramMechanism(value)),
+        }
+    }
+}
+
+impl From<ScramMechanism> for i32 {
+    fn from(value: ScramMechanism) -> Self {
+        match value {
+            ScramMechanism::Scram256 => 1,
+            ScramMechanism::Scram512 => 2,
+        }
+    }
+}
+
+impl From<ScramMechanism> for i8 {
+    fn from(value: ScramMechanism) -> Self {
+        match value {
+            ScramMechanism::Scram256 => 1,
+            ScramMechanism::Scram512 => 2,
         }
     }
 }

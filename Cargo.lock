@@ -1714,6 +1714,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
+name = "core2"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b49ba7ef1ad6107f8824dbe97de947cbaac53c44e7f9756a1fba0d37c1eec505"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
 name = "cpufeatures"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5749,6 +5758,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
 
 [[package]]
+name = "pbkdf2"
+version = "0.12.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8ed6a7761f76e3b9f92dfb0a60a6a6477c61024b775147ff0973a02653abaf2"
+dependencies = [
+ "digest",
+]
+
+[[package]]
 name = "pear"
 version = "0.2.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6160,9 +6178,9 @@ dependencies = [
 
 [[package]]
 name = "psl"
-version = "2.1.187"
+version = "2.1.188"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a27eb737513e1489e19bcddcf474a0f6e3b62bd9e9c081851976bf8380e41661"
+checksum = "b033d75bca9da25cfdcd9528de22ed7870d1695b9e1c3ce55b7127a4a2b16fac"
 dependencies = [
  "psl-types",
 ]
@@ -7011,6 +7029,25 @@ checksum = "8ba9ce64a8f45d7fc86358410bb1a82e8c987504c0d4900e9141d69a9f26c885"
 dependencies = [
  "bytemuck",
  "byteorder",
+]
+
+[[package]]
+name = "rsasl"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c8b534a23662bb559c5c73213be63ecd6524e774d291f3618c2b04b723d184eb"
+dependencies = [
+ "base64",
+ "core2",
+ "digest",
+ "hmac",
+ "pbkdf2",
+ "rand 0.8.5",
+ "serde",
+ "serde_json",
+ "sha2",
+ "stringprep",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -7896,6 +7933,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "tansu-auth"
+version = "0.6.0-pre.10"
+dependencies = [
+ "bytes",
+ "rama",
+ "rsasl",
+ "tansu-sans-io",
+ "tansu-storage",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "tansu-broker"
 version = "0.6.0-pre.10"
 dependencies = [
@@ -7919,9 +7970,11 @@ dependencies = [
  "rama",
  "rand 0.9.2",
  "regex",
+ "rsasl",
  "serde",
  "serde_json",
  "slatedb",
+ "tansu-auth",
  "tansu-model",
  "tansu-sans-io",
  "tansu-schema",
@@ -8202,6 +8255,8 @@ dependencies = [
  "opentelemetry",
  "opentelemetry-semantic-conventions",
  "rama",
+ "rsasl",
+ "tansu-auth",
  "tansu-sans-io",
  "thiserror 2.0.18",
  "tokio",
@@ -8239,10 +8294,12 @@ dependencies = [
  "rama",
  "rand 0.9.2",
  "regex",
+ "rsasl",
  "rustls",
  "rustls-native-certs",
  "serde",
  "serde_json",
+ "sha2",
  "slatedb",
  "tansu-sans-io",
  "tansu-schema",

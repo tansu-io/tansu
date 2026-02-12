@@ -104,7 +104,7 @@
 //!       BytesLayer,
 //!
 //!       // "server" side:
-//!       BytesFrameLayer,
+//!       BytesFrameLayer::default(),
 //!   )
 //!       .into_layer(frame_route);
 //! # Ok(())
@@ -151,7 +151,7 @@
 //! #      RequestFrameLayer,
 //! #      FrameBytesLayer,
 //! #      BytesLayer,
-//! #      BytesFrameLayer,
+//! #      BytesFrameLayer::default(),
 //! #  )
 //! #      .into_layer(frame_route);
 //!   let request = MetadataRequest::default()
@@ -202,7 +202,7 @@
 //! #      RequestFrameLayer,
 //! #      FrameBytesLayer,
 //! #      BytesLayer,
-//! #      BytesFrameLayer,
+//! #      BytesFrameLayer::default(),
 //! #  )
 //! #      .into_layer(frame_route);
 //! let response = service
@@ -270,6 +270,7 @@ pub use stream::{
 
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum Error {
+    Auth(#[from] tansu_auth::Error),
     DuplicateRoute(i16),
     FrameTooBig(usize),
     Io(Arc<io::Error>),

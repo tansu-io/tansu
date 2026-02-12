@@ -16,7 +16,7 @@ license:
 
 build profile="dev" features="delta,dynostore,iceberg,libsql,parquet,postgres,slatedb" bin="tansu": (cargo-build "--profile" profile "--timings" "--bin" bin "--no-default-features" "--features" features)
 
-build-storage: clean-workspace (build "dev" "libsql") clean-workspace (build "dev" "postgres") clean-workspace (build "dev" "slatedb")
+build-storage: clean-workspace (build "dev" "libsql") (build "dev" "postgres") (build "dev" "slatedb")
 
 build-examples: (cargo-build "--examples")
 
@@ -136,7 +136,19 @@ docker-rm-f:
     docker rm --force tansu
 
 list-topics:
-    kafka-topics --bootstrap-server ${ADVERTISED_LISTENER} --list
+    kafka-topics --bootstrap-server ${ADVERTISED_LISTENER} --command-config command.properties --list
+
+list-topics-plain:
+    kafka-topics --bootstrap-server ${ADVERTISED_LISTENER} --command-config command-plain.properties --list
+
+list-topics-scram-256:
+    kafka-topics --bootstrap-server ${ADVERTISED_LISTENER} --command-config command-scram-256.properties --list
+
+list-topics-scram-512:
+    kafka-topics --bootstrap-server ${ADVERTISED_LISTENER} --command-config command-scram-512.properties --list
+
+add-alice-user:
+    kafka-configs --alter --add-config "SCRAM-SHA-256=[iterations=8192,password=secret],SCRAM-SHA-512=[iterations=8192,password=secret]" --entity-type users --entity-name alice --bootstrap-server localhost:9092
 
 test-topic-describe:
     kafka-topics --bootstrap-server ${ADVERTISED_LISTENER} --describe --topic test
@@ -401,11 +413,15 @@ clean-tansu-db:
 
 broker-sqlite profile="profiling": clean-tansu-db (build profile "libsql") (tansu-broker profile "--storage-engine=sqlite://tansu.db")
 
+broker-sqlite-authentication profile="profiling": (build profile "libsql") (tansu-broker profile "--authentication" "--storage-engine=sqlite://tansu.db")
+
 broker-sqlite-vacuum-into profile="profiling": clean-tansu-db (build profile "libsql") (tansu-broker profile "--storage-engine=sqlite://tansu.db?vacuum_into=snapshot.db")
 
 broker-s3 profile="profiling": (build profile "dynostore") docker-compose-down minio-up minio-ready-local minio-local-alias minio-tansu-bucket (tansu-broker profile "--storage-engine=s3://tansu/")
 
-broker-postgres profile="profiling": (build profile "postgres") docker-compose-down db-up (tansu-broker profile "--storage-engine=postgres://pmorgan@localhost")
+broker-postgres profile="profiling": (build profile "postgres") docker-compose-down db-up (tansu-broker profile "--storage-engine=postgres://postgres:postgres@localhost")
+
+broker-postgres-authentication profile="profiling": (build profile "postgres") (tansu-broker profile "--authentication" "--storage-engine=postgres://postgres:postgres@localhost")
 
 samply-null profile="profiling":
     cargo build --profile {{ profile }} --bin tansu

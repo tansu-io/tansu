@@ -17,22 +17,25 @@ use rama::{
     layer::{MapErrLayer, MapStateLayer},
 };
 use tansu_sans_io::{
-    AddOffsetsToTxnRequest, AddPartitionsToTxnRequest, ApiKey as _, ConsumerGroupDescribeRequest,
-    CreateTopicsRequest, DeleteGroupsRequest, DeleteRecordsRequest, DeleteTopicsRequest,
+    AddOffsetsToTxnRequest, AddPartitionsToTxnRequest, AlterUserScramCredentialsRequest,
+    ApiKey as _, ConsumerGroupDescribeRequest, CreateAclsRequest, CreateTopicsRequest,
+    DeleteGroupsRequest, DeleteRecordsRequest, DeleteTopicsRequest, DescribeAclsRequest,
     DescribeClusterRequest, DescribeConfigsRequest, DescribeGroupsRequest,
-    DescribeTopicPartitionsRequest, FetchRequest, FindCoordinatorRequest,
-    GetTelemetrySubscriptionsRequest, IncrementalAlterConfigsRequest, InitProducerIdRequest,
-    ListGroupsRequest, ListOffsetsRequest, ListPartitionReassignmentsRequest, MetadataRequest,
-    ProduceRequest, TxnOffsetCommitRequest,
+    DescribeTopicPartitionsRequest, DescribeUserScramCredentialsRequest, FetchRequest,
+    FindCoordinatorRequest, GetTelemetrySubscriptionsRequest, IncrementalAlterConfigsRequest,
+    InitProducerIdRequest, ListGroupsRequest, ListOffsetsRequest,
+    ListPartitionReassignmentsRequest, MetadataRequest, ProduceRequest, TxnOffsetCommitRequest,
 };
 use tansu_service::{FrameRequestLayer, FrameRouteBuilder};
 use tansu_storage::{
-    ConsumerGroupDescribeService, CreateTopicsService, DeleteGroupsService, DeleteRecordsService,
-    DeleteTopicsService, DescribeClusterService, DescribeConfigsService, DescribeGroupsService,
-    DescribeTopicPartitionsService, FetchService, FindCoordinatorService,
-    GetTelemetrySubscriptionsService, IncrementalAlterConfigsService, InitProducerIdService,
-    ListGroupsService, ListOffsetsService, ListPartitionReassignmentsService, MetadataService,
-    ProduceService, Storage, TxnAddOffsetsService, TxnAddPartitionService, TxnOffsetCommitService,
+    AlterUserScramCredentialsService, ConsumerGroupDescribeService, CreateAclsService,
+    CreateTopicsService, DeleteGroupsService, DeleteRecordsService, DeleteTopicsService,
+    DescribeAclsService, DescribeClusterService, DescribeConfigsService, DescribeGroupsService,
+    DescribeTopicPartitionsService, DescribeUserScramCredentialsService, FetchService,
+    FindCoordinatorService, GetTelemetrySubscriptionsService, IncrementalAlterConfigsService,
+    InitProducerIdService, ListGroupsService, ListOffsetsService,
+    ListPartitionReassignmentsService, MetadataService, ProduceService, Storage,
+    TxnAddOffsetsService, TxnAddPartitionService, TxnOffsetCommitService,
 };
 
 use crate::Error;
@@ -47,15 +50,19 @@ where
     [
         add_offsets_to_txn,
         add_partitions_to_txn,
+        alter_user_scram_credentials,
         consumer_group_describe,
+        create_acls,
         create_topics,
         delete_groups,
         delete_records,
         delete_topics,
+        describe_acls,
         describe_cluster,
         describe_configs,
         describe_groups,
         describe_topic_partitions,
+        describe_user_scram_credentials,
         fetch,
         find_coordinator,
         get_telemetry_subscriptions,
@@ -72,6 +79,90 @@ where
     .try_fold(builder, |builder, service| {
         service(builder, storage.clone())
     })
+}
+
+pub fn alter_user_scram_credentials<S>(
+    builder: FrameRouteBuilder<(), Error>,
+    storage: S,
+) -> Result<FrameRouteBuilder<(), Error>, Error>
+where
+    S: Storage,
+{
+    builder
+        .with_route(
+            AlterUserScramCredentialsRequest::KEY,
+            (
+                MapErrLayer::new(Error::from),
+                MapStateLayer::new(|_| storage),
+                FrameRequestLayer::<AlterUserScramCredentialsRequest>::new(),
+            )
+                .into_layer(AlterUserScramCredentialsService)
+                .boxed(),
+        )
+        .map_err(Into::into)
+}
+
+pub fn describe_user_scram_credentials<S>(
+    builder: FrameRouteBuilder<(), Error>,
+    storage: S,
+) -> Result<FrameRouteBuilder<(), Error>, Error>
+where
+    S: Storage,
+{
+    builder
+        .with_route(
+            DescribeUserScramCredentialsRequest::KEY,
+            (
+                MapErrLayer::new(Error::from),
+                MapStateLayer::new(|_| storage),
+                FrameRequestLayer::<DescribeUserScramCredentialsRequest>::new(),
+            )
+                .into_layer(DescribeUserScramCredentialsService)
+                .boxed(),
+        )
+        .map_err(Into::into)
+}
+
+pub fn create_acls<S>(
+    builder: FrameRouteBuilder<(), Error>,
+    storage: S,
+) -> Result<FrameRouteBuilder<(), Error>, Error>
+where
+    S: Storage,
+{
+    builder
+        .with_route(
+            CreateAclsRequest::KEY,
+            (
+                MapErrLayer::new(Error::from),
+                MapStateLayer::new(|_| storage),
+                FrameRequestLayer::<CreateAclsRequest>::new(),
+            )
+                .into_layer(CreateAclsService)
+                .boxed(),
+        )
+        .map_err(Into::into)
+}
+
+pub fn describe_acls<S>(
+    builder: FrameRouteBuilder<(), Error>,
+    storage: S,
+) -> Result<FrameRouteBuilder<(), Error>, Error>
+where
+    S: Storage,
+{
+    builder
+        .with_route(
+            DescribeAclsRequest::KEY,
+            (
+                MapErrLayer::new(Error::from),
+                MapStateLayer::new(|_| storage),
+                FrameRequestLayer::<DescribeAclsRequest>::new(),
+            )
+                .into_layer(DescribeAclsService)
+                .boxed(),
+        )
+        .map_err(Into::into)
 }
 
 pub fn consumer_group_describe<S>(

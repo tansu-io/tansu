@@ -20,7 +20,7 @@ use std::{
 
 use async_trait::async_trait;
 use tansu_sans_io::{
-    ConfigResource, ErrorCode, IsolationLevel, ListOffset, NULL_TOPIC_ID,
+    ConfigResource, ErrorCode, IsolationLevel, ListOffset, NULL_TOPIC_ID, ScramMechanism,
     add_partitions_to_txn_response::{AddPartitionsToTxnResult, AddPartitionsToTxnTopicResult},
     create_topics_request::CreatableTopic,
     delete_groups_response::DeletableGroupResult,
@@ -45,8 +45,8 @@ use uuid::Uuid;
 use crate::{
     BrokerRegistrationRequest, Error, GroupDetail, GroupDetailResponse, ListOffsetResponse,
     MetadataResponse, NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse,
-    Result, Storage, TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse,
-    TxnOffsetCommitRequest, UpdateError, Version,
+    Result, ScramCredential, Storage, TopicId, Topition, TxnAddPartitionsRequest,
+    TxnAddPartitionsResponse, TxnOffsetCommitRequest, UpdateError, Version,
 };
 
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -511,5 +511,30 @@ impl Storage for Engine {
     #[instrument(skip_all)]
     async fn ping(&self) -> Result<()> {
         Ok(())
+    }
+
+    #[instrument(ret)]
+    async fn upsert_user_scram_credential(
+        &self,
+        user: &str,
+        _mechanism: ScramMechanism,
+        _credential: ScramCredential,
+    ) -> Result<()> {
+        Err(Error::FeatureNotEnabled {
+            feature: FEATURE.into(),
+            message: MESSAGE.into(),
+        })
+    }
+
+    #[instrument(ret)]
+    async fn user_scram_credential(
+        &self,
+        _user: &str,
+        _mechanism: ScramMechanism,
+    ) -> Result<Option<ScramCredential>> {
+        Err(Error::FeatureNotEnabled {
+            feature: FEATURE.into(),
+            message: MESSAGE.into(),
+        })
     }
 }

@@ -27,8 +27,8 @@ use std::{
 use crate::{
     BrokerRegistrationRequest, ChannelRequestLayer, Error, GroupDetail, ListOffsetResponse, METER,
     MetadataResponse, NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse,
-    RequestChannelService, RequestStorageService, Result, Storage, TopicId, Topition,
-    TxnAddPartitionsRequest, TxnAddPartitionsResponse, TxnOffsetCommitRequest, TxnState,
+    RequestChannelService, RequestStorageService, Result, ScramCredential, Storage, TopicId,
+    Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse, TxnOffsetCommitRequest, TxnState,
     UpdateError, Version, bounded_channel,
     sql::{Cache, default_hash, idempotent_sequence_check, remove_comments},
 };
@@ -49,7 +49,7 @@ use rand::{rng, seq::SliceRandom as _};
 use regex::Regex;
 use tansu_sans_io::{
     BatchAttribute, ConfigResource, ConfigSource, ConfigType, ControlBatch, EndTransactionMarker,
-    ErrorCode, IsolationLevel, ListOffset, NULL_TOPIC_ID, OpType,
+    ErrorCode, IsolationLevel, ListOffset, NULL_TOPIC_ID, OpType, ScramMechanism,
     add_partitions_to_txn_response::{
         AddPartitionsToTxnPartitionResult, AddPartitionsToTxnTopicResult,
     },
@@ -1121,7 +1121,7 @@ impl Delegate {
         Ok(())
     }
 
-    #[instrument(skip(self), ret)]
+    #[instrument(skip(self, now), ret)]
     async fn policy_delete(&self, now: SystemTime) -> Result<u64> {
         let start = SystemTime::now();
 
@@ -1241,6 +1241,10 @@ static DDL: LazyLock<Cache> = LazyLock::new(|| {
             include_sql!("ddl/020-consumer-group.sql"),
         ),
         ("020-producer.sql", include_sql!("ddl/020-producer.sql")),
+        (
+            "020-scram-credential.sql",
+            include_sql!("ddl/020-scram-credential.sql"),
+        ),
         ("020-topic.sql", include_sql!("ddl/020-topic.sql")),
         (
             "030-consumer-group-detail.sql",
@@ -1770,6 +1774,43 @@ impl Storage for Engine {
                 &[KeyValue::new("operation", "advertised_listener")],
             )
         })
+    }
+
+    #[instrument(skip_all)]
+    async fn upsert_user_scram_credential(
+        &self,
+        user: &str,
+        mechanism: ScramMechanism,
+        credential: ScramCredential,
+    ) -> Result<()> {
+        let start = SystemTime::now();
+        self.inner
+            .upsert_user_scram_credential(user, mechanism, credential)
+            .await
+            .inspect(|_| {
+                ENGINE_REQUEST_DURATION.record(
+                    elapsed_millis(start),
+                    &[KeyValue::new("operation", "upsert_user_scram_credential")],
+                )
+            })
+    }
+
+    #[instrument(skip_all)]
+    async fn user_scram_credential(
+        &self,
+        user: &str,
+        mechanism: ScramMechanism,
+    ) -> Result<Option<ScramCredential>> {
+        let start = SystemTime::now();
+        self.inner
+            .user_scram_credential(user, mechanism)
+            .await
+            .inspect(|_| {
+                ENGINE_REQUEST_DURATION.record(
+                    elapsed_millis(start),
+                    &[KeyValue::new("operation", "user_scram_credential")],
+                )
+            })
     }
 
     #[instrument(skip_all)]
@@ -4267,6 +4308,81 @@ impl Storage for Delegate {
             DELEGATE_REQUEST_DURATION.record(
                 elapsed_millis(start),
                 &[KeyValue::new("operation", "advertised_listener")],
+            )
+        })
+    }
+
+    #[instrument(skip_all)]
+    async fn upsert_user_scram_credential(
+        &self,
+        user: &str,
+        mechanism: ScramMechanism,
+        credential: ScramCredential,
+    ) -> Result<()> {
+        let start = SystemTime::now();
+        let pc = self.connection().await?;
+
+        pc.execute(
+            "scram_credential_insert.sql",
+            (
+                self.cluster.as_str(),
+                user,
+                i32::from(mechanism),
+                &credential.salt[..],
+                credential.iterations,
+                &credential.stored_key[..],
+                &credential.server_key[..],
+            ),
+        )
+        .await
+        .inspect_err(|err| error!(?err))
+        .map_err(Into::into)
+        .and(Ok(()))
+        .inspect(|_| {
+            DELEGATE_REQUEST_DURATION.record(
+                elapsed_millis(start),
+                &[KeyValue::new("operation", "upsert_user_scram_credential")],
+            )
+        })
+    }
+
+    #[instrument(skip_all)]
+    async fn user_scram_credential(
+        &self,
+        user: &str,
+        mechanism: ScramMechanism,
+    ) -> Result<Option<ScramCredential>> {
+        let start = SystemTime::now();
+        let pc = self.connection().await?;
+
+        pc.query_opt(
+            "scram_credential_select.sql",
+            (self.cluster.as_str(), user, i32::from(mechanism)),
+        )
+        .await
+        .inspect_err(|err| error!(?err))
+        .map_err(Into::into)
+        .and_then(|row| {
+            if let Some(row) = row {
+                let salt = row.get::<Vec<u8>>(0).map(Bytes::from)?;
+                let iterations = row.get::<i32>(1)?;
+                let stored_key = row.get::<Vec<u8>>(2).map(Bytes::from)?;
+                let server_key = row.get::<Vec<u8>>(3).map(Bytes::from)?;
+
+                Ok(Some(ScramCredential {
+                    salt,
+                    iterations,
+                    stored_key,
+                    server_key,
+                }))
+            } else {
+                Ok(None)
+            }
+        })
+        .inspect(|_| {
+            DELEGATE_REQUEST_DURATION.record(
+                elapsed_millis(start),
+                &[KeyValue::new("operation", "upsert_user_scram_credential")],
             )
         })
     }

@@ -26,7 +26,7 @@ use bytes::{BufMut, Bytes, BytesMut};
 use serde::Serialize;
 use tansu_sans_io::{
     BatchAttribute, ConfigResource, ConfigSource, ControlBatch, Encoder, EndTransactionMarker,
-    ErrorCode, IsolationLevel, ListOffset, OpType,
+    ErrorCode, IsolationLevel, ListOffset, OpType, ScramMechanism,
     add_partitions_to_txn_response::{
         AddPartitionsToTxnPartitionResult, AddPartitionsToTxnTopicResult,
     },
@@ -54,7 +54,7 @@ use uuid::Uuid;
 use crate::{
     BrokerRegistrationRequest, Error, GroupDetail, ListOffsetResponse, MetadataResponse,
     NULL_TOPIC_ID, NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse, Result,
-    Storage, TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse,
+    ScramCredential, Storage, TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse,
     TxnOffsetCommitRequest, TxnState, UpdateError, Version,
 };
 
@@ -2374,6 +2374,23 @@ impl Storage for Engine {
 
     async fn advertised_listener(&self) -> Result<url::Url> {
         Ok(self.advertised_listener.clone())
+    }
+
+    async fn upsert_user_scram_credential(
+        &self,
+        _user: &str,
+        _mechanism: ScramMechanism,
+        _credential: ScramCredential,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    async fn user_scram_credential(
+        &self,
+        _user: &str,
+        _mechanism: ScramMechanism,
+    ) -> Result<Option<ScramCredential>> {
+        Ok(None)
     }
 
     async fn ping(&self) -> Result<()> {

@@ -71,7 +71,7 @@ mod doctest_code_a {
             RequestFrameLayer,
             FrameBytesLayer,
             BytesLayer,
-            BytesFrameLayer,
+            BytesFrameLayer::default(),
         )
             .into_layer(frame_route);
 
@@ -139,7 +139,7 @@ async fn simple_routes() -> Result<(), Error> {
         RequestFrameLayer,
         FrameBytesLayer,
         BytesLayer,
-        BytesFrameLayer,
+        BytesFrameLayer::default(),
     )
         .into_layer(
             FrameRouteService::builder()
@@ -239,7 +239,7 @@ async fn route_request_map_response() -> Result<(), Error> {
         RequestFrameLayer,
         FrameBytesLayer,
         BytesLayer,
-        BytesFrameLayer,
+        BytesFrameLayer::default(),
     )
         .into_layer(
             FrameRouteService::<(), Error>::builder()
@@ -305,7 +305,7 @@ async fn simple_layers() -> Result<(), Error> {
         RequestFrameLayer,
         FrameBytesLayer,
         BytesLayer,
-        BytesFrameLayer,
+        BytesFrameLayer::default(),
     )
         .into_layer(
             FrameRouteService::builder()

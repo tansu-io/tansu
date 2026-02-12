@@ -131,7 +131,7 @@ where
 
 /// A [context state][`Context#method.state`] state used by [`TcpContextLayer`] and [`TcpContextService`]
 #[non_exhaustive]
-#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Default)]
 pub struct TcpContext {
     cluster_id: Option<String>,
     maximum_frame_size: Option<usize>,
@@ -151,7 +151,7 @@ impl TcpContext {
 }
 
 /// A [`Layer`] that injects the [`TcpContext`] into the service [`Context`] state
-#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Default)]
 pub struct TcpContextLayer {
     state: TcpContext,
 }
@@ -174,7 +174,7 @@ impl<S> Layer<S> for TcpContextLayer {
 }
 
 /// A [`Service`] that requires the [`TcpContext`] as the service [`Context`] state
-#[derive(Clone, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone)]
 pub struct TcpContextService<S> {
     inner: S,
     state: TcpContext,
