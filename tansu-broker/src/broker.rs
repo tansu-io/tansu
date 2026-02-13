@@ -219,10 +219,7 @@ where
         .inspect(|listener| debug!(listener = ?listener.local_addr().ok()))
         .inspect_err(|err| error!(?err, %self.advertised_listener))?;
 
-        let acceptor = self
-            .tls_server_config
-            .clone()
-            .map(|config| TlsAcceptor::from(config));
+        let acceptor = self.tls_server_config.clone().map(TlsAcceptor::from);
 
         let mut interval = time::interval(Duration::from_millis(600_000));
 
@@ -233,7 +230,7 @@ where
                 Ok((stream, _addr)) = listener.accept() => {
                     stream.set_nodelay(true)?;
 
-                    let acceptor = acceptor.clone();
+                    let _acceptor = acceptor.clone();
 
 
                     let service = services(
