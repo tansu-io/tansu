@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@ use crate::{
 };
 use rama::{Context, Service};
 use rsasl::config::SASLConfig;
+use rustls::ServerConfig;
 use std::{
     io::ErrorKind,
     marker::PhantomData,
@@ -39,6 +40,7 @@ use tokio::{
     task::JoinSet,
     time::{self, sleep},
 };
+use tokio_rustls::{TlsAcceptor, rustls};
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, Level, debug, error, span};
 use url::Url;
@@ -58,6 +60,7 @@ pub struct Broker<G, S> {
     otlp_endpoint_url: Option<Url>,
 
     sasl_config: Option<Arc<SASLConfig>>,
+    tls_server_config: Option<Arc<ServerConfig>>,
 
     cancellation: CancellationToken,
 }
@@ -87,6 +90,7 @@ where
             groups,
             otlp_endpoint_url: None,
             sasl_config: None,
+            tls_server_config: None,
 
             cancellation: CancellationToken::new(),
         }
@@ -215,6 +219,11 @@ where
         .inspect(|listener| debug!(listener = ?listener.local_addr().ok()))
         .inspect_err(|err| error!(?err, %self.advertised_listener))?;
 
+        let acceptor = self
+            .tls_server_config
+            .clone()
+            .map(|config| TlsAcceptor::from(config));
+
         let mut interval = time::interval(Duration::from_millis(600_000));
 
         let mut set = JoinSet::new();
@@ -223,6 +232,9 @@ where
             tokio::select! {
                 Ok((stream, _addr)) = listener.accept() => {
                     stream.set_nodelay(true)?;
+
+                    let acceptor = acceptor.clone();
+
 
                     let service = services(
                         self.cluster_id.as_str(),
@@ -303,6 +315,7 @@ pub struct Builder<N, C, I, A, S, L> {
     schema_registry: Option<Registry>,
     lake_house: Option<House>,
     authentication: bool,
+    tls_server_config: Option<ServerConfig>,
 
     cancellation: CancellationToken,
 }
@@ -329,6 +342,7 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
             authentication: self.authentication,
+            tls_server_config: self.tls_server_config,
 
             cancellation: self.cancellation,
         }
@@ -346,6 +360,7 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
             authentication: self.authentication,
+            tls_server_config: self.tls_server_config,
 
             cancellation: self.cancellation,
         }
@@ -363,6 +378,7 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
             authentication: self.authentication,
+            tls_server_config: self.tls_server_config,
 
             cancellation: self.cancellation,
         }
@@ -383,6 +399,7 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
             authentication: self.authentication,
+            tls_server_config: self.tls_server_config,
 
             cancellation: self.cancellation,
         }
@@ -402,6 +419,7 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
             authentication: self.authentication,
+            tls_server_config: self.tls_server_config,
 
             cancellation: self.cancellation,
         }
@@ -421,6 +439,7 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
             authentication: self.authentication,
+            tls_server_config: self.tls_server_config,
 
             cancellation: self.cancellation,
         }
@@ -451,6 +470,13 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
     pub fn authentication(self, authentication: bool) -> Self {
         Self {
             authentication,
+            ..self
+        }
+    }
+
+    pub fn tls_server_config(self, tls_server_config: Option<ServerConfig>) -> Self {
+        Self {
+            tls_server_config,
             ..self
         }
     }
@@ -495,6 +521,7 @@ impl Builder<i32, String, Uuid, Url, Url, Url> {
             groups,
             otlp_endpoint_url: self.otlp_endpoint_url,
             sasl_config,
+            tls_server_config: self.tls_server_config.map(Arc::new),
 
             cancellation: self.cancellation,
         })

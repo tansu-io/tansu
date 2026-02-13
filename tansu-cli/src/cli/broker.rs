@@ -12,12 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::time::Duration;
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use crate::{EnvVarExp, Result};
 
 use super::DEFAULT_BROKER;
 use clap::Parser;
+use rustls::{
+    ServerConfig,
+    pki_types::{
+        CertificateDer, CertificateRevocationListDer, PrivateKeyDer,
+        pem::{Error as TlsPkiPemError, PemObject as _},
+    },
+};
 use tansu_broker::{NODE_ID, broker::Broker, coordinator::group::administrator::Controller};
 use tansu_sans_io::ErrorCode;
 use tansu_schema::Registry;
@@ -33,7 +43,7 @@ use clap::Subcommand;
 pub(super) struct Arg {
     #[command(subcommand)]
     #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
-    command: Option<Command>,
+    command: Option<Lake>,
 
     /// All members of the same cluster should use the same id
     #[arg(
@@ -81,11 +91,36 @@ pub(super) struct Arg {
     /// When present, client authentication is required
     #[arg(long)]
     authentication: bool,
+
+    /// Transport Layer Security Certificate
+    #[arg(group = "tls", long)]
+    cert: Option<PathBuf>,
+
+    /// Transport Layer Security Key
+    #[arg(group = "tls", long)]
+    key: Option<PathBuf>,
+}
+
+fn load_certs(filename: &Path) -> Result<Vec<CertificateDer<'static>>> {
+    CertificateDer::pem_file_iter(filename)
+        .and_then(|der| der.collect::<Result<Vec<_>, TlsPkiPemError>>())
+        .map_err(Into::into)
+}
+
+fn load_private_key(filename: &Path) -> Result<PrivateKeyDer<'static>> {
+    PrivateKeyDer::from_pem_file(filename).map_err(Into::into)
+}
+
+fn server_config(certs: &Path, private_key: &Path) -> Result<ServerConfig> {
+    ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(load_certs(certs)?, load_private_key(private_key)?)
+        .map_err(Into::into)
 }
 
 #[derive(Clone, Debug, Subcommand)]
 #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
-pub(super) enum Command {
+pub(super) enum Lake {
     /// Schema topics are written as Apache Iceberg tables
     #[cfg(feature = "iceberg")]
     Iceberg {
@@ -167,7 +202,7 @@ impl Arg {
         #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
         let lake_house = match self.command {
             #[cfg(feature = "iceberg")]
-            Some(Command::Iceberg {
+            Some(Lake::Iceberg {
                 location,
                 catalog,
                 namespace,
@@ -184,7 +219,7 @@ impl Arg {
             ),
 
             #[cfg(feature = "delta")]
-            Some(Command::Delta {
+            Some(Lake::Delta {
                 location,
                 database,
                 records_per_second,
@@ -198,7 +233,7 @@ impl Arg {
             ),
 
             #[cfg(feature = "parquet")]
-            Some(Command::Parquet { location }) => Some(
+            Some(Lake::Parquet { location }) => Some(
                 tansu_schema::lake::House::parquet()
                     .location(location.into_inner())
                     .schema_registry(schema_registry.clone().unwrap())
@@ -207,6 +242,10 @@ impl Arg {
 
             None => None,
         };
+
+        let tls_server_config = self
+            .cert
+            .and_then(|certs| self.key.and_then(|key| server_config(&certs, &key).ok()));
 
         let broker = Broker::<Controller<StorageContainer>, StorageContainer>::builder()
             .node_id(NODE_ID)

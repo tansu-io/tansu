@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -30,6 +30,8 @@ pub enum Error {
     Regex(#[from] regex::Error),
     Schema(Box<tansu_schema::Error>),
     Server(Box<tansu_broker::Error>),
+    Tls(#[from] rustls::Error),
+    TlsPkiPem(#[from] rustls::pki_types::pem::Error),
     Topic(#[from] tansu_topic::Error),
     Url(#[from] url::ParseError),
 }

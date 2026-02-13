@@ -30,6 +30,7 @@ dotenv.workspace = true
 human-units.workspace = true
 humantime.workspace = true
 regex.workspace = true
+rustls.workspace = true
 tansu-broker.workspace = true
 tansu-cat.workspace = true
 tansu-generator.workspace = true
