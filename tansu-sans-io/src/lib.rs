@@ -243,6 +243,7 @@ pub enum Error {
     UnexpectedType(String),
     UnknownApiErrorCode(i16),
     UnknownCompressionType(i16),
+    UnknownContainer,
     Utf8(str::Utf8Error),
 }
 

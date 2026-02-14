@@ -981,7 +981,7 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
                     ..
                 }),
                 _,
-            ) if self.kind.is_some_and(|kind| kind == Kind::Request) => "Request",
+            ) if self.kind.is_some_and(|kind| kind == Kind::Request) => Ok("Request"),
 
             (
                 Some(Container::Enum {
@@ -989,12 +989,14 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
                     ..
                 }),
                 _,
-            ) if self.kind.is_some_and(|kind| kind == Kind::Response) => "Response",
+            ) if self.kind.is_some_and(|kind| kind == Kind::Response) => Ok("Response"),
 
-            (Some(Container::Enum { name: "Body", .. }), Some(meta)) => meta.name,
+            (Some(Container::Enum { name: "Body", .. }), Some(meta)) => Ok(meta.name),
+
+            (_, None) => Err(Error::UnknownContainer),
 
             container => todo!("container: {:?}", container),
-        })
+        }?)
     }
 
     fn deserialize_ignored_any<V>(self, visitor: V) -> Result<V::Value, Self::Error>
