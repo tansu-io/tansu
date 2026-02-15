@@ -1,0 +1,31 @@
+[package]
+name = "tansu-sans-io-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+tansu-sans-io = { path = ".." }
+bytes = "1"
+
+[[bin]]
+name = "fuzz_request_decode"
+path = "fuzz_targets/fuzz_request_decode.rs"
+
+[[bin]]
+name = "fuzz_response_decode"
+path = "fuzz_targets/fuzz_response_decode.rs"
+
+[[bin]]
+name = "fuzz_deflated_batch"
+path = "fuzz_targets/fuzz_deflated_batch.rs"
+
+[[bin]]
+name = "fuzz_varint"
+path = "fuzz_targets/fuzz_varint.rs"

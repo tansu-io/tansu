@@ -28,6 +28,8 @@ use std::{
 use tansu_model::{FieldMeta, MessageMeta};
 use tracing::{debug, warn};
 
+const MESSAGE_MAX_SIZE: usize = 1024 * 1024 * 1024;
+
 const PARSE_DEPTH: usize = 6;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -70,6 +72,7 @@ pub struct Decoder<'de> {
     in_seq_of_primitive: bool,
     path: VecDeque<&'static str>,
     in_records: bool,
+    message_max_size: Option<usize>,
 }
 
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -124,6 +127,7 @@ impl<'de> Decoder<'de> {
             in_seq_of_primitive: false,
             path: VecDeque::with_capacity(PARSE_DEPTH),
             in_records: false,
+            message_max_size: None,
         }
     }
 
@@ -140,6 +144,7 @@ impl<'de> Decoder<'de> {
             in_seq_of_primitive: false,
             path: VecDeque::with_capacity(PARSE_DEPTH),
             in_records: false,
+            message_max_size: None,
         }
     }
 
@@ -169,6 +174,7 @@ impl<'de> Decoder<'de> {
             in_seq_of_primitive: false,
             path: VecDeque::with_capacity(PARSE_DEPTH),
             in_records: false,
+            message_max_size: None,
         }
     }
 
@@ -269,9 +275,11 @@ impl<'de> Decoder<'de> {
         );
 
         if self.is_flexible() {
-            let length = self.unsigned_varint()?;
-            debug!("length: {length}");
-            self.length = Some((length - 1).try_into()?);
+            self.length = self
+                .unsigned_varint()
+                .and_then(|length| length.checked_sub(1).ok_or(Error::Overflow))
+                .and_then(|length| TryInto::try_into(length).map_err(Into::into))
+                .map(Some)?;
         } else if self.is_string()
             || (self.in_seq_of_primitive
                 && self.meta.field.is_some_and(|field| {
@@ -312,11 +320,18 @@ impl<'de> Decoder<'de> {
             self.reader.read_exact(&mut buf)?;
 
             if buf[0] & CONTINUATION == CONTINUATION {
-                let intermediate = u32::from(buf[0] & MASK);
-                accumulator += intermediate << shift;
-                shift += 7;
+                accumulator = u32::from(buf[0] & MASK)
+                    .checked_shl(shift as u32)
+                    .and_then(|intermediate| accumulator.checked_add(intermediate))
+                    .ok_or(Error::Overflow)?;
+
+                shift = shift.checked_add(7).ok_or(Error::Overflow)?;
             } else {
-                accumulator += u32::from(buf[0]) << shift;
+                accumulator = u32::from(buf[0])
+                    .checked_shl(shift as u32)
+                    .and_then(|intermediate| accumulator.checked_add(intermediate))
+                    .ok_or(Error::Overflow)?;
+
                 done = true;
             }
         }
@@ -593,6 +608,10 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
         }
 
         if let Some(length) = self.length.take() {
+            if length > self.message_max_size.unwrap_or(MESSAGE_MAX_SIZE) {
+                return Err(Error::MessageMaxSizeExceeded(length));
+            }
+
             let mut buf = vec![0u8; length];
             self.reader.read_exact(&mut buf)?;
 
@@ -640,13 +659,18 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
 
         let length = if self.is_flexible() {
             self.unsigned_varint()
-                .and_then(|length| usize::try_from(length - 1).map_err(Into::into))?
+                .and_then(|length| usize::try_from(length).map_err(Into::into))
+                .and_then(|length| length.checked_sub(1).ok_or(Error::Overflow))?
         } else {
             let mut buf = [0u8; 4];
 
             self.reader.read_exact(&mut buf)?;
             usize::try_from(u32::from_be_bytes(buf))?
         };
+
+        if length > self.message_max_size.unwrap_or(MESSAGE_MAX_SIZE) {
+            return Err(Error::MessageMaxSizeExceeded(length));
+        }
 
         let mut buf = vec![0u8; length];
         self.reader.read_exact(&mut buf)?;
@@ -678,7 +702,8 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
                 }
             } else if self.is_records() {
                 let length = if self.is_flexible() {
-                    self.unsigned_varint().map(|length| length - 1)?
+                    self.unsigned_varint()
+                        .and_then(|length| length.checked_sub(1).ok_or(Error::Overflow))?
                 } else {
                     let mut buf = [0u8; 4];
                     self.reader.read_exact(&mut buf)?;
@@ -836,6 +861,10 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
         match self.length.take() {
             Some(size_in_bytes) if self.in_records => {
                 debug!(size_in_bytes);
+
+                if size_in_bytes > self.message_max_size.unwrap_or(MESSAGE_MAX_SIZE) {
+                    return Err(Error::MessageMaxSizeExceeded(size_in_bytes));
+                }
 
                 let mut buf = vec![0u8; size_in_bytes];
                 self.reader.read_exact(&mut buf)?;
@@ -1039,6 +1068,11 @@ impl<'de> SeqAccess<'de> for Batch {
             let mut batch = BytesMut::new();
             batch.put_i64(base_offset);
             batch.put_i32(batch_length);
+
+            if (batch_length as usize) > self.encoded.len() {
+                return Err(Error::Overflow);
+            }
+
             batch.put(self.encoded.split_to(batch_length as usize));
 
             let decoder = BatchDecoder {

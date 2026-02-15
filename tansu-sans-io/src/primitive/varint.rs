@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -51,14 +51,21 @@ impl Decode for VarInt {
         let mut done = false;
 
         while !done {
-            let byte = encoded.get_u8();
+            let byte = encoded.try_get_u8()?;
 
             if byte & CONTINUATION == CONTINUATION {
-                let intermediate = u32::from(byte & MASK);
-                accumulator += intermediate << shift;
-                shift += 7;
+                accumulator = u32::from(byte & MASK)
+                    .checked_shl(shift as u32)
+                    .and_then(|intermediate| accumulator.checked_add(intermediate))
+                    .ok_or(Error::Overflow)?;
+
+                shift = shift.checked_add(7).ok_or(Error::Overflow)?;
             } else {
-                accumulator += u32::from(byte) << shift;
+                accumulator = u32::from(byte)
+                    .checked_shl(shift as u32)
+                    .and_then(|intermediate| accumulator.checked_add(intermediate))
+                    .ok_or(Error::Overflow)?;
+
                 done = true;
             }
         }
@@ -261,14 +268,21 @@ impl Decode for LongVarInt {
         let mut done = false;
 
         while !done {
-            let byte = encoded.get_u8();
+            let byte = encoded.try_get_u8()?;
 
             if byte & CONTINUATION == CONTINUATION {
-                let intermediate = u64::from(byte & MASK);
-                accumulator += intermediate << shift;
-                shift += 7;
+                accumulator = u64::from(byte & MASK)
+                    .checked_shl(shift as u32)
+                    .and_then(|intermediate| accumulator.checked_add(intermediate))
+                    .ok_or(Error::Overflow)?;
+
+                shift = shift.checked_add(7).ok_or(Error::Overflow)?;
             } else {
-                accumulator += u64::from(byte) << shift;
+                accumulator = u64::from(byte)
+                    .checked_shl(shift as u32)
+                    .and_then(|intermediate| accumulator.checked_add(intermediate))
+                    .ok_or(Error::Overflow)?;
+
                 done = true;
             }
         }
@@ -464,12 +478,21 @@ impl UnsignedVarInt {
 
                     debug!("byte: {byte}");
 
+                    let overflow = || de::Error::custom("overflow");
+
                     if byte & CONTINUATION == CONTINUATION {
-                        let intermediate = u32::from(byte & MASK);
-                        accumulator += intermediate << shift;
-                        shift += 7;
+                        accumulator = u32::from(byte & MASK)
+                            .checked_shl(shift as u32)
+                            .and_then(|intermediate| accumulator.checked_add(intermediate))
+                            .ok_or_else(overflow)?;
+
+                        shift = shift.checked_add(7).ok_or_else(overflow)?;
                     } else {
-                        accumulator += u32::from(byte) << shift;
+                        accumulator = u32::from(byte)
+                            .checked_shl(shift as u32)
+                            .and_then(|intermediate| accumulator.checked_add(intermediate))
+                            .ok_or_else(overflow)?;
+
                         done = true;
                     }
                 }

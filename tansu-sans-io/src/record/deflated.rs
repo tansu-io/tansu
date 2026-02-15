@@ -187,12 +187,27 @@ impl TryFrom<Bytes> for Batch {
         let magic = encoded.try_get_i8()?;
         let crc = encoded.try_get_u32()?;
 
-        let crc_data_size = usize::try_from(batch_length).map(|batch_length| {
-            batch_length
-                - size_of_val(&partition_leader_epoch)
-                - size_of_val(&magic)
-                - size_of_val(&crc)
-        })?;
+        let crc_data_size = usize::try_from(batch_length)
+            .map_err(Into::into)
+            .and_then(|batch_length| {
+                batch_length
+                    .checked_sub(size_of_val(&partition_leader_epoch))
+                    .ok_or(Error::Overflow)
+            })
+            .and_then(|batch_length| {
+                batch_length
+                    .checked_sub(size_of_val(&magic))
+                    .ok_or(Error::Overflow)
+            })
+            .and_then(|batch_length| {
+                batch_length
+                    .checked_sub(size_of_val(&crc))
+                    .ok_or(Error::Overflow)
+            })?;
+
+        if crc_data_size > encoded.len() {
+            return Err(Error::Overflow);
+        }
 
         let crc_data = &encoded[..crc_data_size];
 
@@ -217,7 +232,17 @@ impl TryFrom<Bytes> for Batch {
         let record_count = encoded.try_get_u32()?;
 
         let record_data_size =
-            usize::try_from(batch_length).map(|batch_length| batch_length - FIXED_BATCH_LENGTH)?;
+            usize::try_from(batch_length)
+                .map_err(Into::into)
+                .and_then(|batch_length| {
+                    batch_length
+                        .checked_sub(FIXED_BATCH_LENGTH)
+                        .ok_or(Error::Overflow)
+                })?;
+
+        if record_data_size <= encoded.len() {
+            return Err(Error::Overflow);
+        }
 
         let record_data = encoded.slice(..record_data_size);
 
