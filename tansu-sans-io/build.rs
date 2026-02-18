@@ -992,6 +992,7 @@ fn process(messages: &[Message], include_tag: bool) -> TokenStream {
                             MessageKind::Request => {
                                 assert_eq!(entry.0.replace(message.type_name()), None)
                             }
+
                             MessageKind::Response => {
                                 assert_eq!(entry.1.replace(message.type_name()), None)
                             }
