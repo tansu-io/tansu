@@ -25,7 +25,7 @@ use std::{
     path::Path,
 };
 use syn::{Expr, Type};
-use tansu_model::{CommonStruct, Field, Listener, Message, MessageKind, wv::Wv};
+use tansu_model::{CommonStruct, Field, Listener, Message, MessageKind, VersionRange, wv::Wv};
 
 #[derive(Debug)]
 #[allow(dead_code)]
@@ -985,7 +985,10 @@ fn process(messages: &[Message], include_tag: bool) -> TokenStream {
             let mapping = {
                 let mut mapping: BTreeMap<i16, (Option<Type>, Option<Type>)> = BTreeMap::new();
 
-                for message in messages.iter() {
+                for message in messages
+                    .iter()
+                    .filter(|message| message.version().valid() != VersionRange::default())
+                {
                     _ = mapping
                         .entry(message.api_key())
                         .and_modify(|entry| match message.kind() {
