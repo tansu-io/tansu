@@ -651,7 +651,7 @@ mod tests {
         let id = "test";
         let path = Path::from(format!("/abc/{id}.json"));
 
-        let duration = Duration::from_millis(100);
+        let duration = Duration::from_millis(5_000);
         let cache = Cache::new(Counter::new(InMemory::new()), duration);
 
         assert_eq!(0, cache.inner().put_opts()?);

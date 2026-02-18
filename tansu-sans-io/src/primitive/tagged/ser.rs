@@ -20,7 +20,7 @@ use serde::{
         SerializeTupleStruct, SerializeTupleVariant,
     },
 };
-use std::{fmt, io::Write};
+use std::{any::type_name_of_val, fmt, io::Write};
 use tracing::debug;
 
 pub(crate) struct Encoder<'a> {
@@ -155,7 +155,7 @@ impl Serializer for &mut Encoder<'_> {
 
     fn serialize_char(self, v: char) -> Result<Self::Ok, Self::Error> {
         debug!(?v);
-        todo!()
+        Err(Error::UnexpectedType(format!("{v:?}")))
     }
 
     fn serialize_str(self, v: &str) -> Result<Self::Ok, Self::Error> {
@@ -189,12 +189,12 @@ impl Serializer for &mut Encoder<'_> {
     }
 
     fn serialize_unit(self) -> Result<Self::Ok, Self::Error> {
-        todo!()
+        Err(Error::UnexpectedType(format!("{self:?}")))
     }
 
     fn serialize_unit_struct(self, name: &'static str) -> Result<Self::Ok, Self::Error> {
         debug!(?name);
-        todo!()
+        Err(Error::UnexpectedType(name.into()))
     }
 
     fn serialize_unit_variant(
@@ -204,7 +204,9 @@ impl Serializer for &mut Encoder<'_> {
         variant: &'static str,
     ) -> Result<Self::Ok, Self::Error> {
         debug!(?name, ?variant_index, ?variant);
-        todo!()
+        Err(Error::UnexpectedType(format!(
+            "{name}:{variant_index}:{variant}"
+        )))
     }
 
     fn serialize_newtype_struct<T>(
@@ -233,7 +235,9 @@ impl Serializer for &mut Encoder<'_> {
     {
         debug!(?name, ?variant_index, ?variant);
         let _ = value;
-        todo!()
+        Err(Error::UnexpectedType(format!(
+            "{name}:{variant_index}:{variant}"
+        )))
     }
 
     fn serialize_seq(self, len: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
@@ -346,12 +350,11 @@ impl SerializeTupleStruct for &mut Encoder<'_> {
         T: Serialize,
         T: ?Sized,
     {
-        let _ = value;
-        todo!()
+        Err(Error::UnexpectedType(type_name_of_val(value).into()))
     }
 
     fn end(self) -> Result<Self::Ok, Self::Error> {
-        todo!()
+        Err(Error::UnexpectedType(format!("{self:?}")))
     }
 }
 
@@ -365,12 +368,11 @@ impl SerializeTupleVariant for &mut Encoder<'_> {
         T: Serialize,
         T: ?Sized,
     {
-        let _ = value;
-        todo!()
+        Err(Error::UnexpectedType(type_name_of_val(value).into()))
     }
 
     fn end(self) -> Result<Self::Ok, Self::Error> {
-        todo!()
+        Err(Error::UnexpectedType(format!("{self:?}",)))
     }
 }
 
@@ -384,8 +386,7 @@ impl SerializeMap for &mut Encoder<'_> {
         T: Serialize,
         T: ?Sized,
     {
-        let _ = key;
-        todo!()
+        Err(Error::UnexpectedType(type_name_of_val(key).into()))
     }
 
     fn serialize_value<T>(&mut self, value: &T) -> Result<(), Self::Error>
@@ -393,12 +394,11 @@ impl SerializeMap for &mut Encoder<'_> {
         T: Serialize,
         T: ?Sized,
     {
-        let _ = value;
-        todo!()
+        Err(Error::UnexpectedType(type_name_of_val(value).into()))
     }
 
     fn end(self) -> Result<Self::Ok, Self::Error> {
-        todo!()
+        Err(Error::UnexpectedType(type_name_of_val(self).into()))
     }
 }
 

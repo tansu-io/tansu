@@ -353,8 +353,7 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
     where
         V: Visitor<'de>,
     {
-        let _ = visitor;
-        todo!()
+        Err(Error::UnexpectedType(type_name::<V::Value>().into()))
     }
 
     fn deserialize_bool<V>(self, visitor: V) -> Result<V::Value, Self::Error>
@@ -570,8 +569,7 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
         if let Some(field) = self.field {
             debug!("struct: {:?}, field: {}", self.containers.front(), field);
         }
-        let _ = visitor;
-        unimplemented!()
+        Err(Error::UnexpectedType(type_name::<V::Value>().into()))
     }
 
     fn deserialize_str<V>(self, visitor: V) -> Result<V::Value, Self::Error>
@@ -800,7 +798,7 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
             visitor = type_name_of_val(&visitor),
             type_name = type_name::<V::Value>(),
         );
-        unimplemented!()
+        Err(Error::UnexpectedType(type_name::<V::Value>().into()))
     }
 
     fn deserialize_unit_struct<V>(
@@ -816,7 +814,10 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
         }
 
         debug!(name, visitor = type_name_of_val(&visitor));
-        unimplemented!()
+        Err(Error::UnexpectedType(format!(
+            "{name}:{}",
+            type_name::<V::Value>()
+        )))
     }
 
     fn deserialize_newtype_struct<V>(
@@ -904,7 +905,10 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
         V: Visitor<'de>,
     {
         debug!(name, len, visitor = type_name_of_val(&visitor));
-        unimplemented!()
+        Err(Error::UnexpectedType(format!(
+            "{name}:{len}:{}",
+            type_name::<V::Value>()
+        )))
     }
 
     fn deserialize_map<V>(self, visitor: V) -> Result<V::Value, Self::Error>
@@ -912,7 +916,7 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
         V: Visitor<'de>,
     {
         debug!(visitor = type_name_of_val(&visitor));
-        unimplemented!()
+        Err(Error::UnexpectedType(type_name::<V::Value>().into()))
     }
 
     fn deserialize_struct<V>(
@@ -1024,7 +1028,10 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
 
             (_, None) => Err(Error::UnknownContainer),
 
-            container => todo!("container: {:?}", container),
+            container => Err(Error::UnexpectedType(format!(
+                "{container:?}:{}",
+                type_name::<V::Value>()
+            ))),
         }?)
     }
 
@@ -1032,8 +1039,7 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
     where
         V: Visitor<'de>,
     {
-        debug!("visitor: {}", type_name_of_val(&visitor));
-        todo!()
+        Err(Error::UnexpectedType(type_name::<V::Value>().into()))
     }
 }
 
@@ -1103,105 +1109,105 @@ impl<'de> Deserializer<'de> for BatchDecoder {
     where
         V: Visitor<'de>,
     {
-        todo!()
+        Err(Error::UnexpectedType(type_name::<V::Value>().into()))
     }
 
     fn deserialize_bool<V>(self, visitor: V) -> std::result::Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,
     {
-        todo!()
+        Err(Error::UnexpectedType(type_name::<V::Value>().into()))
     }
 
     fn deserialize_i8<V>(self, visitor: V) -> std::result::Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,
     {
-        todo!()
+        Err(Error::UnexpectedType(type_name::<V::Value>().into()))
     }
 
     fn deserialize_i16<V>(self, visitor: V) -> std::result::Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,
     {
-        todo!()
+        Err(Error::UnexpectedType(type_name::<V::Value>().into()))
     }
 
     fn deserialize_i32<V>(self, visitor: V) -> std::result::Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,
     {
-        todo!()
+        Err(Error::UnexpectedType(type_name::<V::Value>().into()))
     }
 
     fn deserialize_i64<V>(self, visitor: V) -> std::result::Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,
     {
-        todo!()
+        Err(Error::UnexpectedType(type_name::<V::Value>().into()))
     }
 
     fn deserialize_u8<V>(self, visitor: V) -> std::result::Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,
     {
-        todo!()
+        Err(Error::UnexpectedType(type_name::<V::Value>().into()))
     }
 
     fn deserialize_u16<V>(self, visitor: V) -> std::result::Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,
     {
-        todo!()
+        Err(Error::UnexpectedType(type_name::<V::Value>().into()))
     }
 
     fn deserialize_u32<V>(self, visitor: V) -> std::result::Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,
     {
-        todo!()
+        Err(Error::UnexpectedType(type_name::<V::Value>().into()))
     }
 
     fn deserialize_u64<V>(self, visitor: V) -> std::result::Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,
     {
-        todo!()
+        Err(Error::UnexpectedType(type_name::<V::Value>().into()))
     }
 
     fn deserialize_f32<V>(self, visitor: V) -> std::result::Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,
     {
-        todo!()
+        Err(Error::UnexpectedType(type_name::<V::Value>().into()))
     }
 
     fn deserialize_f64<V>(self, visitor: V) -> std::result::Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,
     {
-        todo!()
+        Err(Error::UnexpectedType(type_name::<V::Value>().into()))
     }
 
     fn deserialize_char<V>(self, visitor: V) -> std::result::Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,
     {
-        todo!()
+        Err(Error::UnexpectedType(type_name::<V::Value>().into()))
     }
 
     fn deserialize_str<V>(self, visitor: V) -> std::result::Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,
     {
-        todo!()
+        Err(Error::UnexpectedType(type_name::<V::Value>().into()))
     }
 
     fn deserialize_string<V>(self, visitor: V) -> std::result::Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,
     {
-        todo!()
+        Err(Error::UnexpectedType(type_name::<V::Value>().into()))
     }
 
     fn deserialize_bytes<V>(self, visitor: V) -> std::result::Result<V::Value, Self::Error>
@@ -1222,14 +1228,14 @@ impl<'de> Deserializer<'de> for BatchDecoder {
     where
         V: Visitor<'de>,
     {
-        todo!()
+        Err(Error::UnexpectedType(type_name::<V::Value>().into()))
     }
 
     fn deserialize_unit<V>(self, visitor: V) -> std::result::Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,
     {
-        todo!()
+        Err(Error::UnexpectedType(type_name::<V::Value>().into()))
     }
 
     fn deserialize_unit_struct<V>(
@@ -1240,7 +1246,10 @@ impl<'de> Deserializer<'de> for BatchDecoder {
     where
         V: Visitor<'de>,
     {
-        todo!()
+        Err(Error::UnexpectedType(format!(
+            "{name}:{}",
+            type_name::<V::Value>()
+        )))
     }
 
     fn deserialize_newtype_struct<V>(
@@ -1251,14 +1260,17 @@ impl<'de> Deserializer<'de> for BatchDecoder {
     where
         V: Visitor<'de>,
     {
-        todo!()
+        Err(Error::UnexpectedType(format!(
+            "{name}:{}",
+            type_name::<V::Value>()
+        )))
     }
 
     fn deserialize_seq<V>(self, visitor: V) -> std::result::Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,
     {
-        todo!()
+        Err(Error::UnexpectedType(type_name::<V::Value>().into()))
     }
 
     fn deserialize_tuple<V>(
@@ -1269,7 +1281,10 @@ impl<'de> Deserializer<'de> for BatchDecoder {
     where
         V: Visitor<'de>,
     {
-        todo!()
+        Err(Error::UnexpectedType(format!(
+            "{len}:{}",
+            type_name::<V::Value>()
+        )))
     }
 
     fn deserialize_tuple_struct<V>(
@@ -1281,14 +1296,17 @@ impl<'de> Deserializer<'de> for BatchDecoder {
     where
         V: Visitor<'de>,
     {
-        todo!()
+        Err(Error::UnexpectedType(format!(
+            "{name}:{len}:{}",
+            type_name::<V::Value>()
+        )))
     }
 
     fn deserialize_map<V>(self, visitor: V) -> std::result::Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,
     {
-        todo!()
+        Err(Error::UnexpectedType(type_name::<V::Value>().into()))
     }
 
     fn deserialize_struct<V>(
@@ -1300,7 +1318,10 @@ impl<'de> Deserializer<'de> for BatchDecoder {
     where
         V: Visitor<'de>,
     {
-        todo!()
+        Err(Error::UnexpectedType(format!(
+            "{name}:{fields:?}:{}",
+            type_name::<V::Value>()
+        )))
     }
 
     fn deserialize_enum<V>(
@@ -1312,21 +1333,24 @@ impl<'de> Deserializer<'de> for BatchDecoder {
     where
         V: Visitor<'de>,
     {
-        todo!()
+        Err(Error::UnexpectedType(format!(
+            "{name}:{variants:?}:{}",
+            type_name::<V::Value>()
+        )))
     }
 
     fn deserialize_identifier<V>(self, visitor: V) -> std::result::Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,
     {
-        todo!()
+        Err(Error::UnexpectedType(type_name::<V::Value>().into()))
     }
 
     fn deserialize_ignored_any<V>(self, visitor: V) -> std::result::Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,
     {
-        todo!()
+        Err(Error::UnexpectedType(type_name::<V::Value>().into()))
     }
 }
 
@@ -1462,8 +1486,10 @@ impl<'de> VariantAccess<'de> for Enum<'de, '_> {
     where
         V: Visitor<'de>,
     {
-        debug!(name = self.name, len, visitor = type_name_of_val(&visitor));
-        unimplemented!()
+        Err(Error::UnexpectedType(format!(
+            "{len}:{}",
+            type_name::<V::Value>()
+        )))
     }
 
     fn struct_variant<V>(

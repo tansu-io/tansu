@@ -1,5 +1,5 @@
 -- -*- mode: sql; sql-product: postgres; -*-
--- Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+-- Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 --
 -- Licensed under the Apache License, Version 2.0 (the "License");
 -- you may not use this file except in compliance with the License.
@@ -24,7 +24,8 @@ r.k,
 r.v,
 sum(coalesce(length(r.k), 0) + coalesce(length(r.v), 0)) over (order by r.offset_id) as bytes,
 r.producer_id,
-r.producer_epoch
+r.producer_epoch,
+r.transaction_id < pg_snapshot_xmin(pg_current_snapshot())
 
 from
 
@@ -39,7 +40,7 @@ c.name = $1
 and t.name = $2
 and tp.partition = $3
 and r.offset_id >= $4
-and r.offset_id < $6
-and r.transaction_id < pg_snapshot_xmin(pg_current_snapshot()))
+-- and r.transaction_id < pg_snapshot_xmin(pg_current_snapshot())
+and r.offset_id < $6)
 
 select * from sized where bytes < $5;

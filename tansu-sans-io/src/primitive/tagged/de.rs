@@ -86,8 +86,7 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
     where
         V: Visitor<'de>,
     {
-        debug!("visitor={}", type_name_of_val(&visitor));
-        todo!()
+        Err(Error::UnexpectedType(type_name::<V::Value>().into()))
     }
 
     fn deserialize_bool<V>(self, visitor: V) -> Result<V::Value, Self::Error>
@@ -226,8 +225,7 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
     where
         V: Visitor<'de>,
     {
-        let _ = visitor;
-        unimplemented!()
+        Err(Error::UnexpectedType(type_name::<V::Value>().into()))
     }
 
     fn deserialize_str<V>(self, visitor: V) -> Result<V::Value, Self::Error>
@@ -287,16 +285,14 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
     where
         V: Visitor<'de>,
     {
-        let _ = visitor;
-        unimplemented!()
+        Err(Error::UnexpectedType(type_name::<V::Value>().into()))
     }
 
     fn deserialize_byte_buf<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,
     {
-        let _ = visitor;
-        unimplemented!()
+        Err(Error::UnexpectedType(type_name::<V::Value>().into()))
     }
 
     fn deserialize_option<V>(self, visitor: V) -> Result<V::Value, Self::Error>
@@ -317,8 +313,7 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
     where
         V: Visitor<'de>,
     {
-        let _ = visitor;
-        unimplemented!()
+        Err(Error::UnexpectedType(type_name::<V::Value>().into()))
     }
 
     fn deserialize_unit_struct<V>(
@@ -329,9 +324,10 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
     where
         V: Visitor<'de>,
     {
-        let _ = name;
-        let _ = visitor;
-        unimplemented!()
+        Err(Error::UnexpectedType(format!(
+            "{name}:{}",
+            type_name::<V::Value>()
+        )))
     }
 
     fn deserialize_newtype_struct<V>(
@@ -360,9 +356,10 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
     where
         V: Visitor<'de>,
     {
-        let _ = len;
-        let _ = visitor;
-        unimplemented!()
+        Err(Error::UnexpectedType(format!(
+            "{len}:{}",
+            type_name::<V::Value>()
+        )))
     }
 
     fn deserialize_tuple_struct<V>(
@@ -374,18 +371,17 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
     where
         V: Visitor<'de>,
     {
-        let _ = name;
-        let _ = len;
-        let _ = visitor;
-        unimplemented!()
+        Err(Error::UnexpectedType(format!(
+            "{name}:{len}:{}",
+            type_name::<V::Value>()
+        )))
     }
 
     fn deserialize_map<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,
     {
-        let _ = visitor;
-        unimplemented!()
+        Err(Error::UnexpectedType(type_name::<V::Value>().into()))
     }
 
     fn deserialize_struct<V>(
@@ -410,25 +406,24 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
     where
         V: Visitor<'de>,
     {
-        debug!("name: {name}, variants: {variants:?}");
-        let _ = visitor;
-        unimplemented!()
+        Err(Error::UnexpectedType(format!(
+            "{name}:{variants:?}:{}",
+            type_name::<V::Value>()
+        )))
     }
 
     fn deserialize_identifier<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,
     {
-        let _ = visitor;
-        unimplemented!()
+        Err(Error::UnexpectedType(type_name::<V::Value>().into()))
     }
 
     fn deserialize_ignored_any<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,
     {
-        let _ = visitor;
-        unimplemented!()
+        Err(Error::UnexpectedType(type_name::<V::Value>().into()))
     }
 }
 

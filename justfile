@@ -16,7 +16,7 @@ license:
 
 build profile="dev" features="delta,dynostore,iceberg,libsql,parquet,postgres,slatedb" bin="tansu": (cargo-build "--profile" profile "--timings" "--bin" bin "--no-default-features" "--features" features)
 
-build-storage: clean-workspace (build "dev" "libsql") clean-workspace (build "dev" "postgres") clean-workspace (build "dev" "slatedb")
+build-storage: clean-workspace (build "dev" "libsql") (build "dev" "postgres") (build "dev" "slatedb")
 
 build-examples: (cargo-build "--examples")
 
@@ -27,13 +27,20 @@ release-sqlite: (cargo-build "--release" "--bin" "tansu" "--no-default-features"
 test: test-workspace test-doc
 
 test-workspace:
-    cargo nextest run --workspace --all-targets --all-features
+    cargo nextest run --workspace --all-targets --all-features --exclude fuzz
 
 test-doc:
     cargo test --workspace --doc --all-features
 
 doc:
     cargo doc --all-features --open
+
+cargo-fuzz +args:
+    cargo +nightly fuzz {{ args }}
+
+fuzz-request-decode: (cargo-fuzz "run" "fuzz_request_decode" "--" "-max_total_time=60")
+
+fuzz-generate-seed: (cargo-fuzz "run" "--package" "fuzz" "--bin" "generate_seeds")
 
 check:
     cargo check --workspace --all-features --all-targets

@@ -1722,11 +1722,12 @@ impl Storage for Postgres {
             max_bytes
         );
 
-        let c = self.connection().await?;
+        let mut c = self.connection().await?;
+        let tx = c.transaction().await?;
 
         let records = self
-            .prepare_query(
-                &c,
+            .tx_prepare_query(
+                &tx,
                 "record_fetch_pg.sql",
                 &[
                     &self.cluster,
@@ -1776,6 +1777,8 @@ impl Storage for Postgres {
                         .inspect_err(|err| error!(?err))?,
                 );
 
+            let mut previous_offset = None;
+
             for record in records.iter() {
                 let attributes = record
                     .try_get::<_, Option<i16>>(1)
@@ -1789,6 +1792,11 @@ impl Storage for Postgres {
                 let producer_epoch = record
                     .try_get::<_, Option<i16>>(7)
                     .map(|producer_epoch| producer_epoch.unwrap_or(-1))
+                    .inspect_err(|err| error!(?err))?;
+
+                let completed = record
+                    .try_get::<_, bool>(8)
+                    .inspect(|completed| debug!(?completed))
                     .inspect_err(|err| error!(?err))?;
 
                 if batch_builder.attributes != attributes
@@ -1822,6 +1830,15 @@ impl Storage for Postgres {
                     .try_get::<_, i64>(0)
                     .inspect(|offset| debug!(offset))
                     .inspect_err(|err| error!(?err))?;
+
+                if !completed
+                    && previous_offset
+                        .inspect(|previous_offset| debug!(previous_offset))
+                        .is_none_or(|previous_offset| previous_offset + 1 != offset)
+                {
+                    break;
+                }
+
                 let offset_delta = i32::try_from(offset - batch_builder.base_offset)?;
 
                 let timestamp_delta = record
@@ -1854,8 +1871,8 @@ impl Storage for Postgres {
                     .value(v);
 
                 for header in self
-                    .prepare_query(
-                        &c,
+                    .tx_prepare_query(
+                        &tx,
                         "header_fetch.sql",
                         &[
                             &self.cluster,
@@ -1887,6 +1904,8 @@ impl Storage for Postgres {
                     record_builder = record_builder.header(header_builder);
                 }
 
+                previous_offset = Some(offset);
+
                 batch_builder = batch_builder
                     .record(record_builder)
                     .last_offset_delta(offset_delta);
@@ -1896,6 +1915,8 @@ impl Storage for Postgres {
         } else {
             batches.push(Batch::builder().build().and_then(TryInto::try_into)?);
         }
+
+        tx.commit().await?;
 
         Ok(batches)
     }
@@ -3257,7 +3278,7 @@ impl Storage for Postgres {
                                     ?err,
                                     cluster = self.cluster,
                                     topic = topic.name,
-                                    partition_index,
+                                    ?partition_index,
                                     transaction_id
                                 )
                             })?;
