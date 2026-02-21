@@ -372,7 +372,7 @@ taxi-topic-create-plain: (topic-create "taxi" "--partitions" "1" "--config" "tan
 # create taxi topic with a flattened schema etc/schema/taxi.proto
 taxi-topic-create-normalize: (topic-create "taxi" "--partitions" "1" "--config" "tansu.lake.sink=true" "--config" "tansu.lake.normalize=true" "--config" "tansu.lake.normalize.separator=_" "--config" "tansu.lake.z_order=value_vendor_id")
 
-taxi-topic-generator: (generator "taxi" "--broker=tcp://localhost:9092" "--per-second=1" "--producers=16" "--batch-size=1" "--duration-seconds=60")
+taxi-topic-generator: (generator "taxi" "--broker=tcp://localhost:9092" "--per-second=10" "--producers=16" "--batch-size=1" "--duration-seconds=60")
 
 # delete taxi topic
 taxi-topic-delete: (topic-delete "taxi")
@@ -406,7 +406,7 @@ broker-null profile="profiling": (build profile "default") (tansu-broker profile
 clean-tansu-db:
     rm -f tansu.db*
 
-broker-sqlite-parquet profile="profiling": clean-tansu-db (build profile "libsql,parquet") (tansu-broker profile "--storage-engine=sqlite://tansu.db" "parquet" "--location=file://./lake")
+broker-sqlite-parquet profile="dev": clean-tansu-db (build profile "libsql,parquet") (tansu-broker profile "--storage-engine=sqlite://tansu.db" "parquet" "--location=file://./lake")
 
 broker-sqlite-delta profile="profiling": docker-compose-down minio-up minio-ready-local minio-local-alias minio-lake-bucket clean-tansu-db (build profile "libsql,delta") (tansu-broker profile "--storage-engine=sqlite://tansu.db" "delta")
 

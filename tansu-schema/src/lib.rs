@@ -487,7 +487,7 @@ impl Registry {
         Builder::try_from(url)
     }
 
-    #[instrument(skip(self), ret)]
+    #[instrument(skip(self))]
     pub async fn schema(&self, topic: &str) -> Result<Option<Schema>> {
         let proto = Path::from(format!("{topic}.proto"));
         let json = Path::from(format!("{topic}.json"));
@@ -568,7 +568,7 @@ impl Registry {
         }
     }
 
-    #[instrument(skip(self, batch), ret)]
+    #[instrument(skip(self, batch))]
     pub async fn validate(&self, topic: &str, batch: &Batch) -> Result<()> {
         let validation_start = SystemTime::now();
 
