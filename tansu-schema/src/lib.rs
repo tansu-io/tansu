@@ -35,7 +35,7 @@ use arrow::{datatypes::DataType, error::ArrowError, record_batch::RecordBatch};
 
 use bytes::Bytes;
 
-#[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
+#[cfg(any(feature = "iceberg", feature = "delta"))]
 use datafusion::error::DataFusionError;
 
 #[cfg(feature = "delta")]
@@ -104,7 +104,7 @@ pub enum Error {
     #[cfg(feature = "iceberg")]
     DataFileBuilder(#[from] DataFileBuilderError),
 
-    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
+    #[cfg(any(feature = "iceberg", feature = "delta"))]
     DataFusion(Box<DataFusionError>),
 
     #[cfg(feature = "delta")]
@@ -186,7 +186,7 @@ impl Display for Error {
     }
 }
 
-#[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
+#[cfg(any(feature = "iceberg", feature = "delta"))]
 impl From<DataFusionError> for Error {
     fn from(value: DataFusionError) -> Self {
         Self::DataFusion(Box::new(value))

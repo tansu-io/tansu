@@ -406,6 +406,10 @@ broker-null profile="profiling": (build profile "default") (tansu-broker profile
 clean-tansu-db:
     rm -f tansu.db*
 
+broker-sqlite-parquet profile="profiling": clean-tansu-db (build profile "libsql,parquet") (tansu-broker profile "--storage-engine=sqlite://tansu.db" "parquet" "--location=file://./lake")
+
+broker-sqlite-delta profile="profiling": docker-compose-down minio-up minio-ready-local minio-local-alias minio-lake-bucket clean-tansu-db (build profile "libsql,delta") (tansu-broker profile "--storage-engine=sqlite://tansu.db" "delta")
+
 broker-sqlite profile="profiling": clean-tansu-db (build profile "libsql") (tansu-broker profile "--storage-engine=sqlite://tansu.db")
 
 broker-sqlite-vacuum-into profile="profiling": clean-tansu-db (build profile "libsql") (tansu-broker profile "--storage-engine=sqlite://tansu.db?vacuum_into=snapshot.db")
@@ -455,7 +459,7 @@ bench-perf profile="profiling": (build profile "libsql" "bench")
     RUST_LOG=warn perf record --call-graph dwarf ./target/{{ replace(profile, "dev", "debug") }}/bench 2>&1 >/dev/null
 
 producer-perf throughput="1000" record_size="1024" num_records="100000":
-    kafka-producer-perf-test --topic test --num-records {{ num_records }} --record-size {{ record_size }} --throughput {{ throughput }} --producer-props bootstrap.servers=${ADVERTISED_LISTENER}
+    kafka-producer-perf-test --topic test --warmup-records {{ throughput }} --num-records $(({{ num_records }} + {{ throughput }})) --record-size {{ record_size }} --throughput {{ throughput }} --command-property bootstrap.servers=${ADVERTISED_LISTENER}
 
 producer-perf-10: (producer-perf "10")
 

@@ -154,6 +154,7 @@ jobs:
         lake:
           - delta
           - iceberg
+          - parquet
     steps:
       - uses: actions/checkout@v6
       - uses: actions-rust-lang/setup-rust-toolchain@v1
