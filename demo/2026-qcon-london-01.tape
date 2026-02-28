@@ -89,7 +89,7 @@ Enter
 Enter
 Sleep 10s
 
-Type "# No Kakfa produced to SQLite"
+Type "# No Kafka produced to SQLite"
 Enter
 Type `sqlite3 -box tansu.db "select count(*) from record"`
 Enter
