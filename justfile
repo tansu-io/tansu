@@ -151,6 +151,9 @@ test-topic-describe:
 test-topic-create:
     kafka-topics --bootstrap-server ${ADVERTISED_LISTENER} --config cleanup.policy=compact --partitions=3 --replication-factor=1 --create --topic test
 
+test-topic-create-1m-retention:
+    kafka-topics --bootstrap-server ${ADVERTISED_LISTENER} --config cleanup.policy=delete --config retention.ms=60000 --partitions=3 --replication-factor=1 --create --topic test
+
 test-topic-alter:
     kafka-configs --bootstrap-server ${ADVERTISED_LISTENER} --alter --entity-type topics --entity-name test --add-config retention.ms=3600000,retention.bytes=524288000
 
@@ -406,17 +409,24 @@ broker-null profile="profiling": (build profile "default") (tansu-broker profile
 clean-tansu-db:
     rm -f tansu.db*
 
-broker-sqlite-parquet profile="dev": clean-tansu-db (build profile "libsql,parquet") (tansu-broker profile "--storage-engine=sqlite://tansu.db" "parquet" "--location=file://./lake")
+clean-lake-dir:
+    rm -rf lake/*
+
+broker-sqlite-parquet profile="dev": clean-tansu-db clean-lake-dir (build profile "libsql,parquet") (tansu-broker profile "--storage-engine=sqlite://tansu.db" "parquet" "--location=file://./lake")
 
 broker-sqlite-delta profile="profiling": docker-compose-down minio-up minio-ready-local minio-local-alias minio-lake-bucket clean-tansu-db (build profile "libsql,delta") (tansu-broker profile "--storage-engine=sqlite://tansu.db" "delta")
 
 broker-sqlite profile="profiling": clean-tansu-db (build profile "libsql") (tansu-broker profile "--storage-engine=sqlite://tansu.db")
 
+broker-sqlite-maintenance-1m profile="profiling": clean-tansu-db (build profile "libsql") (tansu-broker profile "--storage-engine=sqlite://tansu.db?maintenance_interval=1m")
+
 broker-sqlite-vacuum-into profile="profiling": clean-tansu-db (build profile "libsql") (tansu-broker profile "--storage-engine=sqlite://tansu.db?vacuum_into=snapshot.db")
 
 broker-s3 profile="profiling": (build profile "dynostore") docker-compose-down minio-up minio-ready-local minio-local-alias minio-tansu-bucket (tansu-broker profile "--storage-engine=s3://tansu/")
 
-broker-postgres profile="profiling": (build profile "postgres") docker-compose-down db-up (tansu-broker profile "--storage-engine=postgres://pmorgan@localhost")
+broker-postgres profile="profiling": (build profile "postgres") (tansu-broker profile "--storage-engine=postgres://pmorgan@localhost")
+
+broker-postgres-maintenance-1m profile="profiling": (build profile "postgres") (tansu-broker profile "--storage-engine=postgres://pmorgan@localhost?maintenance_interval=1m")
 
 samply-null profile="profiling":
     cargo build --profile {{ profile }} --bin tansu
@@ -457,6 +467,13 @@ bench-flamegraph-fetch profile="profiling": (build profile "libsql" "bench")
 
 bench-perf profile="profiling": (build profile "libsql" "bench")
     RUST_LOG=warn perf record --call-graph dwarf ./target/{{ replace(profile, "dev", "debug") }}/bench 2>&1 >/dev/null
+
+soak-producer-perf seconds throughput="1000" record_size="1024":
+    kafka-producer-perf-test --topic test --warmup-records {{ throughput }} --num-records $(({{ seconds }} * {{ throughput }})) --record-size {{ record_size }} --throughput {{ throughput }} --command-property bootstrap.servers=${ADVERTISED_LISTENER}
+
+soak-producer-perf-500: (soak-producer-perf "600" "500" "1024")
+
+soak-producer-perf-1000: (soak-producer-perf "3600" "1000" "1024")
 
 producer-perf throughput="1000" record_size="1024" num_records="100000":
     kafka-producer-perf-test --topic test --warmup-records {{ throughput }} --num-records $(({{ num_records }} + {{ throughput }})) --record-size {{ record_size }} --throughput {{ throughput }} --command-property bootstrap.servers=${ADVERTISED_LISTENER}
