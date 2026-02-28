@@ -55,6 +55,8 @@ pub struct Broker<G, S> {
     #[allow(dead_code)]
     otlp_endpoint_url: Option<Url>,
 
+    maintenance_interval: Option<Duration>,
+
     cancellation: CancellationToken,
 }
 
@@ -82,6 +84,7 @@ where
             storage,
             groups,
             otlp_endpoint_url: None,
+            maintenance_interval: None,
 
             cancellation: CancellationToken::new(),
         }
@@ -210,7 +213,8 @@ where
         .inspect(|listener| debug!(listener = ?listener.local_addr().ok()))
         .inspect_err(|err| error!(?err, %self.advertised_listener))?;
 
-        let mut interval = time::interval(Duration::from_millis(600_000));
+        let mut interval =
+            time::interval(self.maintenance_interval.unwrap_or(Duration::from_mins(10)));
 
         let mut set = JoinSet::new();
 
@@ -298,6 +302,7 @@ pub struct Builder<N, C, I, A, S, L> {
     otlp_endpoint_url: Option<Url>,
     schema_registry: Option<Registry>,
     lake_house: Option<House>,
+    maintenance_interval: Option<Duration>,
 
     cancellation: CancellationToken,
 }
@@ -312,6 +317,8 @@ type PhantomBuilder = Builder<
 >;
 
 impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
+    const MAINTENANCE_INTERVAL: &str = "maintenance_interval";
+
     pub fn node_id(self, node_id: i32) -> Builder<i32, C, I, A, S, L> {
         Builder {
             node_id,
@@ -323,6 +330,7 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             otlp_endpoint_url: self.otlp_endpoint_url,
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
+            maintenance_interval: self.maintenance_interval,
 
             cancellation: self.cancellation,
         }
@@ -339,6 +347,7 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             otlp_endpoint_url: self.otlp_endpoint_url,
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
+            maintenance_interval: self.maintenance_interval,
 
             cancellation: self.cancellation,
         }
@@ -355,6 +364,7 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             otlp_endpoint_url: self.otlp_endpoint_url,
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
+            maintenance_interval: self.maintenance_interval,
 
             cancellation: self.cancellation,
         }
@@ -374,13 +384,39 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             otlp_endpoint_url: self.otlp_endpoint_url,
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
+            maintenance_interval: self.maintenance_interval,
 
             cancellation: self.cancellation,
         }
     }
 
-    pub fn storage(self, storage: Url) -> Builder<N, C, I, A, Url, L> {
-        debug!(%storage);
+    pub fn storage(self, mut storage: Url) -> Builder<N, C, I, A, Url, L> {
+        let maintenance_interval = storage.query_pairs().find_map(|(k, v)| {
+            if k == Self::MAINTENANCE_INTERVAL {
+                v.parse::<humantime::Duration>().map(Into::into).ok()
+            } else {
+                None
+            }
+        });
+
+        let pairs = storage
+            .query_pairs()
+            .filter_map(|(k, v)| {
+                if k == Self::MAINTENANCE_INTERVAL {
+                    None
+                } else {
+                    Some((k.to_string(), v.to_string()))
+                }
+            })
+            .collect::<Vec<_>>();
+
+        if pairs.is_empty() {
+            storage.set_query(None);
+        } else {
+            _ = storage.query_pairs_mut().clear().extend_pairs(pairs);
+        }
+
+        debug!(?maintenance_interval, %storage);
 
         Builder {
             node_id: self.node_id,
@@ -392,6 +428,7 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             otlp_endpoint_url: self.otlp_endpoint_url,
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
+            maintenance_interval,
 
             cancellation: self.cancellation,
         }
@@ -410,6 +447,7 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             otlp_endpoint_url: self.otlp_endpoint_url,
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
+            maintenance_interval: self.maintenance_interval,
 
             cancellation: self.cancellation,
         }
@@ -470,6 +508,7 @@ impl Builder<i32, String, Uuid, Url, Url, Url> {
             storage,
             groups,
             otlp_endpoint_url: self.otlp_endpoint_url,
+            maintenance_interval: self.maintenance_interval,
             cancellation: self.cancellation,
         })
     }
