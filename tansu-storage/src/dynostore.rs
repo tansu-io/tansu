@@ -401,7 +401,10 @@ impl DynoStore {
     }
 
     fn decode(&self, encoded: Bytes) -> Result<deflated::Batch> {
-        deflated::Batch::try_from(encoded).map_err(Into::into)
+        debug!(encoded = ?&encoded[..]);
+        deflated::Batch::try_from(encoded)
+            .inspect_err(|err| debug!(?err))
+            .map_err(Into::into)
     }
 
     async fn get<V>(&self, location: &Path) -> Result<(V, Version)>

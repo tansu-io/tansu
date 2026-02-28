@@ -18,7 +18,8 @@ update watermark
 set
 
 low = $4,
-high = $5
+high = $5,
+last_updated = current_timestamp
 
 from
 

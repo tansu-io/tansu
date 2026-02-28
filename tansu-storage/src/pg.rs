@@ -798,41 +798,81 @@ impl Postgres {
 
         if !attributes.control
             && let Some(ref schemas) = self.schemas
+            && self
+                .describe_config(topic, ConfigResource::Topic, None)
+                .await
+                .map(|resources| {
+                    resources
+                        .configs
+                        .as_ref()
+                        .and_then(|configs| {
+                            configs
+                                .iter()
+                                .inspect(|config| debug!(?config))
+                                .find(|config| config.name.as_str() == "tansu.schema.validation")
+                                .and_then(|config| config.value.as_deref())
+                                .and_then(|value| bool::from_str(value).ok())
+                        })
+                        .unwrap_or(true)
+                })
+                .inspect(|schema_validation| debug!(schema_validation))?
         {
             schemas.validate(topition.topic(), &inflated).await?;
         }
 
         let last_offset_delta = i64::from(inflated.last_offset_delta);
 
+        if self.schemas.is_none()
+            || self.lake.is_none()
+            || (self.lake.is_some()
+                && !self
+                    .describe_config(topic, ConfigResource::Topic, None)
+                    .await
+                    .inspect(|resources| debug!(?resources))
+                    .map(|resources| {
+                        resources
+                            .configs
+                            .as_ref()
+                            .and_then(|configs| {
+                                configs
+                                    .iter()
+                                    .inspect(|config| debug!(?config))
+                                    .find(|config| config.name.as_str() == "tansu.lake.sink")
+                                    .and_then(|config| config.value.as_deref())
+                                    .and_then(|value| bool::from_str(value).ok())
+                            })
+                            .unwrap_or_default()
+                    })
+                    .inspect(|tansu_lake_sink| debug!(tansu_lake_sink))?)
         {
-            let record_sink = tx.copy_in(self.sql_lookup("record_copy.sql")?).await?;
+            {
+                let record_sink = tx.copy_in(self.sql_lookup("record_copy.sql")?).await?;
 
-            let record_column_types = [
-                Type::INT4,
-                Type::INT8,
-                Type::INT2,
-                Type::INT8,
-                Type::INT2,
-                Type::TIMESTAMPTZ,
-                Type::BYTEA,
-                Type::BYTEA,
-            ];
+                let record_column_types = [
+                    Type::INT4,
+                    Type::INT8,
+                    Type::INT2,
+                    Type::INT8,
+                    Type::INT2,
+                    Type::TIMESTAMPTZ,
+                    Type::BYTEA,
+                    Type::BYTEA,
+                ];
 
-            let record_writer = BinaryCopyInWriter::new(record_sink, &record_column_types);
-            pin_mut!(record_writer);
+                let record_writer = BinaryCopyInWriter::new(record_sink, &record_column_types);
+                pin_mut!(record_writer);
 
-            for (delta, record) in inflated.records.iter().enumerate() {
-                let delta = i64::try_from(delta)?;
-                let offset = high.unwrap_or_default() + delta;
-                let attributes = inflated.attributes;
-                let key = record.key.as_deref();
-                let value = record.value.as_deref();
+                for (delta, record) in inflated.records.iter().enumerate() {
+                    let delta = i64::try_from(delta)?;
+                    let offset = high.unwrap_or_default() + delta;
+                    let attributes = inflated.attributes;
+                    let key = record.key.as_deref();
+                    let value = record.value.as_deref();
 
-                let producer_id = transaction_id.and(Some(inflated.producer_id));
-                let producer_epoch = transaction_id.and(Some(inflated.producer_epoch));
-                let ts = to_system_time(inflated.base_timestamp + record.timestamp_delta)?;
+                    let producer_id = transaction_id.and(Some(inflated.producer_id));
+                    let producer_epoch = transaction_id.and(Some(inflated.producer_epoch));
+                    let ts = to_system_time(inflated.base_timestamp + record.timestamp_delta)?;
 
-                {
                     let mut row: Vec<&(dyn ToSql + Sync)> =
                         Vec::with_capacity(record_column_types.len());
 
@@ -853,77 +893,77 @@ impl Postgres {
                             error!(?err, ?topic, ?partition, ?offset, ?key, ?value)
                         })?;
                 }
-            }
 
-            _ = record_writer
-                .finish()
-                .await
-                .inspect(|record_row_count| debug!(?record_row_count))
-                .inspect_err(|err| error!(?err))?;
-        }
-
-        {
-            let header_sink = tx.copy_in(self.sql_lookup("header_copy.sql")?).await?;
-            let header_column_types = [Type::INT4, Type::INT8, Type::BYTEA, Type::BYTEA];
-            let header_writer = BinaryCopyInWriter::new(header_sink, &header_column_types);
-            pin_mut!(header_writer);
-
-            for (delta, record) in inflated.records.iter().enumerate() {
-                let delta = i64::try_from(delta)?;
-                let offset = high.unwrap_or_default() + delta;
-
-                for header in record.headers.iter().as_ref() {
-                    let key = header.key.as_deref();
-                    let value = header.value.as_deref();
-
-                    let mut row: Vec<&(dyn ToSql + Sync)> =
-                        Vec::with_capacity(header_column_types.len());
-
-                    row.push(&topition_id);
-                    row.push(&offset);
-                    row.push(&key);
-                    row.push(&value);
-
-                    header_writer
-                        .as_mut()
-                        .write(&row)
-                        .await
-                        .inspect_err(|err| {
-                            error!(?err, ?topic, ?partition, ?offset, ?key, ?value)
-                        })?;
-                }
-            }
-
-            _ = header_writer
-                .finish()
-                .await
-                .inspect(|header_row_count| debug!(?header_row_count))
-                .inspect_err(|err| error!(?err))?;
-        }
-
-        if let Some(transaction_id) = transaction_id
-            && attributes.transaction
-        {
-            let offset_start = high.unwrap_or_default();
-            let offset_end = high.map_or(last_offset_delta, |high| high + last_offset_delta);
-
-            _ = self
-                    .tx_prepare_execute(tx,
-                        "txn_produce_offset_insert.sql",
-                        &[
-                            &self.cluster,
-                            &transaction_id,
-                            &inflated.producer_id,
-                            &inflated.producer_epoch,
-                            &topic,
-                            &partition,
-                            &offset_start,
-                            &offset_end,
-                        ],
-                    )
+                _ = record_writer
+                    .finish()
                     .await
-                    .inspect(|n| debug!(cluster = ?self.cluster, ?transaction_id, ?inflated.producer_id, ?inflated.producer_epoch, ?topic, ?partition, ?offset_start, ?offset_end, ?n))
+                    .inspect(|record_row_count| debug!(?record_row_count))
                     .inspect_err(|err| error!(?err))?;
+            }
+
+            {
+                let header_sink = tx.copy_in(self.sql_lookup("header_copy.sql")?).await?;
+                let header_column_types = [Type::INT4, Type::INT8, Type::BYTEA, Type::BYTEA];
+                let header_writer = BinaryCopyInWriter::new(header_sink, &header_column_types);
+                pin_mut!(header_writer);
+
+                for (delta, record) in inflated.records.iter().enumerate() {
+                    let delta = i64::try_from(delta)?;
+                    let offset = high.unwrap_or_default() + delta;
+
+                    for header in record.headers.iter().as_ref() {
+                        let key = header.key.as_deref();
+                        let value = header.value.as_deref();
+
+                        let mut row: Vec<&(dyn ToSql + Sync)> =
+                            Vec::with_capacity(header_column_types.len());
+
+                        row.push(&topition_id);
+                        row.push(&offset);
+                        row.push(&key);
+                        row.push(&value);
+
+                        header_writer
+                            .as_mut()
+                            .write(&row)
+                            .await
+                            .inspect_err(|err| {
+                                error!(?err, ?topic, ?partition, ?offset, ?key, ?value)
+                            })?;
+                    }
+                }
+
+                _ = header_writer
+                    .finish()
+                    .await
+                    .inspect(|header_row_count| debug!(?header_row_count))
+                    .inspect_err(|err| error!(?err))?;
+            }
+
+            if let Some(transaction_id) = transaction_id
+                && attributes.transaction
+            {
+                let offset_start = high.unwrap_or_default();
+                let offset_end = high.map_or(last_offset_delta, |high| high + last_offset_delta);
+
+                _ = self
+                .tx_prepare_execute(tx,
+                    "txn_produce_offset_insert.sql",
+                    &[
+                        &self.cluster,
+                        &transaction_id,
+                        &inflated.producer_id,
+                        &inflated.producer_epoch,
+                        &topic,
+                        &partition,
+                        &offset_start,
+                        &offset_end,
+                    ],
+                )
+                .await
+                .inspect(|n| debug!(cluster = ?self.cluster, ?transaction_id, ?inflated.producer_id, ?inflated.producer_epoch, ?topic, ?partition, ?offset_start, ?offset_end, ?n))
+                .inspect_err(|err| error!(?err))?;
+            }
         }
 
         _ = self
@@ -1722,11 +1762,12 @@ impl Storage for Postgres {
             max_bytes
         );
 
-        let c = self.connection().await?;
+        let mut c = self.connection().await?;
+        let tx = c.transaction().await?;
 
         let records = self
-            .prepare_query(
-                &c,
+            .tx_prepare_query(
+                &tx,
                 "record_fetch_pg.sql",
                 &[
                     &self.cluster,
@@ -1776,6 +1817,8 @@ impl Storage for Postgres {
                         .inspect_err(|err| error!(?err))?,
                 );
 
+            let mut previous_offset = None;
+
             for record in records.iter() {
                 let attributes = record
                     .try_get::<_, Option<i16>>(1)
@@ -1789,6 +1832,11 @@ impl Storage for Postgres {
                 let producer_epoch = record
                     .try_get::<_, Option<i16>>(7)
                     .map(|producer_epoch| producer_epoch.unwrap_or(-1))
+                    .inspect_err(|err| error!(?err))?;
+
+                let completed = record
+                    .try_get::<_, bool>(8)
+                    .inspect(|completed| debug!(?completed))
                     .inspect_err(|err| error!(?err))?;
 
                 if batch_builder.attributes != attributes
@@ -1822,6 +1870,15 @@ impl Storage for Postgres {
                     .try_get::<_, i64>(0)
                     .inspect(|offset| debug!(offset))
                     .inspect_err(|err| error!(?err))?;
+
+                if !completed
+                    && previous_offset
+                        .inspect(|previous_offset| debug!(previous_offset))
+                        .is_none_or(|previous_offset| previous_offset + 1 != offset)
+                {
+                    break;
+                }
+
                 let offset_delta = i32::try_from(offset - batch_builder.base_offset)?;
 
                 let timestamp_delta = record
@@ -1854,8 +1911,8 @@ impl Storage for Postgres {
                     .value(v);
 
                 for header in self
-                    .prepare_query(
-                        &c,
+                    .tx_prepare_query(
+                        &tx,
                         "header_fetch.sql",
                         &[
                             &self.cluster,
@@ -1887,6 +1944,8 @@ impl Storage for Postgres {
                     record_builder = record_builder.header(header_builder);
                 }
 
+                previous_offset = Some(offset);
+
                 batch_builder = batch_builder
                     .record(record_builder)
                     .last_offset_delta(offset_delta);
@@ -1896,6 +1955,8 @@ impl Storage for Postgres {
         } else {
             batches.push(Batch::builder().build().and_then(TryInto::try_into)?);
         }
+
+        tx.commit().await?;
 
         Ok(batches)
     }
@@ -3257,7 +3318,7 @@ impl Storage for Postgres {
                                     ?err,
                                     cluster = self.cluster,
                                     topic = topic.name,
-                                    partition_index,
+                                    ?partition_index,
                                     transaction_id
                                 )
                             })?;

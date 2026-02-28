@@ -227,9 +227,11 @@ pub enum Error {
     InvalidOpType(i8),
     Io(Arc<io::Error>),
     Message(String),
+    MessageMaxSizeExceeded(usize),
     NoSuchField(&'static str),
     NoSuchMessage(&'static str),
     NoSuchRequest(i16),
+    Overflow,
     ParseFilter(Arc<ParseError>),
     ResponseFrame,
     Snap(#[from] snap::Error),
@@ -243,6 +245,7 @@ pub enum Error {
     UnexpectedType(String),
     UnknownApiErrorCode(i16),
     UnknownCompressionType(i16),
+    UnknownContainer,
     Utf8(str::Utf8Error),
 }
 

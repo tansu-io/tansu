@@ -1,0 +1,46 @@
+[package]
+name = "fuzz"
+edition.workspace = true
+license.workspace = true
+publish = false
+version.workspace = true
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+bytes.workspace = true
+libfuzzer-sys.workspace = true
+tansu-sans-io.workspace = true
+
+[[bin]]
+name = "generate_seeds"
+path = "fuzz_targets/generate_seeds.rs"
+
+[[bin]]
+name = "fuzz_request_decode"
+path = "fuzz_targets/fuzz_request_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_response_decode"
+path = "fuzz_targets/fuzz_response_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_deflated_batch"
+path = "fuzz_targets/fuzz_deflated_batch.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_varint"
+path = "fuzz_targets/fuzz_varint.rs"
+test = false
+doc = false
+bench = false

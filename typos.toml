@@ -6,3 +6,9 @@ extend-exclude = [
     "license.html",
     "tansu-sans-io/message",
 ]
+
+[default]
+
+[default.extend-words]
+ser = "ser"
+flate = "flate"
