@@ -6,6 +6,7 @@
 *.db-wal
 *.duckdb
 *.log
+*.mp4
 *~
 .#*
 .*DS_Store
