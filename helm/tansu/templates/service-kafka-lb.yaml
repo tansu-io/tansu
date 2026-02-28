@@ -1,0 +1,25 @@
+{{- if .Values.kafkaLoadBalancer.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "tansu.fullname" . }}-kafka
+  labels:
+    {{- include "tansu.labels" . | nindent 4 }}
+    app.kubernetes.io/component: kafka-lb
+  {{- with .Values.kafkaLoadBalancer.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.kafkaLoadBalancer.serviceType }}
+  ports:
+    - port: {{ .Values.kafkaLoadBalancer.port }}
+      targetPort: kafka
+      protocol: TCP
+      name: kafka
+      {{- if and (eq .Values.kafkaLoadBalancer.serviceType "NodePort") .Values.kafkaLoadBalancer.nodePort }}
+      nodePort: {{ .Values.kafkaLoadBalancer.nodePort }}
+      {{- end }}
+  selector:
+    {{- include "tansu.selectorLabels" . | nindent 4 }}
+{{- end }}
