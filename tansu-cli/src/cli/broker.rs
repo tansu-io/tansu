@@ -18,7 +18,6 @@ use crate::{EnvVarExp, Result, cli::storage_engines};
 
 use super::DEFAULT_BROKER;
 use clap::Parser;
-use console::Emoji;
 use owo_colors::{OwoColorize as _, Stream, Style};
 use tansu_broker::{NODE_ID, broker::Broker, coordinator::group::administrator::Controller};
 use tansu_sans_io::ErrorCode;
@@ -81,8 +80,9 @@ pub(super) struct Arg {
     #[arg(long, env = "OTEL_EXPORTER_OTLP_ENDPOINT")]
     otlp_endpoint_url: Option<EnvVarExp<Url>>,
 
-    #[arg(long, default_value = "true")]
-    interactive: bool,
+    /// Silent
+    #[arg(long)]
+    silent: bool,
 }
 
 #[derive(Clone, Debug, Subcommand)]
@@ -232,12 +232,12 @@ impl Arg {
             .schema_registry(schema_registry.clone())
             .storage(storage_engine.clone())
             .listener(listener.clone())
-            .interactive(self.interactive);
+            .silent(self.silent);
 
         #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
         let broker = broker.lake_house(lake_house);
 
-        if self.interactive {
+        if !self.silent {
             let sheet = Sheet::default();
 
             println!(
@@ -248,17 +248,14 @@ impl Arg {
             );
 
             println!(
-                "{}{} {}{}",
-                Emoji("👂", "listener: "),
+                "listening on: {} (advertised: {})",
                 listener.if_supports_color(Stream::Stdout, |text| text.style(sheet.listener)),
-                Emoji("📢", "advertised: "),
                 advertised_listener.if_supports_color(Stream::Stdout, |text| text
                     .style(sheet.advertised_listener))
             );
 
             println!(
-                "{}{} {:?}",
-                Emoji("💾", "storage: "),
+                "storage: {} {:?}",
                 redact_password(storage_engine)
                     .if_supports_color(Stream::Stdout, |text| text.style(sheet.storage)),
                 storage_engines()
@@ -270,8 +267,7 @@ impl Arg {
 
             if let Some(schema_registry) = schema_registry_url {
                 println!(
-                    "{}{}",
-                    Emoji("🛂", "schema registry: "),
+                    "schema registry: {}",
                     schema_registry.if_supports_color(Stream::Stdout, |text| text
                         .style(sheet.schema_registry))
                 );

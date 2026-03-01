@@ -1600,7 +1600,7 @@ pub struct Builder<N, C, A, S> {
     storage: S,
     schema_registry: Option<Registry>,
     lake_house: Option<House>,
-    interactive: bool,
+    silent: bool,
 
     cancellation: CancellationToken,
 }
@@ -1617,7 +1617,7 @@ impl<N, C, A, S> Builder<N, C, A, S> {
             storage: self.storage,
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
-            interactive: self.interactive,
+            silent: self.silent,
             cancellation: self.cancellation,
         }
     }
@@ -1630,7 +1630,7 @@ impl<N, C, A, S> Builder<N, C, A, S> {
             storage: self.storage,
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
-            interactive: self.interactive,
+            silent: self.silent,
             cancellation: self.cancellation,
         }
     }
@@ -1643,7 +1643,7 @@ impl<N, C, A, S> Builder<N, C, A, S> {
             storage: self.storage,
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
-            interactive: self.interactive,
+            silent: self.silent,
             cancellation: self.cancellation,
         }
     }
@@ -1658,7 +1658,7 @@ impl<N, C, A, S> Builder<N, C, A, S> {
             storage,
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
-            interactive: self.interactive,
+            silent: self.silent,
             cancellation: self.cancellation,
         }
     }
@@ -1689,11 +1689,8 @@ impl<N, C, A, S> Builder<N, C, A, S> {
         }
     }
 
-    pub fn interactive(self, interactive: bool) -> Self {
-        Self {
-            interactive,
-            ..self
-        }
+    pub fn silent(self, silent: bool) -> Self {
+        Self { silent, ..self }
     }
 }
 
@@ -1865,7 +1862,9 @@ impl Builder<i32, String, Url, Url> {
             _unsupported => Err(Error::UnsupportedStorageUrl(self.storage.clone())),
         }?;
 
-        let pb = if self.interactive {
+        let pb = if self.silent {
+            None
+        } else {
             let pb = ProgressBar::new(1);
             pb.set_style(
                 ProgressStyle::with_template("[{elapsed}] {bar:40.cyan/blue} {msg}")
@@ -1873,22 +1872,16 @@ impl Builder<i32, String, Url, Url> {
                     .progress_chars("##-"),
             );
 
-            pb.set_message(format!("connecting to {}", Emoji("💾", "storage")));
+            pb.set_message("connecting to storage");
 
             Some(pb)
-        } else {
-            None
         };
 
         storage.ping().await?;
 
         if let Some(pb) = pb {
             pb.inc(1);
-            pb.finish_with_message(format!(
-                "{} connected to {}",
-                Emoji("✅", ""),
-                Emoji("💾", "storage")
-            ));
+            pb.finish_with_message(format!("{} connected to storage", Emoji("✅", ""),));
         }
 
         Ok(storage)

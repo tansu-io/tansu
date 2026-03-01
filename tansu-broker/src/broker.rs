@@ -20,7 +20,7 @@ use crate::{
     otel,
     service::services,
 };
-use console::Emoji;
+use console::Term;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use rama::{Context, Service};
 use std::{
@@ -57,7 +57,7 @@ pub struct Broker<G, S> {
     #[allow(dead_code)]
     otlp_endpoint_url: Option<Url>,
 
-    interactive: bool,
+    silent: bool,
     maintenance_interval: Option<Duration>,
 
     cancellation: CancellationToken,
@@ -87,7 +87,7 @@ where
             storage,
             groups,
             otlp_endpoint_url: None,
-            interactive: false,
+            silent: false,
             maintenance_interval: None,
 
             cancellation: CancellationToken::new(),
@@ -118,6 +118,8 @@ where
 
         let mut terminate_signal = signal(SignalKind::terminate()).unwrap();
         debug!(?terminate_signal);
+
+        let silent = self.silent;
 
         let token = self.cancellation.clone();
 
@@ -170,6 +172,14 @@ where
                     while !set.is_empty() {
                         _ = set.join_next().await;
                     }
+                }
+            }
+
+            if !silent {
+                let stdout = Term::stdout();
+
+                if stdout.is_term() {
+                    _ = stdout.clear_screen().ok();
                 }
             }
         }
@@ -237,7 +247,11 @@ where
             .unwrap()
             .tick_chars("⠁⠂⠄⡀⢀⠠⠐");
 
-        let ls = if self.interactive {
+        let ls = if self.silent {
+            None
+        } else {
+            println!("ready in {}ms", started.elapsed().as_millis(),);
+
             let ls = m.add(ProgressBar::new_spinner());
             ls.set_style(spinner_style.clone());
 
@@ -245,16 +259,9 @@ where
                 ls.set_prefix(format!("[{local_addr:?}]"));
             }
 
-            ls.set_message(format!(
-                "{} in {}ms, {} for connection...",
-                Emoji("🏁", "ready"),
-                started.elapsed().as_millis(),
-                Emoji("👂", "listening")
-            ));
+            ls.set_message("listening for connection...");
 
             Some(ls)
-        } else {
-            None
         };
 
         let mut connections = 0;
@@ -270,7 +277,9 @@ where
                 Ok((stream, addr)) = listener.accept() => {
                     let mut c = Context::default();
 
-                    let pb = if self.interactive {
+                    let pb = if self.silent {
+                        None
+                    } else {
                         let pb = m.add(ProgressBar::new_spinner());
                         pb.set_style(spinner_style.clone());
                         pb.set_prefix(format!("[{connections}/{:?}]", addr));
@@ -279,8 +288,6 @@ where
 
                         _ = c.insert(pb.clone());
                         Some(pb)
-                    } else {
-                        None
                     };
 
 
@@ -364,7 +371,7 @@ pub struct Builder<N, C, I, A, S, L> {
     otlp_endpoint_url: Option<Url>,
     schema_registry: Option<Registry>,
     lake_house: Option<House>,
-    interactive: bool,
+    silent: bool,
     maintenance_interval: Option<Duration>,
 
     cancellation: CancellationToken,
@@ -393,7 +400,7 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             otlp_endpoint_url: self.otlp_endpoint_url,
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
-            interactive: self.interactive,
+            silent: self.silent,
             maintenance_interval: self.maintenance_interval,
 
             cancellation: self.cancellation,
@@ -411,7 +418,7 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             otlp_endpoint_url: self.otlp_endpoint_url,
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
-            interactive: self.interactive,
+            silent: self.silent,
             maintenance_interval: self.maintenance_interval,
 
             cancellation: self.cancellation,
@@ -429,7 +436,7 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             otlp_endpoint_url: self.otlp_endpoint_url,
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
-            interactive: self.interactive,
+            silent: self.silent,
             maintenance_interval: self.maintenance_interval,
 
             cancellation: self.cancellation,
@@ -450,7 +457,7 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             otlp_endpoint_url: self.otlp_endpoint_url,
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
-            interactive: self.interactive,
+            silent: self.silent,
             maintenance_interval: self.maintenance_interval,
 
             cancellation: self.cancellation,
@@ -495,7 +502,7 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             otlp_endpoint_url: self.otlp_endpoint_url,
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
-            interactive: self.interactive,
+            silent: self.silent,
             maintenance_interval,
 
             cancellation: self.cancellation,
@@ -515,7 +522,7 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             otlp_endpoint_url: self.otlp_endpoint_url,
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
-            interactive: self.interactive,
+            silent: self.silent,
             maintenance_interval: self.maintenance_interval,
 
             cancellation: self.cancellation,
@@ -544,11 +551,8 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
         }
     }
 
-    pub fn interactive(self, interactive: bool) -> Self {
-        Self {
-            interactive,
-            ..self
-        }
+    pub fn silent(self, silent: bool) -> Self {
+        Self { silent, ..self }
     }
 }
 
@@ -570,7 +574,7 @@ impl Builder<i32, String, Uuid, Url, Url, Url> {
             .lake_house(self.lake_house.clone())
             .storage(self.storage.clone())
             .cancellation(self.cancellation.clone())
-            .interactive(self.interactive)
+            .silent(self.silent)
             .build()
             .await?;
 
@@ -585,7 +589,7 @@ impl Builder<i32, String, Uuid, Url, Url, Url> {
             storage,
             groups,
             otlp_endpoint_url: self.otlp_endpoint_url,
-            interactive: self.interactive,
+            silent: self.silent,
             maintenance_interval: self.maintenance_interval,
             cancellation: self.cancellation,
         })
