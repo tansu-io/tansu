@@ -1,4 +1,4 @@
-Output show.mp4
+Output "2026-qcon-london-01.mp4"
 
 Set FontSize 30
 Set Width 1920
@@ -43,6 +43,8 @@ Sleep 6s
 Type "# start broker with schema validation and parquet output"
 Enter
 Type "tansu broker \"
+Enter
+Type "--silent \"
 Enter
 Type "--storage-engine=sqlite://tansu.db \"
 Enter
