@@ -63,6 +63,7 @@ tansu-model.workspace = true
 bytes.workspace = true
 criterion.workspace = true
 pretty_assertions.workspace = true
+proptest.workspace = true
 
 [features]
 diagnostics = []

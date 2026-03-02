@@ -30,6 +30,8 @@ use std::{
 };
 use tracing::debug;
 
+const MAXIMUM_TAGGED_FIELDS: usize = 128;
+
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct TagField(pub u32, pub Vec<u8>);
 
@@ -112,6 +114,12 @@ impl<'de> Deserialize<'de> for TagField {
                     .next_element::<UnsignedVarInt>()?
                     .ok_or_else(|| serde::de::Error::custom("length"))?
                     .into();
+
+                if length > MAXIMUM_TAGGED_FIELDS {
+                    return Err(serde::de::Error::custom(format!(
+                        "maximum tagged fields exceeded {length}"
+                    )));
+                }
 
                 (0..length)
                     .try_fold(Vec::with_capacity(length), |mut acc, _| {
@@ -276,6 +284,12 @@ impl<'de> Deserialize<'de> for TagBuffer {
                     .into();
 
                 debug!(?number_of_tagged_fields);
+
+                if number_of_tagged_fields > MAXIMUM_TAGGED_FIELDS {
+                    return Err(serde::de::Error::custom(format!(
+                        "maximum tagged fields exceeded {number_of_tagged_fields}"
+                    )));
+                }
 
                 (0..number_of_tagged_fields)
                     .try_fold(Vec::with_capacity(number_of_tagged_fields), |mut acc, _| {

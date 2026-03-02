@@ -1,7 +1,10 @@
 [workspace]
 resolver = "3"
 members = [
-    "tansu", "tansu-auth",
+    "fuzz",
+    "tansu",
+    "tansu",
+    "tansu-auth",
     "tansu-broker",
     "tansu-cat",
     "tansu-cli",
@@ -75,6 +78,7 @@ cached = "0.56.0"
 chrono = "0.4"
 clap = { version = "4.5.57", features = ["derive", "env"] }
 condtype = "1.3.0"
+console = "0.16.2"
 convert_case = "0.11.0"
 crc-fast = "1.8.0"
 criterion = { version = "0.8.2", features = ["async_tokio", "html_reports"] }
@@ -101,8 +105,10 @@ hyper-util = { version = "0.1", features = ["full"] }
 iceberg = "0.8"
 iceberg-catalog-rest = "0.8"
 iceberg-datafusion = "0.8"
+indicatif = "0.18.3"
 jsonschema = "0.41.0"
 lazy_static = "1.4.0"
+libfuzzer-sys = "0.4"
 libsql = { version = "0.9.18", default-features = false, features = ["core"] }
 lz4 = "1.28.1"
 nanoid = "0.4.0"
@@ -115,14 +121,16 @@ opentelemetry-semantic-conventions = "0.31.0"
 opentelemetry-stdout = "0.31.0"
 opentelemetry_sdk = { version = "0.31.0", features = ["testing"] }
 ordered-float = "5.1"
-parquet = "57"
+owo-colors = {version = "4.2.3", features = ["supports-colors"]}
+parquet = {version = "57", features = ["async"]}
 postcard = { version = "1.1.3", features = ["use-std"] }
 pretty_assertions = "1"
 prettyplease = "0.2.29"
 proc-macro2 = "1.0.106"
+proptest = "1.0.0"
+protobuf = { version = "3.7.1", features = ["with-bytes"] }
 protobuf-json-mapping = "3.7.1"
 protobuf-parse = "3.7.1"
-protobuf = { version = "3.7.1", features = ["with-bytes"] }
 quote = "1.0"
 rama = { version = "0.2.0", features = ["http", "tcp"] }
 rand = "0.9"

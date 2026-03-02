@@ -109,74 +109,6 @@ impl From<Batch> for Bytes {
     }
 }
 
-impl TryFrom<Vec<u8>> for Batch {
-    type Error = Error;
-
-    fn try_from(encoded: Vec<u8>) -> result::Result<Self, Self::Error> {
-        let mut encoded = Bytes::from(encoded);
-
-        let base_offset = encoded.try_get_i64()?;
-        let batch_length = encoded.try_get_i32()?;
-
-        let partition_leader_epoch = encoded.try_get_i32()?;
-        let magic = encoded.try_get_i8()?;
-        let crc = encoded.try_get_u32()?;
-
-        let crc_data_size = usize::try_from(batch_length).map(|batch_length| {
-            batch_length
-                - size_of_val(&partition_leader_epoch)
-                - size_of_val(&magic)
-                - size_of_val(&crc)
-        })?;
-
-        let crc_data = &encoded[..crc_data_size];
-
-        let computed = {
-            let mut digest = crc_fast::Digest::new(crc_fast::CrcAlgorithm::Crc32Iscsi);
-            digest.update(crc_data);
-
-            digest.finalize() as u32
-        };
-
-        if computed != crc {
-            error!(crc, computed);
-        }
-
-        let attributes = encoded.try_get_i16()?;
-        let last_offset_delta = encoded.try_get_i32()?;
-        let base_timestamp = encoded.try_get_i64()?;
-        let max_timestamp = encoded.try_get_i64()?;
-        let producer_id = encoded.try_get_i64()?;
-        let producer_epoch = encoded.try_get_i16()?;
-        let base_sequence = encoded.try_get_i32()?;
-        let record_count = encoded.try_get_u32()?;
-
-        let record_data_size =
-            usize::try_from(batch_length).map(|batch_length| batch_length - FIXED_BATCH_LENGTH)?;
-
-        let record_data = encoded.split_to(record_data_size);
-
-        let batch = Batch {
-            base_offset,
-            batch_length,
-            partition_leader_epoch,
-            magic,
-            crc,
-            attributes,
-            last_offset_delta,
-            base_timestamp,
-            max_timestamp,
-            producer_id,
-            producer_epoch,
-            base_sequence,
-            record_count,
-            record_data,
-        };
-
-        Ok(batch)
-    }
-}
-
 impl TryFrom<Bytes> for Batch {
     type Error = Error;
     fn try_from(mut encoded: Bytes) -> result::Result<Self, Self::Error> {
@@ -187,12 +119,42 @@ impl TryFrom<Bytes> for Batch {
         let magic = encoded.try_get_i8()?;
         let crc = encoded.try_get_u32()?;
 
-        let crc_data_size = usize::try_from(batch_length).map(|batch_length| {
-            batch_length
-                - size_of_val(&partition_leader_epoch)
-                - size_of_val(&magic)
-                - size_of_val(&crc)
-        })?;
+        debug!(base_offset, batch_length);
+
+        let crc_data_size = usize::try_from(batch_length)
+            .map_err(Into::into)
+            .and_then(|batch_length| {
+                batch_length
+                    .checked_sub(size_of_val(&partition_leader_epoch))
+                    .ok_or(Error::Overflow)
+                    .inspect_err(|err| {
+                        debug!(
+                            batch_length,
+                            size_of_val = size_of_val(&partition_leader_epoch),
+                            ?err
+                        )
+                    })
+            })
+            .and_then(|batch_length| {
+                batch_length
+                    .checked_sub(size_of_val(&magic))
+                    .ok_or(Error::Overflow)
+                    .inspect_err(|err| {
+                        debug!(batch_length, size_of_val = size_of_val(&magic), ?err)
+                    })
+            })
+            .and_then(|batch_length| {
+                batch_length
+                    .checked_sub(size_of_val(&crc))
+                    .ok_or(Error::Overflow)
+                    .inspect_err(|err| debug!(batch_length, size_of_val = size_of_val(&crc), ?err))
+            })?;
+
+        debug!(crc_data_size, encoded = encoded.len());
+
+        if crc_data_size > encoded.len() {
+            return Err(Error::Overflow);
+        }
 
         let crc_data = &encoded[..crc_data_size];
 
@@ -217,75 +179,21 @@ impl TryFrom<Bytes> for Batch {
         let record_count = encoded.try_get_u32()?;
 
         let record_data_size =
-            usize::try_from(batch_length).map(|batch_length| batch_length - FIXED_BATCH_LENGTH)?;
+            usize::try_from(batch_length)
+                .map_err(Into::into)
+                .and_then(|batch_length| {
+                    batch_length
+                        .checked_sub(FIXED_BATCH_LENGTH)
+                        .ok_or(Error::Overflow)
+                })?;
+
+        debug!(record_data_size, encoded = encoded.len());
+
+        if record_data_size > encoded.len() {
+            return Err(Error::Overflow);
+        }
 
         let record_data = encoded.slice(..record_data_size);
-
-        let batch = Batch {
-            base_offset,
-            batch_length,
-            partition_leader_epoch,
-            magic,
-            crc,
-            attributes,
-            last_offset_delta,
-            base_timestamp,
-            max_timestamp,
-            producer_id,
-            producer_epoch,
-            base_sequence,
-            record_count,
-            record_data,
-        };
-
-        Ok(batch)
-    }
-}
-
-impl TryFrom<&[u8]> for Batch {
-    type Error = Error;
-
-    fn try_from(mut encoded: &[u8]) -> result::Result<Self, Self::Error> {
-        let base_offset = encoded.try_get_i64()?;
-        let batch_length = encoded.try_get_i32()?;
-
-        let partition_leader_epoch = encoded.try_get_i32()?;
-        let magic = encoded.try_get_i8()?;
-        let crc = encoded.try_get_u32()?;
-
-        let crc_data_size = usize::try_from(batch_length).map(|batch_length| {
-            batch_length
-                - size_of_val(&partition_leader_epoch)
-                - size_of_val(&magic)
-                - size_of_val(&crc)
-        })?;
-
-        let crc_data = &encoded[..crc_data_size];
-
-        let computed = {
-            let mut digest = crc_fast::Digest::new(crc_fast::CrcAlgorithm::Crc32Iscsi);
-            digest.update(crc_data);
-
-            digest.finalize() as u32
-        };
-
-        if computed != crc {
-            error!(crc, computed);
-        }
-
-        let attributes = encoded.try_get_i16()?;
-        let last_offset_delta = encoded.try_get_i32()?;
-        let base_timestamp = encoded.try_get_i64()?;
-        let max_timestamp = encoded.try_get_i64()?;
-        let producer_id = encoded.try_get_i64()?;
-        let producer_epoch = encoded.try_get_i16()?;
-        let base_sequence = encoded.try_get_i32()?;
-        let record_count = encoded.try_get_u32()?;
-
-        let record_data_size =
-            usize::try_from(batch_length).map(|batch_length| batch_length - FIXED_BATCH_LENGTH)?;
-
-        let record_data = Bytes::copy_from_slice(&encoded[..record_data_size]);
 
         let batch = Batch {
             base_offset,
@@ -437,7 +345,7 @@ fn into_record_data(records: &[Record], compression: Compression) -> Result<Byte
                 .map_err(Into::into)
         }
 
-        _ => todo!(),
+        unexpected => Err(Error::UnexpectedType(format!("{unexpected:?}",))),
     }
 }
 
@@ -578,7 +486,7 @@ impl<'de> Deserialize<'de> for Batch {
                 E: de::Error,
             {
                 debug!(v = ?v[..]);
-                Batch::try_from(v).map_err(|err| de::Error::custom(err.to_string()))
+                Batch::try_from(Bytes::from(v)).map_err(|err| de::Error::custom(err.to_string()))
             }
         }
 
@@ -641,7 +549,7 @@ mod tests {
     fn decode_gzip() -> Result<()> {
         let _guard = init_tracing()?;
 
-        let encoded = [
+        let encoded = &[
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 89, 0, 0, 0, 0, 2, 198, 48, 56, 83, 0, 1, 0, 0, 0, 0,
             0, 0, 1, 145, 183, 231, 239, 158, 0, 0, 1, 145, 183, 231, 239, 158, 255, 255, 255, 255,
             255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 1, 31, 139, 8, 0, 0, 0, 0,
@@ -663,7 +571,7 @@ mod tests {
             143, 62, 223, 101, 198, 1, 0, 0, 0, 0, 0,
         ];
 
-        let decoder = BatchDecoder::new(Bytes::copy_from_slice(&encoded[..]));
+        let decoder = BatchDecoder::new(Bytes::from_static(encoded));
         let decoded = Batch::deserialize(decoder)?;
 
         assert_eq!(
@@ -719,7 +627,7 @@ mod tests {
     fn decode_zstd() -> Result<()> {
         let _guard = init_tracing()?;
 
-        let encoded = [
+        let encoded = &[
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 91, 0, 0, 0, 0, 2, 200, 21, 172, 244, 0, 4, 0, 0, 0,
             0, 0, 0, 1, 145, 183, 250, 201, 221, 0, 0, 1, 145, 183, 250, 201, 221, 255, 255, 255,
             255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 1, 40, 181, 47, 253, 0,
@@ -741,7 +649,7 @@ mod tests {
             136, 2, 0, 0, 0,
         ];
 
-        let decoder = BatchDecoder::new(Bytes::copy_from_slice(&encoded[..]));
+        let decoder = BatchDecoder::new(Bytes::from_static(encoded));
         let decoded = Batch::deserialize(decoder)?;
 
         assert_eq!(
@@ -797,7 +705,7 @@ mod tests {
     fn decode_lz4() -> Result<()> {
         let _guard = init_tracing()?;
 
-        let encoded = [
+        let encoded = &[
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 237, 0, 0, 0, 0, 2, 43, 216, 167, 237, 0, 3, 0, 0, 0,
             0, 0, 0, 1, 145, 184, 77, 37, 242, 0, 0, 1, 145, 184, 77, 37, 242, 255, 255, 255, 255,
             255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 1, 4, 34, 77, 24, 96, 64,
@@ -827,7 +735,7 @@ mod tests {
             0, 0, 0,
         ];
 
-        let decoder = BatchDecoder::new(Bytes::copy_from_slice(&encoded[..]));
+        let decoder = BatchDecoder::new(Bytes::from_static(encoded));
         let decoded = Batch::deserialize(decoder)?;
         assert_eq!(Compression::Lz4, Compression::try_from(decoded.attributes)?);
 
@@ -879,7 +787,7 @@ mod tests {
     fn decode_snappy() -> Result<()> {
         let _guard = init_tracing()?;
 
-        let encoded = [
+        let encoded = &[
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 218, 0, 0, 0, 0, 2, 228, 189, 111, 249, 0, 2, 0, 0, 0,
             0, 0, 0, 1, 145, 184, 92, 90, 192, 0, 0, 1, 145, 184, 92, 90, 192, 255, 255, 255, 255,
             255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 1, 198, 3, 240, 111, 136, 7,
@@ -908,7 +816,7 @@ mod tests {
             111, 114, 117, 109, 46, 0, 0, 0, 0,
         ];
 
-        let decoder = BatchDecoder::new(Bytes::copy_from_slice(&encoded[..]));
+        let decoder = BatchDecoder::new(Bytes::from_static(encoded));
         let decoded = Batch::deserialize(decoder)?;
         assert_eq!(
             Compression::Snappy,
@@ -1049,8 +957,8 @@ mod tests {
 
     #[test]
     fn encode_decode() -> Result<()> {
-        let key = Bytes::copy_from_slice("Lorem ipsum dolor sit amet".as_bytes());
-        let value = Bytes::copy_from_slice("consectetur adipiscing elit".as_bytes());
+        let key = Bytes::from_static(b"Lorem ipsum dolor sit amet");
+        let value = Bytes::from_static(b"consectetur adipiscing elit");
 
         let producer_id = 54345;
         let producer_epoch = 32123;
@@ -1077,7 +985,7 @@ mod tests {
 
         let encoded = Bytes::from(batch);
 
-        let deflated = Batch::try_from(&encoded[..])?;
+        let deflated = Batch::try_from(encoded)?;
 
         assert_eq!(deflated.producer_id, producer_id);
         assert_eq!(deflated.producer_epoch, producer_epoch);

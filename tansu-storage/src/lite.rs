@@ -38,7 +38,7 @@ use chrono::NaiveDateTime;
 use deadpool::managed;
 use libsql::{
     Connection, Database, Row, Rows, Statement, Transaction, TransactionBehavior, Value,
-    params::IntoParams,
+    ffi::SQLITE_CONSTRAINT_UNIQUE, params::IntoParams,
 };
 use opentelemetry::{
     KeyValue,
@@ -197,6 +197,13 @@ impl TryFrom<Row> for Txn {
             status,
         })
     }
+}
+
+fn is_unique_constraint(error: &libsql::Error) -> bool {
+    matches!(
+        error,
+        libsql::Error::SqliteFailure(SQLITE_CONSTRAINT_UNIQUE, _)
+    )
 }
 
 /// LibSQL/SQLite storage engine
@@ -464,8 +471,12 @@ impl PoolConnection {
             .await
             .inspect(|rows| debug!(?rows))
             .inspect_err(|err| {
-                error!(?err, elapsed_millis = elapsed_millis(start));
-                SQL_ERROR.add(1, &self.attributes_for_error(Some(sql), err)[..]);
+                if is_unique_constraint(err) {
+                    debug!(?err);
+                } else {
+                    error!(?err, elapsed_millis = elapsed_millis(start));
+                    SQL_ERROR.add(1, &self.attributes_for_error(Some(sql), err)[..]);
+                }
             })?;
 
         if let Some(row) = rows
@@ -473,8 +484,12 @@ impl PoolConnection {
             .await
             .inspect(|row| debug!(?row))
             .inspect_err(|err| {
-                error!(?err, elapsed_millis = elapsed_millis(start));
-                SQL_ERROR.add(1, &self.attributes_for_error(Some(sql), err)[..]);
+                if is_unique_constraint(err) {
+                    debug!(?err);
+                } else {
+                    error!(?err, elapsed_millis = elapsed_millis(start));
+                    SQL_ERROR.add(1, &self.attributes_for_error(Some(sql), err)[..]);
+                }
             })?
         {
             let attributes = [KeyValue::new("sql", sql.to_owned())];
@@ -703,7 +718,7 @@ impl Delegate {
                         })
                         .unwrap_or(true)
                 })
-                .inspect(|tansu_schema_validation| debug!(tansu_schema_validation))?
+                .inspect(|schema_validation| debug!(schema_validation))?
         {
             schemas.validate(topition.topic(), &inflated).await?;
         }
@@ -712,92 +727,116 @@ impl Delegate {
 
         let last_offset_delta = i64::from(inflated.last_offset_delta);
 
-        for (delta, record) in inflated.records.iter().enumerate() {
-            debug!(delta, elapsed = elapsed_millis(start));
+        if self.schemas.is_none()
+            || self.lake.is_none()
+            || (self.lake.is_some()
+                && !self
+                    .describe_config(topic, ConfigResource::Topic, None)
+                    .await
+                    .inspect(|resources| debug!(?resources))
+                    .map(|resources| {
+                        resources
+                            .configs
+                            .as_ref()
+                            .and_then(|configs| {
+                                configs
+                                    .iter()
+                                    .inspect(|config| debug!(?config))
+                                    .find(|config| config.name.as_str() == "tansu.lake.sink")
+                                    .and_then(|config| config.value.as_deref())
+                                    .and_then(|value| bool::from_str(value).ok())
+                            })
+                            .unwrap_or_default()
+                    })
+                    .inspect(|tansu_lake_sink| debug!(tansu_lake_sink))?)
+        {
+            for (delta, record) in inflated.records.iter().enumerate() {
+                debug!(delta, elapsed = elapsed_millis(start));
 
-            let delta = i64::try_from(delta)?;
-            let offset = high.unwrap_or_default() + delta;
-            let key = record.key.as_deref();
-            let value = record.value.as_deref();
+                let delta = i64::try_from(delta)?;
+                let offset = high.unwrap_or_default() + delta;
+                let key = record.key.as_deref();
+                let value = record.value.as_deref();
 
-            debug!(?delta, ?offset);
-
-            _ = connection
-                .execute(
-                    "record_insert.sql",
-                    (
-                        self.cluster.as_str(),
-                        topic,
-                        partition,
-                        offset,
-                        inflated.attributes,
-                        if transaction_id.is_none() {
-                            None
-                        } else {
-                            Some(inflated.producer_id)
-                        },
-                        if transaction_id.is_none() {
-                            None
-                        } else {
-                            Some(inflated.producer_epoch)
-                        },
-                        inflated.base_timestamp + record.timestamp_delta,
-                        key,
-                        value,
-                    ),
-                )
-                .await
-                .inspect_err(|err| error!(?err, ?topic, ?partition, ?offset, ?key, ?value))
-                .map_err(unique_constraint(ErrorCode::UnknownServerError))?;
-
-            debug!(delta, after_record_insert = elapsed_millis(start));
-
-            for header in record.headers.iter().as_ref() {
-                let key = header.key.as_deref();
-                let value = header.value.as_deref();
+                debug!(?delta, ?offset);
 
                 _ = connection
                     .execute(
-                        "header_insert.sql",
-                        (self.cluster.as_str(), topic, partition, offset, key, value),
-                    )
-                    .await
-                    .inspect_err(|err| {
-                        error!(?err, ?topic, ?partition, ?offset, ?key, ?value);
-                    });
-            }
-
-            debug!(delta, after_header_insert = elapsed_millis(start));
-        }
-
-        debug!(after_record_insert = elapsed_millis(start));
-
-        if let Some(transaction_id) = transaction_id
-            && attributes.transaction
-        {
-            let offset_start = high.unwrap_or_default();
-            let offset_end = high.map_or(last_offset_delta, |high| high + last_offset_delta);
-
-            _ = connection
-                    .execute(
-                        "txn_produce_offset_insert.sql",
+                        "record_insert.sql",
                         (
                             self.cluster.as_str(),
-                            transaction_id,
-                            inflated.producer_id,
-                            inflated.producer_epoch,
                             topic,
                             partition,
-                            offset_start,
-                            offset_end,
+                            offset,
+                            inflated.attributes,
+                            if transaction_id.is_none() {
+                                None
+                            } else {
+                                Some(inflated.producer_id)
+                            },
+                            if transaction_id.is_none() {
+                                None
+                            } else {
+                                Some(inflated.producer_epoch)
+                            },
+                            inflated.base_timestamp + record.timestamp_delta,
+                            key,
+                            value,
                         ),
                     )
                     .await
-                    .inspect(|n| debug!(cluster = ?self.cluster, ?transaction_id, ?inflated.producer_id, ?inflated.producer_epoch, ?topic, ?partition, ?offset_start, ?offset_end, ?n))
-                    .inspect_err(|err| error!(?err))?;
-        }
+                    .inspect_err(|err| error!(?err, ?topic, ?partition, ?offset, ?key, ?value))
+                    .map_err(unique_constraint(ErrorCode::UnknownServerError))?;
 
-        debug!(after_some_transaction_id = elapsed_millis(start));
+                debug!(delta, after_record_insert = elapsed_millis(start));
+
+                for header in record.headers.iter().as_ref() {
+                    let key = header.key.as_deref();
+                    let value = header.value.as_deref();
+
+                    _ = connection
+                        .execute(
+                            "header_insert.sql",
+                            (self.cluster.as_str(), topic, partition, offset, key, value),
+                        )
+                        .await
+                        .inspect_err(|err| {
+                            error!(?err, ?topic, ?partition, ?offset, ?key, ?value);
+                        });
+                }
+
+                debug!(delta, after_header_insert = elapsed_millis(start));
+            }
+
+            debug!(after_record_insert = elapsed_millis(start));
+
+            if let Some(transaction_id) = transaction_id
+                && attributes.transaction
+            {
+                let offset_start = high.unwrap_or_default();
+                let offset_end = high.map_or(last_offset_delta, |high| high + last_offset_delta);
+
+                _ = connection
+                        .execute(
+                            "txn_produce_offset_insert.sql",
+                            (
+                                self.cluster.as_str(),
+                                transaction_id,
+                                inflated.producer_id,
+                                inflated.producer_epoch,
+                                topic,
+                                partition,
+                                offset_start,
+                                offset_end,
+                            ),
+                        )
+                        .await
+                        .inspect(|n| debug!(cluster = ?self.cluster, ?transaction_id, ?inflated.producer_id, ?inflated.producer_epoch, ?topic, ?partition, ?offset_start, ?offset_end, ?n))
+                        .inspect_err(|err| error!(?err))?;
+            }
+
+            debug!(after_some_transaction_id = elapsed_millis(start));
+        }
 
         _ = connection
             .execute(
@@ -1902,7 +1941,7 @@ fn unique_constraint(error_code: ErrorCode) -> impl Fn(libsql::Error) -> Error {
         if let libsql::Error::SqliteFailure(code, ref reason) = err {
             debug!(code, reason);
 
-            if code == 2067 {
+            if code == SQLITE_CONSTRAINT_UNIQUE {
                 Error::Api(error_code)
             } else {
                 err.into()
@@ -1988,7 +2027,13 @@ impl Storage for Delegate {
 
             pc.query_one("topic_insert.sql", parameters.clone())
                 .await
-                .inspect_err(|err| error!(?err))
+                .inspect_err(|err| {
+                    if is_unique_constraint(err) {
+                        debug!(?err);
+                    } else {
+                        error!(?err)
+                    }
+                })
                 .map_err(unique_constraint(ErrorCode::TopicAlreadyExists))
                 .inspect(|row| debug!(?parameters, ?row))
                 .and_then(|row| {

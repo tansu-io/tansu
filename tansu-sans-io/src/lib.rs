@@ -231,10 +231,12 @@ pub enum Error {
     InvalidScramMechanism(i8),
     Io(Arc<io::Error>),
     Message(String),
+    MessageMaxSizeExceeded(usize),
     NoSuchField(&'static str),
     NoSuchMessage(&'static str),
     NoSuchRequest(i16),
     NotAuthenticated,
+    Overflow,
     ParseFilter(Arc<ParseError>),
     ParseScram(String),
     ResponseFrame,
@@ -250,6 +252,7 @@ pub enum Error {
     UnknownApiErrorCode(i16),
     UnknownCompressionType(i16),
     UnknownScramMechanism(i8),
+    UnknownContainer,
     Utf8(str::Utf8Error),
 }
 
