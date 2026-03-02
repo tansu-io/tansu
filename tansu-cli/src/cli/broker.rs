@@ -25,7 +25,7 @@ use owo_colors::{OwoColorize as _, Stream, Style};
 use rustls::{
     ServerConfig,
     pki_types::{
-        CertificateDer, CertificateRevocationListDer, PrivateKeyDer,
+        CertificateDer, PrivateKeyDer,
         pem::{Error as TlsPkiPemError, PemObject as _},
     },
 };
@@ -276,6 +276,7 @@ impl Arg {
             .storage(storage_engine.clone())
             .listener(listener.clone())
             .authentication(self.authentication)
+            .tls_server_config(tls_server_config)
             .silent(self.silent);
 
         #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]

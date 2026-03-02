@@ -42,6 +42,7 @@ use tokio::{
     task::JoinSet,
     time::{self, Instant, sleep},
 };
+use tokio_rustls::TlsAcceptor;
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, Level, debug, error, span};
 use url::Url;
@@ -57,7 +58,6 @@ pub struct Broker<G, S> {
     storage: S,
     groups: G,
 
-    #[allow(dead_code)]
     otlp_endpoint_url: Option<Url>,
 
     sasl_config: Option<Arc<SASLConfig>>,
@@ -92,9 +92,12 @@ where
             storage,
             groups,
             otlp_endpoint_url: None,
+
             sasl_config: None,
             tls_server_config: None,
+
             silent: false,
+
             maintenance_interval: None,
 
             cancellation: CancellationToken::new(),
@@ -265,6 +268,8 @@ where
             Some(ls)
         };
 
+        let acceptor = self.tls_server_config.clone().map(TlsAcceptor::from);
+
         let mut connections = 0;
 
         loop {
@@ -276,6 +281,7 @@ where
 
             tokio::select! {
                 Ok((stream, addr)) = listener.accept() => {
+
                     let mut c = Context::default();
 
                     let pb = if self.silent {
