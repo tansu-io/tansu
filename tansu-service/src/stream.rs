@@ -25,7 +25,7 @@ use nanoid::nanoid;
 use opentelemetry::KeyValue;
 use rama::{Context, Layer, Service};
 use tokio::{
-    io::{AsyncReadExt as _, AsyncWriteExt as _, BufWriter},
+    io::{AsyncReadExt, AsyncWriteExt, BufWriter},
     net::{TcpListener, TcpStream},
     task::JoinSet,
 };
@@ -283,11 +283,14 @@ where
     State: Clone + Default + Send + Sync + 'static,
 {
     #[instrument(skip_all)]
-    async fn wait(
+    async fn wait<R>(
         &self,
-        req: &mut TcpStream,
+        req: &mut R,
         maximum_frame_size: Option<usize>,
-    ) -> Result<[u8; 4], S::Error> {
+    ) -> Result<[u8; 4], S::Error>
+    where
+        R: AsyncReadExt + Unpin,
+    {
         let mut size = [0u8; 4];
 
         _ = req
@@ -305,7 +308,10 @@ where
     }
 
     #[instrument(skip_all)]
-    async fn read(&self, req: &mut TcpStream, size: [u8; 4]) -> Result<Bytes, S::Error> {
+    async fn read<R>(&self, req: &mut R, size: [u8; 4]) -> Result<Bytes, S::Error>
+    where
+        R: AsyncReadExt + Unpin,
+    {
         let mut request: Vec<u8> = vec![0u8; frame_length(size)];
 
         request[0..size.len()].copy_from_slice(&size[..]);
@@ -345,7 +351,10 @@ where
     }
 
     #[instrument(skip_all)]
-    async fn write(&self, req: &mut TcpStream, frame: Bytes) -> Result<(), S::Error> {
+    async fn write<W>(&self, req: &mut W, frame: Bytes) -> Result<(), S::Error>
+    where
+        W: AsyncWriteExt + Unpin,
+    {
         let mut w = BufWriter::new(req);
         w.write_all(&frame).await.inspect_err(|err| error!(?err))?;
         BYTES_SENT.add(frame.len() as u64, &[]);
@@ -353,13 +362,16 @@ where
     }
 
     #[instrument(skip_all, fields(id = nanoid!()))]
-    async fn req(
+    async fn req<R>(
         &self,
-        req: &mut TcpStream,
+        req: &mut R,
         maximum_frame_size: Option<usize>,
         attributes: &[KeyValue],
         ctx: Context<TcpContext>,
-    ) -> Result<(), S::Error> {
+    ) -> Result<(), S::Error>
+    where
+        R: AsyncReadExt + AsyncWriteExt + Unpin,
+    {
         let size = self.wait(req, maximum_frame_size).await?;
         let request = self.read(req, size).await?;
         let response = self.process(attributes, ctx, request).await?;
@@ -367,11 +379,12 @@ where
     }
 }
 
-impl<S, State> Service<TcpContext, TcpStream> for TcpBytesService<S, State>
+impl<S, State, Stream> Service<TcpContext, Stream> for TcpBytesService<S, State>
 where
     S: Service<State, Bytes, Response = Bytes>,
     S::Error: From<Error> + From<io::Error> + Debug,
     State: Clone + Default + Send + Sync + 'static,
+    Stream: AsyncReadExt + AsyncWriteExt + Unpin + Send + Sync + 'static,
 {
     type Response = ();
 
@@ -381,15 +394,12 @@ where
     async fn serve(
         &self,
         ctx: Context<TcpContext>,
-        mut req: TcpStream,
+        mut req: Stream,
     ) -> Result<Self::Response, Self::Error> {
         let attributes = {
             let state = ctx.state();
 
-            let mut attributes = vec![KeyValue::new(
-                "local_addr",
-                req.local_addr().map(|local_addr| local_addr.to_string())?,
-            )];
+            let mut attributes = vec![];
 
             if let Some(cluster_id) = state.cluster_id.clone() {
                 attributes.push(KeyValue::new("cluster_id", cluster_id))
