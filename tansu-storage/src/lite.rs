@@ -38,7 +38,7 @@ use chrono::NaiveDateTime;
 use deadpool::managed;
 use libsql::{
     Connection, Database, Row, Rows, Statement, Transaction, TransactionBehavior, Value,
-    params::IntoParams,
+    ffi::SQLITE_CONSTRAINT_UNIQUE, params::IntoParams,
 };
 use opentelemetry::{
     KeyValue,
@@ -197,6 +197,13 @@ impl TryFrom<Row> for Txn {
             status,
         })
     }
+}
+
+fn is_unique_constraint(error: &libsql::Error) -> bool {
+    matches!(
+        error,
+        libsql::Error::SqliteFailure(SQLITE_CONSTRAINT_UNIQUE, _)
+    )
 }
 
 /// LibSQL/SQLite storage engine
@@ -464,8 +471,12 @@ impl PoolConnection {
             .await
             .inspect(|rows| debug!(?rows))
             .inspect_err(|err| {
-                error!(?err, elapsed_millis = elapsed_millis(start));
-                SQL_ERROR.add(1, &self.attributes_for_error(Some(sql), err)[..]);
+                if is_unique_constraint(err) {
+                    debug!(?err);
+                } else {
+                    error!(?err, elapsed_millis = elapsed_millis(start));
+                    SQL_ERROR.add(1, &self.attributes_for_error(Some(sql), err)[..]);
+                }
             })?;
 
         if let Some(row) = rows
@@ -473,8 +484,12 @@ impl PoolConnection {
             .await
             .inspect(|row| debug!(?row))
             .inspect_err(|err| {
-                error!(?err, elapsed_millis = elapsed_millis(start));
-                SQL_ERROR.add(1, &self.attributes_for_error(Some(sql), err)[..]);
+                if is_unique_constraint(err) {
+                    debug!(?err);
+                } else {
+                    error!(?err, elapsed_millis = elapsed_millis(start));
+                    SQL_ERROR.add(1, &self.attributes_for_error(Some(sql), err)[..]);
+                }
             })?
         {
             let attributes = [KeyValue::new("sql", sql.to_owned())];
@@ -1885,7 +1900,7 @@ fn unique_constraint(error_code: ErrorCode) -> impl Fn(libsql::Error) -> Error {
         if let libsql::Error::SqliteFailure(code, ref reason) = err {
             debug!(code, reason);
 
-            if code == 2067 {
+            if code == SQLITE_CONSTRAINT_UNIQUE {
                 Error::Api(error_code)
             } else {
                 err.into()
@@ -1971,7 +1986,13 @@ impl Storage for Delegate {
 
             pc.query_one("topic_insert.sql", parameters.clone())
                 .await
-                .inspect_err(|err| error!(?err))
+                .inspect_err(|err| {
+                    if is_unique_constraint(err) {
+                        debug!(?err);
+                    } else {
+                        error!(?err)
+                    }
+                })
                 .map_err(unique_constraint(ErrorCode::TopicAlreadyExists))
                 .inspect(|row| debug!(?parameters, ?row))
                 .and_then(|row| {
