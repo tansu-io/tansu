@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -1813,6 +1813,24 @@ impl Storage for Engine {
                 &[KeyValue::new("operation", "advertised_listener")],
             )
         })
+    }
+
+    #[instrument(skip_all)]
+    async fn delete_user_scram_credential(
+        &self,
+        user: &str,
+        mechanism: ScramMechanism,
+    ) -> Result<()> {
+        let start = SystemTime::now();
+        self.inner
+            .delete_user_scram_credential(user, mechanism)
+            .await
+            .inspect(|_| {
+                ENGINE_REQUEST_DURATION.record(
+                    elapsed_millis(start),
+                    &[KeyValue::new("operation", "delete_user_scram_credential")],
+                )
+            })
     }
 
     #[instrument(skip_all)]
@@ -4353,6 +4371,30 @@ impl Storage for Delegate {
             DELEGATE_REQUEST_DURATION.record(
                 elapsed_millis(start),
                 &[KeyValue::new("operation", "advertised_listener")],
+            )
+        })
+    }
+
+    async fn delete_user_scram_credential(
+        &self,
+        user: &str,
+        mechanism: ScramMechanism,
+    ) -> Result<()> {
+        let start = SystemTime::now();
+        let pc = self.connection().await?;
+
+        pc.execute(
+            "scram_credential_delete.sql",
+            (self.cluster.as_str(), user, i32::from(mechanism)),
+        )
+        .await
+        .inspect_err(|err| error!(?err))
+        .map_err(Into::into)
+        .and(Ok(()))
+        .inspect(|_| {
+            DELEGATE_REQUEST_DURATION.record(
+                elapsed_millis(start),
+                &[KeyValue::new("operation", "delete_user_scram_credential")],
             )
         })
     }

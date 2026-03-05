@@ -1396,6 +1396,12 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
         credential: ScramCredential,
     ) -> Result<()>;
 
+    async fn delete_user_scram_credential(
+        &self,
+        user: &str,
+        mechanism: ScramMechanism,
+    ) -> Result<()>;
+
     async fn user_scram_credential(
         &self,
         user: &str,
@@ -2956,6 +2962,31 @@ impl Storage for StorageContainer {
 
             #[cfg(feature = "turso")]
             Self::Turso(engine) => engine.advertised_listener().await,
+        }
+    }
+
+    async fn delete_user_scram_credential(
+        &self,
+        user: &str,
+        mechanism: ScramMechanism,
+    ) -> Result<()> {
+        match self {
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.delete_user_scram_credential(user, mechanism).await,
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.delete_user_scram_credential(user, mechanism).await,
+
+            Self::Null(engine) => engine.delete_user_scram_credential(user, mechanism).await,
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.delete_user_scram_credential(user, mechanism).await,
+
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.delete_user_scram_credential(user, mechanism).await,
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.delete_user_scram_credential(user, mechanism).await,
         }
     }
 

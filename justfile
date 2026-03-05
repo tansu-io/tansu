@@ -154,8 +154,18 @@ list-topics-scram-256:
 list-topics-scram-512:
     kafka-topics --bootstrap-server ${ADVERTISED_LISTENER} --command-config command-scram-512.properties --list
 
-add-alice-user:
-    kafka-configs --alter --add-config "SCRAM-SHA-256=[iterations=8192,password=secret],SCRAM-SHA-512=[iterations=8192,password=secret]" --entity-type users --entity-name alice --bootstrap-server localhost:9092
+user-create user password profile mechanism="scram512":
+    target/{{ replace(profile, "dev", "debug") }}/tansu user create {{ user }} {{ password }} --mechanism {{ mechanism }}
+
+add-alice-user profile="dev": (user-create "alice" "secret" profile "scram256") (user-create "alice" "secret" profile "scram512")
+
+user-delete user profile mechanism="scram512":
+    target/{{ replace(profile, "dev", "debug") }}/tansu user delete {{ user }} --mechanism {{ mechanism }}
+
+delete-alice-user profile="dev": (user-delete "alice" profile "scram256") (user-delete "alice" profile "scram512")
+
+# add-alice-user:
+#    kafka-configs --alter --add-config "SCRAM-SHA-256=[iterations=8192,password=secret],SCRAM-SHA-512=[iterations=8192,password=secret]" --entity-type users --entity-name alice --bootstrap-server localhost:9092
 
 test-topic-describe:
     kafka-topics --bootstrap-server ${ADVERTISED_LISTENER} --describe --topic test

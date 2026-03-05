@@ -8170,16 +8170,21 @@ dependencies = [
 name = "tansu-cli"
 version = "0.6.0-pre.10"
 dependencies = [
+ "bytes",
  "clap",
  "console",
  "dotenv",
  "human-units",
  "humantime",
  "owo-colors",
+ "rand 0.9.2",
  "regex",
+ "rsasl",
  "rustls",
+ "sha2",
  "tansu-broker",
  "tansu-cat",
+ "tansu-client",
  "tansu-generator",
  "tansu-perf",
  "tansu-proxy",

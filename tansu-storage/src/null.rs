@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -511,6 +511,18 @@ impl Storage for Engine {
     #[instrument(skip_all)]
     async fn ping(&self) -> Result<()> {
         Ok(())
+    }
+
+    #[instrument(skip_all)]
+    async fn delete_user_scram_credential(
+        &self,
+        _user: &str,
+        _mechanism: ScramMechanism,
+    ) -> Result<()> {
+        Err(Error::FeatureNotEnabled {
+            feature: FEATURE.into(),
+            message: MESSAGE.into(),
+        })
     }
 
     #[instrument(ret)]

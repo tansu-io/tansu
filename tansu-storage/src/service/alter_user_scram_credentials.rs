@@ -45,7 +45,29 @@ where
     ) -> Result<Self::Response, Self::Error> {
         let mut results = vec![];
 
-        if let Some(_deletions) = req.deletions {}
+        if let Some(deletions) = req.deletions {
+            for deletion in deletions {
+                let mechanism = ScramMechanism::try_from(deletion.mechanism)?;
+
+                results.push(
+                    ctx.state()
+                        .delete_user_scram_credential(&deletion.name, mechanism)
+                        .await
+                        .map_or(
+                            AlterUserScramCredentialsResult::default()
+                                .user(deletion.name.clone())
+                                .error_code(ErrorCode::UnsupportedSaslMechanism.into())
+                                .error_message(Some("".into())),
+                            |()| {
+                                AlterUserScramCredentialsResult::default()
+                                    .user(deletion.name.clone())
+                                    .error_code(ErrorCode::None.into())
+                                    .error_message(Some("".into()))
+                            },
+                        ),
+                );
+            }
+        }
 
         if let Some(upsertions) = req.upsertions {
             for upsertion in upsertions {

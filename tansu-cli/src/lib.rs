@@ -23,11 +23,13 @@ use regex::{Regex, Replacer};
 pub enum Error {
     Box(#[from] Box<dyn std::error::Error + Send + Sync>),
     Cat(Box<tansu_cat::Error>),
+    Client(Box<tansu_client::Error>),
     DotEnv(#[from] dotenv::Error),
     Generate(#[from] tansu_generator::Error),
     Perf(#[from] tansu_perf::Error),
     Proxy(#[from] tansu_proxy::Error),
     Regex(#[from] regex::Error),
+    SansIo(#[from] tansu_sans_io::Error),
     Schema(Box<tansu_schema::Error>),
     Server(Box<tansu_broker::Error>),
     Tls(#[from] rustls::Error),
@@ -39,6 +41,12 @@ pub enum Error {
 impl From<tansu_cat::Error> for Error {
     fn from(value: tansu_cat::Error) -> Self {
         Self::Cat(Box::new(value))
+    }
+}
+
+impl From<tansu_client::Error> for Error {
+    fn from(value: tansu_client::Error) -> Self {
+        Self::Client(Box::new(value))
     }
 }
 

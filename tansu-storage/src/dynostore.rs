@@ -2620,6 +2620,15 @@ impl Storage for DynoStore {
         Ok(self.advertised_listener.clone())
     }
 
+    #[instrument(skip_all)]
+    async fn delete_user_scram_credential(
+        &self,
+        _user: &str,
+        _mechanism: ScramMechanism,
+    ) -> Result<()> {
+        Ok(())
+    }
+
     async fn upsert_user_scram_credential(
         &self,
         _user: &str,

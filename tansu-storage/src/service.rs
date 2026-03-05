@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -189,6 +189,10 @@ pub enum Request {
     ClusterId,
     Node,
     AdvertisedListener,
+    DeleteUserScramCredential {
+        user: String,
+        mechanism: ScramMechanism,
+    },
     UpsertUserScramCredential {
         user: String,
         mechanism: ScramMechanism,
@@ -233,6 +237,7 @@ impl Display for Request {
             Self::TxnEnd { .. } => f.write_str("TxnEnd"),
             Self::TxnOffsetCommit(_) => f.write_str("TxnOffsetCommit"),
             Self::UpdateGroup { .. } => f.write_str("UpdateGroup"),
+            Self::DeleteUserScramCredential { .. } => f.write_str("DeleteUserScramCredential"),
             Self::UpsertUserScramCredential { .. } => f.write_str("UpsertUserScramCredential"),
             Self::UserScramCredential { .. } => f.write_str("UserScramCredential"),
             Self::Ping => f.write_str("Ping"),
@@ -250,6 +255,7 @@ pub enum Response {
     DeleteGroups(Result<Vec<DeletableGroupResult>>),
     DeleteRecords(Result<Vec<DeleteRecordsTopicResult>>),
     DeleteTopic(Result<ErrorCode>),
+    DeleteUserScramCredential(Result<()>),
     DescribeConfig(Result<DescribeConfigsResult>),
     DescribeGroups(Result<Vec<NamedGroupDetail>>),
     DescribeTopicPartitions(Result<Vec<DescribeTopicPartitionsResponseTopic>>),
@@ -1101,6 +1107,29 @@ impl Storage for RequestChannelService {
     }
 
     #[instrument(skip_all)]
+    async fn delete_user_scram_credential(
+        &self,
+        user: &str,
+        mechanism: ScramMechanism,
+    ) -> Result<()> {
+        let user = user.to_string();
+
+        self.serve(
+            Context::default(),
+            Request::DeleteUserScramCredential { user, mechanism },
+        )
+        .await
+        .and_then(|response| {
+            if let Response::DeleteUserScramCredential(inner) = response {
+                inner.map_err(Into::into)
+            } else {
+                Err(Error::UnexpectedServiceResponse(Box::new(response)).into())
+            }
+        })
+        .map_err(Into::into)
+    }
+
+    #[instrument(skip_all)]
     async fn upsert_user_scram_credential(
         &self,
         user: &str,
@@ -1429,6 +1458,13 @@ where
             Request::AdvertisedListener => Ok(Response::AdvertisedListener(
                 self.storage.advertised_listener().await,
             )),
+            Request::DeleteUserScramCredential { user, mechanism } => {
+                Ok(Response::DeleteUserScramCredential(
+                    self.storage
+                        .delete_user_scram_credential(&user[..], mechanism)
+                        .await,
+                ))
+            }
             Request::UpsertUserScramCredential {
                 user,
                 mechanism,

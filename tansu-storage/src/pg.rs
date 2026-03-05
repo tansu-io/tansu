@@ -3531,6 +3531,23 @@ impl Storage for Postgres {
         Ok(())
     }
 
+    async fn delete_user_scram_credential(
+        &self,
+        user: &str,
+        mechanism: ScramMechanism,
+    ) -> Result<()> {
+        let c = self.connection().await?;
+
+        self.prepare_execute(
+            &c,
+            "scram_credential_delete.sql",
+            &[&self.cluster, &user, &i32::from(mechanism)],
+        )
+        .await
+        .inspect_err(|err| error!(?err, ?user, ?mechanism,))
+        .and(Ok(()))
+    }
+
     async fn upsert_user_scram_credential(
         &self,
         username: &str,

@@ -884,6 +884,15 @@ impl Storage for Engine {
     }
 
     #[instrument(skip_all)]
+    async fn delete_user_scram_credential(
+        &self,
+        _user: &str,
+        _mechanism: ScramMechanism,
+    ) -> tansu_storage::Result<()> {
+        unimplemented!()
+    }
+
+    #[instrument(skip_all)]
     async fn upsert_user_scram_credential(
         &self,
         user: &str,

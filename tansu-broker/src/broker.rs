@@ -58,8 +58,6 @@ pub struct Broker<G, S> {
     storage: S,
     groups: G,
 
-    otlp_endpoint_url: Option<Url>,
-
     sasl_config: Option<Arc<SASLConfig>>,
     tls_server_config: Option<Arc<ServerConfig>>,
     silent: bool,
@@ -91,7 +89,6 @@ where
             advertised_listener,
             storage,
             groups,
-            otlp_endpoint_url: None,
 
             sasl_config: None,
             tls_server_config: None,
@@ -268,7 +265,7 @@ where
             Some(ls)
         };
 
-        let acceptor = self.tls_server_config.clone().map(TlsAcceptor::from);
+        let _acceptor = self.tls_server_config.clone().map(TlsAcceptor::from);
 
         let mut connections = 0;
 
@@ -633,7 +630,6 @@ impl Builder<i32, String, Uuid, Url, Url, Url> {
             advertised_listener: self.advertised_listener,
             storage,
             groups,
-            otlp_endpoint_url: self.otlp_endpoint_url,
             sasl_config,
             tls_server_config: self.tls_server_config.map(Arc::new),
 
