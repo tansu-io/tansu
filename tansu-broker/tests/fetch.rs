@@ -32,10 +32,7 @@ use uuid::Uuid;
 
 pub mod common;
 
-pub async fn empty_topic<C>(cluster_id: Uuid, broker_id: i32, sc: StorageContainer) -> Result<()>
-where
-    C: Into<String>,
-{
+pub async fn empty_topic(cluster_id: Uuid, broker_id: i32, sc: StorageContainer) -> Result<()> {
     register_broker(cluster_id, broker_id, &sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
