@@ -69,7 +69,7 @@ jobs:
         if: always()
       - run: tar --create --verbose --gzip --file=logs-${{env.PG_IMAGE_DASH}}.tar.gz logs
         if: always()
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: logs-${{env.PG_IMAGE_DASH}}.tar.gz
@@ -190,7 +190,7 @@ jobs:
         run: |
           cargo install "cargo-about@$CARGO_ABOUT_VERSION"
           cargo about generate about.hbs >THIRD-PARTY-LICENSE.html
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: third-party-license
           path: THIRD-PARTY-LICENSE.html
@@ -201,7 +201,7 @@ jobs:
       - uses: actions/checkout@v6
       - run: |
           git archive --format=tar.gz HEAD >${{runner.temp}}/src.tar.gz
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: src
           path: ${{runner.temp}}/src.tar.gz
@@ -387,7 +387,7 @@ jobs:
           cp artifacts/THIRD-PARTY-LICENSE.html "$dist"
           tar --create --verbose --gzip --file=tansu-"${TARGET}".tar.gz -C "$dist" .
       - if: ${{matrix.enabled && github.ref_type != 'tag'}}
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: tansu-${{matrix.target}}
           path: tansu-${{matrix.target}}.tar.gz
