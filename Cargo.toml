@@ -138,7 +138,7 @@ rustls = "0.23.27"
 rustls-native-certs = "0.8.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1"
-slatedb = "0.10.1"
+slatedb = "0.11.1"
 snap = "1.1.1"
 syn = { version = "2.0", features = ["full"] }
 tansu = { version = "0.6.0-pre.10", path = "tansu", default-features = false }
