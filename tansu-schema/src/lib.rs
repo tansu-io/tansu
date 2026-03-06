@@ -35,7 +35,7 @@ use arrow::{datatypes::DataType, error::ArrowError, record_batch::RecordBatch};
 
 use bytes::Bytes;
 
-#[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
+#[cfg(any(feature = "iceberg", feature = "delta"))]
 use datafusion::error::DataFusionError;
 
 #[cfg(feature = "delta")]
@@ -48,8 +48,8 @@ use iceberg::spec::DataFileBuilderError;
 
 use jsonschema::ValidationError;
 use object_store::{
-    DynObjectStore, ObjectStore, aws::AmazonS3Builder, local::LocalFileSystem, memory::InMemory,
-    path::Path,
+    DynObjectStore, ObjectStore, ObjectStoreExt, aws::AmazonS3Builder, local::LocalFileSystem,
+    memory::InMemory, path::Path,
 };
 use opentelemetry::{
     InstrumentationScope, KeyValue, global,
@@ -104,7 +104,7 @@ pub enum Error {
     #[cfg(feature = "iceberg")]
     DataFileBuilder(#[from] DataFileBuilderError),
 
-    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
+    #[cfg(any(feature = "iceberg", feature = "delta"))]
     DataFusion(Box<DataFusionError>),
 
     #[cfg(feature = "delta")]
@@ -161,7 +161,7 @@ pub enum Error {
 
     SerdeJson(#[from] serde_json::Error),
 
-    #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
+    #[cfg(any(feature = "iceberg", feature = "delta"))]
     SqlParser(#[from] datafusion::logical_expr::sqlparser::parser::ParserError),
 
     TopicWithoutSchema(String),
@@ -186,7 +186,7 @@ impl Display for Error {
     }
 }
 
-#[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
+#[cfg(any(feature = "iceberg", feature = "delta"))]
 impl From<DataFusionError> for Error {
     fn from(value: DataFusionError) -> Self {
         Self::DataFusion(Box::new(value))
@@ -487,7 +487,7 @@ impl Registry {
         Builder::try_from(url)
     }
 
-    #[instrument(skip(self), ret)]
+    #[instrument(skip(self))]
     pub async fn schema(&self, topic: &str) -> Result<Option<Schema>> {
         let proto = Path::from(format!("{topic}.proto"));
         let json = Path::from(format!("{topic}.json"));
@@ -568,7 +568,7 @@ impl Registry {
         }
     }
 
-    #[instrument(skip(self, batch), ret)]
+    #[instrument(skip(self, batch))]
     pub async fn validate(&self, topic: &str, batch: &Batch) -> Result<()> {
         let validation_start = SystemTime::now();
 

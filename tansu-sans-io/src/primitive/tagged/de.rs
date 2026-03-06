@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,9 +24,12 @@ use std::{
 };
 use tracing::debug;
 
+const MESSAGE_MAX_SIZE: usize = 1024 * 1024 * 1024;
+
 pub struct Decoder<'de> {
     reader: &'de mut dyn Read,
     length: Option<usize>,
+    message_max_size: Option<usize>,
 }
 
 impl<'de> Decoder<'de> {
@@ -34,6 +37,7 @@ impl<'de> Decoder<'de> {
         Self {
             reader,
             length: None,
+            message_max_size: None,
         }
     }
 
@@ -50,11 +54,17 @@ impl<'de> Decoder<'de> {
             self.reader.read_exact(&mut buf)?;
 
             if buf[0] & CONTINUATION == CONTINUATION {
-                let intermediate = u32::from(buf[0] & MASK);
-                accumulator += intermediate << shift;
-                shift += 7;
+                accumulator = u32::from(buf[0] & MASK)
+                    .checked_shl(shift as u32)
+                    .and_then(|intermediate| accumulator.checked_add(intermediate))
+                    .ok_or(Error::Overflow)?;
+
+                shift = shift.checked_add(7).ok_or(Error::Overflow)?;
             } else {
-                accumulator += u32::from(buf[0]) << shift;
+                accumulator = u32::from(buf[0])
+                    .checked_shl(shift as u32)
+                    .and_then(|intermediate| accumulator.checked_add(intermediate))
+                    .ok_or(Error::Overflow)?;
                 done = true;
             }
         }
@@ -76,8 +86,7 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
     where
         V: Visitor<'de>,
     {
-        debug!("visitor={}", type_name_of_val(&visitor));
-        todo!()
+        Err(Error::UnexpectedType(type_name::<V::Value>().into()))
     }
 
     fn deserialize_bool<V>(self, visitor: V) -> Result<V::Value, Self::Error>
@@ -216,8 +225,7 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
     where
         V: Visitor<'de>,
     {
-        let _ = visitor;
-        unimplemented!()
+        Err(Error::UnexpectedType(type_name::<V::Value>().into()))
     }
 
     fn deserialize_str<V>(self, visitor: V) -> Result<V::Value, Self::Error>
@@ -229,7 +237,7 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
             .map_or_else(
                 || {
                     self.unsigned_varint()
-                        .map(|length| length - 1)
+                        .and_then(|length| length.checked_sub(1).ok_or(Error::Overflow))
                         .and_then(|length| length.try_into().map_err(Into::into))
                 },
                 Ok,
@@ -253,12 +261,16 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
             .map_or_else(
                 || {
                     self.unsigned_varint()
-                        .map(|length| length - 1)
+                        .and_then(|length| length.checked_sub(1).ok_or(Error::Overflow))
                         .and_then(|length| length.try_into().map_err(Into::into))
                 },
                 Ok,
             )
             .and_then(|length| {
+                if length > self.message_max_size.unwrap_or(MESSAGE_MAX_SIZE) {
+                    return Err(Error::MessageMaxSizeExceeded(length));
+                }
+
                 let mut buf = vec![0u8; length];
                 self.reader.read_exact(&mut buf)?;
 
@@ -273,16 +285,14 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
     where
         V: Visitor<'de>,
     {
-        let _ = visitor;
-        unimplemented!()
+        Err(Error::UnexpectedType(type_name::<V::Value>().into()))
     }
 
     fn deserialize_byte_buf<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,
     {
-        let _ = visitor;
-        unimplemented!()
+        Err(Error::UnexpectedType(type_name::<V::Value>().into()))
     }
 
     fn deserialize_option<V>(self, visitor: V) -> Result<V::Value, Self::Error>
@@ -303,8 +313,7 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
     where
         V: Visitor<'de>,
     {
-        let _ = visitor;
-        unimplemented!()
+        Err(Error::UnexpectedType(type_name::<V::Value>().into()))
     }
 
     fn deserialize_unit_struct<V>(
@@ -315,9 +324,10 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
     where
         V: Visitor<'de>,
     {
-        let _ = name;
-        let _ = visitor;
-        unimplemented!()
+        Err(Error::UnexpectedType(format!(
+            "{name}:{}",
+            type_name::<V::Value>()
+        )))
     }
 
     fn deserialize_newtype_struct<V>(
@@ -337,7 +347,7 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
         V: Visitor<'de>,
     {
         self.unsigned_varint()
-            .map(|length| length - 1)
+            .and_then(|length| length.checked_sub(1).ok_or(Error::Overflow))
             .and_then(|length| length.try_into().map_err(Into::into))
             .and_then(|length| visitor.visit_seq(Seq::new(self, Some(length))))
     }
@@ -346,9 +356,10 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
     where
         V: Visitor<'de>,
     {
-        let _ = len;
-        let _ = visitor;
-        unimplemented!()
+        Err(Error::UnexpectedType(format!(
+            "{len}:{}",
+            type_name::<V::Value>()
+        )))
     }
 
     fn deserialize_tuple_struct<V>(
@@ -360,18 +371,17 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
     where
         V: Visitor<'de>,
     {
-        let _ = name;
-        let _ = len;
-        let _ = visitor;
-        unimplemented!()
+        Err(Error::UnexpectedType(format!(
+            "{name}:{len}:{}",
+            type_name::<V::Value>()
+        )))
     }
 
     fn deserialize_map<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,
     {
-        let _ = visitor;
-        unimplemented!()
+        Err(Error::UnexpectedType(type_name::<V::Value>().into()))
     }
 
     fn deserialize_struct<V>(
@@ -396,25 +406,24 @@ impl<'de> Deserializer<'de> for &mut Decoder<'de> {
     where
         V: Visitor<'de>,
     {
-        debug!("name: {name}, variants: {variants:?}");
-        let _ = visitor;
-        unimplemented!()
+        Err(Error::UnexpectedType(format!(
+            "{name}:{variants:?}:{}",
+            type_name::<V::Value>()
+        )))
     }
 
     fn deserialize_identifier<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,
     {
-        let _ = visitor;
-        unimplemented!()
+        Err(Error::UnexpectedType(type_name::<V::Value>().into()))
     }
 
     fn deserialize_ignored_any<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,
     {
-        let _ = visitor;
-        unimplemented!()
+        Err(Error::UnexpectedType(type_name::<V::Value>().into()))
     }
 }
 

@@ -20,13 +20,15 @@ use crate::{
     otel,
     service::services,
 };
+use console::Term;
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use rama::{Context, Service};
 use std::{
     io::ErrorKind,
     marker::PhantomData,
     net::{IpAddr, Ipv6Addr, SocketAddr},
     str::FromStr,
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 use tansu_sans_io::{ErrorCode, RootMessageMeta};
 use tansu_schema::{Registry, lake::House};
@@ -35,7 +37,7 @@ use tokio::{
     net::TcpListener,
     signal::unix::{SignalKind, signal},
     task::JoinSet,
-    time::{self, sleep},
+    time::{self, Instant, sleep},
 };
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, Level, debug, error, span};
@@ -54,6 +56,9 @@ pub struct Broker<G, S> {
 
     #[allow(dead_code)]
     otlp_endpoint_url: Option<Url>,
+
+    silent: bool,
+    maintenance_interval: Option<Duration>,
 
     cancellation: CancellationToken,
 }
@@ -82,6 +87,8 @@ where
             storage,
             groups,
             otlp_endpoint_url: None,
+            silent: false,
+            maintenance_interval: None,
 
             cancellation: CancellationToken::new(),
         }
@@ -91,7 +98,7 @@ where
         Builder::default()
     }
 
-    pub async fn main(mut self) -> Result<ErrorCode> {
+    pub async fn main(mut self, started: Instant) -> Result<ErrorCode> {
         {
             let root_meta = RootMessageMeta::messages();
             debug!(
@@ -112,10 +119,15 @@ where
         let mut terminate_signal = signal(SignalKind::terminate()).unwrap();
         debug!(?terminate_signal);
 
+        let silent = self.silent;
+
         let token = self.cancellation.clone();
 
         _ = set.spawn(async move {
-            self.serve().await.inspect_err(|err| error!(?err)).unwrap();
+            self.serve(started)
+                .await
+                .inspect_err(|err| error!(?err))
+                .unwrap();
         });
 
         let kind = tokio::select! {
@@ -162,14 +174,22 @@ where
                     }
                 }
             }
+
+            if !silent {
+                let stdout = Term::stdout();
+
+                if stdout.is_term() {
+                    _ = stdout.clear_screen().ok();
+                }
+            }
         }
 
         Ok(ErrorCode::None)
     }
 
-    pub async fn serve(&mut self) -> Result<()> {
+    pub async fn serve(&mut self, started: Instant) -> Result<()> {
         self.register().await?;
-        self.listen().await
+        self.listen(started).await
     }
 
     pub async fn register(&mut self) -> Result<()> {
@@ -184,7 +204,7 @@ where
             .map_err(Into::into)
     }
 
-    pub async fn listen(&self) -> Result<()> {
+    pub async fn listen(&self, started: Instant) -> Result<()> {
         debug!(%self.listener, %self.advertised_listener);
 
         let listener = TcpListener::bind(self.listener.host().map_or_else(
@@ -210,7 +230,8 @@ where
         .inspect(|listener| debug!(listener = ?listener.local_addr().ok()))
         .inspect_err(|err| error!(?err, %self.advertised_listener))?;
 
-        let mut interval = time::interval(Duration::from_millis(600_000));
+        let mut interval =
+            time::interval(self.maintenance_interval.unwrap_or(Duration::from_mins(10)));
 
         let mut set = JoinSet::new();
 
@@ -220,15 +241,62 @@ where
             self.storage.clone(),
         )?;
 
+        let m = MultiProgress::new();
+
+        let spinner_style = ProgressStyle::with_template("{prefix:.bold.dim} {spinner} {msg}")
+            .unwrap()
+            .tick_chars("⠁⠂⠄⡀⢀⠠⠐");
+
+        let ls = if self.silent {
+            None
+        } else {
+            println!("ready in {}ms", started.elapsed().as_millis(),);
+
+            let ls = m.add(ProgressBar::new_spinner());
+            ls.set_style(spinner_style.clone());
+
+            if let Ok(local_addr) = listener.local_addr() {
+                ls.set_prefix(format!("[{local_addr:?}]"));
+            }
+
+            ls.set_message("listening for connection...");
+
+            Some(ls)
+        };
+
+        let mut connections = 0;
+
         loop {
+            connections += 1;
+
+            if let Some(ref ls) = ls {
+                ls.tick();
+            }
+
             tokio::select! {
-                Ok((stream, _addr)) = listener.accept() => {
+                Ok((stream, addr)) = listener.accept() => {
+                    let mut c = Context::default();
+
+                    let pb = if self.silent {
+                        None
+                    } else {
+                        let pb = m.add(ProgressBar::new_spinner());
+                        pb.set_style(spinner_style.clone());
+                        pb.set_prefix(format!("[{connections}/{:?}]", addr));
+                        pb.set_message("connected");
+                        pb.tick();
+
+                        _ = c.insert(pb.clone());
+                        Some(pb)
+                    };
+
+
                     stream.set_nodelay(true)?;
 
                     let service = service.clone();
 
                     let handle = set.spawn(async move {
-                            match service.serve(Context::default(), stream).await {
+                            match service.serve(c, stream).await {
                                 Err(Error::Io(ref io))
                                     if io.kind() == ErrorKind::UnexpectedEof
                                         || io.kind() == ErrorKind::BrokenPipe
@@ -242,7 +310,12 @@ where
                                     debug!(?response)
                                 }
                         }
+
+                        if let Some(ref pb) = pb {
+                            pb.finish_and_clear();
+                        }
                     });
+
 
                     debug!(?handle);
 
@@ -257,7 +330,7 @@ where
                         let span = span!(Level::DEBUG, "maintenance");
 
                         async move {
-                            _ = storage.maintain().await.inspect(|maintain|debug!(?maintain)).inspect_err(|err|debug!(?err)).ok();
+                            _ = storage.maintain(SystemTime::now()).await.inspect(|maintain|debug!(?maintain)).inspect_err(|err|debug!(?err)).ok();
 
                         }.instrument(span).await
 
@@ -298,6 +371,8 @@ pub struct Builder<N, C, I, A, S, L> {
     otlp_endpoint_url: Option<Url>,
     schema_registry: Option<Registry>,
     lake_house: Option<House>,
+    silent: bool,
+    maintenance_interval: Option<Duration>,
 
     cancellation: CancellationToken,
 }
@@ -312,6 +387,8 @@ type PhantomBuilder = Builder<
 >;
 
 impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
+    const MAINTENANCE_INTERVAL: &str = "maintenance_interval";
+
     pub fn node_id(self, node_id: i32) -> Builder<i32, C, I, A, S, L> {
         Builder {
             node_id,
@@ -323,6 +400,8 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             otlp_endpoint_url: self.otlp_endpoint_url,
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
+            silent: self.silent,
+            maintenance_interval: self.maintenance_interval,
 
             cancellation: self.cancellation,
         }
@@ -339,6 +418,8 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             otlp_endpoint_url: self.otlp_endpoint_url,
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
+            silent: self.silent,
+            maintenance_interval: self.maintenance_interval,
 
             cancellation: self.cancellation,
         }
@@ -355,6 +436,8 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             otlp_endpoint_url: self.otlp_endpoint_url,
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
+            silent: self.silent,
+            maintenance_interval: self.maintenance_interval,
 
             cancellation: self.cancellation,
         }
@@ -374,13 +457,40 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             otlp_endpoint_url: self.otlp_endpoint_url,
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
+            silent: self.silent,
+            maintenance_interval: self.maintenance_interval,
 
             cancellation: self.cancellation,
         }
     }
 
-    pub fn storage(self, storage: Url) -> Builder<N, C, I, A, Url, L> {
-        debug!(%storage);
+    pub fn storage(self, mut storage: Url) -> Builder<N, C, I, A, Url, L> {
+        let maintenance_interval = storage.query_pairs().find_map(|(k, v)| {
+            if k == Self::MAINTENANCE_INTERVAL {
+                v.parse::<humantime::Duration>().map(Into::into).ok()
+            } else {
+                None
+            }
+        });
+
+        let pairs = storage
+            .query_pairs()
+            .filter_map(|(k, v)| {
+                if k == Self::MAINTENANCE_INTERVAL {
+                    None
+                } else {
+                    Some((k.to_string(), v.to_string()))
+                }
+            })
+            .collect::<Vec<_>>();
+
+        if pairs.is_empty() {
+            storage.set_query(None);
+        } else {
+            _ = storage.query_pairs_mut().clear().extend_pairs(pairs);
+        }
+
+        debug!(?maintenance_interval, %storage);
 
         Builder {
             node_id: self.node_id,
@@ -392,6 +502,8 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             otlp_endpoint_url: self.otlp_endpoint_url,
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
+            silent: self.silent,
+            maintenance_interval,
 
             cancellation: self.cancellation,
         }
@@ -410,6 +522,8 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             otlp_endpoint_url: self.otlp_endpoint_url,
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
+            silent: self.silent,
+            maintenance_interval: self.maintenance_interval,
 
             cancellation: self.cancellation,
         }
@@ -436,6 +550,10 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             ..self
         }
     }
+
+    pub fn silent(self, silent: bool) -> Self {
+        Self { silent, ..self }
+    }
 }
 
 impl Builder<i32, String, Uuid, Url, Url, Url> {
@@ -456,6 +574,7 @@ impl Builder<i32, String, Uuid, Url, Url, Url> {
             .lake_house(self.lake_house.clone())
             .storage(self.storage.clone())
             .cancellation(self.cancellation.clone())
+            .silent(self.silent)
             .build()
             .await?;
 
@@ -470,6 +589,8 @@ impl Builder<i32, String, Uuid, Url, Url, Url> {
             storage,
             groups,
             otlp_endpoint_url: self.otlp_endpoint_url,
+            silent: self.silent,
+            maintenance_interval: self.maintenance_interval,
             cancellation: self.cancellation,
         })
     }

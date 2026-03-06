@@ -25,14 +25,16 @@ use nanoid::nanoid;
 use opentelemetry::KeyValue;
 use rama::{Context, Layer, Service};
 use tokio::{
-    io::{AsyncReadExt as _, AsyncWriteExt as _, BufWriter},
+    io::{AsyncReadExt, AsyncWriteExt, BufWriter},
     net::{TcpListener, TcpStream},
     task::JoinSet,
 };
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, instrument};
 
-use crate::{Error, REQUEST_DURATION, REQUEST_SIZE, RESPONSE_SIZE, frame_length};
+use crate::{
+    BYTES_RECEIVED, BYTES_SENT, Error, REQUEST_DURATION, REQUEST_SIZE, RESPONSE_SIZE, frame_length,
+};
 
 /// A [`Layer`] that listens for TCP connections
 #[derive(Clone, Debug, Default)]
@@ -222,6 +224,7 @@ impl Service<TcpStream, Bytes> for BytesTcpService {
         let stream = ctx.state_mut();
 
         stream.write_all(&req[..]).await?;
+        BYTES_SENT.add(req.len() as u64, &[]);
 
         let mut size = [0u8; 4];
         _ = stream.read_exact(&mut size).await?;
@@ -229,6 +232,7 @@ impl Service<TcpStream, Bytes> for BytesTcpService {
         let mut buffer: Vec<u8> = vec![0u8; frame_length(size)];
         buffer[0..size.len()].copy_from_slice(&size[..]);
         _ = stream.read_exact(&mut buffer[4..]).await?;
+        BYTES_RECEIVED.add(buffer.len() as u64, &[]);
 
         Ok(Bytes::from(buffer))
     }
@@ -279,11 +283,14 @@ where
     State: Clone + Default + Send + Sync + 'static,
 {
     #[instrument(skip_all)]
-    async fn wait(
+    async fn wait<R>(
         &self,
-        req: &mut TcpStream,
+        req: &mut R,
         maximum_frame_size: Option<usize>,
-    ) -> Result<[u8; 4], S::Error> {
+    ) -> Result<[u8; 4], S::Error>
+    where
+        R: AsyncReadExt + Unpin,
+    {
         let mut size = [0u8; 4];
 
         _ = req
@@ -301,7 +308,10 @@ where
     }
 
     #[instrument(skip_all)]
-    async fn read(&self, req: &mut TcpStream, size: [u8; 4]) -> Result<Bytes, S::Error> {
+    async fn read<R>(&self, req: &mut R, size: [u8; 4]) -> Result<Bytes, S::Error>
+    where
+        R: AsyncReadExt + Unpin,
+    {
         let mut request: Vec<u8> = vec![0u8; frame_length(size)];
 
         request[0..size.len()].copy_from_slice(&size[..]);
@@ -310,6 +320,7 @@ where
             .read_exact(&mut request[4..])
             .await
             .inspect_err(|err| error!(?err))?;
+        BYTES_RECEIVED.add(request.len() as u64, &[]);
 
         Ok(Bytes::from(request))
     }
@@ -340,20 +351,27 @@ where
     }
 
     #[instrument(skip_all)]
-    async fn write(&self, req: &mut TcpStream, frame: Bytes) -> Result<(), S::Error> {
+    async fn write<W>(&self, req: &mut W, frame: Bytes) -> Result<(), S::Error>
+    where
+        W: AsyncWriteExt + Unpin,
+    {
         let mut w = BufWriter::new(req);
         w.write_all(&frame).await.inspect_err(|err| error!(?err))?;
+        BYTES_SENT.add(frame.len() as u64, &[]);
         w.flush().await.map_err(Into::into)
     }
 
     #[instrument(skip_all, fields(id = nanoid!()))]
-    async fn req(
+    async fn req<R>(
         &self,
-        req: &mut TcpStream,
+        req: &mut R,
         maximum_frame_size: Option<usize>,
         attributes: &[KeyValue],
         ctx: Context<TcpContext>,
-    ) -> Result<(), S::Error> {
+    ) -> Result<(), S::Error>
+    where
+        R: AsyncReadExt + AsyncWriteExt + Unpin,
+    {
         let size = self.wait(req, maximum_frame_size).await?;
         let request = self.read(req, size).await?;
         let response = self.process(attributes, ctx, request).await?;
@@ -361,11 +379,12 @@ where
     }
 }
 
-impl<S, State> Service<TcpContext, TcpStream> for TcpBytesService<S, State>
+impl<S, State, Stream> Service<TcpContext, Stream> for TcpBytesService<S, State>
 where
     S: Service<State, Bytes, Response = Bytes>,
     S::Error: From<Error> + From<io::Error> + Debug,
     State: Clone + Default + Send + Sync + 'static,
+    Stream: AsyncReadExt + AsyncWriteExt + Unpin + Send + Sync + 'static,
 {
     type Response = ();
 
@@ -375,15 +394,12 @@ where
     async fn serve(
         &self,
         ctx: Context<TcpContext>,
-        mut req: TcpStream,
+        mut req: Stream,
     ) -> Result<Self::Response, Self::Error> {
         let attributes = {
             let state = ctx.state();
 
-            let mut attributes = vec![KeyValue::new(
-                "local_addr",
-                req.local_addr().map(|local_addr| local_addr.to_string())?,
-            )];
+            let mut attributes = vec![];
 
             if let Some(cluster_id) = state.cluster_id.clone() {
                 attributes.push(KeyValue::new("cluster_id", cluster_id))
@@ -438,10 +454,10 @@ where
 
     #[instrument(skip_all)]
     async fn serve(&self, ctx: Context<State>, req: Bytes) -> Result<Self::Response, Self::Error> {
-        debug!(?req);
+        debug!(req = ?&req[..]);
         self.inner
             .serve(ctx, req)
             .await
-            .inspect(|response| debug!(?response))
+            .inspect(|response| debug!(response = ?&response[..]))
     }
 }

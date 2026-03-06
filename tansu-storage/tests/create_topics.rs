@@ -147,7 +147,7 @@ async fn create_with_default() -> Result<(), Error> {
     for (index, partition) in partitions.iter().enumerate() {
         assert_eq!(index as i32, partition.partition_index);
         assert_eq!(node_id, partition.leader_id);
-        assert_eq!(-1, partition.leader_epoch);
+        assert_eq!(0, partition.leader_epoch);
         assert_eq!(ErrorCode::None, ErrorCode::try_from(partition.error_code)?);
     }
 

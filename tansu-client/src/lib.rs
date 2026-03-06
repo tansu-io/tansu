@@ -106,12 +106,12 @@ use std::{
     time::SystemTime,
 };
 
-use backoff::{ExponentialBackoff, future::retry};
+use backoff::{ExponentialBackoffBuilder, future::retry};
 use bytes::Bytes;
 use deadpool::managed::{self, BuildError, Object, PoolError};
 use opentelemetry::{
     InstrumentationScope, KeyValue, global,
-    metrics::{Counter, Histogram, Meter},
+    metrics::{Counter, Gauge, Histogram, Meter},
 };
 use opentelemetry_semantic_conventions::SCHEMA_URL;
 use rama::{Context, Layer, Service};
@@ -121,6 +121,7 @@ use tokio::{
     io::{AsyncReadExt as _, AsyncWriteExt as _},
     net::TcpStream,
     task::JoinError,
+    time::Duration,
 };
 use tracing::{Instrument, Level, debug, span};
 use tracing_subscriber::filter::ParseError;
@@ -219,6 +220,8 @@ impl ConnectionManager {
     }
 }
 
+const INITIAL_CONNECTION_TIMEOUT_MILLIS: u64 = 30_000;
+
 impl managed::Manager for ConnectionManager {
     type Type = Connection;
     type Error = Error;
@@ -231,7 +234,12 @@ impl managed::Manager for ConnectionManager {
 
         let addr = host_port(self.broker.clone()).await?;
 
-        retry(ExponentialBackoff::default(), || async {
+        let backoff = ExponentialBackoffBuilder::new()
+            .with_max_elapsed_time(Some(Duration::from_millis(
+                INITIAL_CONNECTION_TIMEOUT_MILLIS,
+            )))
+            .build();
+        retry(backoff, || async {
             Ok(TcpStream::connect(addr)
                 .await
                 .inspect(|_| {
@@ -261,12 +269,21 @@ impl managed::Manager for ConnectionManager {
         metrics: &managed::Metrics,
     ) -> managed::RecycleResult<Self::Error> {
         debug!(?obj, ?metrics);
+
         Ok(())
     }
 }
 
 /// A managed [`Pool`] of broker [`Connection`]s
 pub type Pool = managed::Pool<ConnectionManager>;
+
+fn status_update(pool: &Pool) {
+    let status = pool.status();
+    POOL_AVAILABLE.record(status.available as u64, &[]);
+    POOL_CURRENT_SIZE.record(status.size as u64, &[]);
+    POOL_MAX_SIZE.record(status.max_size as u64, &[]);
+    POOL_WAITING.record(status.waiting as u64, &[]);
+}
 
 /// [Build][`Builder#method.build`] a [`Connection`] [`Pool`] to a [broker][`Builder#method.broker`]
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -499,7 +516,10 @@ where
             .client_id()
             .map(|client_id| client_id.map(|client_id| client_id.to_string()))?;
 
-        let connection = ctx.state().get().await?;
+        let pool = ctx.state();
+        status_update(pool);
+
+        let connection = pool.get().await?;
         let correlation_id = connection.correlation_id;
 
         let frame = Frame {
@@ -734,6 +754,34 @@ static TCP_BYTES_RECEIVED: LazyLock<Counter<u64>> = LazyLock::new(|| {
     METER
         .u64_counter("tcp_bytes_received")
         .with_description("TCP bytes received")
+        .build()
+});
+
+static POOL_MAX_SIZE: LazyLock<Gauge<u64>> = LazyLock::new(|| {
+    METER
+        .u64_gauge("pool_max_size")
+        .with_description("The maximum size of the pool")
+        .build()
+});
+
+static POOL_CURRENT_SIZE: LazyLock<Gauge<u64>> = LazyLock::new(|| {
+    METER
+        .u64_gauge("pool_current_size")
+        .with_description("The current size of the pool")
+        .build()
+});
+
+static POOL_AVAILABLE: LazyLock<Gauge<u64>> = LazyLock::new(|| {
+    METER
+        .u64_gauge("pool_available")
+        .with_description("The number of available objects in the pool")
+        .build()
+});
+
+static POOL_WAITING: LazyLock<Gauge<u64>> = LazyLock::new(|| {
+    METER
+        .u64_gauge("pool_waiting")
+        .with_description("The number of waiting objects in the pool")
         .build()
 });
 

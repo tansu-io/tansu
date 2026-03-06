@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,12 +20,12 @@ use std::{
 use crate::{Result, dynostore::object_store_error_name};
 use bytes::Bytes;
 use object_store::{
-    Attributes, GetOptions, ObjectStore, PutMode, PutOptions, PutPayload, TagSet, UpdateVersion,
-    path::Path,
+    Attributes, GetOptions, ObjectStore, ObjectStoreExt, PutMode, PutOptions, PutPayload, TagSet,
+    UpdateVersion, path::Path,
 };
 use opentelemetry::{KeyValue, metrics::Counter};
 use serde::{Serialize, de::DeserializeOwned};
-use tracing::debug;
+use tracing::{debug, instrument};
 
 use super::METER;
 
@@ -81,9 +81,8 @@ impl<D> OptiCon<D>
 where
     D: Clone + Debug + Default + DeserializeOwned + PartialEq + Serialize,
 {
+    #[instrument(skip_all, fields(path = %self.path))]
     async fn get(&self, object_store: &impl ObjectStore) -> Result<()> {
-        debug!(%self.path);
-
         const METHOD: &str = "get";
         REQUESTS.add(1, &[KeyValue::new("method", METHOD)]);
 
@@ -113,6 +112,8 @@ where
                 })?;
                 let data = serde_json::from_slice::<D>(&encoded)?;
 
+                debug!(?version);
+
                 self.data_version
                     .lock()
                     .map_err(Into::into)
@@ -131,12 +132,11 @@ where
         }
     }
 
+    #[instrument(skip_all, fields(path = %self.path))]
     pub(super) async fn with<E, F>(&self, object_store: &impl ObjectStore, f: F) -> Result<E>
     where
         F: Fn(&D) -> Result<E>,
     {
-        debug!(%self.path);
-
         const METHOD: &str = "with";
         REQUESTS.add(1, &[KeyValue::new("method", METHOD)]);
 
@@ -175,6 +175,8 @@ where
                     version: get_result.meta.version.clone(),
                 });
 
+                debug!(action = "out of date", ?version);
+
                 get_result
                     .bytes()
                     .await
@@ -193,14 +195,19 @@ where
                     .and(Ok(()))
             }
 
-            Err(object_store::Error::NotFound { .. }) => self
-                .data_version
-                .lock()
-                .map_err(Into::into)
-                .map(|mut guard| guard.take())
-                .and(Ok(())),
+            Err(object_store::Error::NotFound { .. }) => {
+                debug!(action = "not found");
+                self.data_version
+                    .lock()
+                    .map_err(Into::into)
+                    .map(|mut guard| guard.take())
+                    .and(Ok(()))
+            }
 
-            Err(object_store::Error::NotModified { .. }) => Ok(()),
+            Err(object_store::Error::NotModified { .. }) => {
+                debug!(action = "not modified");
+                Ok(())
+            }
 
             Err(otherwise) => Err(otherwise.into()),
         }
@@ -221,13 +228,12 @@ where
         )
     }
 
+    #[instrument(skip_all, fields(path = %self.path))]
     pub(super) async fn with_mut<E, F>(&self, object_store: &impl ObjectStore, f: F) -> Result<E>
     where
         E: Debug,
         F: Fn(&mut D) -> Result<E>,
     {
-        debug!(%self.path);
-
         const METHOD: &str = "with_mut";
         REQUESTS.add(1, &[KeyValue::new("method", METHOD)]);
 

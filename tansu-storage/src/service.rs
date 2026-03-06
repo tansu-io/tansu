@@ -177,10 +177,11 @@ pub enum Request {
         producer_epoch: i16,
         committed: bool,
     },
-    Maintain,
+    Maintain(SystemTime),
     ClusterId,
     Node,
     AdvertisedListener,
+    Ping,
 }
 
 impl Display for Request {
@@ -202,7 +203,7 @@ impl Display for Request {
             Self::InitProducer { .. } => f.write_str("InitProducer"),
             Self::ListGroups(_) => f.write_str("ListGroups"),
             Self::ListOffsets { .. } => f.write_str("ListOffsets"),
-            Self::Maintain => f.write_str("Maintain"),
+            Self::Maintain(_) => f.write_str("Maintain"),
             Self::Metadata(_) => f.write_str("Metadata"),
             Self::Node => f.write_str("Node"),
             Self::OffsetCommit { .. } => f.write_str("OffsetCommit"),
@@ -215,6 +216,7 @@ impl Display for Request {
             Self::TxnEnd { .. } => f.write_str("TxnEnd"),
             Self::TxnOffsetCommit(_) => f.write_str("TxnOffsetCommit"),
             Self::UpdateGroup { .. } => f.write_str("UpdateGroup"),
+            Self::Ping => f.write_str("Ping"),
         }
     }
 }
@@ -250,6 +252,7 @@ pub enum Response {
     ClusterId(Result<String>),
     Node(Result<i32>),
     AdvertisedListener(Result<Url>),
+    Ping(Result<()>),
 }
 
 pub type RequestSender = mpsc::Sender<(Request, oneshot::Sender<Response>)>;
@@ -1021,8 +1024,8 @@ impl Storage for RequestChannelService {
     }
 
     #[instrument(skip_all)]
-    async fn maintain(&self) -> Result<()> {
-        self.serve(Context::default(), Request::Maintain)
+    async fn maintain(&self, now: SystemTime) -> Result<()> {
+        self.serve(Context::default(), Request::Maintain(now))
             .await
             .and_then(|response| {
                 if let Response::Maintain(inner) = response {
@@ -1068,6 +1071,20 @@ impl Storage for RequestChannelService {
             .await
             .and_then(|response| {
                 if let Response::AdvertisedListener(inner) = response {
+                    inner.map_err(Into::into)
+                } else {
+                    Err(Error::UnexpectedServiceResponse(Box::new(response)).into())
+                }
+            })
+            .map_err(Into::into)
+    }
+
+    #[instrument(skip_all)]
+    async fn ping(&self) -> Result<()> {
+        self.serve(Context::default(), Request::Ping)
+            .await
+            .and_then(|response| {
+                if let Response::Ping(inner) = response {
                     inner.map_err(Into::into)
                 } else {
                     Err(Error::UnexpectedServiceResponse(Box::new(response)).into())
@@ -1334,12 +1351,13 @@ where
                     .txn_end(&transaction_id, producer_id, producer_epoch, committed)
                     .await,
             )),
-            Request::Maintain => Ok(Response::Maintain(self.storage.maintain().await)),
+            Request::Maintain(now) => Ok(Response::Maintain(self.storage.maintain(now).await)),
             Request::ClusterId => Ok(Response::ClusterId(self.storage.cluster_id().await)),
             Request::Node => Ok(Response::Node(self.storage.node().await)),
             Request::AdvertisedListener => Ok(Response::AdvertisedListener(
                 self.storage.advertised_listener().await,
             )),
+            Request::Ping => Ok(Response::Ping(self.storage.ping().await)),
         }
     }
 }

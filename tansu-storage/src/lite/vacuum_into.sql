@@ -1,5 +1,5 @@
 -- -*- mode: sql; sql-product: postgres; -*-
--- Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+-- Copyright ⓒ 2026 Peter Morgan <peter.james.morgan@gmail.com>
 --
 -- Licensed under the Apache License, Version 2.0 (the "License");
 -- you may not use this file except in compliance with the License.
@@ -13,22 +13,4 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-update watermark
-
-set
-
-low = $4,
-high = $5
-
-from
-
-cluster c
-join topic t on t.cluster = c.id
-join topition tp on tp.topic = t.id
-
-where
-
-c.name = $1
-and t.name = $2
-and tp.partition = $3
-and watermark.topition = tp.id;
+vacuum into $1;

@@ -14,9 +14,9 @@
 
 create table if not exists consumer_group (
     id integer primary key autoincrement not null,
-    cluster integer references cluster (id),
+    cluster integer references cluster (id) on delete cascade,
     name text not null,
-    last_updated text default current_timestamp not null,
-    created_at text default current_timestamp not null,
+    last_updated datetime default current_timestamp not null,
+    created_at datetime default current_timestamp not null,
     unique(cluster, name)
 );

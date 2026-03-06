@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -227,9 +227,11 @@ pub enum Error {
     InvalidOpType(i8),
     Io(Arc<io::Error>),
     Message(String),
+    MessageMaxSizeExceeded(usize),
     NoSuchField(&'static str),
     NoSuchMessage(&'static str),
     NoSuchRequest(i16),
+    Overflow,
     ParseFilter(Arc<ParseError>),
     ResponseFrame,
     Snap(#[from] snap::Error),
@@ -243,6 +245,7 @@ pub enum Error {
     UnexpectedType(String),
     UnknownApiErrorCode(i16),
     UnknownCompressionType(i16),
+    UnknownContainer,
     Utf8(str::Utf8Error),
 }
 
@@ -1565,14 +1568,15 @@ impl Compression {
                         if input.starts_with(b"\x82SNAPPY\0") {
                             if let (b"\x82SNAPPY\0", remainder) = input.split_at(8) {
                                 let (version, remainder) = remainder.split_at(4);
-                                let version = version.try_into().map(i32::from_be_bytes)?;
+                                let version: i32 = version.try_into().map(i32::from_be_bytes)?;
 
                                 let (compatible_version, remainder) = remainder.split_at(4);
-                                let compatible_version =
+                                let compatible_version: i32 =
                                     compatible_version.try_into().map(i32::from_be_bytes)?;
 
                                 let (block_size, _) = remainder.split_at(4);
-                                let block_size = block_size.try_into().map(i32::from_be_bytes)?;
+                                let block_size: i32 =
+                                    block_size.try_into().map(i32::from_be_bytes)?;
 
                                 debug!(version, compatible_version, block_size);
                             }
@@ -2075,7 +2079,18 @@ pub trait Decode: Sized {
 
 #[cfg(test)]
 mod tests {
+    use std::thread::sleep;
+
     use super::*;
+
+    #[test]
+    fn frame_elapsed_millis() {
+        let pause = 6;
+        let now = SystemTime::now();
+        sleep(Duration::from_millis(pause));
+
+        assert!(Frame::elapsed_millis(now) >= pause);
+    }
 
     #[test]
     fn batch_attribute() {

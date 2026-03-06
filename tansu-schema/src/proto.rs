@@ -371,9 +371,11 @@ impl<'a> FieldGenerator<'a> {
                 .map_or(Ok(ReflectValueBox::Enum(descriptor.clone(), 1)), |script| {
                     engine
                         .eval::<String>(script)
+                        .inspect(|name| debug!(name))
                         .map(|name| {
                             descriptor
                                 .value_by_name(&name[..])
+                                .inspect(|value_descriptor| debug!(?value_descriptor))
                                 .map(|value_descriptor| {
                                     ReflectValueBox::Enum(
                                         descriptor.clone(),
@@ -847,7 +849,7 @@ mod tests {
 
     use super::*;
 
-    use object_store::{ObjectStore, PutPayload, memory::InMemory, path::Path};
+    use object_store::{ObjectStoreExt, PutPayload, memory::InMemory, path::Path};
 
     use serde_json::json;
     use std::{fs::File, sync::Arc, thread};

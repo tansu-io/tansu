@@ -47,6 +47,7 @@ protobuf-json-mapping.workspace = true
 protobuf-parse.workspace = true
 protobuf.workspace = true
 rand.workspace = true
+regex.workspace = true
 rhai-rand.workspace = true
 rhai.workspace = true
 serde.workspace = true

@@ -13,22 +13,32 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
--- prepare list_earliest_offset (text, text, integer) as
+-- prepare record_fetch (text, text, integer, integer, integer, integer) as
+with sized as (
 select
 
 r.offset_id,
-r.timestamp
+r.attributes,
+r.timestamp,
+r.k,
+r.v,
+sum(coalesce(length(r.k), 0) + coalesce(length(r.v), 0)) over (order by r.offset_id) as bytes,
+r.producer_id,
+r.producer_epoch
 
 from
 
 cluster c
 join topic t on t.cluster = c.id
 join topition tp on tp.topic = t.id
-join watermark w on w.topition = tp.id
-join record r on r.topition = tp.id and r.offset_id = w.low
+join record r on r.topition = tp.id
 
 where
 
 c.name = $1
 and t.name = $2
-and tp.partition = $3;
+and tp.partition = $3
+and r.offset_id >= $4
+and r.offset_id < $6)
+
+select * from sized where bytes < $5;
