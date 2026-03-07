@@ -428,6 +428,8 @@ broker-postgres profile="profiling": (build profile "postgres") (tansu-broker pr
 
 broker-postgres-maintenance-1m profile="profiling": (build profile "postgres") (tansu-broker profile "--storage-engine=postgres://pmorgan@localhost?maintenance_interval=1m")
 
+broker-turso profile="profiling": clean-tansu-db (build profile "turso") (tansu-broker profile "--storage-engine=turso://tansu.db")
+
 samply-null profile="profiling":
     cargo build --profile {{ profile }} --bin tansu
     RUST_LOG=warn samply record ./target/{{ replace(profile, "dev", "debug") }}/tansu --storage-engine=null://sink

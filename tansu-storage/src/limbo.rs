@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -1042,10 +1042,12 @@ impl Builder<String, i32, Url, Url> {
             path.push(domain);
         }
 
-        if let Some(relative) = self.storage.path().strip_prefix("/") {
-            path.push(relative);
-        } else {
-            path.push(self.storage.path());
+        if !self.storage.path().is_empty() {
+            if let Some(relative) = self.storage.path().strip_prefix("/") {
+                path.push(relative);
+            } else {
+                path.push(self.storage.path());
+            }
         }
 
         debug!(?path);
@@ -3603,7 +3605,9 @@ impl Storage for Engine {
 
     async fn ping(&self) -> Result<()> {
         let c = self.connection().await?;
-        let _ = c.query("ping.sql", ()).await?;
+        let _ = self
+            .prepare_query_one(&c, &sql_lookup("ping.sql")?, ())
+            .await?;
         Ok(())
     }
 }
