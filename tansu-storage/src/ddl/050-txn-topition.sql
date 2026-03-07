@@ -15,7 +15,7 @@
 -- AddPartitionsToTxnRequest
 --
 create table if not exists txn_topition (
-    id integer primary key autoincrement,
+    id integer primary key autoincrement not null,
     txn_detail integer references txn_detail (id) on delete cascade,
     topition integer references topition (id) on delete cascade,
     last_updated datetime default current_timestamp not null,

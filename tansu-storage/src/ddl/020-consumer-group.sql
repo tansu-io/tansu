@@ -13,8 +13,8 @@
 -- limitations under the License.
 
 create table if not exists consumer_group (
-    id integer primary key autoincrement,
-    cluster integer references cluster (id) on delete cascade not null,
+    id integer primary key autoincrement not null,
+    cluster integer references cluster (id) on delete cascade,
     name text not null,
     last_updated datetime default current_timestamp not null,
     created_at datetime default current_timestamp not null,

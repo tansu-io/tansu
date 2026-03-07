@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -679,7 +679,6 @@ mod turso {
         .await
     }
 
-    #[ignore]
     #[tokio::test]
     async fn create_describe_topic_partitions_by_id() -> Result<()> {
         let _guard = init_tracing()?;
@@ -695,7 +694,6 @@ mod turso {
         .await
     }
 
-    #[ignore]
     #[tokio::test]
     async fn create_describe_topic_partitions_by_name() -> Result<()> {
         let _guard = init_tracing()?;
@@ -711,7 +709,6 @@ mod turso {
         .await
     }
 
-    #[ignore]
     #[tokio::test]
     async fn describe_non_existing_topic_partitions_by_name() -> Result<()> {
         let _guard = init_tracing()?;

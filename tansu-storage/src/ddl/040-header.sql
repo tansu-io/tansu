@@ -13,7 +13,7 @@
 -- limitations under the License.
 
 create table if not exists header (
-    topition integer,
+    topition integer references topition (id),
     offset_id integer,
     k blob,
     v blob,

@@ -13,7 +13,7 @@
 -- limitations under the License.
 
 create table if not exists topition (
-    id integer primary key autoincrement,
+    id integer primary key autoincrement not null,
     topic integer references topic (id) on delete cascade,
     partition integer,
     last_updated datetime default current_timestamp not null,
