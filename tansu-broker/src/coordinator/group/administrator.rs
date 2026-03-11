@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,7 +18,7 @@ use std::{
     hash::{Hash, Hasher},
     marker::PhantomData,
     ops::Deref,
-    sync::LazyLock,
+    sync::{Arc, LazyLock, Mutex},
     time::SystemTime,
 };
 
@@ -672,10 +672,12 @@ where
     }
 }
 
+type WrapperMap<O> = Arc<Mutex<BTreeMap<String, (Wrapper<O>, Option<Version>)>>>;
+
 #[derive(Clone, Debug)]
 pub struct Controller<O> {
     storage: O,
-    wrappers: BTreeMap<String, (Wrapper<O>, Option<Version>)>,
+    wrappers: WrapperMap<O>,
 }
 
 impl<O> Controller<O>
@@ -685,7 +687,7 @@ where
     pub fn with_storage(storage: O) -> Result<Self> {
         Ok(Self {
             storage,
-            wrappers: BTreeMap::new(),
+            wrappers: Arc::new(Mutex::new(BTreeMap::new())),
         })
     }
 }
@@ -730,22 +732,30 @@ where
 
             let now = SystemTime::now();
 
-            let (mut original, version) = self.wrappers.remove(group_id).unwrap_or_else(|| {
-                debug!(?iteration, ?group_id);
+            if self.wrappers.lock().map(|wrappers| {
+                wrappers.get(group_id).is_some_and(|(original, _)| {
+                    original.leader().is_some_and(|leader| leader != member_id)
+                })
+            })? {};
 
-                let inner = Inner {
-                    session_timeout_ms,
-                    rebalance_timeout_ms,
-                    members: Default::default(),
-                    generation_id: -1,
-                    state: Forming::default(),
-                    skip_assignment: Some(false),
-                    storage: self.storage.clone(),
-                    inception: SystemTime::now(),
-                };
+            let (mut original, version) = self.wrappers.lock().map(|mut wrappers| {
+                wrappers.remove(group_id).unwrap_or_else(|| {
+                    debug!(?iteration, ?group_id);
 
-                (Wrapper::Forming(inner), None)
-            });
+                    let inner = Inner {
+                        session_timeout_ms,
+                        rebalance_timeout_ms,
+                        members: Default::default(),
+                        generation_id: -1,
+                        state: Forming::default(),
+                        skip_assignment: Some(false),
+                        storage: self.storage.clone(),
+                        inception: SystemTime::now(),
+                    };
+
+                    (Wrapper::Forming(inner), None)
+                })
+            })?;
 
             if group_instance_id.is_none() {
                 original = original.missed_heartbeat(group_id, now);
@@ -799,9 +809,9 @@ where
                         is_forming = updated.is_forming()
                     );
 
-                    _ = self
-                        .wrappers
-                        .insert(group_id.to_owned(), (updated, Some(version)));
+                    _ = self.wrappers.lock().map(|mut wrappers| {
+                        wrappers.insert(group_id.to_owned(), (updated, Some(version)))
+                    })?;
 
                     if group_instance_id.is_some() && elapsed < PAUSE_MS {
                         let pause = PAUSE_MS.saturating_sub(elapsed);
@@ -823,13 +833,15 @@ where
 
                     COORDINATOR_REQUESTS.add(1, &[KeyValue::new("method", "join_outdated")]);
 
-                    _ = self.wrappers.insert(
-                        group_id.to_owned(),
-                        (
-                            Wrapper::with_storage_group_detail(self.storage.clone(), current),
-                            Some(version),
-                        ),
-                    );
+                    _ = self.wrappers.lock().map(|mut wrappers| {
+                        wrappers.insert(
+                            group_id.to_owned(),
+                            (
+                                Wrapper::with_storage_group_detail(self.storage.clone(), current),
+                                Some(version),
+                            ),
+                        )
+                    });
 
                     iteration += 1;
                     continue;
@@ -881,10 +893,11 @@ where
 
             let now = SystemTime::now();
 
-            let (mut original, version) = self
-                .wrappers
-                .remove(group_id)
-                .unwrap_or((Wrapper::Forming(Inner::new(self.storage.clone())), None));
+            let (mut original, version) = self.wrappers.lock().map(|mut wrappers| {
+                wrappers
+                    .remove(group_id)
+                    .unwrap_or_else(|| (Wrapper::Forming(Inner::new(self.storage.clone())), None))
+            })?;
 
             debug!(?group_id, ?original, ?version, ?iteration);
 
@@ -925,9 +938,9 @@ where
                         is_forming = updated.is_forming()
                     );
 
-                    _ = self
-                        .wrappers
-                        .insert(group_id.to_owned(), (updated, Some(version)));
+                    _ = self.wrappers.lock().map(|mut wrappers| {
+                        wrappers.insert(group_id.to_owned(), (updated, Some(version)))
+                    })?;
 
                     if group_instance_id.is_some() && elapsed < PAUSE_MS {
                         let pause = PAUSE_MS.saturating_sub(elapsed);
@@ -948,13 +961,15 @@ where
                     debug!(?group_id, ?current, ?version);
                     COORDINATOR_REQUESTS.add(1, &[KeyValue::new("method", "sync_outdated")]);
 
-                    _ = self.wrappers.insert(
-                        group_id.to_owned(),
-                        (
-                            Wrapper::with_storage_group_detail(self.storage.clone(), current),
-                            Some(version),
-                        ),
-                    );
+                    _ = self.wrappers.lock().map(|mut wrappers| {
+                        wrappers.insert(
+                            group_id.to_owned(),
+                            (
+                                Wrapper::with_storage_group_detail(self.storage.clone(), current),
+                                Some(version),
+                            ),
+                        )
+                    })?;
 
                     iteration += 1;
                     continue;
@@ -990,10 +1005,11 @@ where
         loop {
             COORDINATOR_REQUESTS.add(1, &[KeyValue::new("method", "leave_loop")]);
 
-            let (wrapper, version) = self
-                .wrappers
-                .remove(group_id)
-                .unwrap_or((Wrapper::Forming(Inner::new(self.storage.clone())), None));
+            let (wrapper, version) = self.wrappers.lock().map(|mut wrappers| {
+                wrappers
+                    .remove(group_id)
+                    .unwrap_or_else(|| (Wrapper::Forming(Inner::new(self.storage.clone())), None))
+            })?;
 
             debug!(?group_id, ?wrapper, ?version, ?iteration);
 
@@ -1011,9 +1027,9 @@ where
                 Ok(version) => {
                     debug!(?group_id, ?version);
 
-                    _ = self
-                        .wrappers
-                        .insert(group_id.to_owned(), (wrapper, Some(version)));
+                    _ = self.wrappers.lock().map(|mut wrappers| {
+                        wrappers.insert(group_id.to_owned(), (wrapper, Some(version)))
+                    })?;
 
                     return Ok(body);
                 }
@@ -1022,13 +1038,15 @@ where
                     debug!(?group_id, ?current, ?version);
                     COORDINATOR_REQUESTS.add(1, &[KeyValue::new("method", "leave_outdated")]);
 
-                    _ = self.wrappers.insert(
-                        group_id.to_owned(),
-                        (
-                            Wrapper::with_storage_group_detail(self.storage.clone(), current),
-                            Some(version),
-                        ),
-                    );
+                    _ = self.wrappers.lock().map(|mut wrappers| {
+                        wrappers.insert(
+                            group_id.to_owned(),
+                            (
+                                Wrapper::with_storage_group_detail(self.storage.clone(), current),
+                                Some(version),
+                            ),
+                        )
+                    })?;
 
                     iteration += 1;
                     continue;
@@ -1059,10 +1077,11 @@ where
         loop {
             COORDINATOR_REQUESTS.add(1, &[KeyValue::new("method", "offset_commit_loop")]);
 
-            let (wrapper, version) = self
-                .wrappers
-                .remove(group_id)
-                .unwrap_or((Wrapper::Forming(Inner::new(self.storage.clone())), None));
+            let (wrapper, version) = self.wrappers.lock().map(|mut wrappers| {
+                wrappers
+                    .remove(group_id)
+                    .unwrap_or_else(|| (Wrapper::Forming(Inner::new(self.storage.clone())), None))
+            })?;
 
             debug!(?group_id, ?wrapper, ?version, ?iteration);
 
@@ -1079,9 +1098,9 @@ where
                 Ok(version) => {
                     debug!(?group_id, ?version);
 
-                    _ = self
-                        .wrappers
-                        .insert(group_id.to_owned(), (wrapper, Some(version)));
+                    _ = self.wrappers.lock().map(|mut wrappers| {
+                        wrappers.insert(group_id.to_owned(), (wrapper, Some(version)))
+                    })?;
 
                     return Ok(body);
                 }
@@ -1091,13 +1110,15 @@ where
                     COORDINATOR_REQUESTS
                         .add(1, &[KeyValue::new("method", "offset_commit_outdated")]);
 
-                    _ = self.wrappers.insert(
-                        group_id.to_owned(),
-                        (
-                            Wrapper::with_storage_group_detail(self.storage.clone(), current),
-                            Some(version),
-                        ),
-                    );
+                    _ = self.wrappers.lock().map(|mut wrappers| {
+                        wrappers.insert(
+                            group_id.to_owned(),
+                            (
+                                Wrapper::with_storage_group_detail(self.storage.clone(), current),
+                                Some(version),
+                            ),
+                        )
+                    })?;
 
                     iteration += 1;
                     continue;
@@ -1152,10 +1173,11 @@ where
         loop {
             COORDINATOR_REQUESTS.add(1, &[KeyValue::new("method", "heartbeat_loop")]);
 
-            let (wrapper, version) = self
-                .wrappers
-                .remove(group_id)
-                .unwrap_or((Wrapper::Forming(Inner::new(self.storage.clone())), None));
+            let (wrapper, version) = self.wrappers.lock().map(|mut wrappers| {
+                wrappers
+                    .remove(group_id)
+                    .unwrap_or_else(|| (Wrapper::Forming(Inner::new(self.storage.clone())), None))
+            })?;
 
             debug!(?group_id, ?wrapper, ?version, ?iteration);
 
@@ -1179,9 +1201,9 @@ where
                 Ok(version) => {
                     debug!(?group_id, ?version);
 
-                    _ = self
-                        .wrappers
-                        .insert(group_id.to_owned(), (wrapper, Some(version)));
+                    _ = self.wrappers.lock().map(|mut wrappers| {
+                        wrappers.insert(group_id.to_owned(), (wrapper, Some(version)))
+                    })?;
 
                     return Ok(body);
                 }
@@ -1190,13 +1212,15 @@ where
                     debug!(?group_id, ?current, ?version);
                     COORDINATOR_REQUESTS.add(1, &[KeyValue::new("method", "heartbeat_outdated")]);
 
-                    _ = self.wrappers.insert(
-                        group_id.to_owned(),
-                        (
-                            Wrapper::with_storage_group_detail(self.storage.clone(), current),
-                            Some(version),
-                        ),
-                    );
+                    _ = self.wrappers.lock().map(|mut wrappers| {
+                        wrappers.insert(
+                            group_id.to_owned(),
+                            (
+                                Wrapper::with_storage_group_detail(self.storage.clone(), current),
+                                Some(version),
+                            ),
+                        )
+                    })?;
 
                     iteration += 1;
                     continue;
@@ -3009,7 +3033,7 @@ mod tests {
                 group_instance_id,
                 Some(PROTOCOL_TYPE),
                 Some(RANGE),
-                Some(&assignments),
+                Some(&assignments[..]),
             )
             .await?
         );
@@ -3174,7 +3198,7 @@ mod tests {
                     &first_member_id,
                     group_instance_id,
                     PROTOCOL_TYPE,
-                    Some(&protocols),
+                    Some(&protocols[..]),
                     reason,
                 )
                 .await?
@@ -3238,7 +3262,7 @@ mod tests {
                     &second_member_id,
                     group_instance_id,
                     PROTOCOL_TYPE,
-                    Some(&protocols),
+                    Some(&protocols[..]),
                     reason,
                 )
                 .await?
@@ -3298,7 +3322,7 @@ mod tests {
                     group_instance_id,
                     Some(PROTOCOL_TYPE),
                     Some(RANGE),
-                    Some(&assignments),
+                    Some(&assignments[..]),
                 )
                 .await?
             );
@@ -3416,7 +3440,7 @@ mod tests {
                     &second_member_id,
                     group_instance_id,
                     PROTOCOL_TYPE,
-                    Some(&protocols),
+                    Some(&protocols[..]),
                     reason,
                 )
                 .await?
@@ -3446,7 +3470,7 @@ mod tests {
                     group_instance_id,
                     Some(PROTOCOL_TYPE),
                     Some(RANGE),
-                    Some(&assignments),
+                    Some(&assignments[..]),
                 )
                 .await?
             );
@@ -3930,7 +3954,7 @@ mod tests {
                 group_instance_id,
                 Some(PROTOCOL_TYPE),
                 Some(RANGE),
-                Some(&assignments),
+                Some(&assignments[..]),
             )
             .await;
 
