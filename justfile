@@ -452,7 +452,7 @@ broker-postgres profile="profiling": (build profile "postgres") docker-compose-d
 
 broker-postgres-authentication profile="profiling": (build profile "postgres") (tansu-broker profile "--authentication" "--storage-engine=postgres://postgres:postgres@localhost")
 
-broker-postgres-maintenance-1m profile="profiling": (build profile "postgres") (tansu-broker profile "--storage-engine=postgres://pmorgan@localhost?maintenance_interval=1m")
+broker-postgres-maintenance-1m profile="profiling": (build profile "postgres") (tansu-broker profile "--storage-engine=postgres://postgres:postgres@localhost?maintenance_interval=1m")
 
 samply-null profile="profiling":
     cargo build --profile {{ profile }} --bin tansu

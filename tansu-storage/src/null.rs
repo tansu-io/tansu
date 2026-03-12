@@ -403,7 +403,7 @@ impl Storage for Engine {
                     Ok(version)
                 } else {
                     Err(UpdateError::Outdated {
-                        current: group.detail.clone(),
+                        current: Box::new(group.detail.clone()),
                         version: group.version.clone().unwrap_or_default(),
                     })
                 }

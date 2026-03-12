@@ -3705,7 +3705,7 @@ impl Storage for Delegate {
         let new_e_tag = default_hash(&detail);
         debug!(?new_e_tag);
 
-        let detail = serde_json::to_value(detail).inspect(|detail| debug!(?detail))?;
+        let detail = serde_json::to_value(detail).inspect(|detail| debug!(%detail))?;
 
         let outcome = if let Some(row) = pc
             .query_opt(
@@ -3766,7 +3766,8 @@ impl Storage for Delegate {
 
             let current = serde_json::from_value::<GroupDetail>(value)
                 .inspect(|current| debug!(?current))
-                .inspect_err(|err| error!(?err))?;
+                .inspect_err(|err| error!(?err))
+                .map(Box::new)?;
 
             Err(UpdateError::Outdated { current, version })
         };

@@ -3042,8 +3042,9 @@ impl Storage for Postgres {
                 .inspect(|version| debug!(?version))?;
 
             let value = row.try_get::<_, Value>(1)?;
-            let current =
-                serde_json::from_value::<GroupDetail>(value).inspect(|current| debug!(?current))?;
+            let current = serde_json::from_value::<GroupDetail>(value)
+                .inspect(|current| debug!(?current))
+                .map(Box::new)?;
 
             Err(UpdateError::Outdated { current, version })
         };

@@ -1530,7 +1530,7 @@ impl Storage for Engine {
             if version.is_some_and(|v| v != current.version) {
                 tx.rollback();
                 return Err(UpdateError::Outdated {
-                    current: current.detail,
+                    current: Box::new(current.detail),
                     version: current.version,
                 });
             }
