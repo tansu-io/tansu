@@ -3646,7 +3646,7 @@ impl Storage for Delegate {
         let new_e_tag = default_hash(&detail);
         debug!(?new_e_tag);
 
-        let detail = serde_json::to_value(detail).inspect(|detail| debug!(?detail))?;
+        let detail = serde_json::to_value(detail).inspect(|detail| debug!(%detail))?;
 
         let outcome = if let Some(row) = pc
             .query_opt(
