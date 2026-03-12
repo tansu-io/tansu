@@ -424,9 +424,9 @@ broker-sqlite-vacuum-into profile="profiling": clean-tansu-db (build profile "li
 
 broker-s3 profile="profiling": (build profile "dynostore") docker-compose-down minio-up minio-ready-local minio-local-alias minio-tansu-bucket (tansu-broker profile "--storage-engine=s3://tansu/")
 
-broker-postgres profile="profiling": (build profile "postgres") (tansu-broker profile "--storage-engine=postgres://pmorgan@localhost")
+broker-postgres profile="profiling": (build profile "postgres") (tansu-broker profile "--storage-engine=postgres://postgres:postgres@localhost")
 
-broker-postgres-maintenance-1m profile="profiling": (build profile "postgres") (tansu-broker profile "--storage-engine=postgres://pmorgan@localhost?maintenance_interval=1m")
+broker-postgres-maintenance-1m profile="profiling": (build profile "postgres") (tansu-broker profile "--storage-engine=postgres://postgres:postgres@localhost?maintenance_interval=1m")
 
 samply-null profile="profiling":
     cargo build --profile {{ profile }} --bin tansu
