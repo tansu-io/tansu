@@ -732,12 +732,6 @@ where
 
             let now = SystemTime::now();
 
-            if self.wrappers.lock().map(|wrappers| {
-                wrappers.get(group_id).is_some_and(|(original, _)| {
-                    original.leader().is_some_and(|leader| leader != member_id)
-                })
-            })? {};
-
             let (mut original, version) = self.wrappers.lock().map(|mut wrappers| {
                 wrappers.remove(group_id).unwrap_or_else(|| {
                     debug!(?iteration, ?group_id);
