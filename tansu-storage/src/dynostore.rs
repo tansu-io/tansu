@@ -462,7 +462,10 @@ impl DynoStore {
 
                 debug!(%location, ?value, ?current);
 
-                Err(UpdateError::Outdated { current, version })
+                Err(UpdateError::Outdated {
+                    current: Box::new(current),
+                    version,
+                })
             }
 
             Err(otherwise) => Err(otherwise.into()),

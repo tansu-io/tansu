@@ -1486,7 +1486,7 @@ pub enum UpdateError<T> {
 
     MissingEtag,
 
-    Outdated { current: T, version: Version },
+    Outdated { current: Box<T>, version: Version },
 
     SerdeJson(Arc<serde_json::Error>),
 

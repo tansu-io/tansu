@@ -831,7 +831,7 @@ where
                         wrappers.insert(
                             group_id.to_owned(),
                             (
-                                Wrapper::with_storage_group_detail(self.storage.clone(), current),
+                                Wrapper::with_storage_group_detail(self.storage.clone(), *current),
                                 Some(version),
                             ),
                         )
@@ -959,7 +959,7 @@ where
                         wrappers.insert(
                             group_id.to_owned(),
                             (
-                                Wrapper::with_storage_group_detail(self.storage.clone(), current),
+                                Wrapper::with_storage_group_detail(self.storage.clone(), *current),
                                 Some(version),
                             ),
                         )
@@ -1036,7 +1036,7 @@ where
                         wrappers.insert(
                             group_id.to_owned(),
                             (
-                                Wrapper::with_storage_group_detail(self.storage.clone(), current),
+                                Wrapper::with_storage_group_detail(self.storage.clone(), *current),
                                 Some(version),
                             ),
                         )
@@ -1108,7 +1108,7 @@ where
                         wrappers.insert(
                             group_id.to_owned(),
                             (
-                                Wrapper::with_storage_group_detail(self.storage.clone(), current),
+                                Wrapper::with_storage_group_detail(self.storage.clone(), *current),
                                 Some(version),
                             ),
                         )
@@ -1210,7 +1210,7 @@ where
                         wrappers.insert(
                             group_id.to_owned(),
                             (
-                                Wrapper::with_storage_group_detail(self.storage.clone(), current),
+                                Wrapper::with_storage_group_detail(self.storage.clone(), *current),
                                 Some(version),
                             ),
                         )

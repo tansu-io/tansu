@@ -3707,7 +3707,8 @@ impl Storage for Delegate {
 
             let current = serde_json::from_value::<GroupDetail>(value)
                 .inspect(|current| debug!(?current))
-                .inspect_err(|err| error!(?err))?;
+                .inspect_err(|err| error!(?err))
+                .map(Box::new)?;
 
             Err(UpdateError::Outdated { current, version })
         };
