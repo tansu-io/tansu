@@ -106,7 +106,7 @@ iceberg = "0.8"
 iceberg-catalog-rest = "0.8"
 iceberg-datafusion = "0.8"
 indicatif = "0.18.3"
-jsonschema = "0.41.0"
+jsonschema = "0.44.1"
 lazy_static = "1.4.0"
 libfuzzer-sys = "0.4"
 libsql = { version = "0.9.18", default-features = false, features = ["core"] }
