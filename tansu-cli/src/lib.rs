@@ -26,6 +26,7 @@ pub enum Error {
     Client(Box<tansu_client::Error>),
     DotEnv(#[from] dotenv::Error),
     Generate(#[from] tansu_generator::Error),
+    InvalidLength(#[from] sha2::digest::InvalidLength),
     Perf(#[from] tansu_perf::Error),
     Proxy(#[from] tansu_proxy::Error),
     Regex(#[from] regex::Error),

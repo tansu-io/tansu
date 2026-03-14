@@ -13,11 +13,11 @@
 // limitations under the License.
 
 use crate::Result;
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use clap::{Subcommand, ValueEnum};
+use pbkdf2::{hmac::Hmac, pbkdf2};
 use rand::{RngCore as _, rng};
-use rsasl::mechanisms::scram::tools::hash_password;
-use sha2::{Sha256, Sha512, digest::generic_array::GenericArray};
+use sha2::{Sha256, Sha512};
 use tansu_client::{Client, ConnectionManager};
 use tansu_sans_io::{
     AlterUserScramCredentialsRequest, ErrorCode, ScramMechanism,
@@ -77,23 +77,38 @@ pub(super) enum Mechanism {
 }
 
 impl Mechanism {
-    fn salted_password(&self, password: &[u8], iterations: u32, salt: &[u8]) -> Bytes {
+    fn salted_password(&self, password: &[u8], iterations: u32, salt: &[u8]) -> Result<Bytes> {
         match self {
-            Self::Scram256 => {
-                let mut salted_password = GenericArray::default();
-                hash_password::<Sha256>(password, iterations, salt, &mut salted_password);
-
-                Bytes::copy_from_slice(salted_password.as_slice())
+            Mechanism::Scram256 => {
+                let mut buf = BytesMut::zeroed(32);
+                pbkdf2::<Hmac<Sha256>>(password, salt, iterations, &mut buf)?;
+                Ok(buf.into())
             }
-
-            Self::Scram512 => {
-                let mut salted_password = GenericArray::default();
-                hash_password::<Sha512>(password, iterations, salt, &mut salted_password);
-
-                Bytes::copy_from_slice(salted_password.as_slice())
+            Mechanism::Scram512 => {
+                let mut buf = BytesMut::zeroed(64);
+                pbkdf2::<Hmac<Sha512>>(password, salt, iterations, &mut buf)?;
+                Ok(buf.into())
             }
         }
     }
+
+    // fn salted_password(&self, password: &[u8], iterations: u32, salt: &[u8]) -> Result<Bytes> {
+    //     match self {
+    //         Self::Scram256 => {
+    //             let mut salted_password = GenericArray::default();
+    //             hash_password::<Sha256>(password, iterations, salt, &mut salted_password);
+
+    //             Ok(Bytes::copy_from_slice(salted_password.as_slice()))
+    //         }
+
+    //         Self::Scram512 => {
+    //             let mut salted_password = GenericArray::default();
+    //             hash_password::<Sha512>(password, iterations, salt, &mut salted_password);
+
+    //             Ok(Bytes::copy_from_slice(salted_password.as_slice()))
+    //         }
+    //     }
+    // }
 }
 
 impl From<&Mechanism> for i8 {
@@ -106,6 +121,9 @@ impl From<&Mechanism> for i8 {
 }
 
 impl Command {
+    const DEFAULT_SALT_LEN: usize = 32;
+    const DEFAULT_ITERATIONS: u32 = 2u32.pow(14);
+
     fn broker(&self) -> Url {
         match self {
             Command::Create { broker, .. } => broker.to_owned(),
@@ -122,26 +140,23 @@ impl Command {
                 mechanism,
                 ..
             } => {
-                const DEFAULT_SALT_LEN: usize = 32;
-                const DEFAULT_ITERATIONS: u32 = 2u32.pow(14);
-
-                let mut salt = [0u8; DEFAULT_SALT_LEN];
+                let mut salt = [0u8; Self::DEFAULT_SALT_LEN];
                 rng().fill_bytes(&mut salt);
 
-                let iterations = iterations.unwrap_or(DEFAULT_ITERATIONS);
+                let iterations = iterations.unwrap_or(Self::DEFAULT_ITERATIONS);
 
-                let salted_password =
-                    mechanism.salted_password(password.as_bytes(), iterations, &salt[..]);
-
-                Some(
-                    [ScramCredentialUpsertion::default()
-                        .name(name.into())
-                        .mechanism(mechanism.into())
-                        .iterations(iterations as i32)
-                        .salt(Bytes::copy_from_slice(&salt[..]))
-                        .salted_password(salted_password)]
-                    .into(),
-                )
+                mechanism
+                    .salted_password(password.as_bytes(), iterations, &salt[..])
+                    .ok()
+                    .map(|salted_password| {
+                        [ScramCredentialUpsertion::default()
+                            .name(name.into())
+                            .mechanism(mechanism.into())
+                            .iterations(iterations as i32)
+                            .salt(Bytes::copy_from_slice(&salt[..]))
+                            .salted_password(salted_password)]
+                        .into()
+                    })
             }
 
             _ => Some([].into()),
@@ -182,5 +197,48 @@ impl Command {
             .inspect(|response| debug!(?response))?;
 
         Ok(ErrorCode::None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_salted_password_256() -> Result<()> {
+        let password = "password";
+        let salt = b"abcdef";
+        let iterations = 1000;
+        let mechanism = Mechanism::Scram256;
+
+        let result = mechanism.salted_password(password.as_bytes(), iterations, salt)?;
+        assert_eq!(
+            [
+                145, 219, 38, 255, 206, 134, 237, 218, 6, 231, 82, 1, 148, 149, 161, 210, 185, 243,
+                46, 76, 94, 133, 112, 217, 144, 162, 201, 91, 29, 255, 5, 19
+            ],
+            &result[..]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_salted_password_512() -> Result<()> {
+        let password = "password";
+        let salt = b"abcdef";
+        let iterations = 1000;
+        let mechanism = Mechanism::Scram512;
+
+        let result = mechanism.salted_password(password.as_bytes(), iterations, salt)?;
+        assert_eq!(
+            [
+                154, 35, 153, 145, 17, 161, 139, 24, 204, 40, 101, 29, 139, 51, 136, 125, 228, 84,
+                18, 240, 169, 203, 123, 34, 18, 167, 45, 226, 1, 215, 102, 172, 150, 75, 234, 71,
+                238, 187, 194, 46, 5, 38, 119, 248, 202, 110, 44, 39, 62, 227, 46, 210, 208, 201,
+                180, 183, 91, 212, 148, 57, 64, 96, 115, 175
+            ],
+            &result[..]
+        );
+        Ok(())
     }
 }

@@ -5877,6 +5877,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8ed6a7761f76e3b9f92dfb0a60a6a6477c61024b775147ff0973a02653abaf2"
 dependencies = [
  "digest",
+ "hmac",
 ]
 
 [[package]]
@@ -8229,6 +8230,7 @@ dependencies = [
  "human-units",
  "humantime",
  "owo-colors",
+ "pbkdf2",
  "rand 0.9.2",
  "regex",
  "rsasl",
