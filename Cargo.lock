@@ -2877,7 +2877,7 @@ dependencies = [
  "chrono",
  "comfy-table",
  "crc",
- "delta_kernel_derive",
+ "delta_kernel_derive 0.19.2",
  "futures",
  "indexmap 2.13.0",
  "itertools 0.14.0",
@@ -2898,10 +2898,48 @@ dependencies = [
 ]
 
 [[package]]
+name = "delta_kernel"
+version = "0.20.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1090d16e17a06e95ed6f85980d5ac9640e855b5f30f20137b0564206e4cc656e"
+dependencies = [
+ "arrow",
+ "bytes",
+ "chrono",
+ "crc",
+ "delta_kernel_derive 0.20.0",
+ "indexmap 2.13.0",
+ "itertools 0.14.0",
+ "object_store 0.12.5",
+ "parquet",
+ "roaring",
+ "rustc_version",
+ "serde",
+ "serde_json",
+ "strum 0.27.2",
+ "thiserror 2.0.18",
+ "tracing",
+ "url",
+ "uuid",
+ "z85",
+]
+
+[[package]]
 name = "delta_kernel_derive"
 version = "0.19.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "86815a2c475835751ffa9b8d9ac8ed86cf86294304c42bedd1103d54f25ecbfe"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
+name = "delta_kernel_derive"
+version = "0.20.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6d0157a88736949355db0680cbaa34a236b1fad780c203038d5e74ea03113043"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2915,7 +2953,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d5ace194fd6a5db14d4b4973c5780cf4569650716594ffd25297343be2e7cb0c"
 dependencies = [
  "ctor",
- "delta_kernel",
+ "delta_kernel 0.19.2",
  "deltalake-aws",
  "deltalake-core",
 ]
@@ -2972,7 +3010,7 @@ dependencies = [
  "datafusion",
  "datafusion-datasource",
  "datafusion-proto",
- "delta_kernel",
+ "delta_kernel 0.19.2",
  "deltalake-derive",
  "dirs",
  "either",
@@ -8425,7 +8463,7 @@ dependencies = [
  "bytes",
  "chrono",
  "datafusion",
- "delta_kernel",
+ "delta_kernel 0.20.0",
  "deltalake",
  "dotenv",
  "fake",
