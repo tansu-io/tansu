@@ -91,24 +91,6 @@ impl Mechanism {
             }
         }
     }
-
-    // fn salted_password(&self, password: &[u8], iterations: u32, salt: &[u8]) -> Result<Bytes> {
-    //     match self {
-    //         Self::Scram256 => {
-    //             let mut salted_password = GenericArray::default();
-    //             hash_password::<Sha256>(password, iterations, salt, &mut salted_password);
-
-    //             Ok(Bytes::copy_from_slice(salted_password.as_slice()))
-    //         }
-
-    //         Self::Scram512 => {
-    //             let mut salted_password = GenericArray::default();
-    //             hash_password::<Sha512>(password, iterations, salt, &mut salted_password);
-
-    //             Ok(Bytes::copy_from_slice(salted_password.as_slice()))
-    //         }
-    //     }
-    // }
 }
 
 impl From<&Mechanism> for i8 {
