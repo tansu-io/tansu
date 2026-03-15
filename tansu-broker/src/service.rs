@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
+
 use rama::Layer;
+use rsasl::config::SASLConfig;
 use tansu_service::{
     BytesFrameLayer, BytesFrameService, FrameRouteService, TcpBytesLayer, TcpBytesService,
     TcpContext, TcpContextLayer, TcpContextService,
@@ -22,13 +25,19 @@ use tracing::debug;
 
 use crate::{Error, Result, coordinator::group::Coordinator};
 
+pub mod auth;
 pub mod coordinator;
 pub mod storage;
 
 type TcpRouteFrame =
     TcpContextService<TcpBytesService<BytesFrameService<FrameRouteService<(), Error>>, ()>>;
 
-pub fn services<C, S>(cluster_id: &str, coordinator: C, storage: S) -> Result<TcpRouteFrame, Error>
+pub fn services<C, S>(
+    cluster_id: &str,
+    coordinator: C,
+    storage: S,
+    sasl_config: Option<Arc<SASLConfig>>,
+) -> Result<TcpRouteFrame, Error>
 where
     S: Storage,
     C: Coordinator,
@@ -38,12 +47,13 @@ where
         .and_then(|builder| {
             coordinator::services(builder, coordinator).inspect(|builder| debug!(?builder))
         })
+        .and_then(auth::services)
         .and_then(|builder| builder.build().map_err(Into::into))
         .map(|route| {
             (
                 TcpContextLayer::new(TcpContext::default().cluster_id(Some(cluster_id.into()))),
-                TcpBytesLayer::<()>::default(),
-                BytesFrameLayer,
+                TcpBytesLayer::default(),
+                BytesFrameLayer::default().with_sasl_config(sasl_config),
             )
                 .into_layer(route)
         })
