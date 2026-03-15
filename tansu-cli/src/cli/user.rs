@@ -122,7 +122,7 @@ impl Command {
                 mechanism,
                 ..
             } => {
-                let mut salt = [0u8; Self::DEFAULT_SALT_LEN];
+                let mut salt = BytesMut::zeroed(Self::DEFAULT_SALT_LEN);
                 rng().fill_bytes(&mut salt);
 
                 let iterations = iterations.unwrap_or(Self::DEFAULT_ITERATIONS);
@@ -135,7 +135,7 @@ impl Command {
                             .name(name.into())
                             .mechanism(mechanism.into())
                             .iterations(iterations as i32)
-                            .salt(Bytes::copy_from_slice(&salt[..]))
+                            .salt(salt.into())
                             .salted_password(salted_password)]
                         .into()
                     })
