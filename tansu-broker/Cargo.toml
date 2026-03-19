@@ -43,9 +43,12 @@ opentelemetry_sdk.workspace = true
 rama.workspace = true
 rand.workspace = true
 regex.workspace = true
+rsasl.workspace = true
+rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 slatedb = { workspace = true, optional = true }
+tansu-auth.workspace = true
 tansu-model.workspace = true
 tansu-sans-io.workspace = true
 tansu-schema.workspace = true
@@ -53,6 +56,7 @@ tansu-service.workspace = true
 tansu-storage.workspace = true
 thiserror.workspace = true
 tokio-postgres = { workspace = true, optional = true }
+tokio-rustls.workspace = true
 tokio-util.workspace = true
 tokio.workspace = true
 tracing-opentelemetry.workspace = true
