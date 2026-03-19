@@ -16,7 +16,7 @@ use crate::Result;
 use bytes::{Bytes, BytesMut};
 use clap::{Subcommand, ValueEnum};
 use pbkdf2::{hmac::Hmac, pbkdf2};
-use rand::{RngCore as _, rng};
+use rand::{Rng as _, rng};
 use sha2::{Sha256, Sha512};
 use tansu_client::{Client, ConnectionManager};
 use tansu_sans_io::{
