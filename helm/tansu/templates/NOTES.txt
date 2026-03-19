@@ -1,0 +1,7 @@
+1. Kafka bootstrap (in-cluster):
+  {{ include "tansu.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.kafkaPort }}
+
+2. Connect to the broker (in-cluster):
+   kafka-bootstrap-servers: {{ include "tansu.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.kafkaPort }}
+
+3. Storage engine: {{ .Values.storageEngine.type }}

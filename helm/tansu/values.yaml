@@ -1,0 +1,149 @@
+# Default values for tansu.
+# This is a YAML-formatted file. Declare variables to be passed into your templates.
+
+nameOverride: ""
+fullnameOverride: ""
+
+# Number of replicas (used when autoscaling is disabled, or as minimum when enabled)
+replicaCount: 1
+
+image:
+  repository: ghcr.io/tansu-io/tansu
+  tag: "main"
+  pullPolicy: IfNotPresent
+
+# Kafka cluster identity
+clusterId: tansu
+
+# Advertised listener for clients (use service DNS in-cluster, or ingress host when exposed)
+# In-cluster example: "tansu.{{ .Release.Namespace }}.svc.cluster.local:9092"
+advertisedListener: "tansu:9092"
+
+# Schema registry (optional). Leave empty to omit --schema-registry.
+# Example: "file:///schema"
+schemaRegistry: ""
+
+# --- Autoscaling (HorizontalPodAutoscaler) ---
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: null  # optional, e.g. 80 for memory-based scaling
+
+# --- Storage engine: memory | s3 | postgres | sqlite ---
+storageEngine:
+  # One of: memory, s3, postgres, sqlite
+  type: memory
+
+  # For type=memory: prefix for in-memory storage (e.g. "tansu" -> memory://tansu/)
+  memory:
+    prefix: tansu
+
+  # For type=s3: bucket/path and AWS settings (credentials via existingSecret)
+  s3:
+    bucket: tansu
+    path: ""  # optional path prefix, e.g. "data"
+    region: eu-west-2
+    endpoint: ""  # optional custom S3 endpoint
+    allowHttp: "false"
+    # Name of existing secret containing AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY
+    existingSecret: ""  # e.g. "tansu-s3-credentials"
+    existingSecretAccessKeyKey: AWS_SECRET_ACCESS_KEY
+    existingSecretAccessKeyIdKey: AWS_ACCESS_KEY_ID
+
+  # For type=postgres: connection URL (password from existingSecret recommended)
+  postgres:
+    host: postgres
+    port: 5432
+    database: postgres
+    user: postgres
+    # Plain password (prefer existingSecret in production)
+    password: ""
+    # Name of existing secret; if set, password is read from secretKey
+    existingSecret: ""
+    existingSecretPasswordKey: password
+
+  # For type=sqlite: path (use PVC or emptyDir)
+  sqlite:
+    path: /data/tansu.db
+
+# Optional: use a Secret for storage URL (overrides storageEngine.*)
+# If set, storageEngine type/params are ignored and this URL is used as-is.
+# storageUrlFromSecret:
+#   name: tansu-storage-url
+#   key: STORAGE_ENGINE
+
+serviceAccount:
+  create: true
+  name: ""
+
+service:
+  type: ClusterIP
+  kafkaPort: 9092
+  metricsPort: 9100
+
+# --- Kafka TCP LoadBalancer (expose Kafka externally) ---
+kafkaLoadBalancer:
+  enabled: false
+  # LoadBalancer (cloud) or NodePort (local k8s, e.g. Docker Desktop on Mac)
+  serviceType: LoadBalancer
+  # For NodePort: optional fixed port (e.g. 30092); omit for auto-assigned
+  nodePort: null
+  # Optional annotations (e.g. AWS NLB, GCP backend config)
+  annotations: {}
+  # annotations:
+  #   service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+  #   service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
+  port: 9092  # external port (must match advertisedListener when clients connect)
+
+# --- Ingress (HTTP/HTTPS) ---
+ingress:
+  enabled: false
+  className: ""  # e.g. nginx, traefik
+  annotations: {}
+  # annotations:
+  #   cert-manager.io/cluster-issuer: letsencrypt-prod
+  #   nginx.ingress.kubernetes.io/proxy-body-size: "0"
+  hosts:
+    - host: tansu.local
+      paths:
+        - path: /
+          pathType: Prefix
+          port: metrics  # metrics port (9100)
+  tls: []
+  # tls:
+  #   - secretName: tansu-tls
+  #     hosts:
+  #       - tansu.local
+
+resources:
+  limits:
+    cpu: 1000m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 256Mi
+
+# Logging
+# Rust log level (env_logger): error, warn, info, debug, trace. Default warning.
+rustLog: "warn"
+rustBacktrace: "0"
+
+# Extra env vars (key-value)
+extraEnv: {}
+# extraEnv:
+#   AWS_DEFAULT_REGION: eu-west-2
+
+# Extra volumes and volumeMounts (e.g. for schema files)
+extraVolumes: []
+extraVolumeMounts: []
+
+# Pod security context
+podSecurityContext: {}
+securityContext: {}
+
+# Node selector / tolerations / affinity
+nodeSelector: {}
+tolerations: []
+affinity: {}
