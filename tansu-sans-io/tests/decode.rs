@@ -20,9 +20,10 @@ use tansu_sans_io::{
     ErrorCode, FetchRequest, FetchResponse, FindCoordinatorRequest, FindCoordinatorResponse, Frame,
     Header, HeartbeatRequest, InitProducerIdRequest, JoinGroupRequest, JoinGroupResponse,
     LeaveGroupRequest, ListGroupsRequest, ListOffsetsResponse, ListPartitionReassignmentsRequest,
-    ListTransactionsRequest, ListTransactionsResponse, MetadataRequest, MetadataResponse,
-    OffsetCommitRequest, OffsetFetchRequest, OffsetFetchResponse, OffsetForLeaderEpochRequest,
-    ProduceRequest, ProduceResponse, Result, SaslHandshakeRequest, SyncGroupRequest,
+    ListTransactionsRequest, ListTransactionsResponse, MaximumAllocationSize, MetadataRequest,
+    MetadataResponse, OffsetCommitRequest, OffsetFetchRequest, OffsetFetchResponse,
+    OffsetForLeaderEpochRequest, ProduceRequest, ProduceResponse, Result, SaslHandshakeRequest,
+    SyncGroupRequest,
     alter_user_scram_credentials_request::ScramCredentialUpsertion,
     api_versions_request::ApiVersionsRequest,
     api_versions_response::{
@@ -52,6 +53,9 @@ fn sasl_handshake_request_v0_000() -> Result<()> {
         114, 111, 100, 117, 99, 101, 114, 45, 49, 0, 5, 80, 76, 65, 73, 78,
     ];
 
+    let actual = Frame::request_from_bytes(&v[..])?;
+    assert!(actual.maximum_allocation_size()? >= v.len());
+
     assert_eq!(
         Frame {
             size: 36,
@@ -65,7 +69,7 @@ fn sasl_handshake_request_v0_000() -> Result<()> {
                 SaslHandshakeRequest::default().mechanism("PLAIN".into())
             )
         },
-        Frame::request_from_bytes(&v[..])?
+        actual
     );
 
     Ok(())
@@ -79,6 +83,9 @@ fn create_acls_request_v3_000() -> Result<()> {
         110, 116, 45, 49, 0, 2, 2, 4, 97, 98, 99, 3, 11, 85, 115, 101, 114, 58, 97, 108, 105, 99,
         101, 2, 42, 4, 3, 0, 0,
     ];
+
+    let actual = Frame::request_from_bytes(&v[..])?;
+    assert!(actual.maximum_allocation_size()? >= v.len());
 
     assert_eq!(
         Frame {
@@ -103,7 +110,7 @@ fn create_acls_request_v3_000() -> Result<()> {
                 ))
             )
         },
-        Frame::request_from_bytes(&v[..])?
+        actual
     );
 
     Ok(())
@@ -116,6 +123,14 @@ fn describe_acls_request_v3_000() -> Result<()> {
         0, 0, 0, 32, 0, 29, 0, 3, 0, 0, 0, 3, 0, 13, 97, 100, 109, 105, 110, 99, 108, 105, 101,
         110, 116, 45, 49, 0, 1, 0, 1, 0, 0, 1, 1, 0,
     ];
+
+    let actual = Frame::request_from_bytes(&v[..])?;
+    assert!(
+        actual.maximum_allocation_size()? >= v.len(),
+        "actual: {}, v.len: {}",
+        actual.maximum_allocation_size()?,
+        v.len()
+    );
 
     assert_eq!(
         Frame {
@@ -137,7 +152,7 @@ fn describe_acls_request_v3_000() -> Result<()> {
                     .permission_type(1)
             )
         },
-        Frame::request_from_bytes(&v[..])?
+        actual
     );
 
     Ok(())
@@ -160,6 +175,14 @@ fn alter_scram_user_credentials_request_v0_000() -> Result<()> {
         127, 72, 241, 193, 119, 189, 205, 107, 93, 0, 159, 160, 139, 5, 219, 49, 211, 244, 224,
         249, 4, 75, 166, 0, 0,
     ];
+
+    let actual = Frame::request_from_bytes(&v[..])?;
+    assert!(
+        actual.maximum_allocation_size()? >= v.len(),
+        "actual: {}, v.len: {}",
+        actual.maximum_allocation_size()?,
+        v.len()
+    );
 
     let salted_password_1 = Bytes::from_static(b"\x14s\xef(\x0bf\xb6\xb1n\x7fH\xf1\xc1w\xbd\xcdk]\0\x9f\xa0\x8b\x05\xdb1\xd3\xf4\xe0\xf9\x04K\xa6");
     let salt_1 = Bytes::from_static(b"17nwl8daentmk97cbcqweml3yx");
@@ -198,7 +221,7 @@ fn alter_scram_user_credentials_request_v0_000() -> Result<()> {
                     ))
             )
         },
-        Frame::request_from_bytes(&v[..])?
+        actual
     );
 
     Ok(())

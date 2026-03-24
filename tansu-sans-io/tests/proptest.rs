@@ -22,11 +22,8 @@ use proptest::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::io::Cursor;
 use tansu_sans_io::{
-    BatchAttribute, Compression, Decode, Decoder, Encode, Encoder,
-    primitive::{
-        ByteSize,
-        varint::{LongVarInt, UnsignedVarInt, VarInt},
-    },
+    BatchAttribute, ByteSize, Compression, Decode, Decoder, Encode, Encoder,
+    primitive::varint::{LongVarInt, UnsignedVarInt, VarInt},
     record::{self, Header, Record, deflated, inflated},
 };
 

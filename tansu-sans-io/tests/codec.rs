@@ -1114,11 +1114,10 @@ fn produce_request_v9_000() -> Result<()> {
         0, 0,
     ];
 
-    assert_eq!(
-        expected,
-        Frame::request_from_bytes(&expected[..])
-            .and_then(|frame| Frame::request(frame.header, frame.body))?
-    );
+    let actual = Frame::request_from_bytes(&expected[..])
+        .and_then(|frame| Frame::request(frame.header, frame.body))?;
+
+    assert_eq!(expected, &actual[..]);
 
     Ok(())
 }

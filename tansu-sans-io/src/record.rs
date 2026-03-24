@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -153,11 +153,8 @@ pub mod header;
 pub mod inflated;
 
 use crate::{
-    Decode, Encode, Result,
-    primitive::{
-        ByteSize,
-        varint::{LongVarInt, VarInt},
-    },
+    ByteSize, Decode, Encode, Result,
+    primitive::varint::{LongVarInt, VarInt},
 };
 use bytes::{Buf as _, BufMut as _, Bytes, BytesMut};
 use codec::{Octets, VarIntSequence};
@@ -214,9 +211,32 @@ impl ByteSize for Record {
     }
 }
 
-impl Encode for Record {
+impl Encode for &[Record] {
+    #[instrument(skip_all)]
     fn encode(&self) -> Result<Bytes> {
-        let mut encoded = self.size_in_bytes().map(BytesMut::with_capacity)?;
+        let mut encoded = self
+            .iter()
+            .map(ByteSize::size_in_bytes)
+            .collect::<Result<Vec<_>>>()
+            .map(|sizes| sizes.iter().sum::<usize>())
+            .inspect(|with_capacity| debug!(records = self.len(), with_capacity))
+            .map(BytesMut::with_capacity)?;
+
+        for record in self.iter() {
+            encoded.extend_from_slice(&record.encode()?[..]);
+        }
+
+        Ok(encoded.freeze())
+    }
+}
+
+impl Encode for Record {
+    #[instrument(skip_all)]
+    fn encode(&self) -> Result<Bytes> {
+        let mut encoded = self
+            .size_in_bytes()
+            .inspect(|with_capacity| debug!(with_capacity))
+            .map(BytesMut::with_capacity)?;
 
         let length = VarInt::from(self.length);
         encoded.put(length.encode()?);
@@ -227,7 +247,7 @@ impl Encode for Record {
         encoded.put(Octets(self.value.clone()).encode()?);
         encoded.put(VarIntSequence(self.headers.clone()).encode()?);
 
-        Ok(encoded.into())
+        Ok(encoded.freeze())
     }
 }
 

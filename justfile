@@ -26,8 +26,8 @@ release-sqlite: (cargo-build "--release" "--bin" "tansu" "--no-default-features"
 
 test: test-workspace test-doc
 
-test-workspace:
-    cargo nextest run --workspace --all-targets --all-features --exclude fuzz
+test-workspace *args:
+    cargo nextest run --workspace --all-targets --all-features --no-fail-fast --exclude fuzz {{ args }}
 
 test-doc:
     cargo test --workspace --doc --all-features
@@ -343,7 +343,7 @@ flamegraph-tansu-broker profile *args:
     #!/usr/bin/env zsh
     unset SCHEMA_REGISTRY
     export RUST_LOG=warn
-    flamegraph -- ./target/{{ replace(profile, "dev", "debug") }}/tansu broker {{ args }}
+    flamegraph --verbose -- ./target/{{ replace(profile, "dev", "debug") }}/tansu broker {{ args }}
 
 # run a debug broker with configuration from .env
 broker *args: build docker-compose-down prometheus-up grafana-up db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket lakehouse-catalog-up (tansu-broker "debug" args)
@@ -446,7 +446,9 @@ broker-sqlite-maintenance-1m profile="profiling": clean-tansu-db (build profile 
 
 broker-sqlite-vacuum-into profile="profiling": clean-tansu-db (build profile "libsql") (tansu-broker profile "--storage-engine=sqlite://tansu.db?vacuum_into=snapshot.db")
 
-broker-s3 profile="profiling": (build profile "dynostore") docker-compose-down minio-up minio-ready-local minio-local-alias minio-tansu-bucket (tansu-broker profile "--storage-engine=s3://tansu/")
+s3-up: docker-compose-down minio-up minio-ready-local minio-local-alias minio-tansu-bucket
+
+broker-s3 profile="profiling": (build profile "dynostore") s3-up (tansu-broker profile "--storage-engine=s3://tansu/")
 
 broker-postgres profile="profiling": (build profile "postgres") docker-compose-down db-up (tansu-broker profile "--storage-engine=postgres://postgres:postgres@localhost")
 
@@ -494,6 +496,9 @@ bench-flamegraph-fetch profile="profiling": (build profile "libsql" "bench")
 bench-perf profile="profiling": (build profile "libsql" "bench")
     RUST_LOG=warn perf record --call-graph dwarf ./target/{{ replace(profile, "dev", "debug") }}/bench 2>&1 >/dev/null
 
+consumer-perf num_records="1000" topic="test":
+    kafka-consumer-perf-test --topic {{ topic }} --num-records {{ num_records }} --bootstrap-server ${ADVERTISED_LISTENER}
+
 soak-producer-perf seconds throughput="1000" record_size="1024":
     kafka-producer-perf-test --topic test --warmup-records {{ throughput }} --num-records $(({{ seconds }} * {{ throughput }})) --record-size {{ record_size }} --throughput {{ throughput }} --command-property bootstrap.servers=${ADVERTISED_LISTENER}
 
@@ -501,8 +506,8 @@ soak-producer-perf-500: (soak-producer-perf "600" "500" "1024")
 
 soak-producer-perf-1000: (soak-producer-perf "3600" "1000" "1024")
 
-producer-perf throughput="1000" record_size="1024" num_records="100000":
-    kafka-producer-perf-test --topic test --warmup-records {{ throughput }} --num-records $(({{ num_records }} + {{ throughput }})) --record-size {{ record_size }} --throughput {{ throughput }} --command-property bootstrap.servers=${ADVERTISED_LISTENER}
+producer-perf throughput="1000" record_size="1024" num_records="100000" topic="test":
+    kafka-producer-perf-test --topic {{ topic }} --warmup-records {{ throughput }} --num-records $(({{ num_records }} + {{ throughput }})) --record-size {{ record_size }} --throughput {{ throughput }} --command-property bootstrap.servers=${ADVERTISED_LISTENER}
 
 producer-perf-10: (producer-perf "10")
 

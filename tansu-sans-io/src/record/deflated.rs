@@ -24,7 +24,7 @@ use serde::{
 use tracing::{debug, error, instrument};
 
 use crate::{
-    Compression, Decode as _, Decoder, Encoder, Error, Result, primitive::ByteSize, record::Record,
+    ByteSize, Compression, Decode as _, Decoder, Encode, Encoder, Error, Result, record::Record,
 };
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -293,17 +293,16 @@ impl CrcData {
 }
 
 fn into_record_data(records: &[Record], compression: Compression) -> Result<Bytes> {
+    let sizing = records
+        .iter()
+        .map(|record| record.size_in_bytes())
+        .collect::<Result<Vec<_>>>()
+        .map(|sizes| sizes.iter().sum::<usize>())?;
+
+    debug!(sizing);
+
     match compression {
-        Compression::None => {
-            let mut record_data = BytesMut::new().writer();
-            let mut encoder = Encoder::new(&mut record_data);
-
-            for record in records {
-                record.serialize(&mut encoder)?;
-            }
-
-            Ok(Bytes::from(record_data.into_inner()))
-        }
+        Compression::None => records.encode(),
 
         Compression::Gzip => {
             let mut gz = GzEncoder::new(BytesMut::new().writer(), flate2::Compression::default());
