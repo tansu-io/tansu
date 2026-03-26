@@ -478,8 +478,8 @@ flamegraph-produce profile="profiling":
     cargo build --profile {{ profile }} --bin bench_produce_v11
     RUST_LOG=warn flamegraph -- ./target/{{ replace(profile, "dev", "debug") }}/bench_produce_v11
 
-bench-hyperfine profile="release": (build profile "libsql" "bench")
-    hyperfine -N ./target/{{ replace(profile, "dev", "debug") }}/bench
+bench-hyperfine iterations="10000" profile="release": (build profile "libsql" "bench")
+    hyperfine -N './target/{{ replace(profile, "dev", "debug") }}/bench --iterations {{ iterations }}'
 
 bench-dhat mode="heap" profile="release": (build profile "libsql" "bench")
     valgrind --tool=dhat --mode={{ mode }} ./target/{{ replace(profile, "dev", "debug") }}/bench
