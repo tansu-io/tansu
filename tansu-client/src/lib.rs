@@ -84,7 +84,7 @@
 //!     TcpListenerLayer::new(token),
 //!     TcpContextLayer::default(),
 //!     TcpBytesLayer::<()>::default(),
-//!     BytesFrameLayer,
+//!     BytesFrameLayer::default(),
 //!
 //!     // client layers: writing frames -> connection pool -> bytes -> origin:
 //!     FramePoolLayer::new(origin),
@@ -830,7 +830,7 @@ mod tests {
             TcpListenerLayer::new(cancellation),
             TcpContextLayer::default(),
             TcpBytesLayer::default(),
-            BytesFrameLayer,
+            BytesFrameLayer::default(),
         )
             .into_layer(
                 FrameRouteService::builder()

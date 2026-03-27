@@ -168,6 +168,8 @@ where
             .inspect(|put_result| {
                 debug!(?put_result);
                 if let Ok(mut guard) = self.entries.lock() {
+                    debug!(cached = guard.len());
+
                     _ = guard.insert_evict(location.to_owned(), CacheEntry::from(put_result), true);
                 }
             })

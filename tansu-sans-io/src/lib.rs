@@ -116,9 +116,11 @@
 //! and whether any tagged fields can be present for a particular message version. Serializers
 //! map from the [Serde Data Model](https://serde.rs/data-model.html) to the Kafka protocol or vice versa.
 
+pub mod acl;
 pub mod de;
 pub mod primitive;
 pub mod record;
+pub mod resource;
 pub mod ser;
 
 use bytes::{Buf, BufMut, Bytes, BytesMut, TryGetError};
@@ -133,10 +135,11 @@ use std::{
     collections::HashMap,
     env::VarError,
     fmt::{self, Display, Formatter},
-    io::{self, BufRead, Cursor, Read, Write},
+    io::{self, BufRead, Cursor, Read},
     num,
     process::{ExitCode, Termination},
-    str, string,
+    str::{self, FromStr},
+    string,
     sync::{Arc, OnceLock},
     time::{Duration, SystemTime, SystemTimeError},
 };
@@ -146,6 +149,107 @@ use tracing_subscriber::filter::ParseError;
 
 /// The null topic identifier.
 pub const NULL_TOPIC_ID: [u8; 16] = [0; 16];
+
+pub trait ByteSize {
+    fn size_in_bytes(&self) -> Result<usize>;
+}
+
+pub trait MaximumAllocationSize {
+    fn maximum_allocation_size(&self) -> Result<usize>;
+}
+
+impl<T> MaximumAllocationSize for T
+where
+    T: ByteSize,
+{
+    fn maximum_allocation_size(&self) -> Result<usize> {
+        self.size_in_bytes()
+    }
+}
+
+impl MaximumAllocationSize for Bytes {
+    fn maximum_allocation_size(&self) -> Result<usize> {
+        Ok(size_of::<i32>() + self.len())
+    }
+}
+
+impl MaximumAllocationSize for f64 {
+    fn maximum_allocation_size(&self) -> Result<usize> {
+        Ok(size_of::<f64>())
+    }
+}
+
+impl MaximumAllocationSize for i16 {
+    fn maximum_allocation_size(&self) -> Result<usize> {
+        Ok(size_of::<i16>())
+    }
+}
+
+impl MaximumAllocationSize for i32 {
+    fn maximum_allocation_size(&self) -> Result<usize> {
+        Ok(size_of::<i32>())
+    }
+}
+
+impl MaximumAllocationSize for i64 {
+    fn maximum_allocation_size(&self) -> Result<usize> {
+        Ok(size_of::<i64>())
+    }
+}
+
+impl MaximumAllocationSize for bool {
+    fn maximum_allocation_size(&self) -> Result<usize> {
+        Ok(size_of::<bool>())
+    }
+}
+
+impl MaximumAllocationSize for i8 {
+    fn maximum_allocation_size(&self) -> Result<usize> {
+        Ok(size_of::<i8>())
+    }
+}
+
+impl MaximumAllocationSize for String {
+    fn maximum_allocation_size(&self) -> Result<usize> {
+        Ok(size_of::<i16>() + self.len())
+    }
+}
+
+impl MaximumAllocationSize for u16 {
+    fn maximum_allocation_size(&self) -> Result<usize> {
+        Ok(size_of::<u16>())
+    }
+}
+
+impl MaximumAllocationSize for [u8; 16] {
+    fn maximum_allocation_size(&self) -> Result<usize> {
+        Ok(size_of::<u8>() * 16)
+    }
+}
+
+impl<T> MaximumAllocationSize for Vec<T>
+where
+    T: MaximumAllocationSize,
+{
+    fn maximum_allocation_size(&self) -> Result<usize> {
+        self.iter()
+            .map(MaximumAllocationSize::maximum_allocation_size)
+            .collect::<Result<Vec<_>>>()
+            .map(|elements| size_of::<i32>() + elements.iter().sum::<usize>())
+    }
+}
+
+impl<T> MaximumAllocationSize for Option<T>
+where
+    T: MaximumAllocationSize,
+{
+    fn maximum_allocation_size(&self) -> Result<usize> {
+        self.as_ref().map_or(
+            Ok(size_of::<i32>()),
+            MaximumAllocationSize::maximum_allocation_size,
+        )
+    }
+}
 
 #[derive(Debug)]
 pub struct RootMessageMeta {
@@ -225,14 +329,17 @@ pub enum Error {
     InvalidCoordinatorType(i8),
     InvalidIsolationLevel(i8),
     InvalidOpType(i8),
+    InvalidScramMechanism(i8),
     Io(Arc<io::Error>),
     Message(String),
     MessageMaxSizeExceeded(usize),
     NoSuchField(&'static str),
     NoSuchMessage(&'static str),
     NoSuchRequest(i16),
+    NotAuthenticated,
     Overflow,
     ParseFilter(Arc<ParseError>),
+    ParseScram(String),
     ResponseFrame,
     Snap(#[from] snap::Error),
     StringWithoutApiVersion,
@@ -245,6 +352,7 @@ pub enum Error {
     UnexpectedType(String),
     UnknownApiErrorCode(i16),
     UnknownCompressionType(i16),
+    UnknownScramMechanism(i8),
     UnknownContainer,
     Utf8(str::Utf8Error),
 }
@@ -406,6 +514,23 @@ pub struct Frame {
     pub body: Body,
 }
 
+impl MaximumAllocationSize for Frame {
+    fn maximum_allocation_size(&self) -> Result<usize> {
+        Ok(self.size.maximum_allocation_size()?
+            + self.header.maximum_allocation_size()?
+            + self.body.maximum_allocation_size()?)
+    }
+}
+
+fn fix_length(mut encoded: BytesMut) -> Result<Bytes> {
+    let mut sz = encoded.split_to(size_of::<i32>());
+    sz.clear();
+    sz.put_i32(i32::try_from(encoded.len())?);
+    sz.unsplit(encoded);
+    sz.truncate(sz.len());
+    Ok(sz.freeze())
+}
+
 impl Frame {
     fn elapsed_millis(start: SystemTime) -> u64 {
         start
@@ -416,31 +541,20 @@ impl Frame {
     /// serialize an API request into a frame of bytes
     #[instrument(skip_all)]
     pub fn request(header: Header, body: Body) -> Result<Bytes> {
-        let start = SystemTime::now();
-
-        let mut c = Cursor::new(vec![]);
-
-        let mut serializer = Encoder::request(&mut c);
-
         let frame = Frame {
             size: 0,
             header,
             body,
         };
 
+        let mut encoded = frame
+            .maximum_allocation_size()
+            .map(BytesMut::with_capacity)
+            .map(|encoded| encoded.writer())?;
+
+        let mut serializer = Encoder::request(&mut encoded);
         frame.serialize(&mut serializer)?;
-        let size = i32::try_from(c.position()).map(|position| position - 4)?;
-
-        c.set_position(0);
-        let buf = size.to_be_bytes();
-        c.write_all(&buf)?;
-
-        Ok(Bytes::from(c.into_inner())).inspect(|encoded| {
-            debug!(
-                len = encoded.len(),
-                elapsed_millis = Self::elapsed_millis(start)
-            )
-        })
+        fix_length(encoded.into_inner())
     }
 
     /// deserialize bytes into an API request frame
@@ -457,35 +571,20 @@ impl Frame {
     /// serialize an API response into a frame of bytes
     #[instrument(skip_all)]
     pub fn response(header: Header, body: Body, api_key: i16, api_version: i16) -> Result<Bytes> {
-        let start = SystemTime::now();
-
-        let mut c = Cursor::new(vec![]);
-        let mut serializer = Encoder::response(&mut c, api_key, api_version);
-
         let frame = Frame {
             size: 0,
             header,
             body,
         };
 
+        let mut encoded = frame
+            .maximum_allocation_size()
+            .map(BytesMut::with_capacity)
+            .map(|encoded| encoded.writer())?;
+
+        let mut serializer = Encoder::response(&mut encoded, api_key, api_version);
         frame.serialize(&mut serializer)?;
-        let size = i32::try_from(c.position())
-            .map(|position| position - 4)
-            .inspect_err(|err| {
-                let position = c.position();
-                warn!(?err, ?position, ?frame);
-            })?;
-
-        c.set_position(0);
-        let buf = size.to_be_bytes();
-        c.write_all(&buf)?;
-
-        Ok(Bytes::from(c.into_inner())).inspect(|encoded| {
-            debug!(
-                len = encoded.len(),
-                elapsed_millis = Self::elapsed_millis(start)
-            )
-        })
+        fix_length(encoded.into_inner())
     }
 
     /// deserialize bytes into an API response frame
@@ -566,6 +665,23 @@ pub enum Header {
         /// The correlation ID for the corresponding request.
         correlation_id: i32,
     },
+}
+
+impl MaximumAllocationSize for Header {
+    fn maximum_allocation_size(&self) -> Result<usize> {
+        match self {
+            Self::Request {
+                api_key,
+                api_version,
+                correlation_id,
+                client_id,
+            } => Ok(api_key.maximum_allocation_size()?
+                + api_version.maximum_allocation_size()?
+                + correlation_id.maximum_allocation_size()?
+                + client_id.maximum_allocation_size()?),
+            Self::Response { correlation_id } => correlation_id.maximum_allocation_size(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, PartialOrd, Serialize)]
@@ -1777,8 +1893,10 @@ impl TryFrom<EndTransactionMarker> for Bytes {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 /// The endpoint type.
 pub enum EndpointType {
+    #[default]
     Unknown,
     Broker,
     Controller,
@@ -2065,6 +2183,54 @@ impl TryFrom<i64> for ListOffset {
             Self::EARLIEST_OFFSET => Ok(Self::Earliest),
             Self::LATEST_OFFSET => Ok(Self::Latest),
             timestamp => to_system_time(timestamp).map(Self::Timestamp),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum ScramMechanism {
+    Scram256,
+    Scram512,
+}
+
+impl FromStr for ScramMechanism {
+    type Err = Error;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "SCRAM-SHA-256" => Ok(ScramMechanism::Scram256),
+            "SCRAM-SHA-512" => Ok(ScramMechanism::Scram512),
+            otherwise => Err(Error::ParseScram(otherwise.to_string())),
+        }
+    }
+}
+
+impl TryFrom<i8> for ScramMechanism {
+    type Error = Error;
+
+    fn try_from(value: i8) -> std::result::Result<Self, Self::Error> {
+        match value {
+            1 => Ok(ScramMechanism::Scram256),
+            2 => Ok(ScramMechanism::Scram512),
+            otherwise => Err(Error::UnknownScramMechanism(value)),
+        }
+    }
+}
+
+impl From<ScramMechanism> for i32 {
+    fn from(value: ScramMechanism) -> Self {
+        match value {
+            ScramMechanism::Scram256 => 1,
+            ScramMechanism::Scram512 => 2,
+        }
+    }
+}
+
+impl From<ScramMechanism> for i8 {
+    fn from(value: ScramMechanism) -> Self {
+        match value {
+            ScramMechanism::Scram256 => 1,
+            ScramMechanism::Scram512 => 2,
         }
     }
 }
