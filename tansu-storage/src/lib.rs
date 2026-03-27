@@ -127,7 +127,10 @@ use indicatif::{ProgressBar, ProgressStyle};
 use object_store::memory::InMemory;
 
 #[cfg(feature = "dynostore")]
-use object_store::aws::{AmazonS3Builder, S3ConditionalPut};
+use object_store::{
+    RetryConfig,
+    aws::{AmazonS3Builder, S3ConditionalPut},
+};
 
 use opentelemetry::{
     InstrumentationScope, KeyValue, global,
@@ -1742,6 +1745,7 @@ impl Builder<i32, String, Url, Url> {
                 AmazonS3Builder::from_env()
                     .with_bucket_name(bucket_name)
                     .with_conditional_put(S3ConditionalPut::ETagMatch)
+                    .with_retry(RetryConfig::default())
                     .build()
                     .map(|object_store| {
                         DynoStore::new(self.cluster_id.as_str(), self.node_id, object_store)
