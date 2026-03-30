@@ -138,6 +138,7 @@ use opentelemetry_semantic_conventions::SCHEMA_URL;
 #[cfg(feature = "postgres")]
 use pg::Postgres;
 
+use governor::InsufficientCapacity;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 #[cfg(any(feature = "libsql", feature = "postgres"))]
@@ -197,11 +198,12 @@ use uuid::Uuid;
 #[cfg(feature = "dynostore")]
 mod dynostore;
 
-mod null;
-
 #[cfg(feature = "postgres")]
 mod pg;
 
+mod delegate;
+mod limit;
+mod null;
 mod proxy;
 mod service;
 
@@ -251,7 +253,9 @@ pub enum Error {
     },
 
     Glob(Arc<GlobError>),
+    InsufficientCapacity(#[from] InsufficientCapacity),
     Io(Arc<io::Error>),
+
     LessThanBaseOffset {
         offset: i64,
         base_offset: i64,
@@ -1501,6 +1505,8 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
     async fn ping(&self) -> Result<()>;
 }
 
+pub type DynStorage = dyn Storage;
+
 /// Conditional Update Errors
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum UpdateError<T> {
@@ -1742,6 +1748,25 @@ impl Builder<i32, String, Url, Url> {
                 AmazonS3Builder::from_env()
                     .with_bucket_name(bucket_name)
                     .with_conditional_put(S3ConditionalPut::ETagMatch)
+                    .build()
+                    .map(|object_store| {
+                        DynoStore::new(self.cluster_id.as_str(), self.node_id, object_store)
+                            .advertised_listener(self.advertised_listener.clone())
+                            .schemas(self.schema_registry)
+                            .lake(self.lake_house.clone())
+                    })
+                    .map(StorageContainer::DynoStore)
+                    .map_err(Into::into)
+            }
+
+            #[cfg(feature = "dynostore")]
+            "gs" => {
+                use object_store::gcp::GoogleCloudStorageBuilder;
+
+                let bucket_name = self.storage.host_str().unwrap_or("tansu");
+
+                GoogleCloudStorageBuilder::from_env()
+                    .with_bucket_name(bucket_name)
                     .build()
                     .map(|object_store| {
                         DynoStore::new(self.cluster_id.as_str(), self.node_id, object_store)

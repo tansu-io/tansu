@@ -34,6 +34,7 @@ futures-core.workspace = true
 futures-util.workspace = true
 futures.workspace = true
 glob.workspace = true
+governor.workspace = true
 indicatif.workspace = true
 libsql = { workspace = true, optional = true }
 object_store = { workspace = true, optional = true }
