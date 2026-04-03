@@ -47,6 +47,23 @@ impl TryFrom<deflated::Frame> for Frame {
     }
 }
 
+impl TryFrom<&deflated::Frame> for Frame {
+    type Error = Error;
+
+    fn try_from(deflated: &deflated::Frame) -> Result<Self, Self::Error> {
+        deflated
+            .batches
+            .iter()
+            .try_fold(Vec::new(), |mut acc, batch| {
+                Batch::try_from(batch).map(|inflated| {
+                    acc.push(inflated);
+                    acc
+                })
+            })
+            .map(|batches| Self { batches })
+    }
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(try_from = "deflated::Batch")]
 pub struct Batch {

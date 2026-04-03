@@ -5058,7 +5058,7 @@ mod tests {
     }
 
     #[allow(dead_code)]
-    async fn storage_container(cluster: &str, node: i32) -> Result<StorageContainer> {
+    async fn storage_container(cluster: &str, node: i32) -> Result<Arc<Box<dyn Storage>>> {
         StorageContainer::builder()
             .cluster_id(cluster)
             .node_id(node)

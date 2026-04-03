@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -25,15 +25,18 @@ use tansu_sans_io::{
     fetch_request::{FetchPartition, FetchTopic},
     record::{Record, inflated},
 };
-use tansu_storage::{FetchService, ListOffsetResponse, Storage, StorageContainer, Topition};
+use tansu_storage::{FetchService, ListOffsetResponse, Storage, Topition};
 use tracing::{debug, error};
 use url::Url;
 use uuid::Uuid;
 
 pub mod common;
 
-pub async fn empty_topic(cluster_id: Uuid, broker_id: i32, sc: StorageContainer) -> Result<()> {
-    register_broker(cluster_id, broker_id, &sc).await?;
+pub async fn empty_topic<G>(cluster_id: Uuid, broker_id: i32, sc: G) -> Result<()>
+where
+    G: Storage + Clone,
+{
+    register_broker(cluster_id, broker_id, sc.clone()).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -137,11 +140,12 @@ pub async fn empty_topic(cluster_id: Uuid, broker_id: i32, sc: StorageContainer)
     Ok(())
 }
 
-pub async fn simple_non_txn<C>(cluster_id: C, broker_id: i32, sc: StorageContainer) -> Result<()>
+pub async fn simple_non_txn<C, G>(cluster_id: C, broker_id: i32, sc: G) -> Result<()>
 where
     C: Into<String>,
+    G: Storage + Clone,
 {
-    register_broker(cluster_id, broker_id, &sc).await?;
+    register_broker(cluster_id, broker_id, sc.clone()).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -309,9 +313,14 @@ where
 
 #[cfg(feature = "postgres")]
 mod pg {
+    use std::sync::Arc;
+
     use super::*;
 
-    async fn storage_container(cluster: impl Into<String>, node: i32) -> Result<StorageContainer> {
+    async fn storage_container(
+        cluster: impl Into<String>,
+        node: i32,
+    ) -> Result<Arc<Box<dyn Storage>>> {
         common::storage_container(
             StorageType::Postgres,
             cluster,
@@ -355,9 +364,14 @@ mod pg {
 
 #[cfg(feature = "dynostore")]
 mod in_memory {
+    use std::sync::Arc;
+
     use super::*;
 
-    async fn storage_container(cluster: impl Into<String>, node: i32) -> Result<StorageContainer> {
+    async fn storage_container(
+        cluster: impl Into<String>,
+        node: i32,
+    ) -> Result<Arc<Box<dyn Storage>>> {
         common::storage_container(
             StorageType::InMemory,
             cluster,
@@ -401,9 +415,14 @@ mod in_memory {
 
 #[cfg(feature = "libsql")]
 mod lite {
+    use std::sync::Arc;
+
     use super::*;
 
-    async fn storage_container(cluster: impl Into<String>, node: i32) -> Result<StorageContainer> {
+    async fn storage_container(
+        cluster: impl Into<String>,
+        node: i32,
+    ) -> Result<Arc<Box<dyn Storage>>> {
         common::storage_container(
             StorageType::Lite,
             cluster,
@@ -447,9 +466,14 @@ mod lite {
 
 #[cfg(feature = "slatedb")]
 mod slatedb {
+    use std::sync::Arc;
+
     use super::*;
 
-    async fn storage_container(cluster: impl Into<String>, node: i32) -> Result<StorageContainer> {
+    async fn storage_container(
+        cluster: impl Into<String>,
+        node: i32,
+    ) -> Result<Arc<Box<dyn Storage>>> {
         common::storage_container(
             StorageType::SlateDb,
             cluster,

@@ -11,7 +11,7 @@ repository.workspace = true
 version.workspace = true
 
 [features]
-default = ["dynostore"]
+default = ["dynostore", "libsql", "postgres", "slatedb", "turso"]
 dynostore = ["dep:object_store"]
 libsql = ["dep:libsql", "dep:deadpool"]
 postgres = ["dep:tokio-postgres", "dep:deadpool", "dep:deadpool-postgres", "dep:tokio-postgres-rustls"]
@@ -35,6 +35,7 @@ futures-util.workspace = true
 futures.workspace = true
 glob.workspace = true
 governor.workspace = true
+human-units.workspace = true
 indicatif.workspace = true
 libsql = { workspace = true, optional = true }
 object_store = { workspace = true, optional = true }
