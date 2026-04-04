@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -23,11 +23,14 @@ use crate::{
 use console::Term;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use rama::{Context, Service};
+use rsasl::config::SASLConfig;
+use rustls::ServerConfig;
 use std::{
     io::ErrorKind,
     marker::PhantomData,
     net::{IpAddr, Ipv6Addr, SocketAddr},
     str::FromStr,
+    sync::Arc,
     time::{Duration, SystemTime},
 };
 use tansu_sans_io::{ErrorCode, RootMessageMeta};
@@ -39,6 +42,7 @@ use tokio::{
     task::JoinSet,
     time::{self, Instant, sleep},
 };
+use tokio_rustls::TlsAcceptor;
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, Level, debug, error, span};
 use url::Url;
@@ -54,9 +58,8 @@ pub struct Broker<G, S> {
     storage: S,
     groups: G,
 
-    #[allow(dead_code)]
-    otlp_endpoint_url: Option<Url>,
-
+    sasl_config: Option<Arc<SASLConfig>>,
+    tls_server_config: Option<Arc<ServerConfig>>,
     silent: bool,
     maintenance_interval: Option<Duration>,
 
@@ -86,8 +89,12 @@ where
             advertised_listener,
             storage,
             groups,
-            otlp_endpoint_url: None,
+
+            sasl_config: None,
+            tls_server_config: None,
+
             silent: false,
+
             maintenance_interval: None,
 
             cancellation: CancellationToken::new(),
@@ -235,12 +242,6 @@ where
 
         let mut set = JoinSet::new();
 
-        let service = services(
-            self.cluster_id.as_str(),
-            self.groups.clone(),
-            self.storage.clone(),
-        )?;
-
         let m = MultiProgress::new();
 
         let spinner_style = ProgressStyle::with_template("{prefix:.bold.dim} {spinner} {msg}")
@@ -264,6 +265,8 @@ where
             Some(ls)
         };
 
+        let _acceptor = self.tls_server_config.clone().map(TlsAcceptor::from);
+
         let mut connections = 0;
 
         loop {
@@ -275,6 +278,7 @@ where
 
             tokio::select! {
                 Ok((stream, addr)) = listener.accept() => {
+
                     let mut c = Context::default();
 
                     let pb = if self.silent {
@@ -293,7 +297,12 @@ where
 
                     stream.set_nodelay(true)?;
 
-                    let service = service.clone();
+                    let service = services(
+                        self.cluster_id.as_str(),
+                        self.groups.clone(),
+                        self.storage.clone(),
+                        self.sasl_config.clone()
+                    )?;
 
                     let handle = set.spawn(async move {
                             match service.serve(c, stream).await {
@@ -371,6 +380,8 @@ pub struct Builder<N, C, I, A, S, L> {
     otlp_endpoint_url: Option<Url>,
     schema_registry: Option<Registry>,
     lake_house: Option<House>,
+    authentication: bool,
+    tls_server_config: Option<ServerConfig>,
     silent: bool,
     maintenance_interval: Option<Duration>,
 
@@ -400,6 +411,8 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             otlp_endpoint_url: self.otlp_endpoint_url,
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
+            authentication: self.authentication,
+            tls_server_config: self.tls_server_config,
             silent: self.silent,
             maintenance_interval: self.maintenance_interval,
 
@@ -418,6 +431,8 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             otlp_endpoint_url: self.otlp_endpoint_url,
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
+            authentication: self.authentication,
+            tls_server_config: self.tls_server_config,
             silent: self.silent,
             maintenance_interval: self.maintenance_interval,
 
@@ -436,6 +451,8 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             otlp_endpoint_url: self.otlp_endpoint_url,
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
+            authentication: self.authentication,
+            tls_server_config: self.tls_server_config,
             silent: self.silent,
             maintenance_interval: self.maintenance_interval,
 
@@ -457,6 +474,8 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             otlp_endpoint_url: self.otlp_endpoint_url,
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
+            authentication: self.authentication,
+            tls_server_config: self.tls_server_config,
             silent: self.silent,
             maintenance_interval: self.maintenance_interval,
 
@@ -502,6 +521,8 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             otlp_endpoint_url: self.otlp_endpoint_url,
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
+            authentication: self.authentication,
+            tls_server_config: self.tls_server_config,
             silent: self.silent,
             maintenance_interval,
 
@@ -522,6 +543,8 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             otlp_endpoint_url: self.otlp_endpoint_url,
             schema_registry: self.schema_registry,
             lake_house: self.lake_house,
+            authentication: self.authentication,
+            tls_server_config: self.tls_server_config,
             silent: self.silent,
             maintenance_interval: self.maintenance_interval,
 
@@ -551,6 +574,19 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
         }
     }
 
+    pub fn authentication(self, authentication: bool) -> Self {
+        Self {
+            authentication,
+            ..self
+        }
+    }
+
+    pub fn tls_server_config(self, tls_server_config: Option<ServerConfig>) -> Self {
+        Self {
+            tls_server_config,
+            ..self
+        }
+    }
     pub fn silent(self, silent: bool) -> Self {
         Self { silent, ..self }
     }
@@ -580,6 +616,12 @@ impl Builder<i32, String, Uuid, Url, Url, Url> {
 
         let groups = Controller::with_storage(storage.clone())?;
 
+        let sasl_config = if self.authentication {
+            tansu_auth::configuration(storage.clone()).map(Some)?
+        } else {
+            None
+        };
+
         Ok(Broker {
             node_id: self.node_id,
             cluster_id: self.cluster_id.clone(),
@@ -588,7 +630,9 @@ impl Builder<i32, String, Uuid, Url, Url, Url> {
             advertised_listener: self.advertised_listener,
             storage,
             groups,
-            otlp_endpoint_url: self.otlp_endpoint_url,
+            sasl_config,
+            tls_server_config: self.tls_server_config.map(Arc::new),
+
             silent: self.silent,
             maintenance_interval: self.maintenance_interval,
             cancellation: self.cancellation,

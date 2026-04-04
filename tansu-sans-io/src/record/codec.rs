@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,11 +13,8 @@
 // limitations under the License.
 
 use crate::{
-    Decode, Encode, Result,
-    primitive::{
-        ByteSize,
-        varint::{UnsignedVarInt, VarInt},
-    },
+    ByteSize, Decode, Encode, Result,
+    primitive::varint::{UnsignedVarInt, VarInt},
 };
 use bytes::{BufMut, Bytes, BytesMut};
 use serde::{

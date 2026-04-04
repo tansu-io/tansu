@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::ByteSize;
-use crate::{Decode, Encode, Error, Result};
+use crate::{ByteSize, Decode, Encode, Error, Result};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use serde::{
     Deserialize, Deserializer, Serialize, Serializer,

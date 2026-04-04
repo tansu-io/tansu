@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,8 +13,7 @@
 // limitations under the License.
 
 use crate::{
-    Compression, Encoder, Error, Result,
-    primitive::ByteSize,
+    ByteSize, Compression, Encoder, Error, Result,
     record::{Record, codec::Sequence, deflated},
     to_timestamp,
 };

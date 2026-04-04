@@ -26,8 +26,8 @@ release-sqlite: (cargo-build "--release" "--bin" "tansu" "--no-default-features"
 
 test: test-workspace test-doc
 
-test-workspace:
-    cargo nextest run --workspace --all-targets --all-features --exclude fuzz
+test-workspace *args:
+    cargo nextest run --workspace --all-targets --all-features --no-fail-fast --exclude fuzz {{ args }}
 
 test-doc:
     cargo test --workspace --doc --all-features
@@ -143,7 +143,29 @@ docker-rm-f:
     docker rm --force tansu
 
 list-topics:
-    kafka-topics --bootstrap-server ${ADVERTISED_LISTENER} --list
+    kafka-topics --bootstrap-server ${ADVERTISED_LISTENER} --command-config command.properties --list
+
+list-topics-plain:
+    kafka-topics --bootstrap-server ${ADVERTISED_LISTENER} --command-config command-plain.properties --list
+
+list-topics-scram-256:
+    kafka-topics --bootstrap-server ${ADVERTISED_LISTENER} --command-config command-scram-256.properties --list
+
+list-topics-scram-512:
+    kafka-topics --bootstrap-server ${ADVERTISED_LISTENER} --command-config command-scram-512.properties --list
+
+user-create user password profile mechanism="scram512":
+    target/{{ replace(profile, "dev", "debug") }}/tansu user create {{ user }} {{ password }} --mechanism {{ mechanism }}
+
+add-alice-user profile="dev": (user-create "alice" "secret" profile "scram256") (user-create "alice" "secret" profile "scram512")
+
+user-delete user profile mechanism="scram512":
+    target/{{ replace(profile, "dev", "debug") }}/tansu user delete {{ user }} --mechanism {{ mechanism }}
+
+delete-alice-user profile="dev": (user-delete "alice" profile "scram256") (user-delete "alice" profile "scram512")
+
+# add-alice-user:
+#    kafka-configs --alter --add-config "SCRAM-SHA-256=[iterations=8192,password=secret],SCRAM-SHA-512=[iterations=8192,password=secret]" --entity-type users --entity-name alice --bootstrap-server localhost:9092
 
 test-topic-describe:
     kafka-topics --bootstrap-server ${ADVERTISED_LISTENER} --describe --topic test
@@ -321,7 +343,7 @@ flamegraph-tansu-broker profile *args:
     #!/usr/bin/env zsh
     unset SCHEMA_REGISTRY
     export RUST_LOG=warn
-    flamegraph -- ./target/{{ replace(profile, "dev", "debug") }}/tansu broker {{ args }}
+    flamegraph --verbose -- ./target/{{ replace(profile, "dev", "debug") }}/tansu broker {{ args }}
 
 # run a debug broker with configuration from .env
 broker *args: build docker-compose-down prometheus-up grafana-up db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket lakehouse-catalog-up (tansu-broker "debug" args)
@@ -416,17 +438,23 @@ broker-sqlite-parquet profile="dev": clean-tansu-db clean-lake-dir (build profil
 
 broker-sqlite-delta profile="profiling": docker-compose-down minio-up minio-ready-local minio-local-alias minio-lake-bucket clean-tansu-db (build profile "libsql,delta") (tansu-broker profile "--storage-engine=sqlite://tansu.db" "delta")
 
-broker-sqlite profile="profiling": clean-tansu-db (build profile "libsql") (tansu-broker profile "--storage-engine=sqlite://tansu.db")
+broker-sqlite profile="profiling": clean-tansu-db (build profile "libsql") (tansu-broker profile "--silent" "--storage-engine=sqlite://tansu.db")
+
+broker-sqlite-authentication profile="profiling": (build profile "libsql") (tansu-broker profile "--authentication" "--storage-engine=sqlite://tansu.db")
 
 broker-sqlite-maintenance-1m profile="profiling": clean-tansu-db (build profile "libsql") (tansu-broker profile "--storage-engine=sqlite://tansu.db?maintenance_interval=1m")
 
 broker-sqlite-vacuum-into profile="profiling": clean-tansu-db (build profile "libsql") (tansu-broker profile "--storage-engine=sqlite://tansu.db?vacuum_into=snapshot.db")
 
-broker-s3 profile="profiling": (build profile "dynostore") docker-compose-down minio-up minio-ready-local minio-local-alias minio-tansu-bucket (tansu-broker profile "--storage-engine=s3://tansu/")
+s3-up: docker-compose-down minio-up minio-ready-local minio-local-alias minio-tansu-bucket
 
-broker-postgres profile="profiling": (build profile "postgres") (tansu-broker profile "--storage-engine=postgres://pmorgan@localhost")
+broker-s3 profile="profiling": (build profile "dynostore") s3-up (tansu-broker profile "--storage-engine=s3://tansu/")
 
-broker-postgres-maintenance-1m profile="profiling": (build profile "postgres") (tansu-broker profile "--storage-engine=postgres://pmorgan@localhost?maintenance_interval=1m")
+broker-postgres profile="profiling": (build profile "postgres") docker-compose-down db-up (tansu-broker profile "--storage-engine=postgres://postgres:postgres@localhost")
+
+broker-postgres-authentication profile="profiling": (build profile "postgres") (tansu-broker profile "--authentication" "--storage-engine=postgres://postgres:postgres@localhost")
+
+broker-postgres-maintenance-1m profile="profiling": (build profile "postgres") (tansu-broker profile "--storage-engine=postgres://postgres:postgres@localhost?maintenance_interval=1m")
 
 samply-null profile="profiling":
     cargo build --profile {{ profile }} --bin tansu
@@ -450,8 +478,8 @@ flamegraph-produce profile="profiling":
     cargo build --profile {{ profile }} --bin bench_produce_v11
     RUST_LOG=warn flamegraph -- ./target/{{ replace(profile, "dev", "debug") }}/bench_produce_v11
 
-bench-hyperfine profile="release": (build profile "libsql" "bench")
-    hyperfine -N ./target/{{ replace(profile, "dev", "debug") }}/bench
+bench-hyperfine iterations="10000" profile="release": (build profile "libsql" "bench")
+    hyperfine -N './target/{{ replace(profile, "dev", "debug") }}/bench --iterations {{ iterations }}'
 
 bench-dhat mode="heap" profile="release": (build profile "libsql" "bench")
     valgrind --tool=dhat --mode={{ mode }} ./target/{{ replace(profile, "dev", "debug") }}/bench
@@ -468,6 +496,9 @@ bench-flamegraph-fetch profile="profiling": (build profile "libsql" "bench")
 bench-perf profile="profiling": (build profile "libsql" "bench")
     RUST_LOG=warn perf record --call-graph dwarf ./target/{{ replace(profile, "dev", "debug") }}/bench 2>&1 >/dev/null
 
+consumer-perf num_records="1000" topic="test":
+    kafka-consumer-perf-test --topic {{ topic }} --num-records {{ num_records }} --bootstrap-server ${ADVERTISED_LISTENER}
+
 soak-producer-perf seconds throughput="1000" record_size="1024":
     kafka-producer-perf-test --topic test --warmup-records {{ throughput }} --num-records $(({{ seconds }} * {{ throughput }})) --record-size {{ record_size }} --throughput {{ throughput }} --command-property bootstrap.servers=${ADVERTISED_LISTENER}
 
@@ -475,8 +506,8 @@ soak-producer-perf-500: (soak-producer-perf "600" "500" "1024")
 
 soak-producer-perf-1000: (soak-producer-perf "3600" "1000" "1024")
 
-producer-perf throughput="1000" record_size="1024" num_records="100000":
-    kafka-producer-perf-test --topic test --warmup-records {{ throughput }} --num-records $(({{ num_records }} + {{ throughput }})) --record-size {{ record_size }} --throughput {{ throughput }} --command-property bootstrap.servers=${ADVERTISED_LISTENER}
+producer-perf throughput="1000" record_size="1024" num_records="100000" topic="test":
+    kafka-producer-perf-test --topic {{ topic }} --warmup-records {{ throughput }} --num-records $(({{ num_records }} + {{ throughput }})) --record-size {{ record_size }} --throughput {{ throughput }} --command-property bootstrap.servers=${ADVERTISED_LISTENER}
 
 producer-perf-10: (producer-perf "10")
 
