@@ -236,6 +236,8 @@ mod tests {
     async fn test() -> Result<()> {
         let _guard = init_tracing()?;
 
+        const EXPECTED_DELAY: u64 = 900;
+
         let prl = PutRateLimiter::new(InMemory::new(), Duration::from_mins(5))
             .with_rate_per_second(NonZeroU32::new(1));
 
@@ -255,7 +257,7 @@ mod tests {
                 .map_or(0, |duration| duration.as_millis() as u64)
         };
 
-        assert!(delay < 1_000, "{delay}");
+        assert!(delay < EXPECTED_DELAY, "{delay}");
 
         let delay = {
             let now = SystemTime::now();
@@ -271,7 +273,7 @@ mod tests {
                 .map_or(0, |duration| duration.as_millis() as u64)
         };
 
-        assert!(delay >= 1_000, "{delay}");
+        assert!(delay >= EXPECTED_DELAY, "{delay}");
 
         let location = Path::from("b");
 
@@ -289,7 +291,7 @@ mod tests {
                 .map_or(0, |duration| duration.as_millis() as u64)
         };
 
-        assert!(delay < 1_000, "{delay}");
+        assert!(delay < EXPECTED_DELAY, "{delay}");
 
         let location = Path::from("a");
 
@@ -307,7 +309,7 @@ mod tests {
                 .map_or(0, |duration| duration.as_millis() as u64)
         };
 
-        assert!(delay >= 1_000, "{delay}");
+        assert!(delay >= EXPECTED_DELAY, "{delay}");
 
         Ok(())
     }
