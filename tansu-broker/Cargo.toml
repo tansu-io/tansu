@@ -11,6 +11,7 @@ repository.workspace = true
 version.workspace = true
 
 [features]
+default = ["dynostore", "libsql", "postgres", "slatedb", "turso"]
 dynostore = ["dep:object_store"]
 libsql = ["dep:libsql"]
 postgres = ["dep:deadpool-postgres", "dep:tokio-postgres"]

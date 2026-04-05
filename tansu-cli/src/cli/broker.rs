@@ -32,7 +32,7 @@ use rustls::{
 use tansu_broker::{NODE_ID, broker::Broker, coordinator::group::administrator::Controller};
 use tansu_sans_io::ErrorCode;
 use tansu_schema::Registry;
-use tansu_storage::StorageContainer;
+use tansu_storage::{ArcDynStorage, StorageContainer};
 use tokio::time::Instant;
 use tracing::debug;
 use url::Url;
@@ -192,7 +192,7 @@ impl Arg {
             .map_err(Into::into)
     }
 
-    async fn build(self) -> Result<Broker<Controller<StorageContainer>, StorageContainer>> {
+    async fn build(self) -> Result<Broker<Controller<ArcDynStorage>, ArcDynStorage>> {
         let cluster_id = self.cluster_id;
         let incarnation_id = Uuid::now_v7();
         let otlp_endpoint_url = self

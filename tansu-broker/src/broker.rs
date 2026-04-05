@@ -35,7 +35,7 @@ use std::{
 };
 use tansu_sans_io::{ErrorCode, RootMessageMeta};
 use tansu_schema::{Registry, lake::House};
-use tansu_storage::{BrokerRegistrationRequest, Storage, StorageContainer};
+use tansu_storage::{ArcDynStorage, BrokerRegistrationRequest, Storage, StorageContainer};
 use tokio::{
     net::TcpListener,
     signal::unix::{SignalKind, signal},
@@ -593,7 +593,7 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
 }
 
 impl Builder<i32, String, Uuid, Url, Url, Url> {
-    pub async fn build(self) -> Result<Broker<Controller<StorageContainer>, StorageContainer>> {
+    pub async fn build(self) -> Result<Broker<Controller<ArcDynStorage>, ArcDynStorage>> {
         if let Some(otlp_endpoint_url) = self
             .otlp_endpoint_url
             .clone()
@@ -612,7 +612,8 @@ impl Builder<i32, String, Uuid, Url, Url, Url> {
             .cancellation(self.cancellation.clone())
             .silent(self.silent)
             .build()
-            .await?;
+            .await
+            .map(|storage| Arc::new(storage) as ArcDynStorage)?;
 
         let groups = Controller::with_storage(storage.clone())?;
 

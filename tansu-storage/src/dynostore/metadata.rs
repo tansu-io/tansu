@@ -22,8 +22,7 @@ use std::{
 
 use async_trait::async_trait;
 use cached::stores::ExpiringSizedCache;
-use futures::stream::BoxStream;
-use futures::stream::StreamExt;
+use futures::stream::{BoxStream, StreamExt};
 use object_store::{
     CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
     PutMultipartOptions, PutOptions, PutPayload, PutResult, UpdateVersion, path::Path,
