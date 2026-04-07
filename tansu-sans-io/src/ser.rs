@@ -13,12 +13,12 @@
 // limitations under the License.
 
 use std::{
-    any::type_name_of_val,
+    any::{type_name, type_name_of_val},
     collections::VecDeque,
     fmt,
-    io::{Cursor, Write},
 };
 
+use bytes::{BufMut, Bytes, BytesMut};
 use serde::{
     Serialize, Serializer,
     ser::{
@@ -27,9 +27,9 @@ use serde::{
     },
 };
 use tansu_model::{FieldMeta, MessageMeta};
-use tracing::debug;
+use tracing::{debug, instrument};
 
-use crate::{Error, Result, RootMessageMeta};
+use crate::{Encode, Error, Result, RootMessageMeta, primitive::varint::UnsignedVarInt};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 enum Kind {
@@ -100,8 +100,9 @@ impl Default for Meta {
 }
 
 /// Serialize the serde data model into the Kafka protocol.
-pub struct Encoder<'a> {
-    writer: &'a mut dyn Write,
+pub struct Encoder {
+    working: BytesMut,
+    encoded: Vec<BytesMut>,
     containers: VecDeque<Container>,
     field: Option<&'static str>,
     kind: Option<Kind>,
@@ -110,16 +111,47 @@ pub struct Encoder<'a> {
     meta: Meta,
 }
 
-impl fmt::Debug for Encoder<'_> {
+impl From<Encoder> for BytesMut {
+    fn from(encoder: Encoder) -> Self {
+        if encoder.encoded.is_empty() {
+            encoder.working
+        } else {
+            let mut combo = BytesMut::with_capacity(
+                encoder
+                    .encoded
+                    .iter()
+                    .map(|encoded| encoded.len())
+                    .sum::<usize>()
+                    + encoder.working.len(),
+            );
+
+            for encoded in encoder.encoded {
+                combo.extend(encoded);
+            }
+
+            combo.extend(encoder.working);
+            combo
+        }
+    }
+}
+
+impl From<Encoder> for Bytes {
+    fn from(encoder: Encoder) -> Self {
+        BytesMut::from(encoder).freeze()
+    }
+}
+
+impl fmt::Debug for Encoder {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(stringify!(Self)).finish()
     }
 }
 
-impl<'a> Encoder<'a> {
-    pub(crate) fn request(writer: &'a mut dyn Write) -> Self {
+impl Encoder {
+    pub(crate) fn request(working: BytesMut) -> Self {
         Self {
-            writer,
+            working,
+            encoded: Vec::with_capacity(PARSE_DEPTH),
             containers: VecDeque::with_capacity(PARSE_DEPTH),
             kind: Some(Kind::Request),
             field: None,
@@ -129,9 +161,10 @@ impl<'a> Encoder<'a> {
         }
     }
 
-    pub(crate) fn response(writer: &'a mut dyn Write, api_key: i16, api_version: i16) -> Self {
+    pub(crate) fn response(working: BytesMut, api_key: i16, api_version: i16) -> Self {
         Self {
-            writer,
+            working,
+            encoded: Vec::with_capacity(PARSE_DEPTH),
             containers: VecDeque::with_capacity(PARSE_DEPTH),
             kind: Some(Kind::Response),
             field: None,
@@ -153,9 +186,10 @@ impl<'a> Encoder<'a> {
         }
     }
 
-    pub fn new(writer: &'a mut dyn Write) -> Self {
+    pub fn new(working: BytesMut) -> Self {
         Self {
-            writer,
+            working,
+            encoded: Vec::with_capacity(PARSE_DEPTH),
             containers: VecDeque::with_capacity(PARSE_DEPTH),
             kind: None,
             field: None,
@@ -197,13 +231,11 @@ impl<'a> Encoder<'a> {
         const CONTINUATION: u8 = 0b1000_0000;
 
         while v >= u32::from(CONTINUATION) {
-            #[allow(clippy::cast_possible_truncation)]
-            self.writer.write_all(&[(v as u8 | CONTINUATION)])?;
+            self.working.put_u8(v as u8 | CONTINUATION);
             v >>= 7;
         }
 
-        #[allow(clippy::cast_possible_truncation)]
-        self.writer.write_all(&[(v as u8)])?;
+        self.working.put_u8(v as u8);
         Ok(())
     }
 
@@ -283,7 +315,7 @@ impl<'a> Encoder<'a> {
     }
 }
 
-impl Serializer for &mut Encoder<'_> {
+impl Serializer for &mut Encoder {
     type Ok = ();
     type Error = Error;
 
@@ -296,13 +328,13 @@ impl Serializer for &mut Encoder<'_> {
     type SerializeStructVariant = Self;
 
     fn serialize_bool(self, v: bool) -> Result<Self::Ok, Self::Error> {
-        let buf: [u8; 1] = [u8::from(v); 1];
-        self.writer.write_all(&buf).map_err(Into::into)
+        self.working.put_u8(u8::from(v));
+        Ok(())
     }
 
     fn serialize_i8(self, v: i8) -> Result<Self::Ok, Self::Error> {
-        let buf = v.to_be_bytes();
-        self.writer.write_all(&buf).map_err(Into::into)
+        self.working.put_i8(v);
+        Ok(())
     }
 
     fn serialize_i16(self, v: i16) -> Result<Self::Ok, Self::Error> {
@@ -337,48 +369,48 @@ impl Serializer for &mut Encoder<'_> {
             _ => (),
         }
 
-        let buf = v.to_be_bytes();
-        self.writer.write_all(&buf).map_err(Into::into)
+        self.working.put_i16(v);
+        Ok(())
     }
 
     fn serialize_i32(self, v: i32) -> Result<Self::Ok, Self::Error> {
-        let buf = v.to_be_bytes();
-        self.writer.write_all(&buf).map_err(Into::into)
+        self.working.put_i32(v);
+        Ok(())
     }
 
     fn serialize_i64(self, v: i64) -> Result<Self::Ok, Self::Error> {
-        let buf = v.to_be_bytes();
-        self.writer.write_all(&buf).map_err(Into::into)
+        self.working.put_i64(v);
+        Ok(())
     }
 
     fn serialize_u8(self, v: u8) -> Result<Self::Ok, Self::Error> {
-        let buf = v.to_be_bytes();
-        self.writer.write_all(&buf).map_err(Into::into)
+        self.working.put_u8(v);
+        Ok(())
     }
 
     fn serialize_u16(self, v: u16) -> Result<Self::Ok, Self::Error> {
-        let buf = v.to_be_bytes();
-        self.writer.write_all(&buf).map_err(Into::into)
+        self.working.put_u16(v);
+        Ok(())
     }
 
     fn serialize_u32(self, v: u32) -> Result<Self::Ok, Self::Error> {
-        let buf = v.to_be_bytes();
-        self.writer.write_all(&buf).map_err(Into::into)
+        self.working.put_u32(v);
+        Ok(())
     }
 
     fn serialize_u64(self, v: u64) -> Result<Self::Ok, Self::Error> {
-        let buf = v.to_be_bytes();
-        self.writer.write_all(&buf).map_err(Into::into)
+        self.working.put_u64(v);
+        Ok(())
     }
 
     fn serialize_f32(self, v: f32) -> Result<Self::Ok, Self::Error> {
-        let buf = v.to_be_bytes();
-        self.writer.write_all(&buf).map_err(Into::into)
+        self.working.put_f32(v);
+        Ok(())
     }
 
     fn serialize_f64(self, v: f64) -> Result<Self::Ok, Self::Error> {
-        let buf = v.to_be_bytes();
-        self.writer.write_all(&buf).map_err(Into::into)
+        self.working.put_f64(v);
+        Ok(())
     }
 
     fn serialize_char(self, v: char) -> Result<Self::Ok, Self::Error> {
@@ -393,28 +425,35 @@ impl Serializer for &mut Encoder<'_> {
             v.len()
                 .try_into()
                 .map_err(Into::into)
-                .and_then(|len| self.serialize_i16(len))
-                .and(self.writer.write_all(v.as_bytes()).map_err(Into::into))
+                .and_then(|len| self.serialize_i16(len))?;
+
+            self.working.put_slice(v.as_bytes());
         } else if self.is_valid() {
             if self.is_flexible() {
                 (v.len() + 1)
                     .try_into()
                     .map_err(Into::into)
-                    .and_then(|len| self.unsigned_varint(len))
-                    .and(self.writer.write_all(v.as_bytes()).map_err(Into::into))
+                    .and_then(|len| self.unsigned_varint(len))?;
             } else {
                 v.len()
                     .try_into()
                     .map_err(Into::into)
-                    .and_then(|len| self.serialize_i16(len))
-                    .and(self.writer.write_all(v.as_bytes()).map_err(Into::into))
+                    .and_then(|len| self.serialize_i16(len))?;
             }
-        } else {
-            Ok(())
+
+            self.working.put_slice(v.as_bytes());
         }
+
+        Ok(())
     }
 
     fn serialize_bytes(self, v: &[u8]) -> Result<Self::Ok, Self::Error> {
+        debug!(
+            ?v,
+            is_valid = self.is_valid(),
+            is_flexible = self.is_flexible()
+        );
+
         if self.is_valid() {
             if self.is_flexible() {
                 (v.len() + 1)
@@ -427,9 +466,11 @@ impl Serializer for &mut Encoder<'_> {
                     .map_err(Into::into)
                     .and_then(|len| self.serialize_u32(len))?;
             }
+
+            self.working.put_slice(v);
         }
 
-        self.writer.write_all(v).map_err(Into::into)
+        Ok(())
     }
 
     fn serialize_none(self) -> Result<Self::Ok, Self::Error> {
@@ -475,25 +516,43 @@ impl Serializer for &mut Encoder<'_> {
         T: Serialize,
         T: ?Sized,
     {
+        debug!(
+            type_name = type_name::<T>(),
+            is_tag_buffer = self.field.is_some_and(|field| field == "tag_buffer"),
+            is_flexible = self.is_flexible(),
+            is_records = self.is_records(),
+        );
+
         if self.field.is_some_and(|field| field == "tag_buffer") && !self.is_flexible() {
             Ok(())
         } else if self.is_records() {
-            let mut c = Cursor::new(vec![]);
-            let mut e = Encoder::new(&mut c);
-            value.serialize(&mut e)?;
+            self.encoded.push(self.working.split());
 
-            u32::try_from(c.position())
-                .map_err(Into::into)
-                .and_then(|length| {
-                    if self.is_flexible() {
-                        self.unsigned_varint(length + 1)
-                    } else {
-                        let buf = length.to_be_bytes();
-                        self.writer.write_all(&buf).map_err(Into::into)
-                    }
-                })?;
+            let records = {
+                let records = self.working.split_off(self.working.capacity());
 
-            self.writer.write_all(&c.into_inner()).map_err(Into::into)
+                let mut e = RecordBatchEncoder::new(records);
+                value.serialize(&mut e)?;
+                BytesMut::from(e)
+            };
+
+            self.encoded
+                .push(
+                    u32::try_from(records.len())
+                        .map_err(Into::into)
+                        .and_then(|length| {
+                            if self.is_flexible() {
+                                UnsignedVarInt(length + 1).encode().map(BytesMut::from)
+                            } else {
+                                let mut size = BytesMut::with_capacity(size_of::<u32>());
+                                size.put_u32(length);
+                                Ok(size)
+                            }
+                        })?,
+                );
+
+            self.encoded.push(records);
+            Ok(())
         } else {
             value.serialize(self)
         }
@@ -634,7 +693,7 @@ impl Serializer for &mut Encoder<'_> {
     }
 }
 
-impl SerializeSeq for &mut Encoder<'_> {
+impl SerializeSeq for &mut Encoder {
     type Ok = ();
 
     type Error = Error;
@@ -652,7 +711,7 @@ impl SerializeSeq for &mut Encoder<'_> {
     }
 }
 
-impl SerializeTuple for &mut Encoder<'_> {
+impl SerializeTuple for &mut Encoder {
     type Ok = ();
 
     type Error = Error;
@@ -670,7 +729,7 @@ impl SerializeTuple for &mut Encoder<'_> {
     }
 }
 
-impl SerializeTupleStruct for &mut Encoder<'_> {
+impl SerializeTupleStruct for &mut Encoder {
     type Ok = ();
 
     type Error = Error;
@@ -688,7 +747,7 @@ impl SerializeTupleStruct for &mut Encoder<'_> {
     }
 }
 
-impl SerializeTupleVariant for &mut Encoder<'_> {
+impl SerializeTupleVariant for &mut Encoder {
     type Ok = ();
 
     type Error = Error;
@@ -706,7 +765,7 @@ impl SerializeTupleVariant for &mut Encoder<'_> {
     }
 }
 
-impl SerializeMap for &mut Encoder<'_> {
+impl SerializeMap for &mut Encoder {
     type Ok = ();
 
     type Error = Error;
@@ -732,7 +791,7 @@ impl SerializeMap for &mut Encoder<'_> {
     }
 }
 
-impl SerializeStruct for &mut Encoder<'_> {
+impl SerializeStruct for &mut Encoder {
     type Ok = ();
     type Error = Error;
 
@@ -773,7 +832,7 @@ impl SerializeStruct for &mut Encoder<'_> {
     }
 }
 
-impl SerializeStructVariant for &mut Encoder<'_> {
+impl SerializeStructVariant for &mut Encoder {
     type Ok = ();
     type Error = Error;
 
@@ -818,6 +877,397 @@ impl SerializeStructVariant for &mut Encoder<'_> {
 
     fn end(self) -> Result<Self::Ok, Self::Error> {
         _ = self.containers.pop_front();
+        Ok(())
+    }
+}
+
+pub struct RecordBatchEncoder {
+    working: BytesMut,
+}
+
+impl RecordBatchEncoder {
+    pub fn new(working: BytesMut) -> Self {
+        Self { working }
+    }
+}
+
+impl From<RecordBatchEncoder> for BytesMut {
+    fn from(value: RecordBatchEncoder) -> Self {
+        value.working
+    }
+}
+
+impl From<RecordBatchEncoder> for Bytes {
+    fn from(value: RecordBatchEncoder) -> Self {
+        BytesMut::from(value).into()
+    }
+}
+
+impl Serializer for &mut RecordBatchEncoder {
+    type Ok = ();
+
+    type Error = Error;
+
+    type SerializeSeq = Self;
+
+    type SerializeTuple = Self;
+
+    type SerializeTupleStruct = Self;
+
+    type SerializeTupleVariant = Self;
+
+    type SerializeMap = Self;
+
+    type SerializeStruct = Self;
+
+    type SerializeStructVariant = Self;
+
+    #[instrument(skip(self))]
+    fn serialize_bool(self, v: bool) -> std::result::Result<Self::Ok, Self::Error> {
+        self.working.put_u8(u8::from(v));
+        Ok(())
+    }
+
+    #[instrument(skip(self))]
+    fn serialize_i8(self, v: i8) -> std::result::Result<Self::Ok, Self::Error> {
+        self.working.put_i8(v);
+        Ok(())
+    }
+
+    #[instrument(skip(self))]
+    fn serialize_i16(self, v: i16) -> std::result::Result<Self::Ok, Self::Error> {
+        self.working.put_i16(v);
+        Ok(())
+    }
+
+    #[instrument(skip(self))]
+    fn serialize_i32(self, v: i32) -> std::result::Result<Self::Ok, Self::Error> {
+        self.working.put_i32(v);
+        Ok(())
+    }
+
+    #[instrument(skip(self))]
+    fn serialize_i64(self, v: i64) -> std::result::Result<Self::Ok, Self::Error> {
+        self.working.put_i64(v);
+        Ok(())
+    }
+
+    #[instrument(skip(self))]
+    fn serialize_u8(self, v: u8) -> std::result::Result<Self::Ok, Self::Error> {
+        self.working.put_u8(v);
+        Ok(())
+    }
+
+    #[instrument(skip(self))]
+    fn serialize_u16(self, v: u16) -> std::result::Result<Self::Ok, Self::Error> {
+        self.working.put_u16(v);
+        Ok(())
+    }
+
+    #[instrument(skip(self))]
+    fn serialize_u32(self, v: u32) -> std::result::Result<Self::Ok, Self::Error> {
+        self.working.put_u32(v);
+        Ok(())
+    }
+
+    #[instrument(skip(self))]
+    fn serialize_u64(self, v: u64) -> std::result::Result<Self::Ok, Self::Error> {
+        self.working.put_u64(v);
+        Ok(())
+    }
+
+    #[instrument(skip(self))]
+    fn serialize_f32(self, v: f32) -> std::result::Result<Self::Ok, Self::Error> {
+        self.working.put_f32(v);
+        Ok(())
+    }
+
+    #[instrument(skip(self))]
+    fn serialize_f64(self, v: f64) -> std::result::Result<Self::Ok, Self::Error> {
+        self.working.put_f64(v);
+        Ok(())
+    }
+
+    #[instrument(skip(self))]
+    fn serialize_char(self, v: char) -> std::result::Result<Self::Ok, Self::Error> {
+        unimplemented!("{v}")
+    }
+
+    #[instrument(skip(self))]
+    fn serialize_str(self, v: &str) -> std::result::Result<Self::Ok, Self::Error> {
+        unimplemented!("{v}")
+    }
+
+    #[instrument(skip(self))]
+    fn serialize_bytes(self, v: &[u8]) -> std::result::Result<Self::Ok, Self::Error> {
+        if self.working.capacity() < v.len() {
+            self.working.reserve(v.len() - self.working.capacity());
+        }
+
+        self.working.put(v);
+        Ok(())
+    }
+
+    #[instrument(skip(self))]
+    fn serialize_none(self) -> std::result::Result<Self::Ok, Self::Error> {
+        Ok(())
+    }
+
+    #[instrument(skip_all, fields(value = type_name::<T>()))]
+    fn serialize_some<T>(self, value: &T) -> std::result::Result<Self::Ok, Self::Error>
+    where
+        T: ?Sized + Serialize,
+    {
+        unimplemented!("{}", type_name_of_val(value))
+    }
+
+    #[instrument(skip_all)]
+    fn serialize_unit(self) -> std::result::Result<Self::Ok, Self::Error> {
+        unimplemented!()
+    }
+
+    #[instrument(skip(self))]
+    fn serialize_unit_struct(
+        self,
+        name: &'static str,
+    ) -> std::result::Result<Self::Ok, Self::Error> {
+        unimplemented!()
+    }
+
+    #[instrument(skip(self))]
+    fn serialize_unit_variant(
+        self,
+        name: &'static str,
+        variant_index: u32,
+        variant: &'static str,
+    ) -> std::result::Result<Self::Ok, Self::Error> {
+        unimplemented!("{name}, {variant_index}, {variant}")
+    }
+
+    #[instrument(skip_all, fields(name, value = type_name::<T>()))]
+    fn serialize_newtype_struct<T>(
+        self,
+        name: &'static str,
+        value: &T,
+    ) -> std::result::Result<Self::Ok, Self::Error>
+    where
+        T: ?Sized + Serialize,
+    {
+        unimplemented!("{}, {name}", type_name_of_val(value))
+    }
+
+    #[instrument(skip_all, fields(name, variant_index, variant, value = type_name::<T>()))]
+    fn serialize_newtype_variant<T>(
+        self,
+        name: &'static str,
+        variant_index: u32,
+        variant: &'static str,
+        value: &T,
+    ) -> std::result::Result<Self::Ok, Self::Error>
+    where
+        T: ?Sized + Serialize,
+    {
+        unimplemented!(
+            "{}, {name}, {variant_index}, {variant}",
+            type_name_of_val(value)
+        );
+    }
+
+    #[instrument(skip(self))]
+    fn serialize_seq(
+        self,
+        len: Option<usize>,
+    ) -> std::result::Result<Self::SerializeSeq, Self::Error> {
+        Ok(self)
+    }
+
+    #[instrument(skip(self))]
+    fn serialize_tuple(self, len: usize) -> std::result::Result<Self::SerializeTuple, Self::Error> {
+        unimplemented!("{len}")
+    }
+
+    #[instrument(skip(self))]
+    fn serialize_tuple_struct(
+        self,
+        name: &'static str,
+        len: usize,
+    ) -> std::result::Result<Self::SerializeTupleStruct, Self::Error> {
+        unimplemented!("{name}, {len}")
+    }
+
+    #[instrument(skip(self))]
+    fn serialize_tuple_variant(
+        self,
+        name: &'static str,
+        variant_index: u32,
+        variant: &'static str,
+        len: usize,
+    ) -> std::result::Result<Self::SerializeTupleVariant, Self::Error> {
+        unimplemented!("{name}, {variant_index}, {variant}, {len}")
+    }
+
+    #[instrument(skip(self))]
+    fn serialize_map(
+        self,
+        len: Option<usize>,
+    ) -> std::result::Result<Self::SerializeMap, Self::Error> {
+        unimplemented!("{len:?}")
+    }
+
+    #[instrument(skip(self))]
+    fn serialize_struct(
+        self,
+        name: &'static str,
+        len: usize,
+    ) -> std::result::Result<Self::SerializeStruct, Self::Error> {
+        Ok(self)
+    }
+
+    #[instrument(skip(self))]
+    fn serialize_struct_variant(
+        self,
+        name: &'static str,
+        variant_index: u32,
+        variant: &'static str,
+        len: usize,
+    ) -> std::result::Result<Self::SerializeStructVariant, Self::Error> {
+        Ok(self)
+    }
+}
+
+impl SerializeSeq for &mut RecordBatchEncoder {
+    type Ok = ();
+
+    type Error = Error;
+
+    #[instrument(skip_all, fields(type_name = type_name::<T>()))]
+    fn serialize_element<T>(&mut self, value: &T) -> std::result::Result<(), Self::Error>
+    where
+        T: ?Sized + Serialize,
+    {
+        value.serialize(&mut **self)
+    }
+
+    fn end(self) -> std::result::Result<Self::Ok, Self::Error> {
+        Ok(())
+    }
+}
+
+impl SerializeTuple for &mut RecordBatchEncoder {
+    type Ok = ();
+
+    type Error = Error;
+
+    fn serialize_element<T>(&mut self, value: &T) -> std::result::Result<(), Self::Error>
+    where
+        T: ?Sized + Serialize,
+    {
+        todo!()
+    }
+
+    fn end(self) -> std::result::Result<Self::Ok, Self::Error> {
+        todo!()
+    }
+}
+
+impl SerializeTupleVariant for &mut RecordBatchEncoder {
+    type Ok = ();
+
+    type Error = Error;
+
+    fn serialize_field<T>(&mut self, value: &T) -> std::result::Result<(), Self::Error>
+    where
+        T: ?Sized + Serialize,
+    {
+        todo!()
+    }
+
+    fn end(self) -> std::result::Result<Self::Ok, Self::Error> {
+        todo!()
+    }
+}
+
+impl SerializeMap for &mut RecordBatchEncoder {
+    type Ok = ();
+
+    type Error = Error;
+
+    fn serialize_key<T>(&mut self, key: &T) -> std::result::Result<(), Self::Error>
+    where
+        T: ?Sized + Serialize,
+    {
+        todo!()
+    }
+
+    fn serialize_value<T>(&mut self, value: &T) -> std::result::Result<(), Self::Error>
+    where
+        T: ?Sized + Serialize,
+    {
+        todo!()
+    }
+
+    fn end(self) -> std::result::Result<Self::Ok, Self::Error> {
+        todo!()
+    }
+}
+
+impl SerializeStruct for &mut RecordBatchEncoder {
+    type Ok = ();
+
+    type Error = Error;
+
+    #[instrument(skip_all, fields(key, type_name = type_name::<T>()))]
+    fn serialize_field<T>(
+        &mut self,
+        key: &'static str,
+        value: &T,
+    ) -> std::result::Result<(), Self::Error>
+    where
+        T: ?Sized + Serialize,
+    {
+        value.serialize(&mut **self)
+    }
+
+    fn end(self) -> std::result::Result<Self::Ok, Self::Error> {
+        Ok(())
+    }
+}
+
+impl SerializeTupleStruct for &mut RecordBatchEncoder {
+    type Ok = ();
+
+    type Error = Error;
+
+    fn serialize_field<T>(&mut self, value: &T) -> std::result::Result<(), Self::Error>
+    where
+        T: ?Sized + Serialize,
+    {
+        todo!()
+    }
+
+    fn end(self) -> std::result::Result<Self::Ok, Self::Error> {
+        todo!()
+    }
+}
+
+impl SerializeStructVariant for &mut RecordBatchEncoder {
+    type Ok = ();
+
+    type Error = Error;
+
+    #[instrument(skip_all, fields(key, type_name = type_name::<T>()))]
+    fn serialize_field<T>(
+        &mut self,
+        key: &'static str,
+        value: &T,
+    ) -> std::result::Result<(), Self::Error>
+    where
+        T: ?Sized + Serialize,
+    {
+        value.serialize(&mut **self)
+    }
+
+    fn end(self) -> std::result::Result<Self::Ok, Self::Error> {
         Ok(())
     }
 }

@@ -428,6 +428,23 @@ impl Deref for UnsignedVarInt {
     }
 }
 
+impl Encode for UnsignedVarInt {
+    fn encode(&self) -> Result<Bytes> {
+        let mut encoded = BytesMut::new();
+
+        let mut v = self.0;
+
+        while v >= u32::from(CONTINUATION) {
+            encoded.put_u8(v as u8 | CONTINUATION);
+            v >>= 7;
+        }
+
+        encoded.put_u8(v as u8);
+
+        Ok(Bytes::from(encoded))
+    }
+}
+
 impl UnsignedVarInt {
     pub fn serialize<S>(i: &u32, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -624,34 +641,37 @@ mod tests {
 
     #[test]
     fn encode_varint_signed_one() -> Result<()> {
-        let mut encoded = Vec::new();
-        let mut serializer = Encoder::new(&mut encoded);
+        let mut serializer = Encoder::new(BytesMut::new());
         let decoded = VarInt(1);
         decoded.serialize(&mut serializer)?;
 
-        assert_eq!(vec![2u8], encoded);
+        let encoded = Bytes::from(serializer);
+
+        assert_eq!(&[2u8], &encoded[..]);
         Ok(())
     }
 
     #[test]
     fn encode_varint_unsigned_one() -> Result<()> {
-        let mut encoded = Vec::new();
-        let mut serializer = Encoder::new(&mut encoded);
+        let mut serializer = Encoder::new(BytesMut::new());
         let decoded = UnsignedVarInt(1);
         decoded.serialize(&mut serializer)?;
 
-        assert_eq!(vec![1u8], encoded);
+        let encoded = Bytes::from(serializer);
+
+        assert_eq!(&[1u8], &encoded[..]);
         Ok(())
     }
 
     #[test]
     fn encode_varint_signed_zero() -> Result<()> {
-        let mut encoded = Vec::new();
-        let mut serializer = Encoder::new(&mut encoded);
+        let mut serializer = Encoder::new(BytesMut::new());
         let decoded = VarInt(0);
         decoded.serialize(&mut serializer)?;
 
-        assert_eq!(vec![0u8], encoded);
+        let encoded = Bytes::from(serializer);
+
+        assert_eq!(&[0u8], &encoded[..]);
         Ok(())
     }
 

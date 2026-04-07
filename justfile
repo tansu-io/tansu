@@ -478,7 +478,7 @@ flamegraph-produce profile="profiling":
     cargo build --profile {{ profile }} --bin bench_produce_v11
     RUST_LOG=warn flamegraph -- ./target/{{ replace(profile, "dev", "debug") }}/bench_produce_v11
 
-bench-hyperfine iterations="10000" profile="release": (build profile "libsql" "bench")
+bench-hyperfine iterations="100000" profile="release": (build profile "libsql" "bench")
     hyperfine -N './target/{{ replace(profile, "dev", "debug") }}/bench --iterations {{ iterations }}'
 
 bench-dhat mode="heap" profile="release": (build profile "libsql" "bench")
@@ -490,8 +490,8 @@ bench-flamegraph profile="profiling": (build profile "libsql" "bench")
 bench-flamegraph-produce profile="profiling": (build profile "libsql" "bench")
     RUST_LOG=warn flamegraph -- ./target/{{ replace(profile, "dev", "debug") }}/bench --api-key=0
 
-bench-flamegraph-fetch profile="profiling": (build profile "libsql" "bench")
-    RUST_LOG=warn flamegraph -- ./target/{{ replace(profile, "dev", "debug") }}/bench --api-key=1
+bench-flamegraph-fetch iterations="100000" profile="profiling": (build profile "libsql" "bench")
+    RUST_LOG=warn flamegraph -- ./target/{{ replace(profile, "dev", "debug") }}/bench  --iterations {{ iterations }} --api-key=1
 
 bench-perf profile="profiling": (build profile "libsql" "bench")
     RUST_LOG=warn perf record --call-graph dwarf ./target/{{ replace(profile, "dev", "debug") }}/bench 2>&1 >/dev/null

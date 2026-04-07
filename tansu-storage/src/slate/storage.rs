@@ -22,11 +22,11 @@ use std::{
 };
 
 use async_trait::async_trait;
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{Bytes, BytesMut};
 use serde::Serialize;
 use tansu_sans_io::{
-    BatchAttribute, ConfigResource, ConfigSource, ControlBatch, Encoder, EndTransactionMarker,
-    ErrorCode, IsolationLevel, ListOffset, OpType, ScramMechanism,
+    BatchAttribute, ConfigResource, ConfigSource, ControlBatch, EndTransactionMarker, ErrorCode,
+    IsolationLevel, ListOffset, OpType, ScramMechanism,
     add_partitions_to_txn_response::{
         AddPartitionsToTxnPartitionResult, AddPartitionsToTxnTopicResult,
     },
@@ -44,6 +44,7 @@ use tansu_sans_io::{
     list_groups_response::ListedGroup,
     metadata_response::{MetadataResponseBroker, MetadataResponsePartition, MetadataResponseTopic},
     record::{Record, deflated::Batch, inflated::Batch as InflatedBatch},
+    ser::RecordBatchEncoder,
     to_system_time,
     txn_offset_commit_response::{TxnOffsetCommitResponsePartition, TxnOffsetCommitResponseTopic},
 };
@@ -622,11 +623,10 @@ impl Storage for Engine {
         debug!(?watermark);
 
         let encoded = {
-            let mut writer = BytesMut::new().writer();
-            let mut encoder = Encoder::new(&mut writer);
+            let mut encoder = RecordBatchEncoder::new(BytesMut::new());
             deflated.serialize(&mut encoder)?;
 
-            Bytes::from(writer.into_inner())
+            Bytes::from(encoder)
         };
 
         let batch_key =
@@ -1642,10 +1642,9 @@ impl Storage for Engine {
 
                             // Encode and store the batch
                             let encoded = {
-                                let mut writer = BytesMut::new().writer();
-                                let mut encoder = Encoder::new(&mut writer);
+                                let mut encoder = RecordBatchEncoder::new(BytesMut::new());
                                 batch.serialize(&mut encoder)?;
-                                Bytes::from(writer.into_inner())
+                                Bytes::from(encoder)
                             };
 
                             let batch_key = postcard::to_stdvec(&BatchKey::new(
@@ -2210,10 +2209,9 @@ impl Storage for Engine {
 
                 // Encode and store the batch
                 let encoded = {
-                    let mut writer = BytesMut::new().writer();
-                    let mut encoder = Encoder::new(&mut writer);
+                    let mut encoder = RecordBatchEncoder::new(BytesMut::new());
                     batch.serialize(&mut encoder)?;
-                    Bytes::from(writer.into_inner())
+                    Bytes::from(encoder)
                 };
 
                 let batch_key =
