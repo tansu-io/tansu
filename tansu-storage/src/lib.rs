@@ -1507,6 +1507,10 @@ pub trait Storage: Debug + Send + Sync + 'static {
     async fn ping(&self) -> Result<()>;
 }
 
+// The existence of this function makes the compiler catch if the Storage
+// trait is "object-safe" or not.
+fn _assert_trait_object(_s: &dyn Storage) {}
+
 #[async_trait]
 impl<T> Storage for Arc<T>
 where
