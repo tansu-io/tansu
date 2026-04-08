@@ -653,6 +653,8 @@ fn message_struct(
             })
             .collect();
 
+        let tag_capacity = tags.len();
+
         let assignments: Vec<TokenStream> = fields
             .iter()
             .filter(|field| field.tag().is_none())
@@ -691,7 +693,7 @@ fn message_struct(
                 impl From<#tagged_name> for #name {
                     fn from(value: #tagged_name) -> Self {
                         #[allow(unused_mut)]
-                        let mut tag_buffer = Vec::new();
+                        let mut tag_buffer = Vec::with_capacity(#tag_capacity);
 
                         #(#tags)*
 
@@ -911,6 +913,8 @@ fn common_struct(
             })
             .collect();
 
+        let tag_capacity = tags.len();
+
         let assignments: Vec<TokenStream> = fields
             .iter()
             .filter(|field| field.tag().is_none())
@@ -960,7 +964,7 @@ fn common_struct(
             impl From<#from> for #name {
                 fn from(value: #from) -> Self {
                     #[allow(unused_mut)]
-                    let mut tag_buffer = Vec::new();
+                    let mut tag_buffer = Vec::with_capacity(#tag_capacity);
 
                     #(#tags)*
 

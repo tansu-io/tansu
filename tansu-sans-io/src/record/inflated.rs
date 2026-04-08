@@ -38,12 +38,8 @@ impl TryFrom<deflated::Frame> for Frame {
         deflated
             .batches
             .into_iter()
-            .try_fold(Vec::new(), |mut acc, batch| {
-                Batch::try_from(batch).map(|inflated| {
-                    acc.push(inflated);
-                    acc
-                })
-            })
+            .map(Batch::try_from)
+            .collect::<Result<Vec<_>>>()
             .map(|batches| Self { batches })
     }
 }

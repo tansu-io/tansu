@@ -54,12 +54,8 @@ impl TryFrom<crate::record::inflated::Frame> for Frame {
         inflated
             .batches
             .into_iter()
-            .try_fold(Vec::new(), |mut acc, batch| {
-                Batch::try_from(batch).map(|deflated| {
-                    acc.push(deflated);
-                    acc
-                })
-            })
+            .map(Batch::try_from)
+            .collect::<Result<Vec<_>>>()
             .map(|batches| Self { batches })
     }
 }

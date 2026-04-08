@@ -19,7 +19,11 @@ use serde::{
     de::{self, SeqAccess, Visitor},
     ser::SerializeSeq,
 };
-use std::{any::type_name_of_val, fmt::Formatter, ops::Deref};
+use std::{
+    any::{type_name, type_name_of_val},
+    fmt::Formatter,
+    ops::Deref,
+};
 use tracing::{debug, instrument};
 
 const CONTINUATION: u8 = 0b1000_0000;
@@ -446,6 +450,7 @@ impl Encode for UnsignedVarInt {
 }
 
 impl UnsignedVarInt {
+    #[instrument(skip(serializer), fields(serializer = type_name::<S>()))]
     pub fn serialize<S>(i: &u32, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -454,10 +459,14 @@ impl UnsignedVarInt {
         let mut s = serializer.serialize_seq(None)?;
 
         while v >= u32::from(CONTINUATION) {
+            debug!(v);
+
             #[allow(clippy::cast_possible_truncation)]
             s.serialize_element(&(v as u8 | CONTINUATION))?;
             v >>= 7;
         }
+
+        debug!(v);
 
         #[allow(clippy::cast_possible_truncation)]
         s.serialize_element(&(v as u8))?;
@@ -574,6 +583,7 @@ impl TryFrom<usize> for UnsignedVarInt {
 }
 
 impl Serialize for UnsignedVarInt {
+    #[instrument(skip_all, fields(serializer = type_name::<S>()))]
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,

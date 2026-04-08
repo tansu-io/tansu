@@ -568,7 +568,7 @@ impl Frame {
     }
 
     /// serialize an API response into a frame of bytes
-    #[instrument(skip_all)]
+    #[instrument(skip(header, body))]
     pub fn response(header: Header, body: Body, api_key: i16, api_version: i16) -> Result<Bytes> {
         let frame = Frame {
             size: 0,

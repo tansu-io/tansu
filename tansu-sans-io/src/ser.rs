@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -102,7 +102,6 @@ impl Default for Meta {
 /// Serialize the serde data model into the Kafka protocol.
 pub struct Encoder {
     working: BytesMut,
-    encoded: Vec<BytesMut>,
     containers: VecDeque<Container>,
     field: Option<&'static str>,
     kind: Option<Kind>,
@@ -113,25 +112,7 @@ pub struct Encoder {
 
 impl From<Encoder> for BytesMut {
     fn from(encoder: Encoder) -> Self {
-        if encoder.encoded.is_empty() {
-            encoder.working
-        } else {
-            let mut combo = BytesMut::with_capacity(
-                encoder
-                    .encoded
-                    .iter()
-                    .map(|encoded| encoded.len())
-                    .sum::<usize>()
-                    + encoder.working.len(),
-            );
-
-            for encoded in encoder.encoded {
-                combo.extend(encoded);
-            }
-
-            combo.extend(encoder.working);
-            combo
-        }
+        encoder.working
     }
 }
 
@@ -151,7 +132,6 @@ impl Encoder {
     pub(crate) fn request(working: BytesMut) -> Self {
         Self {
             working,
-            encoded: Vec::with_capacity(PARSE_DEPTH),
             containers: VecDeque::with_capacity(PARSE_DEPTH),
             kind: Some(Kind::Request),
             field: None,
@@ -164,7 +144,6 @@ impl Encoder {
     pub(crate) fn response(working: BytesMut, api_key: i16, api_version: i16) -> Self {
         Self {
             working,
-            encoded: Vec::with_capacity(PARSE_DEPTH),
             containers: VecDeque::with_capacity(PARSE_DEPTH),
             kind: Some(Kind::Response),
             field: None,
@@ -189,7 +168,6 @@ impl Encoder {
     pub fn new(working: BytesMut) -> Self {
         Self {
             working,
-            encoded: Vec::with_capacity(PARSE_DEPTH),
             containers: VecDeque::with_capacity(PARSE_DEPTH),
             kind: None,
             field: None,
@@ -199,9 +177,9 @@ impl Encoder {
         }
     }
 
+    #[instrument(skip(self))]
     fn field_meta(&self, name: &str) -> Option<&'static FieldMeta> {
         debug!(
-            name,
             parse_front = ?self.meta.parse.front().and_then(|front| front.field(name)),
             meta = ?self.meta.message.and_then(|mm| mm.field(name))
         );
@@ -327,16 +305,19 @@ impl Serializer for &mut Encoder {
     type SerializeStruct = Self;
     type SerializeStructVariant = Self;
 
+    #[instrument(skip(self))]
     fn serialize_bool(self, v: bool) -> Result<Self::Ok, Self::Error> {
         self.working.put_u8(u8::from(v));
         Ok(())
     }
 
+    #[instrument(skip(self))]
     fn serialize_i8(self, v: i8) -> Result<Self::Ok, Self::Error> {
         self.working.put_i8(v);
         Ok(())
     }
 
+    #[instrument(skip(self))]
     fn serialize_i16(self, v: i16) -> Result<Self::Ok, Self::Error> {
         match (self.containers.front(), self.field) {
             (
@@ -373,50 +354,60 @@ impl Serializer for &mut Encoder {
         Ok(())
     }
 
+    #[instrument(skip(self))]
     fn serialize_i32(self, v: i32) -> Result<Self::Ok, Self::Error> {
         self.working.put_i32(v);
         Ok(())
     }
 
+    #[instrument(skip(self))]
     fn serialize_i64(self, v: i64) -> Result<Self::Ok, Self::Error> {
         self.working.put_i64(v);
         Ok(())
     }
 
+    #[instrument(skip(self))]
     fn serialize_u8(self, v: u8) -> Result<Self::Ok, Self::Error> {
         self.working.put_u8(v);
         Ok(())
     }
 
+    #[instrument(skip(self))]
     fn serialize_u16(self, v: u16) -> Result<Self::Ok, Self::Error> {
         self.working.put_u16(v);
         Ok(())
     }
 
+    #[instrument(skip(self))]
     fn serialize_u32(self, v: u32) -> Result<Self::Ok, Self::Error> {
         self.working.put_u32(v);
         Ok(())
     }
 
+    #[instrument(skip(self))]
     fn serialize_u64(self, v: u64) -> Result<Self::Ok, Self::Error> {
         self.working.put_u64(v);
         Ok(())
     }
 
+    #[instrument(skip(self))]
     fn serialize_f32(self, v: f32) -> Result<Self::Ok, Self::Error> {
         self.working.put_f32(v);
         Ok(())
     }
 
+    #[instrument(skip(self))]
     fn serialize_f64(self, v: f64) -> Result<Self::Ok, Self::Error> {
         self.working.put_f64(v);
         Ok(())
     }
 
+    #[instrument(skip(self))]
     fn serialize_char(self, v: char) -> Result<Self::Ok, Self::Error> {
         Err(Error::UnexpectedType(format!("{v}")))
     }
 
+    #[instrument(skip(self))]
     fn serialize_str(self, v: &str) -> Result<Self::Ok, Self::Error> {
         if self.in_header()
             && self.kind.is_some_and(|kind| kind == Kind::Request)
@@ -447,6 +438,7 @@ impl Serializer for &mut Encoder {
         Ok(())
     }
 
+    #[instrument(skip(self))]
     fn serialize_bytes(self, v: &[u8]) -> Result<Self::Ok, Self::Error> {
         debug!(
             ?v,
@@ -473,6 +465,7 @@ impl Serializer for &mut Encoder {
         Ok(())
     }
 
+    #[instrument(skip(self))]
     fn serialize_none(self) -> Result<Self::Ok, Self::Error> {
         debug!(
             name = self.field_name(),
@@ -511,13 +504,13 @@ impl Serializer for &mut Encoder {
         }
     }
 
+    #[instrument(skip(self, value), fields(value = type_name::<T>()))]
     fn serialize_some<T>(self, value: &T) -> Result<Self::Ok, Self::Error>
     where
         T: Serialize,
         T: ?Sized,
     {
         debug!(
-            type_name = type_name::<T>(),
             is_tag_buffer = self.field.is_some_and(|field| field == "tag_buffer"),
             is_flexible = self.is_flexible(),
             is_records = self.is_records(),
@@ -526,46 +519,70 @@ impl Serializer for &mut Encoder {
         if self.field.is_some_and(|field| field == "tag_buffer") && !self.is_flexible() {
             Ok(())
         } else if self.is_records() {
-            self.encoded.push(self.working.split());
+            debug!(
+                working_capacity = self.working.capacity(),
+                working_len = self.working.len()
+            );
 
             let records = {
-                let records = self.working.split_off(self.working.capacity());
+                let records = self
+                    .working
+                    .split_off(self.working.len() + size_of::<u32>());
+                debug!(
+                    records_capacity = records.capacity(),
+                    records_len = records.len(),
+                );
 
                 let mut e = RecordBatchEncoder::new(records);
                 value.serialize(&mut e)?;
                 BytesMut::from(e)
             };
 
-            self.encoded
-                .push(
-                    u32::try_from(records.len())
-                        .map_err(Into::into)
-                        .and_then(|length| {
-                            if self.is_flexible() {
-                                UnsignedVarInt(length + 1).encode().map(BytesMut::from)
-                            } else {
-                                let mut size = BytesMut::with_capacity(size_of::<u32>());
-                                size.put_u32(length);
-                                Ok(size)
-                            }
-                        })?,
-                );
+            debug!(
+                working_capacity = self.working.capacity(),
+                working_len = self.working.len(),
+                records_capacity = records.capacity(),
+                records_len = records.len(),
+            );
 
-            self.encoded.push(records);
+            let length = u32::try_from(records.len())?;
+
+            if self.is_flexible() {
+                let encoded = UnsignedVarInt(length + 1).encode()?;
+                self.working.put(encoded);
+            } else {
+                self.working.put_u32(length);
+            }
+
+            debug!(
+                working_capacity = self.working.capacity(),
+                working_len = self.working.len(),
+            );
+
+            self.working.unsplit(records);
+
+            debug!(
+                working_capacity = self.working.capacity(),
+                working_len = self.working.len(),
+            );
+
             Ok(())
         } else {
             value.serialize(self)
         }
     }
 
+    #[instrument(skip_all)]
     fn serialize_unit(self) -> Result<Self::Ok, Self::Error> {
         Err(Error::UnexpectedType(format!("{self:?}")))
     }
 
+    #[instrument(skip(self))]
     fn serialize_unit_struct(self, name: &'static str) -> Result<Self::Ok, Self::Error> {
         Err(Error::UnexpectedType(name.into()))
     }
 
+    #[instrument(skip(self))]
     fn serialize_unit_variant(
         self,
         name: &'static str,
@@ -577,6 +594,7 @@ impl Serializer for &mut Encoder {
         )))
     }
 
+    #[instrument(skip(self, value), fields(value = type_name::<T>()))]
     fn serialize_newtype_struct<T>(
         self,
         name: &'static str,
@@ -586,10 +604,10 @@ impl Serializer for &mut Encoder {
         T: Serialize,
         T: ?Sized,
     {
-        debug!(?name);
         value.serialize(self)
     }
 
+    #[instrument(skip(self, value), fields(value = type_name::<T>()))]
     fn serialize_newtype_variant<T>(
         self,
         name: &'static str,
@@ -601,13 +619,11 @@ impl Serializer for &mut Encoder {
         T: Serialize,
         T: ?Sized,
     {
-        debug!(?name, ?variant_index, ?variant);
         value.serialize(self)
     }
 
+    #[instrument(skip(self))]
     fn serialize_seq(self, len: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
-        debug!(?len);
-
         if self.is_valid()
             && let Some(len) = len
         {
@@ -626,20 +642,21 @@ impl Serializer for &mut Encoder {
         Ok(self)
     }
 
+    #[instrument(skip(self))]
     fn serialize_tuple(self, len: usize) -> Result<Self::SerializeTuple, Self::Error> {
-        debug!(?len);
         Ok(self)
     }
 
+    #[instrument(skip(self))]
     fn serialize_tuple_struct(
         self,
         name: &'static str,
         len: usize,
     ) -> Result<Self::SerializeTupleStruct, Self::Error> {
-        debug!(?name, ?len);
         Ok(self)
     }
 
+    #[instrument(skip(self))]
     fn serialize_tuple_variant(
         self,
         name: &'static str,
@@ -647,22 +664,20 @@ impl Serializer for &mut Encoder {
         variant: &'static str,
         len: usize,
     ) -> Result<Self::SerializeTupleVariant, Self::Error> {
-        debug!(?name, ?variant_index, ?variant, ?len);
         Ok(self)
     }
 
+    #[instrument(skip(self))]
     fn serialize_map(self, len: Option<usize>) -> Result<Self::SerializeMap, Self::Error> {
-        debug!(?len);
         Ok(self)
     }
 
+    #[instrument(skip(self))]
     fn serialize_struct(
         self,
         name: &'static str,
         len: usize,
     ) -> Result<Self::SerializeStruct, Self::Error> {
-        debug!(?name, ?len);
-
         self.containers.push_front(Container::Struct { name, len });
 
         if let Some(fm) = self.field_meta(name) {
@@ -673,6 +688,7 @@ impl Serializer for &mut Encoder {
         Ok(self)
     }
 
+    #[instrument(skip(self))]
     fn serialize_struct_variant(
         self,
         name: &'static str,
@@ -680,8 +696,6 @@ impl Serializer for &mut Encoder {
         variant: &'static str,
         len: usize,
     ) -> Result<Self::SerializeStructVariant, Self::Error> {
-        debug!(?name, ?variant_index, ?variant, ?len);
-
         self.containers.push_front(Container::StructVariant {
             name,
             variant_index,
@@ -698,6 +712,7 @@ impl SerializeSeq for &mut Encoder {
 
     type Error = Error;
 
+    #[instrument(skip(self, value), fields(value = type_name::<T>()))]
     fn serialize_element<T>(&mut self, value: &T) -> Result<(), Self::Error>
     where
         T: Serialize,
@@ -716,6 +731,7 @@ impl SerializeTuple for &mut Encoder {
 
     type Error = Error;
 
+    #[instrument(skip(self, value), fields(value = type_name::<T>()))]
     fn serialize_element<T>(&mut self, value: &T) -> Result<(), Self::Error>
     where
         T: Serialize,
@@ -734,6 +750,7 @@ impl SerializeTupleStruct for &mut Encoder {
 
     type Error = Error;
 
+    #[instrument(skip(self, value), fields(value = type_name::<T>()))]
     fn serialize_field<T>(&mut self, value: &T) -> Result<(), Self::Error>
     where
         T: Serialize,
@@ -752,6 +769,7 @@ impl SerializeTupleVariant for &mut Encoder {
 
     type Error = Error;
 
+    #[instrument(skip(self, value), fields(value = type_name::<T>()))]
     fn serialize_field<T>(&mut self, value: &T) -> Result<(), Self::Error>
     where
         T: Serialize,
@@ -770,6 +788,7 @@ impl SerializeMap for &mut Encoder {
 
     type Error = Error;
 
+    #[instrument(skip(self, key), fields(key = type_name::<T>()))]
     fn serialize_key<T>(&mut self, key: &T) -> Result<(), Self::Error>
     where
         T: Serialize,
@@ -778,6 +797,7 @@ impl SerializeMap for &mut Encoder {
         Err(Error::UnexpectedType(type_name_of_val(key).into()))
     }
 
+    #[instrument(skip(self, value), fields(value = type_name::<T>()))]
     fn serialize_value<T>(&mut self, value: &T) -> Result<(), Self::Error>
     where
         T: Serialize,
@@ -795,6 +815,7 @@ impl SerializeStruct for &mut Encoder {
     type Ok = ();
     type Error = Error;
 
+    #[instrument(skip(self, value), fields(value = type_name::<T>()))]
     fn serialize_field<T>(&mut self, key: &'static str, value: &T) -> Result<(), Self::Error>
     where
         T: Serialize,
@@ -836,13 +857,12 @@ impl SerializeStructVariant for &mut Encoder {
     type Ok = ();
     type Error = Error;
 
+    #[instrument(skip(self, value), fields(value = type_name::<T>()))]
     fn serialize_field<T>(&mut self, key: &'static str, value: &T) -> Result<(), Self::Error>
     where
         T: Serialize,
         T: ?Sized,
     {
-        debug!(?key);
-
         _ = self.field.replace(key);
 
         if let Some(fm) = self.field_meta(key) {
@@ -850,7 +870,7 @@ impl SerializeStructVariant for &mut Encoder {
                 .api_version
                 .is_some_and(|api_version| fm.version.within(api_version))
             {
-                debug!("field name: {}, meta: {fm:?}", self.field_name());
+                debug!(field_name = self.field_name(), meta = ?fm);
 
                 _ = self.meta.field.replace(fm);
                 self.meta.parse.push_front(fm.fields.into());
@@ -860,9 +880,8 @@ impl SerializeStructVariant for &mut Encoder {
                 outcome
             } else {
                 debug!(
-                    "field name: {}, meta: {fm:?}, is not required in v: {:?}",
-                    self.field_name(),
-                    self.api_version
+                    field_name = self.field_name(),
+                    api_version = self.api_version
                 );
                 Ok(())
             }
@@ -1000,10 +1019,6 @@ impl Serializer for &mut RecordBatchEncoder {
 
     #[instrument(skip(self))]
     fn serialize_bytes(self, v: &[u8]) -> std::result::Result<Self::Ok, Self::Error> {
-        if self.working.capacity() < v.len() {
-            self.working.reserve(v.len() - self.working.capacity());
-        }
-
         self.working.put(v);
         Ok(())
     }
