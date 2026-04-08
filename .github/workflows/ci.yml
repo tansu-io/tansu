@@ -211,7 +211,7 @@ jobs:
           path: ${{runner.temp}}/src.tar.gz
           if-no-files-found: error
   package:
-    needs: [test, cargo-publish-dry-run, third-party-license, typos]
+    needs: [test, cargo-publish-dry-run, typos]
     runs-on: ${{matrix.os}}
     permissions:
       packages: write
@@ -331,7 +331,7 @@ jobs:
           TANSU_IMAGE: ghcr.io/tansu-io/tansu:${{steps.meta.outputs.version}}
   release:
     if: ${{github.actor == 'shortishly'}}
-    needs: [test, src, third-party-license, typos]
+    needs: [test, src, typos]
     permissions:
       contents: write
     runs-on: ${{matrix.os}}
@@ -388,7 +388,6 @@ jobs:
           cp target/"${TARGET}"/release/tansu "$dist"/bin
           cp compose.yaml example.env LICENSE README.md "$dist"
           cp -r etc "$dist"
-          cp artifacts/THIRD-PARTY-LICENSE.html "$dist"
           tar --create --verbose --gzip --file=tansu-"${TARGET}".tar.gz -C "$dist" .
       - if: ${{matrix.enabled && github.ref_type != 'tag'}}
         uses: actions/upload-artifact@v7
