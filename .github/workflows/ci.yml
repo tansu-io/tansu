@@ -184,21 +184,6 @@ jobs:
       - uses: crate-ci/typos@v1.44.0
         with:
           config: typos.toml
-  third-party-license:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - env:
-          CARGO_ABOUT_VERSION: 0.8.2
-        run: |
-          cargo install "cargo-about@$CARGO_ABOUT_VERSION"
-          cargo about generate about.hbs >THIRD-PARTY-LICENSE.html
-      - uses: actions/upload-artifact@v7
-        with:
-          name: third-party-license
-          path: THIRD-PARTY-LICENSE.html
-          if-no-files-found: error
   src:
     runs-on: ubuntu-latest
     steps:
