@@ -920,8 +920,8 @@ mod tests {
 
     #[test]
     fn deflate() -> Result<()> {
-        let key = Bytes::copy_from_slice("Lorem ipsum dolor sit amet".as_bytes());
-        let value = Bytes::copy_from_slice("consectetur adipiscing elit".as_bytes());
+        let key = Bytes::from_static(b"Lorem ipsum dolor sit amet");
+        let value = Bytes::from_static(b"consectetur adipiscing elit");
 
         let producer_id = 54345;
         let producer_epoch = 32123;

@@ -39,7 +39,7 @@ pub fn services<C, S>(
     sasl_config: Option<Arc<SASLConfig>>,
 ) -> Result<TcpRouteFrame, Error>
 where
-    S: Storage,
+    S: Storage + Clone,
     C: Coordinator,
 {
     storage::services(FrameRouteService::<(), Error>::builder(), storage)

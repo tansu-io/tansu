@@ -251,10 +251,10 @@ where
                 .enable_all()
                 .build()?;
 
-            let storage = self.storage.clone();
-
             if let Ok(Some(credential)) = rt
-                .block_on(async { storage.user_scram_credential(auth_id, mechanism).await })
+                .block_on(
+                    async move { self.storage.user_scram_credential(auth_id, mechanism).await },
+                )
                 .inspect_err(|err| debug!(auth_id, ?mechanism, ?err))
             {
                 _ = request

@@ -128,7 +128,7 @@ impl FetchService {
     #[allow(clippy::too_many_arguments)]
     async fn fetch_partition<G>(
         &self,
-        ctx: Context<G>,
+        ctx: &Context<G>,
         max_wait_ms: Duration,
         min_bytes: u32,
         max_bytes: &mut u32,
@@ -242,7 +242,7 @@ impl FetchService {
     #[allow(clippy::too_many_arguments)]
     async fn fetch_topic<G>(
         &self,
-        ctx: Context<G>,
+        ctx: &Context<G>,
         max_wait_ms: Duration,
         min_bytes: u32,
         max_bytes: &mut u32,
@@ -268,7 +268,7 @@ impl FetchService {
             for fetch_partition in fetch.partitions.as_ref().unwrap_or(&Vec::new()) {
                 let partition = self
                     .fetch_partition(
-                        ctx.clone(),
+                        ctx,
                         max_wait_ms,
                         min_bytes,
                         max_bytes,
@@ -292,7 +292,7 @@ impl FetchService {
 
     pub(crate) async fn fetch<G>(
         &self,
-        ctx: Context<G>,
+        ctx: &Context<G>,
         max_wait: Duration,
         min_bytes: u32,
         max_bytes: &mut u32,
@@ -322,7 +322,7 @@ impl FetchService {
                 for (i, fetch) in enumerate {
                     let fetch_response = self
                         .fetch_topic(
-                            ctx.clone(),
+                            ctx,
                             max_wait,
                             min_bytes,
                             max_bytes,
@@ -396,7 +396,7 @@ where
             })?;
 
             self.fetch(
-                ctx,
+                &ctx,
                 max_wait_ms,
                 min_bytes,
                 &mut max_bytes,

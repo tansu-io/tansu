@@ -2658,6 +2658,8 @@ impl Storage for Postgres {
             Vec::with_capacity(topics.map(|topics| topics.len()).unwrap_or_default());
 
         for topic in topics.unwrap_or_default() {
+            debug!(?topic);
+
             responses.push(match topic {
                 TopicId::Name(name) => {
                     match self

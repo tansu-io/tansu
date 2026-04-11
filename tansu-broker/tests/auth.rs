@@ -61,7 +61,7 @@ type Broker = BytesFrameService<FrameRouteService<(), Error>>;
 
 fn broker<S>(storage: S, sasl_config: Option<Arc<SASLConfig>>) -> Result<Broker>
 where
-    S: Storage,
+    S: Storage + Clone,
 {
     storage::services(FrameRouteService::<(), Error>::builder(), storage)
         .and_then(auth::services)

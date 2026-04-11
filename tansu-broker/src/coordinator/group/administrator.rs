@@ -682,7 +682,7 @@ pub struct Controller<O> {
 
 impl<O> Controller<O>
 where
-    O: Storage,
+    O: Storage + Clone,
 {
     pub fn with_storage(storage: O) -> Result<Self> {
         Ok(Self {
@@ -695,7 +695,7 @@ where
 #[async_trait]
 impl<O> Coordinator for Controller<O>
 where
-    O: Storage,
+    O: Storage + Clone,
 {
     async fn join(
         &mut self,

@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -45,7 +45,7 @@ pub fn services<S>(
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
 where
-    S: Storage,
+    S: Storage + Clone,
 {
     [
         add_offsets_to_txn,
@@ -86,7 +86,7 @@ pub fn alter_user_scram_credentials<S>(
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
 where
-    S: Storage,
+    S: Storage + Clone,
 {
     builder
         .with_route(
@@ -107,7 +107,7 @@ pub fn describe_user_scram_credentials<S>(
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
 where
-    S: Storage,
+    S: Storage + Clone,
 {
     builder
         .with_route(
@@ -128,7 +128,7 @@ pub fn create_acls<S>(
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
 where
-    S: Storage,
+    S: Storage + Clone,
 {
     builder
         .with_route(
@@ -149,7 +149,7 @@ pub fn describe_acls<S>(
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
 where
-    S: Storage,
+    S: Storage + Clone,
 {
     builder
         .with_route(
@@ -170,7 +170,7 @@ pub fn consumer_group_describe<S>(
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
 where
-    S: Storage,
+    S: Storage + Clone,
 {
     builder
         .with_route(
@@ -191,7 +191,7 @@ pub fn create_topics<S>(
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
 where
-    S: Storage,
+    S: Storage + Clone,
 {
     builder
         .with_route(
@@ -212,7 +212,7 @@ pub fn delete_groups<S>(
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
 where
-    S: Storage,
+    S: Storage + Clone,
 {
     builder
         .with_route(
@@ -233,7 +233,7 @@ pub fn delete_records<S>(
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
 where
-    S: Storage,
+    S: Storage + Clone,
 {
     builder
         .with_route(
@@ -254,7 +254,7 @@ pub fn delete_topics<S>(
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
 where
-    S: Storage,
+    S: Storage + Clone,
 {
     builder
         .with_route(
@@ -275,7 +275,7 @@ pub fn describe_cluster<S>(
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
 where
-    S: Storage,
+    S: Storage + Clone,
 {
     builder
         .with_route(
@@ -296,7 +296,7 @@ pub fn describe_configs<S>(
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
 where
-    S: Storage,
+    S: Storage + Clone,
 {
     builder
         .with_route(
@@ -317,7 +317,7 @@ pub fn describe_groups<S>(
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
 where
-    S: Storage,
+    S: Storage + Clone,
 {
     builder
         .with_route(
@@ -338,7 +338,7 @@ pub fn describe_topic_partitions<S>(
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
 where
-    S: Storage,
+    S: Storage + Clone,
 {
     builder
         .with_route(
@@ -359,7 +359,7 @@ pub fn fetch<S>(
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
 where
-    S: Storage,
+    S: Storage + Clone,
 {
     builder
         .with_route(
@@ -380,7 +380,7 @@ pub fn find_coordinator<S>(
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
 where
-    S: Storage,
+    S: Storage + Clone,
 {
     builder
         .with_route(
@@ -401,7 +401,7 @@ pub fn incremental_alter_configs<S>(
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
 where
-    S: Storage,
+    S: Storage + Clone,
 {
     builder
         .with_route(
@@ -422,7 +422,7 @@ pub fn init_producer_id<S>(
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
 where
-    S: Storage,
+    S: Storage + Clone,
 {
     builder
         .with_route(
@@ -443,7 +443,7 @@ pub fn list_groups<S>(
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
 where
-    S: Storage,
+    S: Storage + Clone,
 {
     builder
         .with_route(
@@ -464,7 +464,7 @@ pub fn list_offsets<S>(
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
 where
-    S: Storage,
+    S: Storage + Clone,
 {
     builder
         .with_route(
@@ -485,7 +485,7 @@ pub fn list_partition_reassignments<S>(
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
 where
-    S: Storage,
+    S: Storage + Clone,
 {
     builder
         .with_route(
@@ -506,7 +506,7 @@ pub fn metadata<S>(
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
 where
-    S: Storage,
+    S: Storage + Clone,
 {
     builder
         .with_route(
@@ -527,7 +527,7 @@ pub fn produce<S>(
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
 where
-    S: Storage,
+    S: Storage + Clone,
 {
     builder
         .with_route(
@@ -548,7 +548,7 @@ pub fn get_telemetry_subscriptions<S>(
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
 where
-    S: Storage,
+    S: Storage + Clone,
 {
     builder
         .with_route(
@@ -569,7 +569,7 @@ pub fn add_offsets_to_txn<S>(
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
 where
-    S: Storage,
+    S: Storage + Clone,
 {
     builder
         .with_route(
@@ -590,7 +590,7 @@ pub fn add_partitions_to_txn<S>(
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
 where
-    S: Storage,
+    S: Storage + Clone,
 {
     builder
         .with_route(
@@ -611,7 +611,7 @@ pub fn txn_offset_commit_request<S>(
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
 where
-    S: Storage,
+    S: Storage + Clone,
 {
     builder
         .with_route(
