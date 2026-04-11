@@ -429,7 +429,7 @@ broker-memory profile="profiling": (build profile "dynostore") (tansu-broker pro
 broker-null profile="profiling": (build profile "default") (tansu-broker profile "--storage-engine=null://")
 
 clean-tansu-db:
-    rm -f tansu.db*
+    rm -f tansu.db* snapshot.db
 
 clean-lake-dir:
     rm -rf lake/*
@@ -438,7 +438,7 @@ broker-sqlite-parquet profile="dev": clean-tansu-db clean-lake-dir (build profil
 
 broker-sqlite-delta profile="profiling": docker-compose-down minio-up minio-ready-local minio-local-alias minio-lake-bucket clean-tansu-db (build profile "libsql,delta") (tansu-broker profile "--storage-engine=sqlite://tansu.db" "delta")
 
-broker-sqlite profile="profiling": clean-tansu-db (build profile "libsql") (tansu-broker profile "--silent" "--storage-engine=sqlite://tansu.db")
+broker-sqlite profile="profiling": clean-tansu-db (build profile "libsql") (tansu-broker profile "--silent" "--storage-engine='sqlite://tansu.db?vacuum_into=snapshot.db&maintenance_interval=1m'")
 
 broker-sqlite-authentication profile="profiling": (build profile "libsql") (tansu-broker profile "--authentication" "--storage-engine=sqlite://tansu.db")
 
@@ -567,3 +567,6 @@ producer-perf-1000000: (producer-perf "1000000" "1024" "25000000")
 
 ps-tansu-rss:
     ps -p $(pgrep tansu) -o rss= | awk '{print $1/1024 " MB"}'
+
+telemetry-topic-create:
+    kafka-topics --bootstrap-server ${ADVERTISED_LISTENER} --config cleanup.policy=compact --partitions=3 --replication-factor=1 --create --topic telemetry

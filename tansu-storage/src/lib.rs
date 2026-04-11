@@ -190,10 +190,13 @@ use tansu_sans_io::{
 };
 use tansu_schema::{Registry, lake::House};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, instrument};
+use tracing::{debug, instrument};
 use tracing_subscriber::filter::ParseError;
 use url::Url;
 use uuid::Uuid;
+
+#[cfg(feature = "dynostore")]
+use tracing::warn;
 
 #[cfg(feature = "dynostore")]
 mod dynostore;
@@ -2290,9 +2293,7 @@ impl Builder<i32, String, Url, Url> {
                     if k == "batch_min_size" {
                         human_units::Size::from_str(v.as_ref())
                             .map(|size| size.0)
-                            .inspect_err(
-                                |err| error!(storage = %self.storage, v = v.as_ref(), ?err),
-                            )
+                            .inspect_err(|err| warn!(storage = %self.storage, v = v.as_ref(), ?err))
                             .ok()
                             .and_then(|size| usize::try_from(size).ok())
                     } else {
@@ -2304,9 +2305,7 @@ impl Builder<i32, String, Url, Url> {
                     if k == "batch_max_delay" {
                         human_units::Duration::from_str(v.as_ref())
                             .map(|duration| duration.0)
-                            .inspect_err(
-                                |err| error!(storage = %self.storage, v = v.as_ref(), ?err),
-                            )
+                            .inspect_err(|err| warn!(storage = %self.storage, v = v.as_ref(), ?err))
                             .ok()
                     } else {
                         None
@@ -2354,18 +2353,18 @@ impl Builder<i32, String, Url, Url> {
             }),
 
             #[cfg(feature = "libsql")]
-            "sqlite" => lite::Engine::builder()
-                .storage(self.storage.clone())
-                .node(self.node_id)
-                .cluster(self.cluster_id.clone())
-                .advertised_listener(self.advertised_listener.clone())
-                .schemas(self.schema_registry)
-                .lake(self.lake_house.clone())
-                .cancellation(self.cancellation.clone())
-                .build()
-                .await
-                .map(|storage| Box::new(storage) as Box<dyn Storage>)
-                .map(Arc::new),
+            "sqlite" => {
+                lite::Engine::builder()
+                    .storage(self.storage.clone())
+                    .node(self.node_id)
+                    .cluster(self.cluster_id.clone())
+                    .advertised_listener(self.advertised_listener.clone())
+                    .schemas(self.schema_registry)
+                    .lake(self.lake_house.clone())
+                    .cancellation(self.cancellation.clone())
+                    .build()
+                    .await
+            }
 
             #[cfg(not(feature = "libsql"))]
             "sqlite" => Err(Error::FeatureNotEnabled {

@@ -19,7 +19,7 @@ use std::{
     marker::PhantomData,
     ops::Deref,
     result,
-    str::FromStr as _,
+    str::FromStr,
     sync::{Arc, LazyLock, Mutex},
     time::{Duration, SystemTime},
 };
@@ -1880,8 +1880,27 @@ impl Storage for Engine {
     }
 }
 
+#[derive(Debug, Default)]
+enum Mode {
+    #[default]
+    Delegate,
+    Direct,
+}
+
+impl FromStr for Mode {
+    type Err = Error;
+
+    fn from_str(s: &str) -> result::Result<Self, Self::Err> {
+        match s {
+            "direct" => Ok(Self::Direct),
+            "delegate" => Ok(Self::Delegate),
+            otherwise => Err(Error::Message(otherwise.to_owned())),
+        }
+    }
+}
+
 impl Builder<String, i32, Url, Url> {
-    pub(crate) async fn build(self) -> Result<Engine> {
+    pub(crate) async fn build(self) -> Result<Arc<Box<dyn Storage>>> {
         debug!(domain = self.storage.domain(), path = self.storage.path());
 
         let mut path = env::current_dir().inspect(|current_dir| debug!(?current_dir))?;
@@ -1918,13 +1937,55 @@ impl Builder<String, i32, Url, Url> {
                 .inspect_err(|err| error!(name, ?err));
         }
 
-        let (sender, receiver) = bounded_channel(1);
-        let mut server = JoinSet::new();
+        match self
+            .storage
+            .query_pairs()
+            .find_map(|(k, v)| {
+                if k == "mode" {
+                    Mode::from_str(v.as_ref()).ok()
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default()
+        {
+            Mode::Delegate => {
+                let (sender, receiver) = bounded_channel(1);
+                let mut server = JoinSet::new();
 
-        let _ = {
-            let cancellation = self.cancellation.clone();
+                let _ = {
+                    let cancellation = self.cancellation.clone();
 
-            let storage = Delegate {
+                    let storage = Delegate {
+                        cluster: self.cluster,
+                        node: self.node,
+                        advertised_listener: self.advertised_listener,
+                        pool: Pool::builder(ConnectionManager {
+                            db: Arc::new(Mutex::new(db)),
+                        })
+                        .build()?,
+                        schemas: self.schemas,
+                        lake: self.lake,
+                        vacuum_into,
+                    };
+
+                    server.spawn(async move {
+                        let server = ChannelRequestLayer::new(cancellation)
+                            .into_layer(RequestStorageService::new(storage));
+
+                        server.serve(Context::default(), receiver).await
+                    })
+                };
+
+                let inner = RequestChannelService::new(sender);
+
+                Ok(Arc::new(Box::new(Engine {
+                    server: Arc::new(server),
+                    inner,
+                }) as Box<dyn Storage>))
+            }
+
+            Mode::Direct => Ok(Arc::new(Box::new(Delegate {
                 cluster: self.cluster,
                 node: self.node,
                 advertised_listener: self.advertised_listener,
@@ -1935,22 +1996,8 @@ impl Builder<String, i32, Url, Url> {
                 schemas: self.schemas,
                 lake: self.lake,
                 vacuum_into,
-            };
-
-            server.spawn(async move {
-                let server = ChannelRequestLayer::new(cancellation)
-                    .into_layer(RequestStorageService::new(storage));
-
-                server.serve(Context::default(), receiver).await
-            })
-        };
-
-        let inner = RequestChannelService::new(sender);
-
-        Ok(Engine {
-            server: Arc::new(server),
-            inner,
-        })
+            }) as Box<dyn Storage>)),
+        }
     }
 }
 
