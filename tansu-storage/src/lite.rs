@@ -1883,7 +1883,7 @@ impl Storage for Engine {
 #[derive(Debug, Default)]
 enum Mode {
     #[default]
-    Delegate,
+    Mpsc,
     Direct,
 }
 
@@ -1893,7 +1893,7 @@ impl FromStr for Mode {
     fn from_str(s: &str) -> result::Result<Self, Self::Err> {
         match s {
             "direct" => Ok(Self::Direct),
-            "delegate" => Ok(Self::Delegate),
+            "mpsc" => Ok(Self::Mpsc),
             otherwise => Err(Error::Message(otherwise.to_owned())),
         }
     }
@@ -1949,7 +1949,7 @@ impl Builder<String, i32, Url, Url> {
             })
             .unwrap_or_default()
         {
-            Mode::Delegate => {
+            Mode::Mpsc => {
                 let (sender, receiver) = bounded_channel(1);
                 let mut server = JoinSet::new();
 
