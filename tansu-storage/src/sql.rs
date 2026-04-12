@@ -142,6 +142,26 @@ pub(crate) static SQL: LazyLock<Cache> = LazyLock::new(|| {
             include_sql!("sql/list_latest_offset_uncommitted.sql"),
         ),
         (
+            "lite/policy_compact_compaction.sql",
+            include_sql!("lite/policy_compact_compaction.sql"),
+        ),
+        (
+            "lite/policy_compact_delete.sql",
+            include_sql!("lite/policy_compact_delete.sql"),
+        ),
+        (
+            "lite/policy_compact_distinct_k.sql",
+            include_sql!("lite/policy_compact_distinct_k.sql"),
+        ),
+        (
+            "lite/policy_compact_max_offset_id.sql",
+            include_sql!("lite/policy_compact_max_offset_id.sql"),
+        ),
+        (
+            "lite/policy_compact_topitions.sql",
+            include_sql!("lite/policy_compact_topitions.sql"),
+        ),
+        (
             "lite/policy_delete.sql",
             include_sql!("lite/policy_delete.sql"),
         ),
