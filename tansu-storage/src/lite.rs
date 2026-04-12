@@ -4575,6 +4575,8 @@ impl Storage for Delegate {
     }
 
     async fn maintain(&self, now: SystemTime) -> Result<()> {
+        self.vacuum_into().await?;
+
         let Ok(_permit) = self.maintenance.try_acquire() else {
             return Ok(());
         };
@@ -4586,8 +4588,6 @@ impl Storage for Delegate {
 
         let compacted = self.policy_compact().await?;
         debug!(compacted);
-
-        self.vacuum_into().await?;
 
         {
             let connection = self.pool.get().await?;
