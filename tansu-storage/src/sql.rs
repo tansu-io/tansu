@@ -211,7 +211,15 @@ pub(crate) static SQL: LazyLock<Cache> = LazyLock::new(|| {
             include_sql!("sql/record_delete_by_topic.sql"),
         ),
         ("record_fetch.sql", include_sql!("sql/record_fetch.sql")),
+        (
+            "record_fetch_keyed.sql",
+            include_sql!("sql/record_fetch_keyed.sql"),
+        ),
         ("record_fetch_pg.sql", include_sql!("pg/record_fetch.sql")),
+        (
+            "record_fetch_pg_keyed.sql",
+            include_sql!("pg/record_fetch_keyed.sql"),
+        ),
         ("record_insert.sql", include_sql!("sql/record_insert.sql")),
         (
             "register_broker.sql",

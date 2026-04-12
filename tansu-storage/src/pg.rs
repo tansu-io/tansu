@@ -1744,13 +1744,53 @@ impl Storage for Postgres {
         max_bytes: u32,
         isolation_level: IsolationLevel,
     ) -> Result<Vec<deflated::Batch>> {
-        let high_watermark = self.offset_stage(topition).await.map(|offset_stage| {
-            if isolation_level == IsolationLevel::ReadCommitted {
-                offset_stage.last_stable
+        let (base_topic, key_filter): (&str, Option<&str>) =
+            if let Some((t, k)) = topition.topic().split_once('/') {
+                let is_virtual = self
+                    .describe_config(t, ConfigResource::Topic, None)
+                    .await
+                    .map(|result| {
+                        result
+                            .configs
+                            .as_ref()
+                            .and_then(|configs| {
+                                configs
+                                    .iter()
+                                    .find(|c| c.name.as_str() == "tansu.virtual")
+                                    .and_then(|c| c.value.as_deref())
+                                    .and_then(|v| bool::from_str(v).ok())
+                            })
+                            .unwrap_or_default()
+                    })
+                    .unwrap_or_default();
+
+                if is_virtual {
+                    (t, Some(k))
+                } else {
+                    (topition.topic(), None)
+                }
             } else {
-                offset_stage.high_watermark
-            }
-        })?;
+                (topition.topic(), None)
+            };
+
+        let base_topition;
+        let effective_topition: &Topition = if key_filter.is_some() {
+            base_topition = Topition::new(base_topic, topition.partition());
+            &base_topition
+        } else {
+            topition
+        };
+
+        let high_watermark = self
+            .offset_stage(effective_topition)
+            .await
+            .map(|offset_stage| {
+                if isolation_level == IsolationLevel::ReadCommitted {
+                    offset_stage.last_stable
+                } else {
+                    offset_stage.high_watermark
+                }
+            })?;
 
         debug!(
             cluster = self.cluster,
@@ -1765,8 +1805,25 @@ impl Storage for Postgres {
         let mut c = self.connection().await?;
         let tx = c.transaction().await?;
 
-        let records = self
-            .tx_prepare_query(
+        let records = if let Some(key) = key_filter {
+            let key_bytes = key.as_bytes().to_vec();
+            self.tx_prepare_query(
+                &tx,
+                "record_fetch_pg_keyed.sql",
+                &[
+                    &self.cluster,
+                    &base_topic,
+                    &topition.partition(),
+                    &offset,
+                    &(max_bytes as i64),
+                    &high_watermark,
+                    &key_bytes,
+                ],
+            )
+            .await
+            .inspect_err(|err| error!(?err))?
+        } else {
+            self.tx_prepare_query(
                 &tx,
                 "record_fetch_pg.sql",
                 &[
@@ -1779,7 +1836,8 @@ impl Storage for Postgres {
                 ],
             )
             .await
-            .inspect_err(|err| error!(?err))?;
+            .inspect_err(|err| error!(?err))?
+        };
 
         let mut batches = vec![];
 
