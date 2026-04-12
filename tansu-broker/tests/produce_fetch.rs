@@ -24,7 +24,7 @@ use tansu_sans_io::{
     add_partitions_to_txn_response::{
         AddPartitionsToTxnPartitionResult, AddPartitionsToTxnTopicResult,
     },
-    create_topics_request::CreatableTopic,
+    create_topics_request::{CreatableTopic, CreatableTopicConfig},
     record::{Record, inflated},
 };
 use tansu_storage::{Storage, Topition, TxnAddPartitionsRequest};
@@ -628,7 +628,12 @@ where
                 .num_partitions(1)
                 .replication_factor(0)
                 .assignments(Some([].into()))
-                .configs(Some([].into())),
+                .configs(Some(
+                    [CreatableTopicConfig::default()
+                        .name("tansu.virtual".into())
+                        .value(Some("true".into()))]
+                    .into(),
+                )),
             false,
         )
         .await?;

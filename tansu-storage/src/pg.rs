@@ -1744,11 +1744,34 @@ impl Storage for Postgres {
         max_bytes: u32,
         isolation_level: IsolationLevel,
     ) -> Result<Vec<deflated::Batch>> {
-        let (base_topic, key_filter): (&str, Option<&str>) = topition
-            .topic()
-            .split_once('/')
-            .map(|(t, k)| (t, Some(k)))
-            .unwrap_or((topition.topic(), None));
+        let (base_topic, key_filter): (&str, Option<&str>) =
+            if let Some((t, k)) = topition.topic().split_once('/') {
+                let is_virtual = self
+                    .describe_config(t, ConfigResource::Topic, None)
+                    .await
+                    .map(|result| {
+                        result
+                            .configs
+                            .as_ref()
+                            .and_then(|configs| {
+                                configs
+                                    .iter()
+                                    .find(|c| c.name.as_str() == "tansu.virtual")
+                                    .and_then(|c| c.value.as_deref())
+                                    .and_then(|v| bool::from_str(v).ok())
+                            })
+                            .unwrap_or_default()
+                    })
+                    .unwrap_or_default();
+
+                if is_virtual {
+                    (t, Some(k))
+                } else {
+                    (topition.topic(), None)
+                }
+            } else {
+                (topition.topic(), None)
+            };
 
         let base_topition;
         let effective_topition: &Topition = if key_filter.is_some() {
