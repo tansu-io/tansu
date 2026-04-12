@@ -337,7 +337,7 @@ otel: build docker-compose-down db-up minio-up minio-ready-local minio-local-ali
 otel-up: docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up tansu-up
 
 tansu-broker profile *args:
-    target/{{ replace(profile, "dev", "debug") }}/tansu broker {{ args }} 2>&1 | tee broker.log
+    target/{{ replace(profile, "dev", "debug") }}/tansu broker {{ args }} 2>&1 >broker.log
 
 flamegraph-tansu-broker profile *args:
     #!/usr/bin/env zsh

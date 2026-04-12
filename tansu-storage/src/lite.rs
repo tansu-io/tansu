@@ -13,11 +13,12 @@
 // limitations under the License.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     env,
     fmt::Debug,
     marker::PhantomData,
     ops::Deref,
+    path::PathBuf,
     result,
     str::FromStr,
     sync::{Arc, LazyLock, Mutex},
@@ -30,6 +31,7 @@ use crate::{
     RequestChannelService, RequestStorageService, Result, ScramCredential, Storage, TopicId,
     Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse, TxnOffsetCommitRequest, TxnState,
     UpdateError, Version, bounded_channel,
+    proxy::SemaphoreProxy,
     sql::{Cache, default_hash, idempotent_sequence_check, remove_comments},
 };
 use async_trait::async_trait;
@@ -74,9 +76,9 @@ use tansu_schema::{
     Registry,
     lake::{House, LakeHouse as _},
 };
-use tokio::task::JoinSet;
+use tokio::{fs::rename, sync::Semaphore, task::JoinSet};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, instrument};
+use tracing::{debug, error, instrument, warn};
 use url::Url;
 use uuid::Uuid;
 
@@ -219,12 +221,16 @@ pub(crate) struct Delegate {
 
     lake: Option<House>,
 
-    vacuum_into: Option<String>,
+    vacuum_into: Option<PathBuf>,
+
+    maintenance: Arc<Semaphore>,
+    compaction: CompactionMode,
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct ConnectionManager {
     db: Arc<Mutex<Database>>,
+    busy_timeout: Duration,
 }
 
 pub(crate) struct PoolConnection {
@@ -517,6 +523,8 @@ impl managed::Manager for ConnectionManager {
             let db = self.db.lock()?;
             db.connect()
         }?;
+
+        connection.busy_timeout(self.busy_timeout)?;
 
         PoolConnection::new(connection)
             .await
@@ -1127,34 +1135,173 @@ impl Delegate {
     }
 
     #[instrument(skip(self), ret)]
+    async fn policy_compact_delete(&self, topition: i64, offset_id: i64) -> Result<u64> {
+        let pc = self.connection().await?;
+
+        pc.execute("lite/policy_compact_delete.sql", (topition, offset_id))
+            .await
+            .map(|rows| rows as u64)
+            .inspect(|rows| debug!(rows))
+            .map_err(Into::into)
+    }
+
+    #[instrument(skip(self))]
+    async fn policy_compact_compaction(
+        &self,
+        topition: i64,
+        key: &[u8],
+        max_offset_id: i64,
+    ) -> Result<Vec<i64>> {
+        let pc = self.connection().await?;
+
+        let mut rows = pc
+            .query(
+                "lite/policy_compact_compaction.sql",
+                (topition, key, max_offset_id),
+            )
+            .await?;
+
+        let mut offsets = Vec::new();
+
+        while let Some(row) = rows.next().await? {
+            let offset = row.get::<i64>(0)?;
+            offsets.push(offset);
+        }
+
+        Ok(offsets)
+    }
+
+    #[instrument(skip(self))]
+    async fn policy_compact_max_offset_id(&self, topition: i64, key: &[u8]) -> Result<Option<i64>> {
+        let pc = self.connection().await?;
+
+        if let Some(row) = pc
+            .query_opt("lite/policy_compact_max_offset_id.sql", (topition, key))
+            .await?
+        {
+            row.get::<i64>(0).map(Some).map_err(Into::into)
+        } else {
+            Ok(None)
+        }
+        .inspect(|max_offset| debug!(max_offset))
+    }
+
+    #[instrument(skip(self))]
+    async fn policy_compact_distinct_k(&self, topition: i64) -> Result<BTreeSet<Vec<u8>>> {
+        let pc = self.connection().await?;
+
+        let mut rows = pc
+            .query("lite/policy_compact_distinct_k.sql", [topition])
+            .await?;
+
+        let mut keys = BTreeSet::new();
+
+        while let Some(row) = rows.next().await? {
+            if let Some(key) = row.get::<Option<Vec<u8>>>(0)? {
+                _ = keys.insert(key);
+            }
+        }
+
+        debug!(keys = keys.len());
+
+        Ok(keys)
+    }
+
+    #[instrument(skip(self))]
+    async fn policy_compact_topitions(&self) -> Result<BTreeSet<i64>> {
+        let pc = self.connection().await?;
+
+        let mut rows = pc
+            .query("lite/policy_compact_topitions.sql", [self.cluster.as_str()])
+            .await?;
+
+        let mut topitions = BTreeSet::new();
+
+        while let Some(row) = rows.next().await? {
+            let topition = row.get::<i64>(0)?;
+            _ = topitions.insert(topition);
+        }
+
+        Ok(topitions)
+    }
+
+    #[instrument(skip(self))]
     async fn policy_compact(&self) -> Result<u64> {
         let start = SystemTime::now();
 
-        let pc = self.connection().await?;
-        let tx = pc.transaction().await?;
+        match self.compaction {
+            CompactionMode::Single => {
+                let pc = self.connection().await?;
 
-        let compacted = pc
-            .execute("policy_compact.sql", [self.cluster.as_str()])
-            .await? as u64;
+                pc.execute("policy_compact.sql", [self.cluster.as_str()])
+                    .await
+                    .map(|compacted| compacted as u64)
+                    .inspect(|_| {
+                        DELEGATE_REQUEST_DURATION.record(
+                            elapsed_millis(start),
+                            &[KeyValue::new("operation", "policy_compact_single")],
+                        )
+                    })
+                    .map_err(Into::into)
+            }
+            CompactionMode::Multi => {
+                let mut compacted = 0;
 
-        tx.commit()
-            .await
-            .map_err(Into::into)
-            .and(Ok(compacted))
-            .inspect(|_| {
-                DELEGATE_REQUEST_DURATION.record(
-                    elapsed_millis(start),
-                    &[KeyValue::new("operation", "policy_compact")],
-                )
-            })
+                for topition in self.policy_compact_topitions().await? {
+                    debug!(topition);
+
+                    for key in self.policy_compact_distinct_k(topition).await? {
+                        debug!(key = ?&key[..]);
+
+                        if let Some(max_offset_id) = self
+                            .policy_compact_max_offset_id(topition, &key[..])
+                            .await?
+                        {
+                            debug!(max_offset_id);
+
+                            for offset in self
+                                .policy_compact_compaction(topition, &key[..], max_offset_id)
+                                .await?
+                            {
+                                debug!(offset);
+
+                                compacted += self.policy_compact_delete(topition, offset).await?;
+                            }
+                        }
+                    }
+                }
+
+                Ok(compacted).inspect(|_| {
+                    DELEGATE_REQUEST_DURATION.record(
+                        elapsed_millis(start),
+                        &[KeyValue::new("operation", "policy_compact_multi")],
+                    )
+                })
+            }
+        }
     }
 
-    #[instrument(skip(self), ret)]
+    #[instrument(skip(self))]
     async fn vacuum_into(&self) -> Result<()> {
-        if let Some(vacuum_into) = self.vacuum_into.as_deref() {
-            let pc = self.connection().await?;
-            let rows = pc.execute("lite/vacuum_into.sql", [vacuum_into]).await? as u64;
-            debug!(vacuum_into, rows);
+        if let Some(vacuum_into) = self
+            .vacuum_into
+            .as_deref()
+            .inspect(|vacuum_into| debug!(vacuum_into = vacuum_into.to_str()))
+        {
+            let mut temporary = PathBuf::from(vacuum_into);
+            if temporary.add_extension("temporary") {
+                debug!(temporary = temporary.to_str());
+
+                if let Some(vacuum_temporary) = temporary.to_str() {
+                    let pc = self.connection().await?;
+                    let rows = pc
+                        .execute("lite/vacuum_into.sql", [vacuum_temporary])
+                        .await? as u64;
+
+                    rename(temporary, vacuum_into).await?;
+                    debug!(vacuum_into = vacuum_into.to_str(), rows);
+                }
+            }
         }
 
         Ok(())
@@ -1168,25 +1315,20 @@ impl Delegate {
         let retention_ms = u64::try_from(Duration::from_hours(7 * 24).as_millis())?;
 
         let pc = self.connection().await?;
-        let tx = pc.transaction().await?;
 
-        let deleted = pc
-            .execute(
-                "lite/policy_delete.sql",
-                (self.cluster.as_str(), now, retention_ms),
+        pc.execute(
+            "lite/policy_delete.sql",
+            (self.cluster.as_str(), now, retention_ms),
+        )
+        .await
+        .map(|deleted| deleted as u64)
+        .map_err(Into::into)
+        .inspect(|_| {
+            DELEGATE_REQUEST_DURATION.record(
+                elapsed_millis(start),
+                &[KeyValue::new("operation", "policy_delete")],
             )
-            .await? as u64;
-
-        tx.commit()
-            .await
-            .map_err(Into::into)
-            .and(Ok(deleted))
-            .inspect(|_| {
-                DELEGATE_REQUEST_DURATION.record(
-                    elapsed_millis(start),
-                    &[KeyValue::new("operation", "policy_delete")],
-                )
-            })
+        })
     }
 }
 
@@ -1880,20 +2022,41 @@ impl Storage for Engine {
     }
 }
 
-#[derive(Debug, Default)]
-enum Mode {
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+enum CompactionMode {
+    Single,
     #[default]
-    Mpsc,
-    Direct,
+    Multi,
 }
 
-impl FromStr for Mode {
+impl FromStr for CompactionMode {
+    type Err = Error;
+
+    fn from_str(s: &str) -> result::Result<Self, Self::Err> {
+        match s {
+            "single" => Ok(Self::Single),
+            "multi" => Ok(Self::Multi),
+            otherwise => Err(Error::Message(otherwise.to_owned())),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+enum CommunicationMode {
+    Mpsc,
+    Direct,
+    #[default]
+    Semaphore,
+}
+
+impl FromStr for CommunicationMode {
     type Err = Error;
 
     fn from_str(s: &str) -> result::Result<Self, Self::Err> {
         match s {
             "direct" => Ok(Self::Direct),
             "mpsc" => Ok(Self::Mpsc),
+            "semaphore" => Ok(Self::Semaphore),
             otherwise => Err(Error::Message(otherwise.to_owned())),
         }
     }
@@ -1919,22 +2082,51 @@ impl Builder<String, i32, Url, Url> {
 
         let vacuum_into = self.storage.query_pairs().find_map(|(k, v)| {
             if k == "vacuum_into" {
-                Some(v.to_string())
+                Some(PathBuf::from(v.as_ref()))
             } else {
                 None
             }
         });
 
+        let busy_timeout = self
+            .storage
+            .query_pairs()
+            .find_map(|(k, v)| {
+                if k == "busy_timeout" {
+                    human_units::Duration::from_str(v.as_ref())
+                        .map(|duration| duration.0)
+                        .inspect_err(|err| warn!(storage = %self.storage, v = v.as_ref(), ?err))
+                        .ok()
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(Duration::from_secs(5));
+
+        let compaction = self
+            .storage
+            .query_pairs()
+            .find_map(|(k, v)| {
+                if k == "compaction" {
+                    CompactionMode::from_str(v.as_ref()).ok()
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default();
+
         let db = libsql::Builder::new_local(path).build().await?;
 
-        let connection = db.connect()?;
+        {
+            let connection = db.connect()?;
 
-        for (name, ddl) in DDL.iter() {
-            _ = connection
-                .execute(ddl.as_str(), ())
-                .await
-                .inspect(|rows| debug!(name, rows))
-                .inspect_err(|err| error!(name, ?err));
+            for (name, ddl) in DDL.iter() {
+                _ = connection
+                    .execute(ddl.as_str(), ())
+                    .await
+                    .inspect(|rows| debug!(name, rows))
+                    .inspect_err(|err| error!(name, ?err));
+            }
         }
 
         match self
@@ -1942,14 +2134,14 @@ impl Builder<String, i32, Url, Url> {
             .query_pairs()
             .find_map(|(k, v)| {
                 if k == "mode" {
-                    Mode::from_str(v.as_ref()).ok()
+                    CommunicationMode::from_str(v.as_ref()).ok()
                 } else {
                     None
                 }
             })
             .unwrap_or_default()
         {
-            Mode::Mpsc => {
+            CommunicationMode::Mpsc => {
                 let (sender, receiver) = bounded_channel(1);
                 let mut server = JoinSet::new();
 
@@ -1962,11 +2154,14 @@ impl Builder<String, i32, Url, Url> {
                         advertised_listener: self.advertised_listener,
                         pool: Pool::builder(ConnectionManager {
                             db: Arc::new(Mutex::new(db)),
+                            busy_timeout,
                         })
                         .build()?,
                         schemas: self.schemas,
                         lake: self.lake,
                         vacuum_into,
+                        maintenance: Arc::new(Semaphore::new(1)),
+                        compaction,
                     };
 
                     server.spawn(async move {
@@ -1985,18 +2180,37 @@ impl Builder<String, i32, Url, Url> {
                 }) as Box<dyn Storage>))
             }
 
-            Mode::Direct => Ok(Arc::new(Box::new(Delegate {
+            CommunicationMode::Direct => Ok(Arc::new(Box::new(Delegate {
                 cluster: self.cluster,
                 node: self.node,
                 advertised_listener: self.advertised_listener,
                 pool: Pool::builder(ConnectionManager {
                     db: Arc::new(Mutex::new(db)),
+                    busy_timeout,
                 })
                 .build()?,
                 schemas: self.schemas,
                 lake: self.lake,
                 vacuum_into,
+                maintenance: Arc::new(Semaphore::new(1)),
+                compaction,
             }) as Box<dyn Storage>)),
+
+            CommunicationMode::Semaphore => Ok(Arc::new(Box::new(SemaphoreProxy::new(Delegate {
+                cluster: self.cluster,
+                node: self.node,
+                advertised_listener: self.advertised_listener,
+                pool: Pool::builder(ConnectionManager {
+                    db: Arc::new(Mutex::new(db)),
+                    busy_timeout,
+                })
+                .build()?,
+                schemas: self.schemas,
+                lake: self.lake,
+                vacuum_into,
+                maintenance: Arc::new(Semaphore::new(1)),
+                compaction,
+            })) as Box<dyn Storage>)),
         }
     }
 }
@@ -4361,6 +4575,10 @@ impl Storage for Delegate {
     }
 
     async fn maintain(&self, now: SystemTime) -> Result<()> {
+        let Ok(_permit) = self.maintenance.try_acquire() else {
+            return Ok(());
+        };
+
         let start = SystemTime::now();
 
         let deleted = self.policy_delete(now).await?;

@@ -189,6 +189,7 @@ use tansu_sans_io::{
     txn_offset_commit_response::TxnOffsetCommitResponseTopic,
 };
 use tansu_schema::{Registry, lake::House};
+use tokio::sync::AcquireError;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, instrument};
 use tracing_subscriber::filter::ParseError;
@@ -243,6 +244,8 @@ mod limbo;
 /// Storage Errors
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum Error {
+    Acquire(Arc<AcquireError>),
+
     Api(ErrorCode),
 
     ChronoParse(#[from] chrono::ParseError),
@@ -370,6 +373,12 @@ impl From<TryGetError> for Error {
 impl<T> From<PoisonError<T>> for Error {
     fn from(_value: PoisonError<T>) -> Self {
         Self::Poison
+    }
+}
+
+impl From<AcquireError> for Error {
+    fn from(value: AcquireError) -> Self {
+        Self::Acquire(Arc::new(value))
     }
 }
 
