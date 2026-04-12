@@ -2327,13 +2327,30 @@ impl Storage for Delegate {
 
         debug!(?topition, offset, min_bytes, max_bytes, ?isolation_level);
 
-        let high_watermark = self.offset_stage(topition).await.map(|offset_stage| {
-            if isolation_level == IsolationLevel::ReadCommitted {
-                offset_stage.last_stable
-            } else {
-                offset_stage.high_watermark
-            }
-        })?;
+        let (base_topic, key_filter): (&str, Option<&str>) = topition
+            .topic()
+            .split_once('/')
+            .map(|(t, k)| (t, Some(k)))
+            .unwrap_or((topition.topic(), None));
+
+        let base_topition;
+        let effective_topition: &Topition = if key_filter.is_some() {
+            base_topition = Topition::new(base_topic, topition.partition());
+            &base_topition
+        } else {
+            topition
+        };
+
+        let high_watermark = self
+            .offset_stage(effective_topition)
+            .await
+            .map(|offset_stage| {
+                if isolation_level == IsolationLevel::ReadCommitted {
+                    offset_stage.last_stable
+                } else {
+                    offset_stage.high_watermark
+                }
+            })?;
 
         debug!(
             cluster = self.cluster,
@@ -2347,8 +2364,24 @@ impl Storage for Delegate {
 
         let c = self.connection().await?;
 
-        let mut records = c
-            .query(
+        let mut records = if let Some(key) = key_filter {
+            let key_bytes = key.as_bytes().to_vec();
+            c.query(
+                "record_fetch_keyed.sql",
+                (
+                    self.cluster.as_str(),
+                    base_topic,
+                    topition.partition(),
+                    offset,
+                    (max_bytes as i64),
+                    high_watermark,
+                    key_bytes,
+                ),
+            )
+            .await
+            .inspect_err(|err| error!(?err))?
+        } else {
+            c.query(
                 "record_fetch.sql",
                 (
                     self.cluster.as_str(),
@@ -2360,7 +2393,8 @@ impl Storage for Delegate {
                 ),
             )
             .await
-            .inspect_err(|err| error!(?err))?;
+            .inspect_err(|err| error!(?err))?
+        };
 
         let mut batches = vec![];
 
