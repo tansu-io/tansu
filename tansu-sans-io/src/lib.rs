@@ -547,14 +547,13 @@ impl Frame {
             body,
         };
 
-        let mut encoded = frame
-            .maximum_allocation_size()
-            .map(BytesMut::with_capacity)
-            .map(|encoded| encoded.writer())?;
-
-        let mut serializer = Encoder::request(&mut encoded);
+        let mut serializer = Encoder::request(
+            frame
+                .maximum_allocation_size()
+                .map(BytesMut::with_capacity)?,
+        );
         frame.serialize(&mut serializer)?;
-        fix_length(encoded.into_inner())
+        fix_length(BytesMut::from(serializer))
     }
 
     /// deserialize bytes into an API request frame
@@ -565,11 +564,11 @@ impl Frame {
         let mut reader = encoded.reader();
         let mut deserializer = Decoder::request(&mut reader);
         Frame::deserialize(&mut deserializer)
-            .inspect(|_frame| debug!(elapsed_millis = Self::elapsed_millis(start)))
+            .inspect(|frame| debug!(?frame, elapsed_millis = Self::elapsed_millis(start)))
     }
 
     /// serialize an API response into a frame of bytes
-    #[instrument(skip_all)]
+    #[instrument(skip(header, body))]
     pub fn response(header: Header, body: Body, api_key: i16, api_version: i16) -> Result<Bytes> {
         let frame = Frame {
             size: 0,
@@ -577,14 +576,15 @@ impl Frame {
             body,
         };
 
-        let mut encoded = frame
-            .maximum_allocation_size()
-            .map(BytesMut::with_capacity)
-            .map(|encoded| encoded.writer())?;
-
-        let mut serializer = Encoder::response(&mut encoded, api_key, api_version);
-        frame.serialize(&mut serializer)?;
-        fix_length(encoded.into_inner())
+        let mut encoder = Encoder::response(
+            frame
+                .maximum_allocation_size()
+                .map(BytesMut::with_capacity)?,
+            api_key,
+            api_version,
+        );
+        frame.serialize(&mut encoder)?;
+        fix_length(BytesMut::from(encoder))
     }
 
     /// deserialize bytes into an API response frame
@@ -1813,6 +1813,12 @@ pub struct ControlBatch {
     pub r#type: i16,
 }
 
+impl ByteSize for ControlBatch {
+    fn size_in_bytes(&self) -> Result<usize> {
+        Ok(size_of_val(&self.version) + size_of_val(&self.r#type))
+    }
+}
+
 impl ControlBatch {
     const ABORT: i16 = 0;
     const COMMIT: i16 = 1;
@@ -1858,10 +1864,10 @@ impl TryFrom<ControlBatch> for Bytes {
     type Error = Error;
 
     fn try_from(value: ControlBatch) -> Result<Self, Self::Error> {
-        let mut b = BytesMut::new().writer();
-        let mut serializer = Encoder::new(&mut b);
-        value.serialize(&mut serializer)?;
-        Ok(Bytes::from(b.into_inner()))
+        let mut encoder = Encoder::new(BytesMut::with_capacity(value.size_in_bytes()?));
+        value.serialize(&mut encoder)?;
+
+        Ok(Bytes::from(encoder))
     }
 }
 
@@ -1870,6 +1876,12 @@ impl TryFrom<ControlBatch> for Bytes {
 pub struct EndTransactionMarker {
     pub version: i16,
     pub coordinator_epoch: i32,
+}
+
+impl ByteSize for EndTransactionMarker {
+    fn size_in_bytes(&self) -> Result<usize> {
+        Ok(size_of_val(&self.version) + size_of_val(&self.coordinator_epoch))
+    }
 }
 
 impl TryFrom<Bytes> for EndTransactionMarker {
@@ -1886,10 +1898,9 @@ impl TryFrom<EndTransactionMarker> for Bytes {
     type Error = Error;
 
     fn try_from(value: EndTransactionMarker) -> Result<Self, Self::Error> {
-        let mut b = BytesMut::new().writer();
-        let mut serializer = Encoder::new(&mut b);
-        value.serialize(&mut serializer)?;
-        Ok(Bytes::from(b.into_inner()))
+        let mut encoder = Encoder::new(BytesMut::with_capacity(value.size_in_bytes()?));
+        value.serialize(&mut encoder)?;
+        Ok(Bytes::from(encoder))
     }
 }
 
