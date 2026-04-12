@@ -56,7 +56,7 @@ static SEMAPHORE_ACQUIRE_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
             .into(),
         )
         .with_unit("ms")
-        .with_description("Storage proxy semaphore acquistion duration in ms")
+        .with_description("Storage proxy semaphore acquisition duration in ms")
         .build()
 });
 
