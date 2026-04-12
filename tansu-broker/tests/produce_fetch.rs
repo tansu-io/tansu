@@ -605,6 +605,116 @@ where
     Ok(())
 }
 
+pub async fn virtual_keyed_topic_fetch<G>(
+    cluster_id: impl Into<String>,
+    broker_id: i32,
+    sc: G,
+) -> Result<()>
+where
+    G: Storage + Clone,
+{
+    register_broker(cluster_id, broker_id, sc.clone()).await?;
+
+    let topic_name: String = alphanumeric_string(15);
+    debug!(?topic_name);
+
+    let partition = 0;
+    let transaction_timeout_ms = 10_000;
+
+    let topic_id = sc
+        .create_topic(
+            CreatableTopic::default()
+                .name(topic_name.clone())
+                .num_partitions(1)
+                .replication_factor(0)
+                .assignments(Some([].into()))
+                .configs(Some([].into())),
+            false,
+        )
+        .await?;
+    debug!(?topic_id);
+
+    let topition = Topition::new(topic_name.clone(), partition);
+
+    const KEY_A: &[u8] = b"CC54 RYD";
+    const KEY_B: &[u8] = b"NN03 RYB";
+
+    for (key, value) in [
+        (KEY_A, b"telemetry a1" as &[u8]),
+        (KEY_B, b"telemetry b1"),
+        (KEY_A, b"telemetry a2"),
+        (KEY_B, b"telemetry b2"),
+        (KEY_A, b"telemetry a3"),
+        (KEY_B, b"telemetry b3"),
+    ] {
+        let producer = sc
+            .init_producer(None, transaction_timeout_ms, Some(-1), Some(-1))
+            .await?;
+
+        let batch = inflated::Batch::builder()
+            .record(
+                Record::builder()
+                    .key(Some(Bytes::copy_from_slice(key)))
+                    .value(Some(Bytes::copy_from_slice(value))),
+            )
+            .producer_id(producer.id)
+            .producer_epoch(producer.epoch)
+            .build()
+            .and_then(TryInto::try_into)?;
+
+        let offset = sc.produce(None, &topition, batch).await?;
+        debug!(offset);
+    }
+
+    let offset = 0;
+    let min_bytes = 1;
+    let max_bytes = 50 * 1_024;
+    let isolation = IsolationLevel::ReadUncommitted;
+
+    let collect_records = |batches: Vec<tansu_sans_io::record::deflated::Batch>| {
+        batches.into_iter().try_fold(Vec::new(), |mut acc, batch| {
+            inflated::Batch::try_from(batch).map(|inflated| {
+                acc.extend(inflated.records);
+                acc
+            })
+        })
+    };
+
+    // Fetch the base topic — all six records
+    let all_records = sc
+        .fetch(&topition, offset, min_bytes, max_bytes, isolation)
+        .await
+        .and_then(|batches| collect_records(batches).map_err(Into::into))?;
+    debug!(?all_records);
+    assert_eq!(6, all_records.len());
+
+    // Fetch virtual keyed topic for KEY_A — three records
+    let keyed_topition_a = Topition::new(format!("{topic_name}/CC54 RYD"), partition);
+    let key_a_records = sc
+        .fetch(&keyed_topition_a, offset, min_bytes, max_bytes, isolation)
+        .await
+        .and_then(|batches| collect_records(batches).map_err(Into::into))?;
+    debug!(?key_a_records);
+    assert_eq!(3, key_a_records.len());
+    for record in &key_a_records {
+        assert_eq!(Some(Bytes::from_static(KEY_A)), record.key);
+    }
+
+    // Fetch virtual keyed topic for KEY_B — three records
+    let keyed_topition_b = Topition::new(format!("{topic_name}/NN03 RYB"), partition);
+    let key_b_records = sc
+        .fetch(&keyed_topition_b, offset, min_bytes, max_bytes, isolation)
+        .await
+        .and_then(|batches| collect_records(batches).map_err(Into::into))?;
+    debug!(?key_b_records);
+    assert_eq!(3, key_b_records.len());
+    for record in &key_b_records {
+        assert_eq!(Some(Bytes::from_static(KEY_B)), record.key);
+    }
+
+    Ok(())
+}
+
 #[cfg(feature = "postgres")]
 mod pg {
     use std::sync::Arc;
@@ -663,6 +773,21 @@ mod pg {
         let broker_id = rng().random_range(0..i32::MAX);
 
         super::with_multiple_txn(
+            cluster_id,
+            broker_id,
+            storage_container(cluster_id, broker_id).await?,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn virtual_keyed_topic_fetch() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        super::virtual_keyed_topic_fetch(
             cluster_id,
             broker_id,
             storage_container(cluster_id, broker_id).await?,
@@ -795,6 +920,21 @@ mod lite {
         let broker_id = rng().random_range(0..i32::MAX);
 
         super::with_multiple_txn(
+            cluster_id,
+            broker_id,
+            storage_container(cluster_id, broker_id).await?,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn virtual_keyed_topic_fetch() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        super::virtual_keyed_topic_fetch(
             cluster_id,
             broker_id,
             storage_container(cluster_id, broker_id).await?,
