@@ -23,7 +23,7 @@ pub mod common;
 
 #[test]
 fn decode_range_metadata_001() -> Result<()> {
-    let _guard = init_tracing().unwrap();
+    let _guard = init_tracing()?;
 
     let encoded =
         Bytes::from_static(b"\0\x03\0\0\0\x01\0\tbenchmark\0\0\0\0\0\0\0\0\xff\xff\xff\xff\0\0");
@@ -82,6 +82,38 @@ fn decode_range_metadata_002() -> Result<()> {
 }
 
 #[test]
+fn decode_range_metadata_003() -> Result<()> {
+    let _guard = init_tracing().unwrap();
+
+    let encoded = Bytes::from_static(
+        b"\0\x03\0\0\0\x01\0\x14telemetry/\"PL20 UXA\"\xff\xff\xff\xff\0\0\0\0\xff\xff\xff\xff\xff\xff"
+    );
+
+    let decoded = MemberMetadata::try_from(encoded.clone())?;
+
+    assert_eq!(3, decoded.version);
+    assert_eq!(
+        vec![String::from("telemetry/\"PL20 UXA\"")],
+        decoded.subscription.topics
+    );
+    assert_eq!(None, decoded.subscription.user_data);
+    assert!(
+        decoded
+            .subscription
+            .owned_partitions
+            .as_ref()
+            .is_some_and(|owned_partitions| owned_partitions.is_empty())
+    );
+
+    assert_eq!(Some(-1), decoded.subscription.generation_id);
+    assert_eq!(None, decoded.subscription.rack_id.as_deref());
+
+    assert_eq!(encoded, Bytes::try_from(&decoded)?);
+
+    Ok(())
+}
+
+#[test]
 fn cooperative_sticky_001() -> Result<()> {
     let _guard = init_tracing().unwrap();
 
@@ -93,6 +125,41 @@ fn cooperative_sticky_001() -> Result<()> {
 
     assert_eq!(3, decoded.version);
     assert_eq!(vec![String::from("test")], decoded.subscription.topics);
+    assert_eq!(
+        Some(Bytes::from_static(b"\xff\xff\xff\xff")),
+        decoded.subscription.user_data
+    );
+    assert!(
+        decoded
+            .subscription
+            .owned_partitions
+            .as_ref()
+            .is_some_and(|owned_partitions| owned_partitions.is_empty())
+    );
+
+    assert_eq!(Some(-1), decoded.subscription.generation_id);
+    assert_eq!(None, decoded.subscription.rack_id.as_deref());
+
+    assert_eq!(encoded, Bytes::try_from(&decoded)?);
+
+    Ok(())
+}
+
+#[test]
+fn cooperative_sticky_002() -> Result<()> {
+    let _guard = init_tracing().unwrap();
+
+    let encoded = Bytes::from_static(
+        b"\0\x03\0\0\0\x01\0\x14telemetry/\"PL20 UXA\"\0\0\0\x04\xff\xff\xff\xff\0\0\0\0\xff\xff\xff\xff\xff\xff"
+    );
+
+    let decoded = MemberMetadata::try_from(encoded.clone())?;
+
+    assert_eq!(3, decoded.version);
+    assert_eq!(
+        vec![String::from("telemetry/\"PL20 UXA\"")],
+        decoded.subscription.topics
+    );
     assert_eq!(
         Some(Bytes::from_static(b"\xff\xff\xff\xff")),
         decoded.subscription.user_data
@@ -128,6 +195,58 @@ fn member_assignment_001() -> Result<()> {
     assert_eq!(
         Some(TopicPartition {
             topic: "test".into(),
+            partitions: vec![0, 1, 2]
+        }),
+        decoded.assignment.assigned_partitions.first().cloned()
+    );
+    assert!(decoded.assignment.user_data.is_none());
+
+    assert_eq!(encoded, Bytes::try_from(&decoded)?);
+
+    Ok(())
+}
+
+#[test]
+fn member_assignment_002() -> Result<()> {
+    let _guard = init_tracing().unwrap();
+
+    let encoded = Bytes::from_static(
+        b"\0\x03\0\0\0\x01\0\x04test\0\0\0\x03\0\0\0\0\0\0\0\x01\0\0\0\x02\xff\xff\xff\xff",
+    );
+
+    let decoded = MemberAssignment::try_from(encoded.clone())?;
+
+    assert_eq!(3, decoded.version);
+    assert_eq!(1, decoded.assignment.assigned_partitions.len());
+    assert_eq!(
+        Some(TopicPartition {
+            topic: "test".into(),
+            partitions: vec![0, 1, 2]
+        }),
+        decoded.assignment.assigned_partitions.first().cloned()
+    );
+    assert!(decoded.assignment.user_data.is_none());
+
+    assert_eq!(encoded, Bytes::try_from(&decoded)?);
+
+    Ok(())
+}
+
+#[test]
+fn member_assignment_003() -> Result<()> {
+    let _guard = init_tracing().unwrap();
+
+    let encoded = Bytes::from_static(
+        b"\0\x03\0\0\0\x01\0\x14telemetry/\"PL20 UXA\"\0\0\0\x03\0\0\0\0\0\0\0\x01\0\0\0\x02\xff\xff\xff\xff"
+    );
+
+    let decoded = MemberAssignment::try_from(encoded.clone())?;
+
+    assert_eq!(3, decoded.version);
+    assert_eq!(1, decoded.assignment.assigned_partitions.len());
+    assert_eq!(
+        Some(TopicPartition {
+            topic: "telemetry/\"PL20 UXA\"".into(),
             partitions: vec![0, 1, 2]
         }),
         decoded.assignment.assigned_partitions.first().cloned()
