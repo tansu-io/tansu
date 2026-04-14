@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,15 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::ByteSize;
-use crate::{Error, Result};
+use crate::{ByteSize, Decode, Encode, Error, Result};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use serde::{
     Deserialize, Deserializer, Serialize, Serializer,
     de::{self, SeqAccess, Visitor},
     ser::SerializeSeq,
 };
-use std::{any::type_name_of_val, fmt::Formatter, ops::Deref};
-use tracing::debug;
+use std::{
+    any::{type_name, type_name_of_val},
+    fmt::Formatter,
+    ops::Deref,
+};
+use tracing::{debug, instrument};
 
 const CONTINUATION: u8 = 0b1000_0000;
 const MASK: u8 = 0b0111_1111;
@@ -28,11 +32,68 @@ const MASK: u8 = 0b0111_1111;
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct VarInt(pub i32);
 
+impl From<VarInt> for i32 {
+    fn from(value: VarInt) -> Self {
+        value.0
+    }
+}
+
 impl Deref for VarInt {
     type Target = i32;
 
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+impl Decode for VarInt {
+    #[instrument(skip_all, ret)]
+    fn decode(encoded: &mut Bytes) -> Result<Self> {
+        let mut shift = 0u8;
+        let mut accumulator = 0u32;
+        let mut done = false;
+
+        while !done {
+            let byte = encoded.try_get_u8()?;
+
+            if byte & CONTINUATION == CONTINUATION {
+                accumulator = u32::from(byte & MASK)
+                    .checked_shl(shift as u32)
+                    .and_then(|intermediate| accumulator.checked_add(intermediate))
+                    .ok_or(Error::Overflow)?;
+
+                shift = shift.checked_add(7).ok_or(Error::Overflow)?;
+            } else {
+                accumulator = u32::from(byte)
+                    .checked_shl(shift as u32)
+                    .and_then(|intermediate| accumulator.checked_add(intermediate))
+                    .ok_or(Error::Overflow)?;
+
+                done = true;
+            }
+        }
+
+        Ok(Self(Self::de_zigzag(accumulator)))
+    }
+}
+
+impl Encode for VarInt {
+    #[instrument]
+    fn encode(&self) -> Result<Bytes> {
+        let mut encoded = self.size_in_bytes().map(BytesMut::with_capacity)?;
+
+        let mut v = Self::en_zigzag(self.0);
+
+        while v >= u32::from(CONTINUATION) {
+            #[allow(clippy::cast_possible_truncation)]
+            encoded.put_u8(v as u8 | CONTINUATION);
+            v >>= 7;
+        }
+
+        #[allow(clippy::cast_possible_truncation)]
+        encoded.put_u8(v as u8);
+
+        Ok(encoded.into()).inspect(|encoded: &Bytes| debug!(encoded = ?encoded[..]))
     }
 }
 
@@ -170,11 +231,66 @@ impl<'de> Deserialize<'de> for VarInt {
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct LongVarInt(pub i64);
 
+impl From<LongVarInt> for i64 {
+    fn from(value: LongVarInt) -> Self {
+        value.0
+    }
+}
+
 impl Deref for LongVarInt {
     type Target = i64;
 
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+impl Encode for LongVarInt {
+    fn encode(&self) -> Result<Bytes> {
+        let mut encoded = self.size_in_bytes().map(BytesMut::with_capacity)?;
+
+        let mut v = Self::en_zigzag(self.0);
+
+        while v >= u64::from(CONTINUATION) {
+            #[allow(clippy::cast_possible_truncation)]
+            encoded.put_u8(v as u8 | CONTINUATION);
+            v >>= 7;
+        }
+
+        #[allow(clippy::cast_possible_truncation)]
+        encoded.put_u8(v as u8);
+        Ok(encoded.into())
+    }
+}
+
+impl Decode for LongVarInt {
+    #[instrument(skip_all, ret)]
+    fn decode(encoded: &mut Bytes) -> Result<Self> {
+        let mut shift = 0u8;
+        let mut accumulator = 0u64;
+        let mut done = false;
+
+        while !done {
+            let byte = encoded.try_get_u8()?;
+
+            if byte & CONTINUATION == CONTINUATION {
+                accumulator = u64::from(byte & MASK)
+                    .checked_shl(shift as u32)
+                    .and_then(|intermediate| accumulator.checked_add(intermediate))
+                    .ok_or(Error::Overflow)?;
+
+                shift = shift.checked_add(7).ok_or(Error::Overflow)?;
+            } else {
+                accumulator = u64::from(byte)
+                    .checked_shl(shift as u32)
+                    .and_then(|intermediate| accumulator.checked_add(intermediate))
+                    .ok_or(Error::Overflow)?;
+
+                done = true;
+            }
+        }
+
+        Ok(Self(Self::de_zigzag(accumulator)))
     }
 }
 
@@ -316,7 +432,25 @@ impl Deref for UnsignedVarInt {
     }
 }
 
+impl Encode for UnsignedVarInt {
+    fn encode(&self) -> Result<Bytes> {
+        let mut encoded = BytesMut::new();
+
+        let mut v = self.0;
+
+        while v >= u32::from(CONTINUATION) {
+            encoded.put_u8(v as u8 | CONTINUATION);
+            v >>= 7;
+        }
+
+        encoded.put_u8(v as u8);
+
+        Ok(Bytes::from(encoded))
+    }
+}
+
 impl UnsignedVarInt {
+    #[instrument(skip(serializer), fields(serializer = type_name::<S>()))]
     pub fn serialize<S>(i: &u32, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -325,10 +459,14 @@ impl UnsignedVarInt {
         let mut s = serializer.serialize_seq(None)?;
 
         while v >= u32::from(CONTINUATION) {
+            debug!(v);
+
             #[allow(clippy::cast_possible_truncation)]
             s.serialize_element(&(v as u8 | CONTINUATION))?;
             v >>= 7;
         }
+
+        debug!(v);
 
         #[allow(clippy::cast_possible_truncation)]
         s.serialize_element(&(v as u8))?;
@@ -365,12 +503,21 @@ impl UnsignedVarInt {
 
                     debug!("byte: {byte}");
 
+                    let overflow = || de::Error::custom("overflow");
+
                     if byte & CONTINUATION == CONTINUATION {
-                        let intermediate = u32::from(byte & MASK);
-                        accumulator += intermediate << shift;
-                        shift += 7;
+                        accumulator = u32::from(byte & MASK)
+                            .checked_shl(shift as u32)
+                            .and_then(|intermediate| accumulator.checked_add(intermediate))
+                            .ok_or_else(overflow)?;
+
+                        shift = shift.checked_add(7).ok_or_else(overflow)?;
                     } else {
-                        accumulator += u32::from(byte) << shift;
+                        accumulator = u32::from(byte)
+                            .checked_shl(shift as u32)
+                            .and_then(|intermediate| accumulator.checked_add(intermediate))
+                            .ok_or_else(overflow)?;
+
                         done = true;
                     }
                 }
@@ -436,6 +583,7 @@ impl TryFrom<usize> for UnsignedVarInt {
 }
 
 impl Serialize for UnsignedVarInt {
+    #[instrument(skip_all, fields(serializer = type_name::<S>()))]
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -489,35 +637,51 @@ mod tests {
     // }
 
     #[test]
+    fn encode_decode() -> Result<()> {
+        let expected = 1;
+
+        let mut encoded = VarInt(expected).encode()?;
+        assert_eq!(Bytes::from(vec![2u8]), encoded);
+
+        let actual = VarInt::decode(&mut encoded).map(i32::from)?;
+        assert_eq!(expected, actual);
+
+        Ok(())
+    }
+
+    #[test]
     fn encode_varint_signed_one() -> Result<()> {
-        let mut encoded = Vec::new();
-        let mut serializer = Encoder::new(&mut encoded);
+        let mut serializer = Encoder::new(BytesMut::new());
         let decoded = VarInt(1);
         decoded.serialize(&mut serializer)?;
 
-        assert_eq!(vec![2u8], encoded);
+        let encoded = Bytes::from(serializer);
+
+        assert_eq!(&[2u8], &encoded[..]);
         Ok(())
     }
 
     #[test]
     fn encode_varint_unsigned_one() -> Result<()> {
-        let mut encoded = Vec::new();
-        let mut serializer = Encoder::new(&mut encoded);
+        let mut serializer = Encoder::new(BytesMut::new());
         let decoded = UnsignedVarInt(1);
         decoded.serialize(&mut serializer)?;
 
-        assert_eq!(vec![1u8], encoded);
+        let encoded = Bytes::from(serializer);
+
+        assert_eq!(&[1u8], &encoded[..]);
         Ok(())
     }
 
     #[test]
     fn encode_varint_signed_zero() -> Result<()> {
-        let mut encoded = Vec::new();
-        let mut serializer = Encoder::new(&mut encoded);
+        let mut serializer = Encoder::new(BytesMut::new());
         let decoded = VarInt(0);
         decoded.serialize(&mut serializer)?;
 
-        assert_eq!(vec![0u8], encoded);
+        let encoded = Bytes::from(serializer);
+
+        assert_eq!(&[0u8], &encoded[..]);
         Ok(())
     }
 

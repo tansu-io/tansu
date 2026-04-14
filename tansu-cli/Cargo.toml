@@ -14,23 +14,35 @@ version.workspace = true
 workspace = true
 
 [features]
-default = ["delta", "dynostore", "iceberg", "libsql", "parquet", "postgres"]
+default = []
 delta = []
 dynostore = []
+iceberg = []
 libsql = []
 parquet = []
 postgres = []
-iceberg = []
+slatedb = []
 turso = []
 
 [dependencies]
+bytes.workspace = true
 clap.workspace = true
+console.workspace = true
 dotenv.workspace = true
+human-units.workspace = true
 humantime.workspace = true
+owo-colors.workspace = true
+pbkdf2.workspace = true
+rand.workspace = true
 regex.workspace = true
+rsasl.workspace = true
+rustls.workspace = true
+sha2.workspace = true
 tansu-broker.workspace = true
 tansu-cat.workspace = true
+tansu-client.workspace = true
 tansu-generator.workspace = true
+tansu-perf.workspace = true
 tansu-proxy.workspace = true
 tansu-sans-io.workspace = true
 tansu-schema.workspace = true

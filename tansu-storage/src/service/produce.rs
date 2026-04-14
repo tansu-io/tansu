@@ -18,7 +18,7 @@ use tansu_sans_io::{
     produce_request::{PartitionProduceData, TopicProduceData},
     produce_response::{PartitionProduceResponse, TopicProduceResponse},
 };
-use tracing::{debug, error, warn};
+use tracing::{debug, error, instrument, warn};
 
 use crate::{Error, Result, Storage, Topition};
 
@@ -146,9 +146,10 @@ impl ProduceService {
             .current_leader(None)
     }
 
+    #[instrument(skip_all)]
     async fn partition<G>(
         &self,
-        ctx: Context<G>,
+        ctx: &Context<G>,
         transaction_id: Option<&str>,
         name: &str,
         partition: PartitionProduceData,
@@ -161,11 +162,6 @@ impl ProduceService {
 
             for batch in records.batches {
                 let tp = Topition::new(name, partition.index);
-                debug!(
-                    record_count = batch.record_count,
-                    record_bytes = batch.record_data.len(),
-                    ?tp
-                );
 
                 match ctx
                     .state()
@@ -210,9 +206,10 @@ impl ProduceService {
         }
     }
 
+    #[instrument(skip_all)]
     async fn topic<G>(
         &self,
-        ctx: Context<G>,
+        ctx: &Context<G>,
         transaction_id: Option<&str>,
         topic: TopicProduceData,
     ) -> TopicProduceResponse
@@ -224,7 +221,7 @@ impl ProduceService {
         if let Some(partition_data) = topic.partition_data {
             for partition in partition_data {
                 partitions.push(
-                    self.partition(ctx.clone(), transaction_id, &topic.name, partition)
+                    self.partition(ctx, transaction_id, &topic.name, partition)
                         .await,
                 )
             }
@@ -243,6 +240,7 @@ where
     type Response = ProduceResponse;
     type Error = Error;
 
+    #[instrument(skip(ctx, req))]
     async fn serve(
         &self,
         ctx: Context<G>,
@@ -256,10 +254,8 @@ where
 
         if let Some(topics) = req.topic_data {
             for topic in topics {
-                debug!(?topic);
-
                 responses.push(
-                    self.topic(ctx.clone(), req.transactional_id.as_deref(), topic)
+                    self.topic(&ctx, req.transactional_id.as_deref(), topic)
                         .await,
                 )
             }

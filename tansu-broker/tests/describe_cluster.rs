@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,24 +19,25 @@ use tansu_sans_io::{
     DescribeClusterRequest, DescribeClusterResponse, ErrorCode,
     describe_cluster_response::DescribeClusterBroker,
 };
-use tansu_storage::{DescribeClusterService, StorageContainer};
+use tansu_storage::{DescribeClusterService, Storage};
 use tracing::debug;
 use url::Url;
 use uuid::Uuid;
 
 pub mod common;
 
-pub async fn describe<C>(
+pub async fn describe<C, G>(
     cluster_id: C,
     broker_id: i32,
     advertised_listener: Url,
-    sc: StorageContainer,
+    sc: G,
 ) -> Result<()>
 where
     C: Into<String>,
+    G: Storage + Clone,
 {
     debug!(broker_id, %advertised_listener);
-    register_broker(cluster_id, broker_id, &sc).await?;
+    register_broker(cluster_id, broker_id, sc.clone()).await?;
 
     let include_cluster_authorized_operations = true;
     let endpoint_type = Some(6);
@@ -81,6 +82,8 @@ where
 
 #[cfg(feature = "postgres")]
 mod pg {
+    use std::sync::Arc;
+
     use common::{StorageType, init_tracing};
     use rand::{prelude::*, rng};
 
@@ -90,7 +93,7 @@ mod pg {
         cluster: impl Into<String>,
         node: i32,
         advertised_listener: Url,
-    ) -> Result<StorageContainer> {
+    ) -> Result<Arc<Box<dyn Storage>>> {
         common::storage_container(
             StorageType::Postgres,
             cluster,
@@ -119,7 +122,10 @@ mod pg {
     }
 }
 
+#[cfg(feature = "dynostore")]
 mod in_memory {
+    use std::sync::Arc;
+
     use common::{StorageType, init_tracing};
     use rand::{prelude::*, rng};
 
@@ -129,7 +135,7 @@ mod in_memory {
         cluster: impl Into<String>,
         node: i32,
         advertised_listener: Url,
-    ) -> Result<StorageContainer> {
+    ) -> Result<Arc<Box<dyn Storage>>> {
         common::storage_container(
             StorageType::InMemory,
             cluster,
@@ -160,6 +166,8 @@ mod in_memory {
 
 #[cfg(feature = "libsql")]
 mod lite {
+    use std::sync::Arc;
+
     use common::{StorageType, init_tracing};
     use rand::{prelude::*, rng};
 
@@ -169,8 +177,50 @@ mod lite {
         cluster: impl Into<String>,
         node: i32,
         advertised_listener: Url,
-    ) -> Result<StorageContainer> {
+    ) -> Result<Arc<Box<dyn Storage>>> {
         common::storage_container(StorageType::Lite, cluster, node, advertised_listener, None).await
+    }
+
+    #[tokio::test]
+    async fn describe() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster = Uuid::now_v7();
+        let node = rng().random_range(0..i32::MAX);
+        let advertised_listener = Url::parse("tcp://example.com:9092/")?;
+
+        super::describe(
+            cluster,
+            node,
+            advertised_listener.clone(),
+            storage_container(cluster, node, advertised_listener).await?,
+        )
+        .await
+    }
+}
+
+#[cfg(feature = "slatedb")]
+mod slatedb {
+    use std::sync::Arc;
+
+    use common::{StorageType, init_tracing};
+    use rand::{prelude::*, rng};
+
+    use super::*;
+
+    async fn storage_container(
+        cluster: impl Into<String>,
+        node: i32,
+        advertised_listener: Url,
+    ) -> Result<Arc<Box<dyn Storage>>> {
+        common::storage_container(
+            StorageType::SlateDb,
+            cluster,
+            node,
+            advertised_listener,
+            None,
+        )
+        .await
     }
 
     #[tokio::test]

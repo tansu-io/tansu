@@ -72,6 +72,7 @@ pub(crate) static METER: LazyLock<Meter> = LazyLock::new(|| {
 pub enum Error {
     AddrParse(#[from] AddrParseError),
     Api(ErrorCode),
+    Auth(#[from] tansu_auth::Error),
     Custom(String),
     DuplicateApiService(i16),
     EmptyCoordinatorWrapper,
@@ -128,14 +129,28 @@ pub enum Error {
 #[cfg(feature = "libsql")]
 impl From<libsql::Error> for Error {
     fn from(value: libsql::Error) -> Self {
-        Self::LibSql(Arc::new(value))
+        Self::from(Arc::new(value))
+    }
+}
+
+#[cfg(feature = "libsql")]
+impl From<Arc<libsql::Error>> for Error {
+    fn from(value: Arc<libsql::Error>) -> Self {
+        Self::LibSql(value)
     }
 }
 
 #[cfg(feature = "turso")]
 impl From<turso::Error> for Error {
     fn from(value: turso::Error) -> Self {
-        Self::Turso(Arc::new(value))
+        Self::from(Arc::new(value))
+    }
+}
+
+#[cfg(feature = "turso")]
+impl From<Arc<turso::Error>> for Error {
+    fn from(value: Arc<turso::Error>) -> Self {
+        Self::Turso(value)
     }
 }
 
@@ -160,7 +175,14 @@ impl From<SendError<CancelKind>> for Error {
 #[cfg(feature = "postgres")]
 impl From<tokio_postgres::error::Error> for Error {
     fn from(value: tokio_postgres::error::Error) -> Self {
-        Self::TokioPostgres(Arc::new(value))
+        Self::from(Arc::new(value))
+    }
+}
+
+#[cfg(feature = "postgres")]
+impl From<Arc<tokio_postgres::error::Error>> for Error {
+    fn from(value: Arc<tokio_postgres::error::Error>) -> Self {
+        Self::TokioPostgres(value)
     }
 }
 
@@ -178,14 +200,27 @@ impl From<JoinError> for Error {
 
 impl From<serde_json::Error> for Error {
     fn from(value: serde_json::Error) -> Self {
-        Self::Json(Arc::new(value))
+        Self::from(Arc::new(value))
+    }
+}
+
+impl From<Arc<serde_json::Error>> for Error {
+    fn from(value: Arc<serde_json::Error>) -> Self {
+        Self::Json(value)
     }
 }
 
 #[cfg(feature = "dynostore")]
 impl From<object_store::Error> for Error {
     fn from(value: object_store::Error) -> Self {
-        Self::ObjectStore(Arc::new(value))
+        Self::from(Arc::new(value))
+    }
+}
+
+#[cfg(feature = "dynostore")]
+impl From<Arc<object_store::Error>> for Error {
+    fn from(value: Arc<object_store::Error>) -> Self {
+        Self::ObjectStore(value)
     }
 }
 
@@ -198,7 +233,14 @@ impl From<ParseError> for Error {
 #[cfg(feature = "postgres")]
 impl From<deadpool_postgres::PoolError> for Error {
     fn from(value: deadpool_postgres::PoolError) -> Self {
-        Self::Pool(Arc::new(value))
+        Self::from(Arc::new(value))
+    }
+}
+
+#[cfg(feature = "postgres")]
+impl From<Arc<deadpool_postgres::PoolError>> for Error {
+    fn from(value: Arc<deadpool_postgres::PoolError>) -> Self {
+        Self::Pool(value)
     }
 }
 

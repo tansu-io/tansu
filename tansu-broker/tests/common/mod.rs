@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,7 +20,7 @@ use rand::{
     prelude::*,
     rng,
 };
-use std::{env, io::ErrorKind, thread};
+use std::{env, io::ErrorKind, sync::Arc, thread};
 use tansu_broker::{
     Error, Result,
     coordinator::group::{Coordinator, administrator::Controller},
@@ -73,6 +73,7 @@ pub(crate) enum StorageType {
     InMemory,
     Lite,
     Postgres,
+    SlateDb,
     Turso,
 }
 
@@ -82,7 +83,7 @@ pub(crate) async fn storage_container<C>(
     node: i32,
     advertised_listener: Url,
     schemas: Option<Registry>,
-) -> Result<StorageContainer>
+) -> Result<Arc<Box<dyn Storage>>>
 where
     C: Into<String>,
 {
@@ -174,12 +175,10 @@ where
 
                 let paths = glob(pattern)?;
 
-                for path in paths {
-                    if let Ok(path) = path {
-                        debug!(?path);
+                for path in paths.flatten() {
+                    debug!(?path);
 
-                        remove_file(path).await?;
-                    }
+                    remove_file(path).await?;
                 }
             }
 
@@ -206,6 +205,17 @@ where
                 .await
                 .map_err(Into::into)
         }
+
+        // Uses slatedb://memory for in-memory testing, no external S3 needed
+        StorageType::SlateDb => StorageContainer::builder()
+            .cluster_id(cluster)
+            .node_id(node)
+            .advertised_listener(advertised_listener)
+            .schema_registry(schemas)
+            .storage(Url::parse("slatedb://memory")?)
+            .build()
+            .await
+            .map_err(Into::into),
     }
 }
 
@@ -226,8 +236,8 @@ pub(crate) fn random_bytes(length: usize) -> Bytes {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn join_group(
-    controller: &mut Controller<StorageContainer>,
+pub(crate) async fn join_group<G>(
+    controller: &mut Controller<G>,
     client_id: Option<&str>,
     group_id: &str,
     session_timeout_ms: i32,
@@ -237,7 +247,10 @@ pub(crate) async fn join_group(
     protocol_type: &str,
     protocols: Option<&[JoinGroupRequestProtocol]>,
     reason: Option<&str>,
-) -> Result<JoinGroupResponse> {
+) -> Result<JoinGroupResponse>
+where
+    G: Storage + Clone,
+{
     controller
         .join(
             client_id,
@@ -255,8 +268,8 @@ pub(crate) async fn join_group(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn sync_group(
-    controller: &mut Controller<StorageContainer>,
+pub(crate) async fn sync_group<G>(
+    controller: &mut Controller<G>,
     group_id: &str,
     generation_id: i32,
     member_id: &str,
@@ -264,7 +277,10 @@ pub(crate) async fn sync_group(
     protocol_type: &str,
     protocol_name: &str,
     assignments: &[SyncGroupRequestAssignment],
-) -> Result<SyncGroupResponse> {
+) -> Result<SyncGroupResponse>
+where
+    G: Storage + Clone,
+{
     controller
         .sync(
             group_id,
@@ -279,36 +295,45 @@ pub(crate) async fn sync_group(
         .and_then(|body| TryInto::try_into(body).map_err(Into::into))
 }
 
-pub(crate) async fn heartbeat(
-    controller: &mut Controller<StorageContainer>,
+pub(crate) async fn heartbeat<G>(
+    controller: &mut Controller<G>,
     group_id: &str,
     generation_id: i32,
     member_id: &str,
     group_instance_id: Option<&str>,
-) -> Result<HeartbeatResponse> {
+) -> Result<HeartbeatResponse>
+where
+    G: Storage + Clone,
+{
     controller
         .heartbeat(group_id, generation_id, member_id, group_instance_id)
         .await
         .and_then(|body| TryInto::try_into(body).map_err(Into::into))
 }
 
-pub(crate) async fn offset_fetch(
-    controller: &mut Controller<StorageContainer>,
+pub(crate) async fn offset_fetch<G>(
+    controller: &mut Controller<G>,
     group_id: &str,
     topics: &[OffsetFetchRequestTopic],
-) -> Result<OffsetFetchResponse> {
+) -> Result<OffsetFetchResponse>
+where
+    G: Storage + Clone,
+{
     controller
         .offset_fetch(Some(group_id), Some(topics), None, Some(false))
         .await
         .and_then(|body| TryInto::try_into(body).map_err(Into::into))
 }
 
-pub(crate) async fn leave(
-    controller: &mut Controller<StorageContainer>,
+pub(crate) async fn leave<G>(
+    controller: &mut Controller<G>,
     group_id: &str,
     member_id: &str,
     group_instance_id: Option<&str>,
-) -> Result<LeaveGroupResponse> {
+) -> Result<LeaveGroupResponse>
+where
+    G: Storage + Clone,
+{
     controller
         .leave(
             group_id,
@@ -375,15 +400,18 @@ pub(crate) const COOPERATIVE_STICKY: &str = "cooperative-sticky";
 pub(crate) const PROTOCOL_TYPE: &str = "consumer";
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn join(
-    controller: &mut Controller<StorageContainer>,
+pub(crate) async fn join<G>(
+    controller: &mut Controller<G>,
     group_id: &str,
     member_id: Option<&str>,
     group_instance_id: Option<&str>,
     protocols: Option<Vec<JoinGroupRequestProtocol>>,
     session_timeout_ms: i32,
     rebalance_timeout_ms: Option<i32>,
-) -> Result<JoinResponse> {
+) -> Result<JoinResponse>
+where
+    G: Storage + Clone,
+{
     let reason = None;
 
     let protocols = protocols.unwrap_or_else(|| {
@@ -475,13 +503,10 @@ pub(crate) async fn join(
     }
 }
 
-pub(crate) async fn register_broker<C>(
-    cluster_id: C,
-    broker_id: i32,
-    sc: &StorageContainer,
-) -> Result<()>
+pub(crate) async fn register_broker<C, G>(cluster_id: C, broker_id: i32, sc: G) -> Result<()>
 where
     C: Into<String>,
+    G: Storage,
 {
     let incarnation_id = Uuid::now_v7();
 

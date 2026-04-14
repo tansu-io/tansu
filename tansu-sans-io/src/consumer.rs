@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,7 +14,7 @@
 
 use std::str::FromStr;
 
-use bytes::{Buf as _, BufMut, Bytes, BytesMut};
+use bytes::{Buf as _, Bytes, BytesMut};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -111,12 +111,9 @@ impl TryFrom<&MemberMetadata> for Bytes {
     type Error = Error;
 
     fn try_from(value: &MemberMetadata) -> Result<Self, Self::Error> {
-        let mut writer = BytesMut::new().writer();
-        let mut encoder = Encoder::new(&mut writer);
+        let mut encoder = Encoder::new(BytesMut::new());
 
-        value
-            .serialize(&mut encoder)
-            .and(Ok(Bytes::from(writer.into_inner())))
+        value.serialize(&mut encoder).and(Ok(Bytes::from(encoder)))
     }
 }
 
@@ -214,12 +211,9 @@ impl TryFrom<&MemberAssignment> for Bytes {
     type Error = Error;
 
     fn try_from(value: &MemberAssignment) -> Result<Self, Self::Error> {
-        let mut writer = BytesMut::new().writer();
-        let mut encoder = Encoder::new(&mut writer);
+        let mut encoder = Encoder::new(BytesMut::new());
 
-        value
-            .serialize(&mut encoder)
-            .and(Ok(Bytes::from(writer.into_inner())))
+        value.serialize(&mut encoder).and(Ok(Bytes::from(encoder)))
     }
 }
 

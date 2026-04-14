@@ -11,13 +11,11 @@ repository.workspace = true
 version.workspace = true
 
 [features]
-default = ["delta", "dynostore", "iceberg", "libsql", "postgres"]
-delta = []
+default = ["dynostore", "libsql", "postgres", "slatedb", "turso"]
 dynostore = ["dep:object_store"]
-iceberg = []
 libsql = ["dep:libsql"]
-parquet = []
 postgres = ["dep:deadpool-postgres", "dep:tokio-postgres"]
+slatedb = ["dep:object_store", "dep:slatedb", "tansu-storage/slatedb"]
 turso = ["dep:turso"]
 
 [lints]
@@ -27,12 +25,15 @@ workspace = true
 async-trait.workspace = true
 bytes.workspace = true
 clap.workspace = true
+console.workspace = true
 deadpool-postgres = { workspace = true, optional = true }
 futures.workspace = true
 glob.workspace = true
 http-body-util.workspace = true
+humantime.workspace = true
 hyper-util.workspace = true
 hyper.workspace = true
+indicatif.workspace = true
 jsonschema.workspace = true
 libsql = { workspace = true, optional = true }
 object_store = { workspace = true, optional = true }
@@ -43,8 +44,12 @@ opentelemetry_sdk.workspace = true
 rama.workspace = true
 rand.workspace = true
 regex.workspace = true
+rsasl.workspace = true
+rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+slatedb = { workspace = true, optional = true }
+tansu-auth.workspace = true
 tansu-model.workspace = true
 tansu-sans-io.workspace = true
 tansu-schema.workspace = true
@@ -52,6 +57,8 @@ tansu-service.workspace = true
 tansu-storage.workspace = true
 thiserror.workspace = true
 tokio-postgres = { workspace = true, optional = true }
+tokio-rustls.workspace = true
+tokio-util.workspace = true
 tokio.workspace = true
 tracing-opentelemetry.workspace = true
 tracing-subscriber.workspace = true
@@ -61,4 +68,8 @@ url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+object_store = { workspace = true }
 pretty_assertions.workspace = true
+slatedb = { workspace = true }
+tansu-schema = { workspace = true }
+tansu-storage = { workspace = true }

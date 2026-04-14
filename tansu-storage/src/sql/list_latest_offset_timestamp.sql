@@ -13,22 +13,19 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
--- prepare list_earliest_offset (text, text, integer) as
 select
+r.offset_id, r.timestamp
 
-r.offset_id,
-r.timestamp
-
-from
-
-cluster c
+from cluster c
 join topic t on t.cluster = c.id
 join topition tp on tp.topic = t.id
-join watermark w on w.topition = tp.id
-join record r on r.topition = tp.id and r.offset_id = w.low
+join record r on r.topition = tp.id
 
 where
-
 c.name = $1
 and t.name = $2
-and tp.partition = $3;
+and tp.partition = $3
+and r.timestamp >= $4
+
+order by r.offset_id asc
+limit 1;

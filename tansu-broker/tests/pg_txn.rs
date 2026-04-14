@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -57,8 +57,8 @@ use uuid::Uuid;
 
 mod common;
 
-#[cfg(feature = "postgres")]
 #[tokio::test]
+#[cfg(feature = "postgres")]
 async fn simple_txn_commit() -> Result<()> {
     use tansu_sans_io::ListOffset;
 
@@ -69,7 +69,7 @@ async fn simple_txn_commit() -> Result<()> {
     let cluster_id = Uuid::now_v7();
     let broker_id = rng.random_range(0..i32::MAX);
 
-    let mut sc = storage_container(
+    let sc = storage_container(
         StorageType::Postgres,
         cluster_id,
         broker_id,
@@ -78,7 +78,7 @@ async fn simple_txn_commit() -> Result<()> {
     )
     .await?;
 
-    register_broker(cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, sc.clone()).await?;
 
     let input_topic_name: String = alphanumeric_string(15);
     debug!(?input_topic_name);
@@ -373,8 +373,8 @@ async fn simple_txn_commit() -> Result<()> {
                         [OffsetFetchResponsePartition::default()
                             .partition_index(input_partition_index)
                             .committed_offset(-1)
-                            .committed_leader_epoch(None)
-                            .metadata(None)
+                            .committed_leader_epoch(Some(-1))
+                            .metadata(Some("".into()))
                             .error_code(0)]
                         .into()
                     ))]
@@ -490,8 +490,8 @@ async fn simple_txn_commit() -> Result<()> {
                         [OffsetFetchResponsePartition::default()
                             .partition_index(input_partition_index)
                             .committed_offset(COMMITTED_OFFSET)
-                            .committed_leader_epoch(None)
-                            .metadata(None)
+                            .committed_leader_epoch(Some(-1))
+                            .metadata(Some("".into()))
                             .error_code(0)]
                         .into()
                     ))]

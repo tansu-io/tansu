@@ -28,7 +28,7 @@ services:
     ports:
       - 5432:5432
     volumes:
-      - db:/var/lib/postgresql/data
+      - db:/var/lib/postgresql
       - ./etc/initdb.d/:/docker-entrypoint-initdb.d/
     healthcheck:
       test: /usr/bin/pg_isready
@@ -64,6 +64,7 @@ services:
       AWS_ALLOW_HTTP: ${AWS_ALLOW_HTTP}
     volumes:
       - ./etc/schema/:/schema/
+      - ./data:/data/
     command: |
       --kafka-cluster-id ${CLUSTER_ID}
       --kafka-listener-url tcp://0.0.0.0:9092/

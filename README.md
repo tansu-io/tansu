@@ -1,14 +1,39 @@
-# Tansu
+<div align="center">
+
+# Tansu 🗃️
+stateless Kafka-compatible broker with pluggable storage (PostgreSQL, SQLite, S3, memory)
+
+<br>
+
+[![License](https://img.shields.io/badge/License-Apache-165dfc.svg)](https://github.com/tansu-io/tansu/blob/main/LICENSE)
+&nbsp;
+[![Built with Rust](https://img.shields.io/badge/built_with-Rust-165dfc.svg?logo=rust)](https://www.rust-lang.org/)
+&nbsp;
+<br>
+[![Docs](https://img.shields.io/badge/📖%20docs-docs.tansu.io-165dfc.svg)](https://docs.tansu.io/)
+&nbsp;
+[![Blog](https://img.shields.io/badge/%F0%9F%93%98%20blog-blog.tansu.io-165dfc.svg)](https://blog.tansu.io/articles)
+&nbsp;
+<br>
+[![GitHub stars](https://img.shields.io/github/stars/tansu-io/tansu?style=social)](https://github.com/tansu-io/tansu)
+&nbsp;
+[![Bluesky](https://img.shields.io/bluesky/followers/tansu.io)](https://bsky.app/profile/tansu.io)
+
+<br>
+
+</div>
+
+# What is Tansu?
 
 [Tansu][github-com-tansu-io] is a drop-in replacement for
-Apache Kafka with PostgreSQL, S3 or memory storage engines.
+Apache Kafka with PostgreSQL, libSQL (SQLite), S3 or memory storage engines.
 Schema backed topics (Avro, JSON or Protocol buffers) can
 be written as [Apache Iceberg](https://iceberg.apache.org) or [Delta Lake](https://delta.io) tables.
 
 Features:
 
 - Apache Kafka API compatible
-- Available with [PostgreSQL](https://www.postgresql.org), [S3](https://en.wikipedia.org/wiki/Amazon_S3) or memory storage engines
+- Available with [PostgreSQL](https://www.postgresql.org), [libSQL](https://docs.turso.tech/libsql), [S3](https://en.wikipedia.org/wiki/Amazon_S3) or memory storage engines
 - Topics [validated](docs/schema-registry.md) by [JSON Schema][json-schema-org], [Apache Avro](https://avro.apache.org)
   or [Protocol buffers](protocol-buffers) can be written as [Apache Iceberg](https://iceberg.apache.org) or [Delta Lake](https://delta.io) tables
 

@@ -25,7 +25,7 @@ use bytes::Bytes;
 use serde_json::Value;
 
 use tansu_sans_io::{ErrorCode, record::inflated::Batch};
-use tracing::{debug, warn};
+use tracing::{debug, instrument, warn};
 
 #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
 mod arrow;
@@ -84,19 +84,21 @@ impl TryFrom<Bytes> for Schema {
     type Error = Error;
 
     fn try_from(encoded: Bytes) -> Result<Self, Self::Error> {
+        debug!(encoded = &encoded[..]);
         const PROPERTIES: &str = "properties";
 
-        let mut schema =
-            serde_json::from_slice::<Value>(&encoded[..]).inspect(|schema| debug!(%schema))?;
+        let mut schema = serde_json::from_slice::<Value>(&encoded[..])?;
 
         let key = schema
             .get(PROPERTIES)
             .and_then(|properties| properties.get(MessageKind::Key.as_ref()))
+            .inspect(|key| debug!(?key))
             .and_then(|key| jsonschema::validator_for(key).ok());
 
         let value = schema
             .get(PROPERTIES)
             .and_then(|properties| properties.get(MessageKind::Value.as_ref()))
+            .inspect(|value| debug!(?value))
             .and_then(|value| jsonschema::validator_for(value).ok());
 
         let meta =
@@ -109,7 +111,6 @@ impl TryFrom<Bytes> for Schema {
             .inspect(|properties| debug!(?properties))
             .and_then(|object| object.insert(MessageKind::Meta.as_ref().to_owned(), meta));
 
-        debug!(%schema);
         let ids = field_ids(&schema);
         debug!(?ids);
 
@@ -118,9 +119,8 @@ impl TryFrom<Bytes> for Schema {
 }
 
 impl Validator for Schema {
+    #[instrument(skip(self, batch), ret)]
     fn validate(&self, batch: &Batch) -> Result<()> {
-        debug!(?batch);
-
         for record in &batch.records {
             debug!(?record);
 
@@ -170,9 +170,8 @@ impl AsJsonValue for Schema {
     }
 }
 
+#[instrument(skip(schema), ret)]
 fn field_ids(schema: &Value) -> BTreeMap<String, i32> {
-    debug!(%schema);
-
     fn field_ids_with_path(path: &[&str], schema: &Value, id: &mut i32) -> BTreeMap<String, i32> {
         debug!(?path, %schema, id);
 
@@ -241,8 +240,6 @@ fn field_ids(schema: &Value) -> BTreeMap<String, i32> {
         }
     }
 
-    debug!(?ids);
-
     ids
 }
 
@@ -252,11 +249,10 @@ mod tests {
 
     use super::*;
 
-    use jsonschema::BasicOutput;
-    use object_store::{ObjectStore, PutPayload, memory::InMemory, path::Path};
+    use object_store::{ObjectStoreExt, PutPayload, memory::InMemory, path::Path};
 
     use serde_json::json;
-    use std::{collections::VecDeque, fs::File, ops::Deref, sync::Arc, thread};
+    use std::{fs::File, sync::Arc, thread};
     use tansu_sans_io::record::Record;
     use tracing::subscriber::DefaultGuard;
     use tracing_subscriber::EnvFilter;
@@ -757,45 +753,45 @@ mod tests {
         .map(Bytes::from)
         .and_then(Schema::try_from)?;
 
-        assert!(matches!(
+        assert!(
             schema
                 .value
                 .as_ref()
                 .unwrap()
-                .apply(&json!([1, 2, 3, 4, 5]))
-                .basic(),
-            BasicOutput::Valid(_),
-        ));
+                .evaluate(&json!([1, 2, 3, 4, 5]))
+                .flag()
+                .valid
+        );
 
-        assert!(matches!(
+        assert!(
             schema
                 .value
                 .as_ref()
                 .unwrap()
-                .apply(&json!([-1, 2.3, 3, 4.0, 5]))
-                .basic(),
-            BasicOutput::Valid(_),
-        ));
+                .evaluate(&json!([-1, 2.3, 3, 4.0, 5]))
+                .flag()
+                .valid
+        );
 
-        assert!(matches!(
-            schema
+        assert!(
+            !schema
                 .value
                 .as_ref()
                 .unwrap()
-                .apply(&json!([3, "different", { "types": "of values" }]))
-                .basic(),
-            BasicOutput::Invalid(_),
-        ));
+                .evaluate(&json!([3, "different", { "types": "of values" }]))
+                .flag()
+                .valid
+        );
 
-        assert!(matches!(
-            schema
+        assert!(
+            !schema
                 .value
                 .as_ref()
                 .unwrap()
-                .apply(&json!({"Not": "an array"}))
-                .basic(),
-            BasicOutput::Invalid(_)
-        ));
+                .evaluate(&json!({"Not": "an array"}))
+                .flag()
+                .valid,
+        );
 
         Ok(())
     }
@@ -816,35 +812,35 @@ mod tests {
         .map(Bytes::from)
         .and_then(Schema::try_from)?;
 
-        assert_eq!(
-            BasicOutput::Valid(VecDeque::new()),
+        assert!(
             schema
                 .value
                 .as_ref()
                 .unwrap()
-                .apply(&json!([1, 2, 3, 4, 5]))
-                .basic()
+                .evaluate(&json!([1, 2, 3, 4, 5]))
+                .flag()
+                .valid
         );
 
-        assert_eq!(
-            BasicOutput::Valid(VecDeque::new()),
+        assert!(
             schema
                 .value
                 .as_ref()
                 .unwrap()
-                .apply(&json!([3, "different", { "types": "of values" }]))
-                .basic()
+                .evaluate(&json!([3, "different", { "types": "of values" }]))
+                .flag()
+                .valid
         );
 
-        assert!(matches!(
-            schema
+        assert!(
+            !schema
                 .value
                 .as_ref()
                 .unwrap()
-                .apply(&json!({"Not": "an array"}))
-                .basic(),
-            BasicOutput::Invalid(_)
-        ));
+                .evaluate(&json!({"Not": "an array"}))
+                .flag()
+                .valid,
+        );
 
         Ok(())
     }
@@ -879,42 +875,25 @@ mod tests {
 
         debug!(?schema);
 
-        assert_eq!(
-            BasicOutput::Valid(VecDeque::new()),
-            schema.key.as_ref().unwrap().apply(&json!(12321)).basic()
+        assert!(
+            schema
+                .key
+                .as_ref()
+                .unwrap()
+                .evaluate(&json!(12321))
+                .flag()
+                .valid
         );
 
-        match schema
-            .value
-            .as_ref()
-            .unwrap()
-            .apply(&json!({"name": "alice", "email": "alice@example.com"}))
-            .basic()
-        {
-            BasicOutput::Valid(annotations) => {
-                debug!(?annotations);
-                assert_eq!(1, annotations.len());
-                assert_eq!(
-                    &Value::Array(vec![
-                        Value::String("email".into()),
-                        Value::String("name".into())
-                    ]),
-                    annotations[0].value().deref()
-                );
-
-                for annotation in annotations {
-                    debug!(
-                        "value: {} at path {}",
-                        annotation.value(),
-                        annotation.instance_location()
-                    )
-                }
-            }
-            BasicOutput::Invalid(errors) => {
-                debug!(?errors);
-                panic!()
-            }
-        }
+        assert!(
+            schema
+                .value
+                .as_ref()
+                .unwrap()
+                .evaluate(&json!({"name": "alice", "email": "alice@example.com"}))
+                .flag()
+                .valid
+        );
 
         Ok(())
     }

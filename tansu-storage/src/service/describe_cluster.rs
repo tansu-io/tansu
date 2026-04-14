@@ -72,7 +72,7 @@ where
     type Response = DescribeClusterResponse;
     type Error = Error;
 
-    #[instrument(skip(ctx), ret)]
+    #[instrument(skip(ctx, req))]
     async fn serve(
         &self,
         ctx: Context<G>,
@@ -81,7 +81,7 @@ where
         let brokers = ctx.state().brokers().await?;
         debug!(?brokers);
 
-        let cluster_id = ctx.state().cluster_id()?;
+        let cluster_id = ctx.state().cluster_id().await?;
 
         Ok(DescribeClusterResponse::default()
             .throttle_time_ms(0)

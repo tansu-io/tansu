@@ -20,9 +20,7 @@ use tansu_sans_io::{
 use tracing::debug;
 use url::Url;
 
-use crate::{Error, Result};
-
-use super::Topic;
+use crate::{Error, Result, Topic};
 
 #[derive(Clone, Debug, Default)]
 pub struct Builder<B, N> {

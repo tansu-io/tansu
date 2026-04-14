@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,22 +13,26 @@
 // limitations under the License.
 
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::HashMap,
+    marker::PhantomData,
     num::NonZeroU32,
     sync::{Arc, LazyLock, Mutex},
     time::{Duration, SystemTime},
 };
 
-use crate::{Error, METER, Result, lake::LakeHouseType, sql::typeof_sql_expr};
+use crate::{
+    AsArrow as _, Error, METER, Registry, Result, lake::LakeHouseType, sql::typeof_sql_expr,
+};
 use arrow::{
     array::RecordBatch,
     datatypes::{Field, Schema as ArrowSchema},
 };
 use async_trait::async_trait;
+use datafusion::{datasource::TableProvider, prelude::SessionContext};
 use deltalake::{
-    DeltaOps, DeltaTable, DeltaTableBuilder, aws,
-    kernel::{ColumnMetadataKey, StructField},
-    operations::optimize::OptimizeType,
+    DeltaTable, DeltaTableBuilder, aws,
+    kernel::{StructField, engine::arrow_conversion::TryFromArrow},
+    operations::{create::CreateBuilder, optimize::OptimizeType, write::WriteBuilder},
     protocol::SaveMode,
     writer::{DeltaWriter, RecordBatchWriter},
 };
@@ -41,23 +45,34 @@ use opentelemetry::{
     metrics::{Counter, Histogram},
 };
 use parquet::file::properties::WriterProperties;
-use tansu_sans_io::describe_configs_response::DescribeConfigsResult;
-use tracing::{debug, warn};
+use tansu_sans_io::{describe_configs_response::DescribeConfigsResult, record::inflated::Batch};
+use tracing::{debug, instrument, warn};
 use url::Url;
 
 use super::{House, LakeHouse};
 
 #[derive(Clone, Debug, Default)]
-pub struct Builder<L> {
+pub struct Builder<L = PhantomData<Url>, R = PhantomData<Registry>> {
     location: L,
+    schema_registry: R,
     database: Option<String>,
     records_per_second: Option<u32>,
 }
 
-impl<L> Builder<L> {
-    pub fn location(self, location: Url) -> Builder<Url> {
+impl<L, R> Builder<L, R> {
+    pub fn location(self, location: Url) -> Builder<Url, R> {
         Builder {
             location,
+            schema_registry: self.schema_registry,
+            database: self.database,
+            records_per_second: self.records_per_second,
+        }
+    }
+
+    pub fn schema_registry(self, schema_registry: Registry) -> Builder<L, Registry> {
+        Builder {
+            location: self.location,
+            schema_registry,
             database: self.database,
             records_per_second: self.records_per_second,
         }
@@ -75,7 +90,7 @@ impl<L> Builder<L> {
     }
 }
 
-impl Builder<Url> {
+impl Builder<Url, Registry> {
     pub fn build(self) -> Result<House> {
         Delta::try_from(self).map(House::Delta)
     }
@@ -165,6 +180,7 @@ static OPTIMIZE_TOTAL_FILES_SKIPPED: LazyLock<Counter<u64>> = LazyLock::new(|| {
 #[derive(Clone, Debug)]
 pub struct Delta {
     location: Url,
+    schema_registry: Registry,
     tables: Arc<Mutex<HashMap<String, Table>>>,
     database: String,
     rate_limiter: Option<Arc<DefaultDirectRateLimiter<NoOpMiddleware<QuantaInstant>>>>,
@@ -217,10 +233,6 @@ impl Config {
         self.as_columns("tansu.lake.z_order")
     }
 
-    fn quote(s: &str) -> String {
-        format!("\"{s}\"")
-    }
-
     fn generated_fields(&self) -> Vec<Arc<Field>> {
         self.0
             .iter()
@@ -229,12 +241,9 @@ impl Config {
                     .and_then(|suffix| {
                         typeof_sql_expr(value)
                             .map(|data_type| {
-                                Arc::new(Field::new(suffix, data_type, true).with_metadata(
-                                    HashMap::from_iter([(
-                                        ColumnMetadataKey::GenerationExpression.as_ref().into(),
-                                        Self::quote(value),
-                                    )]),
-                                ))
+                                // Create as a regular nullable column without generation expression
+                                // The values will be computed by write_with_datafusion
+                                Arc::new(Field::new(suffix, data_type, true))
                             })
                             .inspect_err(|err| debug!(?err, %value))
                             .ok()
@@ -247,8 +256,36 @@ impl Config {
     fn generated(&self) -> Result<Vec<StructField>> {
         self.generated_fields()
             .iter()
-            .map(|field| StructField::try_from(field.as_ref()).map_err(Into::into))
+            .map(|field| StructField::try_from_arrow(field.as_ref()).map_err(Into::into))
             .collect::<Result<Vec<_>>>()
+    }
+
+    /// Returns a list of (column_name, sql_expression) pairs for generated columns
+    fn generated_expressions(&self) -> Vec<(String, String)> {
+        self.0
+            .iter()
+            .filter_map(|(name, value)| {
+                name.strip_prefix("tansu.lake.generate.")
+                    .map(|suffix| (suffix.to_string(), value.clone()))
+            })
+            .collect()
+    }
+
+    fn is_normalized(&self) -> bool {
+        self.0
+            .iter()
+            .find_map(|(name, value)| {
+                (name == "tansu.lake.normalize").then(|| value.parse().ok().unwrap_or_default())
+            })
+            .unwrap_or(false)
+    }
+
+    fn normalize_separator(&self) -> &str {
+        self.0
+            .iter()
+            .find(|(name, _)| name == "tansu.lake.normalize.separator")
+            .map(|(_, value)| value.as_str())
+            .unwrap_or(".")
     }
 }
 
@@ -269,18 +306,37 @@ impl Delta {
             .fields()
             .iter()
             .inspect(|field| debug!(?field))
-            .map(|field| StructField::try_from(field.as_ref()).map_err(Into::into))
+            .map(|field| StructField::try_from_arrow(field.as_ref()).map_err(Into::into))
             .inspect(|struct_field| debug!(?struct_field))
             .collect::<Result<Vec<_>>>()
             .inspect(|columns| debug!(?columns))
             .inspect_err(|err| debug!(?err))?;
 
-        let table = match DeltaOps::try_from_uri(&self.table_uri(name))
-            .await
-            .inspect_err(|err| debug!(?err))?
-            .create()
+        // Validate partition columns exist in schema before creating table
+        let generated_columns = config.generated()?;
+        let all_column_names: std::collections::HashSet<_> = columns
+            .iter()
+            .chain(generated_columns.iter())
+            .map(|c| c.name.as_str())
+            .collect();
+
+        for partition_col in config.partition() {
+            if !all_column_names.contains(partition_col.as_str()) {
+                return Err(Error::DeltaTable(Box::new(
+                    deltalake::errors::DeltaTableError::Generic(format!(
+                        "Partition column {} not found in schema",
+                        partition_col
+                    )),
+                )));
+            }
+        }
+
+        let table_url = Url::parse(&self.table_uri(name))?;
+
+        let table = match CreateBuilder::new()
+            .with_location(table_url.to_string())
             .with_save_mode(SaveMode::Ignore)
-            .with_columns(columns.into_iter().chain(config.generated()?.into_iter()))
+            .with_columns(columns.into_iter().chain(generated_columns.into_iter()))
             .with_partition_columns(config.partition())
             .await
             .inspect(|table| debug!(?table))
@@ -291,7 +347,7 @@ impl Delta {
                     return Ok(table.delta_table);
                 }
 
-                let mut table = DeltaTableBuilder::from_uri(self.table_uri(name)).build()?;
+                let mut table = DeltaTableBuilder::from_url(table_url)?.build()?;
                 table
                     .load()
                     .await
@@ -330,13 +386,76 @@ impl Delta {
         &self,
         name: &str,
         batches: impl Iterator<Item = RecordBatch>,
+        config: &Config,
     ) -> Result<()> {
+        // Transform dot notation struct access to bracket notation
+        // e.g., "meta.timestamp" -> "t.meta['timestamp']"
+        fn transform_struct_access(expr: &str) -> String {
+            use regex::Regex;
+            // Match patterns like "word.word" but not inside strings
+            let re = Regex::new(r"\b([a-zA-Z_][a-zA-Z0-9_]*)\.([a-zA-Z_][a-zA-Z0-9_]*)\b").unwrap();
+            re.replace_all(expr, |caps: &regex::Captures<'_>| {
+                format!("t.{}['{}']", &caps[1], &caps[2])
+            })
+            .to_string()
+        }
+
         let start = SystemTime::now();
 
-        let table = DeltaOps::try_from_uri(&self.table_uri(name))
-            .await
-            .inspect_err(|err| debug!(?err))?
-            .write(batches)
+        let table_url = Url::parse(&self.table_uri(name))?;
+        let mut table = DeltaTableBuilder::from_url(table_url)?.build()?;
+        table.load().await.inspect_err(|err| debug!(?err))?;
+
+        // Compute generated columns using DataFusion
+        let generated_exprs = config.generated_expressions();
+        let batches_with_generated: Vec<RecordBatch> = if generated_exprs.is_empty() {
+            batches.collect()
+        } else {
+            let ctx = SessionContext::new();
+            let mut result_batches = Vec::new();
+
+            for batch in batches {
+                // Register the batch as a table
+                _ = ctx.register_batch("t", batch.clone())?;
+
+                // Build SQL query with generated columns
+                let select_cols: Vec<String> = batch
+                    .schema()
+                    .fields()
+                    .iter()
+                    .map(|f| format!("t.\"{}\"", f.name()))
+                    .collect();
+
+                // Transform expressions to use struct field access syntax
+                // e.g., "cast(meta.timestamp as date)" -> "cast(t.meta['timestamp'] as date)"
+                let generated_cols: Vec<String> = generated_exprs
+                    .iter()
+                    .map(|(col_name, expr)| {
+                        // Convert dot notation to bracket notation for struct access
+                        let transformed_expr = transform_struct_access(expr);
+                        format!("{} AS \"{}\"", transformed_expr, col_name)
+                    })
+                    .collect();
+
+                let all_cols = [select_cols, generated_cols].concat().join(", ");
+                let sql = format!("SELECT {} FROM t", all_cols);
+                debug!(%sql);
+
+                let df = ctx.sql(&sql).await?;
+                let computed_batches = df.collect().await?;
+                result_batches.extend(computed_batches);
+
+                // Deregister the table for the next iteration
+                _ = ctx.deregister_table("t")?;
+            }
+
+            result_batches
+        };
+
+        // Write using WriteBuilder
+        let snapshot = table.snapshot().ok().map(|s| s.snapshot().clone());
+        let table = WriteBuilder::new(table.log_store(), snapshot)
+            .with_input_batches(batches_with_generated.into_iter())
             .await
             .inspect_err(|err| debug!(?err))
             .inspect(|table| {
@@ -344,7 +463,7 @@ impl Delta {
                     start
                         .elapsed()
                         .map_or(0, |duration| duration.as_millis() as u64),
-                    &[KeyValue::new("table_uri", table.table_uri())],
+                    &[KeyValue::new("table_uri", table.table_url().to_string())],
                 )
             })?;
 
@@ -389,10 +508,11 @@ impl Delta {
     }
 
     async fn write(&self, name: &str, mut table: DeltaTable, batch: RecordBatch) -> Result<()> {
-        let properties = [KeyValue::new("table_uri", table.table_uri())];
+        let properties = [KeyValue::new("table_uri", table.table_url().to_string())];
 
         if let Some(num_rows) = NonZeroU32::new(batch.num_rows() as u32) {
-            self.rate_limit(table.table_uri(), num_rows).await?;
+            self.rate_limit(table.table_url().to_string(), num_rows)
+                .await?;
         }
 
         let num_rows = batch.num_rows() as u64;
@@ -432,7 +552,7 @@ impl Delta {
                         start
                             .elapsed()
                             .map_or(0, |duration| duration.as_millis() as u64),
-                        &[KeyValue::new("table", table.table_uri())],
+                        &[KeyValue::new("table", table.table_url().to_string())],
                     )
                 })?;
         }
@@ -480,14 +600,14 @@ impl Delta {
             },
         );
 
-        let (table, metrics) = DeltaOps::try_from_uri(&self.table_uri(name))
-            .await?
-            .optimize()
-            .with_type(optimize_type)
-            .await?;
+        let table_url = Url::parse(&self.table_uri(name))?;
+        let mut table = DeltaTableBuilder::from_url(table_url)?.build()?;
+        table.load().await?;
+
+        let (table, metrics) = table.optimize().with_type(optimize_type).await?;
 
         let properties = [
-            KeyValue::new("table_uri", table.table_uri()),
+            KeyValue::new("table_uri", table.table_url().to_string()),
             optimize_type_label,
         ];
 
@@ -502,58 +622,43 @@ impl Delta {
     }
 
     async fn migrate_schema(&self, table: DeltaTable, schema: &ArrowSchema) -> Result<DeltaTable> {
-        let mut expected = schema
+        let expected = schema
             .fields()
             .iter()
             .inspect(|field| debug!(?field))
-            .map(|field| StructField::try_from(field.as_ref()).map_err(Into::into))
+            .map(|field| StructField::try_from_arrow(field.as_ref()).map_err(Into::into))
             .inspect(|struct_field| debug!(?struct_field))
-            .collect::<Result<VecDeque<_>>>()
+            .collect::<Result<Vec<_>>>()
             .inspect(|columns| debug!(?columns))
             .inspect_err(|err| debug!(?err))?;
 
-        let mut actual = table
+        // Build a set of existing column names (order-independent comparison)
+        let actual_names: std::collections::HashSet<_> = table
             .schema()
-            .map(|schema| schema.fields().collect::<VecDeque<_>>())
-            .unwrap_or_default();
-        debug!(?actual);
+            .fields()
+            .iter()
+            .map(|field| field.name().clone())
+            .collect();
+        debug!(?actual_names);
 
-        let additional = {
-            let mut additional = vec![];
-
-            while !expected.is_empty() {
-                match (expected.pop_front(), actual.pop_front()) {
-                    (Some(expected_field), Some(actual_field))
-                        if expected_field.name == actual_field.name =>
-                    {
-                        debug!(unchanged = expected_field.name);
-
-                        continue;
-                    }
-
-                    (Some(expected_field), None) => {
-                        debug!(additional = expected_field.name);
-                        additional.push(expected_field);
-                    }
-
-                    (Some(expected_field), Some(actual_field)) => {
-                        debug!(expected = expected_field.name, actual = actual_field.name);
-                        todo!("{expected_field:?}, {actual_field:?}")
-                    }
-
-                    (expected_field, actual_field) => {
-                        todo!("{expected_field:?}, {actual_field:?}")
-                    }
+        // Find columns in expected that don't exist in actual
+        let additional: Vec<_> = expected
+            .into_iter()
+            .filter(|field| {
+                if actual_names.contains(&field.name) {
+                    debug!(unchanged = field.name);
+                    false
+                } else {
+                    debug!(additional = field.name);
+                    true
                 }
-            }
-
-            additional
-        };
+            })
+            .collect();
 
         if additional.is_empty() {
             Ok(table)
         } else {
-            DeltaOps::from(table)
+            table
                 .add_columns()
                 .with_fields(additional.into_iter())
                 .await
@@ -564,17 +669,30 @@ impl Delta {
 
 #[async_trait]
 impl LakeHouse for Delta {
+    #[instrument(skip(self, inflated, config), ret)]
     async fn store(
         &self,
         topic: &str,
         partition: i32,
         offset: i64,
-        record_batch: RecordBatch,
+        inflated: &Batch,
         config: DescribeConfigsResult,
     ) -> Result<()> {
-        debug!(%topic, partition, offset, rows = record_batch.num_rows(), columns = record_batch.num_columns(), ?config);
-
         let config = Config::from(config);
+        debug!(?config);
+
+        let record_batch = self
+            .schema_registry
+            .as_arrow(topic, partition, inflated, LakeHouseType::Delta)
+            .await?;
+
+        let record_batch = if config.is_normalized() {
+            record_batch.normalize(config.normalize_separator(), None)?
+        } else {
+            record_batch
+        };
+
+        debug!(%topic, partition, offset, rows = record_batch.num_rows(), columns = record_batch.num_columns(), ?config);
 
         let table =
             if let Some(table) = self.tables.lock().map(|guard| guard.get(topic).cloned())? {
@@ -592,7 +710,7 @@ impl LakeHouse for Delta {
             _ = self.write(topic, table, record_batch).await?;
         } else {
             _ = self
-                .write_with_datafusion(topic, [record_batch].into_iter())
+                .write_with_datafusion(topic, [record_batch].into_iter(), &config)
                 .await
                 .inspect(|delta_table| debug!(?delta_table))
                 .inspect_err(|err| debug!(?err))?;
@@ -601,6 +719,7 @@ impl LakeHouse for Delta {
         Ok(())
     }
 
+    #[instrument(skip(self), ret)]
     async fn maintain(&self) -> Result<()> {
         debug!(?self);
 
@@ -621,19 +740,21 @@ impl LakeHouse for Delta {
         Ok(())
     }
 
+    #[instrument(skip(self), ret)]
     async fn lake_type(&self) -> Result<LakeHouseType> {
         Ok(LakeHouseType::Delta)
     }
 }
 
-impl TryFrom<Builder<Url>> for Delta {
+impl TryFrom<Builder<Url, Registry>> for Delta {
     type Error = Error;
 
-    fn try_from(value: Builder<Url>) -> Result<Self, Self::Error> {
+    fn try_from(value: Builder<Url, Registry>) -> Result<Self, Self::Error> {
         aws::register_handlers(None);
 
         Ok(Self {
             location: value.location,
+            schema_registry: value.schema_registry,
             database: value.database.unwrap_or(String::from("tansu")),
             tables: Arc::new(Mutex::new(HashMap::new())),
             rate_limiter: value
@@ -649,13 +770,13 @@ impl TryFrom<Builder<Url>> for Delta {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs::File, marker::PhantomData, sync::Arc, thread};
-
     use arrow::util::pretty::pretty_format_batches;
     use bytes::Bytes;
     use datafusion::execution::context::SessionContext;
     use deltalake::DeltaTableBuilder;
+    use object_store::{ObjectStoreExt as _, PutPayload, memory::InMemory, path::Path};
     use serde_json::json;
+    use std::{fs::File, marker::PhantomData, str::FromStr as _, sync::Arc, thread};
     use tansu_sans_io::{
         ConfigResource, ErrorCode,
         describe_configs_response::DescribeConfigsResourceResult,
@@ -665,7 +786,7 @@ mod tests {
     use tracing::subscriber::DefaultGuard;
     use tracing_subscriber::EnvFilter;
 
-    use crate::{AsArrow, Error};
+    use crate::Error;
 
     use super::*;
 
@@ -733,6 +854,7 @@ mod tests {
     }
 
     mod proto {
+
         use super::*;
         use crate::{
             Generator,
@@ -742,6 +864,8 @@ mod tests {
         #[tokio::test]
         async fn message_descriptor_singular_to_field() -> Result<()> {
             let _guard = init_tracing()?;
+
+            let topic = "abc";
 
             let proto = Bytes::from_static(
                 br#"
@@ -769,6 +893,14 @@ mod tests {
                 }
                 "#,
             );
+
+            let object_store = InMemory::new();
+
+            let location = Path::from(format!("{topic}.proto"));
+            _ = object_store
+                .put(&location, PutPayload::from(proto.clone()))
+                .await?;
+            let schema_registry = Registry::new(object_store);
 
             let kv = [(
                 json!({"id": 32123}),
@@ -805,11 +937,10 @@ mod tests {
                     );
                 }
 
-                batch
-                    .build()
-                    .map_err(Into::into)
-                    .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))
+                batch.build()
             }?;
+
+            schema_registry.validate(topic, &record_batch).await?;
 
             let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
             let location = format!("file://{}", temp_dir.path().to_str().unwrap());
@@ -819,13 +950,12 @@ mod tests {
                 Url::parse(location.as_ref())
                     .map_err(Into::into)
                     .and_then(|location| {
-                        Builder::<PhantomData<Url>>::default()
+                        Builder::<PhantomData<Url>, PhantomData<Registry>>::default()
                             .location(location)
                             .database(Some(database.into()))
+                            .schema_registry(schema_registry)
                             .build()
                     })?;
-
-            let topic = "abc";
 
             let config = DescribeConfigsResult::default()
                 .error_code(ErrorCode::None.into())
@@ -848,15 +978,16 @@ mod tests {
             let offset = 543212345;
 
             lake_house
-                .store(topic, partition, offset, record_batch, config)
+                .store(topic, partition, offset, &record_batch, config)
                 .await
                 .inspect(|result| debug!(?result))
                 .inspect_err(|err| debug!(?err))?;
 
             let table = {
-                let mut table =
-                    DeltaTableBuilder::from_uri(format!("{location}/{database}.{topic}"))
-                        .build()?;
+                let mut table = DeltaTableBuilder::from_url(Url::parse(&format!(
+                    "{location}/{database}.{topic}"
+                ))?)?
+                .build()?;
                 table.load().await?;
                 table
             };
@@ -887,6 +1018,8 @@ mod tests {
         async fn taxi_plain() -> Result<()> {
             let _guard = init_tracing()?;
 
+            let topic = "taxi";
+
             let schema = Schema::try_from(Bytes::from_static(include_bytes!(
                 "../../../../tansu/etc/schema/taxi.proto"
             )))?;
@@ -907,25 +1040,26 @@ mod tests {
             let record_batch = Batch::builder()
                 .record(Record::builder().value(value.into()))
                 .base_timestamp(119_731_017_000)
-                .build()
-                .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))?;
+                .build()?;
 
             let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
             let location = format!("file://{}", temp_dir.path().to_str().unwrap());
             let database = "pqr";
 
+            let schema_registry = Registry::from_str("file://../../../etc/schema")?;
+
+            schema_registry.validate(topic, &record_batch).await?;
+
             let lake_house =
                 Url::parse(location.as_ref())
                     .map_err(Into::into)
                     .and_then(|location| {
-                        Builder::<PhantomData<Url>>::default()
+                        Builder::<PhantomData<Url>, PhantomData<Registry>>::default()
                             .location(location)
                             .database(Some(database.into()))
+                            .schema_registry(schema_registry)
                             .build()
                     })?;
-
-            let topic = "taxi";
 
             let config = DescribeConfigsResult::default()
                 .error_code(ErrorCode::None.into())
@@ -937,15 +1071,16 @@ mod tests {
             let offset = 543212345;
 
             lake_house
-                .store(topic, partition, offset, record_batch, config)
+                .store(topic, partition, offset, &record_batch, config)
                 .await
                 .inspect(|result| debug!(?result))
                 .inspect_err(|err| debug!(?err))?;
 
             let table = {
-                let mut table =
-                    DeltaTableBuilder::from_uri(format!("{location}/{database}.{topic}"))
-                        .build()?;
+                let mut table = DeltaTableBuilder::from_url(Url::parse(&format!(
+                    "{location}/{database}.{topic}"
+                ))?)?
+                .build()?;
                 table.load().await?;
                 table
             };
@@ -976,6 +1111,8 @@ mod tests {
         async fn taxi_normalized() -> Result<()> {
             let _guard = init_tracing()?;
 
+            let topic = "taxi";
+
             let schema = Schema::try_from(Bytes::from_static(include_bytes!(
                 "../../../../tansu/etc/schema/taxi.proto"
             )))?;
@@ -996,25 +1133,26 @@ mod tests {
             let record_batch = Batch::builder()
                 .record(Record::builder().value(value.into()))
                 .base_timestamp(119_731_017_000)
-                .build()
-                .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))?;
+                .build()?;
 
             let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
             let location = format!("file://{}", temp_dir.path().to_str().unwrap());
             let database = "pqr";
 
+            let schema_registry = Registry::from_str("file://../../../etc/schema")?;
+
+            schema_registry.validate(topic, &record_batch).await?;
+
             let lake_house =
                 Url::parse(location.as_ref())
                     .map_err(Into::into)
                     .and_then(|location| {
-                        Builder::<PhantomData<Url>>::default()
+                        Builder::<PhantomData<Url>, PhantomData<Registry>>::default()
                             .location(location)
                             .database(Some(database.into()))
+                            .schema_registry(schema_registry)
                             .build()
                     })?;
-
-            let topic = "taxi";
 
             let config = DescribeConfigsResult::default()
                 .error_code(ErrorCode::None.into())
@@ -1037,15 +1175,16 @@ mod tests {
             let offset = 543212345;
 
             lake_house
-                .store(topic, partition, offset, record_batch, config)
+                .store(topic, partition, offset, &record_batch, config)
                 .await
                 .inspect(|result| debug!(?result))
                 .inspect_err(|err| debug!(?err))?;
 
             let table = {
-                let mut table =
-                    DeltaTableBuilder::from_uri(format!("{location}/{database}.{topic}"))
-                        .build()?;
+                let mut table = DeltaTableBuilder::from_url(Url::parse(&format!(
+                    "{location}/{database}.{topic}"
+                ))?)?
+                .build()?;
                 table.load().await?;
                 table
             };
@@ -1076,6 +1215,8 @@ mod tests {
         async fn taxi_normalized_with_separator() -> Result<()> {
             let _guard = init_tracing()?;
 
+            let topic = "taxi";
+
             let schema = Schema::try_from(Bytes::from_static(include_bytes!(
                 "../../../../tansu/etc/schema/taxi.proto"
             )))?;
@@ -1096,25 +1237,26 @@ mod tests {
             let record_batch = Batch::builder()
                 .record(Record::builder().value(value.into()))
                 .base_timestamp(119_731_017_000)
-                .build()
-                .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))?;
+                .build()?;
 
             let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
             let location = format!("file://{}", temp_dir.path().to_str().unwrap());
             let database = "pqr";
 
+            let schema_registry = Registry::from_str("file://../../../etc/schema")?;
+
+            schema_registry.validate(topic, &record_batch).await?;
+
             let lake_house =
                 Url::parse(location.as_ref())
                     .map_err(Into::into)
                     .and_then(|location| {
-                        Builder::<PhantomData<Url>>::default()
+                        Builder::<PhantomData<Url>, PhantomData<Registry>>::default()
                             .location(location)
                             .database(Some(database.into()))
+                            .schema_registry(schema_registry)
                             .build()
                     })?;
-
-            let topic = "taxi";
 
             let config = DescribeConfigsResult::default()
                 .error_code(ErrorCode::None.into())
@@ -1147,15 +1289,16 @@ mod tests {
             let offset = 543212345;
 
             lake_house
-                .store(topic, partition, offset, record_batch, config)
+                .store(topic, partition, offset, &record_batch, config)
                 .await
                 .inspect(|result| debug!(?result))
                 .inspect_err(|err| debug!(?err))?;
 
             let table = {
-                let mut table =
-                    DeltaTableBuilder::from_uri(format!("{location}/{database}.{topic}"))
-                        .build()?;
+                let mut table = DeltaTableBuilder::from_url(Url::parse(&format!(
+                    "{location}/{database}.{topic}"
+                ))?)?
+                .build()?;
                 table.load().await?;
                 table
             };
@@ -1186,6 +1329,8 @@ mod tests {
         async fn taxi_normalized_partition_on_value_dot_vendor_id() -> Result<()> {
             let _guard = init_tracing()?;
 
+            let topic = "taxi";
+
             let schema = Schema::try_from(Bytes::from_static(include_bytes!(
                 "../../../../tansu/etc/schema/taxi.proto"
             )))?;
@@ -1206,25 +1351,26 @@ mod tests {
             let record_batch = Batch::builder()
                 .record(Record::builder().value(value.into()))
                 .base_timestamp(119_731_017_000)
-                .build()
-                .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))?;
+                .build()?;
 
             let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
             let location = format!("file://{}", temp_dir.path().to_str().unwrap());
             let database = "pqr";
 
+            let schema_registry = Registry::from_str("file://../../../etc/schema")?;
+
+            schema_registry.validate(topic, &record_batch).await?;
+
             let lake_house =
                 Url::parse(location.as_ref())
                     .map_err(Into::into)
                     .and_then(|location| {
-                        Builder::<PhantomData<Url>>::default()
+                        Builder::<PhantomData<Url>, PhantomData<Registry>>::default()
                             .location(location)
                             .database(Some(database.into()))
+                            .schema_registry(schema_registry)
                             .build()
                     })?;
-
-            let topic = "taxi";
 
             let config = DescribeConfigsResult::default()
                 .error_code(ErrorCode::None.into())
@@ -1257,15 +1403,16 @@ mod tests {
             let offset = 543212345;
 
             lake_house
-                .store(topic, partition, offset, record_batch, config)
+                .store(topic, partition, offset, &record_batch, config)
                 .await
                 .inspect(|result| debug!(?result))
                 .inspect_err(|err| debug!(?err))?;
 
             let table = {
-                let mut table =
-                    DeltaTableBuilder::from_uri(format!("{location}/{database}.{topic}"))
-                        .build()?;
+                let mut table = DeltaTableBuilder::from_url(Url::parse(&format!(
+                    "{location}/{database}.{topic}"
+                ))?)?
+                .build()?;
                 table.load().await?;
                 table
             };
@@ -1296,6 +1443,8 @@ mod tests {
         async fn taxi_date_generated_field() -> Result<()> {
             let _guard = init_tracing()?;
 
+            let topic = "taxi";
+
             let schema = Schema::try_from(Bytes::from_static(include_bytes!(
                 "../../../../tansu/etc/schema/taxi.proto"
             )))?;
@@ -1316,25 +1465,26 @@ mod tests {
             let record_batch = Batch::builder()
                 .record(Record::builder().value(value.into()))
                 .base_timestamp(119_731_017_000)
-                .build()
-                .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))?;
+                .build()?;
 
             let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
             let location = format!("file://{}", temp_dir.path().to_str().unwrap());
             let database = "pqr";
 
+            let schema_registry = Registry::from_str("file://../../../etc/schema")?;
+
+            schema_registry.validate(topic, &record_batch).await?;
+
             let lake_house =
                 Url::parse(location.as_ref())
                     .map_err(Into::into)
                     .and_then(|location| {
-                        Builder::<PhantomData<Url>>::default()
+                        Builder::<PhantomData<Url>, PhantomData<Registry>>::default()
                             .location(location)
                             .database(Some(database.into()))
+                            .schema_registry(schema_registry)
                             .build()
                     })?;
-
-            let topic = "taxi";
 
             let config = DescribeConfigsResult::default()
                 .error_code(ErrorCode::None.into())
@@ -1357,15 +1507,16 @@ mod tests {
             let offset = 543212345;
 
             lake_house
-                .store(topic, partition, offset, record_batch, config)
+                .store(topic, partition, offset, &record_batch, config)
                 .await
                 .inspect(|result| debug!(?result))
                 .inspect_err(|err| debug!(?err))?;
 
             let table = {
-                let mut table =
-                    DeltaTableBuilder::from_uri(format!("{location}/{database}.{topic}"))
-                        .build()?;
+                let mut table = DeltaTableBuilder::from_url(Url::parse(&format!(
+                    "{location}/{database}.{topic}"
+                ))?)?
+                .build()?;
                 table.load().await?;
                 table
             };
@@ -1396,6 +1547,8 @@ mod tests {
         async fn taxi_partition_on_date_generated_field() -> Result<()> {
             let _guard = init_tracing()?;
 
+            let topic = "taxi";
+
             let schema = Schema::try_from(Bytes::from_static(include_bytes!(
                 "../../../../tansu/etc/schema/taxi.proto"
             )))?;
@@ -1416,25 +1569,26 @@ mod tests {
             let record_batch = Batch::builder()
                 .record(Record::builder().value(value.into()))
                 .base_timestamp(119_731_017_000)
-                .build()
-                .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))?;
+                .build()?;
 
             let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
             let location = format!("file://{}", temp_dir.path().to_str().unwrap());
             let database = "pqr";
 
+            let schema_registry = Registry::from_str("file://../../../etc/schema")?;
+
+            schema_registry.validate(topic, &record_batch).await?;
+
             let lake_house =
                 Url::parse(location.as_ref())
                     .map_err(Into::into)
                     .and_then(|location| {
-                        Builder::<PhantomData<Url>>::default()
+                        Builder::<PhantomData<Url>, PhantomData<Registry>>::default()
                             .location(location)
                             .database(Some(database.into()))
+                            .schema_registry(schema_registry)
                             .build()
                     })?;
-
-            let topic = "taxi";
 
             let config = DescribeConfigsResult::default()
                 .error_code(ErrorCode::None.into())
@@ -1467,15 +1621,16 @@ mod tests {
             let offset = 543212345;
 
             lake_house
-                .store(topic, partition, offset, record_batch, config)
+                .store(topic, partition, offset, &record_batch, config)
                 .await
                 .inspect(|result| debug!(?result))
                 .inspect_err(|err| debug!(?err))?;
 
             let table = {
-                let mut table =
-                    DeltaTableBuilder::from_uri(format!("{location}/{database}.{topic}"))
-                        .build()?;
+                let mut table = DeltaTableBuilder::from_url(Url::parse(&format!(
+                    "{location}/{database}.{topic}"
+                ))?)?
+                .build()?;
                 table.load().await?;
                 table
             };
@@ -1506,6 +1661,8 @@ mod tests {
         async fn taxi_partition_on_value_vendor_id_is_an_error() -> Result<()> {
             let _guard = init_tracing()?;
 
+            let topic = "taxi";
+
             let schema = Schema::try_from(Bytes::from_static(include_bytes!(
                 "../../../../tansu/etc/schema/taxi.proto"
             )))?;
@@ -1526,25 +1683,26 @@ mod tests {
             let record_batch = Batch::builder()
                 .record(Record::builder().value(value.into()))
                 .base_timestamp(119_731_017_000)
-                .build()
-                .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))?;
+                .build()?;
 
             let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
             let location = format!("file://{}", temp_dir.path().to_str().unwrap());
             let database = "pqr";
 
+            let schema_registry = Registry::from_str("file://../../../etc/schema")?;
+
+            schema_registry.validate(topic, &record_batch).await?;
+
             let lake_house =
                 Url::parse(location.as_ref())
                     .map_err(Into::into)
                     .and_then(|location| {
-                        Builder::<PhantomData<Url>>::default()
+                        Builder::<PhantomData<Url>, PhantomData<Registry>>::default()
                             .location(location)
                             .database(Some(database.into()))
+                            .schema_registry(schema_registry)
                             .build()
                     })?;
-
-            let topic = "taxi";
 
             let config = DescribeConfigsResult::default()
                 .error_code(ErrorCode::None.into())
@@ -1566,18 +1724,15 @@ mod tests {
 
             let offset = 543212345;
 
-            let not_found_in_schema =
-                String::from("Partition column value.vendor_id not found in schema");
+            let not_found_in_schema = "Partition column value.vendor_id not found in schema";
 
             assert!(matches!(
                 lake_house
-                    .store(topic, partition, offset, record_batch, config)
+                    .store(topic, partition, offset, &record_batch, config)
                     .await
                     .inspect(|result| debug!(?result))
                     .inspect_err(|err| debug!(?err)),
-                Err(Error::DeltaTable(
-                    deltalake::errors::DeltaTableError::Generic(error)
-                )) if error == not_found_in_schema
+                Err(Error::DeltaTable(ref boxed)) if matches!(&**boxed, deltalake::errors::DeltaTableError::Generic(error) if error == not_found_in_schema)
             ));
 
             Ok(())
@@ -1586,6 +1741,8 @@ mod tests {
         #[tokio::test]
         async fn taxi_partition_on_vendor_id_generated_field() -> Result<()> {
             let _guard = init_tracing()?;
+
+            let topic = "taxi";
 
             let schema = Schema::try_from(Bytes::from_static(include_bytes!(
                 "../../../../tansu/etc/schema/taxi.proto"
@@ -1607,25 +1764,26 @@ mod tests {
             let record_batch = Batch::builder()
                 .record(Record::builder().value(value.into()))
                 .base_timestamp(119_731_017_000)
-                .build()
-                .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))?;
+                .build()?;
 
             let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
             let location = format!("file://{}", temp_dir.path().to_str().unwrap());
             let database = "pqr";
 
+            let schema_registry = Registry::from_str("file://../../../etc/schema")?;
+
+            schema_registry.validate(topic, &record_batch).await?;
+
             let lake_house =
                 Url::parse(location.as_ref())
                     .map_err(Into::into)
                     .and_then(|location| {
-                        Builder::<PhantomData<Url>>::default()
+                        Builder::<PhantomData<Url>, PhantomData<Registry>>::default()
                             .location(location)
                             .database(Some(database.into()))
+                            .schema_registry(schema_registry)
                             .build()
                     })?;
-
-            let topic = "taxi";
 
             let config = DescribeConfigsResult::default()
                 .error_message(None)
@@ -1687,15 +1845,16 @@ mod tests {
             let offset = 543212345;
 
             lake_house
-                .store(topic, partition, offset, record_batch, config)
+                .store(topic, partition, offset, &record_batch, config)
                 .await
                 .inspect(|result| debug!(?result))
                 .inspect_err(|err| debug!(?err))?;
 
             let table = {
-                let mut table =
-                    DeltaTableBuilder::from_uri(format!("{location}/{database}.{topic}"))
-                        .build()?;
+                let mut table = DeltaTableBuilder::from_url(Url::parse(&format!(
+                    "{location}/{database}.{topic}"
+                ))?)?
+                .build()?;
                 table.load().await?;
                 table
             };
@@ -1726,9 +1885,18 @@ mod tests {
         async fn repeated_string() -> Result<()> {
             let _guard = init_tracing()?;
 
-            let schema = Schema::try_from(Bytes::from_static(include_bytes!(
-                "../../tests/repeated-string.proto"
-            )))?;
+            let topic = "t";
+
+            let proto = Bytes::from_static(include_bytes!("../../tests/repeated-string.proto"));
+            let object_store = InMemory::new();
+
+            let location = Path::from(format!("{topic}.proto"));
+            _ = object_store
+                .put(&location, PutPayload::from(proto.clone()))
+                .await?;
+            let schema_registry = Registry::new(object_store);
+
+            let schema = Schema::try_from(proto)?;
 
             let value = schema.encode_from_value(
                 MessageKind::Value,
@@ -1743,25 +1911,24 @@ mod tests {
             let record_batch = Batch::builder()
                 .record(Record::builder().value(value.into()))
                 .base_timestamp(119_731_017_000)
-                .build()
-                .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))?;
+                .build()?;
 
             let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
             let location = format!("file://{}", temp_dir.path().to_str().unwrap());
             let database = "pqr";
 
+            schema_registry.validate(topic, &record_batch).await?;
+
             let lake_house =
                 Url::parse(location.as_ref())
                     .map_err(Into::into)
                     .and_then(|location| {
-                        Builder::<PhantomData<Url>>::default()
+                        Builder::<PhantomData<Url>, PhantomData<Registry>>::default()
                             .location(location)
                             .database(Some(database.into()))
+                            .schema_registry(schema_registry)
                             .build()
                     })?;
-
-            let topic = "t";
 
             let config = DescribeConfigsResult::default()
                 .error_code(ErrorCode::None.into())
@@ -1773,15 +1940,16 @@ mod tests {
             let offset = 543212345;
 
             lake_house
-                .store(topic, partition, offset, record_batch, config)
+                .store(topic, partition, offset, &record_batch, config)
                 .await
                 .inspect(|result| debug!(?result))
                 .inspect_err(|err| debug!(?err))?;
 
             let table = {
-                let mut table =
-                    DeltaTableBuilder::from_uri(format!("{location}/{database}.{topic}"))
-                        .build()?;
+                let mut table = DeltaTableBuilder::from_url(Url::parse(&format!(
+                    "{location}/{database}.{topic}"
+                ))?)?
+                .build()?;
                 table.load().await?;
                 table
             };
@@ -1812,20 +1980,28 @@ mod tests {
         async fn customer_schema_migration() -> Result<()> {
             let _guard = init_tracing()?;
 
+            let topic = "t";
             let partition = 32123;
 
-            let record_batch_001 = {
-                let schema = Schema::try_from(Bytes::from_static(include_bytes!(
-                    "../../tests/migrate-001.proto"
-                )))?;
+            let (schema_registry, record_batch_001) = {
+                let proto = Bytes::from_static(include_bytes!("../../tests/migrate-001.proto"));
+                let schema = Schema::try_from(proto.clone())?;
 
-                Batch::builder()
-                    .record(schema.generate()?)
-                    .base_timestamp(119_731_017_000)
-                    .build()
-                    .map_err(Into::into)
-                    .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))?
+                let object_store = InMemory::new();
+
+                let location = Path::from(format!("{topic}.proto"));
+                _ = object_store.put(&location, PutPayload::from(proto)).await?;
+
+                (
+                    Registry::new(object_store),
+                    Batch::builder()
+                        .record(schema.generate()?)
+                        .base_timestamp(119_731_017_000)
+                        .build()?,
+                )
             };
+
+            schema_registry.validate(topic, &record_batch_001).await?;
 
             let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
             let location = format!("file://{}", temp_dir.path().to_str().unwrap());
@@ -1835,13 +2011,12 @@ mod tests {
                 Url::parse(location.as_ref())
                     .map_err(Into::into)
                     .and_then(|location| {
-                        Builder::<PhantomData<Url>>::default()
+                        Builder::<PhantomData<Url>, PhantomData<Registry>>::default()
                             .location(location)
                             .database(Some(database.into()))
+                            .schema_registry(schema_registry)
                             .build()
                     })?;
-
-            let topic = "t";
 
             let config = DescribeConfigsResult::default()
                 .error_code(ErrorCode::None.into())
@@ -1858,15 +2033,16 @@ mod tests {
             let offset = 543212345;
 
             lake_house
-                .store(topic, partition, offset, record_batch_001, config.clone())
+                .store(topic, partition, offset, &record_batch_001, config.clone())
                 .await
                 .inspect(|result| debug!(?result))
                 .inspect_err(|err| debug!(?err))?;
 
             let table = {
-                let mut table =
-                    DeltaTableBuilder::from_uri(format!("{location}/{database}.{topic}"))
-                        .build()?;
+                let mut table = DeltaTableBuilder::from_url(Url::parse(&format!(
+                    "{location}/{database}.{topic}"
+                ))?)?
+                .build()?;
                 table.load().await?;
                 table
             };
@@ -1889,31 +2065,50 @@ mod tests {
 
             assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
 
-            let record_batch_002 = {
-                let schema = Schema::try_from(Bytes::from_static(include_bytes!(
-                    "../../tests/migrate-002.proto"
-                )))?;
+            let (schema_registry, record_batch_002) = {
+                let proto = Bytes::from_static(include_bytes!("../../tests/migrate-002.proto"));
+                let schema = Schema::try_from(proto.clone())?;
 
-                Batch::builder()
-                    .record(schema.generate()?)
-                    .base_timestamp(119_731_017_000)
-                    .build()
-                    .map_err(Into::into)
-                    .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))?
+                let object_store = InMemory::new();
+
+                let location = Path::from(format!("{topic}.proto"));
+                _ = object_store.put(&location, PutPayload::from(proto)).await?;
+
+                (
+                    Registry::new(object_store),
+                    Batch::builder()
+                        .record(schema.generate()?)
+                        .base_timestamp(119_731_017_000)
+                        .build()?,
+                )
             };
+
+            schema_registry.validate(topic, &record_batch_002).await?;
+
+            let lake_house =
+                Url::parse(location.as_ref())
+                    .map_err(Into::into)
+                    .and_then(|location| {
+                        Builder::<PhantomData<Url>, PhantomData<Registry>>::default()
+                            .location(location)
+                            .database(Some(database.into()))
+                            .schema_registry(schema_registry)
+                            .build()
+                    })?;
 
             let offset = 654323456;
 
             lake_house
-                .store(topic, partition, offset, record_batch_002, config.clone())
+                .store(topic, partition, offset, &record_batch_002, config.clone())
                 .await
                 .inspect(|result| debug!(?result))
                 .inspect_err(|err| debug!(?err))?;
 
             let table = {
-                let mut table =
-                    DeltaTableBuilder::from_uri(format!("{location}/{database}.{topic}"))
-                        .build()?;
+                let mut table = DeltaTableBuilder::from_url(Url::parse(&format!(
+                    "{location}/{database}.{topic}"
+                ))?)?
+                .build()?;
                 table.load().await?;
                 table
             };
@@ -1937,31 +2132,50 @@ mod tests {
 
             assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
 
-            let record_batch_003 = {
-                let schema = Schema::try_from(Bytes::from_static(include_bytes!(
-                    "../../tests/migrate-003.proto"
-                )))?;
+            let (schema_registry, record_batch_003) = {
+                let proto = Bytes::from_static(include_bytes!("../../tests/migrate-003.proto"));
+                let schema = Schema::try_from(proto.clone())?;
 
-                Batch::builder()
-                    .record(schema.generate()?)
-                    .base_timestamp(119_731_017_000)
-                    .build()
-                    .map_err(Into::into)
-                    .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))?
+                let object_store = InMemory::new();
+
+                let location = Path::from(format!("{topic}.proto"));
+                _ = object_store.put(&location, PutPayload::from(proto)).await?;
+
+                (
+                    Registry::new(object_store),
+                    Batch::builder()
+                        .record(schema.generate()?)
+                        .base_timestamp(119_731_017_000)
+                        .build()?,
+                )
             };
+
+            schema_registry.validate(topic, &record_batch_003).await?;
+
+            let lake_house =
+                Url::parse(location.as_ref())
+                    .map_err(Into::into)
+                    .and_then(|location| {
+                        Builder::<PhantomData<Url>, PhantomData<Registry>>::default()
+                            .location(location)
+                            .database(Some(database.into()))
+                            .schema_registry(schema_registry)
+                            .build()
+                    })?;
 
             let offset = 765434567;
 
             lake_house
-                .store(topic, partition, offset, record_batch_003, config)
+                .store(topic, partition, offset, &record_batch_003, config)
                 .await
                 .inspect(|result| debug!(?result))
                 .inspect_err(|err| debug!(?err))?;
 
             let table = {
-                let mut table =
-                    DeltaTableBuilder::from_uri(format!("{location}/{database}.{topic}"))
-                        .build()?;
+                let mut table = DeltaTableBuilder::from_url(Url::parse(&format!(
+                    "{location}/{database}.{topic}"
+                ))?)?
+                .build()?;
                 table.load().await?;
                 table
             };
@@ -1998,24 +2212,34 @@ mod tests {
         async fn record_of_primitive_data_types() -> Result<()> {
             let _guard = init_tracing()?;
 
-            let schema = Schema::from(json!({
-                "type": "record",
-                "name": "Message",
-                "fields": [
-                    {"name": "value", "type": "record", "fields": [
-                    {"name": "b", "type": "boolean"},
-                    {"name": "c", "type": "int"},
-                    {"name": "d", "type": "long"},
-                    {"name": "e", "type": "float"},
-                    {"name": "f", "type": "double"},
-                    {"name": "h", "type": "string"}
-                    ]}
-                ]
-            }));
+            let definition = json!({
+                          "type": "record",
+                          "name": "Message",
+                          "fields": [
+                            {
+                              "name": "value",
+                              "type": {
+                                "name": "sub",
+                                "type": "record",
+                                "fields": [
+                                  { "name": "b", "type": "boolean" },
+                                  { "name": "c", "type": "int" },
+                                  { "name": "d", "type": "long" },
+                                  { "name": "e", "type": "float" },
+                                  { "name": "f", "type": "double" },
+                                  { "name": "h", "type": "string" }
+                                ]
+                              }
+                            }
+                          ]
+                        }
+            );
 
+            let topic = "abc";
             let partition = 32123;
 
-            let record_batch = {
+            let (schema_registry, record_batch) = {
+                let schema = Schema::from(definition.clone());
                 let mut batch = Batch::builder().base_timestamp(1_234_567_890 * 1_000);
 
                 let values = [r(
@@ -2037,11 +2261,25 @@ mod tests {
                         ))
                 }
 
-                batch
-                    .build()
-                    .map_err(Into::into)
-                    .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))
-            }?;
+                let object_store = InMemory::new();
+                {
+                    let location = Path::from(format!("{topic}.avsc"));
+                    _ = object_store
+                        .put(
+                            &location,
+                            serde_json::to_vec(&definition)
+                                .map(Bytes::from)
+                                .map(PutPayload::from)?,
+                        )
+                        .await?;
+                }
+
+                let registry = Registry::new(object_store);
+
+                (registry, batch.build()?)
+            };
+
+            schema_registry.validate(topic, &record_batch).await?;
 
             let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
             let location = format!("file://{}", temp_dir.path().to_str().unwrap());
@@ -2051,13 +2289,12 @@ mod tests {
                 Url::parse(location.as_ref())
                     .map_err(Into::into)
                     .and_then(|location| {
-                        Builder::<PhantomData<Url>>::default()
+                        Builder::<PhantomData<Url>, PhantomData<Registry>>::default()
                             .location(location)
                             .database(Some(database.into()))
+                            .schema_registry(schema_registry)
                             .build()
                     })?;
-
-            let topic = "abc";
 
             let config = DescribeConfigsResult::default()
                 .error_code(ErrorCode::None.into())
@@ -2080,15 +2317,16 @@ mod tests {
             let offset = 543212345;
 
             lake_house
-                .store(topic, partition, offset, record_batch, config)
+                .store(topic, partition, offset, &record_batch, config)
                 .await
                 .inspect(|result| debug!(?result))
                 .inspect_err(|err| debug!(?err))?;
 
             let table = {
-                let mut table =
-                    DeltaTableBuilder::from_uri(format!("{location}/{database}.{topic}"))
-                        .build()?;
+                let mut table = DeltaTableBuilder::from_url(Url::parse(&format!(
+                    "{location}/{database}.{topic}"
+                ))?)?
+                .build()?;
                 table.load().await?;
                 table
             };
@@ -2120,15 +2358,13 @@ mod tests {
         use serde_json::Value;
 
         use super::*;
-        use crate::json::Schema;
 
         #[tokio::test]
         async fn grade() -> Result<()> {
             let _guard = init_tracing()?;
 
-            let schema = Schema::try_from(Bytes::from_static(include_bytes!(
-                "../../../../tansu/etc/schema/grade.json"
-            )))?;
+            let definition =
+                Bytes::from_static(include_bytes!("../../../../tansu/etc/schema/grade.json"));
 
             let kv = if let Value::Array(values) = serde_json::from_slice::<Value>(include_bytes!(
                 "../../../../tansu/etc/data/grades.json"
@@ -2146,9 +2382,10 @@ mod tests {
                 vec![]
             };
 
+            let topic = "abc";
             let partition = 32123;
 
-            let record_batch = {
+            let (schema_registry, record_batch) = {
                 let mut batch = Batch::builder().base_timestamp(1_234_567_890 * 1_000);
 
                 for (ref key, ref value) in kv {
@@ -2161,11 +2398,25 @@ mod tests {
                     );
                 }
 
-                batch
-                    .build()
-                    .map_err(Into::into)
-                    .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Delta))
-            }?;
+                let object_store = InMemory::new();
+                {
+                    let location = Path::from(format!("{topic}.json"));
+                    _ = object_store
+                        .put(
+                            &location,
+                            serde_json::to_vec(&definition)
+                                .map(Bytes::from)
+                                .map(PutPayload::from)?,
+                        )
+                        .await?;
+                }
+
+                let registry = Registry::new(object_store);
+
+                (registry, batch.build()?)
+            };
+
+            schema_registry.validate(topic, &record_batch).await?;
 
             let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
             let location = format!("file://{}", temp_dir.path().to_str().unwrap());
@@ -2175,13 +2426,12 @@ mod tests {
                 Url::parse(location.as_ref())
                     .map_err(Into::into)
                     .and_then(|location| {
-                        Builder::<PhantomData<Url>>::default()
+                        Builder::<PhantomData<Url>, PhantomData<Registry>>::default()
                             .location(location)
                             .database(Some(database.into()))
+                            .schema_registry(schema_registry)
                             .build()
                     })?;
-
-            let topic = "abc";
 
             let config = DescribeConfigsResult::default()
                 .error_code(ErrorCode::None.into())
@@ -2193,15 +2443,16 @@ mod tests {
             let offset = 543212345;
 
             lake_house
-                .store(topic, partition, offset, record_batch, config)
+                .store(topic, partition, offset, &record_batch, config)
                 .await
                 .inspect(|result| debug!(?result))
                 .inspect_err(|err| debug!(?err))?;
 
             let table = {
-                let mut table =
-                    DeltaTableBuilder::from_uri(format!("{location}/{database}.{topic}"))
-                        .build()?;
+                let mut table = DeltaTableBuilder::from_url(Url::parse(&format!(
+                    "{location}/{database}.{topic}"
+                ))?)?
+                .build()?;
                 table.load().await?;
                 table
             };

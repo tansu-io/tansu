@@ -36,7 +36,7 @@ use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use serde_json::{Map, Value, json};
 
 use tansu_sans_io::record::inflated::Batch;
-use tracing::{debug, error};
+use tracing::{debug, error, instrument};
 
 const NULLABLE: bool = true;
 
@@ -450,14 +450,14 @@ fn append(field: &Field, value: Value, builder: &mut dyn ArrayBuilder) -> Result
 }
 
 impl AsArrow for Schema {
-    fn as_arrow(
+    #[instrument(skip(self, batch), ret)]
+    async fn as_arrow(
         &self,
+        topic: &str,
         partition: i32,
         batch: &Batch,
-        lake_type: LakeHouseType,
+        _lake_type: LakeHouseType,
     ) -> Result<RecordBatch> {
-        debug!(?batch, ?lake_type);
-
         let mut builders = vec![];
         let mut fields = vec![];
 
@@ -624,6 +624,7 @@ mod tests {
             file_writer::{
                 ParquetWriterBuilder,
                 location_generator::{DefaultFileNameGenerator, LocationGenerator},
+                rolling_writer::RollingFileWriterBuilder,
             },
         },
     };
@@ -675,21 +676,27 @@ mod tests {
         struct Location;
 
         impl LocationGenerator for Location {
-            fn generate_location(&self, file_name: &str) -> String {
+            fn generate_location(
+                &self,
+                _partition_key: Option<&iceberg::spec::PartitionKey>,
+                file_name: &str,
+            ) -> String {
                 format!("abc/{file_name}")
             }
         }
 
-        let writer = ParquetWriterBuilder::new(
-            WriterProperties::default(),
-            iceberg_schema,
+        let parquet_writer_builder =
+            ParquetWriterBuilder::new(WriterProperties::default(), iceberg_schema);
+
+        let rolling_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
+            parquet_writer_builder,
             memory,
             Location,
             DefaultFileNameGenerator::new("pqr".into(), None, Parquet),
         );
 
-        let mut data_file_writer = DataFileWriterBuilder::new(writer, None, 0)
-            .build()
+        let mut data_file_writer = DataFileWriterBuilder::new(rolling_writer_builder)
+            .build(None)
             .await
             .inspect_err(|err| error!(?err))?;
 
@@ -762,7 +769,9 @@ mod tests {
             batch.build()?
         };
 
-        let record_batch = schema.as_arrow(0, &batch, LakeHouseType::Parquet)?;
+        let record_batch = schema
+            .as_arrow(topic, 0, &batch, LakeHouseType::Parquet)
+            .await?;
         let data_files = iceberg_write(record_batch.clone()).await?;
         assert_eq!(1, data_files.len());
         assert_eq!(2, data_files[0].record_count());
@@ -832,7 +841,9 @@ mod tests {
             batch.build()?
         };
 
-        let record_batch = schema.as_arrow(0, &batch, LakeHouseType::Parquet)?;
+        let record_batch = schema
+            .as_arrow(topic, 0, &batch, LakeHouseType::Parquet)
+            .await?;
         let data_files = iceberg_write(record_batch.clone()).await?;
         assert_eq!(1, data_files.len());
         assert_eq!(16, data_files[0].record_count());
@@ -907,7 +918,9 @@ mod tests {
             batch.build()?
         };
 
-        let record_batch = schema.as_arrow(0, &batch, LakeHouseType::Parquet)?;
+        let record_batch = schema
+            .as_arrow(topic, 0, &batch, LakeHouseType::Parquet)
+            .await?;
         let data_files = iceberg_write(record_batch.clone()).await?;
         assert_eq!(1, data_files.len());
         assert_eq!(3, data_files[0].record_count());
@@ -976,7 +989,9 @@ mod tests {
             batch.build()?
         };
 
-        let record_batch = schema.as_arrow(0, &batch, LakeHouseType::Parquet)?;
+        let record_batch = schema
+            .as_arrow(topic, 0, &batch, LakeHouseType::Parquet)
+            .await?;
         let data_files = iceberg_write(record_batch.clone()).await?;
         assert_eq!(1, data_files.len());
         assert_eq!(2, data_files[0].record_count());
@@ -1047,7 +1062,9 @@ mod tests {
             batch.build()?
         };
 
-        let record_batch = schema.as_arrow(0, &batch, LakeHouseType::Parquet)?;
+        let record_batch = schema
+            .as_arrow(topic, 0, &batch, LakeHouseType::Parquet)
+            .await?;
         let data_files = iceberg_write(record_batch.clone()).await?;
         assert_eq!(1, data_files.len());
         assert_eq!(2, data_files[0].record_count());
@@ -1135,7 +1152,9 @@ mod tests {
             batch.build()?
         };
 
-        let record_batch = schema.as_arrow(0, &batch, LakeHouseType::Parquet)?;
+        let record_batch = schema
+            .as_arrow(topic, 0, &batch, LakeHouseType::Parquet)
+            .await?;
         let data_files = iceberg_write(record_batch.clone()).await?;
         assert_eq!(1, data_files.len());
         assert_eq!(3, data_files[0].record_count());
@@ -1218,7 +1237,9 @@ mod tests {
             batch.build()?
         };
 
-        let record_batch = schema.as_arrow(0, &batch, LakeHouseType::Parquet)?;
+        let record_batch = schema
+            .as_arrow(topic, 0, &batch, LakeHouseType::Parquet)
+            .await?;
         let data_files = iceberg_write(record_batch.clone()).await?;
         assert_eq!(1, data_files.len());
         assert_eq!(2, data_files[0].record_count());

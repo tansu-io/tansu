@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,10 +18,14 @@ use bytes::Bytes;
 use common::init_tracing;
 use datafusion::prelude::SessionContext;
 use dotenv::dotenv;
-use iceberg::{Catalog, TableIdent};
-use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
-use iceberg_datafusion::IcebergTableProvider;
+use iceberg::CatalogBuilder;
+use iceberg_catalog_rest::{
+    REST_CATALOG_PROP_URI, REST_CATALOG_PROP_WAREHOUSE, RestCatalogBuilder,
+};
+use iceberg_datafusion::IcebergCatalogProvider;
+use object_store::{ObjectStoreExt as _, PutPayload, memory::InMemory, path::Path};
 use serde_json::{Value as JsonValue, json};
+use std::collections::HashMap;
 use std::{env::var, sync::Arc};
 use tansu_sans_io::{
     ConfigResource, ErrorCode,
@@ -29,7 +33,7 @@ use tansu_sans_io::{
     record::{Record, inflated::Batch},
 };
 use tansu_schema::{
-    AsArrow, Result,
+    Registry, Result,
     lake::{House, LakeHouse, berg::env_s3_props},
 };
 use tracing::debug;
@@ -41,57 +45,46 @@ pub async fn lake_store(
     namespace: &str,
     topic: &str,
     partition: i32,
+    schema_registry: Registry,
     config: DescribeConfigsResult,
-    record_batch: RecordBatch,
+    inflated: &Batch,
 ) -> Result<Vec<RecordBatch>> {
     let catalog_uri = &var("ICEBERG_CATALOG").unwrap_or("http://localhost:8181".into())[..];
     let location_uri = &var("DATA_LAKE").unwrap_or("s3://lake".into())[..];
     let warehouse = var("ICEBERG_WAREHOUSE").ok();
 
-    debug!(
-        catalog_uri,
-        location_uri,
-        ?warehouse,
-        namespace,
-        ?record_batch
-    );
+    debug!(catalog_uri, location_uri, ?warehouse, namespace, ?inflated);
 
     let lake_house = House::iceberg()
         .location(Url::parse(location_uri)?)
         .catalog(Url::parse(catalog_uri)?)
         .namespace(Some(namespace.to_owned()))
         .warehouse(warehouse.clone())
-        .build()?;
+        .schema_registry(schema_registry)
+        .build()
+        .await?;
 
     let offset = 543212345;
 
     lake_house
-        .store(topic, partition, offset, record_batch, config)
+        .store(topic, partition, offset, inflated, config)
         .await
         .inspect(|result| debug!(?result))
         .inspect_err(|err| debug!(?err))?;
 
-    let catalog = Arc::new(RestCatalog::new(
-        RestCatalogConfig::builder()
-            .uri(catalog_uri.to_string())
-            .warehouse_opt(warehouse)
-            .props(env_s3_props().collect())
-            .build(),
-    ));
+    let mut props: HashMap<String, String> = env_s3_props().collect();
+    _ = props.insert(REST_CATALOG_PROP_URI.to_string(), catalog_uri.to_string());
+    if let Some(wh) = warehouse.clone() {
+        _ = props.insert(REST_CATALOG_PROP_WAREHOUSE.to_string(), wh);
+    }
+    let catalog = Arc::new(RestCatalogBuilder::default().load("rest", props).await?);
 
-    let table = catalog
-        .load_table(&TableIdent::from_strs([&namespace, topic])?)
-        .await?;
-
-    let table_provider = IcebergTableProvider::try_new_from_table(table)
-        .await
-        .map(Arc::new)?;
+    let catalog_provider = IcebergCatalogProvider::try_new(catalog).await?;
 
     let ctx = SessionContext::new();
+    _ = ctx.register_catalog("iceberg", Arc::new(catalog_provider));
 
-    _ = ctx.register_table("t", table_provider)?;
-
-    ctx.sql("select * from t")
+    ctx.sql(&format!("select * from iceberg.{namespace}.{topic}"))
         .await?
         .collect()
         .await
@@ -130,14 +123,16 @@ fn normalized_config(topic: &str) -> DescribeConfigsResult {
 
 mod json {
     use super::*;
-    use tansu_schema::{json::Schema, lake::LakeHouseType};
 
     #[tokio::test]
     async fn key_and_value() -> Result<()> {
         _ = dotenv().ok();
         let _guard = init_tracing()?;
 
-        let schema = serde_json::to_vec(&json!({
+        let topic = &alphanumeric_string(5)[..];
+        let namespace = &alphanumeric_string(5)[..];
+
+        let schema = json!({
             "type": "object",
             "properties": {
                 "key": {
@@ -156,10 +151,22 @@ mod json {
                     }
                 }
             }
-        }))
-        .map_err(Into::into)
-        .map(Bytes::from)
-        .and_then(Schema::try_from)?;
+        });
+
+        let schema_registry = {
+            let object_store = InMemory::new();
+            let location = Path::from(format!("{topic}.json"));
+            _ = object_store
+                .put(
+                    &location,
+                    serde_json::to_vec(&schema)
+                        .map(Bytes::from)
+                        .map(PutPayload::from)?,
+                )
+                .await?;
+
+            Registry::new(object_store)
+        };
 
         let kv = [
             (
@@ -185,20 +192,18 @@ mod json {
                 );
             }
 
-            batch
-                .build()
-                .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
-        };
+            batch.build()
+        }?;
 
-        let namespace = &alphanumeric_string(5);
-        let topic = &alphanumeric_string(5);
+        schema_registry.validate(topic, &record_batch).await?;
+
         let results = lake_store(
             namespace,
             topic,
             partition,
+            schema_registry,
             empty_config(topic),
-            record_batch,
+            &record_batch,
         )
         .await?;
 
@@ -223,10 +228,20 @@ mod json {
         _ = dotenv().ok();
         let _guard = init_tracing()?;
 
-        let schema = Schema::try_from(Bytes::from_static(include_bytes!(
-            "../../../tansu/etc/schema/grade.json"
-        )))?;
-        debug!(?schema);
+        let topic = &alphanumeric_string(5)[..];
+        let namespace = &alphanumeric_string(5)[..];
+
+        let schema_registry = {
+            let schema = Bytes::from_static(include_bytes!("../../../tansu/etc/schema/grade.json"));
+
+            let object_store = InMemory::new();
+            let location = Path::from(format!("{topic}.json"));
+            _ = object_store
+                .put(&location, PutPayload::from(schema))
+                .await?;
+
+            Registry::new(object_store)
+        };
 
         let kv = if let JsonValue::Array(values) = serde_json::from_slice::<JsonValue>(
             include_bytes!("../../../tansu/etc/data/grades.json"),
@@ -259,20 +274,18 @@ mod json {
                 );
             }
 
-            batch
-                .build()
-                .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
-        };
+            batch.build()
+        }?;
 
-        let namespace = &alphanumeric_string(5);
-        let topic = &alphanumeric_string(5);
+        schema_registry.validate(topic, &record_batch).await?;
+
         let results = lake_store(
             namespace,
             topic,
             partition,
+            schema_registry,
             empty_config(topic),
-            record_batch,
+            &record_batch,
         )
         .await?;
 
@@ -311,17 +324,32 @@ mod json {
         _ = dotenv().ok();
         let _guard = init_tracing()?;
 
-        let schema = serde_json::to_vec(&json!({
-            "type": "object",
-            "properties": {
-                "key": {
-                    "type": "number"
+        let namespace = &alphanumeric_string(5)[..];
+        let topic = &alphanumeric_string(5)[..];
+
+        let schema_registry = {
+            let schema = json!({
+                "type": "object",
+                "properties": {
+                    "key": {
+                        "type": "number"
+                    }
                 }
-            }
-        }))
-        .map_err(Into::into)
-        .map(Bytes::from)
-        .and_then(Schema::try_from)?;
+            });
+
+            let object_store = InMemory::new();
+            let location = Path::from(format!("{topic}.json"));
+            _ = object_store
+                .put(
+                    &location,
+                    serde_json::to_vec(&schema)
+                        .map(Bytes::from)
+                        .map(PutPayload::from)?,
+                )
+                .await?;
+
+            Registry::new(object_store)
+        };
 
         let keys = [json!(12321), json!(23432), json!(34543)];
         let partition = 32123;
@@ -336,20 +364,18 @@ mod json {
                 );
             }
 
-            batch
-                .build()
-                .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
-        };
+            batch.build()
+        }?;
 
-        let namespace = &alphanumeric_string(5);
-        let topic = &alphanumeric_string(5);
+        schema_registry.validate(topic, &record_batch).await?;
+
         let results = lake_store(
             namespace,
             topic,
             partition,
+            schema_registry,
             empty_config(topic),
-            record_batch,
+            &record_batch,
         )
         .await?;
 
@@ -375,20 +401,35 @@ mod json {
         _ = dotenv().ok();
         let _guard = init_tracing()?;
 
-        let schema = serde_json::to_vec(&json!({
-            "type": "object",
-            "properties": {
-                "key": {
-                    "type": "number"
-                },
-                "value": {
-                    "type": "string",
+        let namespace = &alphanumeric_string(5)[..];
+        let topic = &alphanumeric_string(5)[..];
+
+        let schema_registry = {
+            let schema = json!({
+                "type": "object",
+                "properties": {
+                    "key": {
+                        "type": "number"
+                    },
+                    "value": {
+                        "type": "string",
+                    }
                 }
-            }
-        }))
-        .map_err(Into::into)
-        .map(Bytes::from)
-        .and_then(Schema::try_from)?;
+            });
+
+            let object_store = InMemory::new();
+            let location = Path::from(format!("{topic}.json"));
+            _ = object_store
+                .put(
+                    &location,
+                    serde_json::to_vec(&schema)
+                        .map(Bytes::from)
+                        .map(PutPayload::from)?,
+                )
+                .await?;
+
+            Registry::new(object_store)
+        };
 
         let kv = [
             (json!(12321), json!("alice@example.com")),
@@ -408,20 +449,18 @@ mod json {
                 );
             }
 
-            batch
-                .build()
-                .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
-        };
+            batch.build()
+        }?;
 
-        let namespace = &alphanumeric_string(5);
-        let topic = &alphanumeric_string(5);
+        schema_registry.validate(topic, &record_batch).await?;
+
         let results = lake_store(
             namespace,
             topic,
             partition,
+            schema_registry,
             empty_config(topic),
-            record_batch,
+            &record_batch,
         )
         .await?;
 
@@ -446,23 +485,38 @@ mod json {
         _ = dotenv().ok();
         let _guard = init_tracing()?;
 
-        let schema = serde_json::to_vec(&json!({
-            "type": "object",
-            "properties": {
-                "key": {
-                    "type": "number"
-                },
-                "value": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
+        let namespace = &alphanumeric_string(5)[..];
+        let topic = &alphanumeric_string(5)[..];
+
+        let schema_registry = {
+            let schema = json!({
+                "type": "object",
+                "properties": {
+                    "key": {
+                        "type": "number"
+                    },
+                    "value": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
                     }
                 }
-            }
-        }))
-        .map_err(Into::into)
-        .map(Bytes::from)
-        .and_then(Schema::try_from)?;
+            });
+
+            let object_store = InMemory::new();
+            let location = Path::from(format!("{topic}.json"));
+            _ = object_store
+                .put(
+                    &location,
+                    serde_json::to_vec(&schema)
+                        .map(Bytes::from)
+                        .map(PutPayload::from)?,
+                )
+                .await?;
+
+            Registry::new(object_store)
+        };
 
         let kv = [
             (json!(12321), json!(["a", "b", "c"])),
@@ -482,20 +536,18 @@ mod json {
                 );
             }
 
-            batch
-                .build()
-                .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
-        };
+            batch.build()
+        }?;
 
-        let namespace = &alphanumeric_string(5);
-        let topic = &alphanumeric_string(5);
+        schema_registry.validate(topic, &record_batch).await?;
+
         let results = lake_store(
             namespace,
             topic,
             partition,
+            schema_registry,
             empty_config(topic),
-            record_batch,
+            &record_batch,
         )
         .await?;
 
@@ -521,31 +573,46 @@ mod json {
         _ = dotenv().ok();
         let _guard = init_tracing()?;
 
-        let schema = serde_json::to_vec(&json!({
-            "type": "object",
-            "properties": {
-                "key": {
-                    "type": "number"
-                },
-                "value": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "quantity": {
-                                "type": "integer",
-                            },
-                            "location": {
-                                "type": "string",
+        let namespace = &alphanumeric_string(5);
+        let topic = &alphanumeric_string(5);
+
+        let schema_registry = {
+            let schema = json!({
+                "type": "object",
+                "properties": {
+                    "key": {
+                        "type": "number"
+                    },
+                    "value": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "quantity": {
+                                    "type": "integer",
+                                },
+                                "location": {
+                                    "type": "string",
+                                }
                             }
                         }
                     }
                 }
-            }
-        }))
-        .map_err(Into::into)
-        .map(Bytes::from)
-        .and_then(Schema::try_from)?;
+            });
+
+            let object_store = InMemory::new();
+            let location = Path::from(format!("{topic}.json"));
+            _ = object_store
+                .put(
+                    &location,
+                    serde_json::to_vec(&schema)
+                        .map(Bytes::from)
+                        .map(PutPayload::from)?,
+                )
+                .await?;
+
+            Registry::new(object_store)
+        };
 
         let kv = [
             (
@@ -573,20 +640,18 @@ mod json {
                 );
             }
 
-            batch
-                .build()
-                .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
-        };
+            batch.build()
+        }?;
 
-        let namespace = &alphanumeric_string(5);
-        let topic = &alphanumeric_string(5);
+        schema_registry.validate(topic, &record_batch).await?;
+
         let results = lake_store(
             namespace,
             topic,
             partition,
+            schema_registry,
             empty_config(topic),
-            record_batch,
+            &record_batch,
         )
         .await?;
 
@@ -612,31 +677,46 @@ mod json {
         _ = dotenv().ok();
         let _guard = init_tracing()?;
 
-        let schema = serde_json::to_vec(&json!({
-            "type": "object",
-            "properties": {
-                "key": {
-                    "type": "number"
-                },
-                "value": {
-                    "type": "object",
-                    "properties": {
-                        "zone": {
-                            "type": "number",
-                        },
-                        "locations": {
-                            "type": "array",
-                            "items": {
-                                "type": "string"
+        let namespace = &alphanumeric_string(5)[..];
+        let topic = &alphanumeric_string(5)[..];
+
+        let schema_registry = {
+            let schema = json!({
+                "type": "object",
+                "properties": {
+                    "key": {
+                        "type": "number"
+                    },
+                    "value": {
+                        "type": "object",
+                        "properties": {
+                            "zone": {
+                                "type": "number",
+                            },
+                            "locations": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string"
+                                }
                             }
                         }
                     }
                 }
-            }
-        }))
-        .map_err(Into::into)
-        .map(Bytes::from)
-        .and_then(Schema::try_from)?;
+            });
+
+            let object_store = InMemory::new();
+            let location = Path::from(format!("{topic}.json"));
+            _ = object_store
+                .put(
+                    &location,
+                    serde_json::to_vec(&schema)
+                        .map(Bytes::from)
+                        .map(PutPayload::from)?,
+                )
+                .await?;
+
+            Registry::new(object_store)
+        };
 
         let kv = [
             (
@@ -659,20 +739,18 @@ mod json {
                 );
             }
 
-            batch
-                .build()
-                .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
-        };
+            batch.build()
+        }?;
 
-        let namespace = &alphanumeric_string(5);
-        let topic = &alphanumeric_string(5);
+        schema_registry.validate(topic, &record_batch).await?;
+
         let results = lake_store(
             namespace,
             topic,
             partition,
+            schema_registry,
             empty_config(topic),
-            record_batch,
+            &record_batch,
         )
         .await?;
 
@@ -697,7 +775,6 @@ mod proto {
     use super::*;
     use tansu_schema::{
         Generator as _,
-        lake::LakeHouseType,
         proto::{MessageKind, Schema},
     };
 
@@ -705,6 +782,9 @@ mod proto {
     async fn message_descriptor_singular_to_field() -> Result<()> {
         _ = dotenv().ok();
         let _guard = init_tracing()?;
+
+        let namespace = &alphanumeric_string(5)[..];
+        let topic = &alphanumeric_string(5)[..];
 
         let proto = Bytes::from_static(
             br#"
@@ -753,6 +833,16 @@ mod proto {
 
         let partition = 32123;
 
+        let schema_registry = {
+            let object_store = InMemory::new();
+            let location = Path::from(format!("{topic}.proto"));
+            _ = object_store
+                .put(&location, PutPayload::from(proto.clone()))
+                .await?;
+
+            Registry::new(object_store)
+        };
+
         let schema = Schema::try_from(proto)?;
 
         let record_batch = {
@@ -768,20 +858,18 @@ mod proto {
                 );
             }
 
-            batch
-                .build()
-                .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))
+            batch.build()
         }?;
 
-        let namespace = &alphanumeric_string(5);
-        let topic = &alphanumeric_string(5);
+        schema_registry.validate(topic, &record_batch).await?;
+
         let results = lake_store(
             namespace,
             topic,
             partition,
+            schema_registry,
             empty_config(topic),
-            record_batch,
+            &record_batch,
         )
         .await?;
 
@@ -805,9 +893,22 @@ mod proto {
         _ = dotenv().ok();
         let _guard = init_tracing()?;
 
-        let schema = Schema::try_from(Bytes::from_static(include_bytes!(
-            "../../../tansu/etc/schema/taxi.proto"
-        )))?;
+        let namespace = &alphanumeric_string(5)[..];
+        let topic = &alphanumeric_string(5)[..];
+
+        let proto = Bytes::from_static(include_bytes!("../../../tansu/etc/schema/taxi.proto"));
+
+        let schema_registry = {
+            let object_store = InMemory::new();
+            let location = Path::from(format!("{topic}.proto"));
+            _ = object_store
+                .put(&location, PutPayload::from(proto.clone()))
+                .await?;
+
+            Registry::new(object_store)
+        };
+
+        let schema = Schema::try_from(proto)?;
 
         let value = schema.encode_from_value(
             MessageKind::Value,
@@ -825,19 +926,17 @@ mod proto {
         let record_batch = Batch::builder()
             .record(Record::builder().value(value.into()))
             .base_timestamp(119_731_017_000)
-            .build()
-            .map_err(Into::into)
-            .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))
-            .inspect(|record_batch| debug!(?record_batch))?;
+            .build()?;
 
-        let namespace = &alphanumeric_string(5);
-        let topic = &alphanumeric_string(5);
+        schema_registry.validate(topic, &record_batch).await?;
+
         let results = lake_store(
             namespace,
             topic,
             partition,
+            schema_registry,
             empty_config(topic),
-            record_batch,
+            &record_batch,
         )
         .await?;
 
@@ -862,9 +961,22 @@ mod proto {
         _ = dotenv().ok();
         let _guard = init_tracing()?;
 
-        let schema = Schema::try_from(Bytes::from_static(include_bytes!(
-            "../../../tansu/etc/schema/taxi.proto"
-        )))?;
+        let namespace = &alphanumeric_string(5)[..];
+        let topic = &alphanumeric_string(5)[..];
+
+        let proto = Bytes::from_static(include_bytes!("../../../tansu/etc/schema/taxi.proto"));
+
+        let schema_registry = {
+            let object_store = InMemory::new();
+            let location = Path::from(format!("{topic}.proto"));
+            _ = object_store
+                .put(&location, PutPayload::from(proto.clone()))
+                .await?;
+
+            Registry::new(object_store)
+        };
+
+        let schema = Schema::try_from(proto)?;
 
         let value = schema.encode_from_value(
             MessageKind::Value,
@@ -882,18 +994,17 @@ mod proto {
         let record_batch = Batch::builder()
             .record(Record::builder().value(value.into()))
             .base_timestamp(119_731_017_000)
-            .build()
-            .map_err(Into::into)
-            .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?;
+            .build()?;
 
-        let namespace = &alphanumeric_string(5);
-        let topic = &alphanumeric_string(5);
+        schema_registry.validate(topic, &record_batch).await?;
+
         let results = lake_store(
             namespace,
             topic,
             partition,
+            schema_registry,
             normalized_config(topic),
-            record_batch,
+            &record_batch,
         )
         .await?;
 
@@ -917,6 +1028,9 @@ mod proto {
         _ = dotenv().ok();
         let _guard = init_tracing()?;
 
+        let namespace = &alphanumeric_string(5)[..];
+        let topic = &alphanumeric_string(5)[..];
+
         let proto = Bytes::from_static(
             br#"
                 syntax = 'proto3';
@@ -933,6 +1047,16 @@ mod proto {
                 "#,
         );
 
+        let schema_registry = {
+            let object_store = InMemory::new();
+            let location = Path::from(format!("{topic}.proto"));
+            _ = object_store
+                .put(&location, PutPayload::from(proto.clone()))
+                .await?;
+
+            Registry::new(object_store)
+        };
+
         let schema = Schema::try_from(proto)?;
 
         let value = schema.encode_from_value(
@@ -948,18 +1072,17 @@ mod proto {
         let record_batch = Batch::builder()
             .base_timestamp(119_731_017_000)
             .record(Record::builder().value(value.into()))
-            .build()
-            .map_err(Into::into)
-            .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?;
+            .build()?;
 
-        let namespace = &alphanumeric_string(5);
-        let topic = &alphanumeric_string(5);
+        schema_registry.validate(topic, &record_batch).await?;
+
         let results = lake_store(
             namespace,
             topic,
             partition,
+            schema_registry,
             empty_config(topic),
-            record_batch,
+            &record_batch,
         )
         .await?;
 
@@ -983,6 +1106,9 @@ mod proto {
         _ = dotenv().ok();
         let _guard = init_tracing()?;
 
+        let namespace = &alphanumeric_string(5)[..];
+        let topic = &alphanumeric_string(5)[..];
+
         let proto = Bytes::from_static(
             br#"
             syntax = 'proto3';
@@ -994,6 +1120,16 @@ mod proto {
             }
             "#,
         );
+
+        let schema_registry = {
+            let object_store = InMemory::new();
+            let location = Path::from(format!("{topic}.proto"));
+            _ = object_store
+                .put(&location, PutPayload::from(proto.clone()))
+                .await?;
+
+            Registry::new(object_store)
+        };
 
         let schema = Schema::try_from(proto)?;
 
@@ -1009,18 +1145,17 @@ mod proto {
         let record_batch = Batch::builder()
             .base_timestamp(119_731_017_000)
             .record(Record::builder().value(value.into()))
-            .build()
-            .map_err(Into::into)
-            .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?;
+            .build()?;
 
-        let namespace = &alphanumeric_string(5);
-        let topic = &alphanumeric_string(5);
+        schema_registry.validate(topic, &record_batch).await?;
+
         let results = lake_store(
             namespace,
             topic,
             partition,
+            schema_registry,
             empty_config(topic),
-            record_batch,
+            &record_batch,
         )
         .await?;
 
@@ -1044,6 +1179,9 @@ mod proto {
         _ = dotenv().ok();
         let _guard = init_tracing()?;
 
+        let namespace = &alphanumeric_string(5)[..];
+        let topic = &alphanumeric_string(5)[..];
+
         let proto = Bytes::from_static(
             br#"
                 syntax = 'proto3';
@@ -1060,6 +1198,16 @@ mod proto {
                 "#,
         );
 
+        let schema_registry = {
+            let object_store = InMemory::new();
+            let location = Path::from(format!("{topic}.proto"));
+            _ = object_store
+                .put(&location, PutPayload::from(proto.clone()))
+                .await?;
+
+            Registry::new(object_store)
+        };
+
         let schema = Schema::try_from(proto)?;
 
         let value = schema.encode_from_value(
@@ -1075,18 +1223,17 @@ mod proto {
         let record_batch = Batch::builder()
             .record(Record::builder().value(value.into()))
             .base_timestamp(119_731_017_000)
-            .build()
-            .map_err(Into::into)
-            .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?;
+            .build()?;
 
-        let namespace = &alphanumeric_string(5);
-        let topic = &alphanumeric_string(5);
+        schema_registry.validate(topic, &record_batch).await?;
+
         let results = lake_store(
             namespace,
             topic,
             partition,
+            schema_registry,
             empty_config(topic),
-            record_batch,
+            &record_batch,
         )
         .await?;
 
@@ -1111,27 +1258,43 @@ mod proto {
         _ = dotenv().ok();
         let _guard = init_tracing()?;
 
+        let namespace = &alphanumeric_string(5)[..];
+        let topic = &alphanumeric_string(5)[..];
         let partition = 32123;
 
-        let record_batch_001 = {
-            let schema = Schema::try_from(Bytes::from_static(include_bytes!("migrate-001.proto")))?;
+        let (schema_registry, record_batch_001) = {
+            let proto = Bytes::from_static(include_bytes!("migrate-001.proto"));
 
-            Batch::builder()
-                .record(schema.generate()?)
-                .base_timestamp(119_731_017_000)
-                .build()
-                .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
+            let schema_registry = {
+                let object_store = InMemory::new();
+                let location = Path::from(format!("{topic}.proto"));
+                _ = object_store
+                    .put(&location, PutPayload::from(proto.clone()))
+                    .await?;
+
+                Registry::new(object_store)
+            };
+
+            let schema = Schema::try_from(proto)?;
+
+            (
+                schema_registry,
+                Batch::builder()
+                    .record(schema.generate()?)
+                    .base_timestamp(119_731_017_000)
+                    .build()?,
+            )
         };
 
-        let namespace = &alphanumeric_string(5);
-        let topic = &alphanumeric_string(5);
+        schema_registry.validate(topic, &record_batch_001).await?;
+
         let results = lake_store(
             namespace,
             topic,
             partition,
+            schema_registry,
             empty_config(topic),
-            record_batch_001,
+            &record_batch_001,
         )
         .await?;
         let pretty_results = pretty_format_batches(&results)?.to_string();
@@ -1146,25 +1309,42 @@ mod proto {
 
         assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
 
-        let record_batch_002 = {
-            let schema = Schema::try_from(Bytes::from_static(include_bytes!("migrate-002.proto")))?;
+        let (schema_registry, record_batch_002) = {
+            let proto = Bytes::from_static(include_bytes!("migrate-002.proto"));
 
-            Batch::builder()
-                .record(schema.generate()?)
-                .base_timestamp(119_731_017_000)
-                .build()
-                .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
+            let schema_registry = {
+                let object_store = InMemory::new();
+                let location = Path::from(format!("{topic}.proto"));
+                _ = object_store
+                    .put(&location, PutPayload::from(proto.clone()))
+                    .await?;
+
+                Registry::new(object_store)
+            };
+
+            let schema = Schema::try_from(proto)?;
+
+            (
+                schema_registry,
+                Batch::builder()
+                    .record(schema.generate()?)
+                    .base_timestamp(119_731_017_000)
+                    .build()?,
+            )
         };
+
+        schema_registry.validate(topic, &record_batch_002).await?;
 
         let results = lake_store(
             namespace,
             topic,
             partition,
+            schema_registry,
             normalized_config(topic),
-            record_batch_002,
+            &record_batch_002,
         )
         .await?;
+
         let pretty_results = pretty_format_batches(&results)?.to_string();
 
         let expected = vec![
@@ -1178,23 +1358,39 @@ mod proto {
 
         assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
 
-        let record_batch_003 = {
-            let schema = Schema::try_from(Bytes::from_static(include_bytes!("migrate-003.proto")))?;
+        let (schema_registry, record_batch_003) = {
+            let proto = Bytes::from_static(include_bytes!("migrate-003.proto"));
 
-            Batch::builder()
-                .record(schema.generate()?)
-                .base_timestamp(119_731_017_000)
-                .build()
-                .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
+            let schema_registry = {
+                let object_store = InMemory::new();
+                let location = Path::from(format!("{topic}.proto"));
+                _ = object_store
+                    .put(&location, PutPayload::from(proto.clone()))
+                    .await?;
+
+                Registry::new(object_store)
+            };
+
+            let schema = Schema::try_from(proto)?;
+
+            (
+                schema_registry,
+                Batch::builder()
+                    .record(schema.generate()?)
+                    .base_timestamp(119_731_017_000)
+                    .build()?,
+            )
         };
+
+        schema_registry.validate(topic, &record_batch_003).await?;
 
         let results = lake_store(
             namespace,
             topic,
             partition,
+            schema_registry,
             normalized_config(topic),
-            record_batch_003,
+            &record_batch_003,
         )
         .await?;
         let pretty_results = pretty_format_batches(&results)?.to_string();
@@ -1221,7 +1417,6 @@ mod avro {
     use tansu_schema::{
         AsKafkaRecord,
         avro::{Schema, r, schema_write},
-        lake::LakeHouseType,
     };
     use uuid::Uuid;
 
@@ -1230,22 +1425,49 @@ mod avro {
         _ = dotenv().ok();
         let _guard = init_tracing()?;
 
-        let schema = Schema::from(json!({
-            "type": "record",
-            "name": "Message",
-            "fields": [
-                {"name": "value", "type": "record", "fields": [
-                // {"name": "a", "type": "null"},
-                {"name": "b", "type": "boolean"},
-                {"name": "c", "type": "int"},
-                {"name": "d", "type": "long"},
-                {"name": "e", "type": "float"},
-                {"name": "f", "type": "double"},
-                {"name": "g", "type": "bytes"},
-                {"name": "h", "type": "string"}
-                ]}
-            ]
-        }));
+        let namespace = &alphanumeric_string(5)[..];
+        let topic = &alphanumeric_string(5)[..];
+
+        let avro = json!({
+                  "type": "record",
+                  "name": "Message",
+                  "fields": [
+                    {
+                      "name": "value",
+                      "type": {
+                        "name": "sub",
+                        "type": "record",
+                        "fields": [
+                          { "name": "b", "type": "boolean" },
+                          { "name": "c", "type": "int" },
+                          { "name": "d", "type": "long" },
+                          { "name": "e", "type": "float" },
+                          { "name": "f", "type": "double" },
+                          { "name": "g", "type": "bytes" },
+                          { "name": "h", "type": "string" }
+                        ]
+                      }
+                    }
+                  ]
+                }
+        );
+
+        let schema_registry = {
+            let object_store = InMemory::new();
+            let location = Path::from(format!("{topic}.avsc"));
+            _ = object_store
+                .put(
+                    &location,
+                    serde_json::to_vec(&avro)
+                        .map(Bytes::from)
+                        .map(PutPayload::from)?,
+                )
+                .await?;
+
+            Registry::new(object_store)
+        };
+
+        let schema = Schema::from(avro);
 
         let partition = 32123;
 
@@ -1273,20 +1495,18 @@ mod avro {
                     ))
             }
 
-            batch
-                .build()
-                .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
-        };
+            batch.build()
+        }?;
 
-        let namespace = &alphanumeric_string(5);
-        let topic = &alphanumeric_string(5);
+        schema_registry.validate(topic, &record_batch).await?;
+
         let results = lake_store(
             namespace,
             topic,
             partition,
+            schema_registry,
             empty_config(topic),
-            record_batch,
+            &record_batch,
         )
         .await?;
 
@@ -1310,21 +1530,48 @@ mod avro {
         _ = dotenv().ok();
         let _guard = init_tracing()?;
 
-        let schema = Schema::from(json!({
-            "type": "record",
-            "name": "Message",
-            "fields": [
-                {"name": "value", "type": "record", "fields": [
-                    {"name": "b", "type": "array", "items": "boolean"},
-                    {"name": "c", "type": "array", "items": "int"},
-                    {"name": "d", "type": "array", "items": "long"},
-                    {"name": "e", "type": "array", "items": "float"},
-                    {"name": "f", "type": "array", "items": "double"},
-                    {"name": "g", "type": "array", "items": "bytes"},
-                    {"name": "h", "type": "array", "items": "string"}
-                ]}
-            ]
-        }));
+        let namespace = &alphanumeric_string(5)[..];
+        let topic = &alphanumeric_string(5)[..];
+
+        let avro = json!({
+          "type": "record",
+          "name": "Message",
+          "fields": [
+            {
+              "name": "value",
+              "type": {
+                "name": "sub",
+                "type": "record",
+                "fields": [
+                  { "name": "b", "type": "array", "items": "boolean" },
+                  { "name": "c", "type": "array", "items": "int" },
+                  { "name": "d", "type": "array", "items": "long" },
+                  { "name": "e", "type": "array", "items": "float" },
+                  { "name": "f", "type": "array", "items": "double" },
+                  { "name": "g", "type": "array", "items": "bytes" },
+                  { "name": "h", "type": "array", "items": "string" }
+                ]
+              }
+            }
+          ]
+        });
+
+        let schema_registry = {
+            let object_store = InMemory::new();
+            let location = Path::from(format!("{topic}.avsc"));
+            _ = object_store
+                .put(
+                    &location,
+                    serde_json::to_vec(&avro)
+                        .map(Bytes::from)
+                        .map(PutPayload::from)?,
+                )
+                .await?;
+
+            Registry::new(object_store)
+        };
+
+        let schema = Schema::from(avro);
 
         let partition = 32123;
 
@@ -1369,20 +1616,18 @@ mod avro {
                     ))
             }
 
-            batch
-                .build()
-                .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
-        };
+            batch.build()
+        }?;
 
-        let namespace = &alphanumeric_string(5);
-        let topic = &alphanumeric_string(5);
+        schema_registry.validate(topic, &record_batch).await?;
+
         let results = lake_store(
             namespace,
             topic,
             partition,
+            schema_registry,
             empty_config(topic),
-            record_batch,
+            &record_batch,
         )
         .await?;
 
@@ -1406,11 +1651,31 @@ mod avro {
         _ = dotenv().ok();
         let _guard = init_tracing()?;
 
-        let schema = Schema::from(json!({
+        let namespace = &alphanumeric_string(5);
+        let topic = &alphanumeric_string(5);
+
+        let avro = json!({
             "type": "record",
             "name": "union",
             "fields": [{"name": "value", "type": ["null", "float"]}]
-        }));
+        });
+
+        let schema_registry = {
+            let object_store = InMemory::new();
+            let location = Path::from(format!("{topic}.avsc"));
+            _ = object_store
+                .put(
+                    &location,
+                    serde_json::to_vec(&avro)
+                        .map(Bytes::from)
+                        .map(PutPayload::from)?,
+                )
+                .await?;
+
+            Registry::new(object_store)
+        };
+
+        let schema = Schema::from(avro);
 
         let partition = 32123;
 
@@ -1430,20 +1695,18 @@ mod avro {
                 )
             }
 
-            batch
-                .build()
-                .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
-        };
+            batch.build()
+        }?;
 
-        let namespace = &alphanumeric_string(5);
-        let topic = &alphanumeric_string(5);
+        schema_registry.validate(topic, &record_batch).await?;
+
         let results = lake_store(
             namespace,
             topic,
             partition,
+            schema_registry,
             empty_config(topic),
-            record_batch,
+            &record_batch,
         )
         .await?;
 
@@ -1469,7 +1732,10 @@ mod avro {
         _ = dotenv().ok();
         let _guard = init_tracing()?;
 
-        let schema = Schema::from(json!({
+        let namespace = &alphanumeric_string(5)[..];
+        let topic = &alphanumeric_string(5)[..];
+
+        let avro = json!({
             "type": "record",
             "name": "Suit",
             "fields": [
@@ -1479,7 +1745,24 @@ mod avro {
                     "symbols": ["SPADES", "HEARTS", "DIAMONDS", "CLUBS"]
                 }
             ]
-        }));
+        });
+
+        let schema_registry = {
+            let object_store = InMemory::new();
+            let location = Path::from(format!("{topic}.avsc"));
+            _ = object_store
+                .put(
+                    &location,
+                    serde_json::to_vec(&avro)
+                        .map(Bytes::from)
+                        .map(PutPayload::from)?,
+                )
+                .await?;
+
+            Registry::new(object_store)
+        };
+
+        let schema = Schema::from(avro);
 
         let partition = 32123;
 
@@ -1498,20 +1781,18 @@ mod avro {
                 )
             }
 
-            batch
-                .build()
-                .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
-        };
+            batch.build()
+        }?;
 
-        let namespace = &alphanumeric_string(5);
-        let topic = &alphanumeric_string(5);
+        schema_registry.validate(topic, &record_batch).await?;
+
         let results = lake_store(
             namespace,
             topic,
             partition,
+            schema_registry,
             empty_config(topic),
-            record_batch,
+            &record_batch,
         )
         .await?;
 
@@ -1536,22 +1817,44 @@ mod avro {
         _ = dotenv().ok();
         let _guard = init_tracing()?;
 
-        let schema = Schema::from(json!({
-            "type": "record",
-            "name": "observation",
-            "fields": [
-                { "name": "key", "type": "string", "logicalType": "uuid" },
-                {
-                    "name": "value",
-                    "type": "record",
-                    "fields": [
-                        { "name": "amount", "type": "double" },
-                        { "name": "unit", "type": "enum", "symbols": ["CELSIUS", "MILLIBAR"] }
-                    ]
-                }
-            ]
-        }
-        ));
+        let namespace = &alphanumeric_string(5)[..];
+        let topic = &alphanumeric_string(5)[..];
+
+        let avro = json!({
+          "type": "record",
+          "name": "observation",
+          "fields": [
+            { "name": "key", "type": "string", "logicalType": "uuid" },
+            {
+              "name": "value",
+              "type": {
+                "name": "sub",
+                "type": "record",
+                "fields": [
+                  { "name": "amount", "type": "double" },
+                  { "name": "unit", "type": "enum", "symbols": ["CELSIUS", "MILLIBAR"] }
+                ]
+              }
+            }
+          ]
+        });
+
+        let schema_registry = {
+            let object_store = InMemory::new();
+            let location = Path::from(format!("{topic}.avsc"));
+            _ = object_store
+                .put(
+                    &location,
+                    serde_json::to_vec(&avro)
+                        .map(Bytes::from)
+                        .map(PutPayload::from)?,
+                )
+                .await?;
+
+            Registry::new(object_store)
+        };
+
+        let schema = Schema::from(avro);
 
         let partition = 32123;
 
@@ -1570,20 +1873,18 @@ mod avro {
                 batch = batch.record(schema.as_kafka_record(&value)?);
             }
 
-            batch
-                .build()
-                .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
-        };
+            batch.build()
+        }?;
 
-        let namespace = &alphanumeric_string(5);
-        let topic = &alphanumeric_string(5);
+        schema_registry.validate(topic, &record_batch).await?;
+
         let results = lake_store(
             namespace,
             topic,
             partition,
+            schema_registry,
             empty_config(topic),
-            record_batch,
+            &record_batch,
         )
         .await?;
 
@@ -1608,13 +1909,33 @@ mod avro {
         _ = dotenv().ok();
         let _guard = init_tracing()?;
 
-        let schema = Schema::from(json!({
+        let namespace = &alphanumeric_string(5)[..];
+        let topic = &alphanumeric_string(5)[..];
+
+        let avro = json!({
             "type": "record",
             "name": "Long",
             "fields": [
                 {"name": "value", "type": "map", "values": "long", "default": {}},
             ],
-        }));
+        });
+
+        let schema_registry = {
+            let object_store = InMemory::new();
+            let location = Path::from(format!("{topic}.avsc"));
+            _ = object_store
+                .put(
+                    &location,
+                    serde_json::to_vec(&avro)
+                        .map(Bytes::from)
+                        .map(PutPayload::from)?,
+                )
+                .await?;
+
+            Registry::new(object_store)
+        };
+
+        let schema = Schema::from(avro);
 
         let partition = 32123;
 
@@ -1630,20 +1951,18 @@ mod avro {
                 )
             }
 
-            batch
-                .build()
-                .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
-        };
+            batch.build()
+        }?;
 
-        let namespace = &alphanumeric_string(5);
-        let topic = &alphanumeric_string(5);
+        schema_registry.validate(topic, &record_batch).await?;
+
         let results = lake_store(
             namespace,
             topic,
             partition,
+            schema_registry,
             empty_config(topic),
-            record_batch,
+            &record_batch,
         )
         .await?;
 
@@ -1668,13 +1987,33 @@ mod avro {
         _ = dotenv().ok();
         let _guard = init_tracing()?;
 
-        let schema = Schema::from(json!({
+        let namespace = &alphanumeric_string(5)[..];
+        let topic = &alphanumeric_string(5)[..];
+
+        let avro = json!({
             "type": "record",
             "name": "test",
             "fields": [
                 {"name": "key", "type": "int"}
             ]
-        }));
+        });
+
+        let schema_registry = {
+            let object_store = InMemory::new();
+            let location = Path::from(format!("{topic}.avsc"));
+            _ = object_store
+                .put(
+                    &location,
+                    serde_json::to_vec(&avro)
+                        .map(Bytes::from)
+                        .map(PutPayload::from)?,
+                )
+                .await?;
+
+            Registry::new(object_store)
+        };
+
+        let schema = Schema::from(avro);
 
         let partition = 32123;
 
@@ -1690,20 +2029,18 @@ mod avro {
                 );
             }
 
-            batch
-                .build()
-                .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
-        };
+            batch.build()
+        }?;
 
-        let namespace = &alphanumeric_string(5);
-        let topic = &alphanumeric_string(5);
+        schema_registry.validate(topic, &record_batch).await?;
+
         let results = lake_store(
             namespace,
             topic,
             partition,
+            schema_registry,
             empty_config(topic),
-            record_batch,
+            &record_batch,
         )
         .await?;
 
@@ -1730,19 +2067,45 @@ mod avro {
         _ = dotenv().ok();
         let _guard = init_tracing()?;
 
-        let schema = Schema::from(json!({
-            "type": "record",
-            "name": "Person",
-            "fields": [{
-                "name": "value",
+        let namespace = &alphanumeric_string(5)[..];
+        let topic = &alphanumeric_string(5)[..];
+
+        let avro = json!({
+          "type": "record",
+          "name": "Person",
+          "fields": [
+            {
+              "name": "value",
+              "type": {
+                "name": "sub",
+
                 "type": "record",
                 "fields": [
-                    {"name": "id", "type": "int"},
-                    {"name": "name", "type": "string"},
-                    {"name": "lucky", "type": "array", "items": "int", "default": []}
-                ]}
-            ]
-        }));
+                  { "name": "id", "type": "int" },
+                  { "name": "name", "type": "string" },
+                  { "name": "lucky", "type": "array", "items": "int", "default": [] }
+                ]
+              }
+            }
+          ]
+        });
+
+        let schema_registry = {
+            let object_store = InMemory::new();
+            let location = Path::from(format!("{topic}.avsc"));
+            _ = object_store
+                .put(
+                    &location,
+                    serde_json::to_vec(&avro)
+                        .map(Bytes::from)
+                        .map(PutPayload::from)?,
+                )
+                .await?;
+
+            Registry::new(object_store)
+        };
+
+        let schema = Schema::from(avro);
 
         let partition = 32123;
 
@@ -1775,20 +2138,18 @@ mod avro {
                     ))
             }
 
-            batch
-                .build()
-                .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
-        };
+            batch.build()
+        }?;
 
-        let namespace = &alphanumeric_string(5);
-        let topic = &alphanumeric_string(5);
+        schema_registry.validate(topic, &record_batch).await?;
+
         let results = lake_store(
             namespace,
             topic,
             partition,
+            schema_registry,
             empty_config(topic),
-            record_batch,
+            &record_batch,
         )
         .await?;
 
@@ -1813,7 +2174,10 @@ mod avro {
         _ = dotenv().ok();
         let _guard = init_tracing()?;
 
-        let schema = Schema::from(json!({
+        let namespace = &alphanumeric_string(5)[..];
+        let topic = &alphanumeric_string(5)[..];
+
+        let avro = json!({
             "type": "record",
             "name": "test",
             "fields": [{
@@ -1822,7 +2186,24 @@ mod avro {
                 "items": "boolean",
                 "default": []
             }]
-        }));
+        });
+
+        let schema_registry = {
+            let object_store = InMemory::new();
+            let location = Path::from(format!("{topic}.avsc"));
+            _ = object_store
+                .put(
+                    &location,
+                    serde_json::to_vec(&avro)
+                        .map(Bytes::from)
+                        .map(PutPayload::from)?,
+                )
+                .await?;
+
+            Registry::new(object_store)
+        };
+
+        let schema = Schema::from(avro);
 
         let values = [[true, true], [false, true], [true, false], [false, false]]
             .into_iter()
@@ -1844,20 +2225,18 @@ mod avro {
                 )
             }
 
-            batch
-                .build()
-                .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
-        };
+            batch.build()
+        }?;
 
-        let namespace = &alphanumeric_string(5);
-        let topic = &alphanumeric_string(5);
+        schema_registry.validate(topic, &record_batch).await?;
+
         let results = lake_store(
             namespace,
             topic,
             partition,
+            schema_registry,
             empty_config(topic),
-            record_batch,
+            &record_batch,
         )
         .await?;
 
@@ -1884,7 +2263,10 @@ mod avro {
         _ = dotenv().ok();
         let _guard = init_tracing()?;
 
-        let schema = Schema::from(json!({
+        let namespace = &alphanumeric_string(5)[..];
+        let topic = &alphanumeric_string(5)[..];
+
+        let avro = json!({
             "type": "record",
             "name": "test",
             "fields": [{
@@ -1893,7 +2275,24 @@ mod avro {
                 "items": "int",
                 "default": []
             }]
-        }));
+        });
+
+        let schema_registry = {
+            let object_store = InMemory::new();
+            let location = Path::from(format!("{topic}.avsc"));
+            _ = object_store
+                .put(
+                    &location,
+                    serde_json::to_vec(&avro)
+                        .map(Bytes::from)
+                        .map(PutPayload::from)?,
+                )
+                .await?;
+
+            Registry::new(object_store)
+        };
+
+        let schema = Schema::from(avro);
 
         let partition = 32123;
 
@@ -1915,20 +2314,18 @@ mod avro {
                 )
             }
 
-            batch
-                .build()
-                .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
-        };
+            batch.build()
+        }?;
 
-        let namespace = &alphanumeric_string(5);
-        let topic = &alphanumeric_string(5);
+        schema_registry.validate(topic, &record_batch).await?;
+
         let results = lake_store(
             namespace,
             topic,
             partition,
+            schema_registry,
             empty_config(topic),
-            record_batch,
+            &record_batch,
         )
         .await?;
 
@@ -1953,7 +2350,10 @@ mod avro {
         _ = dotenv().ok();
         let _guard = init_tracing()?;
 
-        let schema = Schema::from(json!({
+        let namespace = &alphanumeric_string(5)[..];
+        let topic = &alphanumeric_string(5)[..];
+
+        let avro = json!({
             "type": "record",
             "name": "test",
             "fields": [{
@@ -1962,7 +2362,24 @@ mod avro {
                 "items": "long",
                 "default": []
             }]
-        }));
+        });
+
+        let schema_registry = {
+            let object_store = InMemory::new();
+            let location = Path::from(format!("{topic}.avsc"));
+            _ = object_store
+                .put(
+                    &location,
+                    serde_json::to_vec(&avro)
+                        .map(Bytes::from)
+                        .map(PutPayload::from)?,
+                )
+                .await?;
+
+            Registry::new(object_store)
+        };
+
+        let schema = Schema::from(avro);
 
         let partition = 32123;
 
@@ -1984,20 +2401,18 @@ mod avro {
                 )
             }
 
-            batch
-                .build()
-                .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
-        };
+            batch.build()
+        }?;
 
-        let namespace = &alphanumeric_string(5);
-        let topic = &alphanumeric_string(5);
+        schema_registry.validate(topic, &record_batch).await?;
+
         let results = lake_store(
             namespace,
             topic,
             partition,
+            schema_registry,
             empty_config(topic),
-            record_batch,
+            &record_batch,
         )
         .await?;
 
@@ -2022,7 +2437,10 @@ mod avro {
         _ = dotenv().ok();
         let _guard = init_tracing()?;
 
-        let schema = Schema::from(json!({
+        let namespace = &alphanumeric_string(5)[..];
+        let topic = &alphanumeric_string(5)[..];
+
+        let avro = json!({
             "name": "test",
             "type": "record",
             "fields": [{
@@ -2031,7 +2449,24 @@ mod avro {
                 "items": "float",
                 "default": []
             }]
-        }));
+        });
+
+        let schema_registry = {
+            let object_store = InMemory::new();
+            let location = Path::from(format!("{topic}.avsc"));
+            _ = object_store
+                .put(
+                    &location,
+                    serde_json::to_vec(&avro)
+                        .map(Bytes::from)
+                        .map(PutPayload::from)?,
+                )
+                .await?;
+
+            Registry::new(object_store)
+        };
+
+        let schema = Schema::from(avro);
 
         let partition = 32123;
 
@@ -2056,20 +2491,18 @@ mod avro {
                 )
             }
 
-            batch
-                .build()
-                .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
-        };
+            batch.build()
+        }?;
 
-        let namespace = &alphanumeric_string(5);
-        let topic = &alphanumeric_string(5);
+        schema_registry.validate(topic, &record_batch).await?;
+
         let results = lake_store(
             namespace,
             topic,
             partition,
+            schema_registry,
             empty_config(topic),
-            record_batch,
+            &record_batch,
         )
         .await?;
 
@@ -2094,7 +2527,10 @@ mod avro {
         _ = dotenv().ok();
         let _guard = init_tracing()?;
 
-        let schema = Schema::from(json!({
+        let namespace = &alphanumeric_string(5)[..];
+        let topic = &alphanumeric_string(5)[..];
+
+        let avro = json!({
             "type": "record",
             "name": "test",
             "fields": [{
@@ -2103,7 +2539,24 @@ mod avro {
                 "items": "double",
                 "default": []
             }],
-        }));
+        });
+
+        let schema_registry = {
+            let object_store = InMemory::new();
+            let location = Path::from(format!("{topic}.avsc"));
+            _ = object_store
+                .put(
+                    &location,
+                    serde_json::to_vec(&avro)
+                        .map(Bytes::from)
+                        .map(PutPayload::from)?,
+                )
+                .await?;
+
+            Registry::new(object_store)
+        };
+
+        let schema = Schema::from(avro);
 
         let partition = 32123;
 
@@ -2128,20 +2581,18 @@ mod avro {
                 )
             }
 
-            batch
-                .build()
-                .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
-        };
+            batch.build()
+        }?;
 
-        let namespace = &alphanumeric_string(5);
-        let topic = &alphanumeric_string(5);
+        schema_registry.validate(topic, &record_batch).await?;
+
         let results = lake_store(
             namespace,
             topic,
             partition,
+            schema_registry,
             empty_config(topic),
-            record_batch,
+            &record_batch,
         )
         .await?;
 
@@ -2166,7 +2617,10 @@ mod avro {
         _ = dotenv().ok();
         let _guard = init_tracing()?;
 
-        let schema = Schema::from(json!({
+        let namespace = &alphanumeric_string(5)[..];
+        let topic = &alphanumeric_string(5)[..];
+
+        let avro = json!({
             "type": "record",
             "name": "test",
             "fields": [{
@@ -2175,7 +2629,24 @@ mod avro {
                 "items": "string",
                 "default": []
             }]
-        }));
+        });
+
+        let schema_registry = {
+            let object_store = InMemory::new();
+            let location = Path::from(format!("{topic}.avsc"));
+            _ = object_store
+                .put(
+                    &location,
+                    serde_json::to_vec(&avro)
+                        .map(Bytes::from)
+                        .map(PutPayload::from)?,
+                )
+                .await?;
+
+            Registry::new(object_store)
+        };
+
+        let schema = Schema::from(avro);
 
         let partition = 32123;
 
@@ -2200,20 +2671,18 @@ mod avro {
                 )
             }
 
-            batch
-                .build()
-                .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
-        };
+            batch.build()
+        }?;
 
-        let namespace = &alphanumeric_string(5);
-        let topic = &alphanumeric_string(5);
+        schema_registry.validate(topic, &record_batch).await?;
+
         let results = lake_store(
             namespace,
             topic,
             partition,
+            schema_registry,
             empty_config(topic),
-            record_batch,
+            &record_batch,
         )
         .await?;
 
@@ -2239,7 +2708,10 @@ mod avro {
         _ = dotenv().ok();
         let _guard = init_tracing()?;
 
-        let schema = Schema::from(json!({
+        let namespace = &alphanumeric_string(5)[..];
+        let topic = &alphanumeric_string(5)[..];
+
+        let avro = json!({
             "type": "record",
             "name": "test",
             "fields": [{
@@ -2259,7 +2731,24 @@ mod avro {
                 ]},
                 "default": []
             }]
-        }));
+        });
+
+        let schema_registry = {
+            let object_store = InMemory::new();
+            let location = Path::from(format!("{topic}.avsc"));
+            _ = object_store
+                .put(
+                    &location,
+                    serde_json::to_vec(&avro)
+                        .map(Bytes::from)
+                        .map(PutPayload::from)?,
+                )
+                .await?;
+
+            Registry::new(object_store)
+        };
+
+        let schema = Schema::from(avro);
 
         let partition = 32123;
 
@@ -2293,20 +2782,18 @@ mod avro {
                 )
             }
 
-            batch
-                .build()
-                .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
-        };
+            batch.build()
+        }?;
 
-        let namespace = &alphanumeric_string(5);
-        let topic = &alphanumeric_string(5);
+        schema_registry.validate(topic, &record_batch).await?;
+
         let results = lake_store(
             namespace,
             topic,
             partition,
+            schema_registry,
             empty_config(topic),
-            record_batch,
+            &record_batch,
         )
         .await?;
 
@@ -2331,7 +2818,10 @@ mod avro {
         _ = dotenv().ok();
         let _guard = init_tracing()?;
 
-        let schema = Schema::from(json!({
+        let namespace = &alphanumeric_string(5)[..];
+        let topic = &alphanumeric_string(5)[..];
+
+        let avro = json!({
             "type": "record",
             "name": "test",
             "fields": [{
@@ -2340,7 +2830,24 @@ mod avro {
                 "items": "bytes",
                 "default": []
             }]
-        }));
+        });
+
+        let schema_registry = {
+            let object_store = InMemory::new();
+            let location = Path::from(format!("{topic}.avsc"));
+            _ = object_store
+                .put(
+                    &location,
+                    serde_json::to_vec(&avro)
+                        .map(Bytes::from)
+                        .map(PutPayload::from)?,
+                )
+                .await?;
+
+            Registry::new(object_store)
+        };
+
+        let schema = Schema::from(avro);
 
         let partition = 32123;
 
@@ -2365,20 +2872,18 @@ mod avro {
                 )
             }
 
-            batch
-                .build()
-                .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
-        };
+            batch.build()
+        }?;
 
-        let namespace = &alphanumeric_string(5);
-        let topic = &alphanumeric_string(5);
+        schema_registry.validate(topic, &record_batch).await?;
+
         let results = lake_store(
             namespace,
             topic,
             partition,
+            schema_registry,
             empty_config(topic),
-            record_batch,
+            &record_batch,
         )
         .await?;
 
@@ -2403,7 +2908,10 @@ mod avro {
         _ = dotenv().ok();
         let _guard = init_tracing()?;
 
-        let schema = Schema::from(json!({
+        let namespace = &alphanumeric_string(5)[..];
+        let topic = &alphanumeric_string(5)[..];
+
+        let avro = json!({
             "type": "record",
             "name": "test",
             "fields": [{
@@ -2411,7 +2919,24 @@ mod avro {
                 "type": "string",
                 "logicalType": "uuid"
             }]
-        }));
+        });
+
+        let schema_registry = {
+            let object_store = InMemory::new();
+            let location = Path::from(format!("{topic}.avsc"));
+            _ = object_store
+                .put(
+                    &location,
+                    serde_json::to_vec(&avro)
+                        .map(Bytes::from)
+                        .map(PutPayload::from)?,
+                )
+                .await?;
+
+            Registry::new(object_store)
+        };
+
+        let schema = Schema::from(avro);
 
         let partition = 32123;
 
@@ -2441,20 +2966,18 @@ mod avro {
                 )
             }
 
-            batch
-                .build()
-                .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
-        };
+            batch.build()
+        }?;
 
-        let namespace = &alphanumeric_string(5);
-        let topic = &alphanumeric_string(5);
+        schema_registry.validate(topic, &record_batch).await?;
+
         let results = lake_store(
             namespace,
             topic,
             partition,
+            schema_registry,
             empty_config(topic),
-            record_batch,
+            &record_batch,
         )
         .await?;
 
@@ -2481,7 +3004,10 @@ mod avro {
         _ = dotenv().ok();
         let _guard = init_tracing()?;
 
-        let schema = Schema::from(json!({
+        let namespace = &alphanumeric_string(5)[..];
+        let topic = &alphanumeric_string(5)[..];
+
+        let avro = json!({
             "type": "record",
             "name": "test",
             "fields": [{
@@ -2489,7 +3015,24 @@ mod avro {
                 "type": "int",
                 "logicalType": "time-millis"
             }]
-        }));
+        });
+
+        let schema_registry = {
+            let object_store = InMemory::new();
+            let location = Path::from(format!("{topic}.avsc"));
+            _ = object_store
+                .put(
+                    &location,
+                    serde_json::to_vec(&avro)
+                        .map(Bytes::from)
+                        .map(PutPayload::from)?,
+                )
+                .await?;
+
+            Registry::new(object_store)
+        };
+
+        let schema = Schema::from(avro);
 
         let partition = 32123;
 
@@ -2511,20 +3054,18 @@ mod avro {
                 )
             }
 
-            batch
-                .build()
-                .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
-        };
+            batch.build()
+        }?;
 
-        let namespace = &alphanumeric_string(5);
-        let topic = &alphanumeric_string(5);
+        schema_registry.validate(topic, &record_batch).await?;
+
         let results = lake_store(
             namespace,
             topic,
             partition,
+            schema_registry,
             empty_config(topic),
-            record_batch,
+            &record_batch,
         )
         .await?;
 
@@ -2550,7 +3091,10 @@ mod avro {
         _ = dotenv().ok();
         let _guard = init_tracing()?;
 
-        let schema = Schema::from(json!({
+        let namespace = &alphanumeric_string(5)[..];
+        let topic = &alphanumeric_string(5)[..];
+
+        let avro = json!({
             "type": "record",
             "name": "test",
             "fields": [{
@@ -2558,7 +3102,24 @@ mod avro {
                 "type": "long",
                 "logicalType": "time-micros"
             }]
-        }));
+        });
+
+        let schema_registry = {
+            let object_store = InMemory::new();
+            let location = Path::from(format!("{topic}.avsc"));
+            _ = object_store
+                .put(
+                    &location,
+                    serde_json::to_vec(&avro)
+                        .map(Bytes::from)
+                        .map(PutPayload::from)?,
+                )
+                .await?;
+
+            Registry::new(object_store)
+        };
+
+        let schema = Schema::from(avro);
 
         let partition = 32123;
 
@@ -2580,20 +3141,18 @@ mod avro {
                 )
             }
 
-            batch
-                .build()
-                .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
-        };
+            batch.build()
+        }?;
 
-        let namespace = &alphanumeric_string(5);
-        let topic = &alphanumeric_string(5);
+        schema_registry.validate(topic, &record_batch).await?;
+
         let results = lake_store(
             namespace,
             topic,
             partition,
+            schema_registry,
             empty_config(topic),
-            record_batch,
+            &record_batch,
         )
         .await?;
 
@@ -2620,7 +3179,10 @@ mod avro {
         _ = dotenv().ok();
         let _guard = init_tracing()?;
 
-        let schema = Schema::from(json!({
+        let namespace = &alphanumeric_string(5)[..];
+        let topic = &alphanumeric_string(5)[..];
+
+        let avro = json!({
             "type": "record",
             "name": "test",
             "fields": [{
@@ -2628,7 +3190,24 @@ mod avro {
                 "type": "long",
                 "logicalType": "timestamp-millis"
             }]
-        }));
+        });
+
+        let schema_registry = {
+            let object_store = InMemory::new();
+            let location = Path::from(format!("{topic}.avsc"));
+            _ = object_store
+                .put(
+                    &location,
+                    serde_json::to_vec(&avro)
+                        .map(Bytes::from)
+                        .map(PutPayload::from)?,
+                )
+                .await?;
+
+            Registry::new(object_store)
+        };
+
+        let schema = Schema::from(avro);
 
         let partition = 32123;
 
@@ -2650,20 +3229,18 @@ mod avro {
                 )
             }
 
-            batch
-                .build()
-                .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
-        };
+            batch.build()
+        }?;
 
-        let namespace = &alphanumeric_string(5);
-        let topic = &alphanumeric_string(5);
+        schema_registry.validate(topic, &record_batch).await?;
+
         let results = lake_store(
             namespace,
             topic,
             partition,
+            schema_registry,
             empty_config(topic),
-            record_batch,
+            &record_batch,
         )
         .await?;
 
@@ -2689,7 +3266,10 @@ mod avro {
         _ = dotenv().ok();
         let _guard = init_tracing()?;
 
-        let schema = Schema::from(json!({
+        let namespace = &alphanumeric_string(5)[..];
+        let topic = &alphanumeric_string(5)[..];
+
+        let avro = json!({
             "type": "record",
             "name": "test",
             "fields": [{
@@ -2697,7 +3277,24 @@ mod avro {
                 "type": "long",
                 "logicalType": "timestamp-micros"
             }]
-        }));
+        });
+
+        let schema_registry = {
+            let object_store = InMemory::new();
+            let location = Path::from(format!("{topic}.avsc"));
+            _ = object_store
+                .put(
+                    &location,
+                    serde_json::to_vec(&avro)
+                        .map(Bytes::from)
+                        .map(PutPayload::from)?,
+                )
+                .await?;
+
+            Registry::new(object_store)
+        };
+
+        let schema = Schema::from(avro);
 
         let partition = 32123;
 
@@ -2719,20 +3316,18 @@ mod avro {
                 )
             }
 
-            batch
-                .build()
-                .map_err(Into::into)
-                .and_then(|batch| schema.as_arrow(partition, &batch, LakeHouseType::Iceberg))?
-        };
+            batch.build()
+        }?;
 
-        let namespace = &alphanumeric_string(5);
-        let topic = &alphanumeric_string(5);
+        schema_registry.validate(topic, &record_batch).await?;
+
         let results = lake_store(
             namespace,
             topic,
             partition,
+            schema_registry,
             empty_config(topic),
-            record_batch,
+            &record_batch,
         )
         .await?;
 

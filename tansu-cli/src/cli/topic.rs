@@ -52,6 +52,13 @@ pub(super) enum Command {
         #[clap(value_parser)]
         name: String,
     },
+
+    /// List existing topics
+    List {
+        /// Broker URL
+        #[arg(long, default_value = DEFAULT_BROKER)]
+        broker: Url,
+    },
 }
 
 impl From<Command> for Topic {
@@ -70,6 +77,8 @@ impl From<Command> for Topic {
                 .build(),
 
             Command::Delete { broker, name } => Topic::delete().broker(broker).name(name).build(),
+
+            Command::List { broker } => Topic::list().broker(broker).build(),
         }
     }
 }

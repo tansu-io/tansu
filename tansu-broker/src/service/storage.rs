@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,45 +17,52 @@ use rama::{
     layer::{MapErrLayer, MapStateLayer},
 };
 use tansu_sans_io::{
-    AddOffsetsToTxnRequest, AddPartitionsToTxnRequest, ApiKey as _, ConsumerGroupDescribeRequest,
-    CreateTopicsRequest, DeleteGroupsRequest, DeleteRecordsRequest, DeleteTopicsRequest,
+    AddOffsetsToTxnRequest, AddPartitionsToTxnRequest, AlterUserScramCredentialsRequest,
+    ApiKey as _, ConsumerGroupDescribeRequest, CreateAclsRequest, CreateTopicsRequest,
+    DeleteGroupsRequest, DeleteRecordsRequest, DeleteTopicsRequest, DescribeAclsRequest,
     DescribeClusterRequest, DescribeConfigsRequest, DescribeGroupsRequest,
-    DescribeTopicPartitionsRequest, FetchRequest, FindCoordinatorRequest,
-    GetTelemetrySubscriptionsRequest, IncrementalAlterConfigsRequest, InitProducerIdRequest,
-    ListGroupsRequest, ListOffsetsRequest, ListPartitionReassignmentsRequest, MetadataRequest,
-    ProduceRequest, TxnOffsetCommitRequest,
+    DescribeTopicPartitionsRequest, DescribeUserScramCredentialsRequest, FetchRequest,
+    FindCoordinatorRequest, GetTelemetrySubscriptionsRequest, IncrementalAlterConfigsRequest,
+    InitProducerIdRequest, ListGroupsRequest, ListOffsetsRequest,
+    ListPartitionReassignmentsRequest, MetadataRequest, ProduceRequest, TxnOffsetCommitRequest,
 };
 use tansu_service::{FrameRequestLayer, FrameRouteBuilder};
 use tansu_storage::{
-    ConsumerGroupDescribeService, CreateTopicsService, DeleteGroupsService, DeleteRecordsService,
-    DeleteTopicsService, DescribeClusterService, DescribeConfigsService, DescribeGroupsService,
-    DescribeTopicPartitionsService, FetchService, FindCoordinatorService,
-    GetTelemetrySubscriptionsService, IncrementalAlterConfigsService, InitProducerIdService,
-    ListGroupsService, ListOffsetsService, ListPartitionReassignmentsService, MetadataService,
-    ProduceService, Storage, TxnAddOffsetsService, TxnAddPartitionService, TxnOffsetCommitService,
+    AlterUserScramCredentialsService, ConsumerGroupDescribeService, CreateAclsService,
+    CreateTopicsService, DeleteGroupsService, DeleteRecordsService, DeleteTopicsService,
+    DescribeAclsService, DescribeClusterService, DescribeConfigsService, DescribeGroupsService,
+    DescribeTopicPartitionsService, DescribeUserScramCredentialsService, FetchService,
+    FindCoordinatorService, GetTelemetrySubscriptionsService, IncrementalAlterConfigsService,
+    InitProducerIdService, ListGroupsService, ListOffsetsService,
+    ListPartitionReassignmentsService, MetadataService, ProduceService, Storage,
+    TxnAddOffsetsService, TxnAddPartitionService, TxnOffsetCommitService,
 };
 
 use crate::Error;
 
-pub(crate) fn services<S>(
+pub fn services<S>(
     builder: FrameRouteBuilder<(), Error>,
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
 where
-    S: Storage,
+    S: Storage + Clone,
 {
     [
         add_offsets_to_txn,
         add_partitions_to_txn,
+        alter_user_scram_credentials,
         consumer_group_describe,
+        create_acls,
         create_topics,
         delete_groups,
         delete_records,
         delete_topics,
+        describe_acls,
         describe_cluster,
         describe_configs,
         describe_groups,
         describe_topic_partitions,
+        describe_user_scram_credentials,
         fetch,
         find_coordinator,
         get_telemetry_subscriptions,
@@ -74,12 +81,96 @@ where
     })
 }
 
-fn consumer_group_describe<S>(
+pub fn alter_user_scram_credentials<S>(
     builder: FrameRouteBuilder<(), Error>,
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
 where
-    S: Storage,
+    S: Storage + Clone,
+{
+    builder
+        .with_route(
+            AlterUserScramCredentialsRequest::KEY,
+            (
+                MapErrLayer::new(Error::from),
+                MapStateLayer::new(|_| storage),
+                FrameRequestLayer::<AlterUserScramCredentialsRequest>::new(),
+            )
+                .into_layer(AlterUserScramCredentialsService)
+                .boxed(),
+        )
+        .map_err(Into::into)
+}
+
+pub fn describe_user_scram_credentials<S>(
+    builder: FrameRouteBuilder<(), Error>,
+    storage: S,
+) -> Result<FrameRouteBuilder<(), Error>, Error>
+where
+    S: Storage + Clone,
+{
+    builder
+        .with_route(
+            DescribeUserScramCredentialsRequest::KEY,
+            (
+                MapErrLayer::new(Error::from),
+                MapStateLayer::new(|_| storage),
+                FrameRequestLayer::<DescribeUserScramCredentialsRequest>::new(),
+            )
+                .into_layer(DescribeUserScramCredentialsService)
+                .boxed(),
+        )
+        .map_err(Into::into)
+}
+
+pub fn create_acls<S>(
+    builder: FrameRouteBuilder<(), Error>,
+    storage: S,
+) -> Result<FrameRouteBuilder<(), Error>, Error>
+where
+    S: Storage + Clone,
+{
+    builder
+        .with_route(
+            CreateAclsRequest::KEY,
+            (
+                MapErrLayer::new(Error::from),
+                MapStateLayer::new(|_| storage),
+                FrameRequestLayer::<CreateAclsRequest>::new(),
+            )
+                .into_layer(CreateAclsService)
+                .boxed(),
+        )
+        .map_err(Into::into)
+}
+
+pub fn describe_acls<S>(
+    builder: FrameRouteBuilder<(), Error>,
+    storage: S,
+) -> Result<FrameRouteBuilder<(), Error>, Error>
+where
+    S: Storage + Clone,
+{
+    builder
+        .with_route(
+            DescribeAclsRequest::KEY,
+            (
+                MapErrLayer::new(Error::from),
+                MapStateLayer::new(|_| storage),
+                FrameRequestLayer::<DescribeAclsRequest>::new(),
+            )
+                .into_layer(DescribeAclsService)
+                .boxed(),
+        )
+        .map_err(Into::into)
+}
+
+pub fn consumer_group_describe<S>(
+    builder: FrameRouteBuilder<(), Error>,
+    storage: S,
+) -> Result<FrameRouteBuilder<(), Error>, Error>
+where
+    S: Storage + Clone,
 {
     builder
         .with_route(
@@ -95,12 +186,12 @@ where
         .map_err(Into::into)
 }
 
-fn create_topics<S>(
+pub fn create_topics<S>(
     builder: FrameRouteBuilder<(), Error>,
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
 where
-    S: Storage,
+    S: Storage + Clone,
 {
     builder
         .with_route(
@@ -116,12 +207,12 @@ where
         .map_err(Into::into)
 }
 
-fn delete_groups<S>(
+pub fn delete_groups<S>(
     builder: FrameRouteBuilder<(), Error>,
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
 where
-    S: Storage,
+    S: Storage + Clone,
 {
     builder
         .with_route(
@@ -137,12 +228,12 @@ where
         .map_err(Into::into)
 }
 
-fn delete_records<S>(
+pub fn delete_records<S>(
     builder: FrameRouteBuilder<(), Error>,
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
 where
-    S: Storage,
+    S: Storage + Clone,
 {
     builder
         .with_route(
@@ -158,12 +249,12 @@ where
         .map_err(Into::into)
 }
 
-fn delete_topics<S>(
+pub fn delete_topics<S>(
     builder: FrameRouteBuilder<(), Error>,
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
 where
-    S: Storage,
+    S: Storage + Clone,
 {
     builder
         .with_route(
@@ -179,12 +270,12 @@ where
         .map_err(Into::into)
 }
 
-fn describe_cluster<S>(
+pub fn describe_cluster<S>(
     builder: FrameRouteBuilder<(), Error>,
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
 where
-    S: Storage,
+    S: Storage + Clone,
 {
     builder
         .with_route(
@@ -200,12 +291,12 @@ where
         .map_err(Into::into)
 }
 
-fn describe_configs<S>(
+pub fn describe_configs<S>(
     builder: FrameRouteBuilder<(), Error>,
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
 where
-    S: Storage,
+    S: Storage + Clone,
 {
     builder
         .with_route(
@@ -221,12 +312,12 @@ where
         .map_err(Into::into)
 }
 
-fn describe_groups<S>(
+pub fn describe_groups<S>(
     builder: FrameRouteBuilder<(), Error>,
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
 where
-    S: Storage,
+    S: Storage + Clone,
 {
     builder
         .with_route(
@@ -242,12 +333,12 @@ where
         .map_err(Into::into)
 }
 
-fn describe_topic_partitions<S>(
+pub fn describe_topic_partitions<S>(
     builder: FrameRouteBuilder<(), Error>,
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
 where
-    S: Storage,
+    S: Storage + Clone,
 {
     builder
         .with_route(
@@ -263,12 +354,12 @@ where
         .map_err(Into::into)
 }
 
-fn fetch<S>(
+pub fn fetch<S>(
     builder: FrameRouteBuilder<(), Error>,
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
 where
-    S: Storage,
+    S: Storage + Clone,
 {
     builder
         .with_route(
@@ -284,12 +375,12 @@ where
         .map_err(Into::into)
 }
 
-fn find_coordinator<S>(
+pub fn find_coordinator<S>(
     builder: FrameRouteBuilder<(), Error>,
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
 where
-    S: Storage,
+    S: Storage + Clone,
 {
     builder
         .with_route(
@@ -305,12 +396,12 @@ where
         .map_err(Into::into)
 }
 
-fn incremental_alter_configs<S>(
+pub fn incremental_alter_configs<S>(
     builder: FrameRouteBuilder<(), Error>,
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
 where
-    S: Storage,
+    S: Storage + Clone,
 {
     builder
         .with_route(
@@ -326,12 +417,12 @@ where
         .map_err(Into::into)
 }
 
-fn init_producer_id<S>(
+pub fn init_producer_id<S>(
     builder: FrameRouteBuilder<(), Error>,
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
 where
-    S: Storage,
+    S: Storage + Clone,
 {
     builder
         .with_route(
@@ -347,12 +438,12 @@ where
         .map_err(Into::into)
 }
 
-fn list_groups<S>(
+pub fn list_groups<S>(
     builder: FrameRouteBuilder<(), Error>,
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
 where
-    S: Storage,
+    S: Storage + Clone,
 {
     builder
         .with_route(
@@ -368,12 +459,12 @@ where
         .map_err(Into::into)
 }
 
-fn list_offsets<S>(
+pub fn list_offsets<S>(
     builder: FrameRouteBuilder<(), Error>,
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
 where
-    S: Storage,
+    S: Storage + Clone,
 {
     builder
         .with_route(
@@ -389,12 +480,12 @@ where
         .map_err(Into::into)
 }
 
-fn list_partition_reassignments<S>(
+pub fn list_partition_reassignments<S>(
     builder: FrameRouteBuilder<(), Error>,
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
 where
-    S: Storage,
+    S: Storage + Clone,
 {
     builder
         .with_route(
@@ -410,12 +501,12 @@ where
         .map_err(Into::into)
 }
 
-fn metadata<S>(
+pub fn metadata<S>(
     builder: FrameRouteBuilder<(), Error>,
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
 where
-    S: Storage,
+    S: Storage + Clone,
 {
     builder
         .with_route(
@@ -431,12 +522,12 @@ where
         .map_err(Into::into)
 }
 
-fn produce<S>(
+pub fn produce<S>(
     builder: FrameRouteBuilder<(), Error>,
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
 where
-    S: Storage,
+    S: Storage + Clone,
 {
     builder
         .with_route(
@@ -452,12 +543,12 @@ where
         .map_err(Into::into)
 }
 
-fn get_telemetry_subscriptions<S>(
+pub fn get_telemetry_subscriptions<S>(
     builder: FrameRouteBuilder<(), Error>,
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
 where
-    S: Storage,
+    S: Storage + Clone,
 {
     builder
         .with_route(
@@ -473,12 +564,12 @@ where
         .map_err(Into::into)
 }
 
-fn add_offsets_to_txn<S>(
+pub fn add_offsets_to_txn<S>(
     builder: FrameRouteBuilder<(), Error>,
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
 where
-    S: Storage,
+    S: Storage + Clone,
 {
     builder
         .with_route(
@@ -494,12 +585,12 @@ where
         .map_err(Into::into)
 }
 
-fn add_partitions_to_txn<S>(
+pub fn add_partitions_to_txn<S>(
     builder: FrameRouteBuilder<(), Error>,
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
 where
-    S: Storage,
+    S: Storage + Clone,
 {
     builder
         .with_route(
@@ -515,12 +606,12 @@ where
         .map_err(Into::into)
 }
 
-fn txn_offset_commit_request<S>(
+pub fn txn_offset_commit_request<S>(
     builder: FrameRouteBuilder<(), Error>,
     storage: S,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
 where
-    S: Storage,
+    S: Storage + Clone,
 {
     builder
         .with_route(

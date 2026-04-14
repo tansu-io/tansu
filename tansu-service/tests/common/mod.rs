@@ -14,6 +14,7 @@
 
 use std::{fmt, io, sync::Arc};
 
+use tokio::task::JoinError;
 use tracing::subscriber::DefaultGuard;
 use tracing_subscriber::{EnvFilter, filter::ParseError};
 
@@ -21,6 +22,9 @@ use tracing_subscriber::{EnvFilter, filter::ParseError};
 pub(crate) enum Error {
     #[allow(dead_code)]
     Io(Arc<io::Error>),
+
+    #[allow(dead_code)]
+    Join(Arc<JoinError>),
 
     #[allow(dead_code)]
     Message(String),
@@ -35,6 +39,12 @@ pub(crate) enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{self:?}")
+    }
+}
+
+impl From<JoinError> for Error {
+    fn from(value: JoinError) -> Self {
+        Self::Join(Arc::new(value))
     }
 }
 

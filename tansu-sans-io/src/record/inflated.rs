@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,17 +13,15 @@
 // limitations under the License.
 
 use crate::{
-    Compression, Encoder, Error, Result,
-    primitive::ByteSize,
+    ByteSize, Compression, Error, Result,
     record::{Record, codec::Sequence, deflated},
+    ser::RecordBatchEncoder,
     to_timestamp,
 };
-use bytes::Bytes;
-use crc::{CRC_32_ISCSI, Crc, Digest};
+use bytes::{Bytes, BytesMut};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    io,
     time::SystemTime,
 };
 use tracing::debug;
@@ -40,6 +38,19 @@ impl TryFrom<deflated::Frame> for Frame {
         deflated
             .batches
             .into_iter()
+            .map(Batch::try_from)
+            .collect::<Result<Vec<_>>>()
+            .map(|batches| Self { batches })
+    }
+}
+
+impl TryFrom<&deflated::Frame> for Frame {
+    type Error = Error;
+
+    fn try_from(deflated: &deflated::Frame) -> Result<Self, Self::Error> {
+        deflated
+            .batches
+            .iter()
             .try_fold(Vec::new(), |mut acc, batch| {
                 Batch::try_from(batch).map(|inflated| {
                     acc.push(inflated);
@@ -257,7 +268,7 @@ pub struct Builder {
 
 impl Default for Builder {
     fn default() -> Self {
-        let base_timestamp = to_timestamp(SystemTime::now()).unwrap_or_default();
+        let base_timestamp = to_timestamp(&SystemTime::now()).unwrap_or_default();
 
         Self {
             base_offset: 0,
@@ -374,39 +385,22 @@ impl Builder {
     }
 
     fn crc(&self) -> Result<u32> {
-        struct CrcUpdate<'a> {
-            digest: Digest<'a, u32>,
-        }
+        let mut encoder = RecordBatchEncoder::new(BytesMut::with_capacity(self.size_in_bytes()?));
+        self.attributes.serialize(&mut encoder)?;
+        self.last_offset_delta.serialize(&mut encoder)?;
+        self.base_timestamp.serialize(&mut encoder)?;
+        self.max_timestamp.serialize(&mut encoder)?;
+        self.producer_id.serialize(&mut encoder)?;
+        self.producer_epoch.serialize(&mut encoder)?;
+        self.base_sequence.serialize(&mut encoder)?;
+        self.records.serialize(&mut encoder)?;
 
-        impl io::Write for CrcUpdate<'_> {
-            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-                self.digest.update(buf);
-                Ok(buf.len())
-            }
+        let encoded = Bytes::from(encoder);
 
-            fn flush(&mut self) -> io::Result<()> {
-                Ok(())
-            }
-        }
+        let mut digest = crc_fast::Digest::new(crc_fast::CrcAlgorithm::Crc32Iscsi);
+        digest.update(&encoded[..]);
 
-        let crc = Crc::<u32>::new(&CRC_32_ISCSI);
-
-        let mut digester = CrcUpdate {
-            digest: crc.digest(),
-        };
-
-        let mut serializer = Encoder::new(&mut digester);
-
-        self.attributes
-            .serialize(&mut serializer)
-            .and(self.last_offset_delta.serialize(&mut serializer))
-            .and(self.base_timestamp.serialize(&mut serializer))
-            .and(self.max_timestamp.serialize(&mut serializer))
-            .and(self.producer_id.serialize(&mut serializer))
-            .and(self.producer_epoch.serialize(&mut serializer))
-            .and(self.base_sequence.serialize(&mut serializer))
-            .and(self.records.serialize(&mut serializer))
-            .map(|()| digester.digest.finalize())
+        Ok(digest.finalize() as u32)
     }
 
     pub fn build(self) -> Result<Batch> {
@@ -447,12 +441,41 @@ impl Builder {
 
 #[cfg(test)]
 mod tests {
+    use tracing::subscriber::DefaultGuard;
+    use tracing_subscriber::EnvFilter;
+
     use super::*;
-    use crate::{Result, de::Decoder};
-    use std::io::Cursor;
+    use crate::{Result, de::BatchDecoder};
+
+    fn init_tracing() -> Result<DefaultGuard> {
+        use std::{fs::File, sync::Arc, thread};
+
+        Ok(tracing::subscriber::set_default(
+            tracing_subscriber::fmt()
+                .with_level(true)
+                .with_line_number(true)
+                .with_thread_names(false)
+                .with_env_filter(EnvFilter::from_default_env().add_directive(
+                    format!("{}=debug", env!("CARGO_PKG_NAME").replace("-", "_")).parse()?,
+                ))
+                .with_writer(
+                    thread::current()
+                        .name()
+                        .ok_or(Error::Message(String::from("unnamed thread")))
+                        .and_then(|name| {
+                            File::create(format!("../logs/{}/{name}.log", env!("CARGO_PKG_NAME"),))
+                                .map_err(Into::into)
+                        })
+                        .map(Arc::new)?,
+                )
+                .finish(),
+        ))
+    }
 
     #[test]
     fn batch() -> Result<()> {
+        let _guard = init_tracing()?;
+
         let decoded = Batch::builder()
             .base_offset(0)
             .partition_leader_epoch(-1)
@@ -464,7 +487,7 @@ mod tests {
             .producer_id(1)
             .producer_epoch(0)
             .base_sequence(1)
-            .record(Record::builder().value(Some(Bytes::from(vec![100, 101, 102]))))
+            .record(Record::builder().value(Some(Bytes::from_static(&[100, 101, 102]))))
             .build()?;
 
         assert_eq!(decoded.batch_length, 59);
@@ -475,7 +498,9 @@ mod tests {
 
     #[test]
     fn batch_decode() -> Result<()> {
-        let mut encoded = vec![
+        let _guard = init_tracing()?;
+
+        let encoded = vec![
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 59, 255, 255, 255, 255, 2, 67, 41, 231, 61, 0, 0, 0,
             0, 0, 0, 0, 0, 1, 141, 116, 152, 137, 53, 0, 0, 1, 141, 116, 152, 137, 53, 0, 0, 0, 0,
             0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 18, 0, 0, 0, 1, 6, 100, 101, 102, 0,
@@ -495,9 +520,8 @@ mod tests {
             .record(Record::builder().value(Some(Bytes::from(vec![100, 101, 102]))))
             .build()?;
 
-        let mut c = Cursor::new(&mut encoded);
-        let mut decoder = Decoder::new(&mut c);
-        let actual = Batch::deserialize(&mut decoder)?;
+        let decoder = BatchDecoder::new(Bytes::copy_from_slice(&encoded[..]));
+        let actual = Batch::deserialize(decoder)?;
 
         assert_eq!(decoded, actual);
 
@@ -506,11 +530,13 @@ mod tests {
 
     #[test]
     fn batch_encode() -> Result<()> {
-        let mut encoded = vec![
+        let _guard = init_tracing()?;
+
+        let encoded = Bytes::from_static(&[
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 59, 255, 255, 255, 255, 2, 67, 41, 231, 61, 0, 0, 0,
             0, 0, 0, 0, 0, 1, 141, 116, 152, 137, 53, 0, 0, 1, 141, 116, 152, 137, 53, 0, 0, 0, 0,
             0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 18, 0, 0, 0, 1, 6, 100, 101, 102, 0,
-        ];
+        ]);
 
         let decoded = Batch::builder()
             .base_offset(0)
@@ -526,9 +552,8 @@ mod tests {
             .record(Record::builder().value(Some(Bytes::from(vec![100, 101, 102]))))
             .build()?;
 
-        let mut c = Cursor::new(&mut encoded);
-        let mut decoder = Decoder::new(&mut c);
-        let actual = Batch::deserialize(&mut decoder)?;
+        let decoder = BatchDecoder::new(encoded);
+        let actual = Batch::deserialize(decoder)?;
 
         assert_eq!(decoded, actual);
 
@@ -537,6 +562,8 @@ mod tests {
 
     #[test]
     fn build_batch_records() -> Result<()> {
+        let _guard = init_tracing()?;
+
         let keys: Vec<_> = (0..=6).map(|i| format!("k{i}")).map(Bytes::from).collect();
         let values: Vec<_> = (0..=11).map(|i| format!("v{i}")).map(Bytes::from).collect();
 

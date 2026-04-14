@@ -12,9 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{env, sync::Arc};
+use std::{env, marker::PhantomData, sync::Arc};
 
-use arrow::array::RecordBatch;
 use async_trait::async_trait;
 use bytes::Bytes;
 use object_store::{
@@ -24,29 +23,40 @@ use object_store::{
     path::Path,
 };
 use parquet::arrow::AsyncArrowWriter;
-use tansu_sans_io::describe_configs_response::DescribeConfigsResult;
+use tansu_sans_io::{describe_configs_response::DescribeConfigsResult, record::inflated::Batch};
 use tracing::debug;
 use url::Url;
 
 use crate::{
-    Error, Result,
+    AsArrow as _, Error, Registry, Result,
     lake::{LakeHouse, LakeHouseType},
 };
 
 use super::House;
 
 #[derive(Clone, Debug, Default)]
-pub struct Builder<L> {
+pub struct Builder<L = PhantomData<Url>, R = PhantomData<Registry>> {
     location: L,
+    schema_registry: R,
 }
 
 impl<L> Builder<L> {
     pub fn location(self, location: Url) -> Builder<Url> {
-        Builder { location }
+        Builder {
+            location,
+            schema_registry: self.schema_registry,
+        }
+    }
+
+    pub fn schema_registry(self, schema_registry: Registry) -> Builder<L, Registry> {
+        Builder {
+            location: self.location,
+            schema_registry,
+        }
     }
 }
 
-impl Builder<Url> {
+impl Builder<Url, Registry> {
     pub fn build(self) -> Result<House> {
         Parquet::try_from(self).map(House::Parquet)
     }
@@ -55,6 +65,7 @@ impl Builder<Url> {
 #[derive(Clone, Debug)]
 pub struct Parquet {
     object_store: Arc<DynObjectStore>,
+    schema_registry: Registry,
 }
 
 #[async_trait]
@@ -64,9 +75,14 @@ impl LakeHouse for Parquet {
         topic: &str,
         partition: i32,
         offset: i64,
-        record_batch: RecordBatch,
+        inflated: &Batch,
         _config: DescribeConfigsResult,
     ) -> Result<()> {
+        let record_batch = self
+            .schema_registry
+            .as_arrow(topic, partition, inflated, LakeHouseType::Parquet)
+            .await?;
+
         let payload = {
             let mut buffer = Vec::new();
             let mut writer = AsyncArrowWriter::try_new(&mut buffer, record_batch.schema(), None)?;
@@ -101,10 +117,10 @@ impl LakeHouse for Parquet {
     }
 }
 
-impl TryFrom<Builder<Url>> for Parquet {
+impl TryFrom<Builder<Url, Registry>> for Parquet {
     type Error = Error;
 
-    fn try_from(value: Builder<Url>) -> Result<Self, Self::Error> {
+    fn try_from(value: Builder<Url, Registry>) -> Result<Self, Self::Error> {
         match value.location.scheme() {
             "s3" => {
                 let bucket_name = value.location.host_str().unwrap_or("lake");
@@ -114,7 +130,10 @@ impl TryFrom<Builder<Url>> for Parquet {
                     .with_conditional_put(S3ConditionalPut::ETagMatch)
                     .build()
                     .map(Arc::new)
-                    .map(|object_store| Self { object_store })
+                    .map(|object_store| Self {
+                        object_store,
+                        schema_registry: value.schema_registry,
+                    })
                     .map_err(Into::into)
             }
 
@@ -135,7 +154,10 @@ impl TryFrom<Builder<Url>> for Parquet {
 
                 LocalFileSystem::new_with_prefix(path)
                     .map(Arc::new)
-                    .map(|object_store| Self { object_store })
+                    .map(|object_store| Self {
+                        object_store,
+                        schema_registry: value.schema_registry,
+                    })
                     .map_err(Into::into)
             }
 

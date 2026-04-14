@@ -84,7 +84,7 @@
 //!     TcpListenerLayer::new(token),
 //!     TcpContextLayer::default(),
 //!     TcpBytesLayer::<()>::default(),
-//!     BytesFrameLayer,
+//!     BytesFrameLayer::default(),
 //!
 //!     // client layers: writing frames -> connection pool -> bytes -> origin:
 //!     FramePoolLayer::new(origin),
@@ -106,21 +106,24 @@ use std::{
     time::SystemTime,
 };
 
+use backoff::{ExponentialBackoffBuilder, future::retry};
 use bytes::Bytes;
 use deadpool::managed::{self, BuildError, Object, PoolError};
 use opentelemetry::{
     InstrumentationScope, KeyValue, global,
-    metrics::{Counter, Histogram, Meter},
+    metrics::{Counter, Gauge, Histogram, Meter},
 };
 use opentelemetry_semantic_conventions::SCHEMA_URL;
 use rama::{Context, Layer, Service};
-use tansu_sans_io::{ApiKey, ApiVersionsRequest, Body, Frame, Header, Request};
+use tansu_sans_io::{ApiKey, ApiVersionsRequest, Body, Frame, Header, Request, RootMessageMeta};
 use tansu_service::{FrameBytesLayer, FrameBytesService, host_port};
 use tokio::{
     io::{AsyncReadExt as _, AsyncWriteExt as _},
     net::TcpStream,
+    task::JoinError,
+    time::Duration,
 };
-use tracing::{Instrument, Level, debug, error, span};
+use tracing::{Instrument, Level, debug, span};
 use tracing_subscriber::filter::ParseError;
 use url::Url;
 
@@ -133,6 +136,7 @@ pub use consumer::Group;
 pub enum Error {
     DeadPoolBuild(#[from] BuildError),
     Io(Arc<io::Error>),
+    Join(Arc<JoinError>),
     Message(String),
     ParseFilter(Arc<ParseError>),
     ParseUrl(#[from] url::ParseError),
@@ -146,6 +150,12 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{self:?}")
+    }
+}
+
+impl From<JoinError> for Error {
+    fn from(value: JoinError) -> Self {
+        Self::Join(Arc::new(value))
     }
 }
 
@@ -214,6 +224,8 @@ impl ConnectionManager {
     }
 }
 
+const INITIAL_CONNECTION_TIMEOUT_MILLIS: u64 = 30_000;
+
 impl managed::Manager for ConnectionManager {
     type Type = Connection;
     type Error = Error;
@@ -224,25 +236,35 @@ impl managed::Manager for ConnectionManager {
         let attributes = [KeyValue::new("broker", self.broker.to_string())];
         let start = SystemTime::now();
 
-        TcpStream::connect(host_port(self.broker.clone()).await?)
-            .await
-            .inspect(|_| {
-                TCP_CONNECT_DURATION.record(
-                    start
-                        .elapsed()
-                        .map_or(0, |duration| duration.as_millis() as u64),
-                    &attributes,
-                )
-            })
-            .inspect_err(|err| {
-                error!(broker = %self.broker, ?err);
-                TCP_CONNECT_ERRORS.add(1, &attributes);
-            })
-            .map(|stream| Connection {
-                stream,
-                correlation_id: 0,
-            })
-            .map_err(Into::into)
+        let addr = host_port(self.broker.clone()).await?;
+
+        let backoff = ExponentialBackoffBuilder::new()
+            .with_max_elapsed_time(Some(Duration::from_millis(
+                INITIAL_CONNECTION_TIMEOUT_MILLIS,
+            )))
+            .build();
+        retry(backoff, || async {
+            Ok(TcpStream::connect(addr)
+                .await
+                .inspect(|_| {
+                    TCP_CONNECT_DURATION.record(
+                        start
+                            .elapsed()
+                            .map_or(0, |duration| duration.as_millis() as u64),
+                        &attributes,
+                    )
+                })
+                .inspect_err(|err| {
+                    debug!(broker = %self.broker, ?err, elapsed = start.elapsed().map_or(0, |duration| duration.as_millis() as u64));
+                    TCP_CONNECT_ERRORS.add(1, &attributes);
+                })
+                .map(|stream| Connection {
+                    stream,
+                    correlation_id: 0,
+                })?)
+        })
+        .await
+        .map_err(Into::into)
     }
 
     async fn recycle(
@@ -251,12 +273,21 @@ impl managed::Manager for ConnectionManager {
         metrics: &managed::Metrics,
     ) -> managed::RecycleResult<Self::Error> {
         debug!(?obj, ?metrics);
+
         Ok(())
     }
 }
 
 /// A managed [`Pool`] of broker [`Connection`]s
 pub type Pool = managed::Pool<ConnectionManager>;
+
+fn status_update(pool: &Pool) {
+    let status = pool.status();
+    POOL_AVAILABLE.record(status.available as u64, &[]);
+    POOL_CURRENT_SIZE.record(status.size as u64, &[]);
+    POOL_MAX_SIZE.record(status.max_size as u64, &[]);
+    POOL_WAITING.record(status.waiting as u64, &[]);
+}
 
 /// [Build][`Builder#method.build`] a [`Connection`] [`Pool`] to a [broker][`Builder#method.broker`]
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -297,12 +328,25 @@ impl Builder {
         .build()
         .map(Client::new)?;
 
+        let supported = RootMessageMeta::messages().requests();
+
         client.call(req).await.map(|response| {
             response
                 .api_keys
                 .unwrap_or_default()
                 .into_iter()
-                .map(|api| (api.api_key, api.max_version))
+                .filter_map(|api| {
+                    supported.get(&api.api_key).and_then(|supported| {
+                        if api.min_version >= supported.version.valid.start {
+                            Some((
+                                api.api_key,
+                                api.max_version.min(supported.version.valid.end),
+                            ))
+                        } else {
+                            None
+                        }
+                    })
+                })
                 .collect()
         })
     }
@@ -468,7 +512,7 @@ where
     type Error = S::Error;
 
     async fn serve(&self, ctx: Context<Pool>, req: Frame) -> Result<Self::Response, Self::Error> {
-        debug!(?ctx, ?req);
+        debug!(?req);
 
         let api_key = req.api_key()?;
         let api_version = req.api_version()?;
@@ -476,7 +520,10 @@ where
             .client_id()
             .map(|client_id| client_id.map(|client_id| client_id.to_string()))?;
 
-        let connection = ctx.state().get().await?;
+        let pool = ctx.state();
+        status_update(pool);
+
+        let connection = pool.get().await?;
         let correlation_id = connection.correlation_id;
 
         let frame = Frame {
@@ -529,7 +576,7 @@ where
     type Error = S::Error;
 
     async fn serve(&self, ctx: Context<Pool>, req: Q) -> Result<Self::Response, Self::Error> {
-        debug!(?ctx, ?req);
+        debug!(?req);
         let pool = ctx.state();
         let api_key = Q::KEY;
         let api_version = pool.manager().api_version(api_key)?;
@@ -552,7 +599,9 @@ where
 
         let frame = self.inner.serve(ctx, frame).await?;
 
-        Q::Response::try_from(frame.body).map_err(Into::into)
+        Q::Response::try_from(frame.body)
+            .inspect(|response| debug!(?response))
+            .map_err(Into::into)
     }
 }
 
@@ -567,7 +616,7 @@ impl BytesConnectionService {
         frame: Bytes,
         attributes: &[KeyValue],
     ) -> Result<(), Error> {
-        debug!(?frame);
+        debug!(frame = ?&frame[..]);
 
         let start = SystemTime::now();
 
@@ -615,7 +664,7 @@ impl BytesConnectionService {
                 TCP_RECEIVE_ERRORS.add(1, attributes);
             })?;
 
-        Ok(Bytes::from(buffer)).inspect(|frame| debug!(?frame))
+        Ok(Bytes::from(buffer)).inspect(|frame| debug!(frame = ?&frame[..]))
     }
 }
 
@@ -633,10 +682,7 @@ impl Service<Object<ConnectionManager>, Bytes> for BytesConnectionService {
         let local = c.stream.local_addr()?;
         let peer = c.stream.peer_addr()?;
 
-        let attributes = [
-            KeyValue::new("correlation_id", c.correlation_id.to_string()),
-            KeyValue::new("peer", peer.to_string()),
-        ];
+        let attributes = [KeyValue::new("peer", peer.to_string())];
 
         let span = span!(Level::DEBUG, "client", local = %local, peer = %peer);
 
@@ -715,6 +761,34 @@ static TCP_BYTES_RECEIVED: LazyLock<Counter<u64>> = LazyLock::new(|| {
         .build()
 });
 
+static POOL_MAX_SIZE: LazyLock<Gauge<u64>> = LazyLock::new(|| {
+    METER
+        .u64_gauge("pool_max_size")
+        .with_description("The maximum size of the pool")
+        .build()
+});
+
+static POOL_CURRENT_SIZE: LazyLock<Gauge<u64>> = LazyLock::new(|| {
+    METER
+        .u64_gauge("pool_current_size")
+        .with_description("The current size of the pool")
+        .build()
+});
+
+static POOL_AVAILABLE: LazyLock<Gauge<u64>> = LazyLock::new(|| {
+    METER
+        .u64_gauge("pool_available")
+        .with_description("The number of available objects in the pool")
+        .build()
+});
+
+static POOL_WAITING: LazyLock<Gauge<u64>> = LazyLock::new(|| {
+    METER
+        .u64_gauge("pool_waiting")
+        .with_description("The number of waiting objects in the pool")
+        .build()
+});
+
 #[cfg(test)]
 mod tests {
     use std::{fs::File, thread};
@@ -760,7 +834,7 @@ mod tests {
             TcpListenerLayer::new(cancellation),
             TcpContextLayer::default(),
             TcpBytesLayer::default(),
-            BytesFrameLayer,
+            BytesFrameLayer::default(),
         )
             .into_layer(
                 FrameRouteService::builder()
@@ -780,10 +854,7 @@ mod tests {
                     .and_then(|builder| builder.build())?,
             );
 
-        server
-            .serve(Context::default(), listener)
-            .await
-            .map_err(Into::into)
+        server.serve(Context::default(), listener).await
     }
 
     #[tokio::test]

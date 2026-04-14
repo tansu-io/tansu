@@ -32,7 +32,7 @@ use crate::{
     coordinator::group::Coordinator,
 };
 
-pub(crate) fn services<C>(
+pub fn services<C>(
     builder: FrameRouteBuilder<(), Error>,
     coordinator: C,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
@@ -53,7 +53,7 @@ where
     })
 }
 
-fn heartbeat<C>(
+pub fn heartbeat<C>(
     builder: FrameRouteBuilder<(), Error>,
     coordinator: C,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
@@ -73,7 +73,7 @@ where
         .map_err(Into::into)
 }
 
-fn join_group<C>(
+pub fn join_group<C>(
     builder: FrameRouteBuilder<(), Error>,
     coordinator: C,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
@@ -93,7 +93,7 @@ where
         .map_err(Into::into)
 }
 
-fn leave_group<C>(
+pub fn leave_group<C>(
     builder: FrameRouteBuilder<(), Error>,
     coordinator: C,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
@@ -113,7 +113,7 @@ where
         .map_err(Into::into)
 }
 
-fn offset_commit<C>(
+pub fn offset_commit<C>(
     builder: FrameRouteBuilder<(), Error>,
     coordinator: C,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
@@ -133,7 +133,7 @@ where
         .map_err(Into::into)
 }
 
-fn offset_fetch<C>(
+pub fn offset_fetch<C>(
     builder: FrameRouteBuilder<(), Error>,
     coordinator: C,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>
@@ -153,7 +153,7 @@ where
         .map_err(Into::into)
 }
 
-fn sync_group<C>(
+pub fn sync_group<C>(
     builder: FrameRouteBuilder<(), Error>,
     coordinator: C,
 ) -> Result<FrameRouteBuilder<(), Error>, Error>

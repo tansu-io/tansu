@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,8 +20,12 @@ use serde::{
         SerializeTupleStruct, SerializeTupleVariant,
     },
 };
-use std::{fmt, io::Write};
-use tracing::debug;
+use std::{
+    any::{type_name, type_name_of_val},
+    fmt,
+    io::Write,
+};
+use tracing::{debug, instrument};
 
 pub(crate) struct Encoder<'a> {
     writer: &'a mut dyn Write,
@@ -38,11 +42,12 @@ impl<'a> Encoder<'a> {
         Self { writer }
     }
 
+    #[instrument(skip_all, fields(decoded = type_name::<T>()))]
     pub(crate) fn encode<T>(decoded: &T) -> Result<Vec<u8>>
     where
         T: Serialize,
     {
-        let mut encoded = Vec::new();
+        let mut encoded = Vec::with_capacity(512);
         let mut serializer = Encoder::new(&mut encoded);
         decoded.serialize(&mut serializer)?;
         Ok(encoded)
@@ -76,27 +81,25 @@ impl Serializer for &mut Encoder<'_> {
     type SerializeStruct = Self;
     type SerializeStructVariant = Self;
 
+    #[instrument(skip(self))]
     fn serialize_bool(self, v: bool) -> Result<Self::Ok, Self::Error> {
-        debug!(?v);
-
         let buf: [u8; 1] = [u8::from(v); 1];
         self.writer.write_all(&buf).map_err(Into::into)
     }
 
+    #[instrument(skip(self))]
     fn serialize_i8(self, v: i8) -> Result<Self::Ok, Self::Error> {
-        debug!(?v);
-
         let buf = v.to_be_bytes();
         self.writer.write_all(&buf).map_err(Into::into)
     }
 
+    #[instrument(skip(self))]
     fn serialize_i16(self, v: i16) -> Result<Self::Ok, Self::Error> {
-        debug!(?v);
-
         let buf = v.to_be_bytes();
         self.writer.write_all(&buf).map_err(Into::into)
     }
 
+    #[instrument(skip(self))]
     fn serialize_i32(self, v: i32) -> Result<Self::Ok, Self::Error> {
         debug!(?v);
 
@@ -104,62 +107,55 @@ impl Serializer for &mut Encoder<'_> {
         self.writer.write_all(&buf).map_err(Into::into)
     }
 
+    #[instrument(skip(self))]
     fn serialize_i64(self, v: i64) -> Result<Self::Ok, Self::Error> {
-        debug!(?v);
-
         let buf = v.to_be_bytes();
         self.writer.write_all(&buf).map_err(Into::into)
     }
 
+    #[instrument(skip(self))]
     fn serialize_u8(self, v: u8) -> Result<Self::Ok, Self::Error> {
-        debug!(?v);
-
         let buf = v.to_be_bytes();
         self.writer.write_all(&buf).map_err(Into::into)
     }
 
+    #[instrument(skip(self))]
     fn serialize_u16(self, v: u16) -> Result<Self::Ok, Self::Error> {
-        debug!(?v);
-
         let buf = v.to_be_bytes();
         self.writer.write_all(&buf).map_err(Into::into)
     }
 
+    #[instrument(skip(self))]
     fn serialize_u32(self, v: u32) -> Result<Self::Ok, Self::Error> {
-        debug!(?v);
-
         let buf = v.to_be_bytes();
         self.writer.write_all(&buf).map_err(Into::into)
     }
 
+    #[instrument(skip(self))]
     fn serialize_u64(self, v: u64) -> Result<Self::Ok, Self::Error> {
-        debug!(?v);
-
         let buf = v.to_be_bytes();
         self.writer.write_all(&buf).map_err(Into::into)
     }
 
+    #[instrument(skip(self))]
     fn serialize_f32(self, v: f32) -> Result<Self::Ok, Self::Error> {
-        debug!(?v);
-
         let buf = v.to_be_bytes();
         self.writer.write_all(&buf).map_err(Into::into)
     }
 
+    #[instrument(skip(self))]
     fn serialize_f64(self, v: f64) -> Result<Self::Ok, Self::Error> {
-        debug!(?v);
-
         let buf = v.to_be_bytes();
         self.writer.write_all(&buf).map_err(Into::into)
     }
 
+    #[instrument(skip(self))]
     fn serialize_char(self, v: char) -> Result<Self::Ok, Self::Error> {
-        debug!(?v);
-        todo!()
+        Err(Error::UnexpectedType(format!("{v:?}")))
     }
 
+    #[instrument(skip(self))]
     fn serialize_str(self, v: &str) -> Result<Self::Ok, Self::Error> {
-        debug!(?v);
         (v.len() + 1)
             .try_into()
             .map_err(Into::into)
@@ -167,8 +163,8 @@ impl Serializer for &mut Encoder<'_> {
         self.writer.write_all(v.as_bytes()).map_err(Into::into)
     }
 
+    #[instrument(skip(self))]
     fn serialize_bytes(self, v: &[u8]) -> Result<Self::Ok, Self::Error> {
-        debug!(?v);
         (v.len() + 1)
             .try_into()
             .map_err(Into::into)
@@ -176,10 +172,12 @@ impl Serializer for &mut Encoder<'_> {
         self.writer.write_all(v).map_err(Into::into)
     }
 
+    #[instrument(skip(self))]
     fn serialize_none(self) -> Result<Self::Ok, Self::Error> {
         self.unsigned_varint(0)
     }
 
+    #[instrument(skip_all, fields(value = type_name::<T>()))]
     fn serialize_some<T>(self, value: &T) -> Result<Self::Ok, Self::Error>
     where
         T: Serialize,
@@ -188,25 +186,29 @@ impl Serializer for &mut Encoder<'_> {
         value.serialize(self)
     }
 
+    #[instrument(skip(self))]
     fn serialize_unit(self) -> Result<Self::Ok, Self::Error> {
-        todo!()
+        Err(Error::UnexpectedType(format!("{self:?}")))
     }
 
+    #[instrument(skip(self))]
     fn serialize_unit_struct(self, name: &'static str) -> Result<Self::Ok, Self::Error> {
-        debug!(?name);
-        todo!()
+        Err(Error::UnexpectedType(name.into()))
     }
 
+    #[instrument(skip(self))]
     fn serialize_unit_variant(
         self,
         name: &'static str,
         variant_index: u32,
         variant: &'static str,
     ) -> Result<Self::Ok, Self::Error> {
-        debug!(?name, ?variant_index, ?variant);
-        todo!()
+        Err(Error::UnexpectedType(format!(
+            "{name}:{variant_index}:{variant}"
+        )))
     }
 
+    #[instrument(skip(self, value), fields(value = type_name::<T>()))]
     fn serialize_newtype_struct<T>(
         self,
         name: &'static str,
@@ -216,10 +218,10 @@ impl Serializer for &mut Encoder<'_> {
         T: Serialize,
         T: ?Sized,
     {
-        debug!(?name);
         value.serialize(self)
     }
 
+    #[instrument(skip(self, value), fields(value = type_name::<T>()))]
     fn serialize_newtype_variant<T>(
         self,
         name: &'static str,
@@ -231,14 +233,14 @@ impl Serializer for &mut Encoder<'_> {
         T: Serialize,
         T: ?Sized,
     {
-        debug!(?name, ?variant_index, ?variant);
         let _ = value;
-        todo!()
+        Err(Error::UnexpectedType(format!(
+            "{name}:{variant_index}:{variant}"
+        )))
     }
 
+    #[instrument(skip(self))]
     fn serialize_seq(self, len: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
-        debug!(?len);
-
         if let Some(len) = len {
             (len + 1)
                 .try_into()
@@ -248,21 +250,21 @@ impl Serializer for &mut Encoder<'_> {
         Ok(self)
     }
 
+    #[instrument(skip(self))]
     fn serialize_tuple(self, len: usize) -> Result<Self::SerializeTuple, Self::Error> {
-        debug!(?len);
-
         Ok(self)
     }
 
+    #[instrument(skip(self))]
     fn serialize_tuple_struct(
         self,
         name: &'static str,
         len: usize,
     ) -> Result<Self::SerializeTupleStruct, Self::Error> {
-        debug!(?name, ?len);
         Ok(self)
     }
 
+    #[instrument(skip(self))]
     fn serialize_tuple_variant(
         self,
         name: &'static str,
@@ -270,24 +272,24 @@ impl Serializer for &mut Encoder<'_> {
         variant: &'static str,
         len: usize,
     ) -> Result<Self::SerializeTupleVariant, Self::Error> {
-        debug!(?name, ?variant_index, ?variant, ?len);
         Ok(self)
     }
 
+    #[instrument(skip(self))]
     fn serialize_map(self, len: Option<usize>) -> Result<Self::SerializeMap, Self::Error> {
-        debug!(?len);
         Ok(self)
     }
 
+    #[instrument(skip(self))]
     fn serialize_struct(
         self,
         name: &'static str,
         len: usize,
     ) -> Result<Self::SerializeStruct, Self::Error> {
-        debug!(?name, ?len);
         Ok(self)
     }
 
+    #[instrument(skip(self))]
     fn serialize_struct_variant(
         self,
         name: &'static str,
@@ -295,7 +297,6 @@ impl Serializer for &mut Encoder<'_> {
         variant: &'static str,
         len: usize,
     ) -> Result<Self::SerializeStructVariant, Self::Error> {
-        debug!(?name, ?variant_index, ?variant, ?len);
         Ok(self)
     }
 }
@@ -305,6 +306,7 @@ impl SerializeSeq for &mut Encoder<'_> {
 
     type Error = Error;
 
+    #[instrument(skip(self, value), fields(value = type_name::<T>()))]
     fn serialize_element<T>(&mut self, value: &T) -> Result<(), Self::Error>
     where
         T: Serialize,
@@ -323,6 +325,7 @@ impl SerializeTuple for &mut Encoder<'_> {
 
     type Error = Error;
 
+    #[instrument(skip(self, value), fields(value = type_name::<T>()))]
     fn serialize_element<T>(&mut self, value: &T) -> Result<(), Self::Error>
     where
         T: Serialize,
@@ -341,17 +344,17 @@ impl SerializeTupleStruct for &mut Encoder<'_> {
 
     type Error = Error;
 
+    #[instrument(skip(self, value), fields(value = type_name::<T>()))]
     fn serialize_field<T>(&mut self, value: &T) -> Result<(), Self::Error>
     where
         T: Serialize,
         T: ?Sized,
     {
-        let _ = value;
-        todo!()
+        Err(Error::UnexpectedType(type_name_of_val(value).into()))
     }
 
     fn end(self) -> Result<Self::Ok, Self::Error> {
-        todo!()
+        Err(Error::UnexpectedType(format!("{self:?}")))
     }
 }
 
@@ -360,17 +363,17 @@ impl SerializeTupleVariant for &mut Encoder<'_> {
 
     type Error = Error;
 
+    #[instrument(skip(self, value), fields(value = type_name::<T>()))]
     fn serialize_field<T>(&mut self, value: &T) -> Result<(), Self::Error>
     where
         T: Serialize,
         T: ?Sized,
     {
-        let _ = value;
-        todo!()
+        Err(Error::UnexpectedType(type_name_of_val(value).into()))
     }
 
     fn end(self) -> Result<Self::Ok, Self::Error> {
-        todo!()
+        Err(Error::UnexpectedType(format!("{self:?}",)))
     }
 }
 
@@ -379,26 +382,26 @@ impl SerializeMap for &mut Encoder<'_> {
 
     type Error = Error;
 
+    #[instrument(skip(self, key), fields(key = type_name::<T>()))]
     fn serialize_key<T>(&mut self, key: &T) -> Result<(), Self::Error>
     where
         T: Serialize,
         T: ?Sized,
     {
-        let _ = key;
-        todo!()
+        Err(Error::UnexpectedType(type_name_of_val(key).into()))
     }
 
+    #[instrument(skip(self, value), fields(value = type_name::<T>()))]
     fn serialize_value<T>(&mut self, value: &T) -> Result<(), Self::Error>
     where
         T: Serialize,
         T: ?Sized,
     {
-        let _ = value;
-        todo!()
+        Err(Error::UnexpectedType(type_name_of_val(value).into()))
     }
 
     fn end(self) -> Result<Self::Ok, Self::Error> {
-        todo!()
+        Err(Error::UnexpectedType(type_name_of_val(self).into()))
     }
 }
 
@@ -406,6 +409,7 @@ impl SerializeStruct for &mut Encoder<'_> {
     type Ok = ();
     type Error = Error;
 
+    #[instrument(skip(self, value), fields(value = type_name::<T>()))]
     fn serialize_field<T>(&mut self, key: &'static str, value: &T) -> Result<(), Self::Error>
     where
         T: Serialize,
@@ -424,6 +428,7 @@ impl SerializeStructVariant for &mut Encoder<'_> {
     type Ok = ();
     type Error = Error;
 
+    #[instrument(skip(self, value), fields(value = type_name::<T>()))]
     fn serialize_field<T>(&mut self, key: &'static str, value: &T) -> Result<(), Self::Error>
     where
         T: Serialize,

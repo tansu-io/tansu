@@ -25,7 +25,7 @@ use tansu_sans_io::{
     record::deflated::{Batch, Frame},
 };
 use tokio::time::sleep;
-use tracing::{debug, error};
+use tracing::{debug, error, instrument};
 
 use crate::{Error, Result, Storage, Topition};
 
@@ -128,7 +128,7 @@ impl FetchService {
     #[allow(clippy::too_many_arguments)]
     async fn fetch_partition<G>(
         &self,
-        ctx: Context<G>,
+        ctx: &Context<G>,
         max_wait_ms: Duration,
         min_bytes: u32,
         max_bytes: &mut u32,
@@ -242,7 +242,7 @@ impl FetchService {
     #[allow(clippy::too_many_arguments)]
     async fn fetch_topic<G>(
         &self,
-        ctx: Context<G>,
+        ctx: &Context<G>,
         max_wait_ms: Duration,
         min_bytes: u32,
         max_bytes: &mut u32,
@@ -268,7 +268,7 @@ impl FetchService {
             for fetch_partition in fetch.partitions.as_ref().unwrap_or(&Vec::new()) {
                 let partition = self
                     .fetch_partition(
-                        ctx.clone(),
+                        ctx,
                         max_wait_ms,
                         min_bytes,
                         max_bytes,
@@ -292,7 +292,7 @@ impl FetchService {
 
     pub(crate) async fn fetch<G>(
         &self,
-        ctx: Context<G>,
+        ctx: &Context<G>,
         max_wait: Duration,
         min_bytes: u32,
         max_bytes: &mut u32,
@@ -322,7 +322,7 @@ impl FetchService {
                 for (i, fetch) in enumerate {
                     let fetch_response = self
                         .fetch_topic(
-                            ctx.clone(),
+                            ctx,
                             max_wait,
                             min_bytes,
                             max_bytes,
@@ -372,13 +372,12 @@ where
     type Response = FetchResponse;
     type Error = Error;
 
+    #[instrument(skip(ctx, req))]
     async fn serve(
         &self,
         ctx: Context<G>,
         req: FetchRequest,
     ) -> Result<Self::Response, Self::Error> {
-        debug!(?req);
-
         let responses = Some(if let Some(topics) = req.topics {
             let isolation_level = req
                 .isolation_level
@@ -397,7 +396,7 @@ where
             })?;
 
             self.fetch(
-                ctx,
+                &ctx,
                 max_wait_ms,
                 min_bytes,
                 &mut max_bytes,

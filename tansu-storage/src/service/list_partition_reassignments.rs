@@ -20,6 +20,7 @@ use tansu_sans_io::{
         OngoingPartitionReassignment, OngoingTopicReassignment,
     },
 };
+use tracing::instrument;
 
 /// A [`Service`] using [`Storage`] as [`Context`] taking [`ListPartitionReassignmentsRequest`] returning [`ListPartitionReassignmentsResponse`].
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -36,6 +37,7 @@ where
     type Response = ListPartitionReassignmentsResponse;
     type Error = Error;
 
+    #[instrument(skip(ctx, req))]
     async fn serve(
         &self,
         ctx: Context<G>,

@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,18 +24,17 @@ use tansu_sans_io::{
     describe_configs_response::{DescribeConfigsResourceResult, DescribeConfigsResult},
     incremental_alter_configs_request::{AlterConfigsResource, AlterableConfig},
 };
-use tansu_storage::{
-    DescribeConfigsService, IncrementalAlterConfigsService, Storage, StorageContainer,
-};
+use tansu_storage::{DescribeConfigsService, IncrementalAlterConfigsService, Storage};
 use tracing::debug;
 use uuid::Uuid;
 pub mod common;
 
-pub async fn single_topic<C>(cluster_id: C, broker_id: i32, sc: StorageContainer) -> Result<()>
+pub async fn single_topic<C, G>(cluster_id: C, broker_id: i32, sc: G) -> Result<()>
 where
     C: Into<String>,
+    G: Storage + Clone,
 {
-    register_broker(cluster_id, broker_id, &sc).await?;
+    register_broker(cluster_id, broker_id, sc.clone()).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -113,12 +112,15 @@ where
     Ok(())
 }
 
-pub async fn alter_single_topic(
+pub async fn alter_single_topic<G>(
     cluster_id: impl Into<String>,
     broker_id: i32,
-    mut sc: StorageContainer,
-) -> Result<()> {
-    register_broker(cluster_id, broker_id, &mut sc).await?;
+    sc: G,
+) -> Result<()>
+where
+    G: Storage + Clone,
+{
+    register_broker(cluster_id, broker_id, sc.clone()).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -344,12 +346,17 @@ pub async fn alter_single_topic(
 
 #[cfg(feature = "postgres")]
 mod pg {
+    use std::sync::Arc;
+
     use common::{StorageType, init_tracing};
     use url::Url;
 
     use super::*;
 
-    async fn storage_container(cluster: impl Into<String>, node: i32) -> Result<StorageContainer> {
+    async fn storage_container(
+        cluster: impl Into<String>,
+        node: i32,
+    ) -> Result<Arc<Box<dyn Storage>>> {
         common::storage_container(
             StorageType::Postgres,
             cluster,
@@ -391,13 +398,19 @@ mod pg {
     }
 }
 
+#[cfg(feature = "dynostore")]
 mod in_memory {
+    use std::sync::Arc;
+
     use common::{StorageType, init_tracing};
     use url::Url;
 
     use super::*;
 
-    async fn storage_container(cluster: impl Into<String>, node: i32) -> Result<StorageContainer> {
+    async fn storage_container(
+        cluster: impl Into<String>,
+        node: i32,
+    ) -> Result<Arc<Box<dyn Storage>>> {
         common::storage_container(
             StorageType::InMemory,
             cluster,
@@ -441,14 +454,73 @@ mod in_memory {
 
 #[cfg(feature = "libsql")]
 mod lite {
+    use std::sync::Arc;
+
     use common::{StorageType, init_tracing};
     use url::Url;
 
     use super::*;
 
-    async fn storage_container(cluster: impl Into<String>, node: i32) -> Result<StorageContainer> {
+    async fn storage_container(
+        cluster: impl Into<String>,
+        node: i32,
+    ) -> Result<Arc<Box<dyn Storage>>> {
         common::storage_container(
             StorageType::Lite,
+            cluster,
+            node,
+            Url::parse("tcp://127.0.0.1/")?,
+            None,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn alter_single_topic() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        super::alter_single_topic(
+            cluster_id,
+            broker_id,
+            storage_container(cluster_id, broker_id).await?,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn single_topic() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        super::single_topic(
+            cluster_id,
+            broker_id,
+            storage_container(cluster_id, broker_id).await?,
+        )
+        .await
+    }
+}
+
+#[cfg(feature = "slatedb")]
+mod slatedb {
+    use std::sync::Arc;
+
+    use common::{StorageType, init_tracing};
+    use url::Url;
+
+    use super::*;
+
+    async fn storage_container(
+        cluster: impl Into<String>,
+        node: i32,
+    ) -> Result<Arc<Box<dyn Storage>>> {
+        common::storage_container(
+            StorageType::SlateDb,
             cluster,
             node,
             Url::parse("tcp://127.0.0.1/")?,

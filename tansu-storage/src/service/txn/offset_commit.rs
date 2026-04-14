@@ -14,6 +14,7 @@
 
 use rama::{Context, Service};
 use tansu_sans_io::{ApiKey, TxnOffsetCommitResponse};
+use tracing::instrument;
 
 use crate::{Error, Result, Storage};
 
@@ -32,6 +33,7 @@ where
     type Response = TxnOffsetCommitResponse;
     type Error = Error;
 
+    #[instrument(skip(ctx, req))]
     async fn serve(
         &self,
         ctx: Context<G>,

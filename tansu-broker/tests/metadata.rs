@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,21 +15,24 @@
 use common::{alphanumeric_string, register_broker};
 use tansu_broker::Result;
 use tansu_sans_io::{ErrorCode, NULL_TOPIC_ID, create_topics_request::CreatableTopic};
-use tansu_storage::{Storage, StorageContainer, TopicId};
+use tansu_storage::{Storage, TopicId};
 use tracing::debug;
 use url::Url;
 use uuid::Uuid;
 
 pub mod common;
 
-pub async fn topics_none(
+pub async fn topics_none<G>(
     cluster_id: impl Into<String>,
     broker_id: i32,
     advertised_listener: Url,
-    mut sc: StorageContainer,
-) -> Result<()> {
+    sc: G,
+) -> Result<()>
+where
+    G: Storage + Clone,
+{
     debug!(broker_id, %advertised_listener);
-    register_broker(cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, sc.clone()).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -93,7 +96,7 @@ pub async fn topics_none(
             .iter()
             .map(|partition| partition.leader_epoch)
             .inspect(|leader_epoch| debug!(leader_epoch))
-            .all(|leader_epoch| leader_epoch == Some(-1))
+            .all(|leader_epoch| leader_epoch == Some(0))
     );
 
     assert!(
@@ -131,14 +134,17 @@ pub async fn topics_none(
     Ok(())
 }
 
-pub async fn topics_some_empty(
+pub async fn topics_some_empty<G>(
     cluster_id: impl Into<String>,
     broker_id: i32,
     advertised_listener: Url,
-    mut sc: StorageContainer,
-) -> Result<()> {
+    sc: G,
+) -> Result<()>
+where
+    G: Storage + Clone,
+{
     debug!(broker_id, %advertised_listener);
-    register_broker(cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, sc.clone()).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -202,7 +208,7 @@ pub async fn topics_some_empty(
             .iter()
             .map(|partition| partition.leader_epoch)
             .inspect(|leader_epoch| debug!(leader_epoch))
-            .all(|leader_epoch| leader_epoch == Some(-1))
+            .all(|leader_epoch| leader_epoch == Some(0))
     );
 
     assert!(
@@ -240,14 +246,17 @@ pub async fn topics_some_empty(
     Ok(())
 }
 
-pub async fn topics_some_matching_by_name(
+pub async fn topics_some_matching_by_name<G>(
     cluster_id: impl Into<String>,
     broker_id: i32,
     advertised_listener: Url,
-    mut sc: StorageContainer,
-) -> Result<()> {
+    sc: G,
+) -> Result<()>
+where
+    G: Storage + Clone,
+{
     debug!(broker_id, %advertised_listener);
-    register_broker(cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, sc.clone()).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -311,7 +320,7 @@ pub async fn topics_some_matching_by_name(
             .iter()
             .map(|partition| partition.leader_epoch)
             .inspect(|leader_epoch| debug!(leader_epoch))
-            .all(|leader_epoch| leader_epoch == Some(-1))
+            .all(|leader_epoch| leader_epoch == Some(0))
     );
 
     assert!(
@@ -349,14 +358,17 @@ pub async fn topics_some_matching_by_name(
     Ok(())
 }
 
-pub async fn topics_some_not_matching_by_name(
+pub async fn topics_some_not_matching_by_name<G>(
     cluster_id: impl Into<String>,
     broker_id: i32,
     advertised_listener: Url,
-    mut sc: StorageContainer,
-) -> Result<()> {
+    sc: G,
+) -> Result<()>
+where
+    G: Storage + Clone,
+{
     debug!(broker_id, %advertised_listener);
-    register_broker(cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, sc.clone()).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -388,14 +400,17 @@ pub async fn topics_some_not_matching_by_name(
     Ok(())
 }
 
-pub async fn topics_some_matching_by_id(
+pub async fn topics_some_matching_by_id<G>(
     cluster_id: impl Into<String>,
     broker_id: i32,
     advertised_listener: Url,
-    mut sc: StorageContainer,
-) -> Result<()> {
+    sc: G,
+) -> Result<()>
+where
+    G: Storage + Clone,
+{
     debug!(broker_id, %advertised_listener);
-    register_broker(cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, sc.clone()).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -459,7 +474,7 @@ pub async fn topics_some_matching_by_id(
             .iter()
             .map(|partition| partition.leader_epoch)
             .inspect(|leader_epoch| debug!(leader_epoch))
-            .all(|leader_epoch| leader_epoch == Some(-1))
+            .all(|leader_epoch| leader_epoch == Some(0))
     );
 
     assert!(
@@ -497,14 +512,17 @@ pub async fn topics_some_matching_by_id(
     Ok(())
 }
 
-pub async fn topics_some_not_matching_by_id(
+pub async fn topics_some_not_matching_by_id<G>(
     cluster_id: impl Into<String>,
     broker_id: i32,
     advertised_listener: Url,
-    mut sc: StorageContainer,
-) -> Result<()> {
+    sc: G,
+) -> Result<()>
+where
+    G: Storage + Clone,
+{
     debug!(broker_id, %advertised_listener);
-    register_broker(cluster_id, broker_id, &mut sc).await?;
+    register_broker(cluster_id, broker_id, sc.clone()).await?;
 
     let id = Uuid::new_v4();
 
@@ -537,6 +555,8 @@ pub async fn topics_some_not_matching_by_id(
 
 #[cfg(feature = "postgres")]
 mod pg {
+    use std::sync::Arc;
+
     use common::{StorageType, init_tracing};
     use rand::{prelude::*, rng};
 
@@ -546,7 +566,7 @@ mod pg {
         cluster: impl Into<String>,
         node: i32,
         advertised_listener: Url,
-    ) -> Result<StorageContainer> {
+    ) -> Result<Arc<Box<dyn Storage>>> {
         common::storage_container(
             StorageType::Postgres,
             cluster,
@@ -660,7 +680,10 @@ mod pg {
     }
 }
 
+#[cfg(feature = "dynostore")]
 mod in_memory {
+    use std::sync::Arc;
+
     use common::{StorageType, init_tracing};
     use rand::{prelude::*, rng};
 
@@ -670,7 +693,7 @@ mod in_memory {
         cluster: impl Into<String>,
         node: i32,
         advertised_listener: Url,
-    ) -> Result<StorageContainer> {
+    ) -> Result<Arc<Box<dyn Storage>>> {
         common::storage_container(
             StorageType::InMemory,
             cluster,
@@ -786,6 +809,8 @@ mod in_memory {
 
 #[cfg(feature = "libsql")]
 mod lite {
+    use std::sync::Arc;
+
     use common::{StorageType, init_tracing};
     use rand::{prelude::*, rng};
 
@@ -795,8 +820,135 @@ mod lite {
         cluster: impl Into<String>,
         node: i32,
         advertised_listener: Url,
-    ) -> Result<StorageContainer> {
+    ) -> Result<Arc<Box<dyn Storage>>> {
         common::storage_container(StorageType::Lite, cluster, node, advertised_listener, None).await
+    }
+
+    #[tokio::test]
+    async fn topics_none() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster = Uuid::now_v7();
+        let node = rng().random_range(0..i32::MAX);
+        let advertised_listener = Url::parse("tcp://example.com:9092/")?;
+
+        super::topics_none(
+            cluster,
+            node,
+            advertised_listener.clone(),
+            storage_container(cluster, node, advertised_listener).await?,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn topics_some_empty() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster = Uuid::now_v7();
+        let node = rng().random_range(0..i32::MAX);
+        let advertised_listener = Url::parse("tcp://example.com:9092/")?;
+
+        super::topics_some_empty(
+            cluster,
+            node,
+            advertised_listener.clone(),
+            storage_container(cluster, node, advertised_listener).await?,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn topics_some_matching_by_name() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster = Uuid::now_v7();
+        let node = rng().random_range(0..i32::MAX);
+        let advertised_listener = Url::parse("tcp://example.com:9092/")?;
+
+        super::topics_some_matching_by_name(
+            cluster,
+            node,
+            advertised_listener.clone(),
+            storage_container(cluster, node, advertised_listener).await?,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn topics_some_not_matching_by_name() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster = Uuid::now_v7();
+        let node = rng().random_range(0..i32::MAX);
+        let advertised_listener = Url::parse("tcp://example.com:9092/")?;
+
+        super::topics_some_not_matching_by_name(
+            cluster,
+            node,
+            advertised_listener.clone(),
+            storage_container(cluster, node, advertised_listener).await?,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn topics_some_matching_by_id() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster = Uuid::now_v7();
+        let node = rng().random_range(0..i32::MAX);
+        let advertised_listener = Url::parse("tcp://example.com:9092/")?;
+
+        super::topics_some_matching_by_id(
+            cluster,
+            node,
+            advertised_listener.clone(),
+            storage_container(cluster, node, advertised_listener).await?,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn topics_some_not_matching_by_id() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster = Uuid::now_v7();
+        let node = rng().random_range(0..i32::MAX);
+        let advertised_listener = Url::parse("tcp://example.com:9092/")?;
+
+        super::topics_some_not_matching_by_id(
+            cluster,
+            node,
+            advertised_listener.clone(),
+            storage_container(cluster, node, advertised_listener).await?,
+        )
+        .await
+    }
+}
+
+#[cfg(feature = "slatedb")]
+mod slatedb {
+    use std::sync::Arc;
+
+    use common::{StorageType, init_tracing};
+    use rand::{prelude::*, rng};
+
+    use super::*;
+
+    async fn storage_container(
+        cluster: impl Into<String>,
+        node: i32,
+        advertised_listener: Url,
+    ) -> Result<Arc<Box<dyn Storage>>> {
+        common::storage_container(
+            StorageType::SlateDb,
+            cluster,
+            node,
+            advertised_listener,
+            None,
+        )
+        .await
     }
 
     #[tokio::test]

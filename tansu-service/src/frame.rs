@@ -15,13 +15,21 @@
 use std::{
     fmt::{self, Debug},
     marker::PhantomData,
+    sync::{Arc, Mutex},
 };
 
-use bytes::Bytes;
+use bytes::{BufMut as _, Bytes, BytesMut};
+use indicatif::ProgressBar;
 use opentelemetry::KeyValue;
 use rama::{Context, Layer, Service, context::Extensions, matcher::Matcher, service::BoxService};
-use tansu_sans_io::{ApiKey, Body, Frame, Header, Request, Response, RootMessageMeta};
-use tracing::{Instrument as _, Level, debug, error, span};
+use rsasl::config::SASLConfig;
+use tansu_auth::Authentication;
+use tansu_sans_io::{
+    ApiKey, ApiVersionsRequest, Body, Frame, Header, Request, Response, RootMessageMeta,
+    SaslAuthenticateRequest, SaslAuthenticateResponse, SaslHandshakeRequest,
+};
+use tokio::task::spawn_blocking;
+use tracing::{debug, error, instrument};
 
 use crate::{API_ERRORS, API_REQUESTS};
 
@@ -49,7 +57,7 @@ where
     State: Clone + Debug,
 {
     fn matches(&self, ext: Option<&mut Extensions>, ctx: &Context<State>, req: &Frame) -> bool {
-        debug!(?ext, ?ctx, ?req);
+        let _ = (ext, ctx);
         req.api_key().is_ok_and(|api_key| api_key == self.0)
     }
 }
@@ -80,10 +88,16 @@ impl<S, Q> Layer<S> for RequestLayer<Q> {
 }
 
 /// A [`Service`] that handles API [`Request`]s responding with an API [`Response`]
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct RequestService<S, Q> {
     inner: S,
     request: PhantomData<Q>,
+}
+
+impl<S, Q> Debug for RequestService<S, Q> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct(stringify!(RequestService)).finish()
+    }
 }
 
 impl<State, S, Q> Service<State, Q> for RequestService<S, Q>
@@ -98,6 +112,7 @@ where
     type Response = S::Response;
     type Error = S::Error;
 
+    #[instrument(skip(ctx, req))]
     async fn serve(&self, ctx: Context<State>, req: Q) -> Result<Self::Response, Self::Error> {
         debug!(?req);
         self.inner
@@ -140,10 +155,16 @@ impl<S, Q> Layer<S> for FrameRequestLayer<Q> {
 }
 
 /// A [`Service`] that transforms a [`Frame`] into a [`Request`]
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct FrameRequestService<S, Q> {
     inner: S,
     request: PhantomData<Q>,
+}
+
+impl<S, Q> Debug for FrameRequestService<S, Q> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct(stringify!(FrameRequestService)).finish()
+    }
 }
 
 impl<S, Q, State> Service<State, Frame> for FrameRequestService<S, Q>
@@ -158,8 +179,8 @@ where
     type Response = Frame;
     type Error = S::Error;
 
+    #[instrument(skip(ctx, req))]
     async fn serve(&self, ctx: Context<State>, req: Frame) -> Result<Self::Response, Self::Error> {
-        debug!(?req);
         let correlation_id = req.correlation_id()?;
 
         let req = Q::try_from(req.body).map_err(Into::into)?;
@@ -185,76 +206,210 @@ where
 }
 
 /// A [`Layer`] that transforms [`Bytes`] into [`Frame`]s
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct BytesFrameLayer;
+#[derive(Clone, Debug, Default)]
+pub struct BytesFrameLayer {
+    sasl_config: Option<Arc<SASLConfig>>,
+}
+
+impl BytesFrameLayer {
+    pub fn with_sasl_config(self, sasl_config: Option<Arc<SASLConfig>>) -> Self {
+        Self { sasl_config }
+    }
+}
 
 impl<S> Layer<S> for BytesFrameLayer {
     type Service = BytesFrameService<S>;
 
     fn layer(&self, inner: S) -> Self::Service {
-        Self::Service { inner }
+        Self::Service {
+            inner,
+            af: self
+                .sasl_config
+                .clone()
+                .map(|sasl_config| AuthenticationFrame {
+                    authentication: Authentication::server(sasl_config),
+                    v0: Arc::new(Mutex::new(None)),
+                }),
+        }
+    }
+}
+
+#[derive(Clone, Default)]
+struct AuthenticationFrame {
+    authentication: Authentication,
+    v0: Arc<Mutex<Option<bool>>>,
+}
+
+impl AuthenticationFrame {
+    fn is_authenticated(&self) -> bool {
+        self.authentication.is_authenticated()
     }
 }
 
 /// A [`Service`] transforming [`Bytes`]s into [`Frame`]s
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Default)]
 pub struct BytesFrameService<S> {
     inner: S,
+    af: Option<AuthenticationFrame>,
+}
+
+impl<S> Debug for BytesFrameService<S> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct(stringify!(BytesFrameService)).finish()
+    }
+}
+
+impl<S> BytesFrameService<S> {
+    fn is_authenticated(&self, api_key: i16) -> bool {
+        self.af.as_ref().is_none_or(|af| {
+            af.authentication.is_authenticated()
+                || api_key == SaslHandshakeRequest::KEY
+                || api_key == SaslAuthenticateRequest::KEY
+                || api_key == ApiVersionsRequest::KEY
+        })
+    }
 }
 
 impl<S, State> Service<State, Bytes> for BytesFrameService<S>
 where
     S: Service<State, Frame, Response = Frame>,
     State: Clone + Send + Sync + 'static,
-    S::Error: From<tansu_sans_io::Error> + Debug,
+    S::Error: From<tansu_sans_io::Error> + From<tokio::task::JoinError> + Debug,
 {
     type Response = Bytes;
     type Error = S::Error;
 
-    async fn serve(&self, ctx: Context<State>, req: Bytes) -> Result<Self::Response, Self::Error> {
-        let req = Frame::request_from_bytes(req).inspect(|req| debug!(?req))?;
+    #[instrument(skip(ctx, req))]
+    async fn serve(
+        &self,
+        mut ctx: Context<State>,
+        req: Bytes,
+    ) -> Result<Self::Response, Self::Error> {
+        let sasl_handshake_v0 = self
+            .af
+            .as_ref()
+            .and_then(|af| af.v0.lock().ok())
+            .inspect(|v0| debug!(?v0))
+            .map(|v0| v0.unwrap_or_default())
+            .unwrap_or_default();
+
+        debug!(request = ?&req[..], sasl_handshake_v0);
+
+        let req = if sasl_handshake_v0 {
+            //  If SaslHandshakeRequest version is v0, a series of SASL client and server tokens
+            //  corresponding to the mechanism are sent as opaque packets without wrapping the
+            //  messages with Kafka protocol headers. If SaslHandshakeRequest version is v1,
+            //  the SaslAuthenticate request/response are used, where the actual SASL tokens
+            //  are wrapped in the Kafka protocol. The error code in the final message from
+            //  the broker will indicate if authentication succeeded or failed.
+            Frame {
+                size: 0,
+                header: Header::Request {
+                    api_key: SaslAuthenticateRequest::KEY,
+                    api_version: 0,
+                    correlation_id: 0,
+                    client_id: None,
+                },
+                body: Body::SaslAuthenticateRequest(
+                    SaslAuthenticateRequest::default().auth_bytes(req.slice(4..)),
+                ),
+            }
+        } else {
+            spawn_blocking(|| Frame::request_from_bytes(req))
+                .await?
+                .inspect(|request| debug!(?request))?
+        };
+
         let api_key = req.api_key()?;
+
+        if !self.is_authenticated(api_key) {
+            return Err(Into::into(tansu_sans_io::Error::NotAuthenticated));
+        }
+
         let api_version = req.api_version()?;
         let correlation_id = req.correlation_id()?;
 
-        let span = span!(
-            Level::DEBUG,
-            "frame",
-            api_name = req.api_name(),
-            api_version,
-            correlation_id
-        );
+        if let Some(pb) = ctx.get::<ProgressBar>() {
+            let api_name = req.api_name();
 
-        async move {
-            let attributes = vec![
-                KeyValue::new("api_key", api_key as i64),
-                KeyValue::new("api_version", api_version as i64),
-            ];
+            pb.set_message(format!("{api_name} v{api_version}/{correlation_id}"));
+            pb.tick();
+        }
+
+        let attributes = vec![
+            KeyValue::new("api_key", api_key as i64),
+            KeyValue::new("api_version", api_version as i64),
+        ];
+
+        let Frame { body, .. } = {
+            if let Some(authentication) = self.af.as_ref().map(|af| af.authentication.clone()) {
+                assert!(ctx.insert(authentication).is_none());
+            }
 
             self.inner
                 .serve(ctx, req)
                 .await
-                .inspect(|response| debug!(?response))
-                .and_then(|Frame { body, .. }| {
-                    Frame::response(
-                        Header::Response { correlation_id },
-                        body,
-                        api_key,
-                        api_version,
-                    )
-                    .map_err(Into::into)
+                .inspect(|response| debug!(?response))?
+        };
+
+        if sasl_handshake_v0 {
+            //  If SaslHandshakeRequest version is v0, a series of SASL client and server tokens
+            //  corresponding to the mechanism are sent as opaque packets without wrapping the
+            //  messages with Kafka protocol headers.
+
+            // when authenticated, this is final handshake:
+            if let Some(af) = self.af.as_ref()
+                && af.is_authenticated()
+                && let Ok(mut v0) = af.v0.lock()
+                && v0.is_some()
+            {
+                *v0 = None
+            }
+
+            SaslAuthenticateResponse::try_from(body)
+                .and_then(|response| {
+                    i32::try_from(response.auth_bytes.len())
+                        .map_err(Into::into)
+                        .map(|size| {
+                            let mut frame = BytesMut::new();
+                            frame.put(&size.to_be_bytes()[..]);
+                            frame.put(response.auth_bytes);
+                            Bytes::from(frame)
+                        })
                 })
-                .inspect(|response| {
-                    debug!(?response);
-                    API_REQUESTS.add(1, &attributes);
-                })
-                .inspect_err(|err| {
-                    error!(api_key, api_version, ?err);
-                    API_ERRORS.add(1, &attributes);
-                })
+                .map_err(Into::into)
+        } else {
+            //  If SaslHandshakeRequest version is v0, a series of SASL client and server tokens
+            //  corresponding to the mechanism are sent as opaque packets without wrapping the
+            //  messages with Kafka protocol headers.
+            //
+            // Following messages will be opaque:
+            if let Some(af) = self.af.as_ref()
+                && (api_key == SaslHandshakeRequest::KEY && api_version == 0)
+                && let Ok(mut v0) = af.v0.lock()
+            {
+                *v0 = Some(true)
+            }
+
+            spawn_blocking(move || {
+                Frame::response(
+                    Header::Response { correlation_id },
+                    body,
+                    api_key,
+                    api_version,
+                )
+            })
+            .await?
+            .inspect(|response| {
+                debug!(response = ?response[..]);
+                API_REQUESTS.add(1, &attributes);
+            })
+            .inspect_err(|err| {
+                error!(api_key, api_version, ?err);
+                API_ERRORS.add(1, &attributes);
+            })
+            .map_err(Into::into)
         }
-        .instrument(span)
-        .await
     }
 }
 
@@ -271,9 +426,15 @@ impl<S> Layer<S> for FrameBytesLayer {
 }
 
 /// A [`Service`] that transforms [`Frame`]s into [`Bytes`]
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct FrameBytesService<S> {
     inner: S,
+}
+
+impl<S> Debug for FrameBytesService<S> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct(stringify!(FrameBytesService)).finish()
+    }
 }
 
 impl<S, State> Service<State, Frame> for FrameBytesService<S>
@@ -285,6 +446,7 @@ where
     type Response = Frame;
     type Error = S::Error;
 
+    #[instrument(skip(ctx, req), fields(api_key = req.api_key()?, api_version = req.api_version()?, correlation_id = req.correlation_id()?))]
     async fn serve(&self, ctx: Context<State>, req: Frame) -> Result<Self::Response, Self::Error> {
         debug!(?req);
 
@@ -331,6 +493,7 @@ where
 
     type Error = S::Error;
 
+    #[instrument(skip_all, fields(api_key = req.api_key()?, api_version = req.api_version()?, correlation_id = req.correlation_id()?))]
     async fn serve(&self, ctx: Context<State>, req: Frame) -> Result<Self::Response, Self::Error> {
         let correlation_id = req.correlation_id()?;
 
@@ -392,6 +555,7 @@ where
     type Response = Body;
     type Error = S::Error;
 
+    #[instrument(skip_all)]
     async fn serve(&self, ctx: Context<State>, req: Body) -> Result<Self::Response, Self::Error> {
         let req = Q::try_from(req)?;
         self.inner.serve(ctx, req).await.map(Body::from)
@@ -426,6 +590,7 @@ where
     type Response = Q::Response;
     type Error = S::Error;
 
+    #[instrument(skip_all)]
     async fn serve(&self, ctx: Context<State>, req: Q) -> Result<Self::Response, Self::Error> {
         debug!(?req);
 
@@ -519,6 +684,7 @@ where
     type Response = Frame;
     type Error = E;
 
+    #[instrument(skip_all)]
     async fn serve(&self, ctx: Context<State>, req: Frame) -> Result<Self::Response, Self::Error> {
         (self.response)(ctx, req)
     }
@@ -542,7 +708,7 @@ pub struct ResponseService<F> {
 
 impl<F> Debug for ResponseService<F> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ResponseService").finish()
+        f.debug_struct(stringify!(ResponseService)).finish()
     }
 }
 
@@ -556,6 +722,7 @@ where
     type Response = Q::Response;
     type Error = E;
 
+    #[instrument(skip(ctx, req))]
     async fn serve(&self, ctx: Context<State>, req: Q) -> Result<Self::Response, Self::Error> {
         (self.response)(ctx, req)
     }

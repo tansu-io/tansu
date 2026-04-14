@@ -84,7 +84,7 @@ where
     type Response = CreateTopicsResponse;
     type Error = Error;
 
-    #[instrument(skip(ctx), ret)]
+    #[instrument(skip(ctx, req))]
     async fn serve(
         &self,
         ctx: Context<G>,
@@ -92,16 +92,22 @@ where
     ) -> Result<Self::Response, Self::Error> {
         let mut topics = vec![];
 
-        for topic in req.topics.unwrap_or_default() {
+        for mut topic in req.topics.unwrap_or_default() {
             let name = topic.name.clone();
 
             let num_partitions = Some(match topic.num_partitions {
-                -1 => 1,
+                -1 => {
+                    topic.num_partitions = 3;
+                    topic.num_partitions
+                }
                 otherwise => otherwise,
             });
 
             let replication_factor = Some(match topic.replication_factor {
-                -1 => 3,
+                -1 => {
+                    topic.replication_factor = 1;
+                    topic.replication_factor
+                }
                 otherwise => otherwise,
             });
 

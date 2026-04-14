@@ -1,5 +1,5 @@
 -- -*- mode: sql; sql-product: postgres; -*-
--- Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+-- Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 --
 -- Licensed under the Apache License, Version 2.0 (the "License");
 -- you may not use this file except in compliance with the License.
@@ -13,22 +13,35 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-update watermark
+-- prepare record_fetch_keyed (text, text, integer, integer, integer, integer, bytea) as
+with sized as (
+select
 
-set
-
-low = $4,
-high = $5
+r.offset_id,
+r.attributes,
+r.timestamp,
+r.k,
+r.v,
+sum(coalesce(length(r.k), 0) + coalesce(length(r.v), 0)) over (order by r.offset_id) as bytes,
+r.producer_id,
+r.producer_epoch,
+r.transaction_id < pg_snapshot_xmin(pg_current_snapshot())
 
 from
 
 cluster c
 join topic t on t.cluster = c.id
 join topition tp on tp.topic = t.id
+join record r on r.topition = tp.id
 
 where
 
 c.name = $1
 and t.name = $2
 and tp.partition = $3
-and watermark.topition = tp.id;
+and r.offset_id >= $4
+-- and r.transaction_id < pg_snapshot_xmin(pg_current_snapshot())
+and r.offset_id < $6
+and r.k = $7)
+
+select * from sized where bytes < $5;

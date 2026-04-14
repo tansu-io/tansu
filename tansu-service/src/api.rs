@@ -19,7 +19,6 @@ use tansu_sans_io::{
     ApiKey, ApiVersionsRequest, ApiVersionsResponse, Body, ErrorCode, Frame, Header,
     RootMessageMeta, api_versions_response::ApiVersion,
 };
-use tracing::debug;
 
 use crate::Error;
 
@@ -167,8 +166,6 @@ where
     type Error = E;
 
     async fn serve(&self, ctx: Context<State>, req: Frame) -> Result<Self::Response, Self::Error> {
-        debug!(?req);
-
         let api_key = req.api_key()?;
 
         if let Some(service) = self.routes.get(&api_key) {

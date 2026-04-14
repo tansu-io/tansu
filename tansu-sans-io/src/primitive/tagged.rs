@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,8 +15,8 @@
 mod de;
 mod ser;
 
-use super::{ByteSize, varint::UnsignedVarInt};
-use crate::Result;
+use super::varint::UnsignedVarInt;
+use crate::{ByteSize, Result};
 use serde::{
     Deserialize, Deserializer, Serialize, Serializer,
     de::{SeqAccess, Visitor},
@@ -26,9 +26,12 @@ use std::{
     any::{type_name, type_name_of_val},
     fmt::Formatter,
     io::Cursor,
+    iter::{chain, once},
     ops::Deref,
 };
-use tracing::debug;
+use tracing::{debug, instrument};
+
+const MAXIMUM_TAGGED_FIELDS: usize = 128;
 
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct TagField(pub u32, pub Vec<u8>);
@@ -42,6 +45,7 @@ impl TagField {
         &self.1[..]
     }
 
+    #[instrument(skip(field))]
     pub fn encode(tag: u32, field: &impl Serialize) -> Result<Self> {
         ser::Encoder::encode(field).map(|encoded| Self(tag, encoded))
     }
@@ -113,6 +117,12 @@ impl<'de> Deserialize<'de> for TagField {
                     .ok_or_else(|| serde::de::Error::custom("length"))?
                     .into();
 
+                if length > MAXIMUM_TAGGED_FIELDS {
+                    return Err(serde::de::Error::custom(format!(
+                        "maximum tagged fields exceeded {length}"
+                    )));
+                }
+
                 (0..length)
                     .try_fold(Vec::with_capacity(length), |mut acc, _| {
                         seq.next_element::<u8>()?
@@ -173,15 +183,8 @@ impl TagBuffer {
 
     pub fn encode(tags: &[(u32, impl Serialize)]) -> Result<Self> {
         tags.iter()
-            .try_fold(Vec::new(), |mut acc, (tag, field)| {
-                ser::Encoder::encode(field)
-                    .map(|encoded| TagField(*tag, encoded))
-                    .inspect(|tag_field| debug!(?tag, ?tag_field))
-                    .map(|tag_field| {
-                        acc.push(tag_field);
-                        acc
-                    })
-            })
+            .map(|(tag, field)| ser::Encoder::encode(field).map(|encoded| TagField(*tag, encoded)))
+            .collect::<Result<Vec<_>>>()
             .map(Self)
     }
 }
@@ -220,10 +223,12 @@ impl From<Vec<TagField>> for TagBuffer {
 
 impl ByteSize for TagBuffer {
     fn size_in_bytes(&self) -> Result<usize> {
-        self.0.iter().try_fold(
-            UnsignedVarInt::try_from(self.0.len()).and_then(|uvi| uvi.size_in_bytes())?,
-            |acc, tag| tag.size_in_bytes().map(|size| acc + size),
+        chain(
+            once(UnsignedVarInt::try_from(self.0.len()).and_then(|uvi| uvi.size_in_bytes())),
+            self.0.iter().map(|tag| tag.size_in_bytes()),
         )
+        .collect::<Result<Vec<_>>>()
+        .map(|length| length.iter().sum::<usize>())
     }
 }
 
@@ -232,8 +237,6 @@ impl Serialize for TagBuffer {
     where
         S: Serializer,
     {
-        debug!(?self);
-
         let mut s = serializer.serialize_seq(None)?;
 
         UnsignedVarInt::try_from(self.0.len())
@@ -242,7 +245,6 @@ impl Serialize for TagBuffer {
             .and_then(|length| s.serialize_element(&length))?;
 
         for tagged_field in &self.0 {
-            debug!(?tagged_field);
             s.serialize_element(tagged_field)?;
         }
 
@@ -276,6 +278,12 @@ impl<'de> Deserialize<'de> for TagBuffer {
                     .into();
 
                 debug!(?number_of_tagged_fields);
+
+                if number_of_tagged_fields > MAXIMUM_TAGGED_FIELDS {
+                    return Err(serde::de::Error::custom(format!(
+                        "maximum tagged fields exceeded {number_of_tagged_fields}"
+                    )));
+                }
 
                 (0..number_of_tagged_fields)
                     .try_fold(Vec::with_capacity(number_of_tagged_fields), |mut acc, _| {

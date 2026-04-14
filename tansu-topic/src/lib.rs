@@ -20,8 +20,11 @@ use std::{marker::PhantomData, sync::Arc};
 use tansu_sans_io::ErrorCode;
 use url::Url;
 
+use crate::list::List;
+
 mod create;
 mod delete;
+mod list;
 
 pub type Result<T, E = Error> = result::Result<T, E>;
 
@@ -31,11 +34,18 @@ pub enum Error {
     Client(#[from] tansu_client::Error),
     Io(Arc<io::Error>),
     Protocol(#[from] tansu_sans_io::Error),
+    SerdeJson(Arc<serde_json::Error>),
 }
 
 impl From<io::Error> for Error {
     fn from(value: io::Error) -> Self {
         Self::Io(Arc::new(value))
+    }
+}
+
+impl From<serde_json::Error> for Error {
+    fn from(value: serde_json::Error) -> Self {
+        Self::SerdeJson(Arc::new(value))
     }
 }
 
@@ -49,6 +59,7 @@ impl fmt::Display for Error {
 pub enum Topic {
     Create(create::Configuration),
     Delete(delete::Configuration),
+    List(list::Configuration),
 }
 
 impl Topic {
@@ -60,10 +71,15 @@ impl Topic {
         delete::Builder::default()
     }
 
+    pub fn list() -> list::Builder<PhantomData<Url>> {
+        list::Builder::default()
+    }
+
     pub async fn main(self) -> Result<ErrorCode> {
         match self {
             Self::Create(configuration) => Create::try_from(configuration)?.main().await,
             Self::Delete(configuration) => Delete::try_from(configuration)?.main().await,
+            Self::List(configuration) => List::try_from(configuration)?.main().await,
         }
     }
 }

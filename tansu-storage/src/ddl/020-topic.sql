@@ -14,13 +14,13 @@
 
 create table if not exists topic (
     id integer primary key autoincrement,
-    cluster int references cluster (id) not null,
+    cluster int references cluster (id) on delete cascade not null,
     name text not null,
     uuid text not null,
     partitions int not null,
     replication_factor int not null,
     is_internal int default false not null,
-    last_updated text default current_timestamp not null,
-    created_at text default current_timestamp not null,
+    last_updated datetime default current_timestamp not null,
+    created_at datetime default current_timestamp not null,
     unique(cluster, name)
 );

@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -153,19 +153,17 @@ pub mod header;
 pub mod inflated;
 
 use crate::{
-    Result,
-    primitive::{
-        ByteSize,
-        varint::{LongVarInt, VarInt},
-    },
+    ByteSize, Decode, Encode, Result,
+    primitive::varint::{LongVarInt, VarInt},
 };
-use bytes::Bytes;
+use bytes::{Buf as _, BufMut as _, Bytes, BytesMut};
 use codec::{Octets, VarIntSequence};
 pub use header::Header;
 use serde::{
     Deserialize, Serialize, Serializer,
     ser::{self, SerializeSeq},
 };
+use tracing::{debug, instrument};
 
 /// A Kafka API Record.
 ///
@@ -197,6 +195,85 @@ pub struct Record {
     #[serde(serialize_with = "VarIntSequence::<Header>::serialize")]
     #[serde(deserialize_with = "VarIntSequence::<Header>::deserialize")]
     pub headers: Vec<Header>,
+}
+
+impl ByteSize for Record {
+    fn size_in_bytes(&self) -> Result<usize> {
+        let size = VarInt::from(self.length).size_in_bytes()?
+            + 1
+            + LongVarInt::from(self.timestamp_delta).size_in_bytes()?
+            + VarInt::from(self.offset_delta).size_in_bytes()?
+            + Octets(self.key.clone()).size_in_bytes()?
+            + Octets(self.value.clone()).size_in_bytes()?
+            + VarIntSequence(self.headers.clone()).size_in_bytes()?;
+
+        Ok(size)
+    }
+}
+
+impl Encode for &[Record] {
+    #[instrument(skip_all)]
+    fn encode(&self) -> Result<Bytes> {
+        let mut encoded = self
+            .iter()
+            .map(ByteSize::size_in_bytes)
+            .collect::<Result<Vec<_>>>()
+            .map(|sizes| sizes.iter().sum::<usize>())
+            .inspect(|with_capacity| debug!(records = self.len(), with_capacity))
+            .map(BytesMut::with_capacity)?;
+
+        for record in self.iter() {
+            encoded.extend_from_slice(&record.encode()?[..]);
+        }
+
+        Ok(encoded.freeze())
+    }
+}
+
+impl Encode for Record {
+    #[instrument(skip_all)]
+    fn encode(&self) -> Result<Bytes> {
+        let mut encoded = self
+            .size_in_bytes()
+            .inspect(|with_capacity| debug!(with_capacity))
+            .map(BytesMut::with_capacity)?;
+
+        let length = VarInt::from(self.length);
+        encoded.put(length.encode()?);
+        encoded.put_u8(self.attributes);
+        encoded.put(LongVarInt::from(self.timestamp_delta).encode()?);
+        encoded.put(VarInt::from(self.offset_delta).encode()?);
+        encoded.put(Octets(self.key.clone()).encode()?);
+        encoded.put(Octets(self.value.clone()).encode()?);
+        encoded.put(VarIntSequence(self.headers.clone()).encode()?);
+
+        Ok(encoded.freeze())
+    }
+}
+
+impl Decode for Record {
+    #[instrument(skip_all)]
+    fn decode(encoded: &mut Bytes) -> Result<Self> {
+        debug!(encoded = ?encoded[..]);
+
+        let length = VarInt::decode(encoded).map(Into::into)?;
+        let attributes = encoded.get_u8();
+        let timestamp_delta = LongVarInt::decode(encoded).map(Into::into)?;
+        let offset_delta = VarInt::decode(encoded).map(Into::into)?;
+        let key = Octets::decode(encoded).map(Into::into)?;
+        let value = Octets::decode(encoded).map(Into::into)?;
+        let headers = VarIntSequence::decode(encoded).map(Into::into)?;
+
+        Ok(Self {
+            length,
+            attributes,
+            timestamp_delta,
+            offset_delta,
+            key,
+            value,
+            headers,
+        })
+    }
 }
 
 impl Record {
@@ -346,18 +423,48 @@ impl Builder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Result, ser::Encoder};
+    use crate::{Error, Result, ser::RecordBatchEncoder};
     use codec::Sequence;
-    use std::io::Cursor;
+    use tracing::subscriber::DefaultGuard;
+    use tracing_subscriber::EnvFilter;
+
+    fn init_tracing() -> Result<DefaultGuard> {
+        use std::{fs::File, sync::Arc, thread};
+
+        Ok(tracing::subscriber::set_default(
+            tracing_subscriber::fmt()
+                .with_level(true)
+                .with_line_number(true)
+                .with_thread_names(false)
+                .with_env_filter(EnvFilter::from_default_env().add_directive(
+                    format!("{}=debug", env!("CARGO_PKG_NAME").replace("-", "_")).parse()?,
+                ))
+                .with_writer(
+                    thread::current()
+                        .name()
+                        .ok_or(Error::Message(String::from("unnamed thread")))
+                        .and_then(|name| {
+                            File::create(format!("../logs/{}/{name}.log", env!("CARGO_PKG_NAME"),))
+                                .map_err(Into::into)
+                        })
+                        .map(Arc::new)?,
+                )
+                .finish(),
+        ))
+    }
 
     #[test]
     fn bytes_size() -> Result<()> {
+        let _guard = init_tracing()?;
+
         assert_eq!(4, Octets::from(Some(vec![100, 101, 102])).size_in_bytes()?);
         Ok(())
     }
 
     #[test]
     fn record_size() -> Result<()> {
+        let _guard = init_tracing()?;
+
         assert_eq!(
             9,
             Record::builder()
@@ -369,18 +476,56 @@ mod tests {
 
     #[test]
     fn serialize_record_builder() -> Result<()> {
+        let _guard = init_tracing()?;
+
         let rb = Record::builder().value(Some(Bytes::from(vec![100, 101, 102])));
 
-        let mut c = Cursor::new(vec![]);
-        let mut e = Encoder::new(&mut c);
+        let mut e = RecordBatchEncoder::new(BytesMut::new());
         rb.serialize(&mut e)?;
 
-        assert_eq!(vec![18, 0, 0, 0, 1, 6, 100, 101, 102, 0], c.into_inner());
+        let encoded = Bytes::from(e);
+
+        assert_eq!(&[18, 0, 0, 0, 1, 6, 100, 101, 102, 0], &encoded[..]);
+        Ok(())
+    }
+
+    #[test]
+    fn encode_record_builder() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let rb = Record::builder()
+            .value(Some(Bytes::from_static(b"def")))
+            .build()?;
+
+        let encoded = rb.encode()?;
+        assert_eq!(
+            Bytes::from(vec![18, 0, 0, 0, 1, 6, 100, 101, 102, 0]),
+            encoded
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn decode_record_builder() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let mut encoded = Bytes::from(vec![18, 0, 0, 0, 1, 6, 100, 101, 102, 0]);
+        let actual = Record::decode(&mut encoded)?;
+
+        let expected = Record::builder()
+            .value(Some(Bytes::from_static(b"def")))
+            .build()?;
+
+        assert_eq!(expected, actual);
+
         Ok(())
     }
 
     #[test]
     fn try_from_record_builder() -> Result<()> {
+        let _guard = init_tracing()?;
+
         let record =
             Record::try_from(Record::builder().value(Some(Bytes::from(vec![100, 101, 102]))))?;
         assert_eq!(9, record.length);
@@ -389,35 +534,38 @@ mod tests {
 
     #[test]
     fn sequence_of_record_builder() -> Result<()> {
+        let _guard = init_tracing()?;
+
         let rb = Record::builder().value(Some(Bytes::from(vec![100, 101, 102])));
         let records = Sequence::from(vec![rb.clone()]);
         assert_eq!(14, records.size_in_bytes()?);
 
-        let mut c = Cursor::new(vec![]);
-        let mut e = Encoder::new(&mut c);
+        let mut e = RecordBatchEncoder::new(BytesMut::new());
         records.serialize(&mut e)?;
 
+        let encoded = Bytes::from(e);
+
         assert_eq!(
-            vec![0, 0, 0, 1, 18, 0, 0, 0, 1, 6, 100, 101, 102, 0],
-            c.into_inner()
+            &[0, 0, 0, 1, 18, 0, 0, 0, 1, 6, 100, 101, 102, 0],
+            &encoded[..]
         );
 
         Ok(())
     }
 
     #[test]
-    fn crc_check() {
-        use crc::CRC_32_ISCSI;
-        use crc::Crc;
+    fn crc_check() -> Result<()> {
+        let _guard = init_tracing()?;
 
-        let b = [
+        let mut digester = crc_fast::Digest::new(crc_fast::CrcAlgorithm::Crc32Iscsi);
+
+        digester.update(&[
             0, 0, 0, 0, 0, 0, 0, 0, 1, 141, 116, 152, 137, 53, 0, 0, 1, 141, 116, 152, 137, 53, 0,
             0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 18, 0, 0, 0, 1, 6, 100, 101, 102, 0,
-        ];
+        ]);
 
-        let crc = Crc::<u32>::new(&CRC_32_ISCSI);
-        let mut digester = crc.digest();
-        digester.update(&b);
         assert_eq!(1_126_819_645, digester.finalize());
+
+        Ok(())
     }
 }

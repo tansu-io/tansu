@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,14 +20,14 @@ use std::{
 };
 
 use crate::{
-    Error, Result,
+    AsArrow as _, Error, Registry, Result,
     lake::{LakeHouse, LakeHouseType},
 };
-use arrow::array::RecordBatch;
 use async_trait::async_trait;
+use iceberg::memory::MemoryCatalogBuilder;
 use iceberg::{
-    Catalog, MemoryCatalog, NamespaceIdent, TableCreation, TableIdent,
-    io::{FileIOBuilder, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY},
+    Catalog, CatalogBuilder, NamespaceIdent, TableCreation, TableIdent,
+    io::{S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY},
     spec::{DataFileFormat, Schema, TableMetadataBuilder},
     table::Table,
     transaction::{ApplyTransactionAction, Transaction},
@@ -37,12 +37,15 @@ use iceberg::{
         file_writer::{
             ParquetWriterBuilder,
             location_generator::{DefaultFileNameGenerator, DefaultLocationGenerator},
+            rolling_writer::RollingFileWriterBuilder,
         },
     },
 };
-use iceberg_catalog_rest::{RestCatalog, RestCatalogConfig};
+use iceberg_catalog_rest::{
+    REST_CATALOG_PROP_URI, REST_CATALOG_PROP_WAREHOUSE, RestCatalogBuilder,
+};
 use parquet::file::properties::WriterProperties;
-use tansu_sans_io::describe_configs_response::DescribeConfigsResult;
+use tansu_sans_io::{describe_configs_response::DescribeConfigsResult, record::inflated::Batch};
 use tracing::{debug, error};
 use url::Url;
 use uuid::Uuid;
@@ -64,27 +67,40 @@ pub fn env_s3_props() -> impl Iterator<Item = (String, String)> {
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct Builder<C = PhantomData<Url>, L = PhantomData<Url>> {
+pub struct Builder<C = PhantomData<Url>, L = PhantomData<Url>, R = PhantomData<Registry>> {
     location: L,
     catalog: C,
+    schema_registry: R,
     namespace: Option<String>,
     warehouse: Option<String>,
 }
 
-impl<C, L> Builder<C, L> {
-    pub fn location(self, location: Url) -> Builder<C, Url> {
+impl<C, L, R> Builder<C, L, R> {
+    pub fn location(self, location: Url) -> Builder<C, Url, R> {
         Builder {
             location,
             catalog: self.catalog,
+            schema_registry: self.schema_registry,
             namespace: self.namespace,
             warehouse: self.warehouse,
         }
     }
 
-    pub fn catalog(self, catalog: Url) -> Builder<Url, L> {
+    pub fn catalog(self, catalog: Url) -> Builder<Url, L, R> {
         Builder {
-            catalog,
             location: self.location,
+            catalog,
+            schema_registry: self.schema_registry,
+            namespace: self.namespace,
+            warehouse: self.warehouse,
+        }
+    }
+
+    pub fn schema_registry(self, schema_registry: Registry) -> Builder<C, L, Registry> {
+        Builder {
+            catalog: self.catalog,
+            location: self.location,
+            schema_registry,
             namespace: self.namespace,
             warehouse: self.warehouse,
         }
@@ -99,9 +115,9 @@ impl<C, L> Builder<C, L> {
     }
 }
 
-impl Builder<Url, Url> {
-    pub fn build(self) -> Result<House> {
-        Iceberg::try_from(self).map(House::Iceberg)
+impl Builder<Url, Url, Registry> {
+    pub async fn build(self) -> Result<House> {
+        Iceberg::new(self).await.map(House::Iceberg)
     }
 }
 
@@ -110,54 +126,58 @@ pub struct Iceberg {
     catalog: Arc<dyn Catalog>,
     namespace: String,
     tables: Arc<Mutex<HashMap<String, Table>>>,
+    schema_registry: Registry,
 }
 
-impl TryFrom<Builder<Url, Url>> for Iceberg {
-    type Error = Error;
-
-    fn try_from(value: Builder<Url, Url>) -> Result<Self, Self::Error> {
-        iceberg_catalog(&value.catalog, value.warehouse.clone()).map(|catalog| Self {
+impl Iceberg {
+    async fn new(value: Builder<Url, Url, Registry>) -> Result<Self> {
+        let catalog = iceberg_catalog(&value.catalog, value.warehouse.clone()).await?;
+        Ok(Self {
             catalog,
             namespace: value.namespace.unwrap_or(String::from("tansu")),
             tables: Arc::new(Mutex::new(HashMap::new())),
+            schema_registry: value.schema_registry,
         })
     }
 }
 
-fn iceberg_catalog(catalog: &Url, warehouse: Option<String>) -> Result<Arc<dyn Catalog>> {
+async fn iceberg_catalog(catalog: &Url, warehouse: Option<String>) -> Result<Arc<dyn Catalog>> {
     debug!(%catalog, ?warehouse);
 
     match (catalog.scheme(), catalog.path()) {
-        ("http" | "https", "/") => {
-            let catalog_config = RestCatalogConfig::builder()
-                .uri(format!(
+        ("http" | "https", "/") | ("http" | "https", _) => {
+            let uri = if catalog.path() == "/" {
+                format!(
                     "{}://{}:{}",
                     catalog.scheme(),
                     catalog.host_str().unwrap_or("localhost"),
                     catalog.port().unwrap_or(80)
-                ))
-                .warehouse_opt(warehouse)
-                .props(env_s3_props().collect())
-                .build();
+                )
+            } else {
+                catalog.to_string()
+            };
 
-            Ok(Arc::new(RestCatalog::new(catalog_config)))
+            let mut props: HashMap<String, String> = env_s3_props().collect();
+            _ = props.insert(REST_CATALOG_PROP_URI.to_string(), uri);
+            if let Some(wh) = warehouse {
+                _ = props.insert(REST_CATALOG_PROP_WAREHOUSE.to_string(), wh);
+            }
+
+            let catalog = RestCatalogBuilder::default()
+                .load("rest", props)
+                .await
+                .map_err(|e| Error::Iceberg(Box::new(e)))?;
+
+            Ok(Arc::new(catalog) as Arc<dyn Catalog>)
         }
 
-        ("http" | "https", _) => {
-            let catalog_config = RestCatalogConfig::builder()
-                .uri(catalog.to_string())
-                .warehouse_opt(warehouse)
-                .props(env_s3_props().collect())
-                .build();
-
-            Ok(Arc::new(RestCatalog::new(catalog_config)))
+        ("memory", _) => {
+            let catalog = MemoryCatalogBuilder::default()
+                .load("memory", HashMap::new())
+                .await
+                .map_err(|e| Error::Iceberg(Box::new(e)))?;
+            Ok(Arc::new(catalog) as Arc<dyn Catalog>)
         }
-
-        ("memory", _) => FileIOBuilder::new("memory")
-            .build()
-            .map(|file_io| MemoryCatalog::new(file_io, None))
-            .map(|catalog| Arc::new(catalog) as Arc<dyn Catalog>)
-            .map_err(Into::into),
 
         (_otherwise, _) => Err(Error::UnsupportedIcebergCatalogUrl(catalog.to_owned())),
     }
@@ -210,9 +230,9 @@ impl Iceberg {
                         .metadata_location()
                         .map(|location| location.to_owned()),
                 )
-                .add_schema(schema.clone())
-                .set_current_schema(-1)
-                .and_then(|builder| builder.build())
+                .add_schema(schema.clone())?
+                .set_current_schema(-1)?
+                .build()
                 .inspect(|update| {
                     debug!(?update.metadata);
                     debug!(?update.changes);
@@ -251,10 +271,15 @@ impl LakeHouse for Iceberg {
         topic: &str,
         partition: i32,
         offset: i64,
-        record_batch: RecordBatch,
+        inflated: &Batch,
         config: DescribeConfigsResult,
     ) -> Result<()> {
         let _ = config;
+
+        let record_batch = self
+            .schema_registry
+            .as_arrow(topic, partition, inflated, LakeHouseType::Iceberg)
+            .await?;
 
         debug!(?record_batch);
 
@@ -278,9 +303,13 @@ impl LakeHouse for Iceberg {
             })
             .inspect_err(|err| debug!(?err))?;
 
-        let writer = ParquetWriterBuilder::new(
+        let parquet_writer_builder = ParquetWriterBuilder::new(
             WriterProperties::default(),
             table.metadata().current_schema().clone(),
+        );
+
+        let rolling_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
+            parquet_writer_builder,
             table.file_io().clone(),
             DefaultLocationGenerator::new(table.metadata().clone())?,
             DefaultFileNameGenerator::new(
@@ -290,8 +319,8 @@ impl LakeHouse for Iceberg {
             ),
         );
 
-        let mut data_file_writer = DataFileWriterBuilder::new(writer, None, 0)
-            .build()
+        let mut data_file_writer = DataFileWriterBuilder::new(rolling_writer_builder)
+            .build(None)
             .await
             .inspect_err(|err| error!(?err))?;
 
@@ -340,7 +369,7 @@ mod tests {
     use dotenv::dotenv;
     use iceberg::spec::{NestedField, PrimitiveType, Type};
     use rand::{distr::Alphanumeric, prelude::*, rng};
-    use std::{env::var, fs::File, marker::PhantomData, sync::Arc, thread};
+    use std::{env::var, fs::File, marker::PhantomData, str::FromStr as _, sync::Arc, thread};
     use tracing::subscriber::DefaultGuard;
     use tracing_subscriber::EnvFilter;
 
@@ -387,13 +416,17 @@ mod tests {
         let namespace = alphanumeric_string(5);
         debug!(catalog_uri, location_uri, ?warehouse, namespace);
 
-        let lake = Iceberg::try_from(
-            Builder::<PhantomData<Url>, PhantomData<Url>>::default()
+        let schema_registry = Registry::from_str("memory://")?;
+
+        let lake = Iceberg::new(
+            Builder::<PhantomData<Url>, PhantomData<Url>, PhantomData<Registry>>::default()
                 .location(Url::parse(location_uri)?)
                 .catalog(Url::parse(catalog_uri)?)
                 .warehouse(warehouse.clone())
+                .schema_registry(schema_registry)
                 .namespace(Some(namespace.clone())),
-        )?;
+        )
+        .await?;
 
         let ident = lake.create_namespace().await?;
         assert_eq!(namespace, ident.to_url_string());
@@ -412,27 +445,33 @@ mod tests {
         let namespace = alphanumeric_string(5);
         debug!(catalog_uri, location_uri, ?warehouse, namespace);
 
+        let schema_registry = Registry::from_str("memory://")?;
+
         {
-            let lake = Iceberg::try_from(
-                Builder::<PhantomData<Url>, PhantomData<Url>>::default()
+            let lake = Iceberg::new(
+                Builder::<PhantomData<Url>, PhantomData<Url>, PhantomData<Registry>>::default()
                     .location(Url::parse(location_uri)?)
                     .catalog(Url::parse(catalog_uri)?)
                     .warehouse(warehouse.clone())
+                    .schema_registry(schema_registry.clone())
                     .namespace(Some(namespace.clone())),
-            )?;
+            )
+            .await?;
 
             let ident = lake.create_namespace().await?;
             assert_eq!(namespace, ident.to_url_string());
         }
 
         {
-            let lake = Iceberg::try_from(
-                Builder::<PhantomData<Url>, PhantomData<Url>>::default()
+            let lake = Iceberg::new(
+                Builder::<PhantomData<Url>, PhantomData<Url>, PhantomData<Registry>>::default()
                     .location(Url::parse(location_uri)?)
                     .catalog(Url::parse(catalog_uri)?)
                     .warehouse(warehouse)
+                    .schema_registry(schema_registry)
                     .namespace(Some(namespace.clone())),
-            )?;
+            )
+            .await?;
 
             let ident = lake.create_namespace().await?;
             assert_eq!(namespace, ident.to_url_string());
@@ -453,13 +492,17 @@ mod tests {
 
         debug!(catalog_uri, location_uri, ?warehouse, namespace);
 
-        let lake_house = Iceberg::try_from(
-            Builder::<PhantomData<Url>, PhantomData<Url>>::default()
+        let schema_registry = Registry::from_str("memory://")?;
+
+        let lake_house = Iceberg::new(
+            Builder::<PhantomData<Url>, PhantomData<Url>, PhantomData<Registry>>::default()
                 .location(Url::parse(location_uri)?)
                 .catalog(Url::parse(catalog_uri)?)
                 .namespace(Some(namespace.clone()))
+                .schema_registry(schema_registry)
                 .warehouse(warehouse.clone()),
-        )?;
+        )
+        .await?;
 
         let schema = Schema::builder()
             .with_fields(vec![
@@ -493,6 +536,8 @@ mod tests {
 
         debug!(catalog_uri, location_uri, ?warehouse, namespace, table_name);
 
+        let schema_registry = Registry::from_str("memory://")?;
+
         let schema = Schema::builder()
             .with_fields(vec![
                 NestedField::optional(1, "foo", Type::Primitive(PrimitiveType::String)).into(),
@@ -504,13 +549,15 @@ mod tests {
             .build()?;
 
         {
-            let lake_house = Iceberg::try_from(
-                Builder::<PhantomData<Url>, PhantomData<Url>>::default()
+            let lake_house = Iceberg::new(
+                Builder::<PhantomData<Url>, PhantomData<Url>, PhantomData<Registry>>::default()
                     .location(Url::parse(location_uri)?)
                     .catalog(Url::parse(catalog_uri)?)
                     .warehouse(warehouse.clone())
+                    .schema_registry(schema_registry.clone())
                     .namespace(Some(namespace.clone())),
-            )?;
+            )
+            .await?;
 
             let table = lake_house
                 .load_or_create_table(&table_name, schema.clone())
@@ -520,13 +567,15 @@ mod tests {
         }
 
         {
-            let lake_house = Iceberg::try_from(
-                Builder::<PhantomData<Url>, PhantomData<Url>>::default()
+            let lake_house = Iceberg::new(
+                Builder::<PhantomData<Url>, PhantomData<Url>, PhantomData<Registry>>::default()
                     .location(Url::parse(location_uri)?)
                     .catalog(Url::parse(catalog_uri)?)
                     .namespace(Some(namespace.clone()))
+                    .schema_registry(schema_registry)
                     .warehouse(warehouse),
-            )?;
+            )
+            .await?;
 
             let table = lake_house.load_or_create_table(&table_name, schema).await?;
             assert_eq!(table_name, table.identifier().name());

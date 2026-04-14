@@ -24,8 +24,16 @@ pub(super) struct Arg {
     #[arg(long, env = "LISTENER_URL", default_value = "tcp://0.0.0.0:9092")]
     pub(super) listener_url: EnvVarExp<Url>,
 
+    /// This location is advertised to clients in metadata
+    #[arg(
+        long,
+        env = "ADVERTISED_LISTENER_URL",
+        default_value = DEFAULT_BROKER,
+    )]
+    pub(super) advertised_listener_url: EnvVarExp<Url>,
+
     /// The proxy will forward traffic to this origin broker
-    #[arg(long, default_value = DEFAULT_BROKER)]
+    #[arg(long, env = "ORIGIN_URL", default_value = DEFAULT_BROKER)]
     pub(super) origin_url: EnvVarExp<Url>,
 
     /// OTEL Exporter OTLP endpoint

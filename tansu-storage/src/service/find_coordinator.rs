@@ -83,15 +83,15 @@ where
     type Response = FindCoordinatorResponse;
     type Error = Error;
 
-    #[instrument(skip(ctx), ret)]
+    #[instrument(skip(ctx, req))]
     async fn serve(
         &self,
         ctx: Context<G>,
         req: FindCoordinatorRequest,
     ) -> Result<Self::Response, Self::Error> {
-        let node_id = ctx.state().node()?;
+        let node_id = ctx.state().node().await?;
 
-        let listener = ctx.state().advertised_listener()?;
+        let listener = ctx.state().advertised_listener().await?;
         let host = listener.host_str().unwrap_or("localhost");
         let port = i32::from(listener.port().unwrap_or(9092));
 

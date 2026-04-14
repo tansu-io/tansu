@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,16 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::time::Duration;
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
-use crate::{EnvVarExp, Result};
+use crate::{EnvVarExp, Result, cli::storage_engines};
 
 use super::DEFAULT_BROKER;
 use clap::Parser;
+use owo_colors::{OwoColorize as _, Stream, Style};
+use rustls::{
+    ServerConfig,
+    pki_types::{
+        CertificateDer, PrivateKeyDer,
+        pem::{Error as TlsPkiPemError, PemObject as _},
+    },
+};
 use tansu_broker::{NODE_ID, broker::Broker, coordinator::group::administrator::Controller};
 use tansu_sans_io::ErrorCode;
 use tansu_schema::Registry;
-use tansu_storage::StorageContainer;
+use tansu_storage::{ArcDynStorage, StorageContainer};
+use tokio::time::Instant;
 use tracing::debug;
 use url::Url;
 use uuid::Uuid;
@@ -33,7 +45,7 @@ use clap::Subcommand;
 pub(super) struct Arg {
     #[command(subcommand)]
     #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
-    command: Option<Command>,
+    command: Option<Lake>,
 
     /// All members of the same cluster should use the same id
     #[arg(
@@ -77,11 +89,44 @@ pub(super) struct Arg {
     /// OTEL Exporter OTLP endpoint
     #[arg(long, env = "OTEL_EXPORTER_OTLP_ENDPOINT")]
     otlp_endpoint_url: Option<EnvVarExp<Url>>,
+
+    /// When present, client authentication is required
+    #[arg(long)]
+    authentication: bool,
+
+    /// Transport Layer Security Certificate
+    #[arg(group = "tls", long)]
+    cert: Option<PathBuf>,
+
+    /// Transport Layer Security Key
+    #[arg(group = "tls", long)]
+    key: Option<PathBuf>,
+
+    /// Silent
+    #[arg(long)]
+    silent: bool,
+}
+
+fn load_certs(filename: &Path) -> Result<Vec<CertificateDer<'static>>> {
+    CertificateDer::pem_file_iter(filename)
+        .and_then(|der| der.collect::<Result<Vec<_>, TlsPkiPemError>>())
+        .map_err(Into::into)
+}
+
+fn load_private_key(filename: &Path) -> Result<PrivateKeyDer<'static>> {
+    PrivateKeyDer::from_pem_file(filename).map_err(Into::into)
+}
+
+fn server_config(certs: &Path, private_key: &Path) -> Result<ServerConfig> {
+    ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(load_certs(certs)?, load_private_key(private_key)?)
+        .map_err(Into::into)
 }
 
 #[derive(Clone, Debug, Subcommand)]
 #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
-pub(super) enum Command {
+pub(super) enum Lake {
     /// Schema topics are written as Apache Iceberg tables
     #[cfg(feature = "iceberg")]
     Iceberg {
@@ -127,18 +172,27 @@ pub(super) enum Command {
     },
 }
 
+fn redact_password(mut url: Url) -> Url {
+    if url.password().is_some() {
+        _ = url.set_password(None).ok();
+    }
+
+    url
+}
+
 impl Arg {
     pub(super) async fn main(self) -> Result<ErrorCode> {
+        let started = Instant::now();
         self.build()
             .await?
-            .main()
+            .main(started)
             .await
             .inspect(|result| debug!(?result))
             .inspect_err(|err| debug!(?err))
             .map_err(Into::into)
     }
 
-    async fn build(self) -> Result<Broker<Controller<StorageContainer>, StorageContainer>> {
+    async fn build(self) -> Result<Broker<Controller<ArcDynStorage>, ArcDynStorage>> {
         let cluster_id = self.cluster_id;
         let incarnation_id = Uuid::now_v7();
         let otlp_endpoint_url = self
@@ -148,9 +202,13 @@ impl Arg {
         let storage_engine = self.storage_engine.into_inner();
         let advertised_listener = self.advertised_listener_url.into_inner();
         let listener = self.listener_url.into_inner();
-        let schema_registry = self
+
+        let schema_registry_url = self
             .schema_registry
-            .map(|env_var_exp| env_var_exp.into_inner())
+            .map(|env_var_exp| env_var_exp.into_inner());
+
+        let schema_registry = schema_registry_url
+            .clone()
             .map(|object_store| {
                 Registry::builder_try_from_url(&object_store).map(|registry| {
                     registry
@@ -161,53 +219,128 @@ impl Arg {
             .transpose()?;
 
         #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
-        let lake_house = self
-            .command
-            .map(|command| match command {
-                #[cfg(feature = "iceberg")]
-                Command::Iceberg {
-                    location,
-                    catalog,
-                    namespace,
-                    warehouse,
-                } => tansu_schema::lake::House::iceberg()
+        let lake_house = match self.command {
+            #[cfg(feature = "iceberg")]
+            Some(Lake::Iceberg {
+                location,
+                catalog,
+                namespace,
+                warehouse,
+            }) => Some(
+                tansu_schema::lake::House::iceberg()
                     .location(location.into_inner())
                     .catalog(catalog.into_inner())
+                    .schema_registry(schema_registry.clone().unwrap())
                     .namespace(namespace)
                     .warehouse(warehouse)
-                    .build(),
+                    .build()
+                    .await?,
+            ),
 
-                #[cfg(feature = "delta")]
-                Command::Delta {
-                    location,
-                    database,
-                    records_per_second,
-                } => tansu_schema::lake::House::delta()
+            #[cfg(feature = "delta")]
+            Some(Lake::Delta {
+                location,
+                database,
+                records_per_second,
+            }) => Some(
+                tansu_schema::lake::House::delta()
                     .location(location.into_inner())
+                    .schema_registry(schema_registry.clone().unwrap())
                     .database(database)
                     .records_per_second(records_per_second)
-                    .build(),
+                    .build()?,
+            ),
 
-                #[cfg(feature = "parquet")]
-                Command::Parquet { location } => tansu_schema::lake::House::parquet()
+            #[cfg(feature = "parquet")]
+            Some(Lake::Parquet { location }) => Some(
+                tansu_schema::lake::House::parquet()
                     .location(location.into_inner())
-                    .build(),
-            })
-            .transpose()?;
+                    .schema_registry(schema_registry.clone().unwrap())
+                    .build()?,
+            ),
+
+            None => None,
+        };
+
+        let tls_server_config = self
+            .cert
+            .and_then(|certs| self.key.and_then(|key| server_config(&certs, &key).ok()));
 
         let broker = Broker::<Controller<StorageContainer>, StorageContainer>::builder()
             .node_id(NODE_ID)
             .cluster_id(cluster_id)
             .incarnation_id(incarnation_id)
-            .advertised_listener(advertised_listener)
+            .advertised_listener(advertised_listener.clone())
             .otlp_endpoint_url(otlp_endpoint_url)
-            .schema_registry(schema_registry)
-            .storage(storage_engine)
-            .listener(listener);
+            .schema_registry(schema_registry.clone())
+            .storage(storage_engine.clone())
+            .listener(listener.clone())
+            .authentication(self.authentication)
+            .tls_server_config(tls_server_config)
+            .silent(self.silent);
 
         #[cfg(any(feature = "parquet", feature = "iceberg", feature = "delta"))]
         let broker = broker.lake_house(lake_house);
 
+        if !self.silent {
+            let sheet = Sheet::default();
+
+            println!(
+                "tansu {} {}",
+                "broker".if_supports_color(Stream::Stdout, |text| text.style(sheet.headline)),
+                env!("CARGO_PKG_VERSION")
+                    .if_supports_color(Stream::Stdout, |text| text.style(sheet.version))
+            );
+
+            println!(
+                "listening on: {} (advertised: {})",
+                listener.if_supports_color(Stream::Stdout, |text| text.style(sheet.listener)),
+                advertised_listener.if_supports_color(Stream::Stdout, |text| text
+                    .style(sheet.advertised_listener))
+            );
+
+            println!(
+                "storage: {} {:?}",
+                redact_password(storage_engine)
+                    .if_supports_color(Stream::Stdout, |text| text.style(sheet.storage)),
+                storage_engines()
+                    .iter()
+                    .map(|storage_engine| storage_engine
+                        .if_supports_color(Stream::Stdout, |text| text.style(sheet.storage)))
+                    .collect::<Vec<_>>()
+            );
+
+            if let Some(schema_registry) = schema_registry_url {
+                println!(
+                    "schema registry: {}",
+                    schema_registry.if_supports_color(Stream::Stdout, |text| text
+                        .style(sheet.schema_registry))
+                );
+            }
+        }
+
         broker.build().await.map_err(Into::into)
+    }
+}
+
+struct Sheet {
+    advertised_listener: Style,
+    headline: Style,
+    listener: Style,
+    schema_registry: Style,
+    storage: Style,
+    version: Style,
+}
+
+impl Default for Sheet {
+    fn default() -> Self {
+        Self {
+            advertised_listener: Style::new().magenta().bold(),
+            headline: Style::new().green().bold(),
+            listener: Style::new().magenta().bold(),
+            schema_registry: Style::new().magenta().bold(),
+            storage: Style::new().magenta().bold(),
+            version: Style::new().magenta().bold(),
+        }
     }
 }

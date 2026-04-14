@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -31,43 +31,43 @@ use tracing::debug;
 mod broker;
 mod cat;
 mod generator;
+mod perf;
 mod proxy;
 mod topic;
+mod user;
 
 const DEFAULT_BROKER: &str = "tcp://localhost:9092";
 
-fn storage_engines() -> String {
-    let mut engines = Vec::new();
-
-    #[cfg(feature = "dynostore")]
-    engines.push("dynostore");
-
-    #[cfg(feature = "libsql")]
-    engines.push("libsql");
-
-    #[cfg(feature = "postgres")]
-    engines.push("postgres");
-
-    #[cfg(feature = "turso")]
-    engines.push("turso");
-
-    format!("Storage engines: {}", engines.join(", "))
+fn storage_engines() -> Vec<&'static str> {
+    vec![
+        #[cfg(feature = "dynostore")]
+        "dynostore",
+        #[cfg(feature = "libsql")]
+        "libsql",
+        #[cfg(feature = "postgres")]
+        "postgres",
+        #[cfg(feature = "slatedb")]
+        "slatedb",
+        #[cfg(feature = "turso")]
+        "turso",
+    ]
 }
 
-fn lakes() -> String {
-    let mut lakes = Vec::new();
-
-    #[cfg(feature = "delta")]
-    lakes.push("delta");
-
-    #[cfg(feature = "iceberg")]
-    lakes.push("iceberg");
-
-    format!("Data lakes: {}", lakes.join(", "))
+fn lakes() -> Vec<&'static str> {
+    vec![
+        #[cfg(feature = "delta")]
+        "delta",
+        #[cfg(feature = "iceberg")]
+        "iceberg",
+    ]
 }
 
 fn after_help() -> String {
-    [storage_engines(), lakes()].join("\n")
+    [
+        format!("Storage engines: {}", storage_engines().join(", ")),
+        format!("Data lakes: {}", lakes().join(", ")),
+    ]
+    .join("\n")
 }
 
 #[derive(Clone, Debug, Parser)]
@@ -101,47 +101,51 @@ enum Command {
     /// Traffic Generator for schema backed topics
     Generator(Box<generator::Arg>),
 
+    /// Performance
+    Perf(Box<perf::Arg>),
+
     /// Apache Kafka compatible proxy
     Proxy(Box<proxy::Arg>),
 
-    /// Create or delete topics managed by the broker
+    /// Create, list or delete topics managed by the broker
     Topic {
         #[command(subcommand)]
         command: topic::Command,
+    },
+
+    /// Create, list or delete users managed by the broker
+    User {
+        #[command(subcommand)]
+        command: user::Command,
     },
 }
 
 impl Cli {
     pub async fn main() -> Result<ErrorCode> {
-        debug!(pid = process::id());
+        debug!(
+            pid = process::id(),
+            storage = ?storage_engines(),
+            lakes = ?lakes()
+        );
 
         let cli = Cli::parse();
 
         match cli.command.unwrap_or(Command::Broker(Box::new(cli.broker))) {
-            Command::Broker(arg) => arg
-                .main()
-                .await
-                .inspect(|result| debug!(?result))
-                .inspect_err(|err| debug!(?err)),
-
+            Command::Broker(arg) => arg.main().await,
             Command::Cat { command } => command.main().await,
-
-            Command::Generator(arg) => arg
-                .main()
-                .await
-                .inspect(|result| debug!(?result))
-                .inspect_err(|err| debug!(?err)),
-
+            Command::Generator(arg) => arg.main().await,
+            Command::Perf(arg) => arg.main().await,
             Command::Proxy(arg) => tansu_proxy::Proxy::main(
                 arg.listener_url.into_inner(),
+                arg.advertised_listener_url.into_inner(),
                 arg.origin_url.into_inner(),
                 arg.otlp_endpoint_url
                     .map(|otlp_endpoint_url| otlp_endpoint_url.into_inner()),
             )
             .await
             .map_err(Into::into),
-
             Command::Topic { command } => command.main().await,
+            Command::User { command } => command.main().await,
         }
     }
 }

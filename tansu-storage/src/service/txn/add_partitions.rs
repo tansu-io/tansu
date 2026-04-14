@@ -14,6 +14,7 @@
 
 use rama::{Context, Service};
 use tansu_sans_io::{AddPartitionsToTxnRequest, AddPartitionsToTxnResponse, ApiKey, ErrorCode};
+use tracing::instrument;
 
 use crate::{Error, Result, Storage, TxnAddPartitionsRequest, TxnAddPartitionsResponse};
 
@@ -32,6 +33,7 @@ where
     type Response = AddPartitionsToTxnResponse;
     type Error = Error;
 
+    #[instrument(skip(ctx, req))]
     async fn serve(
         &self,
         ctx: Context<G>,

@@ -17,9 +17,14 @@ use std::time::Duration;
 use super::DEFAULT_BROKER;
 use crate::{EnvVarExp, Result};
 use clap::Args;
+use human_units::iec::iec_unit;
 use tansu_generator::Generate;
 use tansu_sans_io::ErrorCode;
 use url::Url;
+
+#[iec_unit(symbol = "B/s")]
+#[derive(Copy, Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+struct Throughput(pub u32);
 
 #[derive(Args, Clone, Debug)]
 pub(super) struct Arg {
@@ -44,8 +49,12 @@ pub(super) struct Arg {
     batch_size: u32,
 
     /// The maximum number of messages per second
-    #[clap(long)]
+    #[clap(long, group = "output")]
     per_second: Option<u32>,
+
+    /// Message throughput
+    #[clap(long, group = "output")]
+    throughput: Option<Throughput>,
 
     /// The number of producers generating messages
     #[arg(long, default_value = "1")]
@@ -69,6 +78,7 @@ impl Arg {
             .schema_registry(self.schema_registry.into_inner())
             .batch_size(self.batch_size)
             .per_second(self.per_second)
+            .throughput(self.throughput.map(|throughput| throughput.0))
             .producers(self.producers)
             .duration(self.duration_seconds.map(Duration::from_secs))
             .otlp_endpoint_url(

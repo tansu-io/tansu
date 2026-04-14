@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -130,7 +130,7 @@ fn member_assignment_001() -> Result<()> {
             topic: "test".into(),
             partitions: vec![0, 1, 2]
         }),
-        decoded.assignment.assigned_partitions.get(0).cloned()
+        decoded.assignment.assigned_partitions.first().cloned()
     );
     assert!(decoded.assignment.user_data.is_none());
 
