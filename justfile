@@ -574,7 +574,7 @@ telemetry-topic-create: (topic-create "telemetry" "--config" "tansu.virtual=true
 telemetry-produce-valid profile="dev":
     echo '{"key": "SK06 YPM", "value": {"latitude":52.930412156530465,"longitude":-4.894550244518114,"altitude":158.06766871179406}}' | target/{{ replace(profile, "dev", "debug") }}/tansu cat produce telemetry
 
-telemetry-topic-consume:
+telemetry-consume:
     kafka-console-consumer \
         --bootstrap-server ${ADVERTISED_LISTENER} \
         --timeout-ms=15000 \
@@ -588,12 +588,12 @@ telemetry-topic-consume:
         --formatter-property print.headers=true \
         --formatter-property print.value=true
 
-telemetry-topic-sk06-ypm-consume:
+telemetry-vrm-consume vrm="SK06 YPM":
     kafka-console-consumer \
         --bootstrap-server ${ADVERTISED_LISTENER} \
-        --timeout-ms=15000 \
+        --timeout-ms=60000 \
         --group telemetry-sk06-consumer-group \
-        --topic 'telemetry/"SK06 YPM"' \
+        --topic 'telemetry/"{{ vrm }}"' \
         --from-beginning \
         --formatter-property print.timestamp=true \
         --formatter-property print.key=true \

@@ -2652,24 +2652,13 @@ impl Storage for Delegate {
         let (base_topic, key_filter): (&str, Option<&str>) =
             self.topic_with_key(topition.topic()).await?;
 
-        let base_topition;
-        let effective_topition: &Topition = if key_filter.is_some() {
-            base_topition = Topition::new(base_topic, topition.partition());
-            &base_topition
-        } else {
-            topition
-        };
-
-        let high_watermark = self
-            .offset_stage(effective_topition)
-            .await
-            .map(|offset_stage| {
-                if isolation_level == IsolationLevel::ReadCommitted {
-                    offset_stage.last_stable
-                } else {
-                    offset_stage.high_watermark
-                }
-            })?;
+        let high_watermark = self.offset_stage(topition).await.map(|offset_stage| {
+            if isolation_level == IsolationLevel::ReadCommitted {
+                offset_stage.last_stable
+            } else {
+                offset_stage.high_watermark
+            }
+        })?;
 
         debug!(
             cluster = self.cluster,
