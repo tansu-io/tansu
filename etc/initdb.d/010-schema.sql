@@ -36,6 +36,16 @@ create table if not exists topic (
     created_at timestamp default current_timestamp not null
 );
 
+create table if not exists virtual_topic (
+    id int generated always as identity primary key,
+    topic int references topic (id) on delete cascade not null,
+    k bytea,
+    uuid uuid not null unique,
+    last_updated timestamp default current_timestamp not null,
+    created_at timestamp default current_timestamp not null,
+    unique (topic, k)
+);
+
 create
 or replace view v_topic as
 select
