@@ -1,5 +1,5 @@
 -- -*- mode: sql; sql-product: postgres; -*-
--- Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+-- Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 --
 -- Licensed under the Apache License, Version 2.0 (the "License");
 -- you may not use this file except in compliance with the License.
@@ -13,28 +13,20 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-select t.uuid, t.name, is_internal, partitions, replication_factor
+insert into virtual_topic (topic, k, uuid)
 
-from
+select t.id, $3, $4
 
-cluster c
+from cluster c
 join topic t on t.cluster = c.id
 
-where
+where c.name = $1
+and t.name = $2
 
-c.name = $1
-and t.uuid = $2
+on conflict (topic, k)
 
-union
+do update set
 
-select vt.uuid, t.name || '/' || vt.k, t.is_internal, t.partitions, t.replication_factor
+last_updated = excluded.last_updated
 
-from
-cluster c
-join topic t on t.cluster = c.id
-join virtual_topic vt on vt.topic = t.id
-
-where
-
-c.name = $1
-and vt.uuid = $2
+returning virtual_topic.uuid;

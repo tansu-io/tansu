@@ -247,15 +247,16 @@ person-duckdb-parquet: (duckdb-k-unnest-v-parquet "person")
 person-topic-consume:
     kafka-console-consumer \
         --bootstrap-server ${ADVERTISED_LISTENER} \
-        --consumer-property fetch.max.wait.ms=15000 \
-        --group person-consumer-group --topic person \
+        --timeout-ms=15000 \
+        --group person-consumer-group \
+        --topic person \
         --from-beginning \
-        --property print.timestamp=true \
-        --property print.key=true \
-        --property print.offset=true \
-        --property print.partition=true \
-        --property print.headers=true \
-        --property print.value=true
+        --formatter-property print.timestamp=true \
+        --formatter-property print.key=true \
+        --formatter-property print.offset=true \
+        --formatter-property print.partition=true \
+        --formatter-property print.headers=true \
+        --formatter-property print.value=true
 
 # create search topic with etc/schema/search.proto
 search-topic-create: (topic-create "search")
@@ -567,3 +568,36 @@ producer-perf-1000000: (producer-perf "1000000" "1024" "25000000")
 
 ps-tansu-rss:
     ps -p $(pgrep tansu) -o rss= | awk '{print $1/1024 " MB"}'
+
+telemetry-topic-create: (topic-create "telemetry" "--config" "tansu.virtual=true")
+
+telemetry-produce-valid profile="dev":
+    echo '{"key": "SK06 YPM", "value": {"latitude":52.930412156530465,"longitude":-4.894550244518114,"altitude":158.06766871179406}}' | target/{{ replace(profile, "dev", "debug") }}/tansu cat produce telemetry
+
+telemetry-topic-consume:
+    kafka-console-consumer \
+        --bootstrap-server ${ADVERTISED_LISTENER} \
+        --timeout-ms=15000 \
+        --group telemetry-consumer-group \
+        --topic telemetry \
+        --from-beginning \
+        --formatter-property print.timestamp=true \
+        --formatter-property print.key=true \
+        --formatter-property print.offset=true \
+        --formatter-property print.partition=true \
+        --formatter-property print.headers=true \
+        --formatter-property print.value=true
+
+telemetry-topic-sk06-ypm-consume:
+    kafka-console-consumer \
+        --bootstrap-server ${ADVERTISED_LISTENER} \
+        --timeout-ms=15000 \
+        --group telemetry-sk06-consumer-group \
+        --topic 'telemetry/"SK06 YPM"' \
+        --from-beginning \
+        --formatter-property print.timestamp=true \
+        --formatter-property print.key=true \
+        --formatter-property print.offset=true \
+        --formatter-property print.partition=true \
+        --formatter-property print.headers=true \
+        --formatter-property print.value=true

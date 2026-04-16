@@ -370,6 +370,10 @@ pub(crate) static SQL: LazyLock<Cache> = LazyLock::new(|| {
             include_sql!("sql/txn_topition_select.sql"),
         ),
         (
+            "virtual_topic_upsert.sql",
+            include_sql!("sql/virtual_topic_upsert.sql"),
+        ),
+        (
             "watermark_delete_by_topic.sql",
             include_sql!("sql/watermark_delete_by_topic.sql"),
         ),
