@@ -338,7 +338,7 @@ otel: build docker-compose-down db-up minio-up minio-ready-local minio-local-ali
 otel-up: docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up tansu-up
 
 tansu-broker profile *args:
-    target/{{ replace(profile, "dev", "debug") }}/tansu broker {{ args }} 2>&1 | tee broker.log
+    target/{{ replace(profile, "dev", "debug") }}/tansu broker {{ args }} 2>&1 >broker.log
 
 flamegraph-tansu-broker profile *args:
     #!/usr/bin/env zsh
@@ -430,7 +430,7 @@ broker-memory profile="profiling": (build profile "dynostore") (tansu-broker pro
 broker-null profile="profiling": (build profile "default") (tansu-broker profile "--storage-engine=null://")
 
 clean-tansu-db:
-    rm -f tansu.db*
+    rm -f tansu.db* snapshot.db
 
 clean-lake-dir:
     rm -rf lake/*
@@ -439,7 +439,7 @@ broker-sqlite-parquet profile="dev": clean-tansu-db clean-lake-dir (build profil
 
 broker-sqlite-delta profile="profiling": docker-compose-down minio-up minio-ready-local minio-local-alias minio-lake-bucket clean-tansu-db (build profile "libsql,delta") (tansu-broker profile "--storage-engine=sqlite://tansu.db" "delta")
 
-broker-sqlite profile="profiling": clean-tansu-db (build profile "libsql") (tansu-broker profile "--silent" "--storage-engine=sqlite://tansu.db")
+broker-sqlite profile="profiling": clean-tansu-db (build profile "libsql") (tansu-broker profile "--silent" "--storage-engine='sqlite://tansu.db?vacuum_into=snapshot.db&maintenance_interval=1m'")
 
 broker-sqlite-authentication profile="profiling": (build profile "libsql") (tansu-broker profile "--authentication" "--storage-engine=sqlite://tansu.db")
 
@@ -479,7 +479,7 @@ flamegraph-produce profile="profiling":
     cargo build --profile {{ profile }} --bin bench_produce_v11
     RUST_LOG=warn flamegraph -- ./target/{{ replace(profile, "dev", "debug") }}/bench_produce_v11
 
-bench-hyperfine iterations="10000" profile="release": (build profile "libsql" "bench")
+bench-hyperfine iterations="100000" profile="release": (build profile "libsql" "bench")
     hyperfine -N './target/{{ replace(profile, "dev", "debug") }}/bench --iterations {{ iterations }}'
 
 bench-dhat mode="heap" profile="release": (build profile "libsql" "bench")
@@ -491,8 +491,8 @@ bench-flamegraph profile="profiling": (build profile "libsql" "bench")
 bench-flamegraph-produce profile="profiling": (build profile "libsql" "bench")
     RUST_LOG=warn flamegraph -- ./target/{{ replace(profile, "dev", "debug") }}/bench --api-key=0
 
-bench-flamegraph-fetch profile="profiling": (build profile "libsql" "bench")
-    RUST_LOG=warn flamegraph -- ./target/{{ replace(profile, "dev", "debug") }}/bench --api-key=1
+bench-flamegraph-fetch iterations="100000" profile="profiling": (build profile "libsql" "bench")
+    RUST_LOG=warn flamegraph -- ./target/{{ replace(profile, "dev", "debug") }}/bench  --iterations {{ iterations }} --api-key=1
 
 bench-perf profile="profiling": (build profile "libsql" "bench")
     RUST_LOG=warn perf record --call-graph dwarf ./target/{{ replace(profile, "dev", "debug") }}/bench 2>&1 >/dev/null
