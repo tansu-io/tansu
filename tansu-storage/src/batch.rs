@@ -240,13 +240,8 @@ where
         producer_id: i64,
     ) -> Result<Option<i64>, Error> {
         let Some(queued) = self.requests.lock().map(|mut requests| {
-            BATCH_REQUESTS_LENGTH.record(
-                requests
-                    .iter()
-                    .map(|(_, queue)| queue.len() as u64)
-                    .sum::<u64>(),
-                &[],
-            );
+            BATCH_REQUESTS_LENGTH
+                .record(requests.values().map(|queue| queue.len() as u64).sum(), &[]);
 
             requests.remove(&TopitionProducerId {
                 topition: topition.to_owned(),
