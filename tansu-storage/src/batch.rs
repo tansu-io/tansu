@@ -80,13 +80,6 @@ static SEND_QUEUED_WAKE_COUNTER: LazyLock<Counter<u64>> = LazyLock::new(|| {
         .build()
 });
 
-static SEND_QUEUED_NO_OWNERS_COUNTER: LazyLock<Counter<u64>> = LazyLock::new(|| {
-    METER
-        .u64_counter("batch_send_queued_no_owners")
-        .with_description("The number of send_queued with no owners")
-        .build()
-});
-
 static PRODUCE_REQUEST_MINIMUM_SIZE_TRIGGER: LazyLock<Counter<u64>> = LazyLock::new(|| {
     METER
         .u64_counter("batch_produce_minimum_size_trigger")
@@ -100,14 +93,6 @@ static PRODUCE_REQUEST_YOUR_TICKET_IS_READY: LazyLock<Counter<u64>> = LazyLock::
         .with_description("The number of notifications that your ticket was ready while waiting")
         .build()
 });
-
-static PRODUCE_REQUEST_TIMEOUT_EXPIRED_WITH_NO_OFFSET: LazyLock<Counter<u64>> =
-    LazyLock::new(|| {
-        METER
-            .u64_counter("batch_produce_timeout_expired_with_no_offset")
-            .with_description("The number of times the timeout expired with no offset")
-            .build()
-    });
 
 static PRODUCE_REQUEST_TIMEOUT_EXPIRED_TRIGGER: LazyLock<Counter<u64>> = LazyLock::new(|| {
     METER
@@ -158,8 +143,6 @@ impl<G> Future for Ticket<G> {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut responses = self.batcher.responses.lock()?;
 
-        BATCH_RESPONSES_LENGTH.record(responses.len() as u64, &[]);
-
         match responses.remove(&self.id) {
             Some(BatchResponse::Response(response)) => {
                 BATCH_TICKET_POLL.add(1, &[KeyValue::new("outcome", "ready")]);
@@ -202,6 +185,23 @@ pub(crate) struct ProduceRequestBatcher<G> {
     responses: Arc<Mutex<BTreeMap<Uuid, BatchResponse>>>,
 }
 
+impl<G> ProduceRequestBatcher<G> {
+    fn update_metrics(&self) -> Result<()> {
+        self.requests
+            .lock()
+            .map_err(Into::into)
+            .map(|requests| requests.values().map(|queue| queue.len() as u64).sum())
+            .map(|length| BATCH_REQUESTS_LENGTH.record(length, &[]))
+            .and(
+                self.responses
+                    .lock()
+                    .map_err(Into::into)
+                    .map(|responses| responses.len() as u64)
+                    .map(|length| BATCH_RESPONSES_LENGTH.record(length, &[])),
+            )
+    }
+}
+
 impl<G> ProduceRequestBatcher<G>
 where
     G: Storage,
@@ -238,7 +238,7 @@ where
         transaction_id: Option<&str>,
         topition: &Topition,
         producer_id: i64,
-    ) -> Result<Option<i64>, Error> {
+    ) -> Result<(), Error> {
         let Some(queued) = self.requests.lock().map(|mut requests| {
             BATCH_REQUESTS_LENGTH
                 .record(requests.values().map(|queue| queue.len() as u64).sum(), &[]);
@@ -251,7 +251,7 @@ where
         else {
             BATCH_REQUESTS_LENGTH.record(0, &[]);
 
-            return Ok(None);
+            return Ok(());
         };
 
         let owners = queued
@@ -276,26 +276,18 @@ where
 
             self.responses.lock().map(|mut responses| {
                 for owner in owners {
-                    if &owner == id {
-                        _ = responses.remove(&owner);
-                    } else {
-                        if let Some(BatchResponse::Waker(waker)) =
-                            responses.insert(owner, BatchResponse::Response(offset))
-                        {
-                            debug!(waking = %owner);
-                            SEND_QUEUED_WAKE_COUNTER.add(1, &attributes);
-                            waker.wake();
-                        }
+                    if let Some(BatchResponse::Waker(waker)) =
+                        responses.insert(owner, BatchResponse::Response(offset))
+                    {
+                        debug!(waking = %owner);
+                        SEND_QUEUED_WAKE_COUNTER.add(1, &attributes);
+                        waker.wake();
                     }
                 }
             })?;
-
-            Ok(Some(offset))
-        } else {
-            warn!(?owners);
-            SEND_QUEUED_NO_OWNERS_COUNTER.add(1, &attributes);
-            Ok(None)
         }
+
+        Ok(())
     }
 }
 
@@ -380,6 +372,8 @@ where
         let mut iteration = -1;
 
         loop {
+            self.update_metrics()?;
+
             let ticket = ticket.clone();
             let id = ticket.id;
 
@@ -405,20 +399,11 @@ where
                 .minimum_size
                 .inspect(|minimum_size| debug!(minimum_size, queued_bytes))
                 .is_some_and(|minimum_size| queued_bytes > minimum_size)
-                && let Some(offset) = self
-                    .send_queued(&id, transaction_id, topition, producer_id)
-                    .await?
             {
                 PRODUCE_REQUEST_MINIMUM_SIZE_TRIGGER.add(1, &attributes);
 
-                let elapsed = start
-                    .elapsed()
-                    .map_or(0, |duration| duration.as_millis() as u64);
-
-                debug!(over_minimum_size = %id, elapsed, offset, iteration);
-                PRODUCE_DURATION.record(elapsed, &attributes);
-
-                return Ok(offset);
+                self.send_queued(&id, transaction_id, topition, producer_id)
+                    .await?;
             }
 
             let patience = sleep(maximum_delay);
@@ -429,21 +414,17 @@ where
                     debug!(ready = %id, elapsed, iteration);
                     PRODUCE_REQUEST_YOUR_TICKET_IS_READY.add(1, &attributes);
                     PRODUCE_DURATION.record(elapsed, &attributes);
+                    self.update_metrics()?;
                     return response;
                 }
 
                 _ = patience => {
-                    PRODUCE_REQUEST_TIMEOUT_EXPIRED_TRIGGER.add(1, &attributes);
-
-                    if let Some(offset) = self.send_queued(&id, transaction_id, topition, producer_id).await? {
-                        let elapsed = start.elapsed().map_or(0, |duration| duration.as_millis() as u64);
-                        debug!(expired = %id, offset, elapsed, iteration);
-                        PRODUCE_DURATION.record(elapsed, &attributes);
-                        return Ok(offset)
-                    } else {
-                        warn!(no_offset = %id, iteration);
-                        PRODUCE_REQUEST_TIMEOUT_EXPIRED_WITH_NO_OFFSET.add(1, &attributes);
+                    if iteration > 1 {
+                        warn!(ticket = %id, iteration);
                     }
+
+                    PRODUCE_REQUEST_TIMEOUT_EXPIRED_TRIGGER.add(1, &attributes);
+                    self.send_queued(&id, transaction_id, topition, producer_id).await?;
                 }
             }
         }

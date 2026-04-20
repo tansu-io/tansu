@@ -2298,6 +2298,8 @@ impl Builder<i32, String, Url, Url> {
                     }
                 });
 
+                debug!(?minimum_size, ?maximum_delay);
+
                 AmazonS3Builder::from_env()
                     .with_bucket_name(bucket_name)
                     .with_conditional_put(S3ConditionalPut::ETagMatch)
