@@ -2271,7 +2271,34 @@ impl Builder<i32, String, Url, Url> {
 
             #[cfg(feature = "dynostore")]
             "s3" => {
+                use crate::batch::ProduceRequestBatcher;
+
                 let bucket_name = self.storage.host_str().unwrap_or("tansu");
+
+                let minimum_size = self.storage.query_pairs().find_map(|(k, v)| {
+                    if k == "batch_min_size" {
+                        human_units::Size::from_str(v.as_ref())
+                            .map(|size| size.0)
+                            .inspect_err(|err| warn!(storage = %self.storage, v = v.as_ref(), ?err))
+                            .ok()
+                            .and_then(|size| usize::try_from(size).ok())
+                    } else {
+                        None
+                    }
+                });
+
+                let maximum_delay = self.storage.query_pairs().find_map(|(k, v)| {
+                    if k == "batch_max_delay" {
+                        human_units::Duration::from_str(v.as_ref())
+                            .map(|duration| duration.0)
+                            .inspect_err(|err| warn!(storage = %self.storage, v = v.as_ref(), ?err))
+                            .ok()
+                    } else {
+                        None
+                    }
+                });
+
+                debug!(?minimum_size, ?maximum_delay);
 
                 AmazonS3Builder::from_env()
                     .with_bucket_name(bucket_name)
@@ -2282,6 +2309,11 @@ impl Builder<i32, String, Url, Url> {
                             .advertised_listener(self.advertised_listener.clone())
                             .schemas(self.schema_registry)
                             .lake(self.lake_house.clone())
+                    })
+                    .map(|storage| {
+                        ProduceRequestBatcher::new(storage)
+                            .with_minimum_size(minimum_size)
+                            .with_maximum_delay(maximum_delay)
                     })
                     .map(|storage| Box::new(storage) as Box<dyn Storage>)
                     .map(Arc::new)

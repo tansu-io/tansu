@@ -16,12 +16,16 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Debug,
     pin::Pin,
-    sync::{Arc, Mutex},
+    sync::{Arc, LazyLock, Mutex},
     task::{Context, Poll, Waker},
     time::{Duration, SystemTime},
 };
 
 use async_trait::async_trait;
+use opentelemetry::{
+    KeyValue,
+    metrics::{Counter, Gauge, Histogram},
+};
 use tansu_sans_io::{
     ConfigResource, ErrorCode, IsolationLevel, ListOffset, ScramMechanism,
     create_topics_request::CreatableTopic,
@@ -38,16 +42,79 @@ use tansu_sans_io::{
     txn_offset_commit_response::TxnOffsetCommitResponseTopic,
 };
 use tokio::time::sleep;
-use tracing::{debug, instrument};
+use tracing::{debug, instrument, warn};
 use url::Url;
 use uuid::Uuid;
 
 use crate::{
-    BrokerRegistrationRequest, Error, GroupDetail, ListOffsetResponse, MetadataResponse,
+    BrokerRegistrationRequest, Error, GroupDetail, ListOffsetResponse, METER, MetadataResponse,
     NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse, Result,
     ScramCredential, Storage, TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse,
     TxnOffsetCommitRequest, UpdateError, Version,
 };
+
+static BATCH_REQUESTS_LENGTH: LazyLock<Gauge<u64>> =
+    LazyLock::new(|| METER.u64_gauge("batch_request_gauge").build());
+
+static BATCH_RESPONSES_LENGTH: LazyLock<Gauge<u64>> =
+    LazyLock::new(|| METER.u64_gauge("batch_response_gauge").build());
+
+static BATCH_TICKET_POLL: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    METER
+        .u64_counter("batch_ticket_poll")
+        .with_description("The number of ticket polls")
+        .build()
+});
+
+static SEND_QUEUED_PRODUCED_RECORDS_COUNTER: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    METER
+        .u64_counter("batch_send_queued_records")
+        .with_description("The number of produced send queued records")
+        .build()
+});
+
+static SEND_QUEUED_WAKE_COUNTER: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    METER
+        .u64_counter("batch_send_queued_wake_event")
+        .with_description("The number of wake events sent")
+        .build()
+});
+
+static PRODUCE_REQUEST_MINIMUM_SIZE_TRIGGER: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    METER
+        .u64_counter("batch_produce_minimum_size_trigger")
+        .with_description("The number of times the minimum size was a trigger")
+        .build()
+});
+
+static PRODUCE_REQUEST_YOUR_TICKET_IS_READY: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    METER
+        .u64_counter("batch_produce_your_ticket_is_ready")
+        .with_description("The number of notifications that your ticket was ready while waiting")
+        .build()
+});
+
+static PRODUCE_REQUEST_TIMEOUT_EXPIRED_TRIGGER: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    METER
+        .u64_counter("batch_produce_timeout_expired_trigger")
+        .with_description("The number of times the timeout expiry was a trigger")
+        .build()
+});
+
+static PRODUCE_REQUEST_QUEUED_COUNTER: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    METER
+        .u64_counter("batch_produce_queued")
+        .with_description("The number of produce requests queued")
+        .build()
+});
+
+static PRODUCE_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
+    METER
+        .u64_histogram("batch_produce_duration")
+        .with_unit("ms")
+        .with_description("The batch produce latency in milliseconds")
+        .build()
+});
 
 #[derive(Clone, Debug)]
 struct Ticket<G> {
@@ -77,8 +144,12 @@ impl<G> Future for Ticket<G> {
         let mut responses = self.batcher.responses.lock()?;
 
         match responses.remove(&self.id) {
-            Some(BatchResponse::Response(response)) => Poll::Ready(Ok(response)),
+            Some(BatchResponse::Response(response)) => {
+                BATCH_TICKET_POLL.add(1, &[KeyValue::new("outcome", "ready")]);
+                Poll::Ready(Ok(response))
+            }
             Some(BatchResponse::Waker(_)) | None => {
+                BATCH_TICKET_POLL.add(1, &[KeyValue::new("outcome", "pending")]);
                 _ = responses.insert(self.id, BatchResponse::Waker(cx.waker().clone()));
                 Poll::Pending
             }
@@ -104,8 +175,6 @@ enum BatchResponse {
     Response(i64),
 }
 
-const DEFAULT_DELAY: Duration = Duration::from_millis(100);
-
 #[derive(Clone, Debug)]
 pub(crate) struct ProduceRequestBatcher<G> {
     storage: G,
@@ -114,6 +183,23 @@ pub(crate) struct ProduceRequestBatcher<G> {
 
     requests: Arc<Mutex<BTreeMap<TopitionProducerId, Vec<BatchRequest>>>>,
     responses: Arc<Mutex<BTreeMap<Uuid, BatchResponse>>>,
+}
+
+impl<G> ProduceRequestBatcher<G> {
+    fn update_metrics(&self) -> Result<()> {
+        self.requests
+            .lock()
+            .map_err(Into::into)
+            .map(|requests| requests.values().map(|queue| queue.len() as u64).sum())
+            .map(|length| BATCH_REQUESTS_LENGTH.record(length, &[]))
+            .and(
+                self.responses
+                    .lock()
+                    .map_err(Into::into)
+                    .map(|responses| responses.len() as u64)
+                    .map(|length| BATCH_RESPONSES_LENGTH.record(length, &[])),
+            )
+    }
 }
 
 impl<G> ProduceRequestBatcher<G>
@@ -145,21 +231,27 @@ where
         }
     }
 
+    #[instrument(skip(self, transaction_id, topition, producer_id))]
     async fn send_queued(
         &self,
         id: &Uuid,
         transaction_id: Option<&str>,
         topition: &Topition,
         producer_id: i64,
-    ) -> Result<Option<i64>, Error> {
+    ) -> Result<(), Error> {
         let Some(queued) = self.requests.lock().map(|mut requests| {
+            BATCH_REQUESTS_LENGTH
+                .record(requests.values().map(|queue| queue.len() as u64).sum(), &[]);
+
             requests.remove(&TopitionProducerId {
                 topition: topition.to_owned(),
                 producer_id,
             })
         })?
         else {
-            return Ok(None);
+            BATCH_REQUESTS_LENGTH.record(0, &[]);
+
+            return Ok(());
         };
 
         let owners = queued
@@ -167,30 +259,35 @@ where
             .map(|batch_request| batch_request.id)
             .collect::<BTreeSet<_>>();
 
+        debug!(owners = owners.len());
+
+        let attributes = [KeyValue::new("topic", topition.topic.clone())];
+
         if let Some(queued) = combine(queued.into_iter().map(|queued| queued.batch).collect())? {
+            let record_count = (queued.last_offset_delta + 1) as u64;
+
             let offset = self
                 .storage
                 .produce(transaction_id, topition, queued)
-                .await?;
+                .await
+                .inspect(|offset| debug!(offset))?;
+
+            SEND_QUEUED_PRODUCED_RECORDS_COUNTER.add(record_count, &attributes);
 
             self.responses.lock().map(|mut responses| {
                 for owner in owners {
-                    if &owner == id {
-                        _ = responses.remove(&owner);
-                    } else {
-                        if let Some(BatchResponse::Waker(waker)) =
-                            responses.insert(owner, BatchResponse::Response(offset))
-                        {
-                            waker.wake();
-                        }
+                    if let Some(BatchResponse::Waker(waker)) =
+                        responses.insert(owner, BatchResponse::Response(offset))
+                    {
+                        debug!(waking = %owner);
+                        SEND_QUEUED_WAKE_COUNTER.add(1, &attributes);
+                        waker.wake();
                     }
                 }
             })?;
-
-            Ok(Some(offset))
-        } else {
-            Ok(None)
         }
+
+        Ok(())
     }
 }
 
@@ -236,6 +333,17 @@ where
         topition: &Topition,
         deflated: deflated::Batch,
     ) -> Result<i64> {
+        let Some(maximum_delay) = self.maximum_delay else {
+            return self
+                .storage
+                .produce(transaction_id, topition, deflated)
+                .await;
+        };
+
+        let start = SystemTime::now();
+
+        let attributes = [KeyValue::new("topic", topition.topic.clone())];
+
         let producer_id = deflated.producer_id;
 
         let topition_producer_id = TopitionProducerId {
@@ -246,20 +354,30 @@ where
         let ticket = self.requests.lock().map(|mut requests| {
             let ticket = Ticket::new(self.clone());
 
-            requests
-                .entry(topition_producer_id.clone())
-                .or_default()
-                .push(BatchRequest {
-                    id: ticket.id,
-                    batch: deflated,
-                });
+            let queue = requests.entry(topition_producer_id.clone()).or_default();
+
+            queue.push(BatchRequest {
+                id: ticket.id,
+                batch: deflated,
+            });
+
+            PRODUCE_REQUEST_QUEUED_COUNTER.add(1, &attributes);
+            debug!(queue_len = queue.len());
 
             ticket
         })?;
 
+        debug!(ticket = %ticket.id);
+
+        let mut iteration = -1;
+
         loop {
+            self.update_metrics()?;
+
             let ticket = ticket.clone();
             let id = ticket.id;
+
+            iteration += 1;
 
             let queued_bytes = self
                 .requests
@@ -279,28 +397,35 @@ where
 
             if self
                 .minimum_size
+                .inspect(|minimum_size| debug!(minimum_size, queued_bytes))
                 .is_some_and(|minimum_size| queued_bytes > minimum_size)
-                && let Some(offset) = self
-                    .send_queued(&id, transaction_id, topition, producer_id)
-                    .await?
             {
-                return Ok(offset);
+                PRODUCE_REQUEST_MINIMUM_SIZE_TRIGGER.add(1, &attributes);
+
+                self.send_queued(&id, transaction_id, topition, producer_id)
+                    .await?;
             }
 
-            let patience = sleep(self.maximum_delay.unwrap_or(DEFAULT_DELAY));
+            let patience = sleep(maximum_delay);
 
             tokio::select! {
                 response = ticket  => {
+                    let elapsed = start.elapsed().map_or(0, |duration| duration.as_millis() as u64);
+                    debug!(ready = %id, elapsed, iteration);
+                    PRODUCE_REQUEST_YOUR_TICKET_IS_READY.add(1, &attributes);
+                    PRODUCE_DURATION.record(elapsed, &attributes);
+                    self.update_metrics()?;
                     return response;
                 }
 
-                expired = patience => {
-                    debug!(?expired);
-                    if let Some(offset) = self.send_queued(&id, transaction_id, topition, producer_id).await? {
-                        return Ok(offset)
+                _ = patience => {
+                    if iteration > 1 {
+                        warn!(ticket = %id, iteration);
                     }
-                }
 
+                    PRODUCE_REQUEST_TIMEOUT_EXPIRED_TRIGGER.add(1, &attributes);
+                    self.send_queued(&id, transaction_id, topition, producer_id).await?;
+                }
             }
         }
     }

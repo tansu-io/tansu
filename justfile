@@ -95,6 +95,9 @@ grafana-up: (docker-compose-up "grafana")
 
 grafana-down: (docker-compose-down "grafana")
 
+grafana-ui:
+    open http://localhost:3000
+
 lakehouse-catalog-up: (docker-compose-up "lakehouse-catalog")
 
 lakehouse-catalog-down: (docker-compose-down "lakehouse-catalog")
@@ -331,8 +334,8 @@ benchmark-flamegraph: build docker-compose-down minio-up minio-ready-local minio
 benchmark: build docker-compose-down minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up
     target/debug/tansu broker 2>&1  | tee broker.log
 
-otel: build docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up
-    target/debug/tansu broker 2>&1  | tee broker.log
+otel profile="dev" *args: build docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up
+    OTEL_METRIC_EXPORT_INTERVAL=5000 OTEL_EXPORTER_OTLP_ENDPOINT="http://localhost:9090/api/v1/otlp/" target/{{ replace(profile, "dev", "debug") }}/tansu broker {{ args }}  | tee broker.log
 
 otel-up: docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket prometheus-up grafana-up tansu-up
 
