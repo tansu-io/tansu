@@ -1,0 +1,14 @@
+apiVersion: v2
+name: tansu
+description: Tansu - Apache Kafka-compatible broker with pluggable storage backends
+type: application
+version: 0.1.0
+appVersion: "1"
+keywords:
+  - kafka
+  - message-broker
+  - event-streaming
+maintainers: []
+home: https://github.com/tansu-io/tansu
+sources: []
+license: Apache-2.0
