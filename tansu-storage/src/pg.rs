@@ -515,6 +515,7 @@ impl Postgres {
                 );
             })
             .inspect_err(|err| {
+                debug!(?err);
                 SQL_ERROR.add(1, &self.attributes_for_error(sql, err)[..]);
             })
             .map_err(Into::into)
@@ -1298,6 +1299,64 @@ impl Postgres {
 
         tx.commit().await.map_err(Into::into).and(Ok(deleted))
     }
+
+    async fn topic_with_key<'a>(&self, topic: &'a str) -> Result<(&'a str, Option<&'a str>)> {
+        if let Some((base, key)) = topic.split_once('/')
+            && self
+                .describe_config(base, ConfigResource::Topic, None)
+                .await
+                .map(|configs| {
+                    configs
+                        .configs
+                        .as_deref()
+                        .unwrap_or_default()
+                        .iter()
+                        .find_map(|config| {
+                            if config.name == "tansu.virtual" {
+                                config
+                                    .value
+                                    .as_deref()
+                                    .and_then(|config| bool::from_str(config).ok())
+                            } else {
+                                None
+                            }
+                        })
+                        .unwrap_or_default()
+                })?
+        {
+            Ok((base, Some(key)))
+        } else {
+            Ok((topic, None))
+        }
+    }
+
+    #[instrument(skip(self), ret)]
+    async fn base_topic<'a>(&self, topic: &'a str) -> Result<&'a str> {
+        self.topic_with_key(topic).await.map(|(topic, _key)| topic)
+    }
+
+    #[instrument(skip(self), ret)]
+    async fn virtual_topic_id(&self, topic: &str, key: &str) -> Result<Uuid> {
+        let uuid = Uuid::new_v5(
+            &Uuid::NAMESPACE_URL,
+            format!("tag:tansu.io,2026-04:virtual:{topic}:{key}",).as_bytes(),
+        );
+
+        let c = self.connection().await.inspect_err(|err| error!(?err))?;
+
+        let row = self
+            .prepare_query_one(
+                &c,
+                "virtual_topic_upsert.sql",
+                &[&self.cluster, &topic, &key.as_bytes(), &uuid],
+            )
+            .await?;
+
+        row.try_get::<_, Uuid>(0)
+            .inspect_err(|err| error!(?err))
+            .map_err(Into::into)
+            .inspect(|vt| debug!(%vt))
+    }
 }
 
 #[async_trait]
@@ -1745,52 +1804,15 @@ impl Storage for Postgres {
         isolation_level: IsolationLevel,
     ) -> Result<Vec<deflated::Batch>> {
         let (base_topic, key_filter): (&str, Option<&str>) =
-            if let Some((t, k)) = topition.topic().split_once('/') {
-                let is_virtual = self
-                    .describe_config(t, ConfigResource::Topic, None)
-                    .await
-                    .map(|result| {
-                        result
-                            .configs
-                            .as_ref()
-                            .and_then(|configs| {
-                                configs
-                                    .iter()
-                                    .find(|c| c.name.as_str() == "tansu.virtual")
-                                    .and_then(|c| c.value.as_deref())
-                                    .and_then(|v| bool::from_str(v).ok())
-                            })
-                            .unwrap_or_default()
-                    })
-                    .unwrap_or_default();
+            self.topic_with_key(topition.topic()).await?;
 
-                if is_virtual {
-                    (t, Some(k))
-                } else {
-                    (topition.topic(), None)
-                }
+        let high_watermark = self.offset_stage(topition).await.map(|offset_stage| {
+            if isolation_level == IsolationLevel::ReadCommitted {
+                offset_stage.last_stable
             } else {
-                (topition.topic(), None)
-            };
-
-        let base_topition;
-        let effective_topition: &Topition = if key_filter.is_some() {
-            base_topition = Topition::new(base_topic, topition.partition());
-            &base_topition
-        } else {
-            topition
-        };
-
-        let high_watermark = self
-            .offset_stage(effective_topition)
-            .await
-            .map(|offset_stage| {
-                if isolation_level == IsolationLevel::ReadCommitted {
-                    offset_stage.last_stable
-                } else {
-                    offset_stage.high_watermark
-                }
-            })?;
+                offset_stage.high_watermark
+            }
+        })?;
 
         debug!(
             cluster = self.cluster,
@@ -1806,7 +1828,6 @@ impl Storage for Postgres {
         let tx = c.transaction().await?;
 
         let records = if let Some(key) = key_filter {
-            let key_bytes = key.as_bytes().to_vec();
             self.tx_prepare_query(
                 &tx,
                 "record_fetch_pg_keyed.sql",
@@ -1817,7 +1838,7 @@ impl Storage for Postgres {
                     &offset,
                     &(max_bytes as i64),
                     &high_watermark,
-                    &key_bytes,
+                    &key.as_bytes(),
                 ],
             )
             .await
@@ -2028,7 +2049,11 @@ impl Storage for Postgres {
             .prepare_query_one(
                 &c,
                 "watermark_select.sql",
-                &[&self.cluster, &topition.topic(), &topition.partition()],
+                &[
+                    &self.cluster,
+                    &self.base_topic(topition.topic()).await?,
+                    &topition.partition(),
+                ],
             )
             .await
             .inspect_err(|err| error!(?topition, ?err))?;
@@ -2080,7 +2105,11 @@ impl Storage for Postgres {
                 .tx_prepare_query_opt(
                     &tx,
                     "topition_select.sql",
-                    &[&self.cluster, &topition.topic(), &topition.partition()],
+                    &[
+                        &self.cluster,
+                        &self.base_topic(topition.topic()).await?,
+                        &topition.partition(),
+                    ],
                 )
                 .await
                 .inspect_err(|err| error!(?err))?
@@ -2105,7 +2134,7 @@ impl Storage for Postgres {
                         "consumer_offset_insert.sql",
                         &[
                             &self.cluster,
-                            &topition.topic(),
+                            &self.base_topic(topition.topic()).await?,
                             &topition.partition(),
                             &group,
                             &offset.offset,
@@ -2187,7 +2216,12 @@ impl Storage for Postgres {
                 .prepare_query_opt(
                     &c,
                     "consumer_offset_select.sql",
-                    &[&self.cluster, &group_id, &topic.topic(), &topic.partition()],
+                    &[
+                        &self.cluster,
+                        &group_id,
+                        &self.base_topic(topic.topic()).await?,
+                        &topic.partition(),
+                    ],
                 )
                 .await
                 .and_then(|maybe| {
@@ -2347,22 +2381,37 @@ impl Storage for Postgres {
                 for topic in topics {
                     responses.push(match topic {
                         TopicId::Name(name) => {
+                            let (base_topic, key) = self
+                                .topic_with_key(name.as_str())
+                                .await
+                                .inspect(|(base_topic, key)| debug!(base_topic, key))?;
+
+                            let vtid = if let Some(key) = key {
+                                self.virtual_topic_id(base_topic, key)
+                                    .await
+                                    .map(|uuid| uuid.into_bytes())
+                                    .map(Some)
+                            } else {
+                                Ok(None)
+                            }?;
+
                             match self
                                 .prepare_query_opt(
                                     &c,
                                     "topic_select_name.sql",
-                                    &[&self.cluster, &name.as_str()],
+                                    &[&self.cluster, &base_topic],
                                 )
                                 .await
                                 .inspect_err(|err| error!(?err))
                             {
                                 Ok(Some(row)) => {
                                     let error_code = ErrorCode::None.into();
-                                    let topic_id = row
+
+                                    let topic_id = vtid.or(row
                                         .try_get::<_, Uuid>(0)
                                         .map(|uuid| uuid.into_bytes())
-                                        .map(Some)?;
-                                    let name = row.try_get::<_, String>(1).map(Some)?;
+                                        .map(Some)?);
+
                                     let is_internal = row.try_get::<_, bool>(2).map(Some)?;
                                     let partitions = row.try_get::<_, i32>(3)?;
                                     let replication_factor = row.try_get::<_, i32>(4)?;
@@ -2411,7 +2460,7 @@ impl Storage for Postgres {
 
                                     MetadataResponseTopic::default()
                                         .error_code(error_code)
-                                        .name(name)
+                                        .name(Some(name.to_owned()))
                                         .topic_id(topic_id)
                                         .is_internal(is_internal)
                                         .partitions(partitions)
@@ -2443,7 +2492,7 @@ impl Storage for Postgres {
                             match self
                                 .prepare_query_one(
                                     &c,
-                                    "topic_select_uuid.sql",
+                                    "pg/topic_select_uuid.sql",
                                     &[&self.cluster, &id],
                                 )
                                 .await

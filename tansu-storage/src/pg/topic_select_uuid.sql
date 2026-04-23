@@ -27,7 +27,7 @@ and t.uuid = $2
 
 union
 
-select vt.uuid, t.name || '/' || vt.k, t.is_internal, t.partitions, t.replication_factor
+select vt.uuid, t.name || '/' || convert_from(vt.k, 'UTF-8'), t.is_internal, t.partitions, t.replication_factor
 
 from
 cluster c

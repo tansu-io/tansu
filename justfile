@@ -114,7 +114,7 @@ docker-compose-up *args:
 docker-compose-down *args:
     docker compose down --remove-orphans --volumes {{ args }}
 
-docker-compose-ps:
+ps:
     docker compose ps
 
 docker-compose-logs *args:
