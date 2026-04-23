@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,13 +13,14 @@
 // limitations under the License.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     env,
     fmt::Debug,
     marker::PhantomData,
     ops::Deref,
+    path::PathBuf,
     result,
-    str::FromStr as _,
+    str::FromStr,
     sync::{Arc, LazyLock, Mutex},
     time::{Duration, SystemTime},
 };
@@ -27,9 +28,10 @@ use std::{
 use crate::{
     BrokerRegistrationRequest, ChannelRequestLayer, Error, GroupDetail, ListOffsetResponse, METER,
     MetadataResponse, NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse,
-    RequestChannelService, RequestStorageService, Result, Storage, TopicId, Topition,
-    TxnAddPartitionsRequest, TxnAddPartitionsResponse, TxnOffsetCommitRequest, TxnState,
+    RequestChannelService, RequestStorageService, Result, ScramCredential, Storage, TopicId,
+    Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse, TxnOffsetCommitRequest, TxnState,
     UpdateError, Version, bounded_channel,
+    proxy::SemaphoreProxy,
     sql::{Cache, default_hash, idempotent_sequence_check, remove_comments},
 };
 use async_trait::async_trait;
@@ -49,7 +51,7 @@ use rand::{rng, seq::SliceRandom as _};
 use regex::Regex;
 use tansu_sans_io::{
     BatchAttribute, ConfigResource, ConfigSource, ConfigType, ControlBatch, EndTransactionMarker,
-    ErrorCode, IsolationLevel, ListOffset, NULL_TOPIC_ID, OpType,
+    ErrorCode, IsolationLevel, ListOffset, NULL_TOPIC_ID, OpType, ScramMechanism,
     add_partitions_to_txn_response::{
         AddPartitionsToTxnPartitionResult, AddPartitionsToTxnTopicResult,
     },
@@ -74,9 +76,9 @@ use tansu_schema::{
     Registry,
     lake::{House, LakeHouse as _},
 };
-use tokio::task::JoinSet;
+use tokio::{fs::rename, sync::Semaphore, task::JoinSet};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, instrument};
+use tracing::{debug, error, instrument, warn};
 use url::Url;
 use uuid::Uuid;
 
@@ -219,12 +221,16 @@ pub(crate) struct Delegate {
 
     lake: Option<House>,
 
-    vacuum_into: Option<String>,
+    vacuum_into: Option<PathBuf>,
+
+    maintenance: Arc<Semaphore>,
+    compaction: CompactionMode,
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct ConnectionManager {
     db: Arc<Mutex<Database>>,
+    busy_timeout: Duration,
 }
 
 pub(crate) struct PoolConnection {
@@ -517,6 +523,8 @@ impl managed::Manager for ConnectionManager {
             let db = self.db.lock()?;
             db.connect()
         }?;
+
+        connection.busy_timeout(self.busy_timeout)?;
 
         PoolConnection::new(connection)
             .await
@@ -1127,40 +1135,179 @@ impl Delegate {
     }
 
     #[instrument(skip(self), ret)]
+    async fn policy_compact_delete(&self, topition: i64, offset_id: i64) -> Result<u64> {
+        let pc = self.connection().await?;
+
+        pc.execute("lite/policy_compact_delete.sql", (topition, offset_id))
+            .await
+            .map(|rows| rows as u64)
+            .inspect(|rows| debug!(rows))
+            .map_err(Into::into)
+    }
+
+    #[instrument(skip(self))]
+    async fn policy_compact_compaction(
+        &self,
+        topition: i64,
+        key: &[u8],
+        max_offset_id: i64,
+    ) -> Result<Vec<i64>> {
+        let pc = self.connection().await?;
+
+        let mut rows = pc
+            .query(
+                "lite/policy_compact_compaction.sql",
+                (topition, key, max_offset_id),
+            )
+            .await?;
+
+        let mut offsets = Vec::new();
+
+        while let Some(row) = rows.next().await? {
+            let offset = row.get::<i64>(0)?;
+            offsets.push(offset);
+        }
+
+        Ok(offsets)
+    }
+
+    #[instrument(skip(self))]
+    async fn policy_compact_max_offset_id(&self, topition: i64, key: &[u8]) -> Result<Option<i64>> {
+        let pc = self.connection().await?;
+
+        if let Some(row) = pc
+            .query_opt("lite/policy_compact_max_offset_id.sql", (topition, key))
+            .await?
+        {
+            row.get::<i64>(0).map(Some).map_err(Into::into)
+        } else {
+            Ok(None)
+        }
+        .inspect(|max_offset| debug!(max_offset))
+    }
+
+    #[instrument(skip(self))]
+    async fn policy_compact_distinct_k(&self, topition: i64) -> Result<BTreeSet<Vec<u8>>> {
+        let pc = self.connection().await?;
+
+        let mut rows = pc
+            .query("lite/policy_compact_distinct_k.sql", [topition])
+            .await?;
+
+        let mut keys = BTreeSet::new();
+
+        while let Some(row) = rows.next().await? {
+            if let Some(key) = row.get::<Option<Vec<u8>>>(0)? {
+                _ = keys.insert(key);
+            }
+        }
+
+        debug!(keys = keys.len());
+
+        Ok(keys)
+    }
+
+    #[instrument(skip(self))]
+    async fn policy_compact_topitions(&self) -> Result<BTreeSet<i64>> {
+        let pc = self.connection().await?;
+
+        let mut rows = pc
+            .query("lite/policy_compact_topitions.sql", [self.cluster.as_str()])
+            .await?;
+
+        let mut topitions = BTreeSet::new();
+
+        while let Some(row) = rows.next().await? {
+            let topition = row.get::<i64>(0)?;
+            _ = topitions.insert(topition);
+        }
+
+        Ok(topitions)
+    }
+
+    #[instrument(skip(self))]
     async fn policy_compact(&self) -> Result<u64> {
         let start = SystemTime::now();
 
-        let pc = self.connection().await?;
-        let tx = pc.transaction().await?;
+        match self.compaction {
+            CompactionMode::Single => {
+                let pc = self.connection().await?;
 
-        let compacted = pc
-            .execute("policy_compact.sql", [self.cluster.as_str()])
-            .await? as u64;
+                pc.execute("policy_compact.sql", [self.cluster.as_str()])
+                    .await
+                    .map(|compacted| compacted as u64)
+                    .inspect(|_| {
+                        DELEGATE_REQUEST_DURATION.record(
+                            elapsed_millis(start),
+                            &[KeyValue::new("operation", "policy_compact_single")],
+                        )
+                    })
+                    .map_err(Into::into)
+            }
+            CompactionMode::Multi => {
+                let mut compacted = 0;
 
-        tx.commit()
-            .await
-            .map_err(Into::into)
-            .and(Ok(compacted))
-            .inspect(|_| {
-                DELEGATE_REQUEST_DURATION.record(
-                    elapsed_millis(start),
-                    &[KeyValue::new("operation", "policy_compact")],
-                )
-            })
+                for topition in self.policy_compact_topitions().await? {
+                    debug!(topition);
+
+                    for key in self.policy_compact_distinct_k(topition).await? {
+                        debug!(key = ?&key[..]);
+
+                        if let Some(max_offset_id) = self
+                            .policy_compact_max_offset_id(topition, &key[..])
+                            .await?
+                        {
+                            debug!(max_offset_id);
+
+                            for offset in self
+                                .policy_compact_compaction(topition, &key[..], max_offset_id)
+                                .await?
+                            {
+                                debug!(offset);
+
+                                compacted += self.policy_compact_delete(topition, offset).await?;
+                            }
+                        }
+                    }
+                }
+
+                Ok(compacted).inspect(|_| {
+                    DELEGATE_REQUEST_DURATION.record(
+                        elapsed_millis(start),
+                        &[KeyValue::new("operation", "policy_compact_multi")],
+                    )
+                })
+            }
+        }
     }
 
-    #[instrument(skip(self), ret)]
+    #[instrument(skip(self))]
     async fn vacuum_into(&self) -> Result<()> {
-        if let Some(vacuum_into) = self.vacuum_into.as_deref() {
-            let pc = self.connection().await?;
-            let rows = pc.execute("lite/vacuum_into.sql", [vacuum_into]).await? as u64;
-            debug!(vacuum_into, rows);
+        if let Some(vacuum_into) = self
+            .vacuum_into
+            .as_deref()
+            .inspect(|vacuum_into| debug!(vacuum_into = vacuum_into.to_str()))
+        {
+            let mut temporary = PathBuf::from(vacuum_into);
+            if temporary.add_extension("temporary") {
+                debug!(temporary = temporary.to_str());
+
+                if let Some(vacuum_temporary) = temporary.to_str() {
+                    let pc = self.connection().await?;
+                    let rows = pc
+                        .execute("lite/vacuum_into.sql", [vacuum_temporary])
+                        .await? as u64;
+
+                    rename(temporary, vacuum_into).await?;
+                    debug!(vacuum_into = vacuum_into.to_str(), rows);
+                }
+            }
         }
 
         Ok(())
     }
 
-    #[instrument(skip_all, ret)]
+    #[instrument(skip(self, now), ret)]
     async fn policy_delete(&self, now: SystemTime) -> Result<u64> {
         let start = SystemTime::now();
 
@@ -1168,25 +1315,20 @@ impl Delegate {
         let retention_ms = u64::try_from(Duration::from_hours(7 * 24).as_millis())?;
 
         let pc = self.connection().await?;
-        let tx = pc.transaction().await?;
 
-        let deleted = pc
-            .execute(
-                "lite/policy_delete.sql",
-                (self.cluster.as_str(), now, retention_ms),
+        pc.execute(
+            "lite/policy_delete.sql",
+            (self.cluster.as_str(), now, retention_ms),
+        )
+        .await
+        .map(|deleted| deleted as u64)
+        .map_err(Into::into)
+        .inspect(|_| {
+            DELEGATE_REQUEST_DURATION.record(
+                elapsed_millis(start),
+                &[KeyValue::new("operation", "policy_delete")],
             )
-            .await? as u64;
-
-        tx.commit()
-            .await
-            .map_err(Into::into)
-            .and(Ok(deleted))
-            .inspect(|_| {
-                DELEGATE_REQUEST_DURATION.record(
-                    elapsed_millis(start),
-                    &[KeyValue::new("operation", "policy_delete")],
-                )
-            })
+        })
     }
 }
 
@@ -1280,6 +1422,10 @@ static DDL: LazyLock<Cache> = LazyLock::new(|| {
             include_sql!("ddl/020-consumer-group.sql"),
         ),
         ("020-producer.sql", include_sql!("ddl/020-producer.sql")),
+        (
+            "020-scram-credential.sql",
+            include_sql!("ddl/020-scram-credential.sql"),
+        ),
         ("020-topic.sql", include_sql!("ddl/020-topic.sql")),
         (
             "030-consumer-group-detail.sql",
@@ -1812,6 +1958,61 @@ impl Storage for Engine {
     }
 
     #[instrument(skip_all)]
+    async fn delete_user_scram_credential(
+        &self,
+        user: &str,
+        mechanism: ScramMechanism,
+    ) -> Result<()> {
+        let start = SystemTime::now();
+        self.inner
+            .delete_user_scram_credential(user, mechanism)
+            .await
+            .inspect(|_| {
+                ENGINE_REQUEST_DURATION.record(
+                    elapsed_millis(start),
+                    &[KeyValue::new("operation", "delete_user_scram_credential")],
+                )
+            })
+    }
+
+    #[instrument(skip_all)]
+    async fn upsert_user_scram_credential(
+        &self,
+        user: &str,
+        mechanism: ScramMechanism,
+        credential: ScramCredential,
+    ) -> Result<()> {
+        let start = SystemTime::now();
+        self.inner
+            .upsert_user_scram_credential(user, mechanism, credential)
+            .await
+            .inspect(|_| {
+                ENGINE_REQUEST_DURATION.record(
+                    elapsed_millis(start),
+                    &[KeyValue::new("operation", "upsert_user_scram_credential")],
+                )
+            })
+    }
+
+    #[instrument(skip_all)]
+    async fn user_scram_credential(
+        &self,
+        user: &str,
+        mechanism: ScramMechanism,
+    ) -> Result<Option<ScramCredential>> {
+        let start = SystemTime::now();
+        self.inner
+            .user_scram_credential(user, mechanism)
+            .await
+            .inspect(|_| {
+                ENGINE_REQUEST_DURATION.record(
+                    elapsed_millis(start),
+                    &[KeyValue::new("operation", "user_scram_credential")],
+                )
+            })
+    }
+
+    #[instrument(skip_all)]
     async fn ping(&self) -> Result<()> {
         let start = SystemTime::now();
         self.inner.ping().await.inspect(|_| {
@@ -1821,8 +2022,48 @@ impl Storage for Engine {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+enum CompactionMode {
+    Single,
+    #[default]
+    Multi,
+}
+
+impl FromStr for CompactionMode {
+    type Err = Error;
+
+    fn from_str(s: &str) -> result::Result<Self, Self::Err> {
+        match s {
+            "single" => Ok(Self::Single),
+            "multi" => Ok(Self::Multi),
+            otherwise => Err(Error::Message(otherwise.to_owned())),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+enum CommunicationMode {
+    Mpsc,
+    Direct,
+    #[default]
+    Semaphore,
+}
+
+impl FromStr for CommunicationMode {
+    type Err = Error;
+
+    fn from_str(s: &str) -> result::Result<Self, Self::Err> {
+        match s {
+            "direct" => Ok(Self::Direct),
+            "mpsc" => Ok(Self::Mpsc),
+            "semaphore" => Ok(Self::Semaphore),
+            otherwise => Err(Error::Message(otherwise.to_owned())),
+        }
+    }
+}
+
 impl Builder<String, i32, Url, Url> {
-    pub(crate) async fn build(self) -> Result<Engine> {
+    pub(crate) async fn build(self) -> Result<Arc<Box<dyn Storage>>> {
         debug!(domain = self.storage.domain(), path = self.storage.path());
 
         let mut path = env::current_dir().inspect(|current_dir| debug!(?current_dir))?;
@@ -1841,57 +2082,136 @@ impl Builder<String, i32, Url, Url> {
 
         let vacuum_into = self.storage.query_pairs().find_map(|(k, v)| {
             if k == "vacuum_into" {
-                Some(v.to_string())
+                Some(PathBuf::from(v.as_ref()))
             } else {
                 None
             }
         });
 
+        let busy_timeout = self
+            .storage
+            .query_pairs()
+            .find_map(|(k, v)| {
+                if k == "busy_timeout" {
+                    human_units::Duration::from_str(v.as_ref())
+                        .map(|duration| duration.0)
+                        .inspect_err(|err| warn!(storage = %self.storage, v = v.as_ref(), ?err))
+                        .ok()
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(Duration::from_secs(5));
+
+        let compaction = self
+            .storage
+            .query_pairs()
+            .find_map(|(k, v)| {
+                if k == "compaction" {
+                    CompactionMode::from_str(v.as_ref()).ok()
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default();
+
         let db = libsql::Builder::new_local(path).build().await?;
 
-        let connection = db.connect()?;
+        {
+            let connection = db.connect()?;
 
-        for (name, ddl) in DDL.iter() {
-            _ = connection
-                .execute(ddl.as_str(), ())
-                .await
-                .inspect(|rows| debug!(name, rows))
-                .inspect_err(|err| error!(name, ?err));
+            for (name, ddl) in DDL.iter() {
+                _ = connection
+                    .execute(ddl.as_str(), ())
+                    .await
+                    .inspect(|rows| debug!(name, rows))
+                    .inspect_err(|err| error!(name, ?err));
+            }
         }
 
-        let (sender, receiver) = bounded_channel(1);
-        let mut server = JoinSet::new();
+        match self
+            .storage
+            .query_pairs()
+            .find_map(|(k, v)| {
+                if k == "mode" {
+                    CommunicationMode::from_str(v.as_ref()).ok()
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default()
+        {
+            CommunicationMode::Mpsc => {
+                let (sender, receiver) = bounded_channel(1);
+                let mut server = JoinSet::new();
 
-        let _ = {
-            let cancellation = self.cancellation.clone();
+                let _ = {
+                    let cancellation = self.cancellation.clone();
 
-            let storage = Delegate {
+                    let storage = Delegate {
+                        cluster: self.cluster,
+                        node: self.node,
+                        advertised_listener: self.advertised_listener,
+                        pool: Pool::builder(ConnectionManager {
+                            db: Arc::new(Mutex::new(db)),
+                            busy_timeout,
+                        })
+                        .build()?,
+                        schemas: self.schemas,
+                        lake: self.lake,
+                        vacuum_into,
+                        maintenance: Arc::new(Semaphore::new(1)),
+                        compaction,
+                    };
+
+                    server.spawn(async move {
+                        let server = ChannelRequestLayer::new(cancellation)
+                            .into_layer(RequestStorageService::new(storage));
+
+                        server.serve(Context::default(), receiver).await
+                    })
+                };
+
+                let inner = RequestChannelService::new(sender);
+
+                Ok(Arc::new(Box::new(Engine {
+                    server: Arc::new(server),
+                    inner,
+                }) as Box<dyn Storage>))
+            }
+
+            CommunicationMode::Direct => Ok(Arc::new(Box::new(Delegate {
                 cluster: self.cluster,
                 node: self.node,
                 advertised_listener: self.advertised_listener,
                 pool: Pool::builder(ConnectionManager {
                     db: Arc::new(Mutex::new(db)),
+                    busy_timeout,
                 })
                 .build()?,
                 schemas: self.schemas,
                 lake: self.lake,
                 vacuum_into,
-            };
+                maintenance: Arc::new(Semaphore::new(1)),
+                compaction,
+            }) as Box<dyn Storage>)),
 
-            server.spawn(async move {
-                let server = ChannelRequestLayer::new(cancellation)
-                    .into_layer(RequestStorageService::new(storage));
-
-                server.serve(Context::default(), receiver).await
-            })
-        };
-
-        let inner = RequestChannelService::new(sender);
-
-        Ok(Engine {
-            server: Arc::new(server),
-            inner,
-        })
+            CommunicationMode::Semaphore => Ok(Arc::new(Box::new(SemaphoreProxy::new(Delegate {
+                cluster: self.cluster,
+                node: self.node,
+                advertised_listener: self.advertised_listener,
+                pool: Pool::builder(ConnectionManager {
+                    db: Arc::new(Mutex::new(db)),
+                    busy_timeout,
+                })
+                .build()?,
+                schemas: self.schemas,
+                lake: self.lake,
+                vacuum_into,
+                maintenance: Arc::new(Semaphore::new(1)),
+                compaction,
+            })) as Box<dyn Storage>)),
+        }
     }
 }
 
@@ -2268,13 +2588,53 @@ impl Storage for Delegate {
 
         debug!(?topition, offset, min_bytes, max_bytes, ?isolation_level);
 
-        let high_watermark = self.offset_stage(topition).await.map(|offset_stage| {
-            if isolation_level == IsolationLevel::ReadCommitted {
-                offset_stage.last_stable
+        let (base_topic, key_filter): (&str, Option<&str>) =
+            if let Some((t, k)) = topition.topic().split_once('/') {
+                let is_virtual = self
+                    .describe_config(t, ConfigResource::Topic, None)
+                    .await
+                    .map(|result| {
+                        result
+                            .configs
+                            .as_ref()
+                            .and_then(|configs| {
+                                configs
+                                    .iter()
+                                    .find(|c| c.name.as_str() == "tansu.virtual")
+                                    .and_then(|c| c.value.as_deref())
+                                    .and_then(|v| bool::from_str(v).ok())
+                            })
+                            .unwrap_or_default()
+                    })
+                    .unwrap_or_default();
+
+                if is_virtual {
+                    (t, Some(k))
+                } else {
+                    (topition.topic(), None)
+                }
             } else {
-                offset_stage.high_watermark
-            }
-        })?;
+                (topition.topic(), None)
+            };
+
+        let base_topition;
+        let effective_topition: &Topition = if key_filter.is_some() {
+            base_topition = Topition::new(base_topic, topition.partition());
+            &base_topition
+        } else {
+            topition
+        };
+
+        let high_watermark = self
+            .offset_stage(effective_topition)
+            .await
+            .map(|offset_stage| {
+                if isolation_level == IsolationLevel::ReadCommitted {
+                    offset_stage.last_stable
+                } else {
+                    offset_stage.high_watermark
+                }
+            })?;
 
         debug!(
             cluster = self.cluster,
@@ -2288,8 +2648,24 @@ impl Storage for Delegate {
 
         let c = self.connection().await?;
 
-        let mut records = c
-            .query(
+        let mut records = if let Some(key) = key_filter {
+            let key_bytes = key.as_bytes().to_vec();
+            c.query(
+                "record_fetch_keyed.sql",
+                (
+                    self.cluster.as_str(),
+                    base_topic,
+                    topition.partition(),
+                    offset,
+                    (max_bytes as i64),
+                    high_watermark,
+                    key_bytes,
+                ),
+            )
+            .await
+            .inspect_err(|err| error!(?err))?
+        } else {
+            c.query(
                 "record_fetch.sql",
                 (
                     self.cluster.as_str(),
@@ -2301,7 +2677,8 @@ impl Storage for Delegate {
                 ),
             )
             .await
-            .inspect_err(|err| error!(?err))?;
+            .inspect_err(|err| error!(?err))?
+        };
 
         let mut batches = vec![];
 
@@ -3646,7 +4023,7 @@ impl Storage for Delegate {
         let new_e_tag = default_hash(&detail);
         debug!(?new_e_tag);
 
-        let detail = serde_json::to_value(detail).inspect(|detail| debug!(?detail))?;
+        let detail = serde_json::to_value(detail).inspect(|detail| debug!(%detail))?;
 
         let outcome = if let Some(row) = pc
             .query_opt(
@@ -3707,7 +4084,8 @@ impl Storage for Delegate {
 
             let current = serde_json::from_value::<GroupDetail>(value)
                 .inspect(|current| debug!(?current))
-                .inspect_err(|err| error!(?err))?;
+                .inspect_err(|err| error!(?err))
+                .map(Box::new)?;
 
             Err(UpdateError::Outdated { current, version })
         };
@@ -4254,6 +4632,12 @@ impl Storage for Delegate {
     }
 
     async fn maintain(&self, now: SystemTime) -> Result<()> {
+        self.vacuum_into().await?;
+
+        let Ok(_permit) = self.maintenance.try_acquire() else {
+            return Ok(());
+        };
+
         let start = SystemTime::now();
 
         let deleted = self.policy_delete(now).await?;
@@ -4261,8 +4645,6 @@ impl Storage for Delegate {
 
         let compacted = self.policy_compact().await?;
         debug!(compacted);
-
-        self.vacuum_into().await?;
 
         {
             let connection = self.pool.get().await?;
@@ -4312,6 +4694,105 @@ impl Storage for Delegate {
             DELEGATE_REQUEST_DURATION.record(
                 elapsed_millis(start),
                 &[KeyValue::new("operation", "advertised_listener")],
+            )
+        })
+    }
+
+    async fn delete_user_scram_credential(
+        &self,
+        user: &str,
+        mechanism: ScramMechanism,
+    ) -> Result<()> {
+        let start = SystemTime::now();
+        let pc = self.connection().await?;
+
+        pc.execute(
+            "scram_credential_delete.sql",
+            (self.cluster.as_str(), user, i32::from(mechanism)),
+        )
+        .await
+        .inspect_err(|err| error!(?err))
+        .map_err(Into::into)
+        .and(Ok(()))
+        .inspect(|_| {
+            DELEGATE_REQUEST_DURATION.record(
+                elapsed_millis(start),
+                &[KeyValue::new("operation", "delete_user_scram_credential")],
+            )
+        })
+    }
+
+    #[instrument(skip_all)]
+    async fn upsert_user_scram_credential(
+        &self,
+        user: &str,
+        mechanism: ScramMechanism,
+        credential: ScramCredential,
+    ) -> Result<()> {
+        let start = SystemTime::now();
+        let pc = self.connection().await?;
+
+        pc.execute(
+            "scram_credential_insert.sql",
+            (
+                self.cluster.as_str(),
+                user,
+                i32::from(mechanism),
+                &credential.salt[..],
+                credential.iterations,
+                &credential.stored_key[..],
+                &credential.server_key[..],
+            ),
+        )
+        .await
+        .inspect_err(|err| error!(?err))
+        .map_err(Into::into)
+        .and(Ok(()))
+        .inspect(|_| {
+            DELEGATE_REQUEST_DURATION.record(
+                elapsed_millis(start),
+                &[KeyValue::new("operation", "upsert_user_scram_credential")],
+            )
+        })
+    }
+
+    #[instrument(skip_all)]
+    async fn user_scram_credential(
+        &self,
+        user: &str,
+        mechanism: ScramMechanism,
+    ) -> Result<Option<ScramCredential>> {
+        let start = SystemTime::now();
+        let pc = self.connection().await?;
+
+        pc.query_opt(
+            "scram_credential_select.sql",
+            (self.cluster.as_str(), user, i32::from(mechanism)),
+        )
+        .await
+        .inspect_err(|err| error!(?err))
+        .map_err(Into::into)
+        .and_then(|row| {
+            if let Some(row) = row {
+                let salt = row.get::<Vec<u8>>(0).map(Bytes::from)?;
+                let iterations = row.get::<i32>(1)?;
+                let stored_key = row.get::<Vec<u8>>(2).map(Bytes::from)?;
+                let server_key = row.get::<Vec<u8>>(3).map(Bytes::from)?;
+
+                Ok(Some(ScramCredential {
+                    salt,
+                    iterations,
+                    stored_key,
+                    server_key,
+                }))
+            } else {
+                Ok(None)
+            }
+        })
+        .inspect(|_| {
+            DELEGATE_REQUEST_DURATION.record(
+                elapsed_millis(start),
+                &[KeyValue::new("operation", "upsert_user_scram_credential")],
             )
         })
     }
@@ -4899,7 +5380,7 @@ mod tests {
     }
 
     #[allow(dead_code)]
-    async fn storage_container(cluster: &str, node: i32) -> Result<StorageContainer> {
+    async fn storage_container(cluster: &str, node: i32) -> Result<Arc<Box<dyn Storage>>> {
         StorageContainer::builder()
             .cluster_id(cluster)
             .node_id(node)

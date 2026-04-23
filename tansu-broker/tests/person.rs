@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,18 +22,17 @@ use tansu_sans_io::{
     create_topics_request::CreatableTopic,
     record::{Record, inflated::Batch},
 };
-use tansu_storage::{Error, Storage, StorageContainer, Topition};
+use tansu_storage::{Error, Storage, Topition};
 use tracing::{debug, error};
 use uuid::Uuid;
 
 pub mod common;
 
-pub async fn person_valid(
-    cluster_id: impl Into<String>,
-    broker_id: i32,
-    sc: StorageContainer,
-) -> Result<()> {
-    register_broker(cluster_id, broker_id, &sc).await?;
+pub async fn person_valid<G>(cluster_id: impl Into<String>, broker_id: i32, sc: G) -> Result<()>
+where
+    G: Storage + Clone,
+{
+    register_broker(cluster_id, broker_id, sc.clone()).await?;
 
     let topic_name = "person";
     debug!(?topic_name);
@@ -86,12 +85,11 @@ pub async fn person_valid(
     Ok(())
 }
 
-pub async fn person_invalid(
-    cluster_id: impl Into<String>,
-    broker_id: i32,
-    sc: StorageContainer,
-) -> Result<()> {
-    register_broker(cluster_id, broker_id, &sc).await?;
+pub async fn person_invalid<G>(cluster_id: impl Into<String>, broker_id: i32, sc: G) -> Result<()>
+where
+    G: Storage + Clone,
+{
+    register_broker(cluster_id, broker_id, sc.clone()).await?;
 
     let topic_name = "person";
     debug!(?topic_name);
@@ -149,7 +147,7 @@ pub async fn person_invalid(
 
 #[cfg(feature = "postgres")]
 mod pg {
-    use std::env;
+    use std::{env, sync::Arc};
 
     use common::{StorageType, init_tracing};
     use tansu_broker::Error;
@@ -158,7 +156,10 @@ mod pg {
 
     use super::*;
 
-    async fn storage_container(cluster: impl Into<String>, node: i32) -> Result<StorageContainer> {
+    async fn storage_container(
+        cluster: impl Into<String>,
+        node: i32,
+    ) -> Result<Arc<Box<dyn Storage>>> {
         let current_dir = env::current_dir()?;
         debug!(?current_dir);
 
@@ -214,7 +215,7 @@ mod pg {
 
 #[cfg(feature = "dynostore")]
 mod in_memory {
-    use std::env;
+    use std::{env, sync::Arc};
 
     use common::{StorageType, init_tracing};
     use tansu_broker::Error;
@@ -223,7 +224,10 @@ mod in_memory {
 
     use super::*;
 
-    async fn storage_container(cluster: impl Into<String>, node: i32) -> Result<StorageContainer> {
+    async fn storage_container(
+        cluster: impl Into<String>,
+        node: i32,
+    ) -> Result<Arc<Box<dyn Storage>>> {
         let current_dir = env::current_dir()?;
         debug!(?current_dir);
 
@@ -279,7 +283,7 @@ mod in_memory {
 
 #[cfg(feature = "libsql")]
 mod lite {
-    use std::env;
+    use std::{env, sync::Arc};
 
     use common::{StorageType, init_tracing};
     use tansu_broker::Error;
@@ -288,7 +292,10 @@ mod lite {
 
     use super::*;
 
-    async fn storage_container(cluster: impl Into<String>, node: i32) -> Result<StorageContainer> {
+    async fn storage_container(
+        cluster: impl Into<String>,
+        node: i32,
+    ) -> Result<Arc<Box<dyn Storage>>> {
         let current_dir = env::current_dir()?;
         debug!(?current_dir);
 
@@ -344,7 +351,7 @@ mod lite {
 
 #[cfg(feature = "slatedb")]
 mod slatedb {
-    use std::env;
+    use std::{env, sync::Arc};
 
     use common::{StorageType, init_tracing};
     use tansu_broker::Error;
@@ -353,7 +360,10 @@ mod slatedb {
 
     use super::*;
 
-    async fn storage_container(cluster: impl Into<String>, node: i32) -> Result<StorageContainer> {
+    async fn storage_container(
+        cluster: impl Into<String>,
+        node: i32,
+    ) -> Result<Arc<Box<dyn Storage>>> {
         let current_dir = env::current_dir()?;
         debug!(?current_dir);
 

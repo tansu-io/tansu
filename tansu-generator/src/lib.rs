@@ -38,8 +38,7 @@ use opentelemetry_semantic_conventions::SCHEMA_URL;
 use tansu_client::{Client, ConnectionManager};
 use tansu_otel::meter_provider;
 use tansu_sans_io::{
-    ErrorCode, ProduceRequest,
-    primitive::ByteSize,
+    ByteSize, ErrorCode, ProduceRequest,
     produce_request::{PartitionProduceData, TopicProduceData},
     record::{deflated, inflated},
 };

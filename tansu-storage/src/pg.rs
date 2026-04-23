@@ -35,7 +35,7 @@ use rand::{prelude::*, rng};
 use serde_json::Value;
 use tansu_sans_io::{
     BatchAttribute, ConfigResource, ConfigSource, ConfigType, ControlBatch, EndTransactionMarker,
-    ErrorCode, IsolationLevel, ListOffset, NULL_TOPIC_ID, OpType,
+    ErrorCode, IsolationLevel, ListOffset, NULL_TOPIC_ID, OpType, ScramMechanism,
     add_partitions_to_txn_response::{
         AddPartitionsToTxnPartitionResult, AddPartitionsToTxnTopicResult,
     },
@@ -72,9 +72,9 @@ use uuid::Uuid;
 
 use crate::{
     BrokerRegistrationRequest, Error, GroupDetail, ListOffsetResponse, METER, MetadataResponse,
-    NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse, Result, Storage,
-    TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse, TxnOffsetCommitRequest,
-    TxnState, UpdateError, Version,
+    NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse, Result,
+    ScramCredential, Storage, TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse,
+    TxnOffsetCommitRequest, TxnState, UpdateError, Version,
     sql::{default_hash, idempotent_sequence_check},
 };
 
@@ -1744,13 +1744,53 @@ impl Storage for Postgres {
         max_bytes: u32,
         isolation_level: IsolationLevel,
     ) -> Result<Vec<deflated::Batch>> {
-        let high_watermark = self.offset_stage(topition).await.map(|offset_stage| {
-            if isolation_level == IsolationLevel::ReadCommitted {
-                offset_stage.last_stable
+        let (base_topic, key_filter): (&str, Option<&str>) =
+            if let Some((t, k)) = topition.topic().split_once('/') {
+                let is_virtual = self
+                    .describe_config(t, ConfigResource::Topic, None)
+                    .await
+                    .map(|result| {
+                        result
+                            .configs
+                            .as_ref()
+                            .and_then(|configs| {
+                                configs
+                                    .iter()
+                                    .find(|c| c.name.as_str() == "tansu.virtual")
+                                    .and_then(|c| c.value.as_deref())
+                                    .and_then(|v| bool::from_str(v).ok())
+                            })
+                            .unwrap_or_default()
+                    })
+                    .unwrap_or_default();
+
+                if is_virtual {
+                    (t, Some(k))
+                } else {
+                    (topition.topic(), None)
+                }
             } else {
-                offset_stage.high_watermark
-            }
-        })?;
+                (topition.topic(), None)
+            };
+
+        let base_topition;
+        let effective_topition: &Topition = if key_filter.is_some() {
+            base_topition = Topition::new(base_topic, topition.partition());
+            &base_topition
+        } else {
+            topition
+        };
+
+        let high_watermark = self
+            .offset_stage(effective_topition)
+            .await
+            .map(|offset_stage| {
+                if isolation_level == IsolationLevel::ReadCommitted {
+                    offset_stage.last_stable
+                } else {
+                    offset_stage.high_watermark
+                }
+            })?;
 
         debug!(
             cluster = self.cluster,
@@ -1765,8 +1805,25 @@ impl Storage for Postgres {
         let mut c = self.connection().await?;
         let tx = c.transaction().await?;
 
-        let records = self
-            .tx_prepare_query(
+        let records = if let Some(key) = key_filter {
+            let key_bytes = key.as_bytes().to_vec();
+            self.tx_prepare_query(
+                &tx,
+                "record_fetch_pg_keyed.sql",
+                &[
+                    &self.cluster,
+                    &base_topic,
+                    &topition.partition(),
+                    &offset,
+                    &(max_bytes as i64),
+                    &high_watermark,
+                    &key_bytes,
+                ],
+            )
+            .await
+            .inspect_err(|err| error!(?err))?
+        } else {
+            self.tx_prepare_query(
                 &tx,
                 "record_fetch_pg.sql",
                 &[
@@ -1779,7 +1836,8 @@ impl Storage for Postgres {
                 ],
             )
             .await
-            .inspect_err(|err| error!(?err))?;
+            .inspect_err(|err| error!(?err))?
+        };
 
         let mut batches = vec![];
 
@@ -2658,6 +2716,8 @@ impl Storage for Postgres {
             Vec::with_capacity(topics.map(|topics| topics.len()).unwrap_or_default());
 
         for topic in topics.unwrap_or_default() {
+            debug!(?topic);
+
             responses.push(match topic {
                 TopicId::Name(name) => {
                     match self
@@ -3042,8 +3102,9 @@ impl Storage for Postgres {
                 .inspect(|version| debug!(?version))?;
 
             let value = row.try_get::<_, Value>(1)?;
-            let current =
-                serde_json::from_value::<GroupDetail>(value).inspect(|current| debug!(?current))?;
+            let current = serde_json::from_value::<GroupDetail>(value)
+                .inspect(|current| debug!(?current))
+                .map(Box::new)?;
 
             Err(UpdateError::Outdated { current, version })
         };
@@ -3529,6 +3590,82 @@ impl Storage for Postgres {
         }
 
         Ok(())
+    }
+
+    async fn delete_user_scram_credential(
+        &self,
+        user: &str,
+        mechanism: ScramMechanism,
+    ) -> Result<()> {
+        let c = self.connection().await?;
+
+        self.prepare_execute(
+            &c,
+            "scram_credential_delete.sql",
+            &[&self.cluster, &user, &i32::from(mechanism)],
+        )
+        .await
+        .inspect_err(|err| error!(?err, ?user, ?mechanism,))
+        .and(Ok(()))
+    }
+
+    async fn upsert_user_scram_credential(
+        &self,
+        username: &str,
+        mechanism: ScramMechanism,
+        credential: ScramCredential,
+    ) -> Result<()> {
+        let c = self.connection().await?;
+
+        self.prepare_execute(
+            &c,
+            "scram_credential_insert.sql",
+            &[
+                &self.cluster,
+                &username,
+                &i32::from(mechanism),
+                &&credential.salt[..],
+                &credential.iterations,
+                &&credential.stored_key[..],
+                &&credential.server_key[..],
+            ],
+        )
+        .await
+        .inspect_err(|err| error!(?err, ?username, ?mechanism,))
+        .and(Ok(()))
+    }
+
+    async fn user_scram_credential(
+        &self,
+        user: &str,
+        mechanism: ScramMechanism,
+    ) -> Result<Option<ScramCredential>> {
+        let c = self.connection().await?;
+
+        self.prepare_query_opt(
+            &c,
+            "scram_credential_select.sql",
+            &[&self.cluster, &user, &i32::from(mechanism)],
+        )
+        .await
+        .and_then(|maybe| {
+            if let Some(row) = maybe {
+                let salt = row.try_get::<_, &[u8]>(0).map(Bytes::copy_from_slice)?;
+                let iterations = row.try_get::<_, i32>(1)?;
+                let stored_key = row.try_get::<_, &[u8]>(2).map(Bytes::copy_from_slice)?;
+                let server_key = row.try_get::<_, &[u8]>(3).map(Bytes::copy_from_slice)?;
+
+                Ok(Some(ScramCredential {
+                    salt,
+                    iterations,
+                    stored_key,
+                    server_key,
+                }))
+            } else {
+                Ok(None)
+            }
+        })
+        .inspect_err(|err| error!(?err, ?user, ?mechanism,))
     }
 
     async fn cluster_id(&self) -> Result<String> {

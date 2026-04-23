@@ -138,6 +138,7 @@ use opentelemetry_semantic_conventions::SCHEMA_URL;
 #[cfg(feature = "postgres")]
 use pg::Postgres;
 
+use governor::InsufficientCapacity;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 #[cfg(any(feature = "libsql", feature = "postgres"))]
@@ -158,7 +159,7 @@ use std::{
     time::{Duration, SystemTime, SystemTimeError},
 };
 use tansu_sans_io::{
-    Body, ConfigResource, ErrorCode, IsolationLevel, ListOffset, NULL_TOPIC_ID,
+    Body, ConfigResource, ErrorCode, IsolationLevel, ListOffset, NULL_TOPIC_ID, ScramMechanism,
     add_partitions_to_txn_request::{
         AddPartitionsToTxnRequest, AddPartitionsToTxnTopic, AddPartitionsToTxnTransaction,
     },
@@ -188,6 +189,7 @@ use tansu_sans_io::{
     txn_offset_commit_response::TxnOffsetCommitResponseTopic,
 };
 use tansu_schema::{Registry, lake::House};
+use tokio::sync::AcquireError;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, instrument};
 use tracing_subscriber::filter::ParseError;
@@ -195,25 +197,29 @@ use url::Url;
 use uuid::Uuid;
 
 #[cfg(feature = "dynostore")]
-mod dynostore;
+use tracing::warn;
 
-mod null;
+#[cfg(feature = "dynostore")]
+mod dynostore;
 
 #[cfg(feature = "postgres")]
 mod pg;
 
+mod batch;
+mod null;
 mod proxy;
 mod service;
 
 pub use service::{
-    ChannelRequestLayer, ChannelRequestService, ConsumerGroupDescribeService, CreateTopicsService,
-    DeleteGroupsService, DeleteRecordsService, DeleteTopicsService, DescribeClusterService,
-    DescribeConfigsService, DescribeGroupsService, DescribeTopicPartitionsService, FetchService,
-    FindCoordinatorService, GetTelemetrySubscriptionsService, IncrementalAlterConfigsService,
-    InitProducerIdService, ListGroupsService, ListOffsetsService,
-    ListPartitionReassignmentsService, MetadataService, ProduceService, Request,
-    RequestChannelService, RequestLayer, RequestReceiver, RequestSender, RequestService,
-    RequestStorageService, Response, TxnAddOffsetsService, TxnAddPartitionService,
+    AlterUserScramCredentialsService, ChannelRequestLayer, ChannelRequestService,
+    ConsumerGroupDescribeService, CreateAclsService, CreateTopicsService, DeleteGroupsService,
+    DeleteRecordsService, DeleteTopicsService, DescribeAclsService, DescribeClusterService,
+    DescribeConfigsService, DescribeGroupsService, DescribeTopicPartitionsService,
+    DescribeUserScramCredentialsService, FetchService, FindCoordinatorService,
+    GetTelemetrySubscriptionsService, IncrementalAlterConfigsService, InitProducerIdService,
+    ListGroupsService, ListOffsetsService, ListPartitionReassignmentsService, MetadataService,
+    ProduceService, Request, RequestChannelService, RequestLayer, RequestReceiver, RequestSender,
+    RequestService, RequestStorageService, Response, TxnAddOffsetsService, TxnAddPartitionService,
     TxnOffsetCommitService, bounded_channel,
 };
 
@@ -227,6 +233,9 @@ pub(crate) mod sql;
 mod lite;
 
 #[cfg(feature = "dynostore")]
+mod gcs;
+
+#[cfg(feature = "dynostore")]
 mod os;
 
 #[cfg(feature = "turso")]
@@ -235,6 +244,8 @@ mod limbo;
 /// Storage Errors
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum Error {
+    Acquire(Arc<AcquireError>),
+
     Api(ErrorCode),
 
     ChronoParse(#[from] chrono::ParseError),
@@ -250,8 +261,9 @@ pub enum Error {
     },
 
     Glob(Arc<GlobError>),
+    InsufficientCapacity(#[from] InsufficientCapacity),
     Io(Arc<io::Error>),
-    KafkaSansIo(#[from] tansu_sans_io::Error),
+
     LessThanBaseOffset {
         offset: i64,
         base_offset: i64,
@@ -295,6 +307,9 @@ pub enum Error {
     Postcard(#[from] postcard::Error),
 
     Regex(#[from] regex::Error),
+
+    SansIo(#[from] tansu_sans_io::Error),
+
     Schema(Arc<tansu_schema::Error>),
 
     Rustls(#[from] rustls::Error),
@@ -358,6 +373,12 @@ impl From<TryGetError> for Error {
 impl<T> From<PoisonError<T>> for Error {
     fn from(_value: PoisonError<T>) -> Self {
         Self::Poison
+    }
+}
+
+impl From<AcquireError> for Error {
+    fn from(value: AcquireError) -> Self {
+        Self::Acquire(Arc::new(value))
     }
 }
 
@@ -1311,7 +1332,7 @@ impl From<TxnState> for String {
 ///
 /// The Core storage abstraction. All storage engines implement this type.
 #[async_trait]
-pub trait Storage: Clone + Debug + Send + Sync + 'static {
+pub trait Storage: Debug + Send + Sync + 'static {
     /// On startup a broker will register with storage.
     async fn register_broker(&self, broker_registration: BrokerRegistrationRequest) -> Result<()>;
 
@@ -1385,6 +1406,25 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
 
     /// Query broker and topic metadata.
     async fn metadata(&self, topics: Option<&[TopicId]>) -> Result<MetadataResponse>;
+
+    async fn upsert_user_scram_credential(
+        &self,
+        user: &str,
+        mechanism: ScramMechanism,
+        credential: ScramCredential,
+    ) -> Result<()>;
+
+    async fn delete_user_scram_credential(
+        &self,
+        user: &str,
+        mechanism: ScramMechanism,
+    ) -> Result<()>;
+
+    async fn user_scram_credential(
+        &self,
+        user: &str,
+        mechanism: ScramMechanism,
+    ) -> Result<Option<ScramCredential>>;
 
     /// Query the configuration of a resource in this storage.
     async fn describe_config(
@@ -1479,6 +1519,521 @@ pub trait Storage: Clone + Debug + Send + Sync + 'static {
     async fn ping(&self) -> Result<()>;
 }
 
+// The existence of this function makes the compiler catch if the Storage
+// trait is "object-safe" or not.
+fn _assert_trait_object(_s: &dyn Storage) {}
+
+#[async_trait]
+impl<T> Storage for Arc<T>
+where
+    T: Storage + ?Sized,
+{
+    async fn register_broker(&self, broker_registration: BrokerRegistrationRequest) -> Result<()> {
+        self.as_ref().register_broker(broker_registration).await
+    }
+
+    async fn create_topic(&self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {
+        self.as_ref().create_topic(topic, validate_only).await
+    }
+
+    async fn incremental_alter_resource(
+        &self,
+        resource: AlterConfigsResource,
+    ) -> Result<AlterConfigsResourceResponse> {
+        self.as_ref().incremental_alter_resource(resource).await
+    }
+
+    async fn delete_records(
+        &self,
+        topics: &[DeleteRecordsTopic],
+    ) -> Result<Vec<DeleteRecordsTopicResult>> {
+        self.as_ref().delete_records(topics).await
+    }
+
+    async fn delete_topic(&self, topic: &TopicId) -> Result<ErrorCode> {
+        self.as_ref().delete_topic(topic).await
+    }
+
+    async fn brokers(&self) -> Result<Vec<DescribeClusterBroker>> {
+        self.as_ref().brokers().await
+    }
+
+    async fn produce(
+        &self,
+        transaction_id: Option<&str>,
+        topition: &Topition,
+        batch: deflated::Batch,
+    ) -> Result<i64> {
+        self.as_ref().produce(transaction_id, topition, batch).await
+    }
+
+    async fn fetch(
+        &self,
+        topition: &'_ Topition,
+        offset: i64,
+        min_bytes: u32,
+        max_bytes: u32,
+        isolation: IsolationLevel,
+    ) -> Result<Vec<deflated::Batch>> {
+        self.as_ref()
+            .fetch(topition, offset, min_bytes, max_bytes, isolation)
+            .await
+    }
+
+    async fn offset_stage(&self, topition: &Topition) -> Result<OffsetStage> {
+        self.as_ref().offset_stage(topition).await
+    }
+
+    async fn list_offsets(
+        &self,
+        isolation_level: IsolationLevel,
+        offsets: &[(Topition, ListOffset)],
+    ) -> Result<Vec<(Topition, ListOffsetResponse)>> {
+        self.as_ref().list_offsets(isolation_level, offsets).await
+    }
+
+    async fn offset_commit(
+        &self,
+        group_id: &str,
+        retention_time_ms: Option<Duration>,
+        offsets: &[(Topition, OffsetCommitRequest)],
+    ) -> Result<Vec<(Topition, ErrorCode)>> {
+        self.as_ref()
+            .offset_commit(group_id, retention_time_ms, offsets)
+            .await
+    }
+
+    async fn offset_fetch(
+        &self,
+        group_id: Option<&str>,
+        topics: &[Topition],
+        require_stable: Option<bool>,
+    ) -> Result<BTreeMap<Topition, i64>> {
+        self.as_ref()
+            .offset_fetch(group_id, topics, require_stable)
+            .await
+    }
+
+    async fn committed_offset_topitions(&self, group_id: &str) -> Result<BTreeMap<Topition, i64>> {
+        self.as_ref().committed_offset_topitions(group_id).await
+    }
+
+    async fn metadata(&self, topics: Option<&[TopicId]>) -> Result<MetadataResponse> {
+        self.as_ref().metadata(topics).await
+    }
+
+    async fn upsert_user_scram_credential(
+        &self,
+        user: &str,
+        mechanism: ScramMechanism,
+        credential: ScramCredential,
+    ) -> Result<()> {
+        self.as_ref()
+            .upsert_user_scram_credential(user, mechanism, credential)
+            .await
+    }
+
+    async fn delete_user_scram_credential(
+        &self,
+        user: &str,
+        mechanism: ScramMechanism,
+    ) -> Result<()> {
+        self.as_ref()
+            .delete_user_scram_credential(user, mechanism)
+            .await
+    }
+
+    async fn user_scram_credential(
+        &self,
+        user: &str,
+        mechanism: ScramMechanism,
+    ) -> Result<Option<ScramCredential>> {
+        self.as_ref().user_scram_credential(user, mechanism).await
+    }
+
+    async fn describe_config(
+        &self,
+        name: &str,
+        resource: ConfigResource,
+        keys: Option<&[String]>,
+    ) -> Result<DescribeConfigsResult> {
+        self.as_ref().describe_config(name, resource, keys).await
+    }
+
+    async fn list_groups(&self, states_filter: Option<&[String]>) -> Result<Vec<ListedGroup>> {
+        self.as_ref().list_groups(states_filter).await
+    }
+
+    async fn delete_groups(
+        &self,
+        group_ids: Option<&[String]>,
+    ) -> Result<Vec<DeletableGroupResult>> {
+        self.as_ref().delete_groups(group_ids).await
+    }
+
+    async fn describe_groups(
+        &self,
+        group_ids: Option<&[String]>,
+        include_authorized_operations: bool,
+    ) -> Result<Vec<NamedGroupDetail>> {
+        self.as_ref()
+            .describe_groups(group_ids, include_authorized_operations)
+            .await
+    }
+
+    async fn describe_topic_partitions(
+        &self,
+        topics: Option<&[TopicId]>,
+        partition_limit: i32,
+        cursor: Option<Topition>,
+    ) -> Result<Vec<DescribeTopicPartitionsResponseTopic>> {
+        self.as_ref()
+            .describe_topic_partitions(topics, partition_limit, cursor)
+            .await
+    }
+
+    async fn update_group(
+        &self,
+        group_id: &str,
+        detail: GroupDetail,
+        version: Option<Version>,
+    ) -> Result<Version, UpdateError<GroupDetail>> {
+        self.as_ref().update_group(group_id, detail, version).await
+    }
+
+    async fn init_producer(
+        &self,
+        transaction_id: Option<&str>,
+        transaction_timeout_ms: i32,
+        producer_id: Option<i64>,
+        producer_epoch: Option<i16>,
+    ) -> Result<ProducerIdResponse> {
+        self.as_ref()
+            .init_producer(
+                transaction_id,
+                transaction_timeout_ms,
+                producer_id,
+                producer_epoch,
+            )
+            .await
+    }
+
+    async fn txn_add_offsets(
+        &self,
+        transaction_id: &str,
+        producer_id: i64,
+        producer_epoch: i16,
+        group_id: &str,
+    ) -> Result<ErrorCode> {
+        self.as_ref()
+            .txn_add_offsets(transaction_id, producer_id, producer_epoch, group_id)
+            .await
+    }
+
+    async fn txn_add_partitions(
+        &self,
+        partitions: TxnAddPartitionsRequest,
+    ) -> Result<TxnAddPartitionsResponse> {
+        self.as_ref().txn_add_partitions(partitions).await
+    }
+
+    async fn txn_offset_commit(
+        &self,
+        offsets: TxnOffsetCommitRequest,
+    ) -> Result<Vec<TxnOffsetCommitResponseTopic>> {
+        self.as_ref().txn_offset_commit(offsets).await
+    }
+
+    async fn txn_end(
+        &self,
+        transaction_id: &str,
+        producer_id: i64,
+        producer_epoch: i16,
+        committed: bool,
+    ) -> Result<ErrorCode> {
+        self.as_ref()
+            .txn_end(transaction_id, producer_id, producer_epoch, committed)
+            .await
+    }
+
+    async fn maintain(&self, now: SystemTime) -> Result<()> {
+        self.as_ref().maintain(now).await
+    }
+
+    async fn cluster_id(&self) -> Result<String> {
+        self.as_ref().cluster_id().await
+    }
+
+    async fn node(&self) -> Result<i32> {
+        self.as_ref().node().await
+    }
+
+    async fn advertised_listener(&self) -> Result<Url> {
+        self.as_ref().advertised_listener().await
+    }
+
+    async fn ping(&self) -> Result<()> {
+        self.as_ref().ping().await
+    }
+}
+
+#[async_trait]
+impl<T> Storage for Box<T>
+where
+    T: Storage + ?Sized,
+{
+    async fn register_broker(&self, broker_registration: BrokerRegistrationRequest) -> Result<()> {
+        self.as_ref().register_broker(broker_registration).await
+    }
+
+    async fn create_topic(&self, topic: CreatableTopic, validate_only: bool) -> Result<Uuid> {
+        self.as_ref().create_topic(topic, validate_only).await
+    }
+
+    async fn incremental_alter_resource(
+        &self,
+        resource: AlterConfigsResource,
+    ) -> Result<AlterConfigsResourceResponse> {
+        self.as_ref().incremental_alter_resource(resource).await
+    }
+
+    async fn delete_records(
+        &self,
+        topics: &[DeleteRecordsTopic],
+    ) -> Result<Vec<DeleteRecordsTopicResult>> {
+        self.as_ref().delete_records(topics).await
+    }
+
+    async fn delete_topic(&self, topic: &TopicId) -> Result<ErrorCode> {
+        self.as_ref().delete_topic(topic).await
+    }
+
+    async fn brokers(&self) -> Result<Vec<DescribeClusterBroker>> {
+        self.as_ref().brokers().await
+    }
+
+    async fn produce(
+        &self,
+        transaction_id: Option<&str>,
+        topition: &Topition,
+        batch: deflated::Batch,
+    ) -> Result<i64> {
+        self.as_ref().produce(transaction_id, topition, batch).await
+    }
+
+    async fn fetch(
+        &self,
+        topition: &'_ Topition,
+        offset: i64,
+        min_bytes: u32,
+        max_bytes: u32,
+        isolation: IsolationLevel,
+    ) -> Result<Vec<deflated::Batch>> {
+        self.as_ref()
+            .fetch(topition, offset, min_bytes, max_bytes, isolation)
+            .await
+    }
+
+    async fn offset_stage(&self, topition: &Topition) -> Result<OffsetStage> {
+        self.as_ref().offset_stage(topition).await
+    }
+
+    async fn list_offsets(
+        &self,
+        isolation_level: IsolationLevel,
+        offsets: &[(Topition, ListOffset)],
+    ) -> Result<Vec<(Topition, ListOffsetResponse)>> {
+        self.as_ref().list_offsets(isolation_level, offsets).await
+    }
+
+    async fn offset_commit(
+        &self,
+        group_id: &str,
+        retention_time_ms: Option<Duration>,
+        offsets: &[(Topition, OffsetCommitRequest)],
+    ) -> Result<Vec<(Topition, ErrorCode)>> {
+        self.as_ref()
+            .offset_commit(group_id, retention_time_ms, offsets)
+            .await
+    }
+
+    async fn offset_fetch(
+        &self,
+        group_id: Option<&str>,
+        topics: &[Topition],
+        require_stable: Option<bool>,
+    ) -> Result<BTreeMap<Topition, i64>> {
+        self.as_ref()
+            .offset_fetch(group_id, topics, require_stable)
+            .await
+    }
+
+    async fn committed_offset_topitions(&self, group_id: &str) -> Result<BTreeMap<Topition, i64>> {
+        self.as_ref().committed_offset_topitions(group_id).await
+    }
+
+    async fn metadata(&self, topics: Option<&[TopicId]>) -> Result<MetadataResponse> {
+        self.as_ref().metadata(topics).await
+    }
+
+    async fn upsert_user_scram_credential(
+        &self,
+        user: &str,
+        mechanism: ScramMechanism,
+        credential: ScramCredential,
+    ) -> Result<()> {
+        self.as_ref()
+            .upsert_user_scram_credential(user, mechanism, credential)
+            .await
+    }
+
+    async fn delete_user_scram_credential(
+        &self,
+        user: &str,
+        mechanism: ScramMechanism,
+    ) -> Result<()> {
+        self.as_ref()
+            .delete_user_scram_credential(user, mechanism)
+            .await
+    }
+
+    async fn user_scram_credential(
+        &self,
+        user: &str,
+        mechanism: ScramMechanism,
+    ) -> Result<Option<ScramCredential>> {
+        self.as_ref().user_scram_credential(user, mechanism).await
+    }
+
+    async fn describe_config(
+        &self,
+        name: &str,
+        resource: ConfigResource,
+        keys: Option<&[String]>,
+    ) -> Result<DescribeConfigsResult> {
+        self.as_ref().describe_config(name, resource, keys).await
+    }
+
+    async fn list_groups(&self, states_filter: Option<&[String]>) -> Result<Vec<ListedGroup>> {
+        self.as_ref().list_groups(states_filter).await
+    }
+
+    async fn delete_groups(
+        &self,
+        group_ids: Option<&[String]>,
+    ) -> Result<Vec<DeletableGroupResult>> {
+        self.as_ref().delete_groups(group_ids).await
+    }
+
+    async fn describe_groups(
+        &self,
+        group_ids: Option<&[String]>,
+        include_authorized_operations: bool,
+    ) -> Result<Vec<NamedGroupDetail>> {
+        self.as_ref()
+            .describe_groups(group_ids, include_authorized_operations)
+            .await
+    }
+
+    async fn describe_topic_partitions(
+        &self,
+        topics: Option<&[TopicId]>,
+        partition_limit: i32,
+        cursor: Option<Topition>,
+    ) -> Result<Vec<DescribeTopicPartitionsResponseTopic>> {
+        self.as_ref()
+            .describe_topic_partitions(topics, partition_limit, cursor)
+            .await
+    }
+
+    async fn update_group(
+        &self,
+        group_id: &str,
+        detail: GroupDetail,
+        version: Option<Version>,
+    ) -> Result<Version, UpdateError<GroupDetail>> {
+        self.as_ref().update_group(group_id, detail, version).await
+    }
+
+    async fn init_producer(
+        &self,
+        transaction_id: Option<&str>,
+        transaction_timeout_ms: i32,
+        producer_id: Option<i64>,
+        producer_epoch: Option<i16>,
+    ) -> Result<ProducerIdResponse> {
+        self.as_ref()
+            .init_producer(
+                transaction_id,
+                transaction_timeout_ms,
+                producer_id,
+                producer_epoch,
+            )
+            .await
+    }
+
+    async fn txn_add_offsets(
+        &self,
+        transaction_id: &str,
+        producer_id: i64,
+        producer_epoch: i16,
+        group_id: &str,
+    ) -> Result<ErrorCode> {
+        self.as_ref()
+            .txn_add_offsets(transaction_id, producer_id, producer_epoch, group_id)
+            .await
+    }
+
+    async fn txn_add_partitions(
+        &self,
+        partitions: TxnAddPartitionsRequest,
+    ) -> Result<TxnAddPartitionsResponse> {
+        self.as_ref().txn_add_partitions(partitions).await
+    }
+
+    async fn txn_offset_commit(
+        &self,
+        offsets: TxnOffsetCommitRequest,
+    ) -> Result<Vec<TxnOffsetCommitResponseTopic>> {
+        self.as_ref().txn_offset_commit(offsets).await
+    }
+
+    async fn txn_end(
+        &self,
+        transaction_id: &str,
+        producer_id: i64,
+        producer_epoch: i16,
+        committed: bool,
+    ) -> Result<ErrorCode> {
+        self.as_ref()
+            .txn_end(transaction_id, producer_id, producer_epoch, committed)
+            .await
+    }
+
+    async fn maintain(&self, now: SystemTime) -> Result<()> {
+        self.as_ref().maintain(now).await
+    }
+
+    async fn cluster_id(&self) -> Result<String> {
+        self.as_ref().cluster_id().await
+    }
+
+    async fn node(&self) -> Result<i32> {
+        self.as_ref().node().await
+    }
+
+    async fn advertised_listener(&self) -> Result<Url> {
+        self.as_ref().advertised_listener().await
+    }
+
+    async fn ping(&self) -> Result<()> {
+        self.as_ref().ping().await
+    }
+}
+
+pub type DynStorage = dyn Storage;
+pub type ArcDynStorage = Arc<DynStorage>;
+
 /// Conditional Update Errors
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum UpdateError<T> {
@@ -1486,7 +2041,7 @@ pub enum UpdateError<T> {
 
     MissingEtag,
 
-    Outdated { current: T, version: Version },
+    Outdated { current: Box<T>, version: Version },
 
     SerdeJson(Arc<serde_json::Error>),
 
@@ -1695,7 +2250,7 @@ impl<N, C, A, S> Builder<N, C, A, S> {
 }
 
 impl Builder<i32, String, Url, Url> {
-    pub async fn build(self) -> Result<StorageContainer> {
+    pub async fn build(self) -> Result<Arc<Box<dyn Storage>>> {
         let storage = match self.storage.scheme() {
             #[cfg(feature = "postgres")]
             "postgres" | "postgresql" => Postgres::builder(self.storage.to_string().as_str())
@@ -1705,7 +2260,8 @@ impl Builder<i32, String, Url, Url> {
                 .map(|builder| builder.schemas(self.schema_registry))
                 .map(|builder| builder.lake(self.lake_house.clone()))
                 .map(|builder| builder.build())
-                .map(StorageContainer::Postgres),
+                .map(|storage| Box::new(storage) as Box<dyn Storage>)
+                .map(Arc::new),
 
             #[cfg(not(feature = "postgres"))]
             "postgres" | "postgresql" => Err(Error::FeatureNotEnabled {
@@ -1715,7 +2271,34 @@ impl Builder<i32, String, Url, Url> {
 
             #[cfg(feature = "dynostore")]
             "s3" => {
+                use crate::batch::ProduceRequestBatcher;
+
                 let bucket_name = self.storage.host_str().unwrap_or("tansu");
+
+                let minimum_size = self.storage.query_pairs().find_map(|(k, v)| {
+                    if k == "batch_min_size" {
+                        human_units::Size::from_str(v.as_ref())
+                            .map(|size| size.0)
+                            .inspect_err(|err| warn!(storage = %self.storage, v = v.as_ref(), ?err))
+                            .ok()
+                            .and_then(|size| usize::try_from(size).ok())
+                    } else {
+                        None
+                    }
+                });
+
+                let maximum_delay = self.storage.query_pairs().find_map(|(k, v)| {
+                    if k == "batch_max_delay" {
+                        human_units::Duration::from_str(v.as_ref())
+                            .map(|duration| duration.0)
+                            .inspect_err(|err| warn!(storage = %self.storage, v = v.as_ref(), ?err))
+                            .ok()
+                    } else {
+                        None
+                    }
+                });
+
+                debug!(?minimum_size, ?maximum_delay);
 
                 AmazonS3Builder::from_env()
                     .with_bucket_name(bucket_name)
@@ -1727,17 +2310,82 @@ impl Builder<i32, String, Url, Url> {
                             .schemas(self.schema_registry)
                             .lake(self.lake_house.clone())
                     })
-                    .map(StorageContainer::DynoStore)
+                    .map(|storage| {
+                        ProduceRequestBatcher::new(storage)
+                            .with_minimum_size(minimum_size)
+                            .with_maximum_delay(maximum_delay)
+                    })
+                    .map(|storage| Box::new(storage) as Box<dyn Storage>)
+                    .map(Arc::new)
                     .map_err(Into::into)
             }
 
             #[cfg(feature = "dynostore")]
-            "memory" => Ok(StorageContainer::DynoStore(
+            "gs" => {
+                use std::num::NonZeroU32;
+
+                use object_store::gcp::GoogleCloudStorageBuilder;
+
+                use crate::{batch::ProduceRequestBatcher, gcs::limit::PutRateLimiter};
+
+                let bucket_name = self.storage.host_str().unwrap_or("tansu");
+
+                let minimum_size = self.storage.query_pairs().find_map(|(k, v)| {
+                    if k == "batch_min_size" {
+                        human_units::Size::from_str(v.as_ref())
+                            .map(|size| size.0)
+                            .inspect_err(|err| warn!(storage = %self.storage, v = v.as_ref(), ?err))
+                            .ok()
+                            .and_then(|size| usize::try_from(size).ok())
+                    } else {
+                        None
+                    }
+                });
+
+                let maximum_delay = self.storage.query_pairs().find_map(|(k, v)| {
+                    if k == "batch_max_delay" {
+                        human_units::Duration::from_str(v.as_ref())
+                            .map(|duration| duration.0)
+                            .inspect_err(|err| warn!(storage = %self.storage, v = v.as_ref(), ?err))
+                            .ok()
+                    } else {
+                        None
+                    }
+                });
+
+                GoogleCloudStorageBuilder::from_env()
+                    .with_bucket_name(bucket_name)
+                    .build()
+                    .map(|object_store| {
+                        PutRateLimiter::new(object_store, Duration::from_mins(5))
+                            .with_rate_per_second(NonZeroU32::new(1))
+                            .with_jitter(Some(Duration::from_millis(50)))
+                    })
+                    .map(|object_store| {
+                        DynoStore::new(self.cluster_id.as_str(), self.node_id, object_store)
+                            .advertised_listener(self.advertised_listener.clone())
+                            .schemas(self.schema_registry)
+                            .lake(self.lake_house.clone())
+                    })
+                    .map(|storage| {
+                        ProduceRequestBatcher::new(storage)
+                            .with_minimum_size(minimum_size)
+                            .with_maximum_delay(maximum_delay)
+                    })
+                    .map(|storage| Box::new(storage) as Box<dyn Storage>)
+                    .map(Arc::new)
+                    .map_err(Into::into)
+            }
+
+            #[cfg(feature = "dynostore")]
+            "memory" => Ok(
                 DynoStore::new(self.cluster_id.as_str(), self.node_id, InMemory::new())
                     .advertised_listener(self.advertised_listener.clone())
                     .schemas(self.schema_registry)
                     .lake(self.lake_house.clone()),
-            )),
+            )
+            .map(|storage| Box::new(storage) as Box<dyn Storage>)
+            .map(Arc::new),
 
             #[cfg(not(feature = "dynostore"))]
             "s3" | "memory" => Err(Error::FeatureNotEnabled {
@@ -1746,17 +2394,18 @@ impl Builder<i32, String, Url, Url> {
             }),
 
             #[cfg(feature = "libsql")]
-            "sqlite" => lite::Engine::builder()
-                .storage(self.storage.clone())
-                .node(self.node_id)
-                .cluster(self.cluster_id.clone())
-                .advertised_listener(self.advertised_listener.clone())
-                .schemas(self.schema_registry)
-                .lake(self.lake_house.clone())
-                .cancellation(self.cancellation.clone())
-                .build()
-                .await
-                .map(StorageContainer::Lite),
+            "sqlite" => {
+                lite::Engine::builder()
+                    .storage(self.storage.clone())
+                    .node(self.node_id)
+                    .cluster(self.cluster_id.clone())
+                    .advertised_listener(self.advertised_listener.clone())
+                    .schemas(self.schema_registry)
+                    .lake(self.lake_house.clone())
+                    .cancellation(self.cancellation.clone())
+                    .build()
+                    .await
+            }
 
             #[cfg(not(feature = "libsql"))]
             "sqlite" => Err(Error::FeatureNotEnabled {
@@ -1805,7 +2454,8 @@ impl Builder<i32, String, Url, Url> {
                             .lake(self.lake_house)
                             .build()
                     })
-                    .map(StorageContainer::Slate)
+                    .map(|storage| Box::new(storage) as Box<dyn Storage>)
+                    .map(Arc::new)
                     .map_err(Into::into)
             }
 
@@ -1825,7 +2475,8 @@ impl Builder<i32, String, Url, Url> {
                 .lake(self.lake_house.clone())
                 .build()
                 .await
-                .map(StorageContainer::Turso),
+                .map(|storage| Box::new(storage) as Box<dyn Storage>)
+                .map(Arc::new),
 
             #[cfg(not(feature = "turso"))]
             "turso" => Err(Error::FeatureNotEnabled {
@@ -1833,11 +2484,13 @@ impl Builder<i32, String, Url, Url> {
                 message: self.storage.to_string(),
             }),
 
-            "null" => Ok(StorageContainer::Null(null::Engine::new(
+            "null" => Ok(null::Engine::new(
                 self.cluster_id.clone(),
                 self.node_id,
                 self.advertised_listener.clone(),
-            ))),
+            ))
+            .map(|storage| Box::new(storage) as Box<dyn Storage>)
+            .map(Arc::new),
 
             #[cfg(not(any(
                 feature = "dynostore",
@@ -1846,11 +2499,13 @@ impl Builder<i32, String, Url, Url> {
                 feature = "slatedb",
                 feature = "turso"
             )))]
-            _storage => Ok(StorageContainer::Null(null::Engine::new(
+            _storage => Ok(null::Engine::new(
                 self.cluster_id.clone(),
                 self.node_id,
                 self.advertised_listener.clone(),
-            ))),
+            ))
+            .map(|storage| Box::new(storage) as Box<dyn Storage>)
+            .map(Arc::new),
 
             #[cfg(any(
                 feature = "dynostore",
@@ -1910,6 +2565,14 @@ static STORAGE_CONTAINER_ERRORS: LazyLock<Counter<u64>> = LazyLock::new(|| {
         .with_description("tansu storage container errors")
         .build()
 });
+
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ScramCredential {
+    pub salt: Bytes,
+    pub iterations: i32,
+    pub stored_key: Bytes,
+    pub server_key: Bytes,
+}
 
 #[async_trait]
 impl Storage for StorageContainer {
@@ -2932,6 +3595,106 @@ impl Storage for StorageContainer {
 
             #[cfg(feature = "turso")]
             Self::Turso(engine) => engine.advertised_listener().await,
+        }
+    }
+
+    async fn delete_user_scram_credential(
+        &self,
+        user: &str,
+        mechanism: ScramMechanism,
+    ) -> Result<()> {
+        match self {
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.delete_user_scram_credential(user, mechanism).await,
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.delete_user_scram_credential(user, mechanism).await,
+
+            Self::Null(engine) => engine.delete_user_scram_credential(user, mechanism).await,
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.delete_user_scram_credential(user, mechanism).await,
+
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.delete_user_scram_credential(user, mechanism).await,
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.delete_user_scram_credential(user, mechanism).await,
+        }
+    }
+
+    async fn upsert_user_scram_credential(
+        &self,
+        user: &str,
+        mechanism: ScramMechanism,
+        credential: ScramCredential,
+    ) -> Result<()> {
+        match self {
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => {
+                engine
+                    .upsert_user_scram_credential(user, mechanism, credential)
+                    .await
+            }
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => {
+                engine
+                    .upsert_user_scram_credential(user, mechanism, credential)
+                    .await
+            }
+
+            Self::Null(engine) => {
+                engine
+                    .upsert_user_scram_credential(user, mechanism, credential)
+                    .await
+            }
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => {
+                engine
+                    .upsert_user_scram_credential(user, mechanism, credential)
+                    .await
+            }
+
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => {
+                engine
+                    .upsert_user_scram_credential(user, mechanism, credential)
+                    .await
+            }
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => {
+                engine
+                    .upsert_user_scram_credential(user, mechanism, credential)
+                    .await
+            }
+        }
+    }
+
+    async fn user_scram_credential(
+        &self,
+        user: &str,
+        mechanism: ScramMechanism,
+    ) -> Result<Option<ScramCredential>> {
+        match self {
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.user_scram_credential(user, mechanism).await,
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.user_scram_credential(user, mechanism).await,
+
+            Self::Null(engine) => engine.user_scram_credential(user, mechanism).await,
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.user_scram_credential(user, mechanism).await,
+
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.user_scram_credential(user, mechanism).await,
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.user_scram_credential(user, mechanism).await,
         }
     }
 

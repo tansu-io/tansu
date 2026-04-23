@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,11 +22,11 @@ use std::{
 };
 
 use async_trait::async_trait;
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{Bytes, BytesMut};
 use serde::Serialize;
 use tansu_sans_io::{
-    BatchAttribute, ConfigResource, ConfigSource, ControlBatch, Encoder, EndTransactionMarker,
-    ErrorCode, IsolationLevel, ListOffset, OpType,
+    BatchAttribute, ConfigResource, ConfigSource, ControlBatch, EndTransactionMarker, ErrorCode,
+    IsolationLevel, ListOffset, OpType, ScramMechanism,
     add_partitions_to_txn_response::{
         AddPartitionsToTxnPartitionResult, AddPartitionsToTxnTopicResult,
     },
@@ -44,6 +44,7 @@ use tansu_sans_io::{
     list_groups_response::ListedGroup,
     metadata_response::{MetadataResponseBroker, MetadataResponsePartition, MetadataResponseTopic},
     record::{Record, deflated::Batch, inflated::Batch as InflatedBatch},
+    ser::RecordBatchEncoder,
     to_system_time,
     txn_offset_commit_response::{TxnOffsetCommitResponsePartition, TxnOffsetCommitResponseTopic},
 };
@@ -54,7 +55,7 @@ use uuid::Uuid;
 use crate::{
     BrokerRegistrationRequest, Error, GroupDetail, ListOffsetResponse, MetadataResponse,
     NULL_TOPIC_ID, NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse, Result,
-    Storage, TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse,
+    ScramCredential, Storage, TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse,
     TxnOffsetCommitRequest, TxnState, UpdateError, Version,
 };
 
@@ -622,11 +623,10 @@ impl Storage for Engine {
         debug!(?watermark);
 
         let encoded = {
-            let mut writer = BytesMut::new().writer();
-            let mut encoder = Encoder::new(&mut writer);
+            let mut encoder = RecordBatchEncoder::new(BytesMut::new());
             deflated.serialize(&mut encoder)?;
 
-            Bytes::from(writer.into_inner())
+            Bytes::from(encoder)
         };
 
         let batch_key =
@@ -1530,7 +1530,7 @@ impl Storage for Engine {
             if version.is_some_and(|v| v != current.version) {
                 tx.rollback();
                 return Err(UpdateError::Outdated {
-                    current: current.detail,
+                    current: Box::new(current.detail),
                     version: current.version,
                 });
             }
@@ -1642,10 +1642,9 @@ impl Storage for Engine {
 
                             // Encode and store the batch
                             let encoded = {
-                                let mut writer = BytesMut::new().writer();
-                                let mut encoder = Encoder::new(&mut writer);
+                                let mut encoder = RecordBatchEncoder::new(BytesMut::new());
                                 batch.serialize(&mut encoder)?;
-                                Bytes::from(writer.into_inner())
+                                Bytes::from(encoder)
                             };
 
                             let batch_key = postcard::to_stdvec(&BatchKey::new(
@@ -2210,10 +2209,9 @@ impl Storage for Engine {
 
                 // Encode and store the batch
                 let encoded = {
-                    let mut writer = BytesMut::new().writer();
-                    let mut encoder = Encoder::new(&mut writer);
+                    let mut encoder = RecordBatchEncoder::new(BytesMut::new());
                     batch.serialize(&mut encoder)?;
-                    Bytes::from(writer.into_inner())
+                    Bytes::from(encoder)
                 };
 
                 let batch_key =
@@ -2374,6 +2372,31 @@ impl Storage for Engine {
 
     async fn advertised_listener(&self) -> Result<url::Url> {
         Ok(self.advertised_listener.clone())
+    }
+
+    async fn delete_user_scram_credential(
+        &self,
+        _user: &str,
+        _mechanism: ScramMechanism,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    async fn upsert_user_scram_credential(
+        &self,
+        _user: &str,
+        _mechanism: ScramMechanism,
+        _credential: ScramCredential,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    async fn user_scram_credential(
+        &self,
+        _user: &str,
+        _mechanism: ScramMechanism,
+    ) -> Result<Option<ScramCredential>> {
+        Ok(None)
     }
 
     async fn ping(&self) -> Result<()> {
