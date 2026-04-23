@@ -336,7 +336,7 @@ impl Delta {
         let table = match CreateBuilder::new()
             .with_location(table_url.to_string())
             .with_save_mode(SaveMode::Ignore)
-            .with_columns(columns.into_iter().chain(generated_columns.into_iter()))
+            .with_columns(columns.into_iter().chain(generated_columns))
             .with_partition_columns(config.partition())
             .await
             .inspect(|table| debug!(?table))
@@ -455,7 +455,7 @@ impl Delta {
         // Write using WriteBuilder
         let snapshot = table.snapshot().ok().map(|s| s.snapshot().clone());
         let table = WriteBuilder::new(table.log_store(), snapshot)
-            .with_input_batches(batches_with_generated.into_iter())
+            .with_input_batches(batches_with_generated)
             .await
             .inspect_err(|err| debug!(?err))
             .inspect(|table| {
@@ -660,7 +660,7 @@ impl Delta {
         } else {
             table
                 .add_columns()
-                .with_fields(additional.into_iter())
+                .with_fields(additional)
                 .await
                 .map_err(Into::into)
         }
