@@ -13,35 +13,28 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
--- prepare record_fetch_keyed (text, text, integer, integer, integer, integer, bytea) as
-with sized as (
-select
-
-r.offset_id,
-r.attributes,
-r.timestamp,
-r.k,
-r.v,
-sum(coalesce(length(r.k), 0) + coalesce(length(r.v), 0)) over (order by r.offset_id) as bytes,
-r.producer_id,
-r.producer_epoch,
-r.transaction_id < pg_snapshot_xmin(pg_current_snapshot())
+select t.uuid, t.name, is_internal, partitions, replication_factor
 
 from
 
 cluster c
 join topic t on t.cluster = c.id
-join topition tp on tp.topic = t.id
-join record r on r.topition = tp.id
 
 where
 
 c.name = $1
-and t.name = $2
-and tp.partition = $3
-and r.offset_id >= $4
--- and r.transaction_id < pg_snapshot_xmin(pg_current_snapshot())
-and r.offset_id < $6
-and r.k = convert_to($7, 'UTF-8'))
+and t.uuid = $2
 
-select * from sized where bytes < $5;
+union
+
+select vt.uuid, t.name || '/' || convert_from(vt.k, 'UTF-8'), t.is_internal, t.partitions, t.replication_factor
+
+from
+cluster c
+join topic t on t.cluster = c.id
+join virtual_topic vt on vt.topic = t.id
+
+where
+
+c.name = $1
+and vt.uuid = $2

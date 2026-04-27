@@ -1,4 +1,3 @@
--- -*- mode: sql; sql-product: postgres; -*-
 -- Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 --
 -- Licensed under the Apache License, Version 2.0 (the "License");
@@ -13,28 +12,12 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-select t.uuid, t.name, is_internal, partitions, replication_factor
-
-from
-
-cluster c
-join topic t on t.cluster = c.id
-
-where
-
-c.name = $1
-and t.uuid = $2
-
-union
-
-select vt.uuid, t.name || '/' || vt.k, t.is_internal, t.partitions, t.replication_factor
-
-from
-cluster c
-join topic t on t.cluster = c.id
-join virtual_topic vt on vt.topic = t.id
-
-where
-
-c.name = $1
-and vt.uuid = $2
+create table if not exists virtual_topic (
+    id integer primary key autoincrement,
+    topic integer references topic (id) on delete cascade,
+    k blob,
+    uuid text not null unique,
+    last_updated datetime default current_timestamp not null,
+    created_at datetime default current_timestamp not null,
+    unique(topic, k)
+);
