@@ -42,6 +42,6 @@ and tp.partition = $3
 and r.offset_id >= $4
 -- and r.transaction_id < pg_snapshot_xmin(pg_current_snapshot())
 and r.offset_id < $6
-and r.k = $7)
+and r.k = convert_to($7, 'UTF-8'))
 
 select * from sized where bytes < $5;

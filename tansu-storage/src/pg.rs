@@ -1838,7 +1838,7 @@ impl Storage for Postgres {
                     &offset,
                     &(max_bytes as i64),
                     &high_watermark,
-                    &key.as_bytes(),
+                    &key,
                 ],
             )
             .await
@@ -2036,6 +2036,8 @@ impl Storage for Postgres {
         }
 
         tx.commit().await?;
+
+        debug!(batches_len = batches.len());
 
         Ok(batches)
     }
