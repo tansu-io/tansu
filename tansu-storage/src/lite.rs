@@ -3960,14 +3960,14 @@ impl Storage for Delegate {
                     .await
                     .inspect_err(|err| error!(?err, group_id))?
                 {
-                    let value = row
+                    let current = row
                         .get_str(1)
                         .map_err(Error::from)
-                        .map(serde_json::Value::from)
+                        .and_then(|s| {
+                            serde_json::from_str::<GroupDetail>(s).map_err(Into::into)
+                        })
+                        .inspect(|current| debug!(?current))
                         .inspect_err(|err| error!(?err, group_id))?;
-
-                    let current = serde_json::from_value::<GroupDetail>(value)
-                        .inspect(|current| debug!(?current))?;
 
                     results.push(NamedGroupDetail::found(group_id.into(), current));
                 } else {
