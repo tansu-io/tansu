@@ -8562,6 +8562,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "slatedb",
+ "snap",
  "tansu-sans-io",
  "tansu-schema",
  "tempfile",
