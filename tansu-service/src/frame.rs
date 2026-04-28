@@ -234,7 +234,7 @@ impl<S> Layer<S> for BytesFrameLayer {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 struct AuthenticationFrame {
     authentication: Authentication,
     v0: Arc<Mutex<Option<bool>>>,

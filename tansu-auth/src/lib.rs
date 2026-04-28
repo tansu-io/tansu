@@ -76,8 +76,9 @@ impl From<SessionError> for Error {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct Authentication {
+    config: Arc<SASLConfig>,
     stage: Arc<Mutex<Option<Stage>>>,
 }
 
@@ -95,10 +96,10 @@ impl Debug for Stage {
 
 impl Authentication {
     pub fn server(config: Arc<SASLConfig>) -> Self {
+        let server = SASLServer::<Justification>::new(config.clone());
         Self {
-            stage: Arc::new(Mutex::new(Some(Stage::Server(
-                SASLServer::<Justification>::new(config),
-            )))),
+            config,
+            stage: Arc::new(Mutex::new(Some(Stage::Server(server)))),
         }
     }
 
@@ -108,6 +109,16 @@ impl Authentication {
             .map(|guard| matches!(guard.as_ref(), Some(Stage::Finished(_))))
             .ok()
             .unwrap_or_default()
+    }
+
+    /// Build a fresh `Stage::Server` from the stored config. Used by
+    /// the SASL handshake handler to support re-authentication
+    /// (KIP-368): a client periodically issues a new SaslHandshake on
+    /// an existing connection, and the broker must be willing to
+    /// initiate a new SASL exchange even though the previous one
+    /// already succeeded.
+    pub fn fresh_server(&self) -> Stage {
+        Stage::Server(SASLServer::<Justification>::new(self.config.clone()))
     }
 }
 
