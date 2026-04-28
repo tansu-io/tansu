@@ -71,6 +71,7 @@ assert_matches.workspace = true
 criterion.workspace = true
 dotenv.workspace = true
 pretty_assertions.workspace = true
+snap.workspace = true
 tansu-schema.workspace = true
 tempfile.workspace = true
 time.workspace = true

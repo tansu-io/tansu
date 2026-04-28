@@ -1511,7 +1511,15 @@ impl Storage for Engine {
                         .inspect_err(|err| error!(?err))?,
                 )
                 .attributes(
-                    row.get_value(1)
+                    // Records are stored decompressed (the produce
+                    // path inflates before insert), so strip the
+                    // compression bits when rebuilding the batch.
+                    // Otherwise the inflated -> deflated conversion at
+                    // the end of fetch blows up, e.g. with
+                    // `UnexpectedType("Snappy")` since
+                    // `tansu_sans_io::record::deflated::into_record_data`
+                    // has no Snappy arm.
+                    (row.get_value(1)
                         .map(|value| {
                             value
                                 .as_integer()
@@ -1519,7 +1527,8 @@ impl Storage for Engine {
                                 .map(|attributes| attributes as i32)
                         })
                         .map(|attributes| attributes.unwrap_or(0))
-                        .inspect_err(|err| error!(?err))? as i16,
+                        .inspect_err(|err| error!(?err))? as i16)
+                        & !0b111,
                 )
                 .base_timestamp(
                     row.get_value(2)
@@ -1549,6 +1558,9 @@ impl Storage for Engine {
                 .last_offset_delta(offset_delta);
 
             while let Some(row) = records.next().await? {
+                // Strip compression bits — see initial-batch comment
+                // above. Masking both sides of the comparison keeps
+                // batch boundary detection consistent.
                 let attributes = row
                     .get_value(1)
                     .map(|value| {
@@ -1558,7 +1570,8 @@ impl Storage for Engine {
                             .map(|attributes| attributes as i16)
                     })
                     .map(|attributes| attributes.unwrap_or(0))
-                    .inspect_err(|err| error!(?err))?;
+                    .inspect_err(|err| error!(?err))?
+                    & !0b111;
 
                 let producer_id = row
                     .get_value(6)

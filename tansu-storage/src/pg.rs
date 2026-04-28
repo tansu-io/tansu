@@ -1850,10 +1850,19 @@ impl Storage for Postgres {
                         .inspect_err(|err| error!(?err))?,
                 )
                 .attributes(
+                    // Records are stored decompressed (the produce
+                    // path inflates before insert), so strip the
+                    // compression bits when rebuilding the batch.
+                    // Otherwise the inflated -> deflated conversion at
+                    // the end of fetch blows up, e.g. with
+                    // `UnexpectedType("Snappy")` since
+                    // `tansu_sans_io::record::deflated::into_record_data`
+                    // has no Snappy arm.
                     first
                         .try_get::<_, Option<i16>>(1)
                         .map(|attributes| attributes.unwrap_or(0))
-                        .inspect_err(|err| error!(?err))?,
+                        .inspect_err(|err| error!(?err))?
+                        & !0b111,
                 )
                 .base_timestamp(
                     first
@@ -1878,10 +1887,14 @@ impl Storage for Postgres {
             let mut previous_offset = None;
 
             for record in records.iter() {
+                // Strip compression bits — see initial-batch comment
+                // above. Masking both sides of the comparison keeps
+                // batch boundary detection consistent.
                 let attributes = record
                     .try_get::<_, Option<i16>>(1)
                     .map(|attributes| attributes.unwrap_or(0))
-                    .inspect_err(|err| error!(?err))?;
+                    .inspect_err(|err| error!(?err))?
+                    & !0b111;
 
                 let producer_id = record
                     .try_get::<_, Option<i64>>(6)
