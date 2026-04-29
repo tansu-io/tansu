@@ -614,7 +614,13 @@ mod tests {
             Compression::try_from(decoded.attributes)?
         );
 
-        let inflated = crate::record::inflated::Batch::try_from(decoded.clone())?;
+        let mut inflated = crate::record::inflated::Batch::try_from(decoded.clone())
+            .inspect(|inflated| debug!(?inflated))?;
+
+        assert_eq!(
+            Compression::None,
+            Compression::try_from(inflated.attributes)?
+        );
 
         assert_eq!(
             vec![Record {
@@ -628,6 +634,9 @@ mod tests {
             }],
             inflated.records
         );
+
+        inflated.attributes = BatchAttribute::try_from(inflated.attributes)
+            .map(|attribute| attribute.compression(Compression::Gzip).into())?;
 
         let deflated = Batch::try_from(inflated)?;
         assert_eq!(decoded.base_offset, deflated.base_offset);
@@ -692,7 +701,12 @@ mod tests {
             Compression::try_from(decoded.attributes)?
         );
 
-        let inflated = crate::record::inflated::Batch::try_from(decoded.clone())?;
+        let mut inflated = crate::record::inflated::Batch::try_from(decoded.clone())?;
+
+        assert_eq!(
+            Compression::None,
+            Compression::try_from(inflated.attributes)?
+        );
 
         assert_eq!(
             vec![Record {
@@ -706,6 +720,9 @@ mod tests {
             }],
             inflated.records
         );
+
+        inflated.attributes = BatchAttribute::try_from(inflated.attributes)
+            .map(|attribute| attribute.compression(Compression::Zstd).into())?;
 
         let deflated = Batch::try_from(inflated)?;
         assert_eq!(decoded.base_offset, deflated.base_offset);
@@ -774,7 +791,12 @@ mod tests {
         let decoded = Batch::deserialize(decoder)?;
         assert_eq!(Compression::Lz4, Compression::try_from(decoded.attributes)?);
 
-        let inflated = crate::record::inflated::Batch::try_from(decoded.clone())?;
+        let mut inflated = crate::record::inflated::Batch::try_from(decoded.clone())?;
+
+        assert_eq!(
+            Compression::None,
+            Compression::try_from(inflated.attributes)?
+        );
 
         assert_eq!(
             vec![Record {
@@ -788,6 +810,9 @@ mod tests {
             }],
             inflated.records
         );
+
+        inflated.attributes = BatchAttribute::try_from(inflated.attributes)
+            .map(|attribute| attribute.compression(Compression::Lz4).into())?;
 
         let deflated = Batch::try_from(inflated)?;
         assert_eq!(decoded.base_offset, deflated.base_offset);
