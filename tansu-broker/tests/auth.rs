@@ -194,6 +194,141 @@ async fn auth_handshake_scram_256_v1() -> Result<()> {
     Ok(())
 }
 
+/// Regression: a successful SASL handshake + authenticate must not
+/// prevent a subsequent re-authentication on the same connection
+/// (KIP-368, used by Java kafka-clients, Strimzi Kafka Connect, etc).
+///
+/// Pre-fix the second `SaslHandshakeRequest` failed with
+/// `UnsupportedSaslMechanism` because `Authentication`'s Stage had
+/// transitioned `Server -> Session -> Finished` and never reset.
+#[tokio::test]
+async fn auth_handshake_scram_256_v1_reauth() -> Result<()> {
+    let _guard = init_tracing()?;
+
+    const PRINCIPAL: &str = "alice";
+    const PASSWORD: &str = "secret";
+    const CLIENT_ID: &str = "rdkafka";
+
+    let engine = Engine::default().with_credential(
+        PRINCIPAL,
+        ScramMechanism::Scram256,
+        ScramCredential {
+            salt: Bytes::from_static(&[
+                107, 53, 50, 116, 97, 121, 49, 118, 118, 116, 105, 97, 53, 101, 54, 108, 99, 51,
+                55, 103, 110, 51, 102, 51, 104,
+            ]),
+            iterations: 8192,
+            stored_key: Bytes::from_static(&[
+                150, 254, 7, 121, 81, 205, 192, 207, 60, 206, 251, 24, 31, 131, 31, 15, 96, 75, 20,
+                228, 251, 132, 22, 235, 160, 72, 200, 130, 127, 49, 29, 150,
+            ]),
+            server_key: Bytes::from_static(&[
+                186, 175, 253, 227, 176, 106, 88, 53, 186, 173, 104, 88, 94, 40, 115, 166, 44, 183,
+                199, 177, 137, 41, 225, 132, 56, 32, 70, 255, 223, 209, 22, 146,
+            ]),
+        },
+    );
+
+    let broker = tansu_auth::configuration(engine.clone())
+        .map_err(Into::into)
+        .map(Some)
+        .and_then(|sasl_config| broker(engine, sasl_config))?;
+
+    const API_VERSION: i16 = 1;
+    let ctx = Context::default();
+    let mut correlation_id = 0;
+
+    // Run a full handshake + authenticate twice on the same broker
+    // (i.e. same `Authentication` shared via the BytesFrameLayer).
+    for round in 0..2 {
+        let response = broker
+            .serve(
+                ctx.clone(),
+                Frame::request(
+                    Header::Request {
+                        api_key: SaslHandshakeRequest::KEY,
+                        api_version: API_VERSION,
+                        correlation_id,
+                        client_id: Some(CLIENT_ID.into()),
+                    },
+                    Body::SaslHandshakeRequest(
+                        SaslHandshakeRequest::default().mechanism("SCRAM-SHA-256".into()),
+                    ),
+                )?,
+            )
+            .await?;
+
+        let response =
+            Frame::response_from_bytes(response, SaslHandshakeResponse::KEY, API_VERSION)
+                .and_then(|response| SaslHandshakeResponse::try_from(response.body))?;
+        debug!(round, ?response);
+        assert_eq!(
+            ErrorCode::None,
+            ErrorCode::try_from(response.error_code)?,
+            "SaslHandshake (round {round}) must succeed; pre-fix the second one returns \
+             UnsupportedSaslMechanism because Stage was already Finished",
+        );
+
+        let offered = response
+            .mechanisms
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|mechanism| Mechname::parse(mechanism.as_bytes()).ok())
+            .collect::<Vec<_>>();
+
+        let sasl = SASLClient::new(
+            SASLConfig::with_credentials(None, PRINCIPAL.into(), PASSWORD.into())
+                .expect("sasl credential config"),
+        );
+
+        let mut session = sasl.start_suggested(&offered).unwrap();
+        assert!(session.are_we_first());
+        let mut input = None;
+
+        loop {
+            correlation_id += 1;
+            let mut output = BytesMut::new().writer();
+
+            match session.step(input.as_deref(), &mut output).unwrap() {
+                State::Running => {
+                    let response = broker
+                        .serve(
+                            ctx.clone(),
+                            Frame::request(
+                                Header::Request {
+                                    api_key: SaslAuthenticateRequest::KEY,
+                                    api_version: API_VERSION,
+                                    correlation_id,
+                                    client_id: Some(CLIENT_ID.into()),
+                                },
+                                Body::SaslAuthenticateRequest(
+                                    SaslAuthenticateRequest::default()
+                                        .auth_bytes(Bytes::from(output.into_inner())),
+                                ),
+                            )?,
+                        )
+                        .await?;
+
+                    let response = Frame::response_from_bytes(
+                        response,
+                        SaslAuthenticateResponse::KEY,
+                        API_VERSION,
+                    )
+                    .and_then(|response| SaslAuthenticateResponse::try_from(response.body))?;
+                    debug!(round, ?response);
+                    assert_eq!(ErrorCode::None, ErrorCode::try_from(response.error_code)?);
+                    input = Some(response.auth_bytes);
+                }
+                State::Finished(_) => break,
+            }
+        }
+        correlation_id += 1;
+    }
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn auth_handshake_scram_512_v1() -> Result<()> {
     let _guard = init_tracing()?;

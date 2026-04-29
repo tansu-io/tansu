@@ -43,9 +43,20 @@ where
             .lock()
             .map_err(Into::into)
             .and_then(|mut guard| {
-                if let Some(Stage::Server(server)) = guard.take()
-                    && let Ok(mechanism) = Mechname::parse(req.mechanism.as_bytes())
-                {
+                // Re-authentication (KIP-368): a Java kafka-clients
+                // connection periodically issues another SaslHandshake
+                // on the same TCP socket. The previous handshake left
+                // the Stage in `Session`/`Finished`, so a stale
+                // `take()` would fall into the else branch and reject
+                // a perfectly valid mechanism with
+                // `UnsupportedSaslMechanism`. Always start with a
+                // fresh `SASLServer` built from the stored config.
+                if guard.as_ref().is_none_or(|guard|!matches!(guard, Stage::Server(_))) {
+                    debug!(?guard);
+                    _ = guard.replace(authentication.fresh_server());
+                }
+
+                if let Some(Stage::Server(server)) = guard.take() && let Ok(mechanism) = Mechname::parse(req.mechanism.as_bytes()) {
                     debug!(available = ?server.get_available().into_iter().map(|mechanism|mechanism.mechanism.as_str()).collect::<Vec<_>>());
 
                     server
