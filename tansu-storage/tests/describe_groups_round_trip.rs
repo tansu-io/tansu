@@ -24,7 +24,7 @@
 
 mod common;
 
-use std::{sync::Arc, thread};
+use std::{slice::from_ref, sync::Arc, thread};
 
 use rand::{prelude::*, rng};
 use tansu_storage::{BrokerRegistrationRequest, GroupDetail, Storage, StorageContainer};
@@ -90,7 +90,7 @@ async fn round_trip(scheme: &str) -> Result<(), Error> {
         .map_err(|err| Error::Message(format!("update_group: {err:?}")))?;
 
     let described = storage
-        .describe_groups(Some(&[group_id.clone()]), false)
+        .describe_groups(Some(from_ref(&group_id)), false)
         .await?;
 
     assert_eq!(1, described.len(), "describe_groups must return one entry");
