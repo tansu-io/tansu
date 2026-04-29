@@ -2918,9 +2918,7 @@ impl Storage for Engine {
                                 .cloned()
                                 .ok_or(Error::UnexpectedValue(value.clone()))
                         })
-                        .and_then(|s| {
-                            serde_json::from_str::<GroupDetail>(&s).map_err(Into::into)
-                        })
+                        .and_then(|s| serde_json::from_str::<GroupDetail>(&s).map_err(Into::into))
                         .inspect(|current| debug!(?current))
                         .inspect_err(|err| error!(?err, group_id))?;
 
@@ -3045,9 +3043,7 @@ impl Storage for Engine {
                         .as_text()
                         .map(|v| v.as_str())
                         .ok_or(Error::UnexpectedValue(value.clone()))
-                        .and_then(|s| {
-                            serde_json::from_str::<GroupDetail>(s).map_err(Into::into)
-                        })
+                        .and_then(|s| serde_json::from_str::<GroupDetail>(s).map_err(Into::into))
                 })
                 .inspect(|current| debug!(?current))
                 .map(Box::new)?;

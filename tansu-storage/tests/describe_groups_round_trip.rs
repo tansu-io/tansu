@@ -27,9 +27,7 @@ mod common;
 use std::{sync::Arc, thread};
 
 use rand::{prelude::*, rng};
-use tansu_storage::{
-    BrokerRegistrationRequest, GroupDetail, Storage, StorageContainer,
-};
+use tansu_storage::{BrokerRegistrationRequest, GroupDetail, Storage, StorageContainer};
 use tracing::debug;
 use url::Url;
 use uuid::Uuid;

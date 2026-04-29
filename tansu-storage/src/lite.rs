@@ -3963,9 +3963,7 @@ impl Storage for Delegate {
                     let current = row
                         .get_str(1)
                         .map_err(Error::from)
-                        .and_then(|s| {
-                            serde_json::from_str::<GroupDetail>(s).map_err(Into::into)
-                        })
+                        .and_then(|s| serde_json::from_str::<GroupDetail>(s).map_err(Into::into))
                         .inspect(|current| debug!(?current))
                         .inspect_err(|err| error!(?err, group_id))?;
 
