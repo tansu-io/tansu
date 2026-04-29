@@ -117,6 +117,7 @@
 //! map from the [Serde Data Model](https://serde.rs/data-model.html) to the Kafka protocol or vice versa.
 
 pub mod acl;
+pub mod consumer;
 pub mod de;
 pub mod primitive;
 pub mod record;
@@ -326,6 +327,7 @@ pub enum Error {
     EnvVar(VarError),
     FromUtf8(string::FromUtf8Error),
     InvalidAckValue(i16),
+    InvalidConsumerProtocolSubscriptionVersion(i16),
     InvalidCoordinatorType(i8),
     InvalidIsolationLevel(i8),
     InvalidOpType(i8),
@@ -351,6 +353,7 @@ pub enum Error {
     TryGet(Arc<TryGetError>),
     UnexpectedType(String),
     UnknownApiErrorCode(i16),
+    UnknownAssignor(String),
     UnknownCompressionType(i16),
     UnknownScramMechanism(i8),
     UnknownContainer,
