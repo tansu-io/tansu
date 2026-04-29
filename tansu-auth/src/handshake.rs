@@ -51,12 +51,12 @@ where
                 // a perfectly valid mechanism with
                 // `UnsupportedSaslMechanism`. Always start with a
                 // fresh `SASLServer` built from the stored config.
-                _ = guard.take();
-                let Stage::Server(server) = authentication.fresh_server() else {
-                    unreachable!("fresh_server returns Stage::Server")
-                };
+                if guard.as_ref().is_none_or(|guard|!matches!(guard, Stage::Server(_))) {
+                    debug!(?guard);
+                    _ = guard.replace(authentication.fresh_server());
+                }
 
-                if let Ok(mechanism) = Mechname::parse(req.mechanism.as_bytes()) {
+                if let Some(Stage::Server(server)) = guard.take() && let Ok(mechanism) = Mechname::parse(req.mechanism.as_bytes()) {
                     debug!(available = ?server.get_available().into_iter().map(|mechanism|mechanism.mechanism.as_str()).collect::<Vec<_>>());
 
                     server
