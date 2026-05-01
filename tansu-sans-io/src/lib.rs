@@ -2303,6 +2303,28 @@ mod tests {
             i16::from(BatchAttribute::default().delete_horizon(true))
         );
     }
+
+    #[test]
+    fn reset_compression() -> Result<()> {
+        let mut attribute: i16 = BatchAttribute::default()
+            .compression(Compression::Gzip)
+            .into();
+
+        assert_eq!(
+            Compression::Gzip,
+            BatchAttribute::try_from(attribute).map(|attribute| attribute.compression)?
+        );
+
+        attribute = BatchAttribute::try_from(attribute)
+            .map(|attribute| attribute.compression(Compression::None).into())?;
+
+        assert_eq!(
+            Compression::None,
+            BatchAttribute::try_from(attribute).map(|attribute| attribute.compression)?
+        );
+
+        Ok(())
+    }
 }
 
 include!(concat!(env!("OUT_DIR"), "/generate.rs"));

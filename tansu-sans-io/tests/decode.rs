@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -5820,7 +5820,7 @@ sunt\x01uXculpa qui officia deser\x01\x1e\x1cmollit a!!<id est laborum.\0");
             partition_leader_epoch: -1,
             magic: 2,
             crc: 137053011,
-            attributes: 2,
+            attributes: 0,
             last_offset_delta: 0,
             base_timestamp: 1728396971494,
             max_timestamp: 1728396971494,
@@ -5947,7 +5947,7 @@ sun\x05uXculpa qui officia deser\x01\x1e\x0cmoll!\x93!!<id est laborum.\0",
             partition_leader_epoch: 0,
             magic: 2,
             crc: 658016223,
-            attributes: 2,
+            attributes: 0,
             last_offset_delta: 0,
             base_timestamp: 1728398664438,
             max_timestamp: 1728398664438,

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::{
-    ByteSize, Compression, Error, Result,
+    BatchAttribute, ByteSize, Compression, Error, Result,
     record::{Record, codec::Sequence, deflated},
     ser::RecordBatchEncoder,
     to_timestamp,
@@ -90,7 +90,8 @@ impl TryFrom<deflated::Batch> for Batch {
         let partition_leader_epoch = value.partition_leader_epoch;
         let magic = value.magic;
         let crc = value.crc;
-        let attributes = value.attributes;
+        let attributes =
+            BatchAttribute::try_from(value.attributes).inspect(|attribute| debug!(?attribute))?;
         let last_offset_delta = value.last_offset_delta;
         let base_timestamp = value.base_timestamp;
         let max_timestamp = value.max_timestamp;
@@ -106,7 +107,7 @@ impl TryFrom<deflated::Batch> for Batch {
             partition_leader_epoch,
             magic,
             crc,
-            attributes,
+            attributes: attributes.compression(Compression::None).into(),
             last_offset_delta,
             base_timestamp,
             max_timestamp,
