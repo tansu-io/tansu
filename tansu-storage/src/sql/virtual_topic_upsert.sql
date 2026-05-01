@@ -13,35 +13,20 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
--- prepare record_fetch_keyed (text, text, integer, integer, integer, integer, bytea) as
-with sized as (
-select
+insert into virtual_topic (topic, k, uuid)
 
-r.offset_id,
-r.attributes,
-r.timestamp,
-r.k,
-r.v,
-sum(coalesce(length(r.k), 0) + coalesce(length(r.v), 0)) over (order by r.offset_id) as bytes,
-r.producer_id,
-r.producer_epoch,
-r.transaction_id < pg_snapshot_xmin(pg_current_snapshot())
+select t.id, $3, $4
 
-from
-
-cluster c
+from cluster c
 join topic t on t.cluster = c.id
-join topition tp on tp.topic = t.id
-join record r on r.topition = tp.id
 
-where
-
-c.name = $1
+where c.name = $1
 and t.name = $2
-and tp.partition = $3
-and r.offset_id >= $4
--- and r.transaction_id < pg_snapshot_xmin(pg_current_snapshot())
-and r.offset_id < $6
-and r.k = convert_to($7, 'UTF-8'))
 
-select * from sized where bytes < $5;
+on conflict (topic, k)
+
+do update set
+
+last_updated = excluded.last_updated
+
+returning virtual_topic.uuid;

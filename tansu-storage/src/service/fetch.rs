@@ -126,10 +126,11 @@ impl ApiKey for FetchService {
 
 impl FetchService {
     #[allow(clippy::too_many_arguments)]
+    #[instrument(skip(self, ctx, _max_wait_ms, min_bytes, max_bytes, isolation, fetch_partition), fields(partition = fetch_partition.partition))]
     async fn fetch_partition<G>(
         &self,
         ctx: &Context<G>,
-        max_wait_ms: Duration,
+        _max_wait_ms: Duration,
         min_bytes: u32,
         max_bytes: &mut u32,
         isolation: IsolationLevel,
@@ -139,14 +140,6 @@ impl FetchService {
     where
         G: Storage,
     {
-        debug!(
-            ?max_wait_ms,
-            ?min_bytes,
-            ?max_bytes,
-            ?isolation,
-            ?fetch_partition
-        );
-
         let partition_index = fetch_partition.partition;
         let tp = Topition::new(topic, partition_index);
 
@@ -171,18 +164,22 @@ impl FetchService {
             *max_bytes =
                 u32::try_from(fetched.byte_size()).map(|bytes| max_bytes.saturating_sub(bytes))?;
 
-            offset += fetched
-                .iter()
-                .map(|batch| batch.record_count as i64)
-                .sum::<i64>();
-
             debug!(?offset, ?fetched);
 
             if fetched.is_empty() || fetched.first().is_some_and(|batch| batch.record_count == 0) {
                 break;
-            } else {
-                batches.append(&mut fetched);
             }
+
+            if let Some(latest) = fetched
+                .iter()
+                .map(|batch| batch.base_offset + batch.record_count as i64)
+                .max()
+                .inspect(|latest| debug!(latest))
+            {
+                offset = latest;
+            }
+
+            batches.append(&mut fetched);
         }
 
         let offset_stage = ctx
@@ -240,6 +237,7 @@ impl FetchService {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[instrument(skip_all)]
     async fn fetch_topic<G>(
         &self,
         ctx: &Context<G>,
@@ -253,8 +251,6 @@ impl FetchService {
     where
         G: Storage,
     {
-        debug!(?max_wait_ms, ?min_bytes, ?isolation, ?fetch);
-
         let metadata = ctx.state().metadata(Some(&[fetch.into()])).await?;
 
         if let Some(MetadataResponseTopic {
@@ -290,6 +286,7 @@ impl FetchService {
         }
     }
 
+    #[instrument(skip(self, ctx, isolation, topics))]
     pub(crate) async fn fetch<G>(
         &self,
         ctx: &Context<G>,
@@ -302,7 +299,7 @@ impl FetchService {
     where
         G: Storage,
     {
-        debug!(?max_wait, ?min_bytes, ?isolation, ?topics);
+        debug!(?isolation, ?topics);
 
         if topics.is_empty() {
             Ok(vec![])
@@ -314,7 +311,7 @@ impl FetchService {
             let mut bytes = 0;
 
             while elapsed <= max_wait && bytes <= min_bytes {
-                debug!(?elapsed, ?max_wait, ?bytes, ?min_bytes);
+                debug!(?elapsed, ?bytes);
 
                 let enumerate = topics.iter().enumerate();
                 responses.clear();
