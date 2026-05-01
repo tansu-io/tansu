@@ -117,7 +117,7 @@ docker-compose-up *args:
 docker-compose-down *args:
     docker compose down --remove-orphans --volumes {{ args }}
 
-docker-compose-ps:
+ps:
     docker compose ps
 
 docker-compose-logs *args:
@@ -250,15 +250,16 @@ person-duckdb-parquet: (duckdb-k-unnest-v-parquet "person")
 person-topic-consume:
     kafka-console-consumer \
         --bootstrap-server ${ADVERTISED_LISTENER} \
-        --consumer-property fetch.max.wait.ms=15000 \
-        --group person-consumer-group --topic person \
+        --timeout-ms=15000 \
+        --group person-consumer-group \
+        --topic person \
         --from-beginning \
-        --property print.timestamp=true \
-        --property print.key=true \
-        --property print.offset=true \
-        --property print.partition=true \
-        --property print.headers=true \
-        --property print.value=true
+        --formatter-property print.timestamp=true \
+        --formatter-property print.key=true \
+        --formatter-property print.offset=true \
+        --formatter-property print.partition=true \
+        --formatter-property print.headers=true \
+        --formatter-property print.value=true
 
 # create search topic with etc/schema/search.proto
 search-topic-create: (topic-create "search")
@@ -441,7 +442,11 @@ broker-sqlite-parquet profile="dev": clean-tansu-db clean-lake-dir (build profil
 
 broker-sqlite-delta profile="profiling": docker-compose-down minio-up minio-ready-local minio-local-alias minio-lake-bucket clean-tansu-db (build profile "libsql,delta") (tansu-broker profile "--storage-engine=sqlite://tansu.db" "delta")
 
-broker-sqlite profile="profiling": clean-tansu-db (build profile "libsql") (tansu-broker profile "--silent" "--storage-engine='sqlite://tansu.db?vacuum_into=snapshot.db&maintenance_interval=1m'")
+broker-sqlite profile="profiling": clean-tansu-db (build profile "libsql") (tansu-broker profile "--silent" "--storage-engine=sqlite://tansu.db")
+
+broker-sqlite-existing profile="profiling": (build profile "libsql") (tansu-broker profile "--silent" "--storage-engine=sqlite://tansu.db")
+
+broker-sqlite-no-maintenance profile="profiling": clean-tansu-db (build profile "libsql") (tansu-broker profile "--silent" "--storage-engine='sqlite://tansu.db'")
 
 broker-sqlite-authentication profile="profiling": (build profile "libsql") (tansu-broker profile "--authentication" "--storage-engine=sqlite://tansu.db")
 
@@ -454,6 +459,10 @@ s3-up: docker-compose-down minio-up minio-ready-local minio-local-alias minio-ta
 broker-s3 profile="profiling": (build profile "dynostore") s3-up (tansu-broker profile "--storage-engine=s3://tansu/")
 
 broker-postgres profile="profiling": (build profile "postgres") docker-compose-down db-up (tansu-broker profile "--storage-engine=postgres://postgres:postgres@localhost")
+
+broker-postgres-existing profile="profiling": (build profile "postgres") (tansu-broker profile "--silent" "--storage-engine=postgres://postgres:postgres@localhost")
+
+broker-postgres-local profile="profiling": (build profile "postgres") (tansu-broker profile "--silent" "--storage-engine=postgres://pmorgan@localhost/pmorgan")
 
 broker-postgres-authentication profile="profiling": (build profile "postgres") (tansu-broker profile "--authentication" "--storage-engine=postgres://postgres:postgres@localhost")
 
@@ -571,5 +580,38 @@ producer-perf-1000000: (producer-perf "1000000" "1024" "25000000")
 ps-tansu-rss:
     ps -p $(pgrep tansu) -o rss= | awk '{print $1/1024 " MB"}'
 
-telemetry-topic-create:
-    kafka-topics --bootstrap-server ${ADVERTISED_LISTENER} --config cleanup.policy=compact --partitions=3 --replication-factor=1 --create --topic telemetry
+telemetry-topic-create: (topic-create "telemetry" "--config" "tansu.virtual=true")
+
+telemetry-produce-valid profile="dev":
+    echo '{"key": "SK06 YPM", "value": {"latitude":52.930412156530465,"longitude":-4.894550244518114,"altitude":158.06766871179406}}' | target/{{ replace(profile, "dev", "debug") }}/tansu cat produce telemetry
+
+telemetry-consume:
+    kafka-console-consumer \
+        --bootstrap-server ${ADVERTISED_LISTENER} \
+        --timeout-ms=15000 \
+        --group telemetry-consumer-group \
+        --topic telemetry \
+        --from-beginning \
+        --formatter-property print.timestamp=true \
+        --formatter-property print.key=true \
+        --formatter-property print.offset=true \
+        --formatter-property print.partition=true \
+        --formatter-property print.headers=true \
+        --formatter-property print.value=true
+
+telemetry-vrm-consume vrm="SK06 YPM":
+    kafka-console-consumer \
+        --bootstrap-server ${ADVERTISED_LISTENER} \
+        --timeout-ms=15000 \
+        --group telemetry-sk06-consumer-group \
+        --topic 'telemetry/"{{ vrm }}"' \
+        --from-beginning \
+        --formatter-property print.timestamp=true \
+        --formatter-property print.key=true \
+        --formatter-property print.offset=true \
+        --formatter-property print.partition=true \
+        --formatter-property print.headers=true \
+        --formatter-property print.value=true
+
+postgres-local:
+    LC_ALL="en_US.UTF-8" /opt/homebrew/opt/postgresql@18/bin/postgres -D /opt/homebrew/var/postgresql@18

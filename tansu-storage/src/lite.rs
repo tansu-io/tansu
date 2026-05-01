@@ -1330,6 +1330,63 @@ impl Delegate {
             )
         })
     }
+
+    async fn topic_with_key<'a>(&self, topic: &'a str) -> Result<(&'a str, Option<&'a str>)> {
+        if let Some((base, key)) = topic.split_once('/')
+            && self
+                .describe_config(base, ConfigResource::Topic, None)
+                .await
+                .map(|configs| {
+                    configs
+                        .configs
+                        .as_deref()
+                        .unwrap_or_default()
+                        .iter()
+                        .find_map(|config| {
+                            if config.name == "tansu.virtual" {
+                                config
+                                    .value
+                                    .as_deref()
+                                    .and_then(|config| bool::from_str(config).ok())
+                            } else {
+                                None
+                            }
+                        })
+                        .unwrap_or_default()
+                })?
+        {
+            Ok((base, Some(key)))
+        } else {
+            Ok((topic, None))
+        }
+    }
+
+    #[instrument(skip(self), ret)]
+    async fn base_topic<'a>(&self, topic: &'a str) -> Result<&'a str> {
+        self.topic_with_key(topic).await.map(|(topic, _key)| topic)
+    }
+
+    #[instrument(skip(self), ret)]
+    async fn virtual_topic_id(&self, topic: &str, key: &str) -> Result<Uuid> {
+        let uuid = Uuid::new_v5(
+            &Uuid::NAMESPACE_URL,
+            format!("tag:tansu.io,2026-04:virtual:{topic}:{key}",).as_bytes(),
+        );
+
+        let c = self.connection().await.inspect_err(|err| error!(?err))?;
+
+        let row = c
+            .query_one(
+                "virtual_topic_upsert.sql",
+                (self.cluster.as_str(), topic, key, uuid.to_string()),
+            )
+            .await?;
+
+        row.get_str(0)
+            .map_err(Error::from)
+            .and_then(|str| Uuid::parse_str(str).map_err(Into::into))
+            .inspect(|vt| debug!(%vt))
+    }
 }
 
 #[derive(Clone, Default, Debug)]
@@ -1441,6 +1498,10 @@ static DDL: LazyLock<Cache> = LazyLock::new(|| {
         ),
         ("030-topition.sql", include_sql!("ddl/030-topition.sql")),
         ("030-txn.sql", include_sql!("ddl/030-txn.sql")),
+        (
+            "030-virtual-topic.sql",
+            include_sql!("ddl/030-virtual-topic.sql"),
+        ),
         (
             "040-consumer-offset.sql",
             include_sql!("ddl/040-consumer-offset.sql"),
@@ -2589,52 +2650,15 @@ impl Storage for Delegate {
         debug!(?topition, offset, min_bytes, max_bytes, ?isolation_level);
 
         let (base_topic, key_filter): (&str, Option<&str>) =
-            if let Some((t, k)) = topition.topic().split_once('/') {
-                let is_virtual = self
-                    .describe_config(t, ConfigResource::Topic, None)
-                    .await
-                    .map(|result| {
-                        result
-                            .configs
-                            .as_ref()
-                            .and_then(|configs| {
-                                configs
-                                    .iter()
-                                    .find(|c| c.name.as_str() == "tansu.virtual")
-                                    .and_then(|c| c.value.as_deref())
-                                    .and_then(|v| bool::from_str(v).ok())
-                            })
-                            .unwrap_or_default()
-                    })
-                    .unwrap_or_default();
+            self.topic_with_key(topition.topic()).await?;
 
-                if is_virtual {
-                    (t, Some(k))
-                } else {
-                    (topition.topic(), None)
-                }
+        let high_watermark = self.offset_stage(topition).await.map(|offset_stage| {
+            if isolation_level == IsolationLevel::ReadCommitted {
+                offset_stage.last_stable
             } else {
-                (topition.topic(), None)
-            };
-
-        let base_topition;
-        let effective_topition: &Topition = if key_filter.is_some() {
-            base_topition = Topition::new(base_topic, topition.partition());
-            &base_topition
-        } else {
-            topition
-        };
-
-        let high_watermark = self
-            .offset_stage(effective_topition)
-            .await
-            .map(|offset_stage| {
-                if isolation_level == IsolationLevel::ReadCommitted {
-                    offset_stage.last_stable
-                } else {
-                    offset_stage.high_watermark
-                }
-            })?;
+                offset_stage.high_watermark
+            }
+        })?;
 
         debug!(
             cluster = self.cluster,
@@ -2914,7 +2938,7 @@ impl Storage for Delegate {
                 "watermark_select.sql",
                 (
                     self.cluster.as_str(),
-                    topition.topic(),
+                    self.base_topic(topition.topic()).await?,
                     topition.partition(),
                 ),
             )
@@ -2976,7 +3000,7 @@ impl Storage for Delegate {
                     "topition_select.sql",
                     (
                         self.cluster.as_str(),
-                        topition.topic(),
+                        self.base_topic(topition.topic()).await?,
                         topition.partition(),
                     ),
                 )
@@ -2998,7 +3022,7 @@ impl Storage for Delegate {
                         "consumer_offset_insert.sql",
                         (
                             self.cluster.as_str(),
-                            topition.topic(),
+                            self.base_topic(topition.topic()).await?,
                             topition.partition(),
                             group,
                             offset.offset,
@@ -3093,7 +3117,7 @@ impl Storage for Delegate {
                     (
                         self.cluster.as_str(),
                         group_id,
-                        topic.topic(),
+                        self.base_topic(topic.topic()).await?,
                         topic.partition(),
                     ),
                 )
@@ -3289,23 +3313,35 @@ impl Storage for Delegate {
                 for topic in topics {
                     responses.push(match topic {
                         TopicId::Name(name) => {
+                            let (base_topic, key) = self
+                                .topic_with_key(name.as_str())
+                                .await
+                                .inspect(|(base_topic, key)| debug!(base_topic, key))?;
+
+                            let vtid = if let Some(key) = key {
+                                self.virtual_topic_id(base_topic, key)
+                                    .await
+                                    .map(|uuid| uuid.into_bytes())
+                                    .map(Some)
+                            } else {
+                                Ok(None)
+                            }?;
+
                             let mut rows = c
-                                .query(
-                                    "topic_select_name.sql",
-                                    (self.cluster.as_str(), name.as_str()),
-                                )
+                                .query("topic_select_name.sql", (self.cluster.as_str(), base_topic))
                                 .await?;
 
                             match rows.next().await.inspect_err(|err| error!(?err)) {
                                 Ok(Some(row)) => {
                                     let error_code = ErrorCode::None.into();
-                                    let topic_id = row
+
+                                    let topic_id = vtid.or(row
                                         .get_str(0)
                                         .map_err(Error::from)
                                         .and_then(|str| Uuid::parse_str(str).map_err(Into::into))
                                         .map(|uuid| uuid.into_bytes())
-                                        .map(Some)?;
-                                    let name = row.get::<String>(1).map(Some)?;
+                                        .map(Some)?);
+
                                     let is_internal = row.get::<bool>(2).map(Some)?;
                                     let partitions = row.get::<i32>(3)?;
                                     let replication_factor = row.get::<i32>(4)?;
@@ -3354,7 +3390,7 @@ impl Storage for Delegate {
 
                                     MetadataResponseTopic::default()
                                         .error_code(error_code)
-                                        .name(name)
+                                        .name(Some(name.to_owned()))
                                         .topic_id(topic_id)
                                         .is_internal(is_internal)
                                         .partitions(partitions)
@@ -3383,6 +3419,7 @@ impl Storage for Delegate {
                         }
                         TopicId::Id(id) => {
                             debug!(?id);
+
                             let mut rows = c
                                 .query(
                                     "topic_select_uuid.sql",
@@ -3960,14 +3997,12 @@ impl Storage for Delegate {
                     .await
                     .inspect_err(|err| error!(?err, group_id))?
                 {
-                    let value = row
+                    let current = row
                         .get_str(1)
                         .map_err(Error::from)
-                        .map(serde_json::Value::from)
+                        .and_then(|s| serde_json::from_str::<GroupDetail>(s).map_err(Into::into))
+                        .inspect(|current| debug!(?current))
                         .inspect_err(|err| error!(?err, group_id))?;
-
-                    let current = serde_json::from_value::<GroupDetail>(value)
-                        .inspect(|current| debug!(?current))?;
 
                     results.push(NamedGroupDetail::found(group_id.into(), current));
                 } else {

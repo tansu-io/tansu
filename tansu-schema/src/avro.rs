@@ -314,7 +314,7 @@ fn field_ids(schema: &AvroSchema) -> HashMap<String, i32> {
                 for field in inner.fields.iter() {
                     let mut path = Vec::from(path);
                     path.push(field.name.as_str());
-                    ids.extend(field_ids_with_path(&path[..], &field.schema, id).into_iter())
+                    ids.extend(field_ids_with_path(&path[..], &field.schema, id))
                 }
             }
 
