@@ -299,6 +299,7 @@ where
 
                     let service = services(
                         self.cluster_id.as_str(),
+                        self.cancellation.clone(),
                         self.groups.clone(),
                         self.storage.clone(),
                         self.sasl_config.clone()

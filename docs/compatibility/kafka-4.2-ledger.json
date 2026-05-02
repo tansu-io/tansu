@@ -1,0 +1,2743 @@
+{
+  "schema_version": 1,
+  "baseline": {
+    "active": "kafka-4.2",
+    "kafka_version": "4.2.0",
+    "release_date": "2026-02-17",
+    "future_tracked": "4.3.0",
+    "references": [
+      "https://kafka.apache.org/community/downloads/",
+      "https://kafka.apache.org/blog/2026/02/17/apache-kafka-4.2.0-release-announcement/",
+      "https://cwiki.apache.org/confluence/display/KAFKA/Release%2BPlan%2B4.3.0",
+      "https://kafka.apache.org/42/design/protocol/"
+    ]
+  },
+  "profiles": [
+    "tansu-native",
+    "kafka-parity-postgres",
+    "kafka-parity-sqlite",
+    "kafka-parity-s3-dynostore",
+    "kafka-parity-slatedb",
+    "compat-preview"
+  ],
+  "storage_engines": [
+    "postgres",
+    "sqlite",
+    "s3-dynostore",
+    "slatedb",
+    "turso",
+    "memory"
+  ],
+  "apis": [
+    {
+      "api_key": 0,
+      "name": "ProduceRequest",
+      "descriptor_versions": {
+        "max": 11,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "partial",
+      "phase_owner": "07",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "production-parity",
+        "sqlite": "limited-parity",
+        "s3-dynostore": "limited-parity",
+        "slatedb": "limited-parity",
+        "turso": "uncertified",
+        "memory": "development-test-only"
+      },
+      "proof": {
+        "unit_tests": [
+          "tansu-storage/tests/log_contract.rs::empty_partition_offsets_are_zero",
+          "tansu-storage/tests/log_contract.rs::produce_assigns_contiguous_offsets",
+          "tansu-storage/tests/log_contract.rs::fetch_reads_written_records",
+          "tansu-storage/tests/log_contract.rs::timestamp_lookup_before_first_record_returns_first_offset",
+          "tansu-storage/tests/log_contract.rs::null_storage_reports_log_features_unsupported",
+          "tansu-storage/tests/produce_exactness.rs::valid_required_acks_are_accepted",
+          "tansu-storage/tests/produce_exactness.rs::invalid_required_acks_is_rejected",
+          "tansu-storage/tests/produce_exactness.rs::unknown_topic_returns_unknown_topic_or_partition",
+          "tansu-storage/tests/produce_exactness.rs::invalid_partition_returns_unknown_topic_or_partition",
+          "tansu-storage/tests/produce_exactness.rs::crc_invalid_is_rejected_without_append",
+          "tansu-storage/tests/produce_exactness.rs::unsupported_compression_is_rejected_without_append",
+          "tansu-storage/tests/produce_exactness.rs::supported_compressions_are_accepted_without_append",
+          "tansu-storage/tests/produce_exactness.rs::all_batches_validated_before_append",
+          "tansu-storage/tests/produce_exactness.rs::batch_length_mismatch_is_rejected_without_append",
+          "tansu-storage/tests/produce_exactness.rs::record_count_mismatch_is_rejected_without_append",
+          "tansu-storage/tests/produce_exactness.rs::invalid_timestamp_is_rejected_without_append",
+          "tansu-storage/tests/produce_exactness.rs::partitions_remain_independent",
+          "tansu-storage/tests/produce_exactness.rs::schema_failure_maps_and_keeps_offsets"
+        ],
+        "differential_tests": [
+          "tansu-broker/tests/compatibility_contract.rs::phase_log_manifest_contract_covers_phase_docs",
+          "tansu-broker/tests/produce_exactness.rs::api_versions_do_not_advertise_produce",
+          "tansu-broker/tests/produce_exactness.rs::produce_acks_zero_suppresses_wire_response",
+          "tansu-broker/tests/produce_exactness.rs::produce_acks_leader_and_full_isr_return_wire_response",
+          "tansu-broker/tests/produce_exactness.rs::produce_request_versions_decode_across_supported_versions"
+        ],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Phase 07 Produce exactness slice; routed API remains pre-advertisement because the repo still lacks a stable Java/librdkafka differential harness. Broker version-matrix and storage exactness tests are present, but current advertised versions stay null until external client proof lands."
+    },
+    {
+      "api_key": 1,
+      "name": "FetchRequest",
+      "descriptor_versions": {
+        "max": 17,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "06",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "production-parity",
+        "sqlite": "limited-parity",
+        "s3-dynostore": "limited-parity",
+        "slatedb": "limited-parity",
+        "turso": "uncertified",
+        "memory": "development-test-only"
+      },
+      "proof": {
+        "unit_tests": [
+          "tansu-storage/tests/log_contract.rs::empty_partition_offsets_are_zero",
+          "tansu-storage/tests/log_contract.rs::produce_assigns_contiguous_offsets",
+          "tansu-storage/tests/log_contract.rs::fetch_reads_written_records",
+          "tansu-storage/tests/log_contract.rs::timestamp_lookup_before_first_record_returns_first_offset",
+          "tansu-storage/tests/log_contract.rs::null_storage_reports_log_features_unsupported"
+        ],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Phase 06 storage contract slice; routed API remains semantically uncertified until the protocol-level phase completes."
+    },
+    {
+      "api_key": 2,
+      "name": "ListOffsetsRequest",
+      "descriptor_versions": {
+        "max": 9,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "06",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "production-parity",
+        "sqlite": "limited-parity",
+        "s3-dynostore": "limited-parity",
+        "slatedb": "limited-parity",
+        "turso": "uncertified",
+        "memory": "development-test-only"
+      },
+      "proof": {
+        "unit_tests": [
+          "tansu-storage/tests/log_contract.rs::empty_partition_offsets_are_zero",
+          "tansu-storage/tests/log_contract.rs::produce_assigns_contiguous_offsets",
+          "tansu-storage/tests/log_contract.rs::fetch_reads_written_records",
+          "tansu-storage/tests/log_contract.rs::timestamp_lookup_before_first_record_returns_first_offset",
+          "tansu-storage/tests/log_contract.rs::null_storage_reports_log_features_unsupported"
+        ],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Phase 06 storage contract slice; routed API remains semantically uncertified until the protocol-level phase completes."
+    },
+    {
+      "api_key": 3,
+      "name": "MetadataRequest",
+      "descriptor_versions": {
+        "max": 12,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "routed",
+      "current_advertised_versions": {
+        "min": 12,
+        "max": 12
+      },
+      "approved_advertised_versions": {
+        "min": 12,
+        "max": 12
+      },
+      "semantic_status": "uncertified",
+      "phase_owner": "02",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [
+          "tansu-service/tests/route.rs::explicit_api_versions_advertisement"
+        ],
+        "differential_tests": [
+          "tansu-broker/tests/compatibility_contract.rs::broker_route_stack_advertises_only_approved_versions"
+        ],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Approved advertised versions in phase 02."
+    },
+    {
+      "api_key": 8,
+      "name": "OffsetCommitRequest",
+      "descriptor_versions": {
+        "max": 9,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Current routed API."
+    },
+    {
+      "api_key": 9,
+      "name": "OffsetFetchRequest",
+      "descriptor_versions": {
+        "max": 9,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Current routed API."
+    },
+    {
+      "api_key": 10,
+      "name": "FindCoordinatorRequest",
+      "descriptor_versions": {
+        "max": 6,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Current routed API."
+    },
+    {
+      "api_key": 11,
+      "name": "JoinGroupRequest",
+      "descriptor_versions": {
+        "max": 9,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Current routed API."
+    },
+    {
+      "api_key": 12,
+      "name": "HeartbeatRequest",
+      "descriptor_versions": {
+        "max": 4,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Current routed API."
+    },
+    {
+      "api_key": 13,
+      "name": "LeaveGroupRequest",
+      "descriptor_versions": {
+        "max": 5,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Current routed API."
+    },
+    {
+      "api_key": 14,
+      "name": "SyncGroupRequest",
+      "descriptor_versions": {
+        "max": 5,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Current routed API."
+    },
+    {
+      "api_key": 15,
+      "name": "DescribeGroupsRequest",
+      "descriptor_versions": {
+        "max": 5,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Current routed API."
+    },
+    {
+      "api_key": 16,
+      "name": "ListGroupsRequest",
+      "descriptor_versions": {
+        "max": 5,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Current routed API."
+    },
+    {
+      "api_key": 17,
+      "name": "SaslHandshakeRequest",
+      "descriptor_versions": {
+        "max": 1,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Current routed API."
+    },
+    {
+      "api_key": 18,
+      "name": "ApiVersionsRequest",
+      "descriptor_versions": {
+        "max": 4,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "routed",
+      "current_advertised_versions": {
+        "min": 0,
+        "max": 4
+      },
+      "approved_advertised_versions": {
+        "min": 0,
+        "max": 4
+      },
+      "semantic_status": "uncertified",
+      "phase_owner": "02",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [
+          "tansu-service/tests/route.rs::explicit_api_versions_advertisement",
+          "tansu-service/tests/route.rs::unsupported_api_versions_request_returns_version_zero"
+        ],
+        "differential_tests": [
+          "tansu-broker/tests/compatibility_contract.rs::broker_registry_matches_ledger_approved_versions",
+          "tansu-broker/tests/compatibility_contract.rs::broker_route_stack_advertises_only_approved_versions"
+        ],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Approved advertised versions in phase 02."
+    },
+    {
+      "api_key": 19,
+      "name": "CreateTopicsRequest",
+      "descriptor_versions": {
+        "max": 7,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Current routed API."
+    },
+    {
+      "api_key": 20,
+      "name": "DeleteTopicsRequest",
+      "descriptor_versions": {
+        "max": 6,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Current routed API."
+    },
+    {
+      "api_key": 21,
+      "name": "DeleteRecordsRequest",
+      "descriptor_versions": {
+        "max": 2,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Current routed API."
+    },
+    {
+      "api_key": 22,
+      "name": "InitProducerIdRequest",
+      "descriptor_versions": {
+        "max": 5,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Current routed API."
+    },
+    {
+      "api_key": 23,
+      "name": "OffsetForLeaderEpochRequest",
+      "descriptor_versions": {
+        "max": 4,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "not-routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "unsupported",
+      "phase_owner": "08",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Present in Kafka 4.2 protocol metadata but not routed yet."
+    },
+    {
+      "api_key": 24,
+      "name": "AddPartitionsToTxnRequest",
+      "descriptor_versions": {
+        "max": 5,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Current routed API."
+    },
+    {
+      "api_key": 25,
+      "name": "AddOffsetsToTxnRequest",
+      "descriptor_versions": {
+        "max": 4,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Current routed API."
+    },
+    {
+      "api_key": 26,
+      "name": "EndTxnRequest",
+      "descriptor_versions": {
+        "max": 4,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "safe-error-routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "safe-error",
+      "phase_owner": "05",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [
+          "tansu-broker/tests/compatibility_contract.rs::broker_safe_error_routes_return_structured_errors",
+          "tansu-broker/tests/compatibility_contract.rs::route_coverage_report_matches_ledger"
+        ],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Safe-error routed for broker probe coverage; not advertised as semantically supported."
+    },
+    {
+      "api_key": 27,
+      "name": "WriteTxnMarkersRequest",
+      "descriptor_versions": {
+        "max": 1,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "not-routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "unsupported",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Present in Kafka 4.2 protocol metadata but not routed yet."
+    },
+    {
+      "api_key": 28,
+      "name": "TxnOffsetCommitRequest",
+      "descriptor_versions": {
+        "max": 4,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Current routed API."
+    },
+    {
+      "api_key": 29,
+      "name": "DescribeAclsRequest",
+      "descriptor_versions": {
+        "max": 3,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Current routed API."
+    },
+    {
+      "api_key": 30,
+      "name": "CreateAclsRequest",
+      "descriptor_versions": {
+        "max": 3,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Current routed API."
+    },
+    {
+      "api_key": 31,
+      "name": "DeleteAclsRequest",
+      "descriptor_versions": {
+        "max": 3,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "safe-error-routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "safe-error",
+      "phase_owner": "05",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [
+          "tansu-broker/tests/compatibility_contract.rs::broker_safe_error_routes_return_structured_errors",
+          "tansu-broker/tests/compatibility_contract.rs::route_coverage_report_matches_ledger"
+        ],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Safe-error routed for broker probe coverage; not advertised as semantically supported."
+    },
+    {
+      "api_key": 32,
+      "name": "DescribeConfigsRequest",
+      "descriptor_versions": {
+        "max": 4,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Current routed API."
+    },
+    {
+      "api_key": 33,
+      "name": "AlterConfigsRequest",
+      "descriptor_versions": {
+        "max": 2,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "safe-error-routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "safe-error",
+      "phase_owner": "05",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [
+          "tansu-broker/tests/compatibility_contract.rs::broker_safe_error_routes_return_structured_errors",
+          "tansu-broker/tests/compatibility_contract.rs::route_coverage_report_matches_ledger"
+        ],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Safe-error routed for broker probe coverage; not advertised as semantically supported."
+    },
+    {
+      "api_key": 34,
+      "name": "AlterReplicaLogDirsRequest",
+      "descriptor_versions": {
+        "max": 2,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "not-routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "unsupported",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Present in Kafka 4.2 protocol metadata but not routed yet."
+    },
+    {
+      "api_key": 35,
+      "name": "DescribeLogDirsRequest",
+      "descriptor_versions": {
+        "max": 4,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "safe-error-routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "safe-error",
+      "phase_owner": "05",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [
+          "tansu-broker/tests/compatibility_contract.rs::broker_safe_error_routes_return_structured_errors",
+          "tansu-broker/tests/compatibility_contract.rs::route_coverage_report_matches_ledger"
+        ],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Safe-error routed for broker probe coverage; not advertised as semantically supported."
+    },
+    {
+      "api_key": 36,
+      "name": "SaslAuthenticateRequest",
+      "descriptor_versions": {
+        "max": 2,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Current routed API."
+    },
+    {
+      "api_key": 37,
+      "name": "CreatePartitionsRequest",
+      "descriptor_versions": {
+        "max": 3,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "safe-error-routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "safe-error",
+      "phase_owner": "05",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [
+          "tansu-broker/tests/compatibility_contract.rs::broker_safe_error_routes_return_structured_errors",
+          "tansu-broker/tests/compatibility_contract.rs::route_coverage_report_matches_ledger"
+        ],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Safe-error routed for broker probe coverage; not advertised as semantically supported."
+    },
+    {
+      "api_key": 38,
+      "name": "CreateDelegationTokenRequest",
+      "descriptor_versions": {
+        "max": 3,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "not-routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "unsupported",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Present in Kafka 4.2 protocol metadata but not routed yet."
+    },
+    {
+      "api_key": 39,
+      "name": "RenewDelegationTokenRequest",
+      "descriptor_versions": {
+        "max": 2,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "not-routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Present in Kafka 4.2 protocol metadata but not routed yet."
+    },
+    {
+      "api_key": 40,
+      "name": "ExpireDelegationTokenRequest",
+      "descriptor_versions": {
+        "max": 2,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "not-routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Present in Kafka 4.2 protocol metadata but not routed yet."
+    },
+    {
+      "api_key": 41,
+      "name": "DescribeDelegationTokenRequest",
+      "descriptor_versions": {
+        "max": 3,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "not-routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Present in Kafka 4.2 protocol metadata but not routed yet."
+    },
+    {
+      "api_key": 42,
+      "name": "DeleteGroupsRequest",
+      "descriptor_versions": {
+        "max": 2,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Current routed API."
+    },
+    {
+      "api_key": 43,
+      "name": "ElectLeadersRequest",
+      "descriptor_versions": {
+        "max": 2,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "safe-error-routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "safe-error",
+      "phase_owner": "05",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [
+          "tansu-broker/tests/compatibility_contract.rs::broker_safe_error_routes_return_structured_errors",
+          "tansu-broker/tests/compatibility_contract.rs::route_coverage_report_matches_ledger"
+        ],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Safe-error routed for broker probe coverage; not advertised as semantically supported."
+    },
+    {
+      "api_key": 44,
+      "name": "IncrementalAlterConfigsRequest",
+      "descriptor_versions": {
+        "max": 1,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Current routed API."
+    },
+    {
+      "api_key": 45,
+      "name": "AlterPartitionReassignmentsRequest",
+      "descriptor_versions": {
+        "max": 0,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "not-routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Present in Kafka 4.2 protocol metadata but not routed yet."
+    },
+    {
+      "api_key": 46,
+      "name": "ListPartitionReassignmentsRequest",
+      "descriptor_versions": {
+        "max": 0,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Current routed API."
+    },
+    {
+      "api_key": 47,
+      "name": "OffsetDeleteRequest",
+      "descriptor_versions": {
+        "max": 0,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "safe-error-routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "safe-error",
+      "phase_owner": "05",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [
+          "tansu-broker/tests/compatibility_contract.rs::broker_safe_error_routes_return_structured_errors",
+          "tansu-broker/tests/compatibility_contract.rs::route_coverage_report_matches_ledger"
+        ],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Safe-error routed for broker probe coverage; not advertised as semantically supported."
+    },
+    {
+      "api_key": 48,
+      "name": "DescribeClientQuotasRequest",
+      "descriptor_versions": {
+        "max": 1,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "not-routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Present in Kafka 4.2 protocol metadata but not routed yet."
+    },
+    {
+      "api_key": 49,
+      "name": "AlterClientQuotasRequest",
+      "descriptor_versions": {
+        "max": 1,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "not-routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Present in Kafka 4.2 protocol metadata but not routed yet."
+    },
+    {
+      "api_key": 50,
+      "name": "DescribeUserScramCredentialsRequest",
+      "descriptor_versions": {
+        "max": 0,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Current routed API."
+    },
+    {
+      "api_key": 51,
+      "name": "AlterUserScramCredentialsRequest",
+      "descriptor_versions": {
+        "max": 0,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Current routed API."
+    },
+    {
+      "api_key": 55,
+      "name": "DescribeQuorumRequest",
+      "descriptor_versions": {
+        "max": 2,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "not-routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Present in Kafka 4.2 protocol metadata but not routed yet."
+    },
+    {
+      "api_key": 57,
+      "name": "UpdateFeaturesRequest",
+      "descriptor_versions": {
+        "max": 1,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "not-routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Present in Kafka 4.2 protocol metadata but not routed yet."
+    },
+    {
+      "api_key": 60,
+      "name": "DescribeClusterRequest",
+      "descriptor_versions": {
+        "max": 1,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Current routed API."
+    },
+    {
+      "api_key": 61,
+      "name": "DescribeProducersRequest",
+      "descriptor_versions": {
+        "max": 0,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "not-routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Present in Kafka 4.2 protocol metadata but not routed yet."
+    },
+    {
+      "api_key": 64,
+      "name": "UnregisterBrokerRequest",
+      "descriptor_versions": {
+        "max": 0,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "not-routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Present in Kafka 4.2 protocol metadata but not routed yet."
+    },
+    {
+      "api_key": 65,
+      "name": "DescribeTransactionsRequest",
+      "descriptor_versions": {
+        "max": 0,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "not-routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Present in Kafka 4.2 protocol metadata but not routed yet."
+    },
+    {
+      "api_key": 66,
+      "name": "ListTransactionsRequest",
+      "descriptor_versions": {
+        "max": 1,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "not-routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Present in Kafka 4.2 protocol metadata but not routed yet."
+    },
+    {
+      "api_key": 68,
+      "name": "ConsumerGroupHeartbeatRequest",
+      "descriptor_versions": {
+        "max": 0,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "not-routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Present in Kafka 4.2 protocol metadata but not routed yet."
+    },
+    {
+      "api_key": 69,
+      "name": "ConsumerGroupDescribeRequest",
+      "descriptor_versions": {
+        "max": 0,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Current routed API."
+    },
+    {
+      "api_key": 71,
+      "name": "GetTelemetrySubscriptionsRequest",
+      "descriptor_versions": {
+        "max": 0,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Current routed API."
+    },
+    {
+      "api_key": 72,
+      "name": "PushTelemetryRequest",
+      "descriptor_versions": {
+        "max": 0,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "safe-error-routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "safe-error",
+      "phase_owner": "05",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [
+          "tansu-broker/tests/compatibility_contract.rs::broker_safe_error_routes_return_structured_errors",
+          "tansu-broker/tests/compatibility_contract.rs::route_coverage_report_matches_ledger"
+        ],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Safe-error routed for broker probe coverage; not advertised as semantically supported."
+    },
+    {
+      "api_key": 75,
+      "name": "DescribeTopicPartitionsRequest",
+      "descriptor_versions": {
+        "max": 0,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Current routed API."
+    },
+    {
+      "api_key": 76,
+      "name": "ShareGroupHeartbeatRequest",
+      "descriptor_versions": {
+        "max": 0,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "not-routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Present in Kafka 4.2 protocol metadata but not routed yet."
+    },
+    {
+      "api_key": 77,
+      "name": "ShareGroupDescribeRequest",
+      "descriptor_versions": {
+        "max": 0,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "not-routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Present in Kafka 4.2 protocol metadata but not routed yet."
+    },
+    {
+      "api_key": 78,
+      "name": "ShareFetchRequest",
+      "descriptor_versions": {
+        "max": 0,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "not-routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Present in Kafka 4.2 protocol metadata but not routed yet."
+    },
+    {
+      "api_key": 79,
+      "name": "ShareAcknowledgeRequest",
+      "descriptor_versions": {
+        "max": 0,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "not-routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Present in Kafka 4.2 protocol metadata but not routed yet."
+    },
+    {
+      "api_key": 80,
+      "name": "AddRaftVoterRequest",
+      "descriptor_versions": {
+        "max": 0,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "not-routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Present in Kafka 4.2 protocol metadata but not routed yet."
+    },
+    {
+      "api_key": 81,
+      "name": "RemoveRaftVoterRequest",
+      "descriptor_versions": {
+        "max": 0,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "not-routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Present in Kafka 4.2 protocol metadata but not routed yet."
+    },
+    {
+      "api_key": 83,
+      "name": "InitializeShareGroupStateRequest",
+      "descriptor_versions": {
+        "max": 0,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "not-routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Present in Kafka 4.2 protocol metadata but not routed yet."
+    },
+    {
+      "api_key": 84,
+      "name": "ReadShareGroupStateRequest",
+      "descriptor_versions": {
+        "max": 0,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "not-routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Present in Kafka 4.2 protocol metadata but not routed yet."
+    },
+    {
+      "api_key": 85,
+      "name": "WriteShareGroupStateRequest",
+      "descriptor_versions": {
+        "max": 0,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "not-routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Present in Kafka 4.2 protocol metadata but not routed yet."
+    },
+    {
+      "api_key": 86,
+      "name": "DeleteShareGroupStateRequest",
+      "descriptor_versions": {
+        "max": 0,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "not-routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Present in Kafka 4.2 protocol metadata but not routed yet."
+    },
+    {
+      "api_key": 87,
+      "name": "ReadShareGroupStateSummaryRequest",
+      "descriptor_versions": {
+        "max": 0,
+        "min": 0
+      },
+      "codec_status": "present",
+      "route_status": "not-routed",
+      "current_advertised_versions": null,
+      "approved_advertised_versions": null,
+      "semantic_status": "uncertified",
+      "phase_owner": "01",
+      "profiles": {
+        "tansu-native": "gray",
+        "kafka-parity-postgres": "gray",
+        "kafka-parity-sqlite": "gray",
+        "kafka-parity-s3-dynostore": "gray",
+        "kafka-parity-slatedb": "gray",
+        "compat-preview": "gray"
+      },
+      "storage": {
+        "postgres": "uncertified",
+        "sqlite": "uncertified",
+        "s3-dynostore": "uncertified",
+        "slatedb": "uncertified",
+        "turso": "uncertified",
+        "memory": "uncertified"
+      },
+      "proof": {
+        "unit_tests": [],
+        "differential_tests": [],
+        "client_tests": {},
+        "failure_modes": "untested"
+      },
+      "notes": "Present in Kafka 4.2 protocol metadata but not routed yet."
+    }
+  ]
+}

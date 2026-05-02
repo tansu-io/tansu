@@ -1,0 +1,372 @@
+{
+  "schema_version": 1,
+  "phases": [
+    {
+      "phase": "01",
+      "phase_file": "tips/phases/01-compatibility-contract.md",
+      "status": "legacy-unlogged",
+      "log_file": null,
+      "ledger_api_keys": [
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        19,
+        20,
+        21,
+        22,
+        24,
+        25,
+        27,
+        28,
+        29,
+        30,
+        32,
+        34,
+        36,
+        38,
+        39,
+        40,
+        41,
+        42,
+        44,
+        45,
+        46,
+        48,
+        49,
+        50,
+        51,
+        55,
+        57,
+        60,
+        61,
+        64,
+        65,
+        66,
+        68,
+        69,
+        71,
+        75,
+        76,
+        77,
+        78,
+        79,
+        80,
+        81,
+        83,
+        84,
+        85,
+        86,
+        87
+      ],
+      "primary_paths": [
+        "tips/phases/01-compatibility-contract.md"
+      ],
+      "verification_commands": [
+        "cargo test -p tansu-broker --test compatibility_contract --all-features -- --nocapture"
+      ],
+      "residual_risks": [
+        "Historical activity was not backfilled into a structured log."
+      ]
+    },
+    {
+      "phase": "02",
+      "phase_file": "tips/phases/02-api-versions-truth.md",
+      "status": "legacy-complete",
+      "log_file": "phase-logs/02-api-versions-truth.md.log",
+      "ledger_api_keys": [
+        3,
+        18
+      ],
+      "primary_paths": [
+        "tips/phases/02-api-versions-truth.md",
+        "phase-logs/02-api-versions-truth.md.log"
+      ],
+      "verification_commands": [
+        "cargo test -p tansu-broker --test compatibility_contract --all-features -- --nocapture"
+      ],
+      "residual_risks": [
+        "None."
+      ]
+    },
+    {
+      "phase": "03",
+      "phase_file": "tips/phases/03-request-lifecycle-no-hangs.md",
+      "status": "legacy-complete",
+      "log_file": "phase-logs/03-request-lifecycle-no-hangs.md.log",
+      "ledger_api_keys": [],
+      "primary_paths": [
+        "tips/phases/03-request-lifecycle-no-hangs.md",
+        "phase-logs/03-request-lifecycle-no-hangs.md.log"
+      ],
+      "verification_commands": [
+        "cargo test -p tansu-storage --lib fetch_request_is_cancelled -- --nocapture",
+        "cargo check -p tansu-storage -p tansu-service -p tansu-broker --all-features --all-targets",
+        "cargo test -p tansu-broker --test compatibility_contract --all-features -- --nocapture"
+      ],
+      "residual_risks": [
+        "Legacy log format; no structured headings yet."
+      ]
+    },
+    {
+      "phase": "04",
+      "phase_file": "tips/phases/04-differential-kafka-lab.md",
+      "status": "legacy-unlogged",
+      "log_file": null,
+      "ledger_api_keys": [],
+      "primary_paths": [
+        "tips/phases/04-differential-kafka-lab.md"
+      ],
+      "verification_commands": [
+        "cargo test -p tansu-broker --test compatibility_contract --all-features -- --nocapture"
+      ],
+      "residual_risks": [
+        "Historical activity was not backfilled into a structured log."
+      ]
+    },
+    {
+      "phase": "05",
+      "phase_file": "tips/phases/05-route-coverage-safe-errors.md",
+      "status": "legacy-complete",
+      "log_file": "phase-logs/05-route-coverage-safe-errors.md.log",
+      "ledger_api_keys": [
+        26,
+        31,
+        33,
+        35,
+        37,
+        43,
+        47,
+        72
+      ],
+      "primary_paths": [
+        "tips/phases/05-route-coverage-safe-errors.md",
+        "phase-logs/05-route-coverage-safe-errors.md.log"
+      ],
+      "verification_commands": [
+        "cargo test -p tansu-broker --test compatibility_contract --all-features -- --nocapture",
+        "cargo test -p tansu-service route --all-features -- --nocapture",
+        "cargo check -p tansu-service -p tansu-broker --all-features --all-targets",
+        "cargo fmt --all --check",
+        "git diff --check"
+      ],
+      "residual_risks": [
+        "Legacy log format; no structured headings yet."
+      ]
+    },
+    {
+      "phase": "06",
+      "phase_file": "tips/phases/06-storage-log-contract.md",
+      "status": "legacy-complete",
+      "log_file": "phase-logs/06-storage-log-contract.md.log",
+      "ledger_api_keys": [
+        1,
+        2
+      ],
+      "primary_paths": [
+        "tips/phases/06-storage-log-contract.md",
+        "phase-logs/06-storage-log-contract.md.log"
+      ],
+      "verification_commands": [
+        "cargo test -p tansu-storage --test log_contract --all-features -- --nocapture",
+        "cargo test -p tansu-broker --test compatibility_contract --all-features -- --nocapture",
+        "cargo check -p tansu-storage -p tansu-broker --all-features --all-targets",
+        "cargo fmt --all --check",
+        "git diff --check"
+      ],
+      "residual_risks": [
+        "Legacy log format; no structured headings yet."
+      ]
+    },
+    {
+      "phase": "07",
+      "phase_file": "tips/phases/07-produce-exactness.md",
+      "status": "in-progress",
+      "log_file": "phase-logs/07-produce-exactness.md.log",
+      "ledger_api_keys": [
+        0
+      ],
+      "primary_paths": [
+        "tips/phases/07-produce-exactness.md",
+        "phase-logs/07-produce-exactness.md.log",
+        "phase-logs/README.md",
+        "phase-logs/index.json",
+        "docs/compatibility/kafka-4.2-ledger.json",
+        "tansu-broker/tests/compatibility_contract.rs",
+        "tansu-broker/tests/produce_exactness.rs",
+        "tansu-service/src/frame.rs",
+        "tansu-service/src/stream.rs",
+        "tansu-storage/src/lib.rs",
+        "tansu-storage/src/service/produce.rs",
+        "tansu-storage/tests/common/mod.rs",
+        "tansu-storage/tests/produce_exactness.rs"
+      ],
+      "verification_commands": [
+        "cargo test -p tansu-storage --test produce_exactness --all-features -- --nocapture",
+        "cargo test -p tansu-broker --test compatibility_contract --all-features -- --nocapture",
+        "cargo test -p tansu-broker --test produce_exactness --all-features -- --nocapture",
+        "cargo test -p tansu-storage --test log_contract --all-features -- --nocapture",
+        "cargo check -p tansu-storage -p tansu-service -p tansu-broker --all-features --all-targets",
+        "cargo fmt --all --check",
+        "git diff --check",
+        "git check-ignore -v phase-logs/07-produce-exactness.md.log"
+      ],
+      "residual_risks": [
+        "Produce remains unadvertised in ApiVersions because no stable Java/librdkafka differential harness was found in this repo.",
+        "Leader epochs, durable idempotence, transactions, retention, compaction, delete-record behavior changes, and broader differential certification remain for later phases."
+      ]
+    },
+    {
+      "phase": "08",
+      "phase_file": "tips/phases/08-fetch-list-offsets-leader-epoch.md",
+      "status": "legacy-unlogged",
+      "log_file": null,
+      "ledger_api_keys": [
+        23
+      ],
+      "primary_paths": [
+        "tips/phases/08-fetch-list-offsets-leader-epoch.md"
+      ],
+      "verification_commands": [
+        "cargo test -p tansu-broker --test compatibility_contract --all-features -- --nocapture"
+      ],
+      "residual_risks": [
+        "Historical activity was not backfilled into a structured log."
+      ]
+    },
+    {
+      "phase": "09",
+      "phase_file": "tips/phases/09-topic-config-admin.md",
+      "status": "legacy-unlogged",
+      "log_file": null,
+      "ledger_api_keys": [],
+      "primary_paths": [
+        "tips/phases/09-topic-config-admin.md"
+      ],
+      "verification_commands": [
+        "cargo test -p tansu-broker --test compatibility_contract --all-features -- --nocapture"
+      ],
+      "residual_risks": [
+        "Historical activity was not backfilled into a structured log."
+      ]
+    },
+    {
+      "phase": "10",
+      "phase_file": "tips/phases/10-consumer-groups-offsets.md",
+      "status": "legacy-unlogged",
+      "log_file": null,
+      "ledger_api_keys": [],
+      "primary_paths": [
+        "tips/phases/10-consumer-groups-offsets.md"
+      ],
+      "verification_commands": [
+        "cargo test -p tansu-broker --test compatibility_contract --all-features -- --nocapture"
+      ],
+      "residual_risks": [
+        "Historical activity was not backfilled into a structured log."
+      ]
+    },
+    {
+      "phase": "11",
+      "phase_file": "tips/phases/11-idempotent-producer.md",
+      "status": "legacy-unlogged",
+      "log_file": null,
+      "ledger_api_keys": [],
+      "primary_paths": [
+        "tips/phases/11-idempotent-producer.md"
+      ],
+      "verification_commands": [
+        "cargo test -p tansu-broker --test compatibility_contract --all-features -- --nocapture"
+      ],
+      "residual_risks": [
+        "Historical activity was not backfilled into a structured log."
+      ]
+    },
+    {
+      "phase": "12",
+      "phase_file": "tips/phases/12-transactions-eos.md",
+      "status": "legacy-unlogged",
+      "log_file": null,
+      "ledger_api_keys": [],
+      "primary_paths": [
+        "tips/phases/12-transactions-eos.md"
+      ],
+      "verification_commands": [
+        "cargo test -p tansu-broker --test compatibility_contract --all-features -- --nocapture"
+      ],
+      "residual_risks": [
+        "Historical activity was not backfilled into a structured log."
+      ]
+    },
+    {
+      "phase": "13",
+      "phase_file": "tips/phases/13-retention-compaction-delete-records.md",
+      "status": "legacy-unlogged",
+      "log_file": null,
+      "ledger_api_keys": [],
+      "primary_paths": [
+        "tips/phases/13-retention-compaction-delete-records.md"
+      ],
+      "verification_commands": [
+        "cargo test -p tansu-broker --test compatibility_contract --all-features -- --nocapture"
+      ],
+      "residual_risks": [
+        "Historical activity was not backfilled into a structured log."
+      ]
+    },
+    {
+      "phase": "14",
+      "phase_file": "tips/phases/14-security-acls-quotas.md",
+      "status": "legacy-unlogged",
+      "log_file": null,
+      "ledger_api_keys": [],
+      "primary_paths": [
+        "tips/phases/14-security-acls-quotas.md"
+      ],
+      "verification_commands": [
+        "cargo test -p tansu-broker --test compatibility_contract --all-features -- --nocapture"
+      ],
+      "residual_risks": [
+        "Historical activity was not backfilled into a structured log."
+      ]
+    },
+    {
+      "phase": "15",
+      "phase_file": "tips/phases/15-cluster-metadata-modern-kafka.md",
+      "status": "legacy-unlogged",
+      "log_file": null,
+      "ledger_api_keys": [],
+      "primary_paths": [
+        "tips/phases/15-cluster-metadata-modern-kafka.md"
+      ],
+      "verification_commands": [
+        "cargo test -p tansu-broker --test compatibility_contract --all-features -- --nocapture"
+      ],
+      "residual_risks": [
+        "Historical activity was not backfilled into a structured log."
+      ]
+    },
+    {
+      "phase": "16",
+      "phase_file": "tips/phases/16-ecosystem-performance-ops-migration.md",
+      "status": "legacy-unlogged",
+      "log_file": null,
+      "ledger_api_keys": [],
+      "primary_paths": [
+        "tips/phases/16-ecosystem-performance-ops-migration.md"
+      ],
+      "verification_commands": [
+        "cargo test -p tansu-broker --test compatibility_contract --all-features -- --nocapture"
+      ],
+      "residual_risks": [
+        "Historical activity was not backfilled into a structured log."
+      ]
+    }
+  ]
+}

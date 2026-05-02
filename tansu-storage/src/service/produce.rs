@@ -14,13 +14,14 @@
 
 use rama::{Context, Service};
 use tansu_sans_io::{
-    ApiKey, ErrorCode, ProduceRequest, ProduceResponse,
+    ApiKey, BatchAttribute, ErrorCode, ProduceRequest, ProduceResponse,
     produce_request::{PartitionProduceData, TopicProduceData},
     produce_response::{PartitionProduceResponse, TopicProduceResponse},
+    record::{Record, deflated, inflated},
 };
 use tracing::{debug, error, instrument, warn};
 
-use crate::{Error, Result, Storage, Topition};
+use crate::{Error, Result, Storage, StorageFeature, TopicId, Topition};
 
 /// A [`Service`] using [`Storage`] as [`Context`] taking [`ProduceRequest`] returning [`ProduceResponse`].
 /// ```
@@ -134,6 +135,8 @@ impl ApiKey for ProduceService {
 }
 
 impl ProduceService {
+    const MAGIC_V2: i8 = 2;
+
     fn error(&self, index: i32, error_code: ErrorCode) -> PartitionProduceResponse {
         PartitionProduceResponse::default()
             .index(index)
@@ -144,6 +147,130 @@ impl ProduceService {
             .record_errors(Some([].into()))
             .error_message(None)
             .current_leader(None)
+    }
+
+    fn partition_error(&self, index: i32, error: Error) -> PartitionProduceResponse {
+        match error {
+            Error::Api(error_code) => self.error(index, error_code),
+            Error::Schema(_) => self.error(index, ErrorCode::InvalidRecord),
+            otherwise => {
+                warn!(?otherwise);
+                self.error(index, ErrorCode::UnknownServerError)
+            }
+        }
+    }
+
+    fn topic_error(&self, topic: TopicProduceData, error_code: ErrorCode) -> TopicProduceResponse {
+        let partitions = topic.partition_data.map_or_else(Vec::new, |partitions| {
+            partitions
+                .into_iter()
+                .map(|partition| self.error(partition.index, error_code))
+                .collect()
+        });
+
+        TopicProduceResponse::default()
+            .name(topic.name)
+            .partition_responses(Some(partitions))
+    }
+
+    fn invalid_acks_response(&self, req: ProduceRequest) -> ProduceResponse {
+        let responses = req.topic_data.map_or_else(Vec::new, |topics| {
+            topics
+                .into_iter()
+                .map(|topic| self.topic_error(topic, ErrorCode::InvalidRequiredAcks))
+                .collect()
+        });
+
+        ProduceResponse::default()
+            .responses(Some(responses))
+            .throttle_time_ms(Some(0))
+            .node_endpoints(None)
+    }
+
+    fn exactness_enabled<G>(&self, ctx: &Context<G>) -> bool
+    where
+        G: Storage,
+    {
+        ctx.state()
+            .capabilities()
+            .supports(StorageFeature::BatchValidation)
+    }
+
+    fn validate_batch(batch: &deflated::Batch) -> Result<()> {
+        let _compression =
+            BatchAttribute::try_from(batch.attributes).map_err(|error| match error {
+                tansu_sans_io::Error::UnknownCompressionType(_) => {
+                    Error::Api(ErrorCode::UnsupportedCompressionType)
+                }
+                otherwise => Error::from(otherwise),
+            })?;
+
+        if batch.magic != Self::MAGIC_V2 {
+            return Err(Error::Api(ErrorCode::InvalidRecord));
+        }
+
+        if batch.base_timestamp < 0
+            || batch.max_timestamp < 0
+            || batch.max_timestamp < batch.base_timestamp
+        {
+            return Err(Error::Api(ErrorCode::InvalidTimestamp));
+        }
+
+        let records: Vec<Record> = batch.try_into().map_err(|error| {
+            debug!(?error);
+            Error::Api(ErrorCode::CorruptMessage)
+        })?;
+
+        if records.is_empty() {
+            return Err(Error::Api(ErrorCode::InvalidRecord));
+        }
+
+        if records
+            .iter()
+            .enumerate()
+            .any(|(index, record)| record.offset_delta != index as i32)
+        {
+            return Err(Error::Api(ErrorCode::InvalidRecord));
+        }
+
+        let expected_record_count =
+            u32::try_from(records.len()).map_err(|_| Error::Api(ErrorCode::InvalidRecord))?;
+        if batch.record_count != expected_record_count {
+            return Err(Error::Api(ErrorCode::InvalidRecord));
+        }
+
+        let expected_last_offset_delta =
+            i32::try_from(records.len() - 1).map_err(|_| Error::Api(ErrorCode::InvalidRecord))?;
+        if batch.last_offset_delta != expected_last_offset_delta {
+            return Err(Error::Api(ErrorCode::InvalidRecord));
+        }
+
+        let inflated = inflated::Batch {
+            base_offset: batch.base_offset,
+            batch_length: batch.batch_length,
+            partition_leader_epoch: batch.partition_leader_epoch,
+            magic: batch.magic,
+            crc: batch.crc,
+            attributes: batch.attributes,
+            last_offset_delta: batch.last_offset_delta,
+            base_timestamp: batch.base_timestamp,
+            max_timestamp: batch.max_timestamp,
+            producer_id: batch.producer_id,
+            producer_epoch: batch.producer_epoch,
+            base_sequence: batch.base_sequence,
+            records,
+        };
+
+        let canonical = deflated::Batch::try_from(inflated).map_err(|error| {
+            debug!(?error);
+            Error::Api(ErrorCode::CorruptMessage)
+        })?;
+
+        if canonical.batch_length != batch.batch_length || canonical.crc != batch.crc {
+            return Err(Error::Api(ErrorCode::CorruptMessage));
+        }
+
+        Ok(())
     }
 
     #[instrument(skip_all)]
@@ -157,52 +284,103 @@ impl ProduceService {
     where
         G: Storage,
     {
-        if let Some(records) = partition.records {
-            let mut base_offset = None;
+        let Some(records) = partition.records else {
+            return self.error(partition.index, ErrorCode::InvalidRecord);
+        };
 
-            for batch in records.batches {
-                let tp = Topition::new(name, partition.index);
+        let tp = Topition::new(name, partition.index);
 
-                match ctx
-                    .state()
-                    .produce(transaction_id, &tp, batch)
-                    .await
-                    .inspect_err(|err| match err {
-                        storage_api @ Error::Api(_) => {
-                            warn!(?storage_api)
-                        }
-                        otherwise => error!(?otherwise),
-                    }) {
-                    Ok(offset) => _ = base_offset.get_or_insert(offset),
+        if self.exactness_enabled(ctx) {
+            let topic_ids = [TopicId::from(&tp)];
+            match ctx.state().metadata(Some(&topic_ids)).await {
+                Ok(metadata) => {
+                    let Some(topic) = metadata.topics().iter().find(|topic| {
+                        topic
+                            .name
+                            .as_deref()
+                            .is_some_and(|topic_name| topic_name == tp.topic())
+                    }) else {
+                        return self.error(partition.index, ErrorCode::UnknownTopicOrPartition);
+                    };
 
-                    Err(Error::Api(error_code)) => {
-                        debug!(?self, ?error_code);
-                        return self.error(partition.index, error_code);
+                    if topic.error_code != i16::from(ErrorCode::None) {
+                        return self.error(partition.index, ErrorCode::UnknownTopicOrPartition);
                     }
 
-                    Err(otherwise) => {
-                        warn!(?otherwise);
-                        let error = self.error(partition.index, ErrorCode::UnknownServerError);
-                        return error;
+                    let Some(partitions) = topic.partitions.as_deref() else {
+                        return self.error(partition.index, ErrorCode::UnknownTopicOrPartition);
+                    };
+
+                    if !partitions
+                        .iter()
+                        .any(|candidate| candidate.partition_index == tp.partition())
+                    {
+                        return self.error(partition.index, ErrorCode::UnknownTopicOrPartition);
                     }
+                }
+
+                Err(Error::Api(error_code)) => {
+                    debug!(?self, ?error_code);
+                    return self.error(partition.index, error_code);
+                }
+
+                Err(otherwise) => {
+                    warn!(?otherwise);
+                    return self.error(partition.index, ErrorCode::UnknownServerError);
                 }
             }
 
-            if let Some(base_offset) = base_offset {
-                PartitionProduceResponse::default()
-                    .index(partition.index)
-                    .error_code(ErrorCode::None.into())
-                    .base_offset(base_offset)
-                    .log_append_time_ms(Some(-1))
-                    .log_start_offset(Some(0))
-                    .record_errors(Some([].into()))
-                    .error_message(None)
-                    .current_leader(None)
-            } else {
-                self.error(partition.index, ErrorCode::UnknownServerError)
+            for batch in &records.batches {
+                if let Err(error) = Self::validate_batch(batch) {
+                    return self.partition_error(partition.index, error);
+                }
             }
+        }
+
+        let mut base_offset = None;
+
+        for batch in records.batches {
+            match ctx
+                .state()
+                .produce(transaction_id, &tp, batch)
+                .await
+                .inspect_err(|err| match err {
+                    storage_api @ Error::Api(_) => {
+                        warn!(?storage_api)
+                    }
+                    Error::Schema(_) => warn!(?tp, event = "schema validation failed"),
+                    otherwise => error!(?otherwise),
+                }) {
+                Ok(offset) => _ = base_offset.get_or_insert(offset),
+
+                Err(Error::Api(error_code)) => {
+                    debug!(?self, ?error_code);
+                    return self.error(partition.index, error_code);
+                }
+
+                Err(Error::Schema(_)) => {
+                    return self.error(partition.index, ErrorCode::InvalidRecord);
+                }
+
+                Err(otherwise) => {
+                    warn!(?otherwise);
+                    return self.error(partition.index, ErrorCode::UnknownServerError);
+                }
+            }
+        }
+
+        if let Some(base_offset) = base_offset {
+            PartitionProduceResponse::default()
+                .index(partition.index)
+                .error_code(ErrorCode::None.into())
+                .base_offset(base_offset)
+                .log_append_time_ms(Some(-1))
+                .log_start_offset(Some(0))
+                .record_errors(Some([].into()))
+                .error_message(None)
+                .current_leader(None)
         } else {
-            self.error(partition.index, ErrorCode::UnknownServerError)
+            self.error(partition.index, ErrorCode::InvalidRecord)
         }
     }
 
@@ -246,6 +424,10 @@ where
         ctx: Context<G>,
         req: ProduceRequest,
     ) -> Result<Self::Response, Self::Error> {
+        if !matches!(req.acks, -1 | 0 | 1) {
+            return Ok(self.invalid_acks_response(req));
+        }
+
         let mut responses = Vec::with_capacity(
             req.topic_data
                 .as_ref()

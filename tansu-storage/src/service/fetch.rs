@@ -25,6 +25,7 @@ use tansu_sans_io::{
     record::deflated::{Batch, Frame},
 };
 use tokio::time::sleep;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, instrument};
 
 use crate::{Error, Result, Storage, Topition};
@@ -125,6 +126,10 @@ impl ApiKey for FetchService {
 }
 
 impl FetchService {
+    fn cancellation_token<G>(ctx: &Context<G>) -> Option<CancellationToken> {
+        ctx.get::<CancellationToken>().cloned()
+    }
+
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip(self, ctx, _max_wait_ms, min_bytes, max_bytes, isolation, fetch_partition), fields(partition = fetch_partition.partition))]
     async fn fetch_partition<G>(
@@ -142,6 +147,7 @@ impl FetchService {
     {
         let partition_index = fetch_partition.partition;
         let tp = Topition::new(topic, partition_index);
+        let cancellation = Self::cancellation_token(ctx);
 
         let mut batches = Vec::new();
 
@@ -154,12 +160,26 @@ impl FetchService {
 
             debug!(offset);
 
-            let mut fetched = ctx
-                .state()
-                .fetch(&tp, offset, min_bytes, *max_bytes, isolation)
-                .await
-                .inspect(|r| debug!(?tp, ?offset, ?r))
-                .inspect_err(|error| error!(?tp, ?error))?;
+            let mut fetched = if let Some(cancellation) = cancellation.as_ref() {
+                tokio::select! {
+                    result = ctx.state().fetch(&tp, offset, min_bytes, *max_bytes, isolation) => {
+                        result
+                            .inspect(|r| debug!(?tp, ?offset, ?r))
+                            .inspect_err(|error| error!(?tp, ?error))?
+                    }
+
+                    _ = cancellation.cancelled() => {
+                        debug!(?tp, ?offset, event = "cancelled");
+                        return Err(Error::Cancelled);
+                    }
+                }
+            } else {
+                ctx.state()
+                    .fetch(&tp, offset, min_bytes, *max_bytes, isolation)
+                    .await
+                    .inspect(|r| debug!(?tp, ?offset, ?r))
+                    .inspect_err(|error| error!(?tp, ?error))?
+            };
 
             *max_bytes =
                 u32::try_from(fetched.byte_size()).map(|bytes| max_bytes.saturating_sub(bytes))?;
@@ -304,6 +324,7 @@ impl FetchService {
         if topics.is_empty() {
             Ok(vec![])
         } else {
+            let cancellation = Self::cancellation_token(ctx);
             let start = Instant::now();
             let mut responses = vec![];
             let mut iteration = 0;
@@ -347,12 +368,24 @@ impl FetchService {
                     ?min_bytes
                 );
 
-                sleep(if remaining.as_millis() >= 250 {
+                let delay = if remaining.as_millis() >= 250 {
                     remaining / 2
                 } else {
                     remaining
-                })
-                .await;
+                };
+
+                if let Some(cancellation) = cancellation.as_ref() {
+                    tokio::select! {
+                        _ = sleep(delay) => {}
+
+                        _ = cancellation.cancelled() => {
+                            debug!(?iteration, event = "cancelled");
+                            return Err(Error::Cancelled);
+                        }
+                    }
+                } else {
+                    sleep(delay).await;
+                }
 
                 iteration += 1;
             }

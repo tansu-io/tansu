@@ -23,3 +23,5 @@ license.html
 perf.data*
 profile.json*
 target
+!phase-logs/
+!phase-logs/*.md.log

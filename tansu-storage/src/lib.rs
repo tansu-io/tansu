@@ -245,6 +245,7 @@ mod limbo;
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum Error {
     Acquire(Arc<AcquireError>),
+    Cancelled,
 
     Api(ErrorCode),
 
@@ -844,6 +845,216 @@ impl OffsetStage {
     }
 }
 
+/// Storage engine kind.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+pub enum StorageEngine {
+    DynoStore,
+    Lite,
+    Memory,
+    Null,
+    Postgres,
+    SlateDb,
+    Turso,
+    Unknown,
+}
+
+/// Storage feature kind.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+pub enum StorageFeature {
+    BatchValidation,
+    CompressionCodecs,
+    ContiguousOffsets,
+    CrashRecovery,
+    DeleteRecords,
+    EmptyPartitionOffsets,
+    FetchVisibility,
+    HighWatermark,
+    LastStableOffset,
+    LeaderEpochHistory,
+    ListOffsetsEarliestLatest,
+    LogStartOffset,
+    ProducerState,
+    Retention,
+    TimestampLookup,
+    Transactions,
+    Compaction,
+}
+
+/// Storage certification level.
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Default,
+)]
+pub enum StorageCertification {
+    ProductionParity,
+    LimitedParity,
+    DevelopmentTestOnly,
+    Unsupported,
+    #[default]
+    Uncertified,
+    NotApplicable,
+}
+
+/// Storage capability matrix.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct StorageCapabilities {
+    pub engine: StorageEngine,
+    pub features: BTreeMap<StorageFeature, StorageCertification>,
+}
+
+impl Default for StorageCapabilities {
+    fn default() -> Self {
+        Self::new(StorageEngine::Unknown)
+    }
+}
+
+impl StorageCapabilities {
+    pub fn new(engine: StorageEngine) -> Self {
+        Self {
+            engine,
+            features: BTreeMap::new(),
+        }
+    }
+
+    pub fn certification(&self, feature: StorageFeature) -> StorageCertification {
+        self.features
+            .get(&feature)
+            .copied()
+            .unwrap_or(StorageCertification::Uncertified)
+    }
+
+    pub fn supports(&self, feature: StorageFeature) -> bool {
+        matches!(
+            self.certification(feature),
+            StorageCertification::ProductionParity
+                | StorageCertification::LimitedParity
+                | StorageCertification::DevelopmentTestOnly
+        )
+    }
+
+    fn phase06_core(engine: StorageEngine, certification: StorageCertification) -> Self {
+        Self {
+            engine,
+            features: [
+                (StorageFeature::BatchValidation, certification),
+                (StorageFeature::ContiguousOffsets, certification),
+                (StorageFeature::EmptyPartitionOffsets, certification),
+                (StorageFeature::FetchVisibility, certification),
+                (StorageFeature::ListOffsetsEarliestLatest, certification),
+                (StorageFeature::TimestampLookup, certification),
+                (StorageFeature::LogStartOffset, certification),
+                (StorageFeature::HighWatermark, certification),
+                (StorageFeature::LastStableOffset, certification),
+            ]
+            .into_iter()
+            .collect(),
+        }
+    }
+
+    pub fn phase06_postgres() -> Self {
+        Self::phase06_core(
+            StorageEngine::Postgres,
+            StorageCertification::ProductionParity,
+        )
+    }
+
+    pub fn phase06_memory() -> Self {
+        Self::phase06_core(
+            StorageEngine::Memory,
+            StorageCertification::DevelopmentTestOnly,
+        )
+    }
+
+    pub fn phase06_lite() -> Self {
+        Self::phase06_core(StorageEngine::Lite, StorageCertification::LimitedParity)
+    }
+
+    pub fn phase06_dynostore() -> Self {
+        Self::phase06_core(
+            StorageEngine::DynoStore,
+            StorageCertification::LimitedParity,
+        )
+    }
+
+    pub fn phase06_slatedb() -> Self {
+        Self::phase06_core(StorageEngine::SlateDb, StorageCertification::LimitedParity)
+    }
+
+    pub fn phase06_turso() -> Self {
+        Self::phase06_core(StorageEngine::Turso, StorageCertification::Uncertified)
+    }
+
+    pub fn phase06_null() -> Self {
+        Self {
+            engine: StorageEngine::Null,
+            features: [
+                (
+                    StorageFeature::ContiguousOffsets,
+                    StorageCertification::Unsupported,
+                ),
+                (
+                    StorageFeature::EmptyPartitionOffsets,
+                    StorageCertification::Unsupported,
+                ),
+                (
+                    StorageFeature::FetchVisibility,
+                    StorageCertification::Unsupported,
+                ),
+                (
+                    StorageFeature::ListOffsetsEarliestLatest,
+                    StorageCertification::Unsupported,
+                ),
+                (
+                    StorageFeature::TimestampLookup,
+                    StorageCertification::Unsupported,
+                ),
+                (
+                    StorageFeature::LogStartOffset,
+                    StorageCertification::Unsupported,
+                ),
+                (
+                    StorageFeature::HighWatermark,
+                    StorageCertification::Unsupported,
+                ),
+                (
+                    StorageFeature::LastStableOffset,
+                    StorageCertification::Unsupported,
+                ),
+                (
+                    StorageFeature::BatchValidation,
+                    StorageCertification::Unsupported,
+                ),
+                (
+                    StorageFeature::CompressionCodecs,
+                    StorageCertification::Unsupported,
+                ),
+                (
+                    StorageFeature::ProducerState,
+                    StorageCertification::Unsupported,
+                ),
+                (
+                    StorageFeature::Transactions,
+                    StorageCertification::Unsupported,
+                ),
+                (
+                    StorageFeature::DeleteRecords,
+                    StorageCertification::Unsupported,
+                ),
+                (StorageFeature::Retention, StorageCertification::Unsupported),
+                (
+                    StorageFeature::Compaction,
+                    StorageCertification::Unsupported,
+                ),
+                (
+                    StorageFeature::CrashRecovery,
+                    StorageCertification::Unsupported,
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        }
+    }
+}
+
 /// Group Member
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct GroupMember {
@@ -1333,6 +1544,11 @@ impl From<TxnState> for String {
 /// The Core storage abstraction. All storage engines implement this type.
 #[async_trait]
 pub trait Storage: Debug + Send + Sync + 'static {
+    /// Query storage capabilities.
+    fn capabilities(&self) -> StorageCapabilities {
+        StorageCapabilities::new(StorageEngine::Unknown)
+    }
+
     /// On startup a broker will register with storage.
     async fn register_broker(&self, broker_registration: BrokerRegistrationRequest) -> Result<()>;
 
@@ -1528,6 +1744,10 @@ impl<T> Storage for Arc<T>
 where
     T: Storage + ?Sized,
 {
+    fn capabilities(&self) -> StorageCapabilities {
+        self.as_ref().capabilities()
+    }
+
     async fn register_broker(&self, broker_registration: BrokerRegistrationRequest) -> Result<()> {
         self.as_ref().register_broker(broker_registration).await
     }
@@ -1782,6 +2002,10 @@ impl<T> Storage for Box<T>
 where
     T: Storage + ?Sized,
 {
+    fn capabilities(&self) -> StorageCapabilities {
+        self.as_ref().capabilities()
+    }
+
     async fn register_broker(&self, broker_registration: BrokerRegistrationRequest) -> Result<()> {
         self.as_ref().register_broker(broker_registration).await
     }
@@ -2260,7 +2484,7 @@ impl Builder<i32, String, Url, Url> {
                 .map(|builder| builder.schemas(self.schema_registry))
                 .map(|builder| builder.lake(self.lake_house.clone()))
                 .map(|builder| builder.build())
-                .map(|storage| Box::new(storage) as Box<dyn Storage>)
+                .map(|storage| Box::new(StorageContainer::Postgres(storage)) as Box<dyn Storage>)
                 .map(Arc::new),
 
             #[cfg(not(feature = "postgres"))]
@@ -2311,7 +2535,7 @@ impl Builder<i32, String, Url, Url> {
                             .lake(self.lake_house.clone())
                     })
                     .map(|storage| {
-                        ProduceRequestBatcher::new(storage)
+                        ProduceRequestBatcher::new(StorageContainer::DynoStore(storage))
                             .with_minimum_size(minimum_size)
                             .with_maximum_delay(maximum_delay)
                     })
@@ -2368,7 +2592,7 @@ impl Builder<i32, String, Url, Url> {
                             .lake(self.lake_house.clone())
                     })
                     .map(|storage| {
-                        ProduceRequestBatcher::new(storage)
+                        ProduceRequestBatcher::new(StorageContainer::DynoStore(storage))
                             .with_minimum_size(minimum_size)
                             .with_maximum_delay(maximum_delay)
                     })
@@ -2384,7 +2608,7 @@ impl Builder<i32, String, Url, Url> {
                     .schemas(self.schema_registry)
                     .lake(self.lake_house.clone()),
             )
-            .map(|storage| Box::new(storage) as Box<dyn Storage>)
+            .map(|storage| Box::new(StorageContainer::DynoStore(storage)) as Box<dyn Storage>)
             .map(Arc::new),
 
             #[cfg(not(feature = "dynostore"))]
@@ -2454,7 +2678,7 @@ impl Builder<i32, String, Url, Url> {
                             .lake(self.lake_house)
                             .build()
                     })
-                    .map(|storage| Box::new(storage) as Box<dyn Storage>)
+                    .map(|storage| Box::new(StorageContainer::Slate(storage)) as Box<dyn Storage>)
                     .map(Arc::new)
                     .map_err(Into::into)
             }
@@ -2475,7 +2699,7 @@ impl Builder<i32, String, Url, Url> {
                 .lake(self.lake_house.clone())
                 .build()
                 .await
-                .map(|storage| Box::new(storage) as Box<dyn Storage>)
+                .map(|storage| Box::new(StorageContainer::Turso(storage)) as Box<dyn Storage>)
                 .map(Arc::new),
 
             #[cfg(not(feature = "turso"))]
@@ -2489,7 +2713,7 @@ impl Builder<i32, String, Url, Url> {
                 self.node_id,
                 self.advertised_listener.clone(),
             ))
-            .map(|storage| Box::new(storage) as Box<dyn Storage>)
+            .map(|storage| Box::new(StorageContainer::Null(storage)) as Box<dyn Storage>)
             .map(Arc::new),
 
             #[cfg(not(any(
@@ -2504,7 +2728,7 @@ impl Builder<i32, String, Url, Url> {
                 self.node_id,
                 self.advertised_listener.clone(),
             ))
-            .map(|storage| Box::new(storage) as Box<dyn Storage>)
+            .map(|storage| Box::new(StorageContainer::Null(storage)) as Box<dyn Storage>)
             .map(Arc::new),
 
             #[cfg(any(
@@ -2576,6 +2800,27 @@ pub struct ScramCredential {
 
 #[async_trait]
 impl Storage for StorageContainer {
+    fn capabilities(&self) -> StorageCapabilities {
+        match self {
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(_) => StorageCapabilities::phase06_dynostore(),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(_) => StorageCapabilities::phase06_lite(),
+
+            Self::Null(_) => StorageCapabilities::phase06_null(),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(_) => StorageCapabilities::phase06_postgres(),
+
+            #[cfg(feature = "slatedb")]
+            Self::Slate(_) => StorageCapabilities::phase06_slatedb(),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(_) => StorageCapabilities::phase06_turso(),
+        }
+    }
+
     #[instrument(skip_all)]
     async fn register_broker(&self, broker_registration: BrokerRegistrationRequest) -> Result<()> {
         let attributes = [KeyValue::new("method", "register_broker")];

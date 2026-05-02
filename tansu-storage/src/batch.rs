@@ -49,8 +49,8 @@ use uuid::Uuid;
 use crate::{
     BrokerRegistrationRequest, Error, GroupDetail, ListOffsetResponse, METER, MetadataResponse,
     NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse, Result,
-    ScramCredential, Storage, TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse,
-    TxnOffsetCommitRequest, UpdateError, Version,
+    ScramCredential, Storage, StorageCapabilities, TopicId, Topition, TxnAddPartitionsRequest,
+    TxnAddPartitionsResponse, TxnOffsetCommitRequest, UpdateError, Version,
 };
 
 static BATCH_REQUESTS_LENGTH: LazyLock<Gauge<u64>> =
@@ -296,6 +296,10 @@ impl<G> Storage for ProduceRequestBatcher<G>
 where
     G: Storage + Clone,
 {
+    fn capabilities(&self) -> StorageCapabilities {
+        self.storage.capabilities()
+    }
+
     async fn register_broker(&self, broker_registration: BrokerRegistrationRequest) -> Result<()> {
         self.storage.register_broker(broker_registration).await
     }

@@ -12,17 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::BTreeMap;
+
 use rama::{
     Context, Layer, Service,
     layer::{HijackLayer, MapResponseLayer},
 };
 use tansu_sans_io::{
-    ApiKey as _, ApiVersionsRequest, ErrorCode, Frame, Header, MetadataRequest, MetadataResponse,
-    metadata_response::MetadataResponseBroker,
+    ApiKey as _, ApiVersionsRequest, ApiVersionsResponse, ErrorCode, Frame, Header,
+    MetadataRequest, MetadataResponse, metadata_response::MetadataResponseBroker,
 };
 use tansu_service::{
-    BytesFrameLayer, BytesLayer, FrameApiKeyMatcher, FrameBytesLayer, FrameRequestLayer,
-    FrameRouteService, FrameService, RequestFrameLayer, RequestLayer, ResponseService,
+    ApiVersionRange, BytesFrameLayer, BytesLayer, FrameApiKeyMatcher, FrameBytesLayer,
+    FrameRequestLayer, FrameRouteService, FrameService, RequestFrameLayer, RequestLayer,
+    ResponseService,
 };
 use tracing::debug;
 
@@ -127,6 +130,25 @@ mod doctest_code_a {
     }
 }
 
+fn explicit_advertised_versions() -> BTreeMap<i16, ApiVersionRange> {
+    BTreeMap::from([
+        (
+            ApiVersionsRequest::KEY,
+            ApiVersionRange {
+                min_version: 0,
+                max_version: 4,
+            },
+        ),
+        (
+            MetadataRequest::KEY,
+            ApiVersionRange {
+                min_version: 12,
+                max_version: 12,
+            },
+        ),
+    ])
+}
+
 #[tokio::test]
 async fn simple_routes() -> Result<(), Error> {
     let _guard = init_tracing()?;
@@ -193,6 +215,135 @@ async fn simple_routes() -> Result<(), Error> {
 
     let response = service.serve(ctx, request).await?;
     assert_eq!(Some(cluster_id.into()), response.cluster_id);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn explicit_api_versions_advertisement() -> Result<(), Error> {
+    let _guard = init_tracing()?;
+
+    let route = FrameRouteService::builder()
+        .with_advertised_versions(explicit_advertised_versions())
+        .with_service(
+            RequestLayer::<MetadataRequest>::new().into_layer(ResponseService::new(
+                |_ctx: Context<()>, _req: MetadataRequest| {
+                    Ok::<_, Error>(
+                        MetadataResponse::default()
+                            .brokers(Some([].into()))
+                            .topics(Some([].into()))
+                            .cluster_id(Some("abc".into()))
+                            .controller_id(Some(111))
+                            .throttle_time_ms(Some(0))
+                            .cluster_authorized_operations(Some(-1)),
+                    )
+                },
+            )),
+        )
+        .and_then(|builder| builder.build())?;
+
+    let service = (
+        RequestFrameLayer,
+        FrameBytesLayer,
+        BytesLayer,
+        BytesFrameLayer::default(),
+    )
+        .into_layer(route);
+
+    let response = service
+        .serve(
+            Context::default(),
+            ApiVersionsRequest::default()
+                .client_software_name(Some("abcba".into()))
+                .client_software_version(Some("12321".into())),
+        )
+        .await?;
+
+    assert_eq!(ErrorCode::None, ErrorCode::try_from(response.error_code)?);
+
+    let api_versions = response
+        .api_keys
+        .unwrap_or_default()
+        .into_iter()
+        .map(|api_version| {
+            (
+                api_version.api_key,
+                api_version.min_version,
+                api_version.max_version,
+            )
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        vec![
+            (ApiVersionsRequest::KEY, 0, 4),
+            (MetadataRequest::KEY, 12, 12)
+        ],
+        api_versions
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn unsupported_api_versions_request_returns_version_zero() -> Result<(), Error> {
+    let _guard = init_tracing()?;
+
+    let route = FrameRouteService::builder()
+        .with_advertised_versions(explicit_advertised_versions())
+        .with_service(
+            RequestLayer::<MetadataRequest>::new().into_layer(ResponseService::new(
+                |_ctx: Context<()>, _req: MetadataRequest| {
+                    Ok::<_, Error>(
+                        MetadataResponse::default()
+                            .brokers(Some([].into()))
+                            .topics(Some([].into()))
+                            .cluster_id(Some("abc".into()))
+                            .controller_id(Some(111))
+                            .throttle_time_ms(Some(0))
+                            .cluster_authorized_operations(Some(-1)),
+                    )
+                },
+            )),
+        )
+        .and_then(|builder| builder.build())?;
+
+    let service = (FrameBytesLayer, BytesLayer, BytesFrameLayer::default()).into_layer(route);
+
+    let frame = Frame {
+        header: Header::Request {
+            api_key: ApiVersionsRequest::KEY,
+            api_version: 5,
+            correlation_id: 17,
+            client_id: Some("tansu".into()),
+        },
+        body: ApiVersionsRequest::default().into(),
+        size: 0,
+    };
+
+    let response = service.serve(Context::default(), frame).await?;
+    assert_eq!(17, response.correlation_id()?);
+
+    let api_versions: ApiVersionsResponse = response.body.try_into()?;
+    assert_eq!(
+        ErrorCode::UnsupportedVersion,
+        ErrorCode::try_from(api_versions.error_code)?
+    );
+
+    let api_versions = api_versions
+        .api_keys
+        .unwrap_or_default()
+        .into_iter()
+        .map(|api_version| {
+            (
+                api_version.api_key,
+                api_version.min_version,
+                api_version.max_version,
+            )
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(vec![(ApiVersionsRequest::KEY, 0, 4)], api_versions);
 
     Ok(())
 }
