@@ -1,0 +1,673 @@
+Absolutely — I would **not** use the generic 18-milestone “from scratch” roadmap as-is. Tansu is already much farther along in the protocol/server/storage skeleton, but it also has a very specific architectural identity: **stateless Kafka-compatible brokers backed by PostgreSQL, SQLite/libSQL, S3, or memory**, with schema/data-lake integrations. The plan has to preserve that advantage while closing the semantic gaps that make Kafka feel “boringly interchangeable” to existing clients. Tansu’s README already positions it as a drop-in Kafka replacement and shows regular Kafka CLI/librdkafka usage, but it also documents the current simplification that all brokers are effectively node `111` / leader / ISR for partitions. ([GitHub][1])
+
+The key strategic point: **“Kafka-compatible” and “100% drop-in Kafka replacement” are different bars.** Tansu’s current docs intentionally advertise a consensus-free/stateless model: no broker storage replication, every broker as leader/coordinator, and no ISR concept in the Kafka sense. That is a brilliant simplification for many workloads, but true drop-in parity requires either faithfully emulating those observable Kafka semantics or introducing a strict Kafka-parity mode. ([Tansu][2])
+
+## My conclusion
+
+I would make this a **15-stage Tansu-specific plan**.
+
+Not 3 stages, because the remaining work is not “just add APIs.” Not 30 stages, because the work can be grouped around hard semantic gates. The right unit is: **each stage should unlock a new class of real Kafka deployments without regressing the previous one.**
+
+The biggest change from your scratch plan is this:
+
+> Tansu should first become a certified Kafka client/app replacement, then a full Kafka cluster-behavior replacement, then a production migration target.
+
+That means the first stages focus on **truthful ApiVersions, no hangs, no over-advertising, and client compatibility**, because those are the fastest ways to make existing stacks trust it.
+
+---
+
+## Where Tansu really is today
+
+Tansu already has strong building blocks:
+
+* `tansu-sans-io` is a generated Kafka protocol implementation based on Kafka’s JSON message descriptors, with request/response/frame/header/body machinery and serde-based encoding/decoding. That means the protocol foundation is real, not hand-written toy parsing. ([Docs.rs][3])
+* The workspace is broad: broker, service, storage, client, proxy, schema, perf, auth, CLI/topic/cat tooling, fuzzing, and lakehouse-related crates. The workspace also forbids unsafe Rust, which is a great foundation for a “no JVM, no footguns” story. ([GitHub][4])
+* The broker/storage route layer already wires many important APIs: Produce, Fetch, Metadata, ListOffsets, Create/DeleteTopics, DescribeConfigs, InitProducerId, AddPartitionsToTxn, AddOffsetsToTxn, TxnOffsetCommit, ACL/SCRAM-related routes, plus group coordinator routes like JoinGroup, SyncGroup, Heartbeat, LeaveGroup, OffsetCommit, and OffsetFetch.  
+* The storage abstraction already exposes broker registration, produce/fetch, list offsets, offset commits/fetches, group updates, producer initialization, transaction primitives, maintenance, cluster/node/listener metadata, and SCRAM credential operations. ([Docs.rs][5])
+
+But there are also important warning signs:
+
+* `ApiVersionsService` currently derives min/max versions from descriptor metadata for supported routed API keys. That is dangerous if the route exists but only some versions are semantically correct. A recent open issue reports Tansu advertising Fetch `0..17`, after which librdkafka/Kafka CLI clients can hang waiting for a Fetch response.  
+* Transaction support is visibly partial: the codec has `EndTxnRequest`, and the storage trait has `txn_end`, but search only surfaced the message descriptor rather than a broker route for `EndTxn`. That is exactly the kind of “surface exists, semantic path incomplete” gap that must be eliminated before claiming drop-in parity.  ([Docs.rs][5])
+* Security is not just “add a dependency”: the broker code has SASL/TLS config fields and constructs a `TlsAcceptor`, but the accept loop still hands the raw TCP stream to the service path. There is also an open issue requesting Kafka-style TLS/mTLS listener support.  
+* Cleanup/compaction and backend uniformity are still active concerns, especially for S3/dynostore-backed topics. There is an open issue specifically calling out delete/compact policy support for dynostore, and a closed performance issue around dynostore timestamp-index behavior.  
+
+So: **Tansu is a serious starting point, but the next work must be semantic certification, not just feature accumulation.**
+
+---
+
+# The 15-stage Tansu-specific path to 100% drop-in parity
+
+## 1. Create the Kafka parity contract and certification ledger
+
+**Goal:** Define exactly what “100% drop-in” means for Tansu.
+
+This should become a living compatibility matrix, generated from Kafka protocol descriptors and Tansu’s own route registry. It should track every API key, every supported protocol version, every request/response field, and the semantic status of that API.
+
+**Tansu-specific work:**
+
+* Define target Kafka line: I would target **Kafka 4.1.x/4.2-era clients**, while keeping older 2.x/3.x clients in the test matrix.
+* Divide parity into profiles:
+
+  * `tansu-native`: stateless, storage-backed, consensus-free behavior.
+  * `kafka-parity`: strict observable Kafka behavior.
+  * `compat-preview`: APIs present but not production-certified.
+* Create a per-API ledger:
+
+  * codec support
+  * route exists
+  * advertised by ApiVersions
+  * semantic implementation complete
+  * Java client test
+  * librdkafka test
+  * franz-go/Sarama test
+  * Kafka CLI/Admin test
+  * failure-mode test
+* Do **not** let marketing language outrun the ledger.
+
+**Exit gate:** No API is advertised unless its implementation is version-correct or intentionally returns the correct Kafka error.
+
+This matters because Apache Kafka’s public API surface is broad: Producer, Consumer, Share Consumer preview, Streams, Connect, and Admin are all part of the ecosystem Tansu must survive around. ([Apache Kafka][6])
+
+---
+
+## 2. Fix ApiVersions truthfulness before adding more APIs
+
+**Goal:** Stop clients from selecting protocol versions Tansu cannot actually satisfy.
+
+This is probably the highest-leverage early stage.
+
+Right now, Tansu’s `ApiVersionsService` is structurally elegant, but too optimistic: if a route is registered, it can advertise the descriptor’s min/max version. That is not the same as saying the broker semantics for that version are correct. 
+
+**Tansu-specific work:**
+
+* Replace “routed API key ⇒ descriptor max version” with:
+
+  * `ImplementedVersionRange`
+  * `TestedVersionRange`
+  * `AdvertisedVersionRange`
+* Make `Fetch`, `Produce`, `JoinGroup`, `SyncGroup`, `OffsetCommit`, `TxnOffsetCommit`, and `InitProducerId` advertise only versions with passing compatibility tests.
+* Add per-version golden tests from:
+
+  * Kafka Java client
+  * librdkafka
+  * franz-go
+  * Sarama
+  * Kafka CLI tools
+* Add a negative test suite:
+
+  * unsupported API version returns `UNSUPPORTED_VERSION`
+  * unsupported feature returns the Kafka-specific error
+  * no route can hang the client
+  * unknown/unsupported route cannot panic
+
+**Exit gate:** Every advertised API version has a passing client-level test and a no-hang guarantee.
+
+---
+
+## 3. Harden the existing common path: Produce, Fetch, Metadata, ListOffsets, groups
+
+**Goal:** Make Tansu reliable for the common “topic → produce → consume → commit offsets → rebalance” app path.
+
+This is the stage that turns Tansu from “promising” into “usable for real apps.”
+
+**Tansu-specific work:**
+
+* Fix Fetch lifecycle so **every FetchRequest receives a FetchResponse**, even empty, timeout, throttled, or errored.
+* Add bounded in-flight request accounting per connection.
+* Add backpressure and cancellation on disconnect.
+* Certify `Fetch` v0 through whichever max version is advertised.
+* Fix incremental fetch sessions or stop advertising versions that require them.
+* Strengthen common group flow:
+
+  * JoinGroup
+  * SyncGroup
+  * Heartbeat
+  * LeaveGroup
+  * OffsetCommit
+  * OffsetFetch
+* Make group rebalance tests multi-client, multi-language, and concurrent.
+* Add “hang detector” tests around every long-polling API.
+
+**Exit gate:** Kafka CLI, Java client, librdkafka, franz-go, and Sarama can all run the same smoke workload for hours without hangs, stuck groups, or memory growth.
+
+This is urgent because the open Fetch issue shows exactly the failure mode that kills drop-in trust: a client sends a valid request, Tansu accepts it, and no response returns. 
+
+---
+
+## 4. Complete route coverage with correct “not yet” behavior
+
+**Goal:** Make every stable Kafka API safe to call, even before every API is fully implemented.
+
+Kafka tools probe a lot of APIs. Kafka Connect, Streams, AdminClient, UI tools, schema tools, and monitoring tools often call APIs the application itself never calls.
+
+**Tansu-specific work:**
+
+* Build a full route-vs-codec map from `tansu-sans-io/message/*.json`.
+* Add handler skeletons for all stable APIs not yet routed.
+* Implement correct Kafka-compatible error semantics for APIs not yet semantically complete.
+* Add compatibility tests for:
+
+  * `CreatePartitions`
+  * `DeleteAcls`
+  * `AlterClientQuotas`
+  * `DescribeClientQuotas`
+  * `DescribeLogDirs`
+  * `AlterReplicaLogDirs`
+  * `DescribeProducers`
+  * `DescribeTransactions`
+  * `ListTransactions`
+  * `EndTxn`
+  * `OffsetDelete`
+  * `ElectLeaders`
+  * feature/update APIs
+* Ensure `EndTxn` is actually wired, not merely represented in the codec/storage layer.
+
+**Exit gate:** No mainstream Kafka AdminClient, CLI, Connect worker, Streams app, or UI tool crashes or hangs because Tansu lacks a route.
+
+---
+
+## 5. Define a real Kafka log contract inside Tansu
+
+**Goal:** Stop thinking in terms of “storage backends” first and define the Kafka log invariants every backend must satisfy.
+
+Tansu does not necessarily need to copy Kafka’s exact disk layout in every mode. But it does need a **KafkaLog contract** that all engines must honor.
+
+**Tansu-specific work:**
+
+Create a `tansu-log` layer with these invariants:
+
+* contiguous offsets per topic-partition
+* base offset, log start offset, log end offset
+* high watermark
+* last stable offset
+* leader epoch cache
+* timestamp index
+* offset index
+* producer state snapshot
+* transaction index
+* batch validation
+* record-batch CRC validation
+* compression codec correctness
+* tombstone semantics
+* retention and compaction boundaries
+* partial-write recovery semantics
+* truncation semantics
+
+Then map backends to that contract:
+
+* SQLite/libSQL implementation
+* PostgreSQL implementation
+* S3/dynostore implementation
+* memory test implementation
+* optional local segment-file implementation for strict Kafka-parity/performance mode
+
+**Exit gate:** Produce/fetch/list-offset behavior is identical across backends except for documented performance/operational differences.
+
+---
+
+## 6. Make Produce and Fetch semantically Kafka-exact
+
+**Goal:** Get the hot path correct before distributed behavior.
+
+**Produce work:**
+
+* `acks=0/1/all`
+* `min.insync.replicas`
+* batch validation
+* max request/message/batch size
+* compression: gzip, snappy, lz4, zstd
+* partition append ordering
+* idempotent producer sequence checks
+* duplicate/out-of-order sequence handling
+* producer epoch fencing
+* throttling behavior
+* exact Kafka error codes
+
+**Fetch work:**
+
+* high watermark reads
+* log start offset reads
+* last stable offset for `read_committed`
+* long polling
+* `min_bytes` / `max_bytes` behavior
+* partition-level limits
+* fetch sessions
+* remote/tiered fetch behavior
+* offset-out-of-range behavior
+* isolation-level correctness
+
+**Exit gate:** Kafka producer-perf-test and consumer-perf-test behave correctly against Tansu with Java and librdkafka clients, across all advertised protocol versions.
+
+---
+
+## 7. Finish retention, compaction, and maintenance across every storage engine
+
+**Goal:** Topic configs must mean the same thing regardless of storage engine.
+
+Tansu already has maintenance concepts and storage-specific cleanup work, but drop-in Kafka users expect `cleanup.policy`, `retention.ms`, `retention.bytes`, tombstones, and compaction to behave uniformly. The current dynostore cleanup-policy issue shows this is not yet universally true. 
+
+**Tansu-specific work:**
+
+* Implement `cleanup.policy=delete`
+* Implement `cleanup.policy=compact`
+* Support `compact,delete`
+* Respect tombstones
+* Respect `delete.retention.ms`
+* Respect `min.cleanable.dirty.ratio`
+* Respect segment roll configs
+* Make maintenance idempotent and resumable
+* Ensure compaction does not violate transactional visibility
+* Ensure retention does not break committed offsets unexpectedly
+* Add backend-specific performance budgets
+
+**Exit gate:** Switching a topic from SQLite to Postgres to S3 does not silently change retention/compaction semantics.
+
+---
+
+## 8. Build a Kafka-parity metadata/controller layer
+
+**Goal:** Introduce real observable cluster metadata semantics.
+
+This is the architectural fork. Tansu-native mode can remain stateless and optimistic. Kafka-parity mode needs stable, client-visible semantics around brokers, topics, partitions, leaders, ISR, epochs, assignments, and feature levels.
+
+**Tansu-specific work:**
+
+* Introduce a `tansu-controller` or equivalent module.
+* Maintain broker registrations and liveness.
+* Track broker IDs separately from “the receiving broker.”
+* Track topic IDs, partition assignments, leader, replicas, ISR, offline replicas.
+* Track leader epochs.
+* Support partition reassignment state.
+* Support feature flags and finalized features.
+* Stop using “all brokers are node 111” in Kafka-parity mode.
+* Decide whether the controller is:
+
+  * storage-backed with compare-and-swap leases, or
+  * all-Rust Raft/KRaft-like metadata quorum, or
+  * hybrid: storage-backed metadata for Tansu-native, quorum-backed metadata for strict parity.
+
+**Exit gate:** `kafka-topics --describe`, AdminClient metadata calls, reassignment tools, and leader/ISR inspection behave like Kafka, not like a simplified demo.
+
+This does not mean “bring back the JVM.” It means “if consensus is needed for strict parity, implement it in Rust.”
+
+---
+
+## 9. Implement replication/ISR semantics or a certified virtual-ISR equivalent
+
+**Goal:** Make `replication.factor`, `acks=all`, ISR, leader epochs, and failover mean something real.
+
+There are two possible designs:
+
+1. **Strict replicated-broker mode:** local per-broker logs, follower fetch, ISR, high-watermark advancement, leader election.
+2. **Storage-backed virtual replica mode:** durable storage is the source of truth, brokers are execution nodes, and ISR/acks semantics are emulated through leases, fencing, durability acknowledgments, and liveness policy.
+
+For “100% Kafka replacement,” I would implement both paths eventually:
+
+* virtual ISR first, because it preserves Tansu’s advantage;
+* strict replication mode later, because some operational/admin semantics are otherwise hard to certify.
+
+**Tansu-specific work:**
+
+* follower fetch or equivalent replication protocol
+* high watermark advancement
+* leader epoch fencing
+* leader election
+* truncation on leader change
+* `NotLeaderOrFollower` behavior
+* `UnknownLeaderEpoch` / `FencedLeaderEpoch`
+* ISR shrink/expand
+* `min.insync.replicas`
+* reassignment
+* preferred leader election
+* broker failure detection
+* unclean leader election policy
+
+**Exit gate:** Killing brokers during produce/fetch/rebalance produces Kafka-equivalent client behavior and no offset corruption.
+
+---
+
+## 10. Rebuild consumer offset storage around Kafka’s internal-topic semantics
+
+**Goal:** Make committed offsets behave exactly as Kafka clients expect.
+
+Tansu already has storage-level offset commit/fetch methods, which is a good base. But Kafka parity requires exact behavior around offset metadata, leader epochs, group generations, retention, deletion, compaction, and transactional offset commits.
+
+**Tansu-specific work:**
+
+* Implement or emulate `__consumer_offsets`.
+* Store offsets with:
+
+  * group
+  * topic
+  * partition
+  * committed offset
+  * leader epoch
+  * metadata
+  * commit timestamp
+  * expire timestamp
+* Implement compaction-compatible offset records.
+* Support OffsetCommit/OffsetFetch all advertised versions.
+* Support OffsetDelete.
+* Support offset retention.
+* Make offset commits transactional when used through `TxnOffsetCommit`.
+* Validate generation/member epoch/member ID correctly.
+
+**Exit gate:** Consumers recover, rebalance, commit, seek, and resume exactly as they would on Kafka.
+
+---
+
+## 11. Finish the consumer group coordinator to full parity
+
+**Goal:** Make group membership boringly correct.
+
+Tansu already has group coordinator routes and tests, so this is a refinement and hardening stage rather than a from-scratch build.  
+
+**Tansu-specific work:**
+
+* Complete classic group protocol:
+
+  * JoinGroup
+  * SyncGroup
+  * Heartbeat
+  * LeaveGroup
+  * generation IDs
+  * member IDs
+  * static membership
+  * rebalance timeouts
+  * session timeouts
+  * leader selection
+  * protocol negotiation
+* Support cooperative rebalancing correctly.
+* Support common assignors:
+
+  * range
+  * round-robin
+  * sticky
+  * cooperative sticky
+* Add new consumer group protocol support where needed for modern Kafka clients.
+* Add group state machine model tests.
+* Certify with Java, librdkafka, franz-go, Sarama, aiokafka.
+* Test:
+
+  * one consumer
+  * many consumers
+  * consumers joining/leaving
+  * static members restarting
+  * heartbeats delayed
+  * partition count changes
+  * topic deletion during membership
+  * commit during rebalance
+
+**Exit gate:** Kafka Streams, Connect distributed workers, and regular consumer groups can rebalance repeatedly without lost assignment or unknown-member loops.
+
+---
+
+## 12. Complete idempotence and transactions
+
+**Goal:** Support exactly-once semantics, not just transaction-looking APIs.
+
+Tansu already has several transaction-adjacent pieces, but full Kafka parity requires the whole pipeline: producer IDs, epochs, sequence numbers, transaction coordinator, transaction log, markers, fencing, LSO, and `read_committed`.
+
+Kafka 4.x also tightened transaction semantics with Transactions Server Side Defense / KIP-890, where the producer epoch is bumped on every transaction when the feature is enabled. ([Apache Kafka][7])
+
+**Tansu-specific work:**
+
+* Wire `EndTxn`.
+* Implement transaction coordinator state machine.
+* Implement transactional ID lifecycle.
+* Implement producer ID allocation.
+* Implement producer epoch fencing.
+* Implement sequence-number dedupe per topic-partition.
+* Implement transaction timeout handling.
+* Implement transaction markers.
+* Implement transaction state log or equivalent.
+* Implement `read_committed` fetch and last stable offset.
+* Implement transactional offset commits.
+* Support Kafka 4.x `transaction.version` behavior.
+* Add cross-partition/cross-topic transaction tests.
+* Add crash tests:
+
+  * crash before commit marker
+  * crash after commit marker
+  * crash during offset commit
+  * producer restart with same transactional ID
+  * zombie producer fencing
+
+**Exit gate:** Kafka exactly-once producer and Kafka Streams EOS workloads pass.
+
+---
+
+## 13. Complete Admin, configs, ACLs, quotas, and security
+
+**Goal:** Make Tansu operable in real secured backend stacks.
+
+This is where Tansu moves from “application-compatible” to “platform-compatible.”
+
+**Tansu-specific work:**
+
+* Listener security:
+
+  * PLAINTEXT
+  * SSL
+  * SASL_PLAINTEXT
+  * SASL_SSL
+  * mTLS optional/required
+* Actually use the TLS acceptor on the listener path.
+* SASL:
+
+  * PLAIN
+  * SCRAM-SHA-256
+  * SCRAM-SHA-512
+  * OAUTHBEARER where practical
+* Principal extraction and mapping.
+* ACL authorizer:
+
+  * topic
+  * group
+  * cluster
+  * transactional ID
+  * delegation token if supported
+* Quotas:
+
+  * produce byte-rate
+  * fetch byte-rate
+  * request percentage/time
+  * connection quotas
+  * tenant quotas
+* Admin APIs:
+
+  * CreatePartitions
+  * DeleteAcls
+  * Alter/DescribeClientQuotas
+  * IncrementalAlterConfigs
+  * DescribeConfigs
+  * DescribeCluster
+  * DescribeLogDirs
+  * AlterReplicaLogDirs
+  * List/AlterPartitionReassignments
+  * ElectLeaders
+  * UpdateFeatures
+* Config compatibility:
+
+  * broker configs
+  * topic configs
+  * group configs
+  * dynamic configs
+  * feature flags
+
+**Exit gate:** A secured Kafka deployment can swap bootstrap servers to Tansu without rewriting application auth/security assumptions.
+
+---
+
+## 14. Certify ecosystem compatibility
+
+**Goal:** “Drop-in” must mean more than producers and consumers.
+
+Kafka is an ecosystem. Backend stacks depend on tools around Kafka as much as Kafka itself.
+
+**Tansu-specific certification matrix:**
+
+* Kafka Java clients:
+
+  * Producer
+  * Consumer
+  * Admin
+  * Streams
+* librdkafka / confluent-kafka-python
+* franz-go
+* Sarama
+* aiokafka
+* Kafka CLI:
+
+  * `kafka-topics`
+  * `kafka-console-producer`
+  * `kafka-console-consumer`
+  * `kafka-consumer-groups`
+  * `kafka-configs`
+  * `kafka-acls`
+  * `kafka-producer-perf-test`
+  * `kafka-consumer-perf-test`
+* Kafka Connect distributed mode
+* Debezium
+* Flink Kafka connector
+* Spark Kafka connector
+* MirrorMaker 2 or Tansu-native mirror maker
+* Redpanda Console / Kafbat UI
+* Schema Registry compatibility:
+
+  * Confluent REST API compatibility
+  * Apicurio compatibility where useful
+  * subject naming strategies
+  * compatibility modes
+  * Avro/JSON/Protobuf schema evolution
+
+**Exit gate:** “Existing Kafka backend stack” means app code, clients, common ops tools, and connectors all run without source-code changes.
+
+---
+
+## 15. Performance, chaos, migration, and release certification
+
+**Goal:** Earn the “replace Kafka overnight” claim.
+
+This final stage is not polish. It is where the claim becomes defensible.
+
+**Performance work:**
+
+* Establish a public benchmark suite:
+
+  * Kafka vs Tansu on same hardware
+  * same clients
+  * same payloads
+  * same compression
+  * same partition counts
+  * p50/p95/p99 latency
+  * max throughput
+  * recovery time
+  * disk/object-store/network cost
+* Optimize:
+
+  * zero-copy protocol encoding
+  * batch append paths
+  * compression hot paths
+  * fetch session memory
+  * Postgres prepared statement caching
+  * S3 index layout
+  * partition lock striping
+  * async read/write scheduling
+  * backpressure
+* Use `tansu-perf` as the foundation, but make it comparative and reproducible.
+
+**Reliability work:**
+
+* Jepsen-style tests.
+* Model checking for:
+
+  * group coordinator
+  * transaction coordinator
+  * controller
+  * producer sequence state
+* Crash/restart tests.
+* Storage-failure tests.
+* Network partition tests.
+* Concurrent writer tests.
+* Object-store partial failure tests.
+* Rolling upgrade tests.
+* Downgrade/rollback tests.
+
+**Migration work:**
+
+* Kafka-to-Tansu topic/config/ACL/quota migrator.
+* Tansu-to-Kafka rollback migrator.
+* Mirror/cutover tool.
+* Offset migration.
+* Transactional-ID migration strategy.
+* DNS/bootstrap cutover guide.
+* Compatibility release notes.
+* Certified workload profiles:
+
+  * “basic producer/consumer”
+  * “consumer groups”
+  * “Kafka Connect”
+  * “Kafka Streams”
+  * “transactions/EOS”
+  * “secured multi-tenant”
+  * “tiered/lakehouse”
+
+**Exit gate:** A release can honestly say: “For these Kafka versions, these clients, these APIs, and these workloads, Tansu is a drop-in replacement.”
+
+---
+
+# The architectural call I would make
+
+I would **not** throw away Tansu’s stateless/storage-backed design. That is the soul of the project.
+
+But I would introduce a formal split:
+
+```text
+Tansu native mode
+  - stateless brokers
+  - storage-backed durability
+  - no broker replication
+  - cheap, elastic, lakehouse-friendly
+  - best for new deployments and cost/perf wins
+
+Kafka parity mode
+  - strict ApiVersions
+  - real broker identities
+  - controller/metadata semantics
+  - leader/ISR/epoch semantics
+  - transaction/group/admin/security parity
+  - certified for replacing existing Kafka clusters
+```
+
+This lets Tansu win twice: keep the elegant “no JVM, no broker-replication tax” path, while building the hard compatibility layer needed for conservative Kafka users.
+
+Kafka’s own tiered-storage model distinguishes local broker log storage from remote storage such as S3, with separate local/remote retention behavior and remote-log metadata semantics. That is a useful reference point: Tansu’s S3/Postgres/SQLite story can be stronger than Kafka’s, but the Kafka-parity mode still has to expose Kafka-compatible log, retention, and metadata behavior. ([Apache Kafka][8])
+
+---
+
+# What I would do first
+
+The first concrete engineering push should be:
+
+1. **Fix ApiVersions advertising.**
+2. **Fix Fetch no-response/hang behavior.**
+3. **Add no-hang tests for every routed API.**
+4. **Wire or hide partial transaction APIs, especially EndTxn.**
+5. **Actually terminate TLS when TLS is configured.**
+6. **Build the compatibility ledger and publish it.**
+
+That is the fastest path from “promising Kafka-compatible Rust broker” to “teams can seriously test this as a Kafka replacement.”
+
+The long-term dream is absolutely compelling: a safe, fast, Rust-native Kafka replacement with storage backends people already trust. But the winning path is ruthless semantic honesty: **advertise only what is certified, certify everything users depend on, and keep the stateless Tansu architecture as the differentiator rather than pretending Kafka’s internals do not matter.**
+
+[1]: https://github.com/tansu-io/tansu "GitHub - tansu-io/tansu: Apache Kafka® compatible broker with S3, PostgreSQL, SQLite, Apache Iceberg and Delta Lake · GitHub"
+[2]: https://docs.tansu.io/docs/features "Features - Docs"
+[3]: https://docs.rs/tansu-sans-io/latest/tansu_sans_io/ "tansu_sans_io - Rust"
+[4]: https://github.com/tansu-io/tansu/blob/main/Cargo.toml "tansu/Cargo.toml at main · tansu-io/tansu · GitHub"
+[5]: https://docs.rs/tansu-storage/latest/tansu_storage/enum.StorageContainer.html "StorageContainer in tansu_storage - Rust"
+[6]: https://kafka.apache.org/41/apis/ "API | Apache Kafka"
+[7]: https://kafka.apache.org/41/operations/transaction-protocol/ "Transaction Protocol | Apache Kafka"
+[8]: https://kafka.apache.org/41/operations/tiered-storage/ "Tiered Storage | Apache Kafka"
+

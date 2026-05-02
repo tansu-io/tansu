@@ -45,8 +45,9 @@ use uuid::Uuid;
 use crate::{
     BrokerRegistrationRequest, Error, GroupDetail, GroupDetailResponse, ListOffsetResponse,
     MetadataResponse, NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse,
-    Result, ScramCredential, Storage, TopicId, Topition, TxnAddPartitionsRequest,
-    TxnAddPartitionsResponse, TxnOffsetCommitRequest, UpdateError, Version,
+    Result, ScramCredential, Storage, StorageCapabilities, TopicId, Topition,
+    TxnAddPartitionsRequest, TxnAddPartitionsResponse, TxnOffsetCommitRequest, UpdateError,
+    Version,
 };
 
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -82,6 +83,10 @@ const MESSAGE: &str = "storage has not been defined";
 
 #[async_trait]
 impl Storage for Engine {
+    fn capabilities(&self) -> StorageCapabilities {
+        StorageCapabilities::phase06_null()
+    }
+
     #[instrument(skip_all)]
     async fn register_broker(&self, _broker_registration: BrokerRegistrationRequest) -> Result<()> {
         Ok(())
@@ -127,10 +132,7 @@ impl Storage for Engine {
         &self,
         _topics: &[DeleteRecordsTopic],
     ) -> Result<Vec<DeleteRecordsTopicResult>> {
-        Err(Error::FeatureNotEnabled {
-            feature: FEATURE.into(),
-            message: MESSAGE.into(),
-        })
+        Err(Error::Api(ErrorCode::KafkaStorageError))
     }
 
     #[instrument(skip_all)]
@@ -157,7 +159,7 @@ impl Storage for Engine {
         _topition: &Topition,
         _deflated: Batch,
     ) -> Result<i64> {
-        Ok(6)
+        Err(Error::Api(ErrorCode::KafkaStorageError))
     }
 
     #[instrument(skip_all)]
@@ -169,12 +171,12 @@ impl Storage for Engine {
         _max_bytes: u32,
         _isolation_level: IsolationLevel,
     ) -> Result<Vec<Batch>> {
-        Ok([].into())
+        Err(Error::Api(ErrorCode::KafkaStorageError))
     }
 
     #[instrument(skip_all)]
     async fn offset_stage(&self, _topition: &Topition) -> Result<OffsetStage> {
-        Ok(OffsetStage::default())
+        Err(Error::Api(ErrorCode::KafkaStorageError))
     }
 
     #[instrument(skip_all)]
@@ -220,9 +222,9 @@ impl Storage for Engine {
                 (
                     topition.to_owned(),
                     ListOffsetResponse {
-                        error_code: ErrorCode::None,
+                        error_code: ErrorCode::KafkaStorageError,
                         timestamp: None,
-                        offset: Some(0),
+                        offset: None,
                     },
                 )
             })

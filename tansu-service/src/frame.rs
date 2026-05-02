@@ -25,8 +25,8 @@ use rama::{Context, Layer, Service, context::Extensions, matcher::Matcher, servi
 use rsasl::config::SASLConfig;
 use tansu_auth::Authentication;
 use tansu_sans_io::{
-    ApiKey, ApiVersionsRequest, Body, Frame, Header, Request, Response, RootMessageMeta,
-    SaslAuthenticateRequest, SaslAuthenticateResponse, SaslHandshakeRequest,
+    ApiKey, ApiVersionsRequest, Body, Frame, Header, ProduceRequest, Request, Response,
+    RootMessageMeta, SaslAuthenticateRequest, SaslAuthenticateResponse, SaslHandshakeRequest,
 };
 use tokio::task::spawn_blocking;
 use tracing::{debug, error, instrument};
@@ -270,6 +270,20 @@ impl<S> BytesFrameService<S> {
     }
 }
 
+fn response_api_version(api_key: i16, api_version: i16) -> i16 {
+    if api_key == ApiVersionsRequest::KEY && api_version > 4 {
+        0
+    } else {
+        api_version
+    }
+}
+
+fn suppress_response(req: &Frame) -> bool {
+    ProduceRequest::try_from(req.body.clone())
+        .map(|request| request.acks == 0)
+        .unwrap_or(false)
+}
+
 impl<S, State> Service<State, Bytes> for BytesFrameService<S>
 where
     S: Service<State, Frame, Response = Frame>,
@@ -328,6 +342,8 @@ where
 
         let api_version = req.api_version()?;
         let correlation_id = req.correlation_id()?;
+        debug!(api_key, api_version, correlation_id, event = "accepted");
+        let suppress_response = suppress_response(&req);
 
         if let Some(pb) = ctx.get::<ProgressBar>() {
             let api_name = req.api_name();
@@ -340,17 +356,27 @@ where
             KeyValue::new("api_key", api_key as i64),
             KeyValue::new("api_version", api_version as i64),
         ];
+        let response_api_version = response_api_version(api_key, api_version);
 
         let Frame { body, .. } = {
             if let Some(authentication) = self.af.as_ref().map(|af| af.authentication.clone()) {
                 assert!(ctx.insert(authentication).is_none());
             }
 
+            debug!(api_key, api_version, correlation_id, event = "dispatched");
+
             self.inner
                 .serve(ctx, req)
                 .await
                 .inspect(|response| debug!(?response))?
         };
+
+        debug!(api_key, api_version, correlation_id, event = "responded");
+
+        if suppress_response {
+            API_REQUESTS.add(1, &attributes);
+            return Ok(Bytes::new());
+        }
 
         if sasl_handshake_v0 {
             //  If SaslHandshakeRequest version is v0, a series of SASL client and server tokens
@@ -396,7 +422,7 @@ where
                     Header::Response { correlation_id },
                     body,
                     api_key,
-                    api_version,
+                    response_api_version,
                 )
             })
             .await?
@@ -452,6 +478,7 @@ where
 
         let api_key = req.api_key()?;
         let api_version = req.api_version()?;
+        let response_api_version = response_api_version(api_key, api_version);
 
         let req = Frame::request(req.header, req.body)?;
 
@@ -459,7 +486,8 @@ where
             .serve(ctx, req)
             .await
             .and_then(|response| {
-                Frame::response_from_bytes(response, api_key, api_version).map_err(Into::into)
+                Frame::response_from_bytes(response, api_key, response_api_version)
+                    .map_err(Into::into)
             })
             .inspect(|response| debug!(?response))
     }

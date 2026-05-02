@@ -41,8 +41,8 @@ use uuid::Uuid;
 use crate::{
     BrokerRegistrationRequest, GroupDetail, ListOffsetResponse, METER, MetadataResponse,
     NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse, Result,
-    ScramCredential, Storage, TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse,
-    TxnOffsetCommitRequest, UpdateError, Version,
+    ScramCredential, Storage, StorageCapabilities, TopicId, Topition, TxnAddPartitionsRequest,
+    TxnAddPartitionsResponse, TxnOffsetCommitRequest, UpdateError, Version,
 };
 
 static SEMAPHORE_ACQUIRE_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
@@ -86,6 +86,10 @@ impl<G> Storage for SemaphoreProxy<G>
 where
     G: Storage + Clone,
 {
+    fn capabilities(&self) -> StorageCapabilities {
+        self.storage.capabilities()
+    }
+
     async fn register_broker(&self, broker_registration: BrokerRegistrationRequest) -> Result<()> {
         let start = SystemTime::now();
         let _permit = self.semaphore.acquire().await.inspect(|_| {

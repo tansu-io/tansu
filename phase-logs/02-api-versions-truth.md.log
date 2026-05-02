@@ -1,0 +1,33 @@
+# Phase 02: ApiVersions Truth
+
+## Date
+2026-05-02
+
+## Phase File
+tips/phases/02-api-versions-truth.md
+
+## Intent
+Harden Tansu's API versioning to strictly adhere to "no advertised API without proof". Ensure that `tansu-service` rejects any request versions outside the explicitly approved ranges by responding with `ErrorCode::UnsupportedVersion` (35), synthesized as correctly typed protocol responses.
+
+## Files Touched
+- `tansu-service/src/api.rs`
+- `tansu-broker/tests/compatibility_contract.rs`
+- `phase-logs/index.json`
+- `phase-logs/02-api-versions-truth.md.log`
+
+## Ledger Rows Touched
+N/A (No new ledger rows added, but bounded execution enforced for all APIs)
+
+## Tests Added
+- `tansu-broker/tests/compatibility_contract.rs::broker_rejects_unsupported_request_versions`
+
+## Verification Commands
+- `cargo test -p tansu-broker --test compatibility_contract`
+- `cargo check -p tansu-service -p tansu-broker`
+- `cargo fmt --all`
+
+## Outcomes
+`FrameRouteService` now compares every incoming request against `advertised_versions`. If out of bounds, it intercepts the request and generates a strongly-typed API response frame mapped with `ErrorCode::UnsupportedVersion` (code 35). `ApiVersionsRequest` bypasses this bounds-checking because it safely handles unsupported versions internally to correctly return its API boundaries. E2E tests confirm that out-of-bounds versions are correctly intercepted and properly serialized.
+
+## Residual Risks
+None.

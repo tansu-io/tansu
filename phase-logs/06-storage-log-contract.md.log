@@ -1,0 +1,45 @@
+Date: 2026-05-02
+
+Phase 06 storage capability API:
+- Added `StorageEngine`, `StorageFeature`, `StorageCertification`, and `StorageCapabilities` to `tansu-storage`.
+- Added `Storage::capabilities()` with a safe default and exact overrides for `StorageContainer`, `Arc<T>`, and storage wrappers that delegate directly.
+- Centralized Phase 06 certification helpers for postgres, memory, libSQL, dynostore, SlateDB, Turso, and null.
+
+Engine tier decisions:
+- PostgreSQL: `production-parity` for the Phase 06 core log invariants.
+- SQLite/libSQL: `limited-parity` for the Phase 06 core log invariants when the feature-gated path passes.
+- S3/dynostore: `limited-parity` for the Phase 06 core log invariants when the feature-gated path passes.
+- SlateDB: `limited-parity` for the Phase 06 core log invariants when the feature-gated path passes.
+- Memory: `development-test-only`.
+- Turso: `uncertified`.
+- Null: `unsupported`.
+
+Conformance tests added:
+- `tansu-storage/tests/log_contract.rs`
+- Shared helpers in `tansu-storage/tests/common/mod.rs`
+- Covered:
+  - empty partition offsets
+  - contiguous produce offsets
+  - fetch reads written records
+  - timestamp lookup before first record
+  - null-storage capability/error behavior
+
+Ledger rows updated:
+- API key 0 `ProduceRequest`
+- API key 1 `FetchRequest`
+- API key 2 `ListOffsetsRequest`
+- Added proof entries for the Phase 06 storage conformance tests.
+
+Verification commands and outcomes:
+- `rtk cargo test -p tansu-storage --test log_contract --all-features -- --nocapture` passed.
+- `rtk cargo test -p tansu-broker --test compatibility_contract --all-features -- --nocapture` passed.
+- `rtk env CARGO_TARGET_DIR=/tmp/phase06-verify cargo check -p tansu-storage -p tansu-broker --all-features --all-targets` passed.
+- `rtk cargo fmt --all --check` passed.
+- `rtk git diff --check` passed.
+
+Residual risks left for later phases:
+- Leader epochs and truncation history.
+- Future timestamp lookup exactness.
+- Transactional LSO semantics and full transaction visibility.
+- Delete-records log-start movement beyond the Phase 06 slice.
+- Retention, compaction, and crash-recovery hardening.

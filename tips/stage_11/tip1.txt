@@ -1,0 +1,2823 @@
+## Phase 11 goal: a Kafka-compatible replication layer
+
+For Tansu specifically, Phase 11 is a big architectural shift. The repo currently describes Tansu as a “stateless Kafka-compatible broker with pluggable storage,” and its README explicitly notes that in the current example “node 111 is the leader and ISR for each topic partition” and “all brokers are node 111.” ([GitHub][1]) ([GitHub][1])
+
+Kafka’s model is different: the unit of replication is the topic partition; each partition has one leader and zero or more followers; followers pull from the leader; and ISR membership is based on broker liveness plus follower catch-up progress. ([Apache Kafka][2]) A write is not considered committed until every in-sync replica has received it, and the ISR is persisted in cluster metadata. ([Apache Kafka][2])
+
+So Phase 11 should produce a **classic Kafka replication mode** while preserving Tansu’s current shared-storage/stateless mode behind a config switch. Do not rip out the existing design. Add:
+
+```text
+replication.mode = shared-storage | classic
+```
+
+For Phase 11 completion, `classic` mode must support:
+
+1. Leader/follower partition roles.
+2. Real replica assignments in metadata.
+3. Followers fetching from leaders.
+4. Exact-offset follower appends.
+5. ISR shrink/expand.
+6. High watermark advancement from ISR replica progress.
+7. Persistent leader epochs.
+8. OffsetForLeaderEpoch-based truncation on leader change.
+9. Produce/fetch error semantics for wrong leader.
+10. End-to-end tests with three brokers, leader failover simulation, and divergent-log truncation.
+
+Phase 12 can replace the static/controller shim with a real cluster controller. Phase 11 still needs enough controller-facing hooks to receive/apply leadership changes.
+
+---
+
+## Current repo baseline
+
+The workspace already has the right split: `tansu-broker`, `tansu-client`, `tansu-sans-io`, `tansu-service`, `tansu-storage`, and related crates are workspace members. The workspace also forbids unsafe code, which is excellent for a Rust replication implementation. 
+
+The current `Storage` trait supports broker registration, topic creation, produce, fetch, offset stage, list offsets, offset commits, metadata, groups, configs, transactions, maintenance, and ping, but it does **not** expose replica state, follower progress, leader epochs, exact-offset follower append, or truncation primitives. ([GitHub][3])
+
+The broker already registers itself at startup, then listens for client connections, and it has a periodic maintenance tick that calls `storage.maintain(SystemTime::now())`. That is a perfect place to attach broker heartbeat, ISR checks, and replication manager maintenance. 
+
+The current broker route table wires many Kafka APIs, including Produce, Fetch, Metadata, CreateTopics, DeleteTopics, ListOffsets, and transactions, but it does not wire `LeaderAndIsr`, `AlterPartition`, or `OffsetForLeaderEpoch` services yet.  The protocol JSON files already exist for `LeaderAndIsrRequest`, `AlterPartitionRequest`, and `OffsetForLeaderEpochRequest`, so this phase should add service handlers rather than inventing a private protocol first.   
+
+The current `ProduceService` calls `Storage::produce` directly and returns `current_leader(None)`, so Phase 11 must add leader validation and return Kafka leader errors when the request lands on a follower.  The current `FetchService` calls `Storage::fetch`, then `Storage::offset_stage`, and also returns `current_leader(None)`; Phase 11 must split **client fetch** from **replica fetch**, because followers must be allowed to fetch beyond the committed high watermark while clients must not. 
+
+---
+
+# The architecture to build
+
+## The core rule
+
+Add a `ReplicaManager` at the broker layer and replication primitives at the storage layer.
+
+```text
+client Produce/Fetch
+        |
+        v
+tansu-broker request router
+        |
+        v
+tansu-storage services
+        |
+        v
+Storage trait
+        |
+        +--> local partition log / durable storage
+        +--> partition replica state
+        +--> leader epoch cache
+        +--> follower progress table
+        +--> ISR/high watermark state
+```
+
+The broker owns network-facing replication tasks:
+
+```text
+Leader broker:
+  - accepts Produce
+  - serves follower Fetch
+  - records follower progress
+  - advances HW
+  - shrinks/expands ISR
+  - proposes ISR updates through AlterPartition/controller path
+
+Follower broker:
+  - discovers leader for assigned partitions
+  - calls OffsetForLeaderEpoch
+  - truncates divergent tail
+  - fetches from leader
+  - appends exact offsets locally
+  - repeats forever until role changes
+```
+
+Storage owns durable truth:
+
+```text
+PartitionReplicaState:
+  leader
+  leader_epoch
+  partition_epoch
+  replicas
+  isr
+  adding_replicas
+  removing_replicas
+  recovery_state
+
+ReplicaProgress:
+  broker_id
+  log_end_offset
+  high_watermark
+  last_fetch_at
+  last_caught_up_at
+
+LeaderEpochCheckpoint:
+  leader_epoch
+  start_offset
+  end_offset / next epoch start
+```
+
+---
+
+# Completion criteria for Phase 11
+
+Phase 11 is not complete until all of these are true:
+
+| Area            | Must be true                                                                                                                                                                                                                                            |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Metadata        | `MetadataResponse` and `DescribeTopicPartitionsResponse` show real brokers, leader, replicas, ISR, offline replicas, and leader epoch.                                                                                                                  |
+| Produce         | Produce to leader succeeds; produce to follower returns `NotLeaderOrFollower` with `current_leader`; `acks=all` respects `min.insync.replicas`.                                                                                                         |
+| Client fetch    | Client fetch returns records only up to high watermark.                                                                                                                                                                                                 |
+| Replica fetch   | Follower fetch returns records up to leader LEO, not merely HW.                                                                                                                                                                                         |
+| Follower append | Follower appends batches at the leader’s exact offsets; offsets and batch order match the leader.                                                                                                                                                       |
+| ISR shrink      | A follower that stops fetching or falls behind is removed from ISR after `replica.lag.time.max.ms`. Kafka documents this config as the point after which a follower that has not fetched or caught up is removed from ISR. ([Apache Kafka][4])          |
+| ISR expand      | A follower re-enters ISR only after catching up to the leader’s committed/log end position according to the configured policy.                                                                                                                          |
+| HW advancement  | HW advances to the minimum LEO of ISR replicas, capped by leader LEO.                                                                                                                                                                                   |
+| Leader epochs   | Each leadership change appends a persistent epoch checkpoint.                                                                                                                                                                                           |
+| Truncation      | On leader change, followers use OffsetForLeaderEpoch and truncate divergent tails before fetching. Kafka’s OffsetForLeaderEpoch protocol includes `current_leader_epoch`, `leader_epoch`, and fencing semantics for old/new epochs. ([Apache Kafka][5]) |
+| Crash/restart   | Broker restarts recover role, LEO, HW, ISR state, and leader epoch cache.                                                                                                                                                                               |
+| Compatibility   | Kafka Java client and librdkafka can produce/fetch through leader changes without offset corruption.                                                                                                                                                    |
+
+---
+
+# Files to touch or create
+
+## `tansu-storage`
+
+### Touch
+
+```text
+tansu-storage/src/lib.rs
+tansu-storage/src/service.rs
+tansu-storage/src/service/fetch.rs
+tansu-storage/src/service/produce.rs
+tansu-storage/src/service/metadata.rs
+tansu-storage/src/service/describe_topic_partitions.rs
+tansu-storage/src/dynostore.rs
+tansu-storage/src/pg.rs
+tansu-storage/src/lite.rs
+tansu-storage/src/limbo.rs
+tansu-storage/src/slate/storage.rs
+tansu-storage/src/null.rs
+tansu-storage/Cargo.toml
+```
+
+### Create
+
+```text
+tansu-storage/src/replication.rs
+tansu-storage/src/replication/assignment.rs
+tansu-storage/src/replication/epoch.rs
+tansu-storage/src/replication/high_watermark.rs
+tansu-storage/src/replication/isr.rs
+tansu-storage/src/replication/progress.rs
+tansu-storage/src/replication/truncate.rs
+
+tansu-storage/src/service/leader_and_isr.rs
+tansu-storage/src/service/alter_partition.rs
+tansu-storage/src/service/offset_for_leader_epoch.rs
+
+tansu-storage/tests/replication_assignment.rs
+tansu-storage/tests/replication_high_watermark.rs
+tansu-storage/tests/replication_isr.rs
+tansu-storage/tests/leader_epoch.rs
+tansu-storage/tests/truncation.rs
+```
+
+### PostgreSQL / SQL files to create
+
+Exact directory naming should match Tansu’s existing SQL lookup convention in `pg.rs`, but the set should look like this:
+
+```text
+tansu-storage/src/sql/broker_registration_upsert.sql
+tansu-storage/src/sql/broker_registration_heartbeat.sql
+tansu-storage/src/sql/broker_registration_select_live.sql
+tansu-storage/src/sql/broker_registration_mark_fenced.sql
+
+tansu-storage/src/sql/partition_replica_state_upsert.sql
+tansu-storage/src/sql/partition_replica_state_select.sql
+tansu-storage/src/sql/partition_replica_state_select_for_broker.sql
+tansu-storage/src/sql/partition_replica_state_update_isr.sql
+tansu-storage/src/sql/partition_replica_state_update_leader.sql
+
+tansu-storage/src/sql/replica_progress_upsert.sql
+tansu-storage/src/sql/replica_progress_select.sql
+tansu-storage/src/sql/replica_progress_select_partition.sql
+
+tansu-storage/src/sql/leader_epoch_insert.sql
+tansu-storage/src/sql/leader_epoch_select_latest.sql
+tansu-storage/src/sql/leader_epoch_select_end_offset.sql
+tansu-storage/src/sql/leader_epoch_truncate_after.sql
+
+tansu-storage/src/sql/partition_watermark_update_hw.sql
+tansu-storage/src/sql/partition_watermark_update_leo.sql
+tansu-storage/src/sql/partition_watermark_select.sql
+
+tansu-storage/src/sql/record_append_exact.sql
+tansu-storage/src/sql/record_delete_from_offset.sql
+tansu-storage/src/sql/record_select_from_offset_for_replica.sql
+```
+
+## `tansu-broker`
+
+### Touch
+
+```text
+tansu-broker/src/broker.rs
+tansu-broker/src/service.rs
+tansu-broker/src/service/storage.rs
+tansu-broker/Cargo.toml
+```
+
+### Create
+
+```text
+tansu-broker/src/replication.rs
+tansu-broker/src/replication/manager.rs
+tansu-broker/src/replication/follower.rs
+tansu-broker/src/replication/leader.rs
+tansu-broker/src/replication/watch.rs
+tansu-broker/src/replication/client.rs
+
+tansu-broker/tests/replication.rs
+tansu-broker/tests/replication_metadata.rs
+tansu-broker/tests/produce_not_leader.rs
+tansu-broker/tests/follower_fetch.rs
+tansu-broker/tests/leader_change_truncation.rs
+tansu-broker/tests/isr_shrink_expand.rs
+tansu-broker/tests/high_watermark_visibility.rs
+```
+
+## `tansu-client`
+
+Touch or create only if the existing client cannot send arbitrary broker RPCs:
+
+```text
+tansu-client/src/replica.rs
+tansu-client/src/broker_request.rs
+tansu-client/src/lib.rs
+```
+
+The replication manager needs a small internal client that can send:
+
+```text
+FetchRequest
+OffsetForLeaderEpochRequest
+AlterPartitionRequest
+MetadataRequest
+```
+
+## `tansu-sans-io`
+
+The JSON protocol definitions already exist for the needed APIs. Create/touch only if generated Rust is missing or tests need updating:
+
+```text
+tansu-sans-io/message/LeaderAndIsrRequest.json       # already exists
+tansu-sans-io/message/LeaderAndIsrResponse.json      # already exists
+tansu-sans-io/message/AlterPartitionRequest.json     # already exists
+tansu-sans-io/message/AlterPartitionResponse.json
+tansu-sans-io/message/OffsetForLeaderEpochRequest.json
+tansu-sans-io/message/OffsetForLeaderEpochResponse.json
+
+tansu-sans-io/tests/encode.rs
+tansu-sans-io/tests/decode.rs
+```
+
+## CLI / config / ops
+
+```text
+tansu-cli/src/cli/broker.rs
+tansu/src/main.rs
+README.md
+docs/replication.md
+compose.yaml
+compose-replication.yaml
+example.env
+justfile
+```
+
+Add broker options:
+
+```text
+--replication-mode shared-storage|classic
+--inter-broker-listener-url tcp://...
+--replica-fetch-min-bytes 1
+--replica-fetch-max-bytes 1048576
+--replica-fetch-wait-max-ms 500
+--replica-lag-time-max-ms 30000
+--replica-high-watermark-checkpoint-interval-ms 5000
+--min-insync-replicas 1
+--unclean-leader-election-enable false
+```
+
+---
+
+# Phase 11 implementation sequence
+
+## 11.1 Add replication data types
+
+Create `tansu-storage/src/replication.rs` and submodules.
+
+```rust
+// tansu-storage/src/replication.rs
+
+use std::collections::BTreeMap;
+use std::time::SystemTime;
+
+use serde::{Deserialize, Serialize};
+
+use crate::Topition;
+
+pub mod assignment;
+pub mod epoch;
+pub mod high_watermark;
+pub mod isr;
+pub mod progress;
+pub mod truncate;
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+pub enum ReplicationMode {
+    SharedStorage,
+    Classic,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+pub enum ReplicaRole {
+    Leader,
+    Follower,
+    Observer,
+    Offline,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+pub enum LeaderRecoveryState {
+    Recovered,
+    Recovering,
+}
+
+impl Default for LeaderRecoveryState {
+    fn default() -> Self {
+        Self::Recovered
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PartitionReplicaState {
+    pub topition: Topition,
+    pub leader: i32,
+    pub leader_epoch: i32,
+    pub partition_epoch: i32,
+    pub replicas: Vec<i32>,
+    pub isr: Vec<i32>,
+    pub adding_replicas: Vec<i32>,
+    pub removing_replicas: Vec<i32>,
+    pub recovery_state: LeaderRecoveryState,
+}
+
+impl PartitionReplicaState {
+    pub fn role_for(&self, broker_id: i32) -> ReplicaRole {
+        if self.leader == broker_id {
+            ReplicaRole::Leader
+        } else if self.replicas.contains(&broker_id) {
+            ReplicaRole::Follower
+        } else {
+            ReplicaRole::Unknown
+        }
+    }
+
+    pub fn contains_replica(&self, broker_id: i32) -> bool {
+        self.replicas.contains(&broker_id)
+    }
+
+    pub fn contains_isr(&self, broker_id: i32) -> bool {
+        self.isr.contains(&broker_id)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ReplicaProgress {
+    pub broker_id: i32,
+    pub log_end_offset: i64,
+    pub high_watermark: i64,
+    pub last_fetch_at: SystemTime,
+    pub last_caught_up_at: Option<SystemTime>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct LeaderEpochCheckpoint {
+    pub topition: Topition,
+    pub leader_epoch: i32,
+    pub start_offset: i64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct LeaderEpochEndOffset {
+    pub leader_epoch: i32,
+    pub end_offset: i64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PartitionProgress {
+    pub local_log_end_offset: i64,
+    pub high_watermark: i64,
+    pub last_stable_offset: i64,
+    pub log_start_offset: i64,
+    pub replicas: BTreeMap<i32, ReplicaProgress>,
+}
+```
+
+Steering:
+
+* Keep these types pure and serde-friendly.
+* Do not import broker networking types into storage.
+* Do not make high watermark calculation depend on wall-clock time; put time-dependent ISR decisions in `isr.rs`.
+* Keep `Topition` as the identity for topic/partition because it is already used widely in storage.
+
+---
+
+## 11.2 Add high watermark calculation
+
+Create `tansu-storage/src/replication/high_watermark.rs`.
+
+```rust
+use std::collections::BTreeMap;
+
+use super::{PartitionReplicaState, ReplicaProgress};
+
+pub fn compute_high_watermark(
+    state: &PartitionReplicaState,
+    leader_log_end_offset: i64,
+    progress: &BTreeMap<i32, ReplicaProgress>,
+) -> i64 {
+    let mut hw = leader_log_end_offset;
+
+    for broker_id in &state.isr {
+        let leo = if *broker_id == state.leader {
+            leader_log_end_offset
+        } else {
+            progress
+                .get(broker_id)
+                .map(|p| p.log_end_offset)
+                .unwrap_or(0)
+        };
+
+        hw = hw.min(leo);
+    }
+
+    hw.max(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Topition, replication::LeaderRecoveryState};
+    use std::time::SystemTime;
+
+    fn state(isr: Vec<i32>) -> PartitionReplicaState {
+        PartitionReplicaState {
+            topition: Topition::new("abc", 0),
+            leader: 1,
+            leader_epoch: 7,
+            partition_epoch: 3,
+            replicas: vec![1, 2, 3],
+            isr,
+            adding_replicas: vec![],
+            removing_replicas: vec![],
+            recovery_state: LeaderRecoveryState::Recovered,
+        }
+    }
+
+    #[test]
+    fn hw_is_min_leo_of_isr() {
+        let now = SystemTime::now();
+
+        let progress = BTreeMap::from([
+            (2, ReplicaProgress {
+                broker_id: 2,
+                log_end_offset: 10,
+                high_watermark: 0,
+                last_fetch_at: now,
+                last_caught_up_at: Some(now),
+            }),
+            (3, ReplicaProgress {
+                broker_id: 3,
+                log_end_offset: 8,
+                high_watermark: 0,
+                last_fetch_at: now,
+                last_caught_up_at: Some(now),
+            }),
+        ]);
+
+        assert_eq!(8, compute_high_watermark(&state(vec![1, 2, 3]), 12, &progress));
+    }
+
+    #[test]
+    fn non_isr_follower_does_not_hold_back_hw() {
+        let now = SystemTime::now();
+
+        let progress = BTreeMap::from([
+            (2, ReplicaProgress {
+                broker_id: 2,
+                log_end_offset: 10,
+                high_watermark: 0,
+                last_fetch_at: now,
+                last_caught_up_at: Some(now),
+            }),
+            (3, ReplicaProgress {
+                broker_id: 3,
+                log_end_offset: 2,
+                high_watermark: 0,
+                last_fetch_at: now,
+                last_caught_up_at: Some(now),
+            }),
+        ]);
+
+        assert_eq!(10, compute_high_watermark(&state(vec![1, 2]), 12, &progress));
+    }
+}
+```
+
+Important steering:
+
+* Store HW as the **next readable committed offset** consistently. Existing code appears to use offsets as positions, so keep this convention: if records 0..9 are committed, HW is 10.
+* Client fetch can return batches whose last offset is `< HW`.
+* Follower fetch can return batches beyond HW up to leader LEO.
+
+---
+
+## 11.3 Add ISR shrink/expand logic
+
+Create `tansu-storage/src/replication/isr.rs`.
+
+```rust
+use std::collections::BTreeMap;
+use std::time::{Duration, SystemTime};
+
+use super::{PartitionReplicaState, ReplicaProgress};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IsrDecision {
+    Keep,
+    Shrink,
+    Expand,
+}
+
+pub fn follower_should_leave_isr(
+    now: SystemTime,
+    replica: &ReplicaProgress,
+    leader_log_end_offset: i64,
+    replica_lag_time_max: Duration,
+) -> bool {
+    if replica.log_end_offset >= leader_log_end_offset {
+        return false;
+    }
+
+    now.duration_since(replica.last_caught_up_at.unwrap_or(replica.last_fetch_at))
+        .map(|lag| lag >= replica_lag_time_max)
+        .unwrap_or(false)
+}
+
+pub fn follower_can_join_isr(
+    replica: &ReplicaProgress,
+    leader_log_end_offset: i64,
+) -> bool {
+    replica.log_end_offset >= leader_log_end_offset
+}
+
+pub fn compute_isr(
+    now: SystemTime,
+    state: &PartitionReplicaState,
+    leader_log_end_offset: i64,
+    progress: &BTreeMap<i32, ReplicaProgress>,
+    replica_lag_time_max: Duration,
+) -> Vec<i32> {
+    let mut next = Vec::with_capacity(state.replicas.len());
+
+    for broker_id in &state.replicas {
+        if *broker_id == state.leader {
+            next.push(*broker_id);
+            continue;
+        }
+
+        let Some(replica) = progress.get(broker_id) else {
+            continue;
+        };
+
+        let in_current_isr = state.isr.contains(broker_id);
+
+        if in_current_isr {
+            if !follower_should_leave_isr(
+                now,
+                replica,
+                leader_log_end_offset,
+                replica_lag_time_max,
+            ) {
+                next.push(*broker_id);
+            }
+        } else if follower_can_join_isr(replica, leader_log_end_offset) {
+            next.push(*broker_id);
+        }
+    }
+
+    next.sort_unstable();
+    next.dedup();
+    next
+}
+```
+
+Steering:
+
+* Do **not** expand ISR just because a follower is alive. Expand only after it catches up.
+* Do **not** shrink ISR on a single failed fetch; use the lag time threshold.
+* In Kafka-like behavior, `replica.fetch.wait.max.ms` should be lower than `replica.lag.time.max.ms` to avoid low-throughput topics constantly shrinking ISR. Kafka’s broker config docs call out this relationship. ([Apache Kafka][4])
+
+---
+
+## 11.4 Add leader epoch cache
+
+Create `tansu-storage/src/replication/epoch.rs`.
+
+```rust
+use super::{LeaderEpochCheckpoint, LeaderEpochEndOffset};
+
+pub fn end_offset_for_epoch(
+    checkpoints: &[LeaderEpochCheckpoint],
+    requested_epoch: i32,
+    log_end_offset: i64,
+) -> LeaderEpochEndOffset {
+    let mut sorted = checkpoints.to_vec();
+    sorted.sort_by_key(|c| c.leader_epoch);
+
+    for window in sorted.windows(2) {
+        let current = &window[0];
+        let next = &window[1];
+
+        if current.leader_epoch == requested_epoch {
+            return LeaderEpochEndOffset {
+                leader_epoch: current.leader_epoch,
+                end_offset: next.start_offset,
+            };
+        }
+    }
+
+    if let Some(last) = sorted.last() {
+        if requested_epoch >= last.leader_epoch {
+            return LeaderEpochEndOffset {
+                leader_epoch: last.leader_epoch,
+                end_offset: log_end_offset,
+            };
+        }
+    }
+
+    LeaderEpochEndOffset {
+        leader_epoch: requested_epoch,
+        end_offset: 0,
+    }
+}
+```
+
+Storage must persist checkpoints like:
+
+```text
+epoch 0 starts at offset 0
+epoch 1 starts at offset 125
+epoch 2 starts at offset 198
+```
+
+Then:
+
+```text
+OffsetForLeaderEpoch(epoch 0) => end_offset 125
+OffsetForLeaderEpoch(epoch 1) => end_offset 198
+OffsetForLeaderEpoch(epoch 2) => end_offset current LEO
+```
+
+Steering:
+
+* Append a checkpoint every time a broker becomes leader for a partition.
+* The checkpoint start offset is the local LEO at leadership start.
+* Never overwrite existing epoch checkpoints except during truncation of divergent future epochs.
+* Persist epoch checkpoints separately from segment files or record rows.
+
+---
+
+## 11.5 Add truncation decision logic
+
+Create `tansu-storage/src/replication/truncate.rs`.
+
+```rust
+use super::LeaderEpochEndOffset;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Truncation {
+    None,
+    ToOffset(i64),
+}
+
+pub fn decide_truncation(
+    local_log_end_offset: i64,
+    leader_epoch_end_offset: LeaderEpochEndOffset,
+) -> Truncation {
+    let target = leader_epoch_end_offset.end_offset;
+
+    if target < local_log_end_offset {
+        Truncation::ToOffset(target)
+    } else {
+        Truncation::None
+    }
+}
+```
+
+Steering:
+
+* This is intentionally simple. The hard work is choosing the right epoch to query.
+* A follower should query the leader for the highest local leader epoch it knows.
+* If the leader returns a lower end offset than local LEO, truncate.
+* After truncation, remove leader epoch checkpoints and producer-state snapshots after the target offset.
+* Never truncate committed offsets below local HW unless this is explicitly an unclean election mode.
+
+---
+
+# Storage trait changes
+
+Touch `tansu-storage/src/lib.rs`.
+
+Add these public types to the imports/exports:
+
+```rust
+pub mod replication;
+
+pub use replication::{
+    LeaderEpochCheckpoint,
+    LeaderEpochEndOffset,
+    LeaderRecoveryState,
+    PartitionProgress,
+    PartitionReplicaState,
+    ReplicaProgress,
+    ReplicaRole,
+    ReplicationMode,
+};
+```
+
+Extend `Storage` with replication methods. The exact return types should match Tansu’s existing style, but this is the shape to implement:
+
+```rust
+#[async_trait]
+pub trait Storage: Debug + Send + Sync + 'static {
+    // existing methods...
+
+    async fn replication_mode(&self) -> Result<ReplicationMode>;
+
+    async fn broker_heartbeat(
+        &self,
+        broker_id: i32,
+        now: SystemTime,
+    ) -> Result<()>;
+
+    async fn partition_replica_state(
+        &self,
+        topition: &Topition,
+    ) -> Result<Option<PartitionReplicaState>>;
+
+    async fn partition_replica_states_for_broker(
+        &self,
+        broker_id: i32,
+    ) -> Result<Vec<PartitionReplicaState>>;
+
+    async fn update_partition_replica_state(
+        &self,
+        state: PartitionReplicaState,
+    ) -> Result<PartitionReplicaState>;
+
+    async fn local_log_end_offset(
+        &self,
+        topition: &Topition,
+    ) -> Result<i64>;
+
+    async fn replica_progress(
+        &self,
+        topition: &Topition,
+    ) -> Result<PartitionProgress>;
+
+    async fn update_replica_progress(
+        &self,
+        topition: &Topition,
+        progress: ReplicaProgress,
+    ) -> Result<PartitionProgress>;
+
+    async fn update_high_watermark(
+        &self,
+        topition: &Topition,
+        high_watermark: i64,
+    ) -> Result<()>;
+
+    async fn append_leader_epoch_checkpoint(
+        &self,
+        checkpoint: LeaderEpochCheckpoint,
+    ) -> Result<()>;
+
+    async fn leader_epoch_checkpoints(
+        &self,
+        topition: &Topition,
+    ) -> Result<Vec<LeaderEpochCheckpoint>>;
+
+    async fn offset_for_leader_epoch(
+        &self,
+        topition: &Topition,
+        current_leader_epoch: i32,
+        requested_leader_epoch: i32,
+    ) -> Result<LeaderEpochEndOffset>;
+
+    async fn truncate_to_offset(
+        &self,
+        topition: &Topition,
+        offset: i64,
+    ) -> Result<()>;
+
+    async fn append_follower_batch(
+        &self,
+        topition: &Topition,
+        leader_epoch: i32,
+        expected_base_offset: i64,
+        batch: tansu_sans_io::record::deflated::Batch,
+    ) -> Result<i64>;
+
+    async fn fetch_for_replica(
+        &self,
+        topition: &Topition,
+        replica_id: i32,
+        offset: i64,
+        min_bytes: u32,
+        max_bytes: u32,
+    ) -> Result<Vec<tansu_sans_io::record::deflated::Batch>>;
+}
+```
+
+Steering:
+
+* `produce()` should remain the leader append API.
+* `append_follower_batch()` must not choose offsets. It must verify the leader-provided base offset equals the follower’s local LEO.
+* `fetch()` remains client-facing and HW-capped.
+* `fetch_for_replica()` is leader-facing and LEO-capped.
+* `offset_stage()` should continue to return `high_watermark`, `last_stable`, and `log_start`; Phase 11 changes how HW is computed, not the API shape.
+* Add default implementations returning `FeatureNotEnabled` for engines not yet supporting classic replication, then remove defaults as engines are completed.
+
+---
+
+# Metadata changes
+
+Today, metadata can synthesize the local broker as the leader/ISR. Phase 11 must make metadata reflect durable replica state.
+
+## Required metadata behavior
+
+For each topic partition:
+
+```text
+leader_id       = state.leader
+leader_epoch    = state.leader_epoch
+replica_nodes   = state.replicas
+isr_nodes       = state.isr
+offline_replicas = replicas whose broker registration is stale/fenced
+```
+
+## Create-topic assignment
+
+When `CreateTopicsRequest` includes explicit assignments, use them exactly.
+
+When it only supplies `num_partitions` and `replication_factor`:
+
+```rust
+pub fn assign_replicas_round_robin(
+    broker_ids: &[i32],
+    partitions: i32,
+    replication_factor: i16,
+) -> Vec<Vec<i32>> {
+    assert!(replication_factor > 0);
+
+    let rf = replication_factor as usize;
+    let mut assignments = Vec::with_capacity(partitions as usize);
+
+    for partition in 0..partitions as usize {
+        let mut replicas = Vec::with_capacity(rf);
+
+        for replica_index in 0..rf {
+            let broker_index = (partition + replica_index) % broker_ids.len();
+            replicas.push(broker_ids[broker_index]);
+        }
+
+        assignments.push(replicas);
+    }
+
+    assignments
+}
+```
+
+Steering:
+
+* Fail create-topic with `InvalidReplicationFactor` if `replication_factor > live_brokers.len()` in classic mode.
+* In shared-storage mode, current behavior can keep allowing `replication_factor=1`.
+* Initial ISR should include all assigned replicas only if all assigned brokers are registered/live. Otherwise, initial ISR should include the leader and live caught-up replicas.
+* Initial leader can be `replicas[0]` until Phase 12 does balanced election.
+
+---
+
+# Produce path changes
+
+Touch `tansu-storage/src/service/produce.rs`.
+
+Add leader validation before calling `Storage::produce`.
+
+```rust
+async fn partition<G>(
+    &self,
+    ctx: &Context<G>,
+    transaction_id: Option<&str>,
+    name: &str,
+    partition: PartitionProduceData,
+    required_acks: i16,
+) -> PartitionProduceResponse
+where
+    G: Storage,
+{
+    let tp = Topition::new(name, partition.index);
+
+    let state = match ctx.state().partition_replica_state(&tp).await {
+        Ok(Some(state)) => state,
+        Ok(None) => return self.error(partition.index, ErrorCode::UnknownTopicOrPartition),
+        Err(_) => return self.error(partition.index, ErrorCode::UnknownServerError),
+    };
+
+    let local_node = ctx.state().node();
+
+    if state.leader != local_node {
+        return self.error_with_current_leader(
+            partition.index,
+            ErrorCode::NotLeaderOrFollower,
+            &state,
+        );
+    }
+
+    let min_isr = ctx
+        .state()
+        .min_insync_replicas(&tp)
+        .await
+        .unwrap_or(1);
+
+    if required_acks == -1 && state.isr.len() < min_isr as usize {
+        return self.error(partition.index, ErrorCode::NotEnoughReplicas);
+    }
+
+    // Existing append logic follows.
+    // After append, acks=0/1 may return immediately.
+    // acks=-1 must wait until HW advances past the appended batch end offset.
+}
+```
+
+Add helper:
+
+```rust
+fn error_with_current_leader(
+    &self,
+    index: i32,
+    error_code: ErrorCode,
+    state: &PartitionReplicaState,
+) -> PartitionProduceResponse {
+    PartitionProduceResponse::default()
+        .index(index)
+        .error_code(error_code.into())
+        .base_offset(-1)
+        .log_append_time_ms(Some(-1))
+        .log_start_offset(Some(0))
+        .record_errors(Some(vec![]))
+        .error_message(None)
+        .current_leader(Some(
+            tansu_sans_io::produce_response::LeaderIdAndEpoch::default()
+                .leader_id(state.leader)
+                .leader_epoch(state.leader_epoch),
+        ))
+}
+```
+
+Add `acks=all` wait:
+
+```rust
+async fn wait_for_commit<G>(
+    ctx: &Context<G>,
+    tp: &Topition,
+    target_end_offset: i64,
+    timeout: Duration,
+) -> Result<(), Error>
+where
+    G: Storage,
+{
+    let started = std::time::Instant::now();
+
+    loop {
+        let stage = ctx.state().offset_stage(tp).await?;
+
+        if stage.high_watermark() >= target_end_offset {
+            return Ok(());
+        }
+
+        if started.elapsed() >= timeout {
+            return Err(Error::Api(ErrorCode::RequestTimedOut));
+        }
+
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+```
+
+Steering:
+
+* `acks=0`: append locally if leader, no response semantics depend on client protocol version. Preserve existing behavior where possible.
+* `acks=1`: return after leader local append.
+* `acks=-1`: return after HW reaches the appended batch end offset.
+* Before append, fail `acks=-1` with `NotEnoughReplicas` if ISR size is below `min.insync.replicas`.
+* If append succeeds but ISR shrinks before commit, return `NotEnoughReplicasAfterAppend` if the enum exists; otherwise `RequestTimedOut` is acceptable as a first pass, but tests should drive the exact Kafka error code.
+
+---
+
+# Fetch path changes
+
+Touch `tansu-storage/src/service/fetch.rs`.
+
+Kafka FetchRequest includes follower/replica fields in protocol versions; the official protocol describes follower-specific fields such as `replica_id`, `last_fetched_epoch`, and follower `log_start_offset`. ([Apache Kafka][5])
+
+## Split fetch into two modes
+
+```rust
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FetchKind {
+    Client,
+    Replica { replica_id: i32 },
+}
+
+fn fetch_kind(req: &FetchRequest) -> FetchKind {
+    // Verify exact generated field names.
+    // Kafka convention: replica_id == -1 means normal consumer/client.
+    match req.replica_id {
+        Some(id) if id >= 0 => FetchKind::Replica { replica_id: id },
+        _ => FetchKind::Client,
+    }
+}
+```
+
+## Client fetch
+
+Client fetch should:
+
+* Verify this broker is current leader or allowed follower read replica.
+* Cap records at HW.
+* Return `NotLeaderOrFollower` with current leader if this node is not allowed to serve the partition.
+* Preserve existing long-polling behavior.
+
+## Replica fetch
+
+Replica fetch should:
+
+* Only be served by the current leader.
+* Verify requesting `replica_id` is in `state.replicas`.
+* Use leader LEO, not HW, as read bound.
+* Update follower progress based on requested fetch offset and returned data.
+* Return leader epoch and HW in partition response.
+* Set `current_leader` when epoch fencing happens.
+
+Pseudo-code:
+
+```rust
+async fn fetch_partition_for_replica<G>(
+    &self,
+    ctx: &Context<G>,
+    replica_id: i32,
+    topic: &str,
+    fetch_partition: &FetchPartition,
+    min_bytes: u32,
+    max_bytes: &mut u32,
+) -> Result<PartitionData>
+where
+    G: Storage,
+{
+    let tp = Topition::new(topic, fetch_partition.partition);
+
+    let Some(state) = ctx.state().partition_replica_state(&tp).await? else {
+        return Ok(self.unknown_partition(fetch_partition.partition));
+    };
+
+    if state.leader != ctx.state().node() {
+        return Ok(self.not_leader_partition(fetch_partition.partition, &state));
+    }
+
+    if !state.contains_replica(replica_id) {
+        return Ok(self.error_partition(
+            fetch_partition.partition,
+            ErrorCode::UnknownServerError,
+        ));
+    }
+
+    if let Some(epoch) = fetch_partition.current_leader_epoch {
+        if epoch < state.leader_epoch {
+            return Ok(self.fenced_epoch_partition(fetch_partition.partition, &state));
+        }
+
+        if epoch > state.leader_epoch {
+            return Ok(self.unknown_epoch_partition(fetch_partition.partition, &state));
+        }
+    }
+
+    let batches = ctx
+        .state()
+        .fetch_for_replica(
+            &tp,
+            replica_id,
+            fetch_partition.fetch_offset,
+            min_bytes,
+            *max_bytes,
+        )
+        .await?;
+
+    let fetched_bytes = batches.iter().map(|b| b.record_data.len() as u32).sum::<u32>();
+    *max_bytes = max_bytes.saturating_sub(fetched_bytes);
+
+    let follower_leo = batches
+        .last()
+        .map(|batch| batch.base_offset + batch.record_count as i64)
+        .unwrap_or(fetch_partition.fetch_offset);
+
+    let progress = ReplicaProgress {
+        broker_id: replica_id,
+        log_end_offset: follower_leo,
+        high_watermark: ctx.state().offset_stage(&tp).await?.high_watermark(),
+        last_fetch_at: SystemTime::now(),
+        last_caught_up_at: None,
+    };
+
+    let progress = ctx.state().update_replica_progress(&tp, progress).await?;
+
+    let leader_leo = ctx.state().local_log_end_offset(&tp).await?;
+    let next_hw = compute_high_watermark(&state, leader_leo, &progress.replicas);
+
+    ctx.state().update_high_watermark(&tp, next_hw).await?;
+
+    Ok(PartitionData::default()
+        .partition_index(fetch_partition.partition)
+        .error_code(ErrorCode::None.into())
+        .high_watermark(next_hw)
+        .last_stable_offset(Some(next_hw))
+        .log_start_offset(Some(progress.log_start_offset))
+        .current_leader(Some(
+            LeaderIdAndEpoch::default()
+                .leader_id(state.leader)
+                .leader_epoch(state.leader_epoch),
+        ))
+        .records(if batches.is_empty() {
+            None
+        } else {
+            Some(Frame { batches })
+        }))
+}
+```
+
+Steering:
+
+* The follower’s fetch offset is the follower’s local LEO.
+* For replica fetch, do not hide uncommitted tail records.
+* For client fetch, continue hiding records above HW.
+* Use `current_leader_epoch` fencing in both client and replica fetch paths.
+* Existing fetch code loops topic/partitions and long-polls; preserve that structure and branch at partition level.
+
+---
+
+# Follower append semantics
+
+Add `Storage::append_follower_batch`.
+
+This is not `produce()`. It must append a batch at the leader’s exact offset.
+
+```rust
+async fn append_follower_batch(
+    &self,
+    topition: &Topition,
+    leader_epoch: i32,
+    expected_base_offset: i64,
+    batch: deflated::Batch,
+) -> Result<i64> {
+    let local_leo = self.local_log_end_offset(topition).await?;
+
+    if local_leo != expected_base_offset {
+        return Err(Error::Message(format!(
+            "replica append offset mismatch for {:?}: local LEO {}, leader batch base {}",
+            topition, local_leo, expected_base_offset
+        )));
+    }
+
+    // Persist batch exactly at expected_base_offset.
+    // Update local LEO to expected_base_offset + batch.record_count.
+    // Do not advance HW here unless the leader sent a higher HW.
+    // Do not run idempotent producer sequence validation as a new produce.
+    // The leader already validated the record batch.
+}
+```
+
+Steering:
+
+* Preserve the original batch bytes exactly.
+* Do not rewrite base offsets.
+* Do not reassign timestamps.
+* Do not validate producer sequence as if this were a new leader append; follower append is replication, not production.
+* Store producer state snapshots so a follower promoted to leader can continue idempotent producer handling.
+
+---
+
+# Leader epoch and OffsetForLeaderEpoch service
+
+Create `tansu-storage/src/service/offset_for_leader_epoch.rs`.
+
+```rust
+use rama::{Context, Service};
+use tansu_sans_io::{
+    ApiKey, ErrorCode, OffsetForLeaderEpochRequest, OffsetForLeaderEpochResponse,
+    offset_for_leader_epoch_response::{
+        OffsetForLeaderEpochResponsePartition,
+        OffsetForLeaderEpochResponseTopic,
+    },
+};
+
+use crate::{Error, Result, Storage, Topition};
+
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct OffsetForLeaderEpochService;
+
+impl ApiKey for OffsetForLeaderEpochService {
+    const KEY: i16 = OffsetForLeaderEpochRequest::KEY;
+}
+
+impl<G> Service<G, OffsetForLeaderEpochRequest> for OffsetForLeaderEpochService
+where
+    G: Storage,
+{
+    type Response = OffsetForLeaderEpochResponse;
+    type Error = Error;
+
+    async fn serve(
+        &self,
+        ctx: Context<G>,
+        req: OffsetForLeaderEpochRequest,
+    ) -> Result<Self::Response, Self::Error> {
+        let mut topics = Vec::new();
+
+        for topic in req.topics.unwrap_or_default() {
+            let topic_name = topic.topic.clone();
+            let mut partitions = Vec::new();
+
+            for partition in topic.partitions.unwrap_or_default() {
+                let tp = Topition::new(&topic_name, partition.partition);
+
+                let response = match ctx
+                    .state()
+                    .offset_for_leader_epoch(
+                        &tp,
+                        partition.current_leader_epoch,
+                        partition.leader_epoch,
+                    )
+                    .await
+                {
+                    Ok(epoch) => OffsetForLeaderEpochResponsePartition::default()
+                        .partition(partition.partition)
+                        .error_code(ErrorCode::None.into())
+                        .leader_epoch(Some(epoch.leader_epoch))
+                        .end_offset(epoch.end_offset),
+
+                    Err(Error::Api(code)) => OffsetForLeaderEpochResponsePartition::default()
+                        .partition(partition.partition)
+                        .error_code(code.into())
+                        .leader_epoch(Some(-1))
+                        .end_offset(-1),
+
+                    Err(_) => OffsetForLeaderEpochResponsePartition::default()
+                        .partition(partition.partition)
+                        .error_code(ErrorCode::UnknownServerError.into())
+                        .leader_epoch(Some(-1))
+                        .end_offset(-1),
+                };
+
+                partitions.push(response);
+            }
+
+            topics.push(
+                OffsetForLeaderEpochResponseTopic::default()
+                    .topic(topic_name)
+                    .partitions(Some(partitions)),
+            );
+        }
+
+        Ok(OffsetForLeaderEpochResponse::default()
+            .throttle_time_ms(Some(0))
+            .topics(Some(topics)))
+    }
+}
+```
+
+Steering:
+
+* Verify exact generated field names in `tansu-sans-io`; the JSON field names use protocol casing, generated Rust likely uses snake_case.
+* Enforce `current_leader_epoch` fencing:
+
+  * request epoch < broker epoch: `FencedLeaderEpoch`
+  * request epoch > broker epoch: `UnknownLeaderEpoch`
+* Consumers can use OffsetForLeaderEpoch too; keep `replica_id=-1` behavior valid.
+
+---
+
+# LeaderAndIsr service
+
+Create `tansu-storage/src/service/leader_and_isr.rs`.
+
+This API is the bridge from controller/static shim to brokers. Phase 12 will produce these commands from a real controller; Phase 11 should handle them correctly.
+
+Responsibilities:
+
+1. Validate controller epoch/broker epoch when present.
+2. Convert request partition states to `PartitionReplicaState`.
+3. For each partition:
+
+   * If local broker is new leader, call `become_leader`.
+   * If local broker is follower, call `become_follower`.
+   * If local broker is no longer replica, stop local follower task and optionally delete/quiesce replica.
+4. Persist state.
+5. Append leader epoch checkpoint when becoming leader.
+6. Return partition-level errors.
+
+Skeleton:
+
+```rust
+pub async fn apply_leader_and_isr_partition<G>(
+    storage: &G,
+    local_broker_id: i32,
+    topic: &str,
+    partition: &LeaderAndIsrPartitionState,
+) -> Result<()>
+where
+    G: Storage,
+{
+    let tp = Topition::new(topic, partition.partition_index);
+
+    let previous = storage.partition_replica_state(&tp).await?;
+
+    let next = PartitionReplicaState {
+        topition: tp.clone(),
+        leader: partition.leader,
+        leader_epoch: partition.leader_epoch,
+        partition_epoch: partition.partition_epoch,
+        replicas: partition.replicas.clone().unwrap_or_default(),
+        isr: partition.isr.clone().unwrap_or_default(),
+        adding_replicas: partition.adding_replicas.clone().unwrap_or_default(),
+        removing_replicas: partition.removing_replicas.clone().unwrap_or_default(),
+        recovery_state: partition
+            .leader_recovery_state
+            .map(LeaderRecoveryState::try_from)
+            .transpose()?
+            .unwrap_or_default(),
+    };
+
+    let became_leader = previous
+        .as_ref()
+        .map(|old| old.leader != local_broker_id && next.leader == local_broker_id)
+        .unwrap_or(next.leader == local_broker_id);
+
+    storage.update_partition_replica_state(next.clone()).await?;
+
+    if became_leader {
+        let leo = storage.local_log_end_offset(&tp).await?;
+        storage
+            .append_leader_epoch_checkpoint(LeaderEpochCheckpoint {
+                topition: tp,
+                leader_epoch: next.leader_epoch,
+                start_offset: leo,
+            })
+            .await?;
+    }
+
+    Ok(())
+}
+```
+
+Steering:
+
+* Do not start network follower loops from storage service directly. Persist state and let broker `ReplicationManager` watch state.
+* `LeaderAndIsr` should be idempotent. Reapplying the same state must be harmless.
+* If leader epoch regresses, reject or ignore with a stale-controller/stale-epoch error.
+
+---
+
+# AlterPartition service
+
+Create `tansu-storage/src/service/alter_partition.rs`.
+
+This is how a leader proposes ISR changes. The repo already has `AlterPartitionRequest.json` with `BrokerId`, `BrokerEpoch`, topic data, partitions, `LeaderEpoch`, and ISR fields. 
+
+Responsibilities:
+
+1. Validate requester is current leader.
+2. Validate request leader epoch equals stored leader epoch.
+3. Validate new ISR is subset of replicas and includes leader.
+4. Atomically update ISR and increment partition epoch.
+5. Recompute HW after ISR change.
+6. Return updated partition state.
+
+Pseudo-code:
+
+```rust
+async fn alter_partition_isr<G>(
+    storage: &G,
+    broker_id: i32,
+    tp: Topition,
+    leader_epoch: i32,
+    requested_isr: Vec<i32>,
+) -> Result<PartitionReplicaState>
+where
+    G: Storage,
+{
+    let Some(mut state) = storage.partition_replica_state(&tp).await? else {
+        return Err(Error::Api(ErrorCode::UnknownTopicOrPartition));
+    };
+
+    if state.leader != broker_id {
+        return Err(Error::Api(ErrorCode::NotLeaderOrFollower));
+    }
+
+    if state.leader_epoch != leader_epoch {
+        return Err(Error::Api(ErrorCode::FencedLeaderEpoch));
+    }
+
+    if !requested_isr.contains(&state.leader) {
+        return Err(Error::Api(ErrorCode::InvalidRequest));
+    }
+
+    for broker in &requested_isr {
+        if !state.replicas.contains(broker) {
+            return Err(Error::Api(ErrorCode::InvalidRequest));
+        }
+    }
+
+    state.isr = requested_isr;
+    state.isr.sort_unstable();
+    state.isr.dedup();
+    state.partition_epoch += 1;
+
+    storage.update_partition_replica_state(state.clone()).await?;
+
+    let progress = storage.replica_progress(&tp).await?;
+    let leader_leo = storage.local_log_end_offset(&tp).await?;
+    let hw = crate::replication::high_watermark::compute_high_watermark(
+        &state,
+        leader_leo,
+        &progress.replicas,
+    );
+
+    storage.update_high_watermark(&tp, hw).await?;
+
+    Ok(state)
+}
+```
+
+Steering:
+
+* This method will become controller-mediated in Phase 12.
+* For Phase 11, the leader can call local storage directly in tests or through this API.
+* Keep `partition_epoch` monotonic and persist it.
+
+---
+
+# Broker replication manager
+
+Create `tansu-broker/src/replication/manager.rs`.
+
+The broker already has startup registration and a maintenance loop, so add a replication task after registration and before or alongside `listen()`. 
+
+```rust
+#[derive(Clone, Debug)]
+pub struct ReplicationConfig {
+    pub mode: ReplicationMode,
+    pub broker_id: i32,
+    pub replica_fetch_min_bytes: u32,
+    pub replica_fetch_max_bytes: u32,
+    pub replica_fetch_wait_max: Duration,
+    pub replica_lag_time_max: Duration,
+    pub high_watermark_checkpoint_interval: Duration,
+    pub min_insync_replicas: i32,
+}
+
+#[derive(Clone, Debug)]
+pub struct ReplicationManager<S> {
+    storage: S,
+    config: ReplicationConfig,
+    cancellation: CancellationToken,
+}
+
+impl<S> ReplicationManager<S>
+where
+    S: Storage + Clone + Send + Sync + 'static,
+{
+    pub fn new(storage: S, config: ReplicationConfig, cancellation: CancellationToken) -> Self {
+        Self {
+            storage,
+            config,
+            cancellation,
+        }
+    }
+
+    pub async fn run(self) -> Result<(), Error> {
+        match self.config.mode {
+            ReplicationMode::SharedStorage => self.run_heartbeat_only().await,
+            ReplicationMode::Classic => self.run_classic().await,
+        }
+    }
+
+    async fn run_classic(self) -> Result<(), Error> {
+        let mut interval = tokio::time::interval(Duration::from_millis(500));
+        let mut tasks = FollowerTaskSet::default();
+
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    self.storage
+                        .broker_heartbeat(self.config.broker_id, SystemTime::now())
+                        .await?;
+
+                    let states = self.storage
+                        .partition_replica_states_for_broker(self.config.broker_id)
+                        .await?;
+
+                    tasks.reconcile(
+                        self.storage.clone(),
+                        self.config.clone(),
+                        states,
+                    ).await?;
+
+                    self.maintain_leader_partitions().await?;
+                }
+
+                _ = self.cancellation.cancelled() => {
+                    tasks.stop_all().await;
+                    return Ok(());
+                }
+            }
+        }
+    }
+}
+```
+
+## Follower task reconciliation
+
+Create `tansu-broker/src/replication/watch.rs`.
+
+```rust
+#[derive(Default)]
+struct FollowerTaskSet {
+    handles: BTreeMap<Topition, tokio::task::JoinHandle<()>>,
+}
+
+impl FollowerTaskSet {
+    async fn reconcile<S>(
+        &mut self,
+        storage: S,
+        config: ReplicationConfig,
+        states: Vec<PartitionReplicaState>,
+    ) -> Result<(), Error>
+    where
+        S: Storage + Clone + Send + Sync + 'static,
+    {
+        let wanted: BTreeSet<Topition> = states
+            .iter()
+            .filter(|state| {
+                state.leader != config.broker_id
+                    && state.replicas.contains(&config.broker_id)
+            })
+            .map(|state| state.topition.clone())
+            .collect();
+
+        for state in states {
+            if state.leader == config.broker_id {
+                continue;
+            }
+
+            if !state.replicas.contains(&config.broker_id) {
+                continue;
+            }
+
+            if self.handles.contains_key(&state.topition) {
+                continue;
+            }
+
+            let task = FollowerReplicationTask::new(
+                storage.clone(),
+                config.clone(),
+                state,
+            );
+
+            let topition = task.topition().clone();
+
+            let handle = tokio::spawn(async move {
+                if let Err(error) = task.run().await {
+                    tracing::warn!(?error, "follower replication task exited");
+                }
+            });
+
+            self.handles.insert(topition, handle);
+        }
+
+        let existing = self.handles.keys().cloned().collect::<Vec<_>>();
+
+        for topition in existing {
+            if !wanted.contains(&topition) {
+                if let Some(handle) = self.handles.remove(&topition) {
+                    handle.abort();
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn stop_all(&mut self) {
+        for (_, handle) in std::mem::take(&mut self.handles) {
+            handle.abort();
+        }
+    }
+}
+```
+
+---
+
+# Follower fetch loop
+
+Create `tansu-broker/src/replication/follower.rs`.
+
+The follower loop is the heart of Phase 11.
+
+```rust
+pub struct FollowerReplicationTask<S> {
+    storage: S,
+    config: ReplicationConfig,
+    state: PartitionReplicaState,
+}
+
+impl<S> FollowerReplicationTask<S>
+where
+    S: Storage + Clone + Send + Sync + 'static,
+{
+    pub fn topition(&self) -> &Topition {
+        &self.state.topition
+    }
+
+    pub async fn run(mut self) -> Result<(), Error> {
+        loop {
+            self.refresh_state().await?;
+
+            if self.state.leader == self.config.broker_id {
+                return Ok(());
+            }
+
+            self.truncate_to_leader_if_needed().await?;
+            self.fetch_once().await?;
+
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    async fn truncate_to_leader_if_needed(&self) -> Result<()> {
+        let checkpoints = self
+            .storage
+            .leader_epoch_checkpoints(&self.state.topition)
+            .await?;
+
+        let Some(last_local_epoch) = checkpoints.iter().map(|c| c.leader_epoch).max() else {
+            return Ok(());
+        };
+
+        let leader = self.connect_to_leader().await?;
+
+        let leader_end = leader
+            .offset_for_leader_epoch(
+                &self.state.topition,
+                self.state.leader_epoch,
+                last_local_epoch,
+            )
+            .await?;
+
+        let local_leo = self
+            .storage
+            .local_log_end_offset(&self.state.topition)
+            .await?;
+
+        match tansu_storage::replication::truncate::decide_truncation(local_leo, leader_end) {
+            Truncation::None => Ok(()),
+            Truncation::ToOffset(offset) => {
+                self.storage.truncate_to_offset(&self.state.topition, offset).await
+            }
+        }
+    }
+
+    async fn fetch_once(&self) -> Result<()> {
+        let leader = self.connect_to_leader().await?;
+
+        let offset = self
+            .storage
+            .local_log_end_offset(&self.state.topition)
+            .await?;
+
+        let response = leader
+            .fetch_replica(
+                self.config.broker_id,
+                &self.state.topition,
+                self.state.leader_epoch,
+                offset,
+                self.config.replica_fetch_min_bytes,
+                self.config.replica_fetch_max_bytes,
+                self.config.replica_fetch_wait_max,
+            )
+            .await?;
+
+        for batch in response.batches {
+            self.storage
+                .append_follower_batch(
+                    &self.state.topition,
+                    self.state.leader_epoch,
+                    batch.base_offset,
+                    batch,
+                )
+                .await?;
+        }
+
+        if let Some(hw) = response.high_watermark {
+            self.storage
+                .update_high_watermark(&self.state.topition, hw)
+                .await?;
+        }
+
+        Ok(())
+    }
+}
+```
+
+Steering:
+
+* Use exponential backoff on network errors, but do not sleep so long that ISR shrinks too aggressively.
+* Re-read partition state before each fetch loop iteration.
+* Stop if local broker is no longer a follower for the partition.
+* Stop if leader changes; restart truncation handshake against the new leader.
+* Use `OffsetForLeaderEpoch` before fetch after every leader epoch change.
+* The follower should include its local log start offset in FetchRequest when the generated type supports it.
+
+---
+
+# Leader maintenance
+
+Create `tansu-broker/src/replication/leader.rs`.
+
+Leader maintenance should run periodically for partitions where local broker is leader.
+
+```rust
+impl<S> ReplicationManager<S>
+where
+    S: Storage + Clone + Send + Sync + 'static,
+{
+    async fn maintain_leader_partitions(&self) -> Result<(), Error> {
+        let states = self
+            .storage
+            .partition_replica_states_for_broker(self.config.broker_id)
+            .await?;
+
+        let now = SystemTime::now();
+
+        for state in states {
+            if state.leader != self.config.broker_id {
+                continue;
+            }
+
+            let progress = self.storage.replica_progress(&state.topition).await?;
+            let leader_leo = self.storage.local_log_end_offset(&state.topition).await?;
+
+            let next_isr = tansu_storage::replication::isr::compute_isr(
+                now,
+                &state,
+                leader_leo,
+                &progress.replicas,
+                self.config.replica_lag_time_max,
+            );
+
+            if next_isr != state.isr {
+                self.update_isr(state.clone(), next_isr).await?;
+            }
+
+            let latest = self
+                .storage
+                .partition_replica_state(&state.topition)
+                .await?
+                .unwrap_or(state);
+
+            let progress = self.storage.replica_progress(&latest.topition).await?;
+            let hw = tansu_storage::replication::high_watermark::compute_high_watermark(
+                &latest,
+                leader_leo,
+                &progress.replicas,
+            );
+
+            self.storage.update_high_watermark(&latest.topition, hw).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn update_isr(
+        &self,
+        mut state: PartitionReplicaState,
+        next_isr: Vec<i32>,
+    ) -> Result<()> {
+        state.isr = next_isr;
+        state.partition_epoch += 1;
+
+        self.storage
+            .update_partition_replica_state(state)
+            .await?;
+
+        Ok(())
+    }
+}
+```
+
+Steering:
+
+* Initially call storage directly; later Phase 12 can enforce controller-mediated ISR changes.
+* Emit metrics for `isr_shrink_total`, `isr_expand_total`, `partition_hw`, `partition_leo`, and `replica_lag`.
+* High watermark checkpointing should persist periodically, not merely in memory.
+
+---
+
+# Broker startup changes
+
+Touch `tansu-broker/src/broker.rs`.
+
+Add field:
+
+```rust
+replication_config: Option<ReplicationConfig>,
+```
+
+In `serve()`:
+
+```rust
+pub async fn serve(&mut self, started: Instant) -> Result<()> {
+    self.register().await?;
+
+    let replication = self.replication_config.clone().map(|config| {
+        ReplicationManager::new(
+            self.storage.clone(),
+            config,
+            self.cancellation.clone(),
+        )
+    });
+
+    let mut set = JoinSet::new();
+
+    if let Some(replication) = replication {
+        set.spawn(async move {
+            replication.run().await
+        });
+    }
+
+    self.listen(started).await
+}
+```
+
+A cleaner version is to integrate this with the existing `main()` `JoinSet`, but the key is that replication runs concurrently with the listener and stops on the same cancellation token.
+
+Steering:
+
+* Broker registration must happen before replication starts.
+* Replication must start before the broker reports ready in classic mode, or readiness should be conditional on initial assignments being loaded.
+* On shutdown, cancel follower loops before closing storage if storage has close semantics.
+* `broker_heartbeat()` should run inside replication manager even for leaders with no follower partitions.
+
+---
+
+# Route table changes
+
+Touch `tansu-broker/src/service/storage.rs`.
+
+Add imports:
+
+```rust
+use tansu_sans_io::{
+    AlterPartitionRequest,
+    LeaderAndIsrRequest,
+    OffsetForLeaderEpochRequest,
+    // existing imports...
+};
+
+use tansu_storage::{
+    AlterPartitionService,
+    LeaderAndIsrService,
+    OffsetForLeaderEpochService,
+    // existing imports...
+};
+```
+
+Add these functions to the service array:
+
+```rust
+leader_and_isr,
+alter_partition,
+offset_for_leader_epoch,
+```
+
+Add route builders:
+
+```rust
+pub fn leader_and_isr<S>(
+    builder: FrameRouteBuilder<(), Error>,
+    storage: S,
+) -> Result<FrameRouteBuilder<(), Error>, Error>
+where
+    S: Storage + Clone,
+{
+    builder
+        .with_route(
+            LeaderAndIsrRequest::KEY,
+            (
+                MapErrLayer::new(Error::from),
+                MapStateLayer::new(|_| storage),
+                FrameRequestLayer::<LeaderAndIsrRequest>::new(),
+            )
+                .into_layer(LeaderAndIsrService)
+                .boxed(),
+        )
+        .map_err(Into::into)
+}
+
+pub fn alter_partition<S>(
+    builder: FrameRouteBuilder<(), Error>,
+    storage: S,
+) -> Result<FrameRouteBuilder<(), Error>, Error>
+where
+    S: Storage + Clone,
+{
+    builder
+        .with_route(
+            AlterPartitionRequest::KEY,
+            (
+                MapErrLayer::new(Error::from),
+                MapStateLayer::new(|_| storage),
+                FrameRequestLayer::<AlterPartitionRequest>::new(),
+            )
+                .into_layer(AlterPartitionService)
+                .boxed(),
+        )
+        .map_err(Into::into)
+}
+
+pub fn offset_for_leader_epoch<S>(
+    builder: FrameRouteBuilder<(), Error>,
+    storage: S,
+) -> Result<FrameRouteBuilder<(), Error>, Error>
+where
+    S: Storage + Clone,
+{
+    builder
+        .with_route(
+            OffsetForLeaderEpochRequest::KEY,
+            (
+                MapErrLayer::new(Error::from),
+                MapStateLayer::new(|_| storage),
+                FrameRequestLayer::<OffsetForLeaderEpochRequest>::new(),
+            )
+                .into_layer(OffsetForLeaderEpochService)
+                .boxed(),
+        )
+        .map_err(Into::into)
+}
+```
+
+---
+
+# Storage engine implementation details
+
+## Memory / DynoStore
+
+This should be the first engine completed because it makes tests fast.
+
+Current dynostore behavior should change from synthesizing “this broker is leader/ISR” to storing actual cluster metadata.
+
+Add to its metadata object:
+
+```rust
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct Meta {
+    pub version: u32,
+    pub brokers: BTreeMap<i32, BrokerRecord>,
+    pub topics: BTreeMap<String, TopicRecord>,
+    pub partitions: BTreeMap<Topition, PartitionReplicaState>,
+    pub replica_progress: BTreeMap<Topition, BTreeMap<i32, ReplicaProgress>>,
+    pub leader_epochs: BTreeMap<Topition, Vec<LeaderEpochCheckpoint>>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct BrokerRecord {
+    pub broker_id: i32,
+    pub cluster_id: String,
+    pub incarnation_id: Uuid,
+    pub advertised_listener: Url,
+    pub rack: Option<String>,
+    pub registered_at: SystemTime,
+    pub last_heartbeat_at: SystemTime,
+    pub fenced: bool,
+}
+```
+
+Update `register_broker()`:
+
+```rust
+async fn register_broker(
+    &self,
+    request: BrokerRegistrationRequest,
+) -> Result<()> {
+    let mut meta = self.load_meta().await?;
+
+    meta.brokers.insert(request.broker_id, BrokerRecord {
+        broker_id: request.broker_id,
+        cluster_id: request.cluster_id,
+        incarnation_id: request.incarnation_id,
+        advertised_listener: self.advertised_listener.clone(),
+        rack: request.rack,
+        registered_at: SystemTime::now(),
+        last_heartbeat_at: SystemTime::now(),
+        fenced: false,
+    });
+
+    self.store_meta(meta).await
+}
+```
+
+Update `create_topic()`:
+
+```rust
+let broker_ids = self.live_broker_ids().await?;
+
+let assignments = if topic.assignments.as_ref().is_some_and(|a| !a.is_empty()) {
+    explicit_assignments(topic.assignments.as_ref().unwrap())?
+} else {
+    assign_replicas_round_robin(
+        &broker_ids,
+        topic.num_partitions,
+        topic.replication_factor,
+    )
+};
+
+for (partition, replicas) in assignments.into_iter().enumerate() {
+    let leader = replicas[0];
+
+    let state = PartitionReplicaState {
+        topition: Topition::new(&topic.name, partition as i32),
+        leader,
+        leader_epoch: 0,
+        partition_epoch: 0,
+        replicas: replicas.clone(),
+        isr: replicas,
+        adding_replicas: vec![],
+        removing_replicas: vec![],
+        recovery_state: LeaderRecoveryState::Recovered,
+    };
+
+    meta.partitions.insert(state.topition.clone(), state);
+}
+```
+
+Update watermark model:
+
+```rust
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
+pub struct Watermark {
+    pub log_start_offset: i64,
+    pub local_log_end_offset: i64,
+    pub high_watermark: i64,
+    pub last_stable_offset: i64,
+}
+```
+
+Steering:
+
+* Existing code may treat “high watermark” as append-end. Split it now.
+* `produce()` advances local LEO.
+* Follower append advances local LEO.
+* Only replication logic advances HW.
+* `offset_stage()` returns HW, not LEO.
+
+## PostgreSQL
+
+Add tables:
+
+```sql
+CREATE TABLE broker_registration (
+    cluster_id text NOT NULL,
+    broker_id integer NOT NULL,
+    incarnation_id uuid NOT NULL,
+    advertised_listener text NOT NULL,
+    rack text NULL,
+    registered_at timestamptz NOT NULL,
+    last_heartbeat_at timestamptz NOT NULL,
+    fenced boolean NOT NULL DEFAULT false,
+    PRIMARY KEY (cluster_id, broker_id)
+);
+
+CREATE TABLE partition_replica_state (
+    cluster_id text NOT NULL,
+    topic_name text NOT NULL,
+    partition_index integer NOT NULL,
+    leader integer NOT NULL,
+    leader_epoch integer NOT NULL,
+    partition_epoch integer NOT NULL,
+    replicas integer[] NOT NULL,
+    isr integer[] NOT NULL,
+    adding_replicas integer[] NOT NULL DEFAULT '{}',
+    removing_replicas integer[] NOT NULL DEFAULT '{}',
+    recovery_state smallint NOT NULL DEFAULT 0,
+    updated_at timestamptz NOT NULL,
+    PRIMARY KEY (cluster_id, topic_name, partition_index)
+);
+
+CREATE TABLE replica_progress (
+    cluster_id text NOT NULL,
+    topic_name text NOT NULL,
+    partition_index integer NOT NULL,
+    broker_id integer NOT NULL,
+    log_end_offset bigint NOT NULL,
+    high_watermark bigint NOT NULL,
+    last_fetch_at timestamptz NOT NULL,
+    last_caught_up_at timestamptz NULL,
+    PRIMARY KEY (cluster_id, topic_name, partition_index, broker_id)
+);
+
+CREATE TABLE leader_epoch_checkpoint (
+    cluster_id text NOT NULL,
+    topic_name text NOT NULL,
+    partition_index integer NOT NULL,
+    leader_epoch integer NOT NULL,
+    start_offset bigint NOT NULL,
+    created_at timestamptz NOT NULL,
+    PRIMARY KEY (cluster_id, topic_name, partition_index, leader_epoch)
+);
+```
+
+Add or alter watermark table to include:
+
+```sql
+local_log_end_offset bigint NOT NULL
+high_watermark bigint NOT NULL
+last_stable_offset bigint NOT NULL
+log_start_offset bigint NOT NULL
+```
+
+Exact-offset append transaction:
+
+```sql
+-- record_append_exact.sql
+INSERT INTO record (
+    cluster_id,
+    topic_name,
+    partition_index,
+    offset,
+    batch
+)
+VALUES ($1, $2, $3, $4, $5);
+```
+
+Truncation:
+
+```sql
+-- record_delete_from_offset.sql
+DELETE FROM record
+WHERE cluster_id = $1
+  AND topic_name = $2
+  AND partition_index = $3
+  AND offset >= $4;
+```
+
+Leader epoch truncation:
+
+```sql
+DELETE FROM leader_epoch_checkpoint
+WHERE cluster_id = $1
+  AND topic_name = $2
+  AND partition_index = $3
+  AND start_offset >= $4;
+```
+
+Steering:
+
+* Every partition state update must be conditional on expected `partition_epoch` or `leader_epoch`.
+* Use SQL transactions for:
+
+  * produce append + LEO update
+  * follower append + LEO update
+  * ISR update + HW recompute
+  * leader change + epoch checkpoint append
+  * truncation + LEO/HW/epoch cleanup
+* Do not let two brokers both think they are leader for the same partition. Use `leader_epoch` and compare-and-swap updates.
+
+## SQLite / libSQL / Turso
+
+Reuse the PostgreSQL logical schema with SQLite-compatible types:
+
+```text
+integer arrays => JSON text
+uuid => text
+timestamptz => integer epoch millis or text timestamp
+bytea => blob
+```
+
+Steering:
+
+* Complete Postgres first.
+* Then port SQL using the existing shared SQL module.
+* Tests should run against memory and at least one SQL backend.
+* For feature-gated engines not included in CI, compile-time stubs must still satisfy the trait.
+
+## SlateDB / local append log
+
+For a Kafka-like local log, SlateDB can store:
+
+```text
+/cluster/{cluster}/topics/{topic}/partitions/{partition}/records/{offset}
+/cluster/{cluster}/topics/{topic}/partitions/{partition}/epochs/{epoch}
+/cluster/{cluster}/topics/{topic}/partitions/{partition}/state
+/cluster/{cluster}/brokers/{broker_id}
+```
+
+Steering:
+
+* Keep record keys fixed-width offset encoded so scans are ordered.
+* Truncation deletes all record keys at or above offset.
+* Persist leader epoch checkpoints separately.
+
+---
+
+# Controller shim for Phase 11
+
+Because Phase 12 is the real controller, implement a minimal static/controller shim now.
+
+Create `tansu-broker/src/replication/controller_shim.rs` or keep it inside manager.
+
+Responsibilities:
+
+1. On topic creation, assign replicas using live brokers.
+2. Write `PartitionReplicaState`.
+3. Broadcast/apply `LeaderAndIsr` locally.
+4. Allow tests to force leader changes.
+5. No automatic failure-based election yet, except test helper or simple “promote first ISR” function.
+
+Test helper API:
+
+```rust
+pub async fn force_leader<S>(
+    storage: &S,
+    topition: &Topition,
+    new_leader: i32,
+) -> Result<PartitionReplicaState>
+where
+    S: Storage,
+{
+    let Some(mut state) = storage.partition_replica_state(topition).await? else {
+        return Err(Error::Api(ErrorCode::UnknownTopicOrPartition));
+    };
+
+    if !state.isr.contains(&new_leader) {
+        return Err(Error::Api(ErrorCode::PreferredLeaderNotAvailable));
+    }
+
+    state.leader = new_leader;
+    state.leader_epoch += 1;
+    state.partition_epoch += 1;
+
+    storage.update_partition_replica_state(state.clone()).await?;
+
+    let leo = storage.local_log_end_offset(topition).await?;
+    storage
+        .append_leader_epoch_checkpoint(LeaderEpochCheckpoint {
+            topition: topition.clone(),
+            leader_epoch: state.leader_epoch,
+            start_offset: leo,
+        })
+        .await?;
+
+    Ok(state)
+}
+```
+
+Steering:
+
+* This is not a substitute for Phase 12.
+* It makes Phase 11 testable and complete: the replication layer can correctly obey leadership changes without owning cluster election.
+
+---
+
+# Exact test plan
+
+## Unit tests
+
+### `tansu-storage/tests/replication_high_watermark.rs`
+
+Cases:
+
+1. `hw_min_of_all_isr`
+2. `hw_ignores_non_isr_lagging_replica`
+3. `hw_never_exceeds_leader_leo`
+4. `hw_zero_when_isr_progress_missing`
+5. `hw_after_isr_shrink_advances`
+
+### `tansu-storage/tests/replication_isr.rs`
+
+Cases:
+
+1. follower stays ISR while caught up
+2. follower leaves ISR after `replica_lag_time_max`
+3. follower re-enters ISR after catching up
+4. leader is always in ISR
+5. unknown broker cannot join ISR
+
+### `tansu-storage/tests/leader_epoch.rs`
+
+Cases:
+
+1. latest epoch returns current LEO
+2. old epoch returns next epoch start offset
+3. unknown future epoch fences as `UnknownLeaderEpoch`
+4. old current leader epoch fences as `FencedLeaderEpoch`
+
+### `tansu-storage/tests/truncation.rs`
+
+Cases:
+
+1. no truncation when local LEO equals leader epoch end
+2. truncate when local LEO exceeds leader end
+3. epoch checkpoints after truncation offset removed
+4. producer state after truncation offset removed
+
+---
+
+## Service tests
+
+### `tansu-broker/tests/produce_not_leader.rs`
+
+```rust
+#[tokio::test]
+async fn produce_to_follower_returns_current_leader() -> Result<()> {
+    let cluster = TestCluster::new(3).await?;
+    let topic = "phase11_not_leader";
+
+    cluster
+        .create_topic(topic, 1, 3)
+        .await?;
+
+    let state = cluster.partition_state(topic, 0).await?;
+    let follower = state
+        .replicas
+        .iter()
+        .copied()
+        .find(|id| *id != state.leader)
+        .unwrap();
+
+    let response = cluster
+        .produce_to_broker(follower, topic, 0, b"hello")
+        .await?;
+
+    let partition = response
+        .responses
+        .unwrap()[0]
+        .partition_responses
+        .as_ref()
+        .unwrap()[0]
+        .clone();
+
+    assert_eq!(
+        ErrorCode::NotLeaderOrFollower,
+        ErrorCode::try_from(partition.error_code)?
+    );
+
+    assert_eq!(
+        Some(state.leader),
+        partition.current_leader.map(|leader| leader.leader_id)
+    );
+
+    Ok(())
+}
+```
+
+### `tansu-broker/tests/high_watermark_visibility.rs`
+
+Goal: client cannot read uncommitted data.
+
+Test flow:
+
+1. Start 3 brokers.
+2. Create topic RF=3, min ISR=2.
+3. Pause follower replication tasks.
+4. Produce `acks=1`.
+5. Client fetch should not see record if HW has not advanced.
+6. Resume one follower.
+7. HW advances.
+8. Client fetch sees record.
+
+### `tansu-broker/tests/follower_fetch.rs`
+
+Goal: follower can fetch leader tail beyond HW.
+
+Test flow:
+
+1. Produce records to leader.
+2. Do not wait for all ISR.
+3. Follower fetch uses replica ID.
+4. Response includes records beyond current HW.
+5. Follower append stores exact offsets.
+
+### `tansu-broker/tests/isr_shrink_expand.rs`
+
+Goal: ISR dynamics.
+
+Test flow:
+
+1. Start 3 brokers.
+2. Create RF=3 topic.
+3. Stop follower 3 replication loop.
+4. Wait `replica_lag_time_max`.
+5. Assert ISR shrinks to `[leader, follower2]`.
+6. Resume follower 3.
+7. Assert follower 3 catches up and ISR expands.
+
+### `tansu-broker/tests/leader_change_truncation.rs`
+
+This is the most important Phase 11 test.
+
+```text
+Initial:
+  leader = broker 1
+  followers = broker 2, broker 3
+  ISR = [1,2,3]
+
+Step 1:
+  produce offsets 0..9, all replicated
+
+Step 2:
+  isolate broker 3
+
+Step 3:
+  produce offsets 10..19 to leader 1, replicated only to broker 2
+  HW advances to 20 if ISR shrank to [1,2], or stays at 10 if broker 3 still ISR
+
+Step 4:
+  force leader to broker 2, epoch increments
+
+Step 5:
+  old broker 1 appends divergent offsets 20..24 while isolated or before fencing
+
+Step 6:
+  broker 1 rejoins as follower
+
+Expected:
+  broker 1 calls OffsetForLeaderEpoch
+  broker 1 truncates divergent offsets 20..24
+  broker 1 fetches from broker 2
+  all replicas converge
+```
+
+Assertions:
+
+```rust
+assert_eq!(leader_records, broker1_records);
+assert_eq!(leader_records, broker2_records);
+assert_eq!(leader_records, broker3_records);
+assert_no_record_value("divergent");
+assert_eq!(same_high_watermark_on_all_replicas);
+```
+
+---
+
+# Kafka client compatibility tests
+
+Add tests using:
+
+```text
+kafka-topics
+kafka-console-producer
+kafka-console-consumer
+kafka-consumer-groups
+librdkafka example
+Kafka Java client integration test
+```
+
+Test matrix:
+
+| Test                   | Expected                                                     |
+| ---------------------- | ------------------------------------------------------------ |
+| create RF=3 topic      | metadata shows 3 replicas and ISR                            |
+| describe topic         | leader and ISR are real broker IDs                           |
+| produce acks=all       | waits for ISR                                                |
+| kill follower          | produce still succeeds if ISR >= min ISR                     |
+| kill leader            | clients refresh metadata and continue                        |
+| stale metadata produce | returns leader error with current leader                     |
+| consume after failover | no duplicate committed offsets, no missing committed records |
+| restart old leader     | divergent tail truncated                                     |
+
+---
+
+# Observability to add in Phase 11
+
+Add metrics in `tansu-storage` or `tansu-otel`:
+
+```text
+tansu_replication_partition_leader{topic,partition,broker}
+tansu_replication_log_end_offset{topic,partition,broker}
+tansu_replication_high_watermark{topic,partition}
+tansu_replication_replica_lag{topic,partition,broker}
+tansu_replication_isr_size{topic,partition}
+tansu_replication_isr_shrink_total{topic,partition}
+tansu_replication_isr_expand_total{topic,partition}
+tansu_replication_fetch_total{topic,partition,broker}
+tansu_replication_fetch_error_total{topic,partition,broker,error}
+tansu_replication_truncation_total{topic,partition,broker}
+tansu_replication_leader_epoch{topic,partition}
+```
+
+Add logs:
+
+```rust
+tracing::info!(
+    topic = %tp.topic(),
+    partition = tp.partition(),
+    old_leader = old.leader,
+    new_leader = next.leader,
+    old_epoch = old.leader_epoch,
+    new_epoch = next.leader_epoch,
+    "partition leadership changed"
+);
+
+tracing::warn!(
+    topic = %tp.topic(),
+    partition = tp.partition(),
+    replica = follower_id,
+    lag_ms,
+    "replica removed from ISR"
+);
+```
+
+---
+
+# Important edge cases
+
+## Produce during leader change
+
+A produce request with stale metadata must fail, not append.
+
+Rules:
+
+```text
+if request leader epoch < current epoch => FencedLeaderEpoch
+if this broker is not leader => NotLeaderOrFollower
+if this broker was leader but has been demoted => NotLeaderOrFollower
+```
+
+## Fetch during leader change
+
+Client fetch:
+
+```text
+old leader => NotLeaderOrFollower
+new leader with HW not caught up => OffsetNotAvailable or empty response until HW is safe
+```
+
+Replica fetch:
+
+```text
+old epoch => FencedLeaderEpoch
+future epoch => UnknownLeaderEpoch
+wrong leader => NotLeaderOrFollower
+```
+
+## ISR empty or leader not in ISR
+
+Do not allow persisted ISR without the leader unless implementing newer ELR semantics. For Phase 11, enforce:
+
+```rust
+assert!(state.isr.contains(&state.leader));
+```
+
+## Min ISR
+
+For `acks=all`:
+
+```text
+ISR size < min.insync.replicas before append => NotEnoughReplicas
+append succeeds but cannot commit before timeout => RequestTimedOut or NotEnoughReplicasAfterAppend
+```
+
+## Transactions
+
+Phase 14 owns full transactions, but Phase 11 must not break scaffolding:
+
+* HW cap applies to `read_uncommitted`.
+* `last_stable_offset` must be `min(transaction_lso, high_watermark)` for `read_committed`.
+* Transaction markers must replicate like normal batches.
+* Follower promotion must recover producer/transaction state from replicated log.
+
+## Compaction / retention
+
+Phase 13 owns full retention/compaction, but Phase 11 must protect replication:
+
+* Do not delete records below follower fetch offset if follower is in ISR.
+* If follower falls behind retention, remove from ISR and require full replica rebuild.
+* Return offset-out-of-range to follower when fetch offset < leader log start; follower must truncate/rebuild.
+
+---
+
+# Recommended PR breakdown
+
+## PR 1: Replication pure model
+
+Files:
+
+```text
+tansu-storage/src/replication.rs
+tansu-storage/src/replication/high_watermark.rs
+tansu-storage/src/replication/isr.rs
+tansu-storage/src/replication/epoch.rs
+tansu-storage/src/replication/truncate.rs
+tansu-storage/src/lib.rs
+tansu-storage/tests/replication_*.rs
+```
+
+Exit criteria:
+
+```text
+cargo test -p tansu-storage replication
+```
+
+## PR 2: Storage trait and memory/dynostore implementation
+
+Files:
+
+```text
+tansu-storage/src/lib.rs
+tansu-storage/src/dynostore.rs
+tansu-storage/src/null.rs
+```
+
+Exit criteria:
+
+* metadata shows real leaders/replicas/ISR
+* offset stage separates LEO and HW
+* exact follower append works
+* truncation works
+
+## PR 3: Protocol services
+
+Files:
+
+```text
+tansu-storage/src/service.rs
+tansu-storage/src/service/leader_and_isr.rs
+tansu-storage/src/service/alter_partition.rs
+tansu-storage/src/service/offset_for_leader_epoch.rs
+tansu-broker/src/service/storage.rs
+```
+
+Exit criteria:
+
+* service-level tests pass
+* `LeaderAndIsr`, `AlterPartition`, and `OffsetForLeaderEpoch` are routable
+
+## PR 4: Produce/fetch leader correctness
+
+Files:
+
+```text
+tansu-storage/src/service/produce.rs
+tansu-storage/src/service/fetch.rs
+tansu-storage/src/service/metadata.rs
+tansu-storage/src/service/describe_topic_partitions.rs
+```
+
+Exit criteria:
+
+* produce to follower returns leader error
+* client fetch capped by HW
+* replica fetch can read to LEO
+* current leader fields are populated
+
+## PR 5: Broker replication manager
+
+Files:
+
+```text
+tansu-broker/src/broker.rs
+tansu-broker/src/replication.rs
+tansu-broker/src/replication/manager.rs
+tansu-broker/src/replication/follower.rs
+tansu-broker/src/replication/leader.rs
+tansu-broker/src/replication/client.rs
+tansu-broker/src/replication/watch.rs
+```
+
+Exit criteria:
+
+* follower copies leader logs
+* HW advances after follower fetch
+* ISR shrink/expand works
+
+## PR 6: PostgreSQL/SQLite persistence
+
+Files:
+
+```text
+tansu-storage/src/pg.rs
+tansu-storage/src/lite.rs
+tansu-storage/src/limbo.rs
+tansu-storage/src/sql/*.sql
+```
+
+Exit criteria:
+
+* restart preserves partition state, HW, LEO, ISR, leader epochs
+* SQL transaction tests pass
+
+## PR 7: End-to-end broker tests
+
+Files:
+
+```text
+tansu-broker/tests/replication.rs
+tansu-broker/tests/leader_change_truncation.rs
+tansu-broker/tests/high_watermark_visibility.rs
+tansu-broker/tests/isr_shrink_expand.rs
+compose-replication.yaml
+```
+
+Exit criteria:
+
+* 3-broker tests pass in CI
+* Kafka CLI can create RF=3 topic, produce, consume, describe
+
+## PR 8: Documentation and operations
+
+Files:
+
+```text
+README.md
+docs/replication.md
+example.env
+compose.yaml
+compose-replication.yaml
+justfile
+```
+
+Exit criteria:
+
+* clear instructions for shared-storage mode vs classic replication mode
+* migration notes
+* known limitations before Phase 12
+
+---
+
+# Final Phase 11 “done” checklist
+
+Use this as the merge gate:
+
+```text
+[ ] Storage has durable PartitionReplicaState.
+[ ] Metadata returns real brokers, leaders, replicas, ISR, leader epochs.
+[ ] CreateTopics assigns replicas correctly for explicit and implicit assignments.
+[ ] Produce validates current leader.
+[ ] Produce acks=all waits for HW.
+[ ] Produce respects min.insync.replicas.
+[ ] Client fetch is HW-capped.
+[ ] Replica fetch is LEO-capped.
+[ ] Replica fetch updates follower progress.
+[ ] HW = min LEO of ISR replicas.
+[ ] ISR shrinks after lag timeout.
+[ ] ISR expands only after full catch-up.
+[ ] Leader epoch checkpoint is appended on every leadership change.
+[ ] OffsetForLeaderEpoch fences stale/future epochs.
+[ ] Followers truncate divergent tails before fetching from new leader.
+[ ] Follower append preserves exact leader offsets and batch bytes.
+[ ] Broker replication manager starts/stops with broker lifecycle.
+[ ] Broker heartbeat is persisted.
+[ ] Restart recovers LEO, HW, ISR, leader epochs, and replica role.
+[ ] Multi-broker integration test passes.
+[ ] Kafka CLI topic describe shows correct leader/replica/ISR data.
+[ ] Existing produce/fetch/idempotent tests still pass.
+[ ] Shared-storage mode still works as before.
+```
+
+The most important implementation principle: **never let client-visible data move past the high watermark, and never let a follower append at an offset chosen locally.** If those two rules hold, leader changes and truncation become tractable instead of terrifying.
+
+[1]: https://github.com/tansu-io/tansu "GitHub - tansu-io/tansu: Apache Kafka® compatible broker with S3, PostgreSQL, SQLite, Apache Iceberg and Delta Lake · GitHub"
+[2]: https://kafka.apache.org/42/design/design/ "Design | Apache Kafka"
+[3]: https://raw.githubusercontent.com/tansu-io/tansu/main/tansu-storage/src/lib.rs "raw.githubusercontent.com"
+[4]: https://kafka.apache.org/28/configuration/broker-configs/ "Broker Configs | Apache Kafka"
+[5]: https://kafka.apache.org/40/protocol.html?utm_source=chatgpt.com "Apache Kafka"
+

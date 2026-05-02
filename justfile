@@ -45,6 +45,9 @@ fuzz-generate-seed: (cargo-fuzz "run" "--package" "fuzz" "--bin" "generate_seeds
 check:
     cargo check --workspace --all-features --all-targets
 
+compatibility-contract:
+    cargo test -p tansu-broker --test compatibility_contract --all-features -- --nocapture
+
 clippy:
     cargo clippy --workspace --all-features --all-targets -- -D warnings
 

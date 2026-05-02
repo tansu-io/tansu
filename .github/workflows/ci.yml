@@ -93,6 +93,7 @@ jobs:
           components: clippy, rustfmt
           cache: false
       - run: just check
+      - run: just compatibility-contract
   fmt:
     runs-on: ${{matrix.os}}
     strategy:

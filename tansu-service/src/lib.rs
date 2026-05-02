@@ -250,7 +250,7 @@ mod channel;
 mod frame;
 mod stream;
 
-pub use api::{ApiVersionsService, FrameRouteBuilder, FrameRouteService};
+pub use api::{ApiVersionRange, ApiVersionsService, FrameRouteBuilder, FrameRouteService};
 
 pub use channel::{
     ChannelFrameLayer, ChannelFrameService, FrameChannelService, FrameReceiver, FrameSender,

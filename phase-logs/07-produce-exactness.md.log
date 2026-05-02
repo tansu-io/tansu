@@ -1,0 +1,83 @@
+# Phase 07 Log - Produce Exactness, Pre-Advertisement
+
+## Date
+
+2026-05-02
+
+## Phase File
+
+tips/phases/07-produce-exactness.md
+
+## Intent
+
+Track the Produce exactness slice for phase 07: validation before append, storage mutation safety, acks handling, wire suppression for `acks=0`, and the manifest / ledger bookkeeping that keeps the phase pre-advertisement.
+
+## Files Touched
+
+- .gitignore
+- docs/compatibility/kafka-4.2-ledger.json
+- phase-logs/README.md
+- phase-logs/index.json
+- phase-logs/07-produce-exactness.md.log
+- tansu-broker/src/service/safe_errors.rs
+- tansu-broker/tests/compatibility_contract.rs
+- tansu-broker/tests/produce_exactness.rs
+- tansu-service/src/frame.rs
+- tansu-service/src/stream.rs
+- tansu-storage/src/lib.rs
+- tansu-storage/src/service/produce.rs
+- tansu-storage/tests/common/mod.rs
+- tansu-storage/tests/log_contract.rs
+- tansu-storage/tests/produce_exactness.rs
+
+## Ledger Rows Touched
+
+- api_key 0 ProduceRequest
+
+## Tests Added
+
+- tansu-broker/tests/compatibility_contract.rs::phase_log_manifest_contract_covers_phase_docs
+- tansu-broker/tests/produce_exactness.rs::api_versions_do_not_advertise_produce
+- tansu-broker/tests/produce_exactness.rs::produce_acks_zero_suppresses_wire_response
+- tansu-broker/tests/produce_exactness.rs::produce_acks_leader_and_full_isr_return_wire_response
+- tansu-broker/tests/produce_exactness.rs::produce_request_versions_decode_across_supported_versions
+- tansu-storage/tests/produce_exactness.rs::valid_required_acks_are_accepted
+- tansu-storage/tests/produce_exactness.rs::invalid_required_acks_is_rejected
+- tansu-storage/tests/produce_exactness.rs::unknown_topic_returns_unknown_topic_or_partition
+- tansu-storage/tests/produce_exactness.rs::invalid_partition_returns_unknown_topic_or_partition
+- tansu-storage/tests/produce_exactness.rs::crc_invalid_is_rejected_without_append
+- tansu-storage/tests/produce_exactness.rs::unsupported_compression_is_rejected_without_append
+- tansu-storage/tests/produce_exactness.rs::supported_compressions_are_accepted_without_append
+- tansu-storage/tests/produce_exactness.rs::all_batches_validated_before_append
+- tansu-storage/tests/produce_exactness.rs::batch_length_mismatch_is_rejected_without_append
+- tansu-storage/tests/produce_exactness.rs::record_count_mismatch_is_rejected_without_append
+- tansu-storage/tests/produce_exactness.rs::invalid_timestamp_is_rejected_without_append
+- tansu-storage/tests/produce_exactness.rs::partitions_remain_independent
+- tansu-storage/tests/produce_exactness.rs::schema_failure_maps_and_keeps_offsets
+
+## Verification Commands
+
+- rtk cargo test -p tansu-storage --test produce_exactness --all-features -- --nocapture
+- rtk cargo test -p tansu-broker --test compatibility_contract --all-features -- --nocapture
+- rtk cargo test -p tansu-broker --test produce_exactness --all-features -- --nocapture
+- rtk cargo test -p tansu-storage --test log_contract --all-features -- --nocapture
+- rtk env CARGO_TARGET_DIR=/tmp/phase07-verify cargo check -p tansu-storage -p tansu-service -p tansu-broker --all-features --all-targets
+- rtk cargo fmt --all --check
+- rtk git diff --check
+- rtk git check-ignore -v phase-logs/07-produce-exactness.md.log
+
+## Outcomes
+
+- Added a structured phase-log manifest and a contract test that keeps the manifest, phase docs, logs, and ledger ownership aligned.
+- Implemented Produce validation before append, including metadata prevalidation, batch decode/CRC checks, and unsupported-compression rejection.
+- Added timestamp validation, batch-length mismatch rejection, and a positive compression matrix for gzip, lz4, and zstd.
+- Preserved storage mutation safety by validating all batches for a partition before the first append and mapping storage schema failures to stable partition errors.
+- Added a broker version-matrix test that exercises Produce request/response decode across protocol versions `0..=11` and keeps `acks=0` wire-silent across the same matrix.
+- Suppressed the broker wire response for `acks=0` while keeping `acks=1` and `acks=-1` successful on the storage path.
+- Updated the Produce ledger row to phase 07 with partial, pre-advertisement semantics and proof coverage for the new tests.
+- No stable Java or librdkafka differential harness was found in this repo, so Produce remains unadvertised for now.
+
+## Residual Risks
+
+- Produce is still unadvertised in `ApiVersions` because no stable Java/librdkafka differential harness was found in this repo.
+- Later phases still own leader epochs, durable idempotence, transactions, retention, compaction, delete-record behavior changes, and any differential certification beyond the current focused checks.

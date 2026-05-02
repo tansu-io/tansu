@@ -15,10 +15,14 @@
 use std::{fmt, io, sync::Arc};
 
 use dotenv::dotenv;
+use tansu_sans_io::create_topics_request::CreatableTopic;
+use tansu_storage::{BrokerRegistrationRequest, Storage, StorageContainer};
 use tracing::subscriber::DefaultGuard;
 use tracing_subscriber::{EnvFilter, filter::ParseError};
+use url::Url;
+use uuid::Uuid;
 
-#[derive(Clone, Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error)]
 pub(crate) enum Error {
     #[allow(dead_code)]
     Io(Arc<io::Error>),
@@ -32,6 +36,7 @@ pub(crate) enum Error {
     Parse(#[from] url::ParseError),
 
     Protocol(#[from] tansu_sans_io::Error),
+    Schema(#[from] tansu_schema::Error),
     Storage(#[from] tansu_storage::Error),
 }
 
@@ -83,4 +88,63 @@ pub(crate) fn init_tracing() -> Result<DefaultGuard, Error> {
             )
             .finish(),
     ))
+}
+
+#[allow(dead_code)]
+pub(crate) async fn build_storage(
+    cluster_id: &str,
+    node_id: i32,
+    storage: Url,
+) -> Result<Arc<Box<dyn Storage>>, Error> {
+    StorageContainer::builder()
+        .cluster_id(cluster_id)
+        .node_id(node_id)
+        .advertised_listener(Url::parse("tcp://127.0.0.1:9092")?)
+        .storage(storage)
+        .build()
+        .await
+        .map_err(Into::into)
+}
+
+#[allow(dead_code)]
+pub(crate) async fn register_broker<S>(
+    storage: &S,
+    cluster_id: &str,
+    node_id: i32,
+) -> Result<(), Error>
+where
+    S: Storage + ?Sized,
+{
+    storage
+        .register_broker(BrokerRegistrationRequest {
+            broker_id: node_id,
+            cluster_id: cluster_id.to_owned(),
+            incarnation_id: Uuid::nil(),
+            rack: None,
+        })
+        .await
+        .map_err(Into::into)
+}
+
+#[allow(dead_code)]
+pub(crate) async fn create_topic<S>(
+    storage: &S,
+    topic: &str,
+    partitions: i32,
+) -> Result<Uuid, Error>
+where
+    S: Storage + ?Sized,
+{
+    storage
+        .create_topic(
+            CreatableTopic::default()
+                .name(topic.to_owned())
+                .num_partitions(partitions)
+                .replication_factor(1)
+                .assignments(Some([].into()))
+                .configs(Some([].into())),
+            false,
+        )
+        .await
+        .map_err(Into::into)
 }

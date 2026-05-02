@@ -24,6 +24,7 @@ use bytes::Bytes;
 use nanoid::nanoid;
 use opentelemetry::KeyValue;
 use rama::{Context, Layer, Service};
+use tansu_sans_io::{Body, Frame};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt, BufWriter},
     net::{TcpListener, TcpStream},
@@ -135,6 +136,7 @@ where
 pub struct TcpContext {
     cluster_id: Option<String>,
     maximum_frame_size: Option<usize>,
+    cancellation: Option<CancellationToken>,
 }
 
 impl TcpContext {
@@ -145,6 +147,13 @@ impl TcpContext {
     pub fn maximum_frame_size(self, maximum_frame_size: Option<usize>) -> Self {
         Self {
             maximum_frame_size,
+            ..self
+        }
+    }
+
+    pub fn cancellation(self, cancellation: Option<CancellationToken>) -> Self {
+        Self {
+            cancellation,
             ..self
         }
     }
@@ -329,10 +338,14 @@ where
     async fn process(
         &self,
         attributes: &[KeyValue],
-        ctx: Context<TcpContext>,
+        mut ctx: Context<TcpContext>,
         request: Bytes,
     ) -> Result<Bytes, S::Error> {
         REQUEST_SIZE.record(request.len() as u64, attributes);
+
+        if let Some(cancellation) = ctx.state().cancellation.clone() {
+            _ = ctx.insert(cancellation);
+        }
 
         let (ctx, _) = ctx.swap_state(State::default());
         let request_start = SystemTime::now();
@@ -374,7 +387,16 @@ where
     {
         let size = self.wait(req, maximum_frame_size).await?;
         let request = self.read(req, size).await?;
+        let suppress_response = Frame::request_from_bytes(&request[..])
+            .map(|frame| matches!(frame.body, Body::ProduceRequest(ref produce) if produce.acks == 0))
+            .map_err(Error::from)?;
         let response = self.process(attributes, ctx, request).await?;
+
+        if suppress_response {
+            debug!("suppressing Produce response for acks=0");
+            return Ok(());
+        }
+
         self.write(req, response).await
     }
 }

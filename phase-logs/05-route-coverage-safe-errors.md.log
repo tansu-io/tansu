@@ -1,0 +1,34 @@
+# Phase 05 Log - Route Coverage Safe Errors
+
+Date: 2026-05-02
+
+Work completed:
+- Added broker safe-error routes for the stable phase 05 set:
+  - `EndTxnRequest`
+  - `DeleteAclsRequest`
+  - `AlterConfigsRequest`
+  - `DescribeLogDirsRequest`
+  - `CreatePartitionsRequest`
+  - `ElectLeadersRequest`
+  - `OffsetDeleteRequest`
+  - `PushTelemetryRequest`
+- Kept unstable or later-phase APIs out of the routed set:
+  - `WriteTxnMarkersRequest`
+  - `AlterReplicaLogDirsRequest`
+  - `CreateDelegationTokenRequest`
+  - `UpdateFeaturesRequest`
+  - `ListTransactionsRequest`
+- Synchronized `docs/compatibility/kafka-4.2-ledger.json` so the route contract matches the live broker stack.
+- Updated the broker compatibility contract to assert the safe-error route set and the advertised-version registry.
+- Removed temporary debug output from the broker contract test after verification.
+
+Verification:
+- `rtk cargo test -p tansu-broker --test compatibility_contract --all-features -- --nocapture`
+- `rtk cargo test -p tansu-service route --all-features -- --nocapture`
+- `rtk cargo check -p tansu-service -p tansu-broker --all-features --all-targets`
+- `rtk cargo fmt --all --check`
+- `rtk git diff --check`
+
+Notes:
+- I intentionally left `MetadataRequest`/`ApiVersionsRequest` behavior from Phase 02 intact.
+- The phase 05 ledger now reflects the current broker route stack rather than a speculative future set.

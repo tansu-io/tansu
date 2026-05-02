@@ -1,0 +1,18 @@
+# Phase 03 Log - Request Lifecycle No Hangs
+
+Date: 2026-05-02
+
+Work completed:
+- Added broker-to-TCP cancellation plumbing by carrying a `CancellationToken` in `TcpContext` and inserting it into request contexts at the TCP boundary.
+- Made storage fetch waits cancellable in `tansu-storage/src/service/fetch.rs`.
+- Made `RequestStorageService` cancel pending fetch dispatches when the request context cancellation token fires.
+- Added request lifecycle tracing events around frame dispatch in `tansu-service/src/frame.rs`.
+- Added a focused storage-layer cancellation test that blocks a fetch, cancels the request token, and asserts `Error::Cancelled`.
+
+Verification:
+- `rtk cargo test -p tansu-storage --lib fetch_request_is_cancelled -- --nocapture`
+- `rtk cargo check -p tansu-storage -p tansu-service -p tansu-broker --all-features --all-targets`
+- `rtk cargo test -p tansu-broker --test compatibility_contract --all-features -- --nocapture`
+
+Notes:
+- I did not widen the scope to every broker/backend combination. The phase change is targeted at the fetch wait path and the request dispatch boundary, which are the visible hang risks called out in the phase doc.
