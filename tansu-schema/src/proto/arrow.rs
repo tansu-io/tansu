@@ -1160,10 +1160,11 @@ fn field_ids(schemas: &[FileDescriptor]) -> BTreeMap<String, i32> {
                             debug!(?path, ?message_descriptor);
 
                             if message_descriptor.full_name() != GOOGLE_PROTOBUF_TIMESTAMP {
-                                ids.extend(
-                                    field_ids_with_path(&path[..], &[message_descriptor], id)
-                                        .into_iter(),
-                                )
+                                ids.extend(field_ids_with_path(
+                                    &path[..],
+                                    &[message_descriptor],
+                                    id,
+                                ))
                             }
                         }
                     }
@@ -1183,10 +1184,7 @@ fn field_ids(schemas: &[FileDescriptor]) -> BTreeMap<String, i32> {
                         if let RuntimeType::Message(message_descriptor) = repeated {
                             debug!(?path, ?message_descriptor);
 
-                            ids.extend(
-                                field_ids_with_path(&path[..], &[message_descriptor], id)
-                                    .into_iter(),
-                            )
+                            ids.extend(field_ids_with_path(&path[..], &[message_descriptor], id))
                         }
                     }
 
@@ -1215,10 +1213,11 @@ fn field_ids(schemas: &[FileDescriptor]) -> BTreeMap<String, i32> {
                             if let RuntimeType::Message(message_descriptor) = keys {
                                 debug!(?path, ?message_descriptor);
 
-                                ids.extend(
-                                    field_ids_with_path(&path[..], &[message_descriptor], id)
-                                        .into_iter(),
-                                )
+                                ids.extend(field_ids_with_path(
+                                    &path[..],
+                                    &[message_descriptor],
+                                    id,
+                                ))
                             }
                         }
 
@@ -1235,10 +1234,11 @@ fn field_ids(schemas: &[FileDescriptor]) -> BTreeMap<String, i32> {
                             if let RuntimeType::Message(message_descriptor) = values {
                                 debug!(?path, ?message_descriptor);
 
-                                ids.extend(
-                                    field_ids_with_path(&path[..], &[message_descriptor], id)
-                                        .into_iter(),
-                                )
+                                ids.extend(field_ids_with_path(
+                                    &path[..],
+                                    &[message_descriptor],
+                                    id,
+                                ))
                             }
                         }
                     }

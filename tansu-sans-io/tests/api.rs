@@ -19,8 +19,8 @@ use bytes::Bytes;
 use tansu_sans_io::{
     Ack, ApiKey as _, BatchAttribute, Body, Compression, ConfigResource, ConfigSource, ConfigType,
     ControlBatch, CoordinatorType, EndTransactionMarker, EndpointType, ErrorCode, FetchRequest,
-    FetchResponse, Frame, Header, IsolationLevel, ListOffset, OpType, Result, TimestampType,
-    to_system_time, to_timestamp,
+    FetchResponse, Frame, Header, IsolationLevel, ListOffset, MaximumAllocationSize, OpType,
+    Result, TimestampType, to_system_time, to_timestamp,
 };
 
 #[test]
@@ -411,4 +411,16 @@ fn config_type() {
     // unrecognized values map to Unknown
     assert_eq!(0i8, i8::from(ConfigType::from(99)));
     assert_eq!(0i8, i8::from(ConfigType::from(0)));
+}
+
+#[test]
+fn allocation_size() -> Result<()> {
+    let mut q: Option<String> = Some("hey".into());
+
+    assert_eq!(size_of::<u16>() + 3, q.maximum_allocation_size()?);
+
+    q = None;
+    assert_eq!(size_of::<u32>(), q.maximum_allocation_size()?);
+
+    Ok(())
 }

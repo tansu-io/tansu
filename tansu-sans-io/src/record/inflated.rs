@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,12 +13,12 @@
 // limitations under the License.
 
 use crate::{
-    Compression, Encoder, Error, Result,
-    primitive::ByteSize,
+    BatchAttribute, ByteSize, Compression, Error, Result,
     record::{Record, codec::Sequence, deflated},
+    ser::RecordBatchEncoder,
     to_timestamp,
 };
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -38,6 +38,19 @@ impl TryFrom<deflated::Frame> for Frame {
         deflated
             .batches
             .into_iter()
+            .map(Batch::try_from)
+            .collect::<Result<Vec<_>>>()
+            .map(|batches| Self { batches })
+    }
+}
+
+impl TryFrom<&deflated::Frame> for Frame {
+    type Error = Error;
+
+    fn try_from(deflated: &deflated::Frame) -> Result<Self, Self::Error> {
+        deflated
+            .batches
+            .iter()
             .try_fold(Vec::new(), |mut acc, batch| {
                 Batch::try_from(batch).map(|inflated| {
                     acc.push(inflated);
@@ -77,7 +90,8 @@ impl TryFrom<deflated::Batch> for Batch {
         let partition_leader_epoch = value.partition_leader_epoch;
         let magic = value.magic;
         let crc = value.crc;
-        let attributes = value.attributes;
+        let attributes =
+            BatchAttribute::try_from(value.attributes).inspect(|attribute| debug!(?attribute))?;
         let last_offset_delta = value.last_offset_delta;
         let base_timestamp = value.base_timestamp;
         let max_timestamp = value.max_timestamp;
@@ -93,7 +107,7 @@ impl TryFrom<deflated::Batch> for Batch {
             partition_leader_epoch,
             magic,
             crc,
-            attributes,
+            attributes: attributes.compression(Compression::None).into(),
             last_offset_delta,
             base_timestamp,
             max_timestamp,
@@ -372,17 +386,20 @@ impl Builder {
     }
 
     fn crc(&self) -> Result<u32> {
-        let mut digest = crc_fast::Digest::new(crc_fast::CrcAlgorithm::Crc32Iscsi);
-        let mut serializer = Encoder::new(&mut digest);
+        let mut encoder = RecordBatchEncoder::new(BytesMut::with_capacity(self.size_in_bytes()?));
+        self.attributes.serialize(&mut encoder)?;
+        self.last_offset_delta.serialize(&mut encoder)?;
+        self.base_timestamp.serialize(&mut encoder)?;
+        self.max_timestamp.serialize(&mut encoder)?;
+        self.producer_id.serialize(&mut encoder)?;
+        self.producer_epoch.serialize(&mut encoder)?;
+        self.base_sequence.serialize(&mut encoder)?;
+        self.records.serialize(&mut encoder)?;
 
-        self.attributes.serialize(&mut serializer)?;
-        self.last_offset_delta.serialize(&mut serializer)?;
-        self.base_timestamp.serialize(&mut serializer)?;
-        self.max_timestamp.serialize(&mut serializer)?;
-        self.producer_id.serialize(&mut serializer)?;
-        self.producer_epoch.serialize(&mut serializer)?;
-        self.base_sequence.serialize(&mut serializer)?;
-        self.records.serialize(&mut serializer)?;
+        let encoded = Bytes::from(encoder);
+
+        let mut digest = crc_fast::Digest::new(crc_fast::CrcAlgorithm::Crc32Iscsi);
+        digest.update(&encoded[..]);
 
         Ok(digest.finalize() as u32)
     }
@@ -425,11 +442,41 @@ impl Builder {
 
 #[cfg(test)]
 mod tests {
+    use tracing::subscriber::DefaultGuard;
+    use tracing_subscriber::EnvFilter;
+
     use super::*;
     use crate::{Result, de::BatchDecoder};
 
+    fn init_tracing() -> Result<DefaultGuard> {
+        use std::{fs::File, sync::Arc, thread};
+
+        Ok(tracing::subscriber::set_default(
+            tracing_subscriber::fmt()
+                .with_level(true)
+                .with_line_number(true)
+                .with_thread_names(false)
+                .with_env_filter(EnvFilter::from_default_env().add_directive(
+                    format!("{}=debug", env!("CARGO_PKG_NAME").replace("-", "_")).parse()?,
+                ))
+                .with_writer(
+                    thread::current()
+                        .name()
+                        .ok_or(Error::Message(String::from("unnamed thread")))
+                        .and_then(|name| {
+                            File::create(format!("../logs/{}/{name}.log", env!("CARGO_PKG_NAME"),))
+                                .map_err(Into::into)
+                        })
+                        .map(Arc::new)?,
+                )
+                .finish(),
+        ))
+    }
+
     #[test]
     fn batch() -> Result<()> {
+        let _guard = init_tracing()?;
+
         let decoded = Batch::builder()
             .base_offset(0)
             .partition_leader_epoch(-1)
@@ -441,7 +488,7 @@ mod tests {
             .producer_id(1)
             .producer_epoch(0)
             .base_sequence(1)
-            .record(Record::builder().value(Some(Bytes::from(vec![100, 101, 102]))))
+            .record(Record::builder().value(Some(Bytes::from_static(&[100, 101, 102]))))
             .build()?;
 
         assert_eq!(decoded.batch_length, 59);
@@ -452,6 +499,8 @@ mod tests {
 
     #[test]
     fn batch_decode() -> Result<()> {
+        let _guard = init_tracing()?;
+
         let encoded = vec![
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 59, 255, 255, 255, 255, 2, 67, 41, 231, 61, 0, 0, 0,
             0, 0, 0, 0, 0, 1, 141, 116, 152, 137, 53, 0, 0, 1, 141, 116, 152, 137, 53, 0, 0, 0, 0,
@@ -482,11 +531,13 @@ mod tests {
 
     #[test]
     fn batch_encode() -> Result<()> {
-        let encoded = vec![
+        let _guard = init_tracing()?;
+
+        let encoded = Bytes::from_static(&[
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 59, 255, 255, 255, 255, 2, 67, 41, 231, 61, 0, 0, 0,
             0, 0, 0, 0, 0, 1, 141, 116, 152, 137, 53, 0, 0, 1, 141, 116, 152, 137, 53, 0, 0, 0, 0,
             0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 18, 0, 0, 0, 1, 6, 100, 101, 102, 0,
-        ];
+        ]);
 
         let decoded = Batch::builder()
             .base_offset(0)
@@ -502,7 +553,7 @@ mod tests {
             .record(Record::builder().value(Some(Bytes::from(vec![100, 101, 102]))))
             .build()?;
 
-        let decoder = BatchDecoder::new(Bytes::copy_from_slice(&encoded[..]));
+        let decoder = BatchDecoder::new(encoded);
         let actual = Batch::deserialize(decoder)?;
 
         assert_eq!(decoded, actual);
@@ -512,6 +563,8 @@ mod tests {
 
     #[test]
     fn build_batch_records() -> Result<()> {
+        let _guard = init_tracing()?;
+
         let keys: Vec<_> = (0..=6).map(|i| format!("k{i}")).map(Bytes::from).collect();
         let values: Vec<_> = (0..=11).map(|i| format!("v{i}")).map(Bytes::from).collect();
 

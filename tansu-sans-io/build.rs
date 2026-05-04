@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -433,6 +433,8 @@ fn message_struct(
         include_tag,
     );
 
+    let maximum_allocation_size = maximum_allocation_size(name, fields, include_tag);
+
     if include_tag {
         let tags: Vec<TokenStream> = fields
             .iter()
@@ -578,6 +580,8 @@ fn message_struct(
 
             #from_mezzanine
 
+            #maximum_allocation_size
+
             impl #name {
                 #(#builders)*
             }
@@ -649,6 +653,8 @@ fn message_struct(
             })
             .collect();
 
+        let tag_capacity = tags.len();
+
         let assignments: Vec<TokenStream> = fields
             .iter()
             .filter(|field| field.tag().is_none())
@@ -687,7 +693,7 @@ fn message_struct(
                 impl From<#tagged_name> for #name {
                     fn from(value: #tagged_name) -> Self {
                         #[allow(unused_mut)]
-                        let mut tag_buffer = Vec::new();
+                        let mut tag_buffer = Vec::with_capacity(#tag_capacity);
 
                         #(#tags)*
 
@@ -724,6 +730,32 @@ fn message_struct(
     }
 }
 
+fn maximum_allocation_size(name: &Type, fields: &[Field], include_tag: bool) -> TokenStream {
+    let sizes = fields
+        .iter()
+        .filter(|field| include_tag || field.tag().is_none())
+        .map(|field| {
+            let f = field.ident();
+
+            quote! {
+                total += self.#f.maximum_allocation_size()?
+            }
+        })
+        .collect::<Vec<_>>();
+
+    quote! {
+        impl crate::MaximumAllocationSize for #name {
+            fn maximum_allocation_size(&self) -> Result<usize, crate::Error> {
+                let mut total:usize = 0;
+
+                #(#sizes;)*
+
+                Ok(total)
+            }
+        }
+    }
+}
+
 #[allow(clippy::too_many_lines)]
 fn common_struct(
     parent: Option<&Field>,
@@ -734,6 +766,7 @@ fn common_struct(
 ) -> TokenStream {
     let vis = quote!(pub);
     let vfk = visibility_field_kind(parent, Some(&vis), fields, module, &[], include_tag);
+    let maximum_allocation_size = maximum_allocation_size(name, fields, include_tag);
 
     if include_tag {
         let assignments: Vec<TokenStream> = fields
@@ -811,6 +844,8 @@ fn common_struct(
                 #(#builders)*
             }
 
+            #maximum_allocation_size
+
             impl From<#from> for #name {
                 fn from(value: #from) -> Self {
                     Self {
@@ -878,6 +913,8 @@ fn common_struct(
             })
             .collect();
 
+        let tag_capacity = tags.len();
+
         let assignments: Vec<TokenStream> = fields
             .iter()
             .filter(|field| field.tag().is_none())
@@ -927,7 +964,7 @@ fn common_struct(
             impl From<#from> for #name {
                 fn from(value: #from) -> Self {
                     #[allow(unused_mut)]
-                    let mut tag_buffer = Vec::new();
+                    let mut tag_buffer = Vec::with_capacity(#tag_capacity);
 
                     #(#tags)*
 
@@ -1080,6 +1117,17 @@ fn process(messages: &[Message], include_tag: bool) -> TokenStream {
             })
             .collect::<Vec<_>>();
 
+        let maximum_allocation_size = messages
+            .iter()
+            .map(|message| {
+                let name = message.type_name();
+
+                quote! {
+                    Self::#name(message) => message.maximum_allocation_size(),
+                }
+            })
+            .collect::<Vec<_>>();
+
         quote! {
             #(#root)*
 
@@ -1101,6 +1149,14 @@ fn process(messages: &[Message], include_tag: bool) -> TokenStream {
                 pub fn api_name(&self) -> &str {
                     match self {
                         #(#api_names)*
+                    }
+                }
+            }
+
+            impl crate::MaximumAllocationSize for Body {
+                fn maximum_allocation_size(&self) -> Result<usize, crate::Error> {
+                    match self {
+                        #(#maximum_allocation_size)*
                     }
                 }
             }

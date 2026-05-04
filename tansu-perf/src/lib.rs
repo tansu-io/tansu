@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -49,8 +49,7 @@ use opentelemetry_sdk::{
 use opentelemetry_semantic_conventions::SCHEMA_URL;
 use tansu_client::{Client, ConnectionManager};
 use tansu_sans_io::{
-    ErrorCode, ProduceRequest,
-    primitive::ByteSize as _,
+    ByteSize as _, ErrorCode, ProduceRequest,
     produce_request::{PartitionProduceData, TopicProduceData},
     record::{Record, deflated, inflated},
 };

@@ -13,7 +13,7 @@
 // limitations under the License.
 //
 //! Deflated (compressed) Kafka Records
-use std::{fmt::Formatter, result};
+use std::{fmt::Formatter, io::Write, result};
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use flate2::write::GzEncoder;
@@ -23,9 +23,7 @@ use serde::{
 };
 use tracing::{debug, error, instrument};
 
-use crate::{
-    Compression, Decode as _, Decoder, Encoder, Error, Result, primitive::ByteSize, record::Record,
-};
+use crate::{ByteSize, Compression, Decode as _, Decoder, Encode, Error, Result, record::Record};
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct Frame {
@@ -56,12 +54,8 @@ impl TryFrom<crate::record::inflated::Frame> for Frame {
         inflated
             .batches
             .into_iter()
-            .try_fold(Vec::new(), |mut acc, batch| {
-                Batch::try_from(batch).map(|deflated| {
-                    acc.push(deflated);
-                    acc
-                })
-            })
+            .map(Batch::try_from)
+            .collect::<Result<Vec<_>>>()
             .map(|batches| Self { batches })
     }
 }
@@ -150,7 +144,7 @@ impl TryFrom<Bytes> for Batch {
                     .inspect_err(|err| debug!(batch_length, size_of_val = size_of_val(&crc), ?err))
             })?;
 
-        debug!(crc_data_size, encoded = encoded.len());
+        debug!(crc_data_size, encoded = encoded.len(), crc);
 
         if crc_data_size > encoded.len() {
             return Err(Error::Overflow);
@@ -187,7 +181,7 @@ impl TryFrom<Bytes> for Batch {
                         .ok_or(Error::Overflow)
                 })?;
 
-        debug!(record_data_size, encoded = encoded.len());
+        debug!(record_data_size, encoded = encoded.len(), computed);
 
         if record_data_size > encoded.len() {
             return Err(Error::Overflow);
@@ -246,6 +240,39 @@ struct CrcData {
     pub record_data: Bytes,
 }
 
+impl TryFrom<&CrcData> for Bytes {
+    type Error = Error;
+
+    fn try_from(value: &CrcData) -> result::Result<Self, Self::Error> {
+        let mut encoded = value.size_in_bytes().map(BytesMut::with_capacity)?;
+        encoded.put_i16(value.attributes);
+        encoded.put_i32(value.last_offset_delta);
+        encoded.put_i64(value.base_timestamp);
+        encoded.put_i64(value.max_timestamp);
+        encoded.put_i64(value.producer_id);
+        encoded.put_i16(value.producer_epoch);
+        encoded.put_i32(value.base_sequence);
+        encoded.put_u32(value.record_count);
+        encoded.put(&value.record_data[..]);
+
+        Ok(Bytes::from(encoded))
+    }
+}
+
+impl ByteSize for CrcData {
+    fn size_in_bytes(&self) -> Result<usize> {
+        Ok(size_of_val(&self.attributes)
+            + size_of_val(&self.last_offset_delta)
+            + size_of_val(&self.base_timestamp)
+            + size_of_val(&self.max_timestamp)
+            + size_of_val(&self.producer_id)
+            + size_of_val(&self.producer_epoch)
+            + size_of_val(&self.base_sequence)
+            + size_of_val(&self.record_count)
+            + self.record_data.len())
+    }
+}
+
 impl From<&Batch> for CrcData {
     fn from(batch: &Batch) -> Self {
         Self {
@@ -264,7 +291,9 @@ impl From<&Batch> for CrcData {
 
 impl CrcData {
     fn into_batch(self, base_offset: i64, partition_leader_epoch: i32, magic: i8) -> Result<Batch> {
-        let crc = self.crc()?;
+        let crc = self
+            .crc()
+            .inspect(|crc| debug!(?self, base_offset, partition_leader_epoch, magic, crc))?;
 
         Ok(Batch {
             base_offset,
@@ -285,33 +314,37 @@ impl CrcData {
     }
 
     fn crc(&self) -> Result<u32> {
+        let encoded = Bytes::try_from(self)?;
+        debug!(encoded = ?&encoded[..]);
+
         let mut digest = crc_fast::Digest::new(crc_fast::CrcAlgorithm::Crc32Iscsi);
-        let mut serializer = Encoder::new(&mut digest);
-        self.serialize(&mut serializer)?;
+        digest.update(&encoded[..]);
+
         Ok(digest.finalize() as u32)
     }
 }
 
 fn into_record_data(records: &[Record], compression: Compression) -> Result<Bytes> {
+    let sizing = records
+        .iter()
+        .map(|record| record.size_in_bytes())
+        .collect::<Result<Vec<_>>>()
+        .map(|sizes| sizes.iter().sum::<usize>())?;
+
+    debug!(sizing);
+
     match compression {
-        Compression::None => {
-            let mut record_data = BytesMut::new().writer();
-            let mut encoder = Encoder::new(&mut record_data);
-
-            for record in records {
-                record.serialize(&mut encoder)?;
-            }
-
-            Ok(Bytes::from(record_data.into_inner()))
-        }
+        Compression::None => records.encode(),
 
         Compression::Gzip => {
-            let mut gz = GzEncoder::new(BytesMut::new().writer(), flate2::Compression::default());
-            let mut encoder = Encoder::new(&mut gz);
+            let uncompressed = records.encode()?;
 
-            for record in records {
-                record.serialize(&mut encoder)?;
-            }
+            let mut gz = GzEncoder::new(
+                BytesMut::with_capacity(uncompressed.len()).writer(),
+                flate2::Compression::default(),
+            );
+
+            gz.write_all(&uncompressed)?;
 
             gz.finish()
                 .map(|w| w.into_inner())
@@ -320,24 +353,26 @@ fn into_record_data(records: &[Record], compression: Compression) -> Result<Byte
         }
 
         Compression::Lz4 => {
-            let mut lz4 = lz4::EncoderBuilder::new().build(BytesMut::new().writer())?;
-            let mut encoder = Encoder::new(&mut lz4);
+            let uncompressed = records.encode()?;
 
-            for record in records {
-                record.serialize(&mut encoder)?;
-            }
+            let mut lz4 = lz4::EncoderBuilder::new()
+                .build(BytesMut::with_capacity(uncompressed.len()).writer())?;
+
+            lz4.write_all(&uncompressed[..])?;
 
             let (w, _) = lz4.finish();
             Ok(Bytes::from(w.into_inner()))
         }
 
         Compression::Zstd => {
-            let mut zstd = zstd::stream::write::Encoder::new(BytesMut::new().writer(), 0)?;
-            let mut encoder = Encoder::new(&mut zstd);
+            let uncompressed = records.encode()?;
 
-            for record in records {
-                record.serialize(&mut encoder)?;
-            }
+            let mut zstd = zstd::stream::write::Encoder::new(
+                BytesMut::with_capacity(uncompressed.len()).writer(),
+                0,
+            )?;
+
+            zstd.write_all(&uncompressed[..])?;
 
             zstd.finish()
                 .map(|w| w.into_inner())
@@ -579,7 +614,13 @@ mod tests {
             Compression::try_from(decoded.attributes)?
         );
 
-        let inflated = crate::record::inflated::Batch::try_from(decoded.clone())?;
+        let mut inflated = crate::record::inflated::Batch::try_from(decoded.clone())
+            .inspect(|inflated| debug!(?inflated))?;
+
+        assert_eq!(
+            Compression::None,
+            Compression::try_from(inflated.attributes)?
+        );
 
         assert_eq!(
             vec![Record {
@@ -593,6 +634,9 @@ mod tests {
             }],
             inflated.records
         );
+
+        inflated.attributes = BatchAttribute::try_from(inflated.attributes)
+            .map(|attribute| attribute.compression(Compression::Gzip).into())?;
 
         let deflated = Batch::try_from(inflated)?;
         assert_eq!(decoded.base_offset, deflated.base_offset);
@@ -657,7 +701,12 @@ mod tests {
             Compression::try_from(decoded.attributes)?
         );
 
-        let inflated = crate::record::inflated::Batch::try_from(decoded.clone())?;
+        let mut inflated = crate::record::inflated::Batch::try_from(decoded.clone())?;
+
+        assert_eq!(
+            Compression::None,
+            Compression::try_from(inflated.attributes)?
+        );
 
         assert_eq!(
             vec![Record {
@@ -671,6 +720,9 @@ mod tests {
             }],
             inflated.records
         );
+
+        inflated.attributes = BatchAttribute::try_from(inflated.attributes)
+            .map(|attribute| attribute.compression(Compression::Zstd).into())?;
 
         let deflated = Batch::try_from(inflated)?;
         assert_eq!(decoded.base_offset, deflated.base_offset);
@@ -739,7 +791,12 @@ mod tests {
         let decoded = Batch::deserialize(decoder)?;
         assert_eq!(Compression::Lz4, Compression::try_from(decoded.attributes)?);
 
-        let inflated = crate::record::inflated::Batch::try_from(decoded.clone())?;
+        let mut inflated = crate::record::inflated::Batch::try_from(decoded.clone())?;
+
+        assert_eq!(
+            Compression::None,
+            Compression::try_from(inflated.attributes)?
+        );
 
         assert_eq!(
             vec![Record {
@@ -753,6 +810,9 @@ mod tests {
             }],
             inflated.records
         );
+
+        inflated.attributes = BatchAttribute::try_from(inflated.attributes)
+            .map(|attribute| attribute.compression(Compression::Lz4).into())?;
 
         let deflated = Batch::try_from(inflated)?;
         assert_eq!(decoded.base_offset, deflated.base_offset);
@@ -921,8 +981,8 @@ mod tests {
 
     #[test]
     fn deflate() -> Result<()> {
-        let key = Bytes::copy_from_slice("Lorem ipsum dolor sit amet".as_bytes());
-        let value = Bytes::copy_from_slice("consectetur adipiscing elit".as_bytes());
+        let key = Bytes::from_static(b"Lorem ipsum dolor sit amet");
+        let value = Bytes::from_static(b"consectetur adipiscing elit");
 
         let producer_id = 54345;
         let producer_epoch = 32123;

@@ -12,15 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::ByteSize;
-use crate::{Decode, Encode, Error, Result};
+use crate::{ByteSize, Decode, Encode, Error, Result};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use serde::{
     Deserialize, Deserializer, Serialize, Serializer,
     de::{self, SeqAccess, Visitor},
     ser::SerializeSeq,
 };
-use std::{any::type_name_of_val, fmt::Formatter, ops::Deref};
+use std::{
+    any::{type_name, type_name_of_val},
+    fmt::Formatter,
+    ops::Deref,
+};
 use tracing::{debug, instrument};
 
 const CONTINUATION: u8 = 0b1000_0000;
@@ -429,7 +432,25 @@ impl Deref for UnsignedVarInt {
     }
 }
 
+impl Encode for UnsignedVarInt {
+    fn encode(&self) -> Result<Bytes> {
+        let mut encoded = BytesMut::new();
+
+        let mut v = self.0;
+
+        while v >= u32::from(CONTINUATION) {
+            encoded.put_u8(v as u8 | CONTINUATION);
+            v >>= 7;
+        }
+
+        encoded.put_u8(v as u8);
+
+        Ok(Bytes::from(encoded))
+    }
+}
+
 impl UnsignedVarInt {
+    #[instrument(skip(serializer), fields(serializer = type_name::<S>()))]
     pub fn serialize<S>(i: &u32, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -438,10 +459,14 @@ impl UnsignedVarInt {
         let mut s = serializer.serialize_seq(None)?;
 
         while v >= u32::from(CONTINUATION) {
+            debug!(v);
+
             #[allow(clippy::cast_possible_truncation)]
             s.serialize_element(&(v as u8 | CONTINUATION))?;
             v >>= 7;
         }
+
+        debug!(v);
 
         #[allow(clippy::cast_possible_truncation)]
         s.serialize_element(&(v as u8))?;
@@ -558,6 +583,7 @@ impl TryFrom<usize> for UnsignedVarInt {
 }
 
 impl Serialize for UnsignedVarInt {
+    #[instrument(skip_all, fields(serializer = type_name::<S>()))]
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -625,34 +651,37 @@ mod tests {
 
     #[test]
     fn encode_varint_signed_one() -> Result<()> {
-        let mut encoded = Vec::new();
-        let mut serializer = Encoder::new(&mut encoded);
+        let mut serializer = Encoder::new(BytesMut::new());
         let decoded = VarInt(1);
         decoded.serialize(&mut serializer)?;
 
-        assert_eq!(vec![2u8], encoded);
+        let encoded = Bytes::from(serializer);
+
+        assert_eq!(&[2u8], &encoded[..]);
         Ok(())
     }
 
     #[test]
     fn encode_varint_unsigned_one() -> Result<()> {
-        let mut encoded = Vec::new();
-        let mut serializer = Encoder::new(&mut encoded);
+        let mut serializer = Encoder::new(BytesMut::new());
         let decoded = UnsignedVarInt(1);
         decoded.serialize(&mut serializer)?;
 
-        assert_eq!(vec![1u8], encoded);
+        let encoded = Bytes::from(serializer);
+
+        assert_eq!(&[1u8], &encoded[..]);
         Ok(())
     }
 
     #[test]
     fn encode_varint_signed_zero() -> Result<()> {
-        let mut encoded = Vec::new();
-        let mut serializer = Encoder::new(&mut encoded);
+        let mut serializer = Encoder::new(BytesMut::new());
         let decoded = VarInt(0);
         decoded.serialize(&mut serializer)?;
 
-        assert_eq!(vec![0u8], encoded);
+        let encoded = Bytes::from(serializer);
+
+        assert_eq!(&[0u8], &encoded[..]);
         Ok(())
     }
 

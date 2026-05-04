@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,19 +17,22 @@ use common::{CLIENT_ID, COOPERATIVE_STICKY, PROTOCOL_TYPE, RANGE, StorageType, r
 use rand::{prelude::*, rng};
 use tansu_broker::{Result, coordinator::group::administrator::Controller};
 use tansu_sans_io::{ErrorCode, join_group_request::JoinGroupRequestProtocol};
-use tansu_storage::StorageContainer;
+use tansu_storage::Storage;
 use tracing::debug;
 use url::Url;
 use uuid::Uuid;
 
 mod common;
 
-pub async fn join_with_empty_member_id(
+pub async fn join_with_empty_member_id<G>(
     cluster_id: impl Into<String>,
     broker_id: i32,
-    sc: StorageContainer,
-) -> Result<()> {
-    register_broker(cluster_id, broker_id, &sc).await?;
+    sc: G,
+) -> Result<()>
+where
+    G: Storage + Clone,
+{
+    register_broker(cluster_id, broker_id, sc.clone()).await?;
 
     let mut controller = Controller::with_storage(sc)?;
 
@@ -92,12 +95,15 @@ pub async fn join_with_empty_member_id(
     Ok(())
 }
 
-pub async fn rejoin_with_empty_member_id(
+pub async fn rejoin_with_empty_member_id<G>(
     cluster_id: impl Into<String>,
     broker_id: i32,
-    sc: StorageContainer,
-) -> Result<()> {
-    register_broker(cluster_id, broker_id, &sc).await?;
+    sc: G,
+) -> Result<()>
+where
+    G: Storage + Clone,
+{
+    register_broker(cluster_id, broker_id, sc.clone()).await?;
 
     let mut controller = Controller::with_storage(sc.clone())?;
 
@@ -181,9 +187,11 @@ pub async fn rejoin_with_empty_member_id(
 
 #[cfg(feature = "postgres")]
 mod pg {
+    use std::sync::Arc;
+
     use super::*;
 
-    async fn storage_container(cluster: Uuid, node: i32) -> Result<StorageContainer> {
+    async fn storage_container(cluster: Uuid, node: i32) -> Result<Arc<Box<dyn Storage>>> {
         common::storage_container(
             StorageType::Postgres,
             cluster,
@@ -229,9 +237,11 @@ mod pg {
 
 #[cfg(feature = "dynostore")]
 mod in_memory {
+    use std::sync::Arc;
+
     use super::*;
 
-    async fn storage_container(cluster: Uuid, node: i32) -> Result<StorageContainer> {
+    async fn storage_container(cluster: Uuid, node: i32) -> Result<Arc<Box<dyn Storage>>> {
         common::storage_container(
             StorageType::InMemory,
             cluster,
