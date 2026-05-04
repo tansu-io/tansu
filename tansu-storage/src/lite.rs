@@ -1675,10 +1675,18 @@ impl Storage for Engine {
         min_bytes: u32,
         max_bytes: u32,
         isolation_level: IsolationLevel,
+        max_wait: Duration,
     ) -> Result<Vec<deflated::Batch>> {
         let start = SystemTime::now();
         self.inner
-            .fetch(topition, offset, min_bytes, max_bytes, isolation_level)
+            .fetch(
+                topition,
+                offset,
+                min_bytes,
+                max_bytes,
+                isolation_level,
+                max_wait,
+            )
             .await
             .inspect(|_| {
                 ENGINE_REQUEST_DURATION.record(
@@ -2644,10 +2652,26 @@ impl Storage for Delegate {
         min_bytes: u32,
         max_bytes: u32,
         isolation_level: IsolationLevel,
+        max_wait: Duration,
     ) -> Result<Vec<deflated::Batch>> {
-        let start = SystemTime::now();
+        let started_at = SystemTime::now();
 
-        debug!(?topition, offset, min_bytes, max_bytes, ?isolation_level);
+        let has_deadline_expired = || {
+            started_at
+                .elapsed()
+                .inspect(|elapsed| debug!(?elapsed, ?max_wait))
+                .map(|elapsed| max_wait.saturating_sub(elapsed).is_zero())
+                .unwrap_or_default()
+        };
+
+        debug!(
+            ?topition,
+            offset,
+            min_bytes,
+            max_bytes,
+            ?isolation_level,
+            ?max_wait
+        );
 
         let (base_topic, key_filter): (&str, Option<&str>) =
             self.topic_with_key(topition.topic()).await?;
@@ -2793,7 +2817,9 @@ impl Storage for Delegate {
                 .record(record_builder)
                 .last_offset_delta(offset_delta);
 
-            while let Some(row) = records.next().await? {
+            while let Some(row) = records.next().await?
+                && !has_deadline_expired()
+            {
                 let attributes = row
                     .get::<Option<i32>>(1)
                     .map(|attributes| attributes.unwrap_or(0))
@@ -2919,10 +2945,12 @@ impl Storage for Delegate {
         }
 
         Ok(batches).inspect(|_| {
-            DELEGATE_REQUEST_DURATION.record(
-                elapsed_millis(start),
-                &[KeyValue::new("operation", "fetch")],
-            )
+            if let Ok(elapsed) = started_at.elapsed() {
+                DELEGATE_REQUEST_DURATION.record(
+                    elapsed.as_millis() as u64,
+                    &[KeyValue::new("operation", "fetch")],
+                )
+            }
         })
     }
 

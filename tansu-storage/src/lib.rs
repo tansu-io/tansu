@@ -1373,6 +1373,7 @@ pub trait Storage: Debug + Send + Sync + 'static {
         min_bytes: u32,
         max_bytes: u32,
         isolation: IsolationLevel,
+        max_wait: Duration,
     ) -> Result<Vec<deflated::Batch>>;
 
     /// Query the offset stage for a topic partition.
@@ -1574,9 +1575,10 @@ where
         min_bytes: u32,
         max_bytes: u32,
         isolation: IsolationLevel,
+        max_wait: Duration,
     ) -> Result<Vec<deflated::Batch>> {
         self.as_ref()
-            .fetch(topition, offset, min_bytes, max_bytes, isolation)
+            .fetch(topition, offset, min_bytes, max_bytes, isolation, max_wait)
             .await
     }
 
@@ -1828,9 +1830,10 @@ where
         min_bytes: u32,
         max_bytes: u32,
         isolation: IsolationLevel,
+        max_wait: Duration,
     ) -> Result<Vec<deflated::Batch>> {
         self.as_ref()
-            .fetch(topition, offset, min_bytes, max_bytes, isolation)
+            .fetch(topition, offset, min_bytes, max_bytes, isolation, max_wait)
             .await
     }
 
@@ -2812,30 +2815,39 @@ impl Storage for StorageContainer {
         min_bytes: u32,
         max_bytes: u32,
         isolation: IsolationLevel,
+        max_wait: Duration,
     ) -> Result<Vec<deflated::Batch>> {
         let attributes = [KeyValue::new("method", "fetch")];
 
         match self {
             #[cfg(feature = "dynostore")]
             Self::DynoStore(engine) => {
-                engine.fetch(topition, offset, min_bytes, max_bytes, isolation)
+                engine.fetch(topition, offset, min_bytes, max_bytes, isolation, max_wait)
             }
 
             #[cfg(feature = "libsql")]
-            Self::Lite(engine) => engine.fetch(topition, offset, min_bytes, max_bytes, isolation),
+            Self::Lite(engine) => {
+                engine.fetch(topition, offset, min_bytes, max_bytes, isolation, max_wait)
+            }
 
-            Self::Null(engine) => engine.fetch(topition, offset, min_bytes, max_bytes, isolation),
+            Self::Null(engine) => {
+                engine.fetch(topition, offset, min_bytes, max_bytes, isolation, max_wait)
+            }
 
             #[cfg(feature = "postgres")]
             Self::Postgres(engine) => {
-                engine.fetch(topition, offset, min_bytes, max_bytes, isolation)
+                engine.fetch(topition, offset, min_bytes, max_bytes, isolation, max_wait)
             }
 
             #[cfg(feature = "slatedb")]
-            Self::Slate(engine) => engine.fetch(topition, offset, min_bytes, max_bytes, isolation),
+            Self::Slate(engine) => {
+                engine.fetch(topition, offset, min_bytes, max_bytes, isolation, max_wait)
+            }
 
             #[cfg(feature = "turso")]
-            Self::Turso(engine) => engine.fetch(topition, offset, min_bytes, max_bytes, isolation),
+            Self::Turso(engine) => {
+                engine.fetch(topition, offset, min_bytes, max_bytes, isolation, max_wait)
+            }
         }
         .await
         .inspect(|_| {

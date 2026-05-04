@@ -1400,6 +1400,7 @@ impl Storage for Engine {
         min_bytes: u32,
         max_bytes: u32,
         isolation_level: IsolationLevel,
+        _max_wait: Duration,
     ) -> Result<Vec<deflated::Batch>> {
         debug!(?topition, offset, min_bytes, max_bytes, ?isolation_level);
         let high_watermark = self.offset_stage(topition).await.map(|offset_stage| {

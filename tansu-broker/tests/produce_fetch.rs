@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, time::Duration};
 
 use bytes::Bytes;
 use common::{StorageType, alphanumeric_string, init_tracing, register_broker};
@@ -107,9 +107,17 @@ where
     let min_bytes = 1;
     let max_bytes = 50 * 1024;
     let isolation = IsolationLevel::ReadUncommitted;
+    let max_wait = Duration::from_millis(500);
 
     let batches = sc
-        .fetch(&topition, offset, min_bytes, max_bytes as u32, isolation)
+        .fetch(
+            &topition,
+            offset,
+            min_bytes,
+            max_bytes as u32,
+            isolation,
+            max_wait,
+        )
         .await
         .and_then(|batches| {
             batches.into_iter().try_fold(Vec::new(), |mut acc, batch| {
@@ -327,9 +335,17 @@ where
     let min_bytes = 1;
     let max_bytes = 50 * 1024;
     let isolation = IsolationLevel::ReadUncommitted;
+    let max_wait = Duration::from_millis(500);
 
     let batches = sc
-        .fetch(&topition, offset, min_bytes, max_bytes as u32, isolation)
+        .fetch(
+            &topition,
+            offset,
+            min_bytes,
+            max_bytes as u32,
+            isolation,
+            max_wait,
+        )
         .await
         .and_then(|batches| {
             batches.into_iter().try_fold(Vec::new(), |mut acc, batch| {
@@ -549,9 +565,17 @@ where
     let min_bytes = 1;
     let max_bytes = 50 * 1024;
     let isolation = IsolationLevel::ReadUncommitted;
+    let max_wait = Duration::from_millis(500);
 
     let batches = sc
-        .fetch(&topition, offset, min_bytes, max_bytes as u32, isolation)
+        .fetch(
+            &topition,
+            offset,
+            min_bytes,
+            max_bytes as u32,
+            isolation,
+            max_wait,
+        )
         .await
         .and_then(|batches| {
             batches.into_iter().try_fold(Vec::new(), |mut acc, batch| {
@@ -675,6 +699,7 @@ where
     let min_bytes = 1;
     let max_bytes = 50 * 1_024;
     let isolation = IsolationLevel::ReadUncommitted;
+    let max_wait = Duration::from_millis(500);
 
     let collect_records = |batches: Vec<tansu_sans_io::record::deflated::Batch>| {
         batches.into_iter().try_fold(Vec::new(), |mut acc, batch| {
@@ -687,7 +712,7 @@ where
 
     // Fetch the base topic — all six records
     let all_records = sc
-        .fetch(&topition, offset, min_bytes, max_bytes, isolation)
+        .fetch(&topition, offset, min_bytes, max_bytes, isolation, max_wait)
         .await
         .and_then(|batches| collect_records(batches).map_err(Into::into))?;
     debug!(?all_records);
@@ -696,7 +721,14 @@ where
     // Fetch virtual keyed topic for KEY_A — three records
     let keyed_topition_a = Topition::new(format!("{topic_name}/CC54 RYD"), partition);
     let key_a_records = sc
-        .fetch(&keyed_topition_a, offset, min_bytes, max_bytes, isolation)
+        .fetch(
+            &keyed_topition_a,
+            offset,
+            min_bytes,
+            max_bytes,
+            isolation,
+            max_wait,
+        )
         .await
         .and_then(|batches| collect_records(batches).map_err(Into::into))?;
     debug!(?key_a_records);
@@ -708,7 +740,14 @@ where
     // Fetch virtual keyed topic for KEY_B — three records
     let keyed_topition_b = Topition::new(format!("{topic_name}/NN03 RYB"), partition);
     let key_b_records = sc
-        .fetch(&keyed_topition_b, offset, min_bytes, max_bytes, isolation)
+        .fetch(
+            &keyed_topition_b,
+            offset,
+            min_bytes,
+            max_bytes,
+            isolation,
+            max_wait,
+        )
         .await
         .and_then(|batches| collect_records(batches).map_err(Into::into))?;
     debug!(?key_b_records);
@@ -787,6 +826,7 @@ where
     let min_bytes = 1;
     let max_bytes = 50 * 1_024;
     let isolation = IsolationLevel::ReadUncommitted;
+    let max_wait = Duration::from_millis(500);
 
     let collect_records = |batches: Vec<tansu_sans_io::record::deflated::Batch>| {
         batches.into_iter().try_fold(Vec::new(), |mut acc, batch| {
@@ -800,7 +840,7 @@ where
     // All six records are returned — tansu.virtual is not set so the "/" is
     // treated as part of the topic name with no key filtering applied.
     let all_records = sc
-        .fetch(&topition, offset, min_bytes, max_bytes, isolation)
+        .fetch(&topition, offset, min_bytes, max_bytes, isolation, max_wait)
         .await
         .and_then(|batches| collect_records(batches).map_err(Into::into))?;
     debug!(?all_records);

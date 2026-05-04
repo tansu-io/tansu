@@ -1802,7 +1802,18 @@ impl Storage for Postgres {
         min_bytes: u32,
         max_bytes: u32,
         isolation_level: IsolationLevel,
+        max_wait: Duration,
     ) -> Result<Vec<deflated::Batch>> {
+        let started_at = SystemTime::now();
+
+        let has_deadline_expired = || {
+            started_at
+                .elapsed()
+                .inspect(|elapsed| debug!(?elapsed, ?max_wait))
+                .map(|elapsed| max_wait.saturating_sub(elapsed).is_zero())
+                .unwrap_or_default()
+        };
+
         let (base_topic, key_filter): (&str, Option<&str>) =
             self.topic_with_key(topition.topic()).await?;
 
@@ -2028,6 +2039,10 @@ impl Storage for Postgres {
                 batch_builder = batch_builder
                     .record(record_builder)
                     .last_offset_delta(offset_delta);
+
+                if has_deadline_expired() {
+                    break;
+                }
             }
 
             batches.push(batch_builder.build().and_then(TryInto::try_into)?);
