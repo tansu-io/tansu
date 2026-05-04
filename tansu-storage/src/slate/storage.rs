@@ -674,6 +674,7 @@ impl Storage for Engine {
         min_bytes: u32,
         max_bytes: u32,
         isolation_level: IsolationLevel,
+        _max_wait: Duration,
     ) -> Result<Vec<Batch>> {
         // Get the high watermark based on isolation level
         let offset_stage = self.offset_stage(topition).await?;

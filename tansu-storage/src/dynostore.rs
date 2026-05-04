@@ -19,7 +19,7 @@ use std::{
     fmt::{Debug, Display},
     str::FromStr,
     sync::{Arc, Mutex},
-    time::{Duration, SystemTime},
+    time::SystemTime,
 };
 
 use async_trait::async_trait;
@@ -67,12 +67,16 @@ use tansu_schema::{
     Registry,
     lake::{House, LakeHouse as _},
 };
+use tokio::time::Duration;
 use tracing::{debug, error, instrument, warn};
 use url::Url;
 use uuid::Uuid;
 
 mod metadata;
 mod opticon;
+
+#[cfg(test)]
+mod tests;
 
 use crate::{
     BrokerRegistrationRequest, Error, GroupDetail, ListOffsetResponse, METER, MetadataResponse,
@@ -990,7 +994,18 @@ impl Storage for DynoStore {
         min_bytes: u32,
         max_bytes: u32,
         isolation_level: IsolationLevel,
+        max_wait: Duration,
     ) -> Result<Vec<deflated::Batch>> {
+        let started_at = SystemTime::now();
+
+        let has_deadline_expired = || {
+            started_at
+                .elapsed()
+                .inspect(|elapsed| debug!(?elapsed, ?max_wait))
+                .map(|elapsed| max_wait.saturating_sub(elapsed).is_zero())
+                .unwrap_or_default()
+        };
+
         let high_watermark = self.offset_stage(topition).await.map(|offset_stage| {
             if isolation_level == IsolationLevel::ReadCommitted {
                 offset_stage.last_stable
@@ -1018,6 +1033,7 @@ impl Storage for DynoStore {
                 .transpose()
                 .inspect_err(|error| error!(?error, ?topition, ?offset, ?min_bytes, ?max_bytes))
                 .map_err(|_| Error::Api(ErrorCode::UnknownServerError))?
+                && !has_deadline_expired()
             {
                 let Some(offset) = meta.location.parts().next_back() else {
                     continue;
@@ -1062,7 +1078,7 @@ impl Storage for DynoStore {
             batch.base_offset = offset;
             batches.push(batch);
 
-            if size > bytes {
+            if size > bytes || has_deadline_expired() {
                 break;
             } else {
                 bytes = bytes.saturating_sub(size);
@@ -2928,55 +2944,5 @@ where
                 additional.append(&mut attributes);
                 self.request_error.add(1, &additional[..]);
             })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-
-    use super::*;
-
-    #[test]
-    fn range_check() {
-        let map = BTreeMap::from([(3, "a"), (5, "b"), (8, "c")]);
-
-        assert_eq!(Some((&3, &"a")), map.range(2..).next());
-        assert_eq!(Some((&5, &"b")), map.range(4..).next());
-        assert_eq!(None, map.range(9..).next());
-    }
-
-    #[test]
-    fn schema_change() -> Result<()> {
-        #[derive(
-            Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize,
-        )]
-        struct X0 {
-            low: Option<i64>,
-            high: Option<i64>,
-        }
-
-        let low = Some(6);
-        let high = Some(66);
-
-        let x0 = X0 { low, high };
-
-        let encoded = serde_json::to_string(&x0)?;
-
-        #[derive(
-            Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize,
-        )]
-        struct X1 {
-            low: Option<i64>,
-            high: Option<i64>,
-            timestamps: Option<BTreeMap<i64, i64>>,
-        }
-
-        let x1: X1 = serde_json::from_str(&encoded[..])?;
-
-        assert_eq!(low, x1.low);
-        assert_eq!(high, x1.high);
-        assert!(x1.timestamps.is_none());
-
-        Ok(())
     }
 }

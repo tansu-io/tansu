@@ -126,6 +126,7 @@ pub enum Request {
         min_bytes: u32,
         max_bytes: u32,
         isolation: IsolationLevel,
+        max_wait: Duration,
     },
     OffsetStage(Topition),
     ListOffsets {
@@ -619,6 +620,7 @@ impl Storage for RequestChannelService {
         min_bytes: u32,
         max_bytes: u32,
         isolation: IsolationLevel,
+        max_wait: Duration,
     ) -> Result<Vec<deflated::Batch>> {
         let topition = topition.to_owned();
 
@@ -630,6 +632,7 @@ impl Storage for RequestChannelService {
                 min_bytes,
                 max_bytes,
                 isolation,
+                max_wait,
             },
         )
         .await
@@ -1326,9 +1329,10 @@ where
                 min_bytes,
                 max_bytes,
                 isolation,
+                max_wait,
             } => Ok(Response::Fetch(
                 self.storage
-                    .fetch(&topition, offset, min_bytes, max_bytes, isolation)
+                    .fetch(&topition, offset, min_bytes, max_bytes, isolation, max_wait)
                     .await,
             )),
             Request::OffsetStage(topition) => Ok(Response::OffsetStage(

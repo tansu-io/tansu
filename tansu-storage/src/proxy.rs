@@ -184,6 +184,7 @@ where
         min_bytes: u32,
         max_bytes: u32,
         isolation: IsolationLevel,
+        max_wait: Duration,
     ) -> Result<Vec<deflated::Batch>> {
         let start = SystemTime::now();
         let _permit = self.semaphore.acquire().await.inspect(|_| {
@@ -193,7 +194,7 @@ where
             )
         })?;
         self.storage
-            .fetch(topition, offset, min_bytes, max_bytes, isolation)
+            .fetch(topition, offset, min_bytes, max_bytes, isolation, max_wait)
             .await
     }
 

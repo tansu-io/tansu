@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{collections::BTreeMap, slice};
+use std::{collections::BTreeMap, slice, time::Duration};
 
 use bytes::Bytes;
 use common::{StorageType, alphanumeric_string, init_tracing, register_broker};
@@ -1440,6 +1440,7 @@ where
 
     let min_bytes = 1;
     let max_bytes = 50 * 1024;
+    let max_wait = Duration::from_millis(500);
 
     let batches = sc
         .fetch(
@@ -1448,6 +1449,7 @@ where
             min_bytes,
             max_bytes as u32,
             IsolationLevel::ReadUncommitted,
+            max_wait,
         )
         .await
         .and_then(|batches| {
@@ -1527,6 +1529,7 @@ where
             min_bytes,
             max_bytes as u32,
             IsolationLevel::ReadUncommitted,
+            max_wait,
         )
         .await
         .and_then(|batches| {

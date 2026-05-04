@@ -437,9 +437,10 @@ where
         min_bytes: u32,
         max_bytes: u32,
         isolation: IsolationLevel,
+        max_wait: Duration,
     ) -> Result<Vec<deflated::Batch>> {
         self.storage
-            .fetch(topition, offset, min_bytes, max_bytes, isolation)
+            .fetch(topition, offset, min_bytes, max_bytes, isolation, max_wait)
             .await
     }
 
@@ -797,6 +798,7 @@ mod tests {
             _min_bytes: u32,
             _max_bytes: u32,
             _isolation_level: IsolationLevel,
+            _max_wait: Duration,
         ) -> Result<Vec<deflated::Batch>> {
             unimplemented!()
         }
