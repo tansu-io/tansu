@@ -12,9 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use rama::{Context, Service};
 use tansu_sans_io::{
-    ApiKey, ErrorCode, ProduceRequest, ProduceResponse,
+    ApiKey, BatchAttribute, ErrorCode, ProduceRequest, ProduceResponse, TimestampType,
     produce_request::{PartitionProduceData, TopicProduceData},
     produce_response::{PartitionProduceResponse, TopicProduceResponse},
 };
@@ -160,8 +162,21 @@ impl ProduceService {
         if let Some(records) = partition.records {
             let mut base_offset = None;
 
-            for batch in records.batches {
+            for mut batch in records.batches {
                 let tp = Topition::new(name, partition.index);
+
+                if BatchAttribute::try_from(batch.attributes)
+                    .map(|attributes| attributes.timestamp == TimestampType::LogAppendTime)
+                    .unwrap_or_default()
+                {
+                    let base_timestamp = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map(|duration| duration.as_millis() as i64)
+                        .unwrap_or_default();
+
+                    batch.base_timestamp = base_timestamp;
+                    batch.max_timestamp = base_timestamp;
+                }
 
                 match ctx
                     .state()

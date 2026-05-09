@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::{
-    BatchAttribute, ByteSize, Compression, Error, Result,
+    BatchAttribute, ByteSize, Compression, Error, Result, TimestampType,
     record::{Record, codec::Sequence, deflated},
     ser::RecordBatchEncoder,
     to_timestamp,
@@ -22,7 +22,7 @@ use bytes::{Bytes, BytesMut};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    time::SystemTime,
+    time::{SystemTime, UNIX_EPOCH},
 };
 use tracing::debug;
 
@@ -61,7 +61,7 @@ impl TryFrom<&deflated::Frame> for Frame {
     }
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(try_from = "deflated::Batch")]
 pub struct Batch {
     pub base_offset: i64,
@@ -79,6 +79,36 @@ pub struct Batch {
 
     #[serde(serialize_with = "Sequence::<Record>::serialize")]
     pub records: Vec<Record>,
+}
+
+const MAGIC: i8 = 2;
+
+impl Default for Batch {
+    fn default() -> Self {
+        let base_timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_millis() as i64)
+            .unwrap_or_default();
+
+        Self {
+            base_offset: 0,
+            batch_length: Default::default(),
+            partition_leader_epoch: -1,
+            magic: MAGIC,
+            crc: Default::default(),
+            attributes: BatchAttribute::default()
+                .compression(Compression::None)
+                .timestamp(TimestampType::CreateTime)
+                .into(),
+            last_offset_delta: Default::default(),
+            base_timestamp,
+            max_timestamp: base_timestamp,
+            producer_id: -1,
+            producer_epoch: -1,
+            base_sequence: -1,
+            records: Default::default(),
+        }
+    }
 }
 
 impl TryFrom<deflated::Batch> for Batch {
