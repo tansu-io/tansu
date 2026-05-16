@@ -582,11 +582,16 @@ mod tests {
         )
             .into_layer(ResponseService::new(produce_response(ErrorCode::None)));
 
-        let service = (RequestFrameLayer, FrameBytesLayer, BytesFrameLayer).into_layer(
-            FrameRouteService::builder()
-                .with_service(produce)
-                .and_then(|builder| builder.build())?,
-        );
+        let service = (
+            RequestFrameLayer,
+            FrameBytesLayer,
+            BytesFrameLayer::default(),
+        )
+            .into_layer(
+                FrameRouteService::builder()
+                    .with_service(produce)
+                    .and_then(|builder| builder.build())?,
+            );
 
         assert!(!configuration.has_resource(RESOURCE_NAME_0));
 

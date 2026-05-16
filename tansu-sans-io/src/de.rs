@@ -1071,7 +1071,7 @@ impl<'de> SeqAccess<'de> for Batch {
             let batch_length = self.encoded.try_get_i32()?;
             debug!(base_offset, batch_length);
 
-            let mut batch = BytesMut::new();
+            let mut batch = BytesMut::with_capacity(batch_length as usize);
             batch.put_i64(base_offset);
             batch.put_i32(batch_length);
 
@@ -1082,7 +1082,7 @@ impl<'de> SeqAccess<'de> for Batch {
             batch.put(self.encoded.split_to(batch_length as usize));
 
             let decoder = BatchDecoder {
-                encoded: Bytes::from(batch),
+                encoded: batch.freeze(),
             };
 
             seed.deserialize(decoder).map(Some)

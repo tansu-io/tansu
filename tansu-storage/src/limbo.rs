@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -27,8 +27,8 @@ use std::{
 use crate::{
     BrokerRegistrationRequest, Error, GroupDetail, ListOffsetRequest, ListOffsetResponse, METER,
     MetadataResponse, NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse,
-    Result, Storage, TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse,
-    TxnOffsetCommitRequest, TxnState, UpdateError, Version,
+    Result, ScramCredential, Storage, TopicId, Topition, TxnAddPartitionsRequest,
+    TxnAddPartitionsResponse, TxnOffsetCommitRequest, TxnState, UpdateError, Version,
     sql::{Cache, default_hash, idempotent_sequence_check, remove_comments},
 };
 use async_trait::async_trait;
@@ -42,7 +42,7 @@ use rand::{rng, seq::SliceRandom as _};
 use regex::Regex;
 use tansu_sans_io::{
     BatchAttribute, ConfigResource, ConfigSource, ConfigType, ControlBatch, EndTransactionMarker,
-    ErrorCode, IsolationLevel, NULL_TOPIC_ID, OpType,
+    ErrorCode, IsolationLevel, NULL_TOPIC_ID, OpType, ScramMechanism,
     add_partitions_to_txn_response::{
         AddPartitionsToTxnPartitionResult, AddPartitionsToTxnTopicResult,
     },
@@ -1400,6 +1400,7 @@ impl Storage for Engine {
         min_bytes: u32,
         max_bytes: u32,
         isolation_level: IsolationLevel,
+        _max_wait: Duration,
     ) -> Result<Vec<deflated::Batch>> {
         debug!(?topition, offset, min_bytes, max_bytes, ?isolation_level);
         let high_watermark = self.offset_stage(topition).await.map(|offset_stage| {
@@ -2909,7 +2910,7 @@ impl Storage for Engine {
                     .await
                     .inspect_err(|err| error!(?err, group_id))?
                 {
-                    let value = row
+                    let current = row
                         .get_value(1)
                         .map_err(Error::from)
                         .and_then(|value| {
@@ -2918,11 +2919,9 @@ impl Storage for Engine {
                                 .cloned()
                                 .ok_or(Error::UnexpectedValue(value.clone()))
                         })
-                        .map(serde_json::Value::from)
+                        .and_then(|s| serde_json::from_str::<GroupDetail>(&s).map_err(Into::into))
+                        .inspect(|current| debug!(?current))
                         .inspect_err(|err| error!(?err, group_id))?;
-
-                    let current = serde_json::from_value::<GroupDetail>(value)
-                        .inspect(|current| debug!(?current))?;
 
                     results.push(NamedGroupDetail::found(group_id.into(), current));
                 } else {
@@ -3037,16 +3036,18 @@ impl Storage for Engine {
                 })
                 .inspect(|version| debug!(?version))?;
 
-            let value = row.get_value(1).map_err(Error::from).and_then(|value| {
-                value
-                    .as_text()
-                    .map(|v| v.as_str())
-                    .ok_or(Error::UnexpectedValue(value.clone()))
-                    .map(serde_json::Value::from)
-            })?;
-
-            let current =
-                serde_json::from_value::<GroupDetail>(value).inspect(|current| debug!(?current))?;
+            let current = row
+                .get_value(1)
+                .map_err(Error::from)
+                .and_then(|value| {
+                    value
+                        .as_text()
+                        .map(|v| v.as_str())
+                        .ok_or(Error::UnexpectedValue(value.clone()))
+                        .and_then(|s| serde_json::from_str::<GroupDetail>(s).map_err(Into::into))
+                })
+                .inspect(|current| debug!(?current))
+                .map(Box::new)?;
 
             Err(UpdateError::Outdated { current, version })
         };
@@ -3640,6 +3641,31 @@ impl Storage for Engine {
 
     async fn advertised_listener(&self) -> Result<Url> {
         Ok(self.advertised_listener.clone())
+    }
+
+    async fn delete_user_scram_credential(
+        &self,
+        _user: &str,
+        _mechanism: ScramMechanism,
+    ) -> Result<()> {
+        todo!()
+    }
+
+    async fn upsert_user_scram_credential(
+        &self,
+        _user: &str,
+        _mechanism: ScramMechanism,
+        _credential: ScramCredential,
+    ) -> Result<()> {
+        todo!()
+    }
+
+    async fn user_scram_credential(
+        &self,
+        _user: &str,
+        _mechanism: ScramMechanism,
+    ) -> Result<Option<ScramCredential>> {
+        todo!()
     }
 
     async fn ping(&self) -> Result<()> {

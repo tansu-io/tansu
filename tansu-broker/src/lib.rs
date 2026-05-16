@@ -72,6 +72,7 @@ pub(crate) static METER: LazyLock<Meter> = LazyLock::new(|| {
 pub enum Error {
     AddrParse(#[from] AddrParseError),
     Api(ErrorCode),
+    Auth(#[from] tansu_auth::Error),
     Custom(String),
     DuplicateApiService(i16),
     EmptyCoordinatorWrapper,

@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -32,7 +32,7 @@ use tansu_service::{
     BytesFrameLayer, BytesFrameService, BytesLayer, BytesService, FrameBytesLayer,
     FrameBytesService, FrameRouteService, RequestFrameLayer, RequestFrameService,
 };
-use tansu_storage::{Storage, StorageContainer};
+use tansu_storage::Storage;
 use tracing::debug;
 use url::Url;
 use uuid::Uuid;
@@ -50,7 +50,7 @@ type Broker = RequestFrameService<
 
 fn broker<S>(storage: S) -> Result<Broker>
 where
-    S: Storage,
+    S: Storage + Clone,
 {
     storage::services(FrameRouteService::<(), Error>::builder(), storage)
         .inspect(|builder| debug!(?builder))
@@ -60,13 +60,16 @@ where
                 RequestFrameLayer,
                 FrameBytesLayer,
                 BytesLayer,
-                BytesFrameLayer,
+                BytesFrameLayer::default(),
             )
                 .into_layer(frame_route)
         })
 }
 
-pub async fn compact_only(sc: StorageContainer) -> Result<()> {
+pub async fn compact_only<G>(sc: G) -> Result<()>
+where
+    G: Storage + Clone,
+{
     let broker = broker(sc.clone())?;
 
     let topic_name = &alphanumeric_string(15)[..];
@@ -486,7 +489,10 @@ pub async fn compact_only(sc: StorageContainer) -> Result<()> {
     Ok(())
 }
 
-pub async fn delete_only(sc: StorageContainer) -> Result<()> {
+pub async fn delete_only<G>(sc: G) -> Result<()>
+where
+    G: Storage + Clone,
+{
     let broker = broker(sc.clone())?;
 
     let topic_name = &alphanumeric_string(15)[..];
@@ -1115,7 +1121,10 @@ pub async fn delete_only(sc: StorageContainer) -> Result<()> {
     Ok(())
 }
 
-pub async fn delete_no_retention_ms_only(sc: StorageContainer) -> Result<()> {
+pub async fn delete_no_retention_ms_only<G>(sc: G) -> Result<()>
+where
+    G: Storage + Clone,
+{
     let broker = broker(sc.clone())?;
 
     let topic_name = &alphanumeric_string(15)[..];
@@ -1739,7 +1748,10 @@ pub async fn delete_no_retention_ms_only(sc: StorageContainer) -> Result<()> {
     Ok(())
 }
 
-pub async fn compact_delete_001(sc: StorageContainer) -> Result<()> {
+pub async fn compact_delete_001<G>(sc: G) -> Result<()>
+where
+    G: Storage + Clone,
+{
     let broker = broker(sc.clone())?;
 
     let topic_name = &alphanumeric_string(15)[..];
@@ -2223,7 +2235,10 @@ pub async fn compact_delete_001(sc: StorageContainer) -> Result<()> {
     Ok(())
 }
 
-pub async fn compact_delete_002(sc: StorageContainer) -> Result<()> {
+pub async fn compact_delete_002<G>(sc: G) -> Result<()>
+where
+    G: Storage + Clone,
+{
     let broker = broker(sc.clone())?;
 
     let topic_name = &alphanumeric_string(15)[..];
@@ -2845,9 +2860,14 @@ pub async fn compact_delete_002(sc: StorageContainer) -> Result<()> {
 
 #[cfg(feature = "postgres")]
 mod pg {
+    use std::sync::Arc;
+
     use super::*;
 
-    async fn storage_container(cluster: impl Into<String>, node: i32) -> Result<StorageContainer> {
+    async fn storage_container(
+        cluster: impl Into<String>,
+        node: i32,
+    ) -> Result<Arc<Box<dyn Storage>>> {
         common::storage_container(
             StorageType::Postgres,
             cluster,
@@ -2866,7 +2886,7 @@ mod pg {
         let broker_id = rng().random_range(0..i32::MAX);
 
         let sc = storage_container(cluster_id, broker_id).await?;
-        register_broker(cluster_id, broker_id, &sc).await?;
+        register_broker(cluster_id, broker_id, sc.clone()).await?;
 
         super::compact_only(sc).await
     }
@@ -2879,7 +2899,7 @@ mod pg {
         let broker_id = rng().random_range(0..i32::MAX);
 
         let sc = storage_container(cluster_id, broker_id).await?;
-        register_broker(cluster_id, broker_id, &sc).await?;
+        register_broker(cluster_id, broker_id, sc.clone()).await?;
 
         super::delete_only(sc).await
     }
@@ -2892,7 +2912,7 @@ mod pg {
         let broker_id = rng().random_range(0..i32::MAX);
 
         let sc = storage_container(cluster_id, broker_id).await?;
-        register_broker(cluster_id, broker_id, &sc).await?;
+        register_broker(cluster_id, broker_id, sc.clone()).await?;
 
         super::delete_no_retention_ms_only(sc).await
     }
@@ -2905,7 +2925,7 @@ mod pg {
         let broker_id = rng().random_range(0..i32::MAX);
 
         let sc = storage_container(cluster_id, broker_id).await?;
-        register_broker(cluster_id, broker_id, &sc).await?;
+        register_broker(cluster_id, broker_id, sc.clone()).await?;
 
         super::compact_delete_001(sc).await
     }
@@ -2918,16 +2938,21 @@ mod pg {
         let broker_id = rng().random_range(0..i32::MAX);
 
         let sc = storage_container(cluster_id, broker_id).await?;
-        register_broker(cluster_id, broker_id, &sc).await?;
+        register_broker(cluster_id, broker_id, sc.clone()).await?;
 
         super::compact_delete_002(sc).await
     }
 }
 
 mod in_memory {
+    use std::sync::Arc;
+
     use super::*;
 
-    async fn storage_container(cluster: impl Into<String>, node: i32) -> Result<StorageContainer> {
+    async fn storage_container(
+        cluster: impl Into<String>,
+        node: i32,
+    ) -> Result<Arc<Box<dyn Storage>>> {
         common::storage_container(
             StorageType::InMemory,
             cluster,
@@ -2947,7 +2972,7 @@ mod in_memory {
         let broker_id = rng().random_range(0..i32::MAX);
 
         let sc = storage_container(cluster_id, broker_id).await?;
-        register_broker(cluster_id, broker_id, &sc).await?;
+        register_broker(cluster_id, broker_id, sc.clone()).await?;
 
         super::compact_only(sc).await
     }
@@ -2961,7 +2986,7 @@ mod in_memory {
         let broker_id = rng().random_range(0..i32::MAX);
 
         let sc = storage_container(cluster_id, broker_id).await?;
-        register_broker(cluster_id, broker_id, &sc).await?;
+        register_broker(cluster_id, broker_id, sc.clone()).await?;
 
         super::delete_only(sc).await
     }
@@ -2975,7 +3000,7 @@ mod in_memory {
         let broker_id = rng().random_range(0..i32::MAX);
 
         let sc = storage_container(cluster_id, broker_id).await?;
-        register_broker(cluster_id, broker_id, &sc).await?;
+        register_broker(cluster_id, broker_id, sc.clone()).await?;
 
         super::delete_no_retention_ms_only(sc).await
     }
@@ -2989,7 +3014,7 @@ mod in_memory {
         let broker_id = rng().random_range(0..i32::MAX);
 
         let sc = storage_container(cluster_id, broker_id).await?;
-        register_broker(cluster_id, broker_id, &sc).await?;
+        register_broker(cluster_id, broker_id, sc.clone()).await?;
 
         super::compact_delete_001(sc).await
     }
@@ -3003,7 +3028,7 @@ mod in_memory {
         let broker_id = rng().random_range(0..i32::MAX);
 
         let sc = storage_container(cluster_id, broker_id).await?;
-        register_broker(cluster_id, broker_id, &sc).await?;
+        register_broker(cluster_id, broker_id, sc.clone()).await?;
 
         super::compact_delete_002(sc).await
     }
@@ -3011,9 +3036,14 @@ mod in_memory {
 
 #[cfg(feature = "libsql")]
 mod lite {
+    use std::sync::Arc;
+
     use super::*;
 
-    async fn storage_container(cluster: impl Into<String>, node: i32) -> Result<StorageContainer> {
+    async fn storage_container(
+        cluster: impl Into<String>,
+        node: i32,
+    ) -> Result<Arc<Box<dyn Storage>>> {
         common::storage_container(
             StorageType::Lite,
             cluster,
@@ -3032,7 +3062,7 @@ mod lite {
         let broker_id = rng().random_range(0..i32::MAX);
 
         let sc = storage_container(cluster_id, broker_id).await?;
-        register_broker(cluster_id, broker_id, &sc).await?;
+        register_broker(cluster_id, broker_id, sc.clone()).await?;
 
         super::compact_only(sc).await
     }
@@ -3045,7 +3075,7 @@ mod lite {
         let broker_id = rng().random_range(0..i32::MAX);
 
         let sc = storage_container(cluster_id, broker_id).await?;
-        register_broker(cluster_id, broker_id, &sc).await?;
+        register_broker(cluster_id, broker_id, sc.clone()).await?;
 
         super::delete_only(sc).await
     }
@@ -3058,7 +3088,7 @@ mod lite {
         let broker_id = rng().random_range(0..i32::MAX);
 
         let sc = storage_container(cluster_id, broker_id).await?;
-        register_broker(cluster_id, broker_id, &sc).await?;
+        register_broker(cluster_id, broker_id, sc.clone()).await?;
 
         super::delete_no_retention_ms_only(sc).await
     }
@@ -3071,7 +3101,7 @@ mod lite {
         let broker_id = rng().random_range(0..i32::MAX);
 
         let sc = storage_container(cluster_id, broker_id).await?;
-        register_broker(cluster_id, broker_id, &sc).await?;
+        register_broker(cluster_id, broker_id, sc.clone()).await?;
 
         super::compact_delete_001(sc).await
     }
@@ -3084,7 +3114,7 @@ mod lite {
         let broker_id = rng().random_range(0..i32::MAX);
 
         let sc = storage_container(cluster_id, broker_id).await?;
-        register_broker(cluster_id, broker_id, &sc).await?;
+        register_broker(cluster_id, broker_id, sc.clone()).await?;
 
         super::compact_delete_002(sc).await
     }

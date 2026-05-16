@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -78,7 +78,7 @@ async fn simple_txn_commit() -> Result<()> {
     )
     .await?;
 
-    register_broker(cluster_id, broker_id, &sc).await?;
+    register_broker(cluster_id, broker_id, sc.clone()).await?;
 
     let input_topic_name: String = alphanumeric_string(15);
     debug!(?input_topic_name);

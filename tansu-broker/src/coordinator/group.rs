@@ -13,7 +13,6 @@
 // limitations under the License.
 
 pub mod administrator;
-pub mod consumer;
 
 use crate::Result;
 use async_trait::async_trait;

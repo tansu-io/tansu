@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{collections::BTreeMap, slice};
+use std::{collections::BTreeMap, slice, time::Duration};
 
 use bytes::Bytes;
 use common::{StorageType, alphanumeric_string, init_tracing, register_broker};
@@ -28,21 +28,22 @@ use tansu_sans_io::{
     record::{Record, inflated},
     txn_offset_commit_request::{TxnOffsetCommitRequestPartition, TxnOffsetCommitRequestTopic},
 };
-use tansu_storage::{
-    Storage, StorageContainer, TopicId, Topition, TxnAddPartitionsRequest, TxnOffsetCommitRequest,
-};
+use tansu_storage::{Storage, TopicId, Topition, TxnAddPartitionsRequest, TxnOffsetCommitRequest};
 use tracing::{debug, error};
 use url::Url;
 use uuid::Uuid;
 
 pub mod common;
 
-pub async fn simple_txn_commit_offset_commit(
+pub async fn simple_txn_commit_offset_commit<G>(
     cluster_id: impl Into<String>,
     broker_id: i32,
-    sc: StorageContainer,
-) -> Result<()> {
-    register_broker(cluster_id, broker_id, &sc).await?;
+    sc: G,
+) -> Result<()>
+where
+    G: Storage + Clone,
+{
+    register_broker(cluster_id, broker_id, sc.clone()).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -172,12 +173,15 @@ pub async fn simple_txn_commit_offset_commit(
     Ok(())
 }
 
-pub async fn simple_txn_commit_offset_abort(
+pub async fn simple_txn_commit_offset_abort<G>(
     cluster_id: impl Into<String>,
     broker_id: i32,
-    sc: StorageContainer,
-) -> Result<()> {
-    register_broker(cluster_id, broker_id, &sc).await?;
+    sc: G,
+) -> Result<()>
+where
+    G: Storage + Clone,
+{
+    register_broker(cluster_id, broker_id, sc.clone()).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -307,12 +311,15 @@ pub async fn simple_txn_commit_offset_abort(
     Ok(())
 }
 
-pub async fn simple_txn_produce_commit(
+pub async fn simple_txn_produce_commit<G>(
     cluster_id: impl Into<String>,
     broker_id: i32,
-    sc: StorageContainer,
-) -> Result<()> {
-    register_broker(cluster_id, broker_id, &sc).await?;
+    sc: G,
+) -> Result<()>
+where
+    G: Storage + Clone,
+{
+    register_broker(cluster_id, broker_id, sc.clone()).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -591,12 +598,15 @@ pub async fn simple_txn_produce_commit(
     Ok(())
 }
 
-pub async fn simple_txn_produce_abort(
+pub async fn simple_txn_produce_abort<G>(
     cluster_id: impl Into<String>,
     broker_id: i32,
-    sc: StorageContainer,
-) -> Result<()> {
-    register_broker(cluster_id, broker_id, &sc).await?;
+    sc: G,
+) -> Result<()>
+where
+    G: Storage + Clone,
+{
+    register_broker(cluster_id, broker_id, sc.clone()).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -876,12 +886,11 @@ pub async fn simple_txn_produce_abort(
 
 // txns that overlap on the same topition
 //
-pub async fn with_overlap(
-    cluster_id: impl Into<String>,
-    broker_id: i32,
-    sc: StorageContainer,
-) -> Result<()> {
-    register_broker(cluster_id, broker_id, &sc).await?;
+pub async fn with_overlap<G>(cluster_id: impl Into<String>, broker_id: i32, sc: G) -> Result<()>
+where
+    G: Storage + Clone,
+{
+    register_broker(cluster_id, broker_id, sc.clone()).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -1240,12 +1249,15 @@ pub async fn with_overlap(
     Ok(())
 }
 
-pub async fn init_producer_twice(
+pub async fn init_producer_twice<G>(
     cluster_id: impl Into<String>,
     broker_id: i32,
-    sc: StorageContainer,
-) -> Result<()> {
-    register_broker(cluster_id, broker_id, &sc).await?;
+    sc: G,
+) -> Result<()>
+where
+    G: Storage + Clone,
+{
+    register_broker(cluster_id, broker_id, sc.clone()).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -1428,6 +1440,7 @@ pub async fn init_producer_twice(
 
     let min_bytes = 1;
     let max_bytes = 50 * 1024;
+    let max_wait = Duration::from_millis(500);
 
     let batches = sc
         .fetch(
@@ -1436,6 +1449,7 @@ pub async fn init_producer_twice(
             min_bytes,
             max_bytes as u32,
             IsolationLevel::ReadUncommitted,
+            max_wait,
         )
         .await
         .and_then(|batches| {
@@ -1515,6 +1529,7 @@ pub async fn init_producer_twice(
             min_bytes,
             max_bytes as u32,
             IsolationLevel::ReadUncommitted,
+            max_wait,
         )
         .await
         .and_then(|batches| {
@@ -1557,9 +1572,14 @@ pub async fn init_producer_twice(
 
 #[cfg(feature = "postgres")]
 mod pg {
+    use std::sync::Arc;
+
     use super::*;
 
-    async fn storage_container(cluster: impl Into<String>, node: i32) -> Result<StorageContainer> {
+    async fn storage_container(
+        cluster: impl Into<String>,
+        node: i32,
+    ) -> Result<Arc<Box<dyn Storage>>> {
         common::storage_container(
             StorageType::Postgres,
             cluster,
@@ -1663,9 +1683,14 @@ mod pg {
 
 #[cfg(feature = "dynostore")]
 mod in_memory {
+    use std::sync::Arc;
+
     use super::*;
 
-    async fn storage_container(cluster: impl Into<String>, node: i32) -> Result<StorageContainer> {
+    async fn storage_container(
+        cluster: impl Into<String>,
+        node: i32,
+    ) -> Result<Arc<Box<dyn Storage>>> {
         common::storage_container(
             StorageType::InMemory,
             cluster,
@@ -1769,9 +1794,14 @@ mod in_memory {
 
 #[cfg(feature = "libsql")]
 mod lite {
+    use std::sync::Arc;
+
     use super::*;
 
-    async fn storage_container(cluster: impl Into<String>, node: i32) -> Result<StorageContainer> {
+    async fn storage_container(
+        cluster: impl Into<String>,
+        node: i32,
+    ) -> Result<Arc<Box<dyn Storage>>> {
         common::storage_container(
             StorageType::Lite,
             cluster,
@@ -1875,9 +1905,14 @@ mod lite {
 
 #[cfg(feature = "slatedb")]
 mod slatedb {
+    use std::sync::Arc;
+
     use super::*;
 
-    async fn storage_container(cluster: impl Into<String>, node: i32) -> Result<StorageContainer> {
+    async fn storage_container(
+        cluster: impl Into<String>,
+        node: i32,
+    ) -> Result<Arc<Box<dyn Storage>>> {
         common::storage_container(
             StorageType::SlateDb,
             cluster,

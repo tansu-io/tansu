@@ -36,4 +36,5 @@ iceberg = ["dep:tansu-broker", "dep:tansu-cli", "dep:tansu-schema", "dep:tansu-s
 libsql = ["dep:tansu-broker", "dep:tansu-cli", "dep:tansu-schema", "dep:tansu-storage", "tansu-broker/libsql", "tansu-cli/libsql", "tansu-storage/libsql"]
 parquet = ["dep:tansu-broker", "dep:tansu-cli", "dep:tansu-schema", "dep:tansu-storage", "tansu-cli/parquet", "tansu-schema/parquet"]
 postgres = ["dep:tansu-broker", "dep:tansu-cli", "dep:tansu-schema", "dep:tansu-storage", "tansu-broker/postgres", "tansu-cli/postgres", "tansu-storage/postgres"]
+slatedb = ["dep:tansu-broker", "dep:tansu-cli", "dep:tansu-schema", "dep:tansu-storage", "tansu-broker/slatedb", "tansu-cli/slatedb", "tansu-storage/slatedb"]
 turso = ["dep:tansu-broker", "dep:tansu-cli", "dep:tansu-schema", "dep:tansu-storage", "tansu-broker/turso", "tansu-cli/turso", "tansu-storage/turso"]
