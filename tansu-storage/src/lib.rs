@@ -205,7 +205,9 @@ mod dynostore;
 #[cfg(feature = "postgres")]
 mod pg;
 
+#[cfg(feature = "dynostore")]
 mod batch;
+
 mod null;
 mod proxy;
 mod service;

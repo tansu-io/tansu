@@ -27,6 +27,7 @@ use bytes::Bytes;
 use opentelemetry::{KeyValue, metrics::Counter};
 use tansu_sans_io::{
     Body, ErrorCode,
+    consumer::MemberAssignment,
     heartbeat_response::HeartbeatResponse,
     join_group_request::JoinGroupRequestProtocol,
     join_group_response::{JoinGroupResponse, JoinGroupResponseMember},
@@ -873,7 +874,14 @@ where
             ?group_instance_id,
             ?protocol_type,
             ?protocol_name,
-            ?assignments
+            assignments = ?assignments
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|request| {
+                    MemberAssignment::try_from(request.assignment.clone())
+                        .ok()
+                        .map(|member_assignment| (request.member_id.clone(), member_assignment))
+                }).collect::<Vec<_>>()
         );
 
         COORDINATOR_REQUESTS.add(1, &[KeyValue::new("method", "sync")]);

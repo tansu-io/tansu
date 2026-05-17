@@ -1,4 +1,4 @@
-set dotenv-load := true
+set dotenv-load
 
 default: fmt build test clippy
 
@@ -277,14 +277,14 @@ search-duckdb-parquet: (duckdb-parquet "search")
 tansu-server:
     target/debug/tansu broker --schema-registry file://./etc/schema 2>&1 | tee broker.log
 
-kafka-proxy:
-    docker run -d -p 19092:9092 apache/kafka:3.9.0
-
 kafka39:
-    docker run --rm -p 9092:9092 apache/kafka:3.9.0
+    docker run --d -p 9092:9092 apache/kafka:3.9.0
 
-kafka41:
-    docker run --rm -p 9092:9092 apache/kafka:4.1.0
+proxy-kafka39:
+    docker run --rm -p 19092:9092 apache/kafka:3.9.0
+
+proxy-kafka41:
+    docker run --rm -p 19092:9092 apache/kafka:4.1.0
 
 codespace-create:
     gh codespace create \
