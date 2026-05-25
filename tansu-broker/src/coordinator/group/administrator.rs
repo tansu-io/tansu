@@ -14,7 +14,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fmt::Debug,
+    fmt::{self, Debug},
     hash::{Hash, Hasher},
     marker::PhantomData,
     ops::Deref,
@@ -27,6 +27,7 @@ use bytes::Bytes;
 use opentelemetry::{KeyValue, metrics::Counter};
 use tansu_sans_io::{
     Body, ErrorCode,
+    consumer::{MemberAssignment, MemberMetadata},
     heartbeat_response::HeartbeatResponse,
     join_group_request::JoinGroupRequestProtocol,
     join_group_response::{JoinGroupResponse, JoinGroupResponseMember},
@@ -48,7 +49,7 @@ use tansu_storage::{
     Version,
 };
 use tokio::time::{Duration, sleep};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, instrument};
 use uuid::Uuid;
 
 use crate::{Error, METER, Result};
@@ -139,6 +140,15 @@ pub trait Group: Debug + Send {
 pub enum Wrapper<O> {
     Forming(Inner<O, Forming>),
     Formed(Inner<O, Formed>),
+}
+
+impl<O> fmt::Display for Wrapper<O> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Wrapper::Forming(inner) => write!(f, "wrap: {}", inner),
+            Wrapper::Formed(inner) => write!(f, "wrap: {}", inner),
+        }
+    }
 }
 
 impl<O> PartialEq for Wrapper<O> {
@@ -424,7 +434,6 @@ where
         matches!(self, Self::Forming(..))
     }
 
-    #[cfg(test)]
     fn assignments(&self) -> Option<BTreeMap<String, Bytes>> {
         match self {
             Self::Forming(..) => None,
@@ -462,6 +471,47 @@ where
                     Self::Formed(inner)
                 }
             }
+        }
+    }
+
+    fn is_leader(&self, body: &Body) -> bool {
+        if let Body::JoinGroupResponse(response) = body
+            && let JoinGroupResponse { member_id, .. } = response
+        {
+            self.leader().is_some_and(|leader| leader == member_id)
+        } else {
+            false
+        }
+    }
+
+    fn is_assigned(&self, body: &Body) -> bool {
+        match body {
+            Body::SyncGroupResponse(SyncGroupResponse {
+                error_code,
+                assignment,
+                ..
+            }) if *error_code == i16::from(ErrorCode::None) && !assignment.is_empty() => true,
+
+            Body::JoinGroupResponse(JoinGroupResponse {
+                member_id,
+                error_code,
+                ..
+            }) if *error_code == i16::from(ErrorCode::None) => self
+                .assignments()
+                .is_some_and(|assignments| assignments.contains_key(member_id)),
+
+            _ => false,
+        }
+    }
+
+    fn is_member_id_required(&self, body: &Body) -> bool {
+        if let Body::JoinGroupResponse(response) = body
+            && let JoinGroupResponse { error_code, .. } = response
+            && *error_code == i16::from(ErrorCode::MemberIdRequired)
+        {
+            true
+        } else {
+            false
         }
     }
 }
@@ -697,8 +747,18 @@ impl<O> Coordinator for Controller<O>
 where
     O: Storage + Clone,
 {
+    #[instrument(skip(
+        self,
+        client_id,
+        session_timeout_ms,
+        rebalance_timeout_ms,
+        group_instance_id,
+        protocol_type,
+        protocols,
+        reason
+    ))]
     async fn join(
-        &mut self,
+        &self,
         client_id: Option<&str>,
         group_id: &str,
         session_timeout_ms: i32,
@@ -711,13 +771,22 @@ where
     ) -> Result<Body> {
         debug!(
             ?client_id,
-            ?group_id,
             ?session_timeout_ms,
             ?rebalance_timeout_ms,
-            ?member_id,
             ?group_instance_id,
             ?protocol_type,
-            ?protocols,
+            protocols = ?protocols
+                .map(|protocols| {
+                    protocols
+                        .iter()
+                        .filter_map(|protocol| {
+                            MemberMetadata::try_from(protocol.metadata.clone())
+                                .ok()
+                                .map(|metadata| (protocol.name.clone(), metadata.to_string()))
+                        })
+                        .collect::<BTreeMap<_, _>>()
+                })
+                .unwrap_or_default(),
             ?reason,
         );
 
@@ -760,12 +829,13 @@ where
                 && original.leader().is_some_and(|leader| leader != member_id)
                 && group_instance_id.is_none()
             {
-                debug!(?member_id);
+                debug!(member_id, iteration, leader = original.leader());
+
                 COORDINATOR_REQUESTS.add(1, &[KeyValue::new("method", "join_follower_pause")]);
                 sleep(Duration::from_millis(PAUSE_MS as u64)).await;
             }
 
-            debug!(?group_id, ?original, ?version, ?iteration);
+            debug!(%original, ?version, ?iteration);
 
             let (updated, body) = original
                 .join(
@@ -782,7 +852,7 @@ where
                 )
                 .await;
 
-            debug!(group_id, ?updated, ?version, iteration,);
+            debug!(%updated, ?version, iteration,);
 
             match self
                 .storage
@@ -795,12 +865,18 @@ where
                         .map(|duration| duration.as_millis())
                         .unwrap_or(0);
 
+                    let is_leader = updated.is_leader(&body);
+                    let is_assigned = updated.is_assigned(&body);
+                    let is_member_id_required = updated.is_member_id_required(&body);
+
                     debug!(
-                        group_id,
                         ?version,
                         iteration,
                         elapsed,
-                        is_forming = updated.is_forming()
+                        is_forming = updated.is_forming(),
+                        ?is_leader,
+                        ?is_assigned,
+                        ?is_member_id_required
                     );
 
                     _ = self.wrappers.lock().map(|mut wrappers| {
@@ -817,13 +893,25 @@ where
 
                         iteration += 1;
                         continue;
+                    } else if is_leader || is_assigned || is_member_id_required {
+                        return Ok(body);
+                    } else if elapsed < PAUSE_MS {
+                        let pause = PAUSE_MS.saturating_sub(elapsed);
+                        debug!(around_again = pause);
+
+                        COORDINATOR_REQUESTS
+                            .add(1, &[KeyValue::new("method", "join_group_instance_pause")]);
+                        sleep(Duration::from_millis(pause as u64)).await;
+
+                        iteration += 1;
+                        continue;
                     } else {
                         return Ok(body);
                     }
                 }
 
                 Err(UpdateError::Outdated { current, version }) => {
-                    debug!(group_id, ?current, ?version, iteration);
+                    debug!(?current, ?version, iteration);
 
                     COORDINATOR_REQUESTS.add(1, &[KeyValue::new("method", "join_outdated")]);
 
@@ -856,8 +944,9 @@ where
         }
     }
 
+    #[instrument(skip(self, group_instance_id, protocol_type, protocol_name, assignments))]
     async fn sync(
-        &mut self,
+        &self,
         group_id: &str,
         generation_id: i32,
         member_id: &str,
@@ -867,13 +956,23 @@ where
         assignments: Option<&[SyncGroupRequestAssignment]>,
     ) -> Result<Body> {
         debug!(
-            ?group_id,
-            ?generation_id,
-            ?member_id,
             ?group_instance_id,
             ?protocol_type,
             ?protocol_name,
-            ?assignments
+            assignments = ?assignments
+                .map(|assignments| {
+                    assignments
+                        .iter()
+                        .filter_map(|request| {
+                            MemberAssignment::try_from(request.assignment.clone())
+                                .ok()
+                                .map(|member_assignment| {
+                                    (request.member_id.clone(), member_assignment)
+                                })
+                        })
+                        .collect::<BTreeMap<_, _>>()
+                })
+                .unwrap_or_default(),
         );
 
         COORDINATOR_REQUESTS.add(1, &[KeyValue::new("method", "sync")]);
@@ -924,12 +1023,15 @@ where
                         .map(|duration| duration.as_millis())
                         .unwrap_or(0);
 
+                    let is_assigned = updated.is_assigned(&body);
+
                     debug!(
                         group_id,
                         ?version,
                         iteration,
                         elapsed,
-                        is_forming = updated.is_forming()
+                        is_forming = updated.is_forming(),
+                        ?is_assigned,
                     );
 
                     _ = self.wrappers.lock().map(|mut wrappers| {
@@ -939,6 +1041,18 @@ where
                     if group_instance_id.is_some() && elapsed < PAUSE_MS {
                         let pause = PAUSE_MS.saturating_sub(elapsed);
                         debug!(pause);
+
+                        COORDINATOR_REQUESTS
+                            .add(1, &[KeyValue::new("method", "sync_group_instance_pause")]);
+                        sleep(Duration::from_millis(pause as u64)).await;
+
+                        iteration += 1;
+                        continue;
+                    } else if is_assigned {
+                        return Ok(body);
+                    } else if elapsed < PAUSE_MS {
+                        let pause = PAUSE_MS.saturating_sub(elapsed);
+                        debug!(around_again = pause);
 
                         COORDINATOR_REQUESTS
                             .add(1, &[KeyValue::new("method", "sync_group_instance_pause")]);
@@ -984,13 +1098,14 @@ where
         }
     }
 
+    #[instrument(skip(self, members))]
     async fn leave(
-        &mut self,
+        &self,
         group_id: &str,
         member_id: Option<&str>,
         members: Option<&[MemberIdentity]>,
     ) -> Result<Body> {
-        debug!(?group_id, ?member_id, ?members);
+        debug!(?members);
 
         COORDINATOR_REQUESTS.add(1, &[KeyValue::new("method", "leave")]);
 
@@ -1061,8 +1176,8 @@ where
         }
     }
 
-    async fn offset_commit(&mut self, offset_commit: OffsetCommit<'_>) -> Result<Body> {
-        debug!(?offset_commit);
+    #[instrument(skip(self, offset_commit), fields(group_id = offset_commit.group_id, generation_id = offset_commit.generation_id_or_member_epoch))]
+    async fn offset_commit(&self, offset_commit: OffsetCommit<'_>) -> Result<Body> {
         COORDINATOR_REQUESTS.add(1, &[KeyValue::new("method", "offset_commit")]);
 
         let group_id = offset_commit.group_id;
@@ -1133,14 +1248,16 @@ where
         }
     }
 
+    #[instrument(skip_all)]
     async fn offset_fetch(
-        &mut self,
+        &self,
         group_id: Option<&str>,
         topics: Option<&[OffsetFetchRequestTopic]>,
         groups: Option<&[OffsetFetchRequestGroup]>,
         require_stable: Option<bool>,
     ) -> Result<Body> {
         debug!(?group_id, ?topics, ?groups, ?require_stable);
+
         COORDINATOR_REQUESTS.add(1, &[KeyValue::new("method", "offset_fetch")]);
 
         let wrapper = Wrapper::Forming(Inner::new(self.storage.clone()));
@@ -1152,8 +1269,9 @@ where
         Ok(body)
     }
 
+    #[instrument(skip(self, group_instance_id))]
     async fn heartbeat(
-        &mut self,
+        &self,
         group_id: &str,
         generation_id: i32,
         member_id: &str,
@@ -1243,12 +1361,41 @@ pub struct Forming {
     leader: Option<String>,
 }
 
+impl fmt::Display for Forming {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Forming({}/{}/{})",
+            self.protocol_type.as_deref().unwrap_or("?"),
+            self.protocol_name.as_deref().unwrap_or("?"),
+            self.leader.as_deref().unwrap_or("?")
+        )
+    }
+}
+
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Formed {
     protocol_type: String,
     protocol_name: String,
     leader: String,
     assignments: BTreeMap<String, Bytes>,
+}
+
+impl fmt::Display for Formed {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Formed({}/{}/{}/[{}])",
+            self.protocol_type,
+            self.protocol_name,
+            self.leader,
+            self.assignments
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1261,6 +1408,19 @@ pub struct Inner<O, S> {
     storage: O,
     skip_assignment: Option<bool>,
     inception: SystemTime,
+}
+
+impl<O, S> fmt::Display for Inner<O, S>
+where
+    S: fmt::Display,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "state: {}, generation: {}",
+            self.state, self.generation_id
+        )
+    }
 }
 
 impl<O, S> PartialEq for Inner<O, S>
@@ -2917,7 +3077,7 @@ mod tests {
             .build()
             .await?;
 
-        let mut s = Controller::with_storage(storage)?;
+        let s = Controller::with_storage(storage)?;
 
         let first_member_range_meta = Bytes::from_static(b"first_member_range_meta_01");
         let first_member_sticky_meta = Bytes::from_static(b"first_member_sticky_meta_01");
@@ -3501,7 +3661,7 @@ mod tests {
             .build()
             .await?;
 
-        let mut s = Controller::with_storage(storage)?;
+        let s = Controller::with_storage(storage)?;
 
         let first_member_range_meta = Bytes::from_static(b"first_member_range_meta_01");
         let first_member_sticky_meta = Bytes::from_static(b"first_member_sticky_meta_01");

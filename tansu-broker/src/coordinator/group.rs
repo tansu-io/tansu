@@ -40,7 +40,7 @@ pub struct OffsetCommit<'a> {
 pub trait Coordinator: Clone + Debug + Send + Sync + 'static {
     #[allow(clippy::too_many_arguments)]
     async fn join(
-        &mut self,
+        &self,
         client_id: Option<&str>,
         group_id: &str,
         session_timeout_ms: i32,
@@ -54,7 +54,7 @@ pub trait Coordinator: Clone + Debug + Send + Sync + 'static {
 
     #[allow(clippy::too_many_arguments)]
     async fn sync(
-        &mut self,
+        &self,
         group_id: &str,
         generation_id: i32,
         member_id: &str,
@@ -65,7 +65,7 @@ pub trait Coordinator: Clone + Debug + Send + Sync + 'static {
     ) -> Result<Body>;
 
     async fn heartbeat(
-        &mut self,
+        &self,
         group_id: &str,
         generation_id: i32,
         member_id: &str,
@@ -73,16 +73,16 @@ pub trait Coordinator: Clone + Debug + Send + Sync + 'static {
     ) -> Result<Body>;
 
     async fn leave(
-        &mut self,
+        &self,
         group_id: &str,
         member_id: Option<&str>,
         members: Option<&[MemberIdentity]>,
     ) -> Result<Body>;
 
-    async fn offset_commit(&mut self, detail: OffsetCommit<'_>) -> Result<Body>;
+    async fn offset_commit(&self, detail: OffsetCommit<'_>) -> Result<Body>;
 
     async fn offset_fetch(
-        &mut self,
+        &self,
         group_id: Option<&str>,
         topics: Option<&[OffsetFetchRequestTopic]>,
         groups: Option<&[OffsetFetchRequestGroup]>,

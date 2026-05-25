@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::str::FromStr;
+use std::{fmt, str::FromStr};
 
 use bytes::{Buf as _, Bytes, BytesMut};
 use serde::{Deserialize, Serialize};
@@ -84,6 +84,12 @@ pub struct MemberMetadata {
     pub subscription: ConsumerProtocolSubscription,
 }
 
+impl fmt::Display for MemberMetadata {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "v: {}, sub: {}", self.version, self.subscription)
+    }
+}
+
 impl MemberMetadata {
     pub fn version(self, version: i16) -> Self {
         Self { version, ..self }
@@ -126,6 +132,25 @@ pub struct ConsumerProtocolSubscription {
     pub rack_id: Option<String>,
 }
 
+impl fmt::Display for ConsumerProtocolSubscription {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "owned: {}",
+            self.owned_partitions
+                .as_deref()
+                .map(|partitions| {
+                    partitions
+                        .iter()
+                        .map(|partition| partition.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default()
+        )
+    }
+}
+
 impl ConsumerProtocolSubscription {
     pub fn topics(self, topics: impl IntoIterator<Item = String>) -> Self {
         Self {
@@ -161,6 +186,21 @@ impl ConsumerProtocolSubscription {
 pub struct TopicPartition {
     pub topic: String,
     pub partitions: Vec<i32>,
+}
+
+impl fmt::Display for TopicPartition {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}: [{}]",
+            self.topic,
+            self.partitions
+                .iter()
+                .map(|partition| partition.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    }
 }
 
 impl TopicPartition {
@@ -257,6 +297,60 @@ mod tests {
 
         assert_eq!(Some(user_data), cpa.user_data);
 
+        Ok(())
+    }
+
+    #[test]
+    fn metadata_from_bytes_001() -> Result<(), Error> {
+        let expected = MemberMetadata {
+            version: 3,
+            subscription: ConsumerProtocolSubscription {
+                topics: ["test-topic".into()].into(),
+                user_data: Some(Bytes::from_static(
+                    b"\0\0\0\x01\0\ntest-topic\0\0\0\x01\0\0\0\x02\0\0\0\x11",
+                )),
+                owned_partitions: Some(
+                    [TopicPartition {
+                        topic: "test-topic".into(),
+                        partitions: [2].into(),
+                    }]
+                    .into(),
+                ),
+                generation_id: Some(17),
+                rack_id: None,
+            },
+        };
+
+        let decoded = MemberMetadata::try_from(Bytes::from_static(b"\0\x03\0\0\0\x01\0\ntest-topic\0\0\0\x1c\0\0\0\x01\0\ntest-topic\0\0\0\x01\0\0\0\x02\0\0\0\x11\0\0\0\x01\0\ntest-topic\0\0\0\x01\0\0\0\x02\0\0\0\x11\xff\xff"))?;
+
+        assert_eq!(expected, decoded);
+        Ok(())
+    }
+
+    #[test]
+    fn metadata_from_bytes_002() -> Result<(), Error> {
+        let expected = MemberMetadata {
+            version: 3,
+            subscription: ConsumerProtocolSubscription {
+                topics: ["test-topic".into()].into(),
+                user_data: Some(Bytes::from_static(
+                    b"\0\0\0\x01\0\ntest-topic\0\0\0\x01\0\0\0\x02\0\0\0\x0e",
+                )),
+                owned_partitions: Some(
+                    [TopicPartition {
+                        topic: "test-topic".into(),
+                        partitions: [2].into(),
+                    }]
+                    .into(),
+                ),
+                generation_id: Some(14),
+                rack_id: None,
+            },
+        };
+
+        let decoded = MemberMetadata::try_from(Bytes::from_static(b"\0\x03\0\0\0\x01\0\ntest-topic\0\0\0\x1c\0\0\0\x01\0\ntest-topic\0\0\0\x01\0\0\0\x02\0\0\0\x0e\0\0\0\x01\0\ntest-topic\0\0\0\x01\0\0\0\x02\0\0\0\x0e\xff\xff"))?;
+
+        assert_eq!(expected, decoded);
         Ok(())
     }
 }
