@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use bytes::Bytes;
-use tracing::{debug, instrument};
+use tracing::instrument;
 
 use crate::{
     Error, MetadataResponse,
@@ -27,10 +27,12 @@ use crate::{
     sync_group_request::SyncGroupRequestAssignment,
 };
 
-#[derive(Clone, Default, Eq, Hash, Debug, Ord, PartialEq, PartialOrd)]
-pub struct RangeAssignor;
+use super::Topition;
 
-impl ConsumerAssignor for RangeAssignor {
+#[derive(Clone, Default, Eq, Hash, Debug, Ord, PartialEq, PartialOrd)]
+pub struct RoundRobinAssignor;
+
+impl ConsumerAssignor for RoundRobinAssignor {
     #[instrument(skip(members, metadata))]
     fn assign(
         &self,
@@ -44,72 +46,38 @@ impl ConsumerAssignor for RangeAssignor {
             .iter()
             .map(|m| {
                 MemberMetadata::try_from(m.metadata.clone())
-                    .inspect(|mm| debug!(?mm))
                     .map(|mm| mm.subscription.topics.into_iter().collect())
             })
             .collect::<Result<_, _>>()?;
 
         let n = sorted.len();
-        let mut assignments: Vec<Vec<TopicPartition>> = vec![vec![]; n];
+        let mut assignments: Vec<Vec<Topition>> = vec![vec![]; n];
+        let mut counter: usize = 0;
 
-        for topic in metadata.topics.as_deref().unwrap_or_default() {
-            let topic_name = match topic.name.as_deref() {
-                Some(name) => name,
-                None => continue,
-            };
-
-            // Indices into `sorted` for members subscribed to this topic
-            let subscribed: Vec<usize> = (0..n)
-                .filter(|&i| member_subs[i].contains(topic_name))
-                .collect();
-
-            if subscribed.is_empty() {
-                continue;
-            }
-
-            // Partitions for this topic, sorted by index
-            let partitions: Vec<i32> = topic
-                .partitions
-                .as_deref()
-                .unwrap_or_default()
-                .iter()
-                .map(|p| p.partition_index)
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect();
-
-            let sub_n = subscribed.len();
-            let total = partitions.len();
-            let allocation = total / sub_n;
-            let remainder = total % sub_n;
-            let mut offset = 0;
-
-            for (j, &sorted_idx) in subscribed.iter().enumerate() {
-                // First `remainder` members get one extra partition
-                let count = allocation + usize::from(j < remainder);
-                if count == 0 {
-                    continue;
+        'outer: for topition in BTreeSet::<Topition>::from(metadata) {
+            for _ in 0..n {
+                let idx = counter % n;
+                counter += 1;
+                if member_subs[idx].contains(topition.topic.as_str()) {
+                    assignments[idx].push(topition);
+                    continue 'outer;
                 }
-                let assigned = partitions[offset..offset + count].to_vec();
-                offset += count;
-
-                debug!(
-                    member_id = sorted[sorted_idx].member_id,
-                    topic_name,
-                    ?assigned
-                );
-
-                assignments[sorted_idx].push(TopicPartition {
-                    topic: topic_name.into(),
-                    partitions: assigned,
-                });
             }
         }
 
         sorted
             .iter()
             .zip(assignments)
-            .map(|(member, topic_partitions)| {
+            .map(|(member, topitions)| {
+                let mut topic_map: BTreeMap<String, Vec<i32>> = BTreeMap::new();
+                for t in topitions {
+                    topic_map.entry(t.topic).or_default().push(t.partition);
+                }
+                let topic_partitions: Vec<TopicPartition> = topic_map
+                    .into_iter()
+                    .map(|(topic, partitions)| TopicPartition { topic, partitions })
+                    .collect();
+
                 Bytes::try_from(
                     &MemberAssignment::default().version(3).assignment(
                         ConsumerProtocolAssignment::default()
@@ -152,9 +120,7 @@ mod tests {
             .partitions(Some(
                 partitions
                     .into_iter()
-                    .map(|partition| {
-                        MetadataResponsePartition::default().partition_index(partition)
-                    })
+                    .map(|p| MetadataResponsePartition::default().partition_index(p))
                     .collect(),
             ))
     }
@@ -165,9 +131,52 @@ mod tests {
         ))
     }
 
-    // 3 members × 2 topics × 3 partitions → each member gets exactly 1 partition per topic
+    // 3 members, 1 topic, 3 partitions → one partition per member
     #[test]
-    fn evenly_divided() -> Result<(), Error> {
+    fn even_single_topic() -> Result<(), Error> {
+        const C0: &str = "C0";
+        const C1: &str = "C1";
+        const C2: &str = "C2";
+        const T0: &str = "t0";
+
+        let md = member_metadata(&[T0])?;
+        let members = [
+            JoinGroupResponseMember::default()
+                .member_id(C0.into())
+                .metadata(md.clone()),
+            JoinGroupResponseMember::default()
+                .member_id(C1.into())
+                .metadata(md.clone()),
+            JoinGroupResponseMember::default()
+                .member_id(C2.into())
+                .metadata(md.clone()),
+        ];
+
+        let metadata =
+            MetadataResponse::default().topics(Some([metadata_response_topic(T0, 0..3)].into()));
+
+        let assignments = RoundRobinAssignor.assign(&members, &metadata)?;
+        assert_eq!(3, assignments.len());
+
+        for (i, id) in [C0, C1, C2].into_iter().enumerate() {
+            assert_eq!(id, assignments[i].member_id);
+            assert_eq!(
+                vec![TopicPartition {
+                    topic: T0.into(),
+                    partitions: vec![i as i32],
+                }],
+                MemberAssignment::try_from(assignments[i].clone().assignment)?
+                    .assignment
+                    .assigned_partitions
+            );
+        }
+
+        Ok(())
+    }
+
+    // 3 members, 2 topics × 3 partitions → each member gets one partition from each topic
+    #[test]
+    fn even_two_topics() -> Result<(), Error> {
         const C0: &str = "C0";
         const C1: &str = "C1";
         const C2: &str = "C2";
@@ -184,7 +193,7 @@ mod tests {
                 .metadata(md.clone()),
             JoinGroupResponseMember::default()
                 .member_id(C2.into())
-                .metadata(md),
+                .metadata(md.clone()),
         ];
 
         let metadata = MetadataResponse::default().topics(Some(
@@ -195,20 +204,20 @@ mod tests {
             .into(),
         ));
 
-        let assignments = RangeAssignor.assign(&members[..], &metadata)?;
+        let assignments = RoundRobinAssignor.assign(&members, &metadata)?;
         assert_eq!(3, assignments.len());
 
-        for (index, id) in [C0, C1, C2].into_iter().enumerate() {
-            assert_eq!(id, assignments[index].member_id);
+        for (i, id) in [C0, C1, C2].into_iter().enumerate() {
+            assert_eq!(id, assignments[i].member_id);
             assert_eq!(
                 [T0, T1]
                     .into_iter()
                     .map(|topic| TopicPartition {
                         topic: topic.into(),
-                        partitions: vec![index as i32],
+                        partitions: vec![i as i32],
                     })
                     .collect::<Vec<_>>(),
-                MemberAssignment::try_from(assignments[index].clone().assignment)?
+                MemberAssignment::try_from(assignments[i].clone().assignment)?
                     .assignment
                     .assigned_partitions
             );
@@ -217,181 +226,35 @@ mod tests {
         Ok(())
     }
 
-    // 2 members × 2 topics × 3 partitions → C0 gets [0,1] per topic, C1 gets [2]
+    // 2 members, 1 topic, 3 partitions → C0 gets [0,2], C1 gets [1]
     #[test]
-    fn remainder() -> Result<(), Error> {
+    fn uneven_single_topic() -> Result<(), Error> {
         const C0: &str = "C0";
         const C1: &str = "C1";
         const T0: &str = "t0";
-        const T1: &str = "t1";
 
-        let md = member_metadata(&[T0, T1])?;
+        let md = member_metadata(&[T0])?;
         let members = [
             JoinGroupResponseMember::default()
                 .member_id(C0.into())
                 .metadata(md.clone()),
             JoinGroupResponseMember::default()
                 .member_id(C1.into())
-                .metadata(md),
-        ];
-
-        let metadata = MetadataResponse::default().topics(Some(
-            [
-                metadata_response_topic(T0, 0..3),
-                metadata_response_topic(T1, 0..3),
-            ]
-            .into(),
-        ));
-
-        let assignments = RangeAssignor.assign(&members[..], &metadata)?;
-        assert_eq!(2, assignments.len());
-
-        assert_eq!(C0, assignments[0].member_id);
-        assert_eq!(
-            [T0, T1]
-                .into_iter()
-                .map(|topic| TopicPartition {
-                    topic: topic.into(),
-                    partitions: vec![0, 1],
-                })
-                .collect::<Vec<_>>(),
-            MemberAssignment::try_from(assignments[0].clone().assignment)?
-                .assignment
-                .assigned_partitions
-        );
-
-        assert_eq!(C1, assignments[1].member_id);
-        assert_eq!(
-            [T0, T1]
-                .into_iter()
-                .map(|topic| TopicPartition {
-                    topic: topic.into(),
-                    partitions: vec![2],
-                })
-                .collect::<Vec<_>>(),
-            MemberAssignment::try_from(assignments[1].clone().assignment)?
-                .assignment
-                .assigned_partitions
-        );
-
-        Ok(())
-    }
-
-    // 2 members × t0(4 partitions) + t1(2 partitions) → per-topic ranges are independent.
-    // The old code collapsed all partition indices into one set {0,1,2,3}, so C1 would have
-    // been assigned t1 partitions [2,3] which don't exist.
-    #[test]
-    fn different_partition_counts() -> Result<(), Error> {
-        const C0: &str = "C0";
-        const C1: &str = "C1";
-        const T0: &str = "t0";
-        const T1: &str = "t1";
-
-        let md = member_metadata(&[T0, T1])?;
-        let members = [
-            JoinGroupResponseMember::default()
-                .member_id(C0.into())
                 .metadata(md.clone()),
-            JoinGroupResponseMember::default()
-                .member_id(C1.into())
-                .metadata(md),
         ];
 
-        let metadata = MetadataResponse::default().topics(Some(
-            [
-                metadata_response_topic(T0, 0..4), // 4 partitions
-                metadata_response_topic(T1, 0..2), // 2 partitions
-            ]
-            .into(),
-        ));
+        let metadata =
+            MetadataResponse::default().topics(Some([metadata_response_topic(T0, 0..3)].into()));
 
-        let assignments = RangeAssignor.assign(&members[..], &metadata)?;
+        let assignments = RoundRobinAssignor.assign(&members, &metadata)?;
         assert_eq!(2, assignments.len());
 
-        // t0: allocation=2, remainder=0 → C0:[0,1], C1:[2,3]
-        // t1: allocation=1, remainder=0 → C0:[0],   C1:[1]
         assert_eq!(C0, assignments[0].member_id);
         assert_eq!(
-            vec![
-                TopicPartition {
-                    topic: T0.into(),
-                    partitions: vec![0, 1],
-                },
-                TopicPartition {
-                    topic: T1.into(),
-                    partitions: vec![0],
-                },
-            ],
-            MemberAssignment::try_from(assignments[0].clone().assignment)?
-                .assignment
-                .assigned_partitions
-        );
-
-        assert_eq!(C1, assignments[1].member_id);
-        assert_eq!(
-            vec![
-                TopicPartition {
-                    topic: T0.into(),
-                    partitions: vec![2, 3],
-                },
-                TopicPartition {
-                    topic: T1.into(),
-                    partitions: vec![1],
-                },
-            ],
-            MemberAssignment::try_from(assignments[1].clone().assignment)?
-                .assignment
-                .assigned_partitions
-        );
-
-        Ok(())
-    }
-
-    // C0 subscribes to [t0, t1], C1 subscribes to only [t0].
-    // t1 partitions are divided only among t1 subscribers (C0 gets all of them).
-    #[test]
-    fn partial_subscription() -> Result<(), Error> {
-        const C0: &str = "C0";
-        const C1: &str = "C1";
-        const T0: &str = "t0";
-        const T1: &str = "t1";
-
-        let md_both = member_metadata(&[T0, T1])?;
-        let md_t0 = member_metadata(&[T0])?;
-        let members = [
-            JoinGroupResponseMember::default()
-                .member_id(C0.into())
-                .metadata(md_both),
-            JoinGroupResponseMember::default()
-                .member_id(C1.into())
-                .metadata(md_t0),
-        ];
-
-        let metadata = MetadataResponse::default().topics(Some(
-            [
-                metadata_response_topic(T0, 0..4),
-                metadata_response_topic(T1, 0..2),
-            ]
-            .into(),
-        ));
-
-        let assignments = RangeAssignor.assign(&members[..], &metadata)?;
-        assert_eq!(2, assignments.len());
-
-        // t0: both members, 4p → C0:[0,1], C1:[2,3]
-        // t1: only C0, 2p   → C0:[0,1]
-        assert_eq!(C0, assignments[0].member_id);
-        assert_eq!(
-            vec![
-                TopicPartition {
-                    topic: T0.into(),
-                    partitions: vec![0, 1],
-                },
-                TopicPartition {
-                    topic: T1.into(),
-                    partitions: vec![0, 1],
-                },
-            ],
+            vec![TopicPartition {
+                topic: T0.into(),
+                partitions: vec![0, 2],
+            }],
             MemberAssignment::try_from(assignments[0].clone().assignment)?
                 .assignment
                 .assigned_partitions
@@ -401,7 +264,139 @@ mod tests {
         assert_eq!(
             vec![TopicPartition {
                 topic: T0.into(),
-                partitions: vec![2, 3],
+                partitions: vec![1],
+            }],
+            MemberAssignment::try_from(assignments[1].clone().assignment)?
+                .assignment
+                .assigned_partitions
+        );
+
+        Ok(())
+    }
+
+    // 2 members, 2 topics × 3 partitions → partitions interleaved across topics
+    #[test]
+    fn interleaved_two_topics() -> Result<(), Error> {
+        const C0: &str = "C0";
+        const C1: &str = "C1";
+        const T0: &str = "t0";
+        const T1: &str = "t1";
+
+        let md = member_metadata(&[T0, T1])?;
+        let members = [
+            JoinGroupResponseMember::default()
+                .member_id(C0.into())
+                .metadata(md.clone()),
+            JoinGroupResponseMember::default()
+                .member_id(C1.into())
+                .metadata(md.clone()),
+        ];
+
+        let metadata = MetadataResponse::default().topics(Some(
+            [
+                metadata_response_topic(T0, 0..3),
+                metadata_response_topic(T1, 0..3),
+            ]
+            .into(),
+        ));
+
+        let assignments = RoundRobinAssignor.assign(&members, &metadata)?;
+        assert_eq!(2, assignments.len());
+
+        // t0:[0,2] t1:[1]
+        assert_eq!(C0, assignments[0].member_id);
+        assert_eq!(
+            vec![
+                TopicPartition {
+                    topic: T0.into(),
+                    partitions: vec![0, 2],
+                },
+                TopicPartition {
+                    topic: T1.into(),
+                    partitions: vec![1],
+                },
+            ],
+            MemberAssignment::try_from(assignments[0].clone().assignment)?
+                .assignment
+                .assigned_partitions
+        );
+
+        // t0:[1] t1:[0,2]
+        assert_eq!(C1, assignments[1].member_id);
+        assert_eq!(
+            vec![
+                TopicPartition {
+                    topic: T0.into(),
+                    partitions: vec![1],
+                },
+                TopicPartition {
+                    topic: T1.into(),
+                    partitions: vec![0, 2],
+                },
+            ],
+            MemberAssignment::try_from(assignments[1].clone().assignment)?
+                .assignment
+                .assigned_partitions
+        );
+
+        Ok(())
+    }
+
+    // C0 subscribes to [t0, t1], C1 only to [t1]; t0 2p + t1 2p
+    // t0 partitions skip C1; C0 ends up with t0:[0,1] t1:[1], C1 gets t1:[0]
+    #[test]
+    fn different_subscriptions() -> Result<(), Error> {
+        const C0: &str = "C0";
+        const C1: &str = "C1";
+        const T0: &str = "t0";
+        const T1: &str = "t1";
+
+        let md_both = member_metadata(&[T0, T1])?;
+        let md_t1 = member_metadata(&[T1])?;
+        let members = [
+            JoinGroupResponseMember::default()
+                .member_id(C0.into())
+                .metadata(md_both),
+            JoinGroupResponseMember::default()
+                .member_id(C1.into())
+                .metadata(md_t1),
+        ];
+
+        let metadata = MetadataResponse::default().topics(Some(
+            [
+                metadata_response_topic(T0, 0..2),
+                metadata_response_topic(T1, 0..2),
+            ]
+            .into(),
+        ));
+
+        let assignments = RoundRobinAssignor.assign(&members, &metadata)?;
+        assert_eq!(2, assignments.len());
+
+        // C0: t0:[0,1] t1:[1]  (t0 skips C1 both times; t1:0 lands on C1, t1:1 lands on C0)
+        assert_eq!(C0, assignments[0].member_id);
+        assert_eq!(
+            vec![
+                TopicPartition {
+                    topic: T0.into(),
+                    partitions: vec![0, 1],
+                },
+                TopicPartition {
+                    topic: T1.into(),
+                    partitions: vec![1],
+                },
+            ],
+            MemberAssignment::try_from(assignments[0].clone().assignment)?
+                .assignment
+                .assigned_partitions
+        );
+
+        // C1: t1:[0]
+        assert_eq!(C1, assignments[1].member_id);
+        assert_eq!(
+            vec![TopicPartition {
+                topic: T1.into(),
+                partitions: vec![0],
             }],
             MemberAssignment::try_from(assignments[1].clone().assignment)?
                 .assignment

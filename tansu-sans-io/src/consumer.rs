@@ -28,7 +28,7 @@ use crate::{
 mod assignor;
 mod codec;
 
-pub use assignor::RangeAssignor;
+pub use assignor::{CooperativeStickyAssignor, RangeAssignor, RoundRobinAssignor, UniformAssignor};
 
 pub const CONSUMER: &str = "consumer";
 
