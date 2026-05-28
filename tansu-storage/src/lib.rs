@@ -206,9 +206,12 @@ mod dynostore;
 mod pg;
 
 mod batch;
+mod latency;
 mod null;
 mod proxy;
 mod service;
+
+pub use latency::LatencyIntroducingStorage;
 
 pub use service::{
     AlterUserScramCredentialsService, ChannelRequestLayer, ChannelRequestService,

@@ -1,4 +1,4 @@
-set dotenv-load := true
+set dotenv-load
 
 default: fmt build test clippy
 
@@ -39,6 +39,8 @@ cargo-fuzz +args:
     cargo +nightly fuzz {{ args }}
 
 fuzz-request-decode: (cargo-fuzz "run" "fuzz_request_decode" "--" "-max_total_time=60")
+
+fuzz-member-metadata: (cargo-fuzz "run" "fuzz_member_metadata" "--" "-max_total_time=60")
 
 fuzz-generate-seed: (cargo-fuzz "run" "--package" "fuzz" "--bin" "generate_seeds")
 

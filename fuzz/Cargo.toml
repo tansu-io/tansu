@@ -25,6 +25,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "fuzz_member_metadata"
+path = "fuzz_targets/fuzz_member_metadata.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "fuzz_response_decode"
 path = "fuzz_targets/fuzz_response_decode.rs"
 test = false

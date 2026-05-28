@@ -967,7 +967,7 @@ where
                             MemberAssignment::try_from(request.assignment.clone())
                                 .ok()
                                 .map(|member_assignment| {
-                                    (request.member_id.clone(), member_assignment)
+                                    (request.member_id.clone(), member_assignment.to_string())
                                 })
                         })
                         .collect::<BTreeMap<_, _>>()
@@ -2158,12 +2158,16 @@ where
 
         let assignments = assignments
             .iter()
-            .fold(BTreeMap::new(), |mut acc, assignment| {
-                _ = acc.insert(assignment.member_id.clone(), assignment.assignment.clone());
-                acc
-            });
-
-        debug!(?assignments);
+            .inspect(|assignment| {
+                debug!(
+                    member_id = assignment.member_id,
+                    assignment = MemberAssignment::try_from(assignment.assignment.clone())
+                        .map(|assignment| assignment.to_string())
+                        .unwrap_or_default()
+                )
+            })
+            .map(|assignment| (assignment.member_id.clone(), assignment.assignment.clone()))
+            .collect::<BTreeMap<_, _>>();
 
         let sync_group_response = SyncGroupResponse::default()
             .throttle_time_ms(Some(0))
@@ -3008,8 +3012,12 @@ where
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
-    use tansu_sans_io::offset_commit_request::{
-        OffsetCommitRequestPartition, OffsetCommitRequestTopic,
+    use tansu_sans_io::{
+        consumer::{
+            Assignor, CONSUMER, ConsumerProtocolAssignment, ConsumerProtocolSubscription,
+            TopicPartition,
+        },
+        offset_commit_request::{OffsetCommitRequestPartition, OffsetCommitRequestTopic},
     };
     use tansu_storage::StorageContainer;
     use tracing::subscriber::DefaultGuard;
@@ -3063,10 +3071,6 @@ mod tests {
         const CLIENT_ID: &str = "console-consumer";
         const GROUP_ID: &str = "test-consumer-group";
         const TOPIC: &str = "test";
-        const RANGE: &str = "range";
-        const COOPERATIVE_STICKY: &str = "cooperative-sticky";
-
-        const PROTOCOL_TYPE: &str = "consumer";
 
         let storage = StorageContainer::builder()
             .cluster_id(cluster)
@@ -3079,15 +3083,32 @@ mod tests {
 
         let s = Controller::with_storage(storage)?;
 
-        let first_member_range_meta = Bytes::from_static(b"first_member_range_meta_01");
-        let first_member_sticky_meta = Bytes::from_static(b"first_member_sticky_meta_01");
+        let first_member_range_meta = Bytes::try_from(
+            &MemberMetadata::default().version(3).subscription(
+                ConsumerProtocolSubscription::default()
+                    .generation_id(Some(0))
+                    .owned_partitions(
+                        [TopicPartition::default().topic("a").partitions(0..3)].into_iter(),
+                    ),
+            ),
+        )?;
+
+        let first_member_sticky_meta = Bytes::try_from(
+            &MemberMetadata::default().version(3).subscription(
+                ConsumerProtocolSubscription::default()
+                    .generation_id(Some(0))
+                    .owned_partitions(
+                        [TopicPartition::default().topic("b").partitions(0..3)].into_iter(),
+                    ),
+            ),
+        )?;
 
         let protocols = [
             JoinGroupRequestProtocol::default()
-                .name(RANGE.into())
+                .name(Assignor::RANGE.into())
                 .metadata(first_member_range_meta.clone()),
             JoinGroupRequestProtocol::default()
-                .name(COOPERATIVE_STICKY.into())
+                .name(Assignor::COOPERATIVE_STICKY.into())
                 .metadata(first_member_sticky_meta),
         ];
 
@@ -3099,7 +3120,7 @@ mod tests {
                 rebalance_timeout_ms,
                 "",
                 group_instance_id,
-                PROTOCOL_TYPE,
+                CONSUMER,
                 Some(&protocols[..]),
                 reason,
             )
@@ -3132,7 +3153,7 @@ mod tests {
                         rebalance_timeout_ms,
                         &member_id,
                         group_instance_id,
-                        PROTOCOL_TYPE,
+                        CONSUMER,
                         Some(&protocols[..]),
                         reason,
                     )
@@ -3143,8 +3164,8 @@ mod tests {
                         .throttle_time_ms(Some(0))
                         .error_code(ErrorCode::None.into())
                         .generation_id(0)
-                        .protocol_type(Some(PROTOCOL_TYPE.into()))
-                        .protocol_name(Some(RANGE.into()))
+                        .protocol_type(Some(CONSUMER.into()))
+                        .protocol_name(Some(Assignor::RANGE.into()))
                         .leader(member_id.clone())
                         .skip_assignment(Some(false))
                         .member_id(member_id.clone())
@@ -3165,7 +3186,11 @@ mod tests {
             otherwise => panic!("{otherwise:?}"),
         };
 
-        let first_member_assignment_01 = Bytes::from_static(b"assignment_01");
+        let first_member_assignment_01 = Bytes::try_from(&MemberAssignment::default().assignment(
+            ConsumerProtocolAssignment::default().assigned_partitions(
+                [TopicPartition::default().topic("x").partitions(3..6)].into_iter(),
+            ),
+        ))?;
 
         let assignments = [SyncGroupRequestAssignment::default()
             .member_id(first_member_id.clone())
@@ -3176,8 +3201,8 @@ mod tests {
                 SyncGroupResponse::default()
                     .throttle_time_ms(Some(0))
                     .error_code(0)
-                    .protocol_type(Some(PROTOCOL_TYPE.into()))
-                    .protocol_name(Some(RANGE.into()))
+                    .protocol_type(Some(CONSUMER.into()))
+                    .protocol_name(Some(Assignor::RANGE.into()))
                     .assignment(first_member_assignment_01)
             ),
             s.sync(
@@ -3185,8 +3210,8 @@ mod tests {
                 0,
                 &first_member_id,
                 group_instance_id,
-                Some(PROTOCOL_TYPE),
-                Some(RANGE),
+                Some(CONSUMER),
+                Some(Assignor::RANGE),
                 Some(&assignments[..]),
             )
             .await?
@@ -3202,15 +3227,32 @@ mod tests {
                 .await?
         );
 
-        let second_member_range_meta = Bytes::from_static(b"second_member_range_meta_01");
-        let second_member_sticky_meta = Bytes::from_static(b"second_member_sticky_meta_01");
+        let second_member_range_meta = Bytes::try_from(
+            &MemberMetadata::default().version(3).subscription(
+                ConsumerProtocolSubscription::default()
+                    .generation_id(Some(0))
+                    .owned_partitions(
+                        [TopicPartition::default().topic("p").partitions(0..3)].into_iter(),
+                    ),
+            ),
+        )?;
+
+        let second_member_sticky_meta = Bytes::try_from(
+            &MemberMetadata::default().version(3).subscription(
+                ConsumerProtocolSubscription::default()
+                    .generation_id(Some(0))
+                    .owned_partitions(
+                        [TopicPartition::default().topic("q").partitions(0..3)].into_iter(),
+                    ),
+            ),
+        )?;
 
         let protocols = [
             JoinGroupRequestProtocol::default()
-                .name(RANGE.into())
+                .name(Assignor::RANGE.into())
                 .metadata(second_member_range_meta.clone()),
             JoinGroupRequestProtocol::default()
-                .name(COOPERATIVE_STICKY.into())
+                .name(Assignor::COOPERATIVE_STICKY.into())
                 .metadata(second_member_sticky_meta.clone()),
         ];
 
@@ -3222,7 +3264,7 @@ mod tests {
                 rebalance_timeout_ms,
                 "",
                 group_instance_id,
-                PROTOCOL_TYPE,
+                CONSUMER,
                 Some(&protocols[..]),
                 reason,
             )
@@ -3254,7 +3296,7 @@ mod tests {
                         rebalance_timeout_ms,
                         &member_id,
                         group_instance_id,
-                        PROTOCOL_TYPE,
+                        CONSUMER,
                         Some(&protocols[..]),
                         reason,
                     )
@@ -3265,8 +3307,8 @@ mod tests {
                         .throttle_time_ms(Some(0))
                         .error_code(ErrorCode::None.into())
                         .generation_id(1)
-                        .protocol_type(Some(PROTOCOL_TYPE.into()))
-                        .protocol_name(Some(RANGE.into()))
+                        .protocol_type(Some(CONSUMER.into()))
+                        .protocol_name(Some(Assignor::RANGE.into()))
                         .leader(first_member_id.clone())
                         .skip_assignment(Some(false))
                         .member_id(member_id.clone())
@@ -3331,15 +3373,32 @@ mod tests {
         );
 
         {
-            let first_member_range_meta = Bytes::from_static(b"first_member_range_meta_02");
-            let first_member_sticky_meta = Bytes::from_static(b"first_member_sticky_meta_02");
+            let first_member_range_meta = Bytes::try_from(
+                &MemberMetadata::default().version(3).subscription(
+                    ConsumerProtocolSubscription::default()
+                        .generation_id(Some(0))
+                        .owned_partitions(
+                            [TopicPartition::default().topic("f").partitions(0..3)].into_iter(),
+                        ),
+                ),
+            )?;
+
+            let first_member_sticky_meta = Bytes::try_from(
+                &MemberMetadata::default().version(3).subscription(
+                    ConsumerProtocolSubscription::default()
+                        .generation_id(Some(0))
+                        .owned_partitions(
+                            [TopicPartition::default().topic("g").partitions(0..3)].into_iter(),
+                        ),
+                ),
+            )?;
 
             let protocols = [
                 JoinGroupRequestProtocol::default()
-                    .name(RANGE.into())
+                    .name(Assignor::RANGE.into())
                     .metadata(first_member_range_meta.clone()),
                 JoinGroupRequestProtocol::default()
-                    .name(COOPERATIVE_STICKY.into())
+                    .name(Assignor::COOPERATIVE_STICKY.into())
                     .metadata(first_member_sticky_meta),
             ];
 
@@ -3351,7 +3410,7 @@ mod tests {
                     rebalance_timeout_ms,
                     &first_member_id,
                     group_instance_id,
-                    PROTOCOL_TYPE,
+                    CONSUMER,
                     Some(&protocols[..]),
                     reason,
                 )
@@ -3371,8 +3430,8 @@ mod tests {
                 }) => {
                     assert_eq!(i16::from(ErrorCode::None), error_code);
                     assert_eq!(2, generation_id);
-                    assert_eq!(Some(PROTOCOL_TYPE.into()), protocol_type);
-                    assert_eq!(Some(RANGE.into()), protocol_name);
+                    assert_eq!(Some(CONSUMER.into()), protocol_type);
+                    assert_eq!(Some(Assignor::RANGE.into()), protocol_name);
                     assert_eq!(first_member_id, leader);
                     assert_eq!(first_member_id, member_id);
 
@@ -3400,10 +3459,10 @@ mod tests {
         {
             let protocols = [
                 JoinGroupRequestProtocol::default()
-                    .name(RANGE.into())
+                    .name(Assignor::RANGE.into())
                     .metadata(second_member_range_meta.clone()),
                 JoinGroupRequestProtocol::default()
-                    .name(COOPERATIVE_STICKY.into())
+                    .name(Assignor::COOPERATIVE_STICKY.into())
                     .metadata(second_member_sticky_meta.clone()),
             ];
 
@@ -3415,7 +3474,7 @@ mod tests {
                     rebalance_timeout_ms,
                     &second_member_id,
                     group_instance_id,
-                    PROTOCOL_TYPE,
+                    CONSUMER,
                     Some(&protocols[..]),
                     reason,
                 )
@@ -3435,8 +3494,8 @@ mod tests {
                 }) => {
                     assert_eq!(i16::from(ErrorCode::None), error_code);
                     assert_eq!(2, generation_id);
-                    assert_eq!(PROTOCOL_TYPE, protocol_type);
-                    assert_eq!(RANGE, protocol_name);
+                    assert_eq!(CONSUMER, protocol_type);
+                    assert_eq!(Assignor::RANGE, protocol_name);
                     assert_eq!(first_member_id, leader);
                     assert_eq!(second_member_id, member_id);
                     assert_eq!(0, members.len());
@@ -3446,10 +3505,20 @@ mod tests {
             }
         }
 
-        let second_member_assignment_02 = Bytes::from_static(b"second_member_assignment_02");
+        let second_member_assignment_02 =
+            Bytes::try_from(&MemberAssignment::default().assignment(
+                ConsumerProtocolAssignment::default().assigned_partitions(
+                    [TopicPartition::default().topic("y").partitions(3..6)].into_iter(),
+                ),
+            ))?;
 
         {
-            let first_member_assignment_02 = Bytes::from_static(b"first_member_assignment_02");
+            let first_member_assignment_02 =
+                Bytes::try_from(&MemberAssignment::default().assignment(
+                    ConsumerProtocolAssignment::default().assigned_partitions(
+                        [TopicPartition::default().topic("z").partitions(0..3)].into_iter(),
+                    ),
+                ))?;
 
             let assignments = [
                 SyncGroupRequestAssignment::default()
@@ -3465,8 +3534,8 @@ mod tests {
                     SyncGroupResponse::default()
                         .throttle_time_ms(Some(0))
                         .error_code(ErrorCode::None.into())
-                        .protocol_type(Some(PROTOCOL_TYPE.into()))
-                        .protocol_name(Some(RANGE.into()))
+                        .protocol_type(Some(CONSUMER.into()))
+                        .protocol_name(Some(Assignor::RANGE.into()))
                         .assignment(first_member_assignment_02)
                 ),
                 s.sync(
@@ -3474,8 +3543,8 @@ mod tests {
                     2,
                     &first_member_id,
                     group_instance_id,
-                    Some(PROTOCOL_TYPE),
-                    Some(RANGE),
+                    Some(CONSUMER),
+                    Some(Assignor::RANGE),
                     Some(&assignments[..]),
                 )
                 .await?
@@ -3487,8 +3556,8 @@ mod tests {
                 SyncGroupResponse::default()
                     .throttle_time_ms(Some(0))
                     .error_code(ErrorCode::None.into())
-                    .protocol_type(Some(PROTOCOL_TYPE.into()))
-                    .protocol_name(Some(RANGE.into()))
+                    .protocol_type(Some(CONSUMER.into()))
+                    .protocol_name(Some(Assignor::RANGE.into()))
                     .assignment(second_member_assignment_02)
             ),
             s.sync(
@@ -3496,8 +3565,8 @@ mod tests {
                 2,
                 &second_member_id,
                 group_instance_id,
-                Some(PROTOCOL_TYPE),
-                Some(RANGE),
+                Some(CONSUMER),
+                Some(Assignor::RANGE),
                 Some(&[]),
             )
             .await?
@@ -3560,10 +3629,10 @@ mod tests {
         {
             let protocols = [
                 JoinGroupRequestProtocol::default()
-                    .name(RANGE.into())
+                    .name(Assignor::RANGE.into())
                     .metadata(second_member_range_meta.clone()),
                 JoinGroupRequestProtocol::default()
-                    .name(COOPERATIVE_STICKY.into())
+                    .name(Assignor::COOPERATIVE_STICKY.into())
                     .metadata(second_member_sticky_meta.clone()),
             ];
 
@@ -3573,8 +3642,8 @@ mod tests {
                         .throttle_time_ms(Some(0))
                         .error_code(ErrorCode::None.into())
                         .generation_id(3)
-                        .protocol_type(Some(PROTOCOL_TYPE.into()))
-                        .protocol_name(Some(RANGE.into()))
+                        .protocol_type(Some(CONSUMER.into()))
+                        .protocol_name(Some(Assignor::RANGE.into()))
                         .leader(second_member_id.clone())
                         .skip_assignment(Some(false))
                         .member_id(second_member_id.clone())
@@ -3593,7 +3662,7 @@ mod tests {
                     rebalance_timeout_ms,
                     &second_member_id,
                     group_instance_id,
-                    PROTOCOL_TYPE,
+                    CONSUMER,
                     Some(&protocols[..]),
                     reason,
                 )
@@ -3602,7 +3671,12 @@ mod tests {
         }
 
         {
-            let second_member_assignment_03 = Bytes::from_static(b"second_member_assignment_03");
+            let second_member_assignment_03 =
+                Bytes::try_from(&MemberAssignment::default().assignment(
+                    ConsumerProtocolAssignment::default().assigned_partitions(
+                        [TopicPartition::default().topic("x").partitions(6..9)].into_iter(),
+                    ),
+                ))?;
 
             let assignments = [SyncGroupRequestAssignment::default()
                 .member_id(second_member_id.clone())
@@ -3613,8 +3687,8 @@ mod tests {
                     SyncGroupResponse::default()
                         .throttle_time_ms(Some(0))
                         .error_code(ErrorCode::None.into())
-                        .protocol_type(Some(PROTOCOL_TYPE.into()))
-                        .protocol_name(Some(RANGE.into()))
+                        .protocol_type(Some(CONSUMER.into()))
+                        .protocol_name(Some(Assignor::RANGE.into()))
                         .assignment(second_member_assignment_03)
                 ),
                 s.sync(
@@ -3622,8 +3696,8 @@ mod tests {
                     3,
                     &second_member_id,
                     group_instance_id,
-                    Some(PROTOCOL_TYPE),
-                    Some(RANGE),
+                    Some(CONSUMER),
+                    Some(Assignor::RANGE),
                     Some(&assignments[..]),
                 )
                 .await?
@@ -3647,10 +3721,6 @@ mod tests {
 
         const CLIENT_ID: &str = "console-consumer";
         const GROUP_ID: &str = "test-consumer-group";
-        const RANGE: &str = "range";
-        const COOPERATIVE_STICKY: &str = "cooperative-sticky";
-
-        const PROTOCOL_TYPE: &str = "consumer";
 
         let storage = StorageContainer::builder()
             .cluster_id(cluster)
@@ -3663,15 +3733,32 @@ mod tests {
 
         let s = Controller::with_storage(storage)?;
 
-        let first_member_range_meta = Bytes::from_static(b"first_member_range_meta_01");
-        let first_member_sticky_meta = Bytes::from_static(b"first_member_sticky_meta_01");
+        let first_member_range_meta = Bytes::try_from(
+            &MemberMetadata::default().version(3).subscription(
+                ConsumerProtocolSubscription::default()
+                    .generation_id(Some(0))
+                    .owned_partitions(
+                        [TopicPartition::default().topic("a").partitions(0..3)].into_iter(),
+                    ),
+            ),
+        )?;
+
+        let first_member_sticky_meta = Bytes::try_from(
+            &MemberMetadata::default().version(3).subscription(
+                ConsumerProtocolSubscription::default()
+                    .generation_id(Some(0))
+                    .owned_partitions(
+                        [TopicPartition::default().topic("b").partitions(0..3)].into_iter(),
+                    ),
+            ),
+        )?;
 
         let first_member_protocols = [
             JoinGroupRequestProtocol::default()
-                .name(RANGE.into())
+                .name(Assignor::RANGE.into())
                 .metadata(first_member_range_meta.clone()),
             JoinGroupRequestProtocol::default()
-                .name(COOPERATIVE_STICKY.into())
+                .name(Assignor::COOPERATIVE_STICKY.into())
                 .metadata(first_member_sticky_meta),
         ];
 
@@ -3683,7 +3770,7 @@ mod tests {
                 rebalance_timeout_ms,
                 "",
                 group_instance_id,
-                PROTOCOL_TYPE,
+                CONSUMER,
                 Some(&first_member_protocols[..]),
                 reason,
             )
@@ -3710,8 +3797,8 @@ mod tests {
                             .throttle_time_ms(Some(0))
                             .error_code(ErrorCode::None.into())
                             .generation_id(0)
-                            .protocol_type(Some(PROTOCOL_TYPE.into()))
-                            .protocol_name(Some(RANGE.into()))
+                            .protocol_type(Some(CONSUMER.into()))
+                            .protocol_name(Some(Assignor::RANGE.into()))
                             .leader(member_id.clone())
                             .skip_assignment(Some(false))
                             .member_id(member_id.clone())
@@ -3730,7 +3817,7 @@ mod tests {
                         rebalance_timeout_ms,
                         &member_id,
                         group_instance_id,
-                        PROTOCOL_TYPE,
+                        CONSUMER,
                         Some(&first_member_protocols[..]),
                         reason,
                     )
@@ -3743,15 +3830,32 @@ mod tests {
             otherwise => panic!("{otherwise:?}"),
         };
 
-        let second_member_range_meta = Bytes::from_static(b"second_member_range_meta_01");
-        let second_member_sticky_meta = Bytes::from_static(b"second_member_sticky_meta_01");
+        let second_member_range_meta = Bytes::try_from(
+            &MemberMetadata::default().version(3).subscription(
+                ConsumerProtocolSubscription::default()
+                    .generation_id(Some(0))
+                    .owned_partitions(
+                        [TopicPartition::default().topic("p").partitions(0..3)].into_iter(),
+                    ),
+            ),
+        )?;
+
+        let second_member_sticky_meta = Bytes::try_from(
+            &MemberMetadata::default().version(3).subscription(
+                ConsumerProtocolSubscription::default()
+                    .generation_id(Some(0))
+                    .owned_partitions(
+                        [TopicPartition::default().topic("q").partitions(0..3)].into_iter(),
+                    ),
+            ),
+        )?;
 
         let second_member_protocols = [
             JoinGroupRequestProtocol::default()
-                .name(RANGE.into())
+                .name(Assignor::RANGE.into())
                 .metadata(second_member_range_meta.clone()),
             JoinGroupRequestProtocol::default()
-                .name(COOPERATIVE_STICKY.into())
+                .name(Assignor::COOPERATIVE_STICKY.into())
                 .metadata(second_member_sticky_meta),
         ];
 
@@ -3763,7 +3867,7 @@ mod tests {
                 rebalance_timeout_ms,
                 "",
                 group_instance_id,
-                PROTOCOL_TYPE,
+                CONSUMER,
                 Some(&second_member_protocols[..]),
                 reason,
             )
@@ -3790,8 +3894,8 @@ mod tests {
                             .throttle_time_ms(Some(0))
                             .error_code(ErrorCode::None.into())
                             .generation_id(1)
-                            .protocol_type(Some(PROTOCOL_TYPE.into()))
-                            .protocol_name(Some(RANGE.into()))
+                            .protocol_type(Some(CONSUMER.into()))
+                            .protocol_name(Some(Assignor::RANGE.into()))
                             .leader(first_member_id.clone())
                             .skip_assignment(Some(false))
                             .member_id(member_id.clone())
@@ -3804,7 +3908,7 @@ mod tests {
                         rebalance_timeout_ms,
                         &member_id,
                         group_instance_id,
-                        PROTOCOL_TYPE,
+                        CONSUMER,
                         Some(&second_member_protocols[..]),
                         reason,
                     )
@@ -3825,7 +3929,7 @@ mod tests {
                 rebalance_timeout_ms,
                 &first_member_id,
                 group_instance_id,
-                PROTOCOL_TYPE,
+                CONSUMER,
                 Some(&first_member_protocols[..]),
                 reason,
             )
@@ -3844,8 +3948,8 @@ mod tests {
                 ..
             }) => {
                 assert_eq!(i16::from(ErrorCode::None), error_code);
-                assert_eq!(Some(PROTOCOL_TYPE.into()), protocol_type);
-                assert_eq!(Some(RANGE.into()), protocol_name);
+                assert_eq!(Some(CONSUMER.into()), protocol_type);
+                assert_eq!(Some(Assignor::RANGE.into()), protocol_name);
                 assert_eq!(first_member_id.clone(), leader);
                 assert_eq!(first_member_id.clone(), member_id);
                 assert_eq!(2, members.len());
@@ -3876,8 +3980,8 @@ mod tests {
                     .throttle_time_ms(Some(0))
                     .error_code(ErrorCode::None.into())
                     .generation_id(1)
-                    .protocol_type(Some(PROTOCOL_TYPE.into()))
-                    .protocol_name(Some(RANGE.into()))
+                    .protocol_type(Some(CONSUMER.into()))
+                    .protocol_name(Some(Assignor::RANGE.into()))
                     .leader(first_member_id.clone())
                     .skip_assignment(Some(false))
                     .member_id(second_member_id.clone())
@@ -3890,7 +3994,7 @@ mod tests {
                 rebalance_timeout_ms,
                 &second_member_id,
                 group_instance_id,
-                PROTOCOL_TYPE,
+                CONSUMER,
                 Some(&second_member_protocols[..]),
                 reason,
             )

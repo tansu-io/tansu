@@ -22,6 +22,7 @@ nanoid.workspace = true
 opentelemetry-semantic-conventions.workspace = true
 opentelemetry.workspace = true
 rama.workspace = true
+rand.workspace = true
 rsasl.workspace = true
 tansu-auth.workspace = true
 tansu-sans-io.workspace = true

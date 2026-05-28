@@ -15,6 +15,7 @@
 use std::collections::BTreeSet;
 
 use bytes::Bytes;
+use tracing::{debug, instrument};
 
 use crate::{
     Error, MetadataResponse,
@@ -26,6 +27,7 @@ use crate::{
     sync_group_request::SyncGroupRequestAssignment,
 };
 
+#[instrument(ret)]
 fn partitions(metadata: &MetadataResponse) -> BTreeSet<i32> {
     metadata
         .topics
@@ -49,6 +51,7 @@ fn partitions(metadata: &MetadataResponse) -> BTreeSet<i32> {
 pub struct RangeAssignor;
 
 impl ConsumerAssignor for RangeAssignor {
+    #[instrument(skip(members, metadata))]
     fn assign(
         &self,
         members: &[JoinGroupResponseMember],
@@ -66,33 +69,37 @@ impl ConsumerAssignor for RangeAssignor {
         members
             .iter()
             .map(|member| {
-                MemberMetadata::try_from(member.metadata.clone()).and_then(|member_metadata| {
-                    let partitions: Vec<_> = if remainder.next().is_some() {
-                        (0..=allocation)
-                            .map(|_| partition.next().expect("partition"))
-                            .collect()
-                    } else {
-                        (0..allocation)
-                            .map(|_| partition.next().expect("partition"))
-                            .collect()
-                    };
+                MemberMetadata::try_from(member.metadata.clone())
+                    .inspect(|member_metadata| debug!(?member_metadata))
+                    .and_then(|member_metadata| {
+                        let partitions: Vec<_> = if remainder.next().is_some() {
+                            (0..=allocation)
+                                .map(|_| partition.next().expect("partition"))
+                                .collect()
+                        } else {
+                            (0..allocation)
+                                .map(|_| partition.next().expect("partition"))
+                                .collect()
+                        };
 
-                    Bytes::try_from(&MemberAssignment::default().version(3).assignment(
-                        ConsumerProtocolAssignment::default().assigned_partitions(
-                            member_metadata.subscription.topics.iter().map(|topic| {
-                                TopicPartition {
-                                    topic: topic.into(),
-                                    partitions: partitions.clone(),
-                                }
-                            }),
-                        ),
-                    ))
-                    .map(|assignment| {
-                        SyncGroupRequestAssignment::default()
-                            .member_id(member.member_id.clone())
-                            .assignment(assignment)
+                        debug!(?partitions);
+
+                        Bytes::try_from(&MemberAssignment::default().version(3).assignment(
+                            ConsumerProtocolAssignment::default().assigned_partitions(
+                                member_metadata.subscription.topics.iter().map(|topic| {
+                                    TopicPartition {
+                                        topic: topic.into(),
+                                        partitions: partitions.clone(),
+                                    }
+                                }),
+                            ),
+                        ))
+                        .map(|assignment| {
+                            SyncGroupRequestAssignment::default()
+                                .member_id(member.member_id.clone())
+                                .assignment(assignment)
+                        })
                     })
-                })
             })
             .collect()
     }
