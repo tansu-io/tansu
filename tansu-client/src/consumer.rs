@@ -21,48 +21,42 @@ use std::{
 use rama::{Context, Service};
 use tansu_sans_io::{
     ApiKey, Frame, Header, HeartbeatResponse, MetadataResponse, RootMessageMeta,
-    consumer::{ConsumerAssignor, GroupConsumer},
+    consumer::GroupConsumer,
 };
 use tokio::time::sleep;
 use tracing::debug;
 
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct ConsumerGroupLayer<A> {
+pub struct ConsumerGroupLayer {
     group_id: String,
     heartbeat_interval: Duration,
     topics: Vec<String>,
     metadata: MetadataResponse,
-    assignor: A,
 }
 
-impl<A> ConsumerGroupLayer<A>
-where
-    A: ConsumerAssignor,
-{
+impl ConsumerGroupLayer {
     pub fn new(
         group_id: impl Into<String>,
         topics: impl IntoIterator<Item = String>,
         metadata: MetadataResponse,
-        assignor: A,
     ) -> Self {
         Self {
             group_id: group_id.into(),
             topics: topics.into_iter().collect(),
             metadata,
-            assignor,
             heartbeat_interval: Duration::from_secs(3),
         }
     }
 }
 
 #[derive(Clone)]
-pub struct ConsumerGroupService<S, A> {
+pub struct ConsumerGroupService<S> {
     inner: S,
-    consumer: Arc<Mutex<GroupConsumer<A>>>,
+    consumer: Arc<Mutex<GroupConsumer>>,
     heartbeat_interval: Duration,
 }
 
-impl<S, A> fmt::Debug for ConsumerGroupService<S, A> {
+impl<S> fmt::Debug for ConsumerGroupService<S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(stringify!(ConsumerGroupService))
             .field("heartbeat", &self.heartbeat_interval)
@@ -70,12 +64,10 @@ impl<S, A> fmt::Debug for ConsumerGroupService<S, A> {
     }
 }
 
-impl<State, S, A> Service<State, ()> for ConsumerGroupService<S, A>
+impl<State, S> Service<State, ()> for ConsumerGroupService<S>
 where
     S: Service<State, Frame, Response = Frame>,
-    A: ConsumerAssignor + Send + Sync + 'static,
-    S::Error:
-        From<tansu_sans_io::Error> + for<'a> From<PoisonError<MutexGuard<'a, GroupConsumer<A>>>>,
+    S::Error: From<tansu_sans_io::Error> + for<'a> From<PoisonError<MutexGuard<'a, GroupConsumer>>>,
     State: Clone + Send + Sync + 'static,
 {
     type Response = S::Response;

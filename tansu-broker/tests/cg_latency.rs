@@ -19,7 +19,7 @@ use tansu_broker::{
 };
 use tansu_sans_io::{
     ErrorCode, HeartbeatRequest, JoinGroupRequest, MetadataResponse, SyncGroupRequest,
-    consumer::{GroupConsumer, MemberAssignment, RangeAssignor},
+    consumer::{GroupConsumer, MemberAssignment},
     metadata_response::{MetadataResponsePartition, MetadataResponseTopic},
 };
 use tansu_service::{
@@ -74,7 +74,6 @@ async fn stack() -> Result<(), Error> {
             .name(Some(topic.into()))
             .partitions(Some(
                 (0..3)
-                    .into_iter()
                     .map(|partition_index| {
                         MetadataResponsePartition::default().partition_index(partition_index)
                     })
@@ -83,11 +82,11 @@ async fn stack() -> Result<(), Error> {
         .into(),
     ));
 
-    let mut consumer = GroupConsumer::new(group_id, [topic.into()].into(), metadata, RangeAssignor);
+    let mut consumer = GroupConsumer::new(group_id, [topic.into()].into(), metadata);
 
     let initial = consumer
         .next_action(None)
-        .and_then(|body| JoinGroupRequest::try_from(body).map_err(Into::into))?;
+        .and_then(|body| JoinGroupRequest::try_from(body))?;
     assert!(initial.member_id.is_empty());
 
     let context = Context::default();
@@ -118,7 +117,7 @@ async fn stack() -> Result<(), Error> {
 
     let member_assignment = MemberAssignment::try_from(r2.assignment.clone())
         .inspect(|member_assignment| debug!(?member_assignment))?;
-    assert!(member_assignment.assignment.assigned_partitions.len() > 0);
+    assert!(!member_assignment.assignment.assigned_partitions.is_empty());
 
     let next_action = consumer.next_action(Some(r2.into()))?;
     let heartbeat = HeartbeatRequest::try_from(next_action)?;

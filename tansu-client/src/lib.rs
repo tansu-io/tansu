@@ -129,6 +129,8 @@ use url::Url;
 
 mod consumer;
 
+pub use consumer::{ConsumerGroupLayer, ConsumerGroupService};
+
 /// Client Errors
 #[derive(thiserror::Error, Clone, Debug)]
 pub enum Error {
