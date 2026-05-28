@@ -16,7 +16,7 @@ use std::{fmt, str::FromStr, time::Duration};
 
 use bytes::{Buf as _, Bytes, BytesMut};
 use serde::{Deserialize, Serialize};
-use tracing::{debug, instrument};
+use tracing::{debug, info, instrument, warn};
 
 use crate::{
     Body, Decoder, Encoder, Error, ErrorCode, HeartbeatRequest, HeartbeatResponse,
@@ -470,6 +470,8 @@ impl GroupConsumer {
     #[instrument(skip(self, input), fields(group_id = self.group_id, member_state = ?self.member_state), ret)]
     pub fn next_action(&mut self, input: Option<Body>) -> Result<Body, Error> {
         match (&mut self.member_state, input) {
+            // initial
+            //
             (
                 MemberState::Outsider {
                     generation_id,
@@ -486,19 +488,22 @@ impl GroupConsumer {
                     .map(Into::into)
             }
 
+            // Join
+            //
             (
-                MemberState::Follower {
+                MemberState::Outsider {
                     generation_id,
                     member_id,
-                    ..
+                    member_assignment,
                 },
-                Some(Body::HeartbeatResponse(HeartbeatResponse { error_code, .. })),
-            ) if error_code == i16::from(ErrorCode::RebalanceInProgress) => {
-                Ok(HeartbeatRequest::default()
-                    .group_id(self.group_id.clone())
-                    .generation_id(*generation_id)
-                    .member_id(member_id.clone())
-                    .into())
+                Some(Body::JoinGroupResponse(JoinGroupResponse { error_code, .. })),
+            ) if i16::from(ErrorCode::NotCoordinator) == error_code => {
+                let generation_id = *generation_id;
+                let member_id = member_id.clone();
+                let member_assignment = member_assignment.clone();
+
+                self.join_request(generation_id, member_id, member_assignment, "join")
+                    .map(Into::into)
             }
 
             (
@@ -610,21 +615,99 @@ impl GroupConsumer {
                     .into())
             }
 
+            // Sync
+            //
             (
                 MemberState::Leader {
                     member_assignment,
                     generation_id,
                     member_id,
+                }
+                | MemberState::Follower {
+                    member_assignment,
+                    generation_id,
+                    member_id,
                 },
-                Some(Body::SyncGroupResponse(SyncGroupResponse { assignment, .. })),
-            ) => {
-                _ = member_assignment.replace(MemberAssignment::try_from(assignment)?);
+                Some(Body::SyncGroupResponse(SyncGroupResponse {
+                    error_code,
+                    assignment,
+                    ..
+                })),
+            ) if i16::from(ErrorCode::None) == error_code => {
+                _ = member_assignment
+                    .replace(MemberAssignment::try_from(assignment).inspect(|ma| warn!(%ma))?);
 
                 Ok(HeartbeatRequest::default()
                     .group_id(self.group_id.clone())
                     .generation_id(*generation_id)
                     .member_id(member_id.clone())
                     .into())
+            }
+
+            // Heartbeat
+            //
+            (
+                MemberState::Leader {
+                    generation_id,
+                    member_id,
+                    ..
+                }
+                | MemberState::Follower {
+                    generation_id,
+                    member_id,
+                    ..
+                },
+                Some(Body::HeartbeatResponse(HeartbeatResponse { error_code, .. })),
+            ) if error_code == i16::from(ErrorCode::UnknownMemberId) => {
+                let generation_id = None;
+                let member_id = None;
+                let member_assignment = None;
+
+                self.member_state = MemberState::Outsider {
+                    generation_id,
+                    member_id: member_id.clone(),
+                    member_assignment: member_assignment.clone(),
+                };
+
+                self.join_request(
+                    generation_id,
+                    member_id,
+                    member_assignment,
+                    "join after unknown member id",
+                )
+                .map(Into::into)
+            }
+
+            (
+                MemberState::Leader {
+                    generation_id,
+                    member_id,
+                    member_assignment,
+                }
+                | MemberState::Follower {
+                    generation_id,
+                    member_id,
+                    member_assignment,
+                },
+                Some(Body::HeartbeatResponse(HeartbeatResponse { error_code, .. })),
+            ) if error_code == i16::from(ErrorCode::RebalanceInProgress) => {
+                let generation_id = Some(generation_id.to_owned());
+                let member_id = Some(member_id.to_owned());
+                let member_assignment = member_assignment.to_owned();
+
+                self.member_state = MemberState::Outsider {
+                    generation_id: generation_id.clone(),
+                    member_id: member_id.clone(),
+                    member_assignment: member_assignment.clone(),
+                };
+
+                self.join_request(
+                    generation_id,
+                    member_id,
+                    member_assignment,
+                    "join after rebalance",
+                )
+                .map(Into::into)
             }
 
             (
@@ -640,6 +723,21 @@ impl GroupConsumer {
                 .member_id(member_id.clone())
                 .into()),
 
+            (
+                MemberState::Leader {
+                    generation_id,
+                    member_id,
+                    ..
+                },
+                Some(Body::HeartbeatResponse(HeartbeatResponse { error_code, .. })),
+            ) if error_code == i16::from(ErrorCode::None) => Ok(HeartbeatRequest::default()
+                .group_id(self.group_id.clone())
+                .generation_id(*generation_id)
+                .member_id(member_id.clone())
+                .into()),
+
+            // Fall through
+            //
             (state, input) => todo!("state: {state:?}, input: {input:?}"),
         }
     }

@@ -18,7 +18,7 @@ use std::{
     time::Duration,
 };
 
-use rama::{Context, Service};
+use rama::{Context, Layer, Service};
 use tansu_sans_io::{
     ApiKey, Frame, Header, HeartbeatResponse, MetadataResponse, RootMessageMeta,
     consumer::GroupConsumer,
@@ -49,6 +49,26 @@ impl ConsumerGroupLayer {
     }
 }
 
+impl<S> Layer<S> for ConsumerGroupLayer {
+    type Service = ConsumerGroupService<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        let consumer = Arc::new(Mutex::new(GroupConsumer::new(
+            self.group_id.clone(),
+            self.topics.clone(),
+            self.metadata.clone(),
+        )));
+
+        let heartbeat_interval = self.heartbeat_interval;
+
+        Self::Service {
+            inner,
+            consumer,
+            heartbeat_interval,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct ConsumerGroupService<S> {
     inner: S,
@@ -70,7 +90,7 @@ where
     S::Error: From<tansu_sans_io::Error> + for<'a> From<PoisonError<MutexGuard<'a, GroupConsumer>>>,
     State: Clone + Send + Sync + 'static,
 {
-    type Response = S::Response;
+    type Response = ();
 
     type Error = S::Error;
 

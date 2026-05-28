@@ -102,7 +102,7 @@
 use std::{
     collections::BTreeMap,
     error, fmt, io,
-    sync::{Arc, LazyLock},
+    sync::{Arc, LazyLock, PoisonError},
     time::SystemTime,
 };
 
@@ -140,11 +140,18 @@ pub enum Error {
     Message(String),
     ParseFilter(Arc<ParseError>),
     ParseUrl(#[from] url::ParseError),
+    Poison,
     Pool(Arc<Box<dyn error::Error + Send + Sync>>),
     Protocol(#[from] tansu_sans_io::Error),
     Service(#[from] tansu_service::Error),
     UnknownApiKey(i16),
     UnknownHost(Url),
+}
+
+impl<T> From<PoisonError<T>> for Error {
+    fn from(_value: PoisonError<T>) -> Self {
+        Self::Poison
+    }
 }
 
 impl fmt::Display for Error {
@@ -272,8 +279,7 @@ impl managed::Manager for ConnectionManager {
         obj: &mut Self::Type,
         metrics: &managed::Metrics,
     ) -> managed::RecycleResult<Self::Error> {
-        debug!(?obj, ?metrics);
-
+        debug!(obj.correlation_id, metrics.recycle_count);
         Ok(())
     }
 }

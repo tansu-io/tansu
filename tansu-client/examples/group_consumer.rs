@@ -16,11 +16,15 @@ use std::{result, time::Duration};
 
 use clap::Parser;
 use dotenv::dotenv;
-use rama::Layer as _;
+use rama::{Context, Layer as _, Service};
 use tansu_client::{
-    BytesConnectionService, Client, ConnectionManager, FrameConnectionLayer, FramePoolLayer,
+    BytesConnectionService, Client, ConnectionManager, ConsumerGroupLayer, FrameConnectionLayer,
+    FramePoolLayer,
 };
-use tansu_sans_io::{MetadataRequest, NULL_TOPIC_ID, metadata_request::MetadataRequestTopic};
+use tansu_sans_io::{
+    CoordinatorType, FindCoordinatorRequest, MetadataRequest, NULL_TOPIC_ID,
+    metadata_request::MetadataRequestTopic,
+};
 use tansu_service::FrameBytesLayer;
 use tracing::debug;
 use tracing_subscriber::{
@@ -46,9 +50,14 @@ struct Arg {
     broker: Url,
 
     /// The topics within the group
+    #[arg(long)]
     topics: Vec<String>,
 
-    #[arg(long, default_value = "10s", value_parser = parse_duration)]
+    /// The group name
+    #[arg(long, default_value = "test")]
+    group: String,
+
+    #[arg(long, default_value = "3s", value_parser = parse_duration)]
     heartbeat_interval: Duration,
 }
 
@@ -77,6 +86,16 @@ async fn main() -> Result<()> {
 
     let origin = Client::new(pool.clone());
 
+    let _coordinator = origin
+        .call(
+            FindCoordinatorRequest::default()
+                .coordinator_keys(Some([arg.group.clone()].into()))
+                .key(Some(arg.group.clone()))
+                .key_type(Some(CoordinatorType::Group.into())),
+        )
+        .await
+        .inspect(|coordinator| debug!(?coordinator))?;
+
     let metadata = origin
         .call(
             MetadataRequest::default()
@@ -96,12 +115,14 @@ async fn main() -> Result<()> {
         )
         .await?;
 
-    let frame_origin = (
+    (
+        ConsumerGroupLayer::new(arg.group, arg.topics, metadata),
         FramePoolLayer::new(pool.clone()),
         FrameConnectionLayer,
         FrameBytesLayer,
     )
-        .into_layer(BytesConnectionService);
-
-    Ok(())
+        .into_layer(BytesConnectionService)
+        .serve(Context::default(), ())
+        .await
+        .map_err(Into::into)
 }
