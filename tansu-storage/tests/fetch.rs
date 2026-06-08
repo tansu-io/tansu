@@ -106,3 +106,159 @@ mod doctest_template {
         Ok(())
     }
 }
+
+/// Exercises the `start-after` based fetch on the `dynostore` (`memory://`) engine: fetch must
+/// return the contiguous run of batches at or after the requested offset, bounded by `max_bytes`,
+/// without depending on the partition's total history.
+mod start_after {
+    use std::{sync::Arc, time::Duration};
+
+    use bytes::Bytes;
+    use tansu_sans_io::{
+        IsolationLevel,
+        record::{Record, deflated, inflated},
+    };
+    use tansu_storage::{Storage, StorageContainer, Topition};
+    use url::Url;
+
+    use crate::common::{Error, init_tracing};
+
+    const CLUSTER_ID: &str = "tansu";
+    const NODE_ID: i32 = 111;
+    const MAX_WAIT: Duration = Duration::from_secs(5);
+
+    async fn in_memory_storage() -> Result<Arc<Box<dyn Storage>>, Error> {
+        StorageContainer::builder()
+            .cluster_id(CLUSTER_ID)
+            .node_id(NODE_ID)
+            .advertised_listener(Url::parse("tcp://localhost:9092")?)
+            .storage(Url::parse("memory://tansu/")?)
+            .build()
+            .await
+            .map_err(Into::into)
+    }
+
+    fn single_record_batch(value: &'static [u8]) -> Result<deflated::Batch, Error> {
+        inflated::Batch::builder()
+            .record(Record::builder().value(Bytes::from_static(value).into()))
+            .build()
+            .and_then(deflated::Batch::try_from)
+            .map_err(Into::into)
+    }
+
+    /// Produce `count` single-record batches; each occupies one offset, so base offsets are
+    /// `0..count` and the high watermark ends at `count`.
+    async fn produce_batches(
+        storage: &Arc<Box<dyn Storage>>,
+        topition: &Topition,
+        count: i64,
+    ) -> Result<(), Error> {
+        for offset in 0..count {
+            let assigned = storage
+                .produce(None, topition, single_record_batch(b"lorem ipsum")?)
+                .await?;
+            assert_eq!(offset, assigned);
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn fetch_from_middle_returns_contiguous_tail() -> Result<(), Error> {
+        let _guard = init_tracing()?;
+
+        let storage = in_memory_storage().await?;
+        let topition = Topition::new("abcba", 0);
+
+        produce_batches(&storage, &topition, 10).await?;
+
+        let batches = storage
+            .fetch(
+                &topition,
+                4,
+                0,
+                1024 * 1024,
+                IsolationLevel::ReadUncommitted,
+                MAX_WAIT,
+            )
+            .await?;
+
+        let base_offsets = batches.iter().map(|b| b.base_offset).collect::<Vec<_>>();
+        assert_eq!(vec![4, 5, 6, 7, 8, 9], base_offsets);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn fetch_from_start_returns_all() -> Result<(), Error> {
+        let _guard = init_tracing()?;
+
+        let storage = in_memory_storage().await?;
+        let topition = Topition::new("abcba", 0);
+
+        produce_batches(&storage, &topition, 10).await?;
+
+        let batches = storage
+            .fetch(
+                &topition,
+                0,
+                0,
+                1024 * 1024,
+                IsolationLevel::ReadUncommitted,
+                MAX_WAIT,
+            )
+            .await?;
+
+        let base_offsets = batches.iter().map(|b| b.base_offset).collect::<Vec<_>>();
+        assert_eq!((0..10).collect::<Vec<_>>(), base_offsets);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn fetch_is_bounded_by_max_bytes() -> Result<(), Error> {
+        let _guard = init_tracing()?;
+
+        let storage = in_memory_storage().await?;
+        let topition = Topition::new("abcba", 0);
+
+        produce_batches(&storage, &topition, 10).await?;
+
+        // A single byte budget always yields at least one batch (Kafka semantics) but never the
+        // whole partition.
+        let batches = storage
+            .fetch(&topition, 0, 0, 1, IsolationLevel::ReadUncommitted, MAX_WAIT)
+            .await?;
+
+        assert_eq!(1, batches.len());
+        assert_eq!(0, batches[0].base_offset);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn fetch_at_or_beyond_high_watermark_is_empty() -> Result<(), Error> {
+        let _guard = init_tracing()?;
+
+        let storage = in_memory_storage().await?;
+        let topition = Topition::new("abcba", 0);
+
+        produce_batches(&storage, &topition, 10).await?;
+
+        for offset in [10, 11, 100] {
+            let batches = storage
+                .fetch(
+                    &topition,
+                    offset,
+                    0,
+                    1024 * 1024,
+                    IsolationLevel::ReadUncommitted,
+                    MAX_WAIT,
+                )
+                .await?;
+            assert!(batches.is_empty(), "offset {offset} should be empty");
+        }
+
+        Ok(())
+    }
+}
