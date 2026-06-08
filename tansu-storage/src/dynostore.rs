@@ -15,7 +15,7 @@
 //! Dynamic Object Storage engine (S3, memory, ...)
 
 use std::{
-    collections::{BTreeMap, BTreeSet, btree_map::Entry},
+    collections::{BTreeMap, btree_map::Entry},
     fmt::{Debug, Display},
     str::FromStr,
     sync::{Arc, Mutex},
@@ -1016,16 +1016,37 @@ impl Storage for DynoStore {
 
         debug!(high_watermark);
 
-        let mut offsets = BTreeSet::new();
+        let mut batches = vec![];
 
         if offset < high_watermark {
-            let location = Path::from(format!(
+            let prefix = Path::from(format!(
                 "clusters/{}/topics/{}/partitions/{:0>10}/records/",
                 self.cluster, topition.topic, topition.partition
             ));
 
-            let mut list_stream = self.object_store.list(Some(&location));
+            // Seek directly to the requested offset using `start-after` instead of
+            // enumerating the whole partition prefix on every fetch. Batch filenames are
+            // zero-padded to 20 digits, so lexicographic order == numeric order. The start
+            // key is the 20-digit offset *without* the `.batch` suffix: it is a strict prefix
+            // of `{offset:0>20}.batch`, so listing returns exactly `base_offset >= offset`
+            // (matching the previous `split_off(&offset)` semantics) while also handling
+            // `offset == 0` without underflow.
+            let start_after = Path::from(format!(
+                "clusters/{}/topics/{}/partitions/{:0>10}/records/{:0>20}",
+                self.cluster, topition.topic, topition.partition, offset,
+            ));
 
+            let mut list_stream = self
+                .object_store
+                .list_with_offset(Some(&prefix), &start_after);
+
+            let mut bytes = max_bytes as u64;
+
+            // The object_store trait does not guarantee ordering, but every dynostore backend
+            // yields ascending keys (S3 ListObjectsV2 sorts by key, the memory store iterates a
+            // BTreeMap). We rely on that to stop as soon as enough batches to satisfy `max_bytes`
+            // are collected, keeping fetch cost proportional to the bytes returned rather than to
+            // the partition's history.
             while let Some(meta) = list_stream
                 .next()
                 .await
@@ -1035,53 +1056,38 @@ impl Storage for DynoStore {
                 .map_err(|_| Error::Api(ErrorCode::UnknownServerError))?
                 && !has_deadline_expired()
             {
-                let Some(offset) = meta.location.parts().next_back() else {
+                let Some(file_name) = meta.location.parts().next_back() else {
                     continue;
                 };
 
-                let offset = i64::from_str(&offset.as_ref()[0..20])?;
-                debug!(offset);
+                let base_offset = i64::from_str(&file_name.as_ref()[0..20])?;
+                debug!(base_offset);
 
-                if offset < high_watermark {
-                    _ = offsets.insert(offset);
+                if base_offset >= high_watermark {
+                    break;
                 }
-            }
-        }
 
-        let mut batches = vec![];
+                let size = meta.size;
 
-        let mut bytes = max_bytes as u64;
+                let mut batch = self
+                    .object_store
+                    .get(&meta.location)
+                    .await
+                    .inspect_err(|error| error!(?error, ?topition, ?offset, ?min_bytes, ?max_bytes))
+                    .map_err(|_| Error::Api(ErrorCode::UnknownServerError))?
+                    .bytes()
+                    .await
+                    .inspect_err(|error| error!(?error, location = %meta.location))
+                    .map_err(|_| Error::Api(ErrorCode::UnknownServerError))
+                    .and_then(|encoded| self.decode(encoded))?;
+                batch.base_offset = base_offset;
+                batches.push(batch);
 
-        for offset in offsets.split_off(&offset) {
-            debug!(?offset);
-
-            let location = Path::from(format!(
-                "clusters/{}/topics/{}/partitions/{:0>10}/records/{:0>20}.batch",
-                self.cluster, topition.topic, topition.partition, offset,
-            ));
-
-            let get_result = self
-                .object_store
-                .get(&location)
-                .await
-                .inspect_err(|error| error!(?error, ?topition, ?offset, ?min_bytes, ?max_bytes))
-                .map_err(|_| Error::Api(ErrorCode::UnknownServerError))?;
-
-            let size = get_result.meta.size;
-
-            let mut batch = get_result
-                .bytes()
-                .await
-                .inspect_err(|error| error!(?error, %location))
-                .map_err(|_| Error::Api(ErrorCode::UnknownServerError))
-                .and_then(|encoded| self.decode(encoded))?;
-            batch.base_offset = offset;
-            batches.push(batch);
-
-            if size > bytes || has_deadline_expired() {
-                break;
-            } else {
-                bytes = bytes.saturating_sub(size);
+                if size > bytes || has_deadline_expired() {
+                    break;
+                } else {
+                    bytes = bytes.saturating_sub(size);
+                }
             }
         }
 
