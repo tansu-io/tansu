@@ -50,7 +50,7 @@ use tansu_sans_io::{
     create_topics_request::{CreatableTopic, CreatableTopicConfig},
     delete_groups_response::DeletableGroupResult,
     delete_records_request::DeleteRecordsTopic,
-    delete_records_response::DeleteRecordsTopicResult,
+    delete_records_response::{DeleteRecordsPartitionResult, DeleteRecordsTopicResult},
     describe_cluster_response::DescribeClusterBroker,
     describe_configs_response::{DescribeConfigsResourceResult, DescribeConfigsResult},
     describe_topic_partitions_response::{
@@ -326,7 +326,6 @@ struct TopicMetadata {
 struct Watermark {
     low: Option<i64>,
     high: Option<i64>,
-    timestamps: Option<BTreeMap<i64, i64>>,
 }
 
 impl OptiCon<Watermark> {
@@ -398,6 +397,325 @@ impl DynoStore {
                 }
             })
             .await
+    }
+
+    fn records_prefix(&self, topition: &Topition) -> Path {
+        Path::from(format!(
+            "clusters/{}/topics/{}/partitions/{:0>10}/records/",
+            self.cluster, topition.topic, topition.partition,
+        ))
+    }
+
+    fn batch_location(&self, topition: &Topition, offset: i64) -> Path {
+        Path::from(format!(
+            "clusters/{}/topics/{}/partitions/{:0>10}/records/{:0>20}.batch",
+            self.cluster, topition.topic, topition.partition, offset,
+        ))
+    }
+
+    fn watermark(&self, topition: &Topition) -> Result<OptiCon<Watermark>> {
+        self.watermarks
+            .lock()
+            .map(|mut locked| {
+                locked
+                    .entry(topition.to_owned())
+                    .or_insert_with(|| OptiCon::<Watermark>::new(self.cluster.as_str(), topition))
+                    .to_owned()
+            })
+            .map_err(Into::into)
+    }
+
+    /// Enforce the `delete` cleanup policy: for every topic configured with
+    /// `cleanup.policy` containing `delete`, drop the batches whose records are
+    /// older than `retention.ms` (defaulting to 7 days, matching the SQL
+    /// backends). Returns the number of batches removed.
+    #[instrument(skip(self), ret)]
+    async fn policy_delete(&self, now: SystemTime) -> Result<u64> {
+        const DEFAULT_RETENTION: Duration = Duration::from_hours(7 * 24);
+
+        let now_ms = i64::try_from(
+            now.duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis(),
+        )
+        .unwrap_or(i64::MAX);
+
+        let topics = self
+            .meta
+            .with(&self.object_store, |meta| {
+                Ok(meta
+                    .topics
+                    .values()
+                    .filter_map(|metadata| {
+                        let configs = metadata.topic.configs.as_deref().unwrap_or_default();
+
+                        let delete = configs.iter().any(|config| {
+                            config.name == "cleanup.policy"
+                                && config
+                                    .value
+                                    .as_deref()
+                                    .is_some_and(|value| value.contains("delete"))
+                        });
+
+                        if !delete {
+                            return None;
+                        }
+
+                        let retention_ms = configs
+                            .iter()
+                            .find(|config| config.name == "retention.ms")
+                            .and_then(|config| config.value.as_deref())
+                            .and_then(|value| i64::from_str(value).ok())
+                            .unwrap_or(DEFAULT_RETENTION.as_millis() as i64);
+
+                        Some((
+                            metadata.topic.name.clone(),
+                            metadata.topic.num_partitions,
+                            retention_ms,
+                        ))
+                    })
+                    .collect::<Vec<_>>())
+            })
+            .await?;
+
+        let mut deleted = 0;
+
+        for (topic, num_partitions, retention_ms) in topics {
+            let threshold_ms = now_ms.saturating_sub(retention_ms);
+
+            for partition in 0..num_partitions {
+                let topition = Topition::new(topic.clone(), partition);
+
+                deleted += self
+                    .expire_partition(&topition, threshold_ms)
+                    .await
+                    .inspect_err(|err| error!(?err, ?topition))?;
+            }
+        }
+
+        Ok(deleted)
+    }
+
+    /// List the batch files of `topition` as a map of base offset to its object
+    /// metadata (sorted ascending by offset).
+    async fn list_batch_offsets(&self, topition: &Topition) -> Result<BTreeMap<i64, ObjectMeta>> {
+        let prefix = self.records_prefix(topition);
+
+        let mut offsets = BTreeMap::new();
+        let mut list_stream = self.object_store.list(Some(&prefix));
+
+        while let Some(meta) = list_stream
+            .next()
+            .await
+            .transpose()
+            .inspect_err(|err| error!(?err, ?topition))?
+        {
+            let Some(name) = meta.location.parts().next_back() else {
+                continue;
+            };
+
+            let Ok(offset) = i64::from_str(&name.as_ref()[0..20]) else {
+                continue;
+            };
+
+            _ = offsets.insert(offset, meta);
+        }
+
+        Ok(offsets)
+    }
+
+    /// Set the log start offset (`watermark.low`) to `low`.
+    async fn advance_low_watermark(&self, topition: &Topition, low: Option<i64>) -> Result<()> {
+        self.watermark(topition)?
+            .with_mut(&self.object_store, |watermark| {
+                watermark.low = low;
+                Ok(())
+            })
+            .await
+    }
+
+    /// Delete the given batch object locations concurrently.
+    async fn delete_batches(&self, locations: Vec<Path>) -> Result<()> {
+        if locations.is_empty() {
+            return Ok(());
+        }
+
+        let locations = futures::stream::iter(locations.into_iter().map(Ok)).boxed();
+
+        self.object_store
+            .delete_stream(locations)
+            .try_collect::<Vec<Path>>()
+            .await
+            .map(|_| ())
+            .map_err(Into::into)
+    }
+
+    /// Delete every batch of `topition` written before `now - retention_ms`, then
+    /// advance the log start offset (`watermark.low`) to the oldest surviving
+    /// batch. Age is taken from the object's `last_modified` (the append time),
+    /// streamed from the object store so no per-batch GET is required.
+    async fn expire_partition(&self, topition: &Topition, threshold_ms: i64) -> Result<u64> {
+        let mut expired = vec![];
+        let mut surviving_low: Option<i64> = None;
+
+        for (offset, meta) in self.list_batch_offsets(topition).await? {
+            if meta.last_modified.timestamp_millis() < threshold_ms {
+                expired.push(meta.location);
+            } else if surviving_low.is_none_or(|low| offset < low) {
+                surviving_low = Some(offset);
+            }
+        }
+
+        if expired.is_empty() {
+            return Ok(0);
+        }
+
+        let deleted = expired.len() as u64;
+
+        self.delete_batches(expired).await?;
+        self.advance_low_watermark(topition, surviving_low).await?;
+
+        Ok(deleted)
+    }
+
+    /// Delete every batch of `topition` whose base offset is below `before` and
+    /// set the log start offset to `before`. `before` of `-1` means the log end
+    /// offset (delete everything). Returns the new log start offset.
+    async fn delete_records_before(&self, topition: &Topition, before: i64) -> Result<i64> {
+        let high = self
+            .watermark(topition)?
+            .with(&self.object_store, |watermark| {
+                Ok(watermark.high.unwrap_or(0))
+            })
+            .await?;
+
+        let before = if before < 0 { high } else { before.min(high) };
+
+        let removed = self
+            .list_batch_offsets(topition)
+            .await?
+            .into_iter()
+            .filter(|(offset, _)| *offset < before)
+            .map(|(_, meta)| meta.location)
+            .collect::<Vec<_>>();
+
+        self.delete_batches(removed).await?;
+        self.advance_low_watermark(topition, Some(before)).await?;
+
+        Ok(before)
+    }
+
+    /// Enforce the `compact` cleanup policy: for every topic configured with
+    /// `cleanup.policy` containing `compact`, keep only the latest record per key
+    /// (by offset), dropping the earlier versions. Surviving offsets are
+    /// preserved. Returns the number of records removed.
+    #[instrument(skip(self), ret)]
+    async fn policy_compact(&self) -> Result<u64> {
+        let topics = self
+            .meta
+            .with(&self.object_store, |meta| {
+                Ok(meta
+                    .topics
+                    .values()
+                    .filter_map(|metadata| {
+                        let configs = metadata.topic.configs.as_deref().unwrap_or_default();
+
+                        let compact = configs.iter().any(|config| {
+                            config.name == "cleanup.policy"
+                                && config
+                                    .value
+                                    .as_deref()
+                                    .is_some_and(|value| value.contains("compact"))
+                        });
+
+                        compact
+                            .then(|| (metadata.topic.name.clone(), metadata.topic.num_partitions))
+                    })
+                    .collect::<Vec<_>>())
+            })
+            .await?;
+
+        let mut compacted = 0;
+
+        for (topic, num_partitions) in topics {
+            for partition in 0..num_partitions {
+                let topition = Topition::new(topic.clone(), partition);
+
+                compacted += self
+                    .compact_partition(&topition)
+                    .await
+                    .inspect_err(|err| error!(?err, ?topition))?;
+            }
+        }
+
+        Ok(compacted)
+    }
+
+    /// Compact a single partition: walking the batches newest first, drop every
+    /// record whose key reappears in a more recent batch (and earlier duplicates
+    /// within a batch). Emptied batch files are removed, partially compacted ones
+    /// are rewritten in place (preserving base offset and record offsets).
+    async fn compact_partition(&self, topition: &Topition) -> Result<u64> {
+        let offsets = self.list_batch_offsets(topition).await?;
+
+        if offsets.is_empty() {
+            return Ok(0);
+        }
+
+        let mut seen: BTreeSet<Bytes> = BTreeSet::new();
+        let mut removed = vec![];
+        let mut surviving_low: Option<i64> = None;
+        let mut compacted = 0;
+
+        // newest to oldest: a key kept in a newer batch supersedes older ones
+        for offset in offsets.into_keys().rev() {
+            let location = self.batch_location(topition, offset);
+
+            let deflated = match self.object_store.get(&location).await {
+                Ok(get_result) => self.decode(get_result.bytes().await?)?,
+                Err(object_store::Error::NotFound { .. }) => continue,
+                Err(err) => return Err(err.into()),
+            };
+
+            let inflated::Compaction { batch, records } =
+                inflated::Batch::try_from(&deflated)?.compact(&seen)?;
+
+            compacted += records;
+            seen.extend(batch.keys());
+
+            if batch.records.is_empty() {
+                removed.push(location);
+            } else {
+                if records > 0 {
+                    let payload = self.encode(deflated::Batch::try_from(batch)?)?;
+
+                    _ = self
+                        .object_store
+                        .put_opts(
+                            &location,
+                            payload,
+                            PutOptions {
+                                mode: PutMode::Overwrite,
+                                attributes: Attributes::new(),
+                                ..Default::default()
+                            },
+                        )
+                        .await
+                        .inspect_err(|err| error!(?err, ?topition, offset))?;
+                }
+
+                if surviving_low.is_none_or(|low| offset < low) {
+                    surviving_low = Some(offset);
+                }
+            }
+        }
+
+        if !removed.is_empty() {
+            self.delete_batches(removed).await?;
+            self.advance_low_watermark(topition, surviving_low).await?;
+        }
+
+        Ok(compacted as u64)
     }
 
     fn encode(&self, deflated: deflated::Batch) -> Result<PutPayload> {
@@ -615,9 +933,50 @@ impl Storage for DynoStore {
 
     async fn delete_records(
         &self,
-        _topics: &[DeleteRecordsTopic],
+        topics: &[DeleteRecordsTopic],
     ) -> Result<Vec<DeleteRecordsTopicResult>> {
-        todo!()
+        debug!(cluster = self.cluster, ?topics);
+
+        let mut responses = vec![];
+
+        for topic in topics {
+            let mut partition_responses = vec![];
+
+            if let Some(ref partitions) = topic.partitions {
+                for partition in partitions {
+                    let topition = Topition::new(topic.name.clone(), partition.partition_index);
+
+                    let partition_result = match self
+                        .delete_records_before(&topition, partition.offset)
+                        .await
+                    {
+                        Ok(low_watermark) => DeleteRecordsPartitionResult::default()
+                            .partition_index(partition.partition_index)
+                            .low_watermark(low_watermark)
+                            .error_code(ErrorCode::None.into()),
+
+                        Err(err) => {
+                            error!(?err, ?topition);
+
+                            DeleteRecordsPartitionResult::default()
+                                .partition_index(partition.partition_index)
+                                .low_watermark(0)
+                                .error_code(ErrorCode::UnknownServerError.into())
+                        }
+                    };
+
+                    partition_responses.push(partition_result);
+                }
+            }
+
+            responses.push(
+                DeleteRecordsTopicResult::default()
+                    .name(topic.name.clone())
+                    .partitions(Some(partition_responses)),
+            );
+        }
+
+        Ok(responses)
     }
 
     async fn delete_topic(&self, topic: &TopicId) -> Result<ErrorCode> {
@@ -759,8 +1118,6 @@ impl Storage for DynoStore {
                         |high| Some(high + deflated.last_offset_delta as i64 + 1i64),
                     );
 
-                    watermark.timestamps = None;
-
                     debug!(?watermark);
 
                     Ok(offset)
@@ -885,8 +1242,6 @@ impl Storage for DynoStore {
                         || Some(deflated.last_offset_delta as i64 + 1i64),
                         |high| Some(high + deflated.last_offset_delta as i64 + 1i64),
                     );
-
-                    watermark.timestamps = None;
 
                     debug!(?watermark);
 
@@ -2614,7 +2969,11 @@ impl Storage for DynoStore {
         Ok(ErrorCode::None)
     }
 
-    async fn maintain(&self, _now: SystemTime) -> Result<()> {
+    async fn maintain(&self, now: SystemTime) -> Result<()> {
+        let deleted = self.policy_delete(now).await?;
+        let compacted = self.policy_compact().await?;
+        debug!(deleted, compacted);
+
         if let Some(ref lake) = self.lake {
             return lake
                 .maintain()
