@@ -840,6 +840,41 @@ mod tests {
     }
 
     #[test]
+    fn initial_state() -> Result<(), Error> {
+        let group = "g1";
+        let topic = "t";
+        let consumer = GroupConsumer::builder(group)
+            .topics([topic])
+            .metadata(make_metadata(&[(topic, 3)]))
+            .build();
+
+        assert_eq!(group, consumer.group_id);
+
+        assert!(matches!(
+            consumer.member_state,
+            MemberState::Outsider {
+                generation_id: None,
+                member_id: None,
+                member_assignment: None
+            }
+        ));
+
+        let x
+
+        let q = consumer
+            .topics
+            .iter()
+            .map(|topic| topic.as_str())
+            .collect::<Vec<_>>()
+            .contains(&topic);
+
+        assert_eq!(1, consumer.topics.len());
+        assert!(consumer.topics.contains(topic));
+
+        Ok(())
+    }
+
+    #[test]
     fn outsider_sends_join_request() -> Result<(), Error> {
         let mut consumer = GroupConsumer::new("g1", vec!["t".into()], make_metadata(&[("t", 3)]));
 
