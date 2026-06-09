@@ -68,6 +68,7 @@ url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+anyhow.workspace = true
 object_store = { workspace = true }
 pretty_assertions.workspace = true
 slatedb = { workspace = true }

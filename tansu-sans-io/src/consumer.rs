@@ -12,11 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{fmt, str::FromStr, time::Duration};
+use std::{
+    collections::BTreeMap,
+    fmt,
+    marker::PhantomData,
+    str::FromStr,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use bytes::{Buf as _, Bytes, BytesMut};
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info, instrument, warn};
+use tracing::{debug, instrument};
 
 use crate::{
     Body, Decoder, Encoder, Error, ErrorCode, HeartbeatRequest, HeartbeatResponse,
@@ -170,6 +177,11 @@ impl fmt::Display for ConsumerProtocolSubscription {
 }
 
 impl ConsumerProtocolSubscription {
+    pub const V0: i16 = 0;
+    pub const V1: i16 = 1;
+    pub const V2: i16 = 2;
+    pub const V3: i16 = 3;
+
     pub fn topics(self, topics: impl IntoIterator<Item = String>) -> Self {
         Self {
             topics: topics.into_iter().collect(),
@@ -204,6 +216,19 @@ impl ConsumerProtocolSubscription {
 pub struct TopicPartition {
     pub topic: String,
     pub partitions: Vec<i32>,
+}
+
+impl<T, P> From<(T, P)> for TopicPartition
+where
+    T: Into<String>,
+    P: IntoIterator<Item = i32>,
+{
+    fn from(value: (T, P)) -> TopicPartition {
+        let topic = value.0.into();
+        let partitions = value.1.into_iter().collect();
+
+        Self { topic, partitions }
+    }
 }
 
 impl fmt::Display for TopicPartition {
@@ -303,72 +328,120 @@ impl fmt::Display for ConsumerProtocolAssignment {
 impl ConsumerProtocolAssignment {
     pub fn assigned_partitions(
         self,
-        assigned_partitions: impl Iterator<Item = TopicPartition>,
+        assigned_partitions: impl IntoIterator<Item = impl Into<TopicPartition>>,
     ) -> Self {
         Self {
-            assigned_partitions: assigned_partitions.collect(),
+            assigned_partitions: assigned_partitions.into_iter().map(|p| p.into()).collect(),
             ..self
         }
     }
 
-    pub fn user_data(self, mut user_data: impl Iterator<Item = Bytes>) -> Self {
+    pub fn user_data(self, user_data: impl IntoIterator<Item = Bytes>) -> Self {
         Self {
-            user_data: user_data.next(),
+            user_data: user_data.into_iter().next(),
             ..self
         }
     }
 }
 
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct GroupConsumer {
+pub type DynConsumerAssignment = dyn Fn(String, MemberAssignment) + Send + Sync + 'static;
+
+pub struct Builder<M, T> {
     group_id: String,
-    topics: Vec<String>,
-    rebalance_timeout: Duration,
-    session_timeout: Duration,
-    heartbeat_interval: Duration,
-    member_state: MemberState,
-    metadata: MetadataResponse,
+    topics: T,
+    metadata: M,
+    on_assignment: Option<Arc<DynConsumerAssignment>>,
+    rebalance_timeout: Option<Duration>,
+    session_timeout: Option<Duration>,
 }
 
-impl GroupConsumer {
-    pub fn new(
-        group_id: impl Into<String>,
-        topics: Vec<String>,
-        metadata: MetadataResponse,
-    ) -> Self {
+impl Builder<PhantomData<MetadataResponse>, PhantomData<Vec<String>>> {
+    fn new(group_id: impl Into<String>) -> Self {
         Self {
             group_id: group_id.into(),
-            topics,
-            rebalance_timeout: Duration::from_secs(60),
-            session_timeout: Duration::from_secs(10),
-            heartbeat_interval: Duration::from_secs(3),
-            member_state: MemberState::Outsider {
-                generation_id: None,
-                member_id: None,
-                member_assignment: None,
-            },
-            metadata,
+            topics: PhantomData,
+            metadata: PhantomData,
+            on_assignment: None,
+            rebalance_timeout: None,
+            session_timeout: None,
+        }
+    }
+}
+
+impl<M, T> Builder<M, T> {
+    pub fn topics(
+        self,
+        topics: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Builder<M, Vec<String>> {
+        Builder {
+            group_id: self.group_id,
+            topics: topics.into_iter().map(Into::into).collect(),
+            metadata: self.metadata,
+            on_assignment: self.on_assignment,
+            rebalance_timeout: self.rebalance_timeout,
+            session_timeout: self.session_timeout,
         }
     }
 
-    pub fn with_rebalance_timeout(self, rebalance_timeout: Duration) -> Self {
+    pub fn metadata(self, metadata: MetadataResponse) -> Builder<MetadataResponse, T> {
+        Builder {
+            group_id: self.group_id,
+            topics: self.topics,
+            metadata,
+            on_assignment: self.on_assignment,
+            rebalance_timeout: self.rebalance_timeout,
+            session_timeout: self.session_timeout,
+        }
+    }
+
+    pub fn rebalance_timeout(self, rebalance_timeout: Option<Duration>) -> Self {
         Self {
             rebalance_timeout,
             ..self
         }
     }
 
-    pub fn with_session_timeout(self, session_timeout: Duration) -> Self {
+    pub fn session_timeout(self, session_timeout: Option<Duration>) -> Self {
         Self {
             session_timeout,
             ..self
         }
     }
 
-    pub fn with_heartbeat_interval(self, heartbeat_interval: Duration) -> Self {
-        Self {
-            heartbeat_interval,
-            ..self
+    pub fn on_assignment(self, on_assignment: Option<Arc<DynConsumerAssignment>>) -> Builder<M, T> {
+        Builder {
+            group_id: self.group_id,
+            topics: self.topics,
+            metadata: self.metadata,
+            on_assignment,
+            rebalance_timeout: self.rebalance_timeout,
+            session_timeout: self.session_timeout,
+        }
+    }
+}
+
+impl Builder<MetadataResponse, Vec<String>> {
+    const REBALANCE_TIMEOUT_MS_DEFAULT: u64 = 60_000;
+    const SESSION_TIMEOUT_MS_DEFAULT: u64 = 10_000;
+
+    pub fn build(self) -> GroupConsumer {
+        GroupConsumer {
+            group_id: self.group_id,
+            topics: self.topics,
+            rebalance_timeout: self
+                .rebalance_timeout
+                .unwrap_or_else(|| Duration::from_millis(Self::REBALANCE_TIMEOUT_MS_DEFAULT)),
+            session_timeout: self
+                .session_timeout
+                .unwrap_or_else(|| Duration::from_millis(Self::SESSION_TIMEOUT_MS_DEFAULT)),
+            member_state: MemberState::Outsider {
+                generation_id: None,
+                member_id: None,
+                member_assignment: None,
+            },
+            on_assignment: self.on_assignment,
+            metadata: self.metadata,
+            errors: Default::default(),
         }
     }
 }
@@ -392,6 +465,108 @@ enum MemberState {
     },
 }
 
+impl MemberState {
+    fn is_outsider(&self) -> bool {
+        matches!(self, Self::Outsider { .. })
+    }
+
+    fn is_follower(&self) -> bool {
+        matches!(self, Self::Follower { .. })
+    }
+
+    fn is_leader(&self) -> bool {
+        matches!(self, Self::Leader { .. })
+    }
+
+    fn generation_id(&self) -> Option<i32> {
+        match self {
+            MemberState::Outsider { generation_id, .. } => *generation_id,
+            MemberState::Follower { generation_id, .. } => Some(*generation_id),
+            MemberState::Leader { generation_id, .. } => Some(*generation_id),
+        }
+    }
+
+    fn member_id(&self) -> Option<&str> {
+        match self {
+            MemberState::Outsider { member_id, .. } => member_id.as_deref(),
+            MemberState::Follower { member_id, .. } => Some(member_id.as_str()),
+            MemberState::Leader { member_id, .. } => Some(member_id.as_str()),
+        }
+    }
+
+    fn member_assignment(&self) -> Option<&MemberAssignment> {
+        match self {
+            MemberState::Outsider {
+                member_assignment, ..
+            } => member_assignment.as_ref(),
+            MemberState::Follower {
+                member_assignment, ..
+            } => member_assignment.as_ref(),
+            MemberState::Leader {
+                member_assignment, ..
+            } => member_assignment.as_ref(),
+        }
+    }
+}
+
+pub struct GroupConsumer {
+    pub group_id: String,
+    pub topics: Vec<String>,
+    pub rebalance_timeout: Duration,
+    pub session_timeout: Duration,
+    member_state: MemberState,
+    metadata: MetadataResponse,
+    on_assignment: Option<Arc<DynConsumerAssignment>>,
+    errors: Arc<Mutex<BTreeMap<ErrorCode, u64>>>,
+}
+
+impl GroupConsumer {
+    pub fn builder(
+        group_id: impl Into<String>,
+    ) -> Builder<PhantomData<MetadataResponse>, PhantomData<Vec<String>>> {
+        Builder::new(group_id)
+    }
+
+    pub fn is_outsider(&self) -> bool {
+        self.member_state.is_outsider()
+    }
+
+    pub fn is_follower(&self) -> bool {
+        self.member_state.is_follower()
+    }
+
+    pub fn is_leader(&self) -> bool {
+        self.member_state.is_leader()
+    }
+
+    pub fn generation_id(&self) -> Option<i32> {
+        self.member_state.generation_id()
+    }
+
+    pub fn member_id(&self) -> Option<&str> {
+        self.member_state.member_id()
+    }
+
+    pub fn member_assignment(&self) -> Option<&MemberAssignment> {
+        self.member_state.member_assignment()
+    }
+
+    pub fn rebalance_timeout(&self) -> Duration {
+        self.rebalance_timeout
+    }
+
+    pub fn session_timeout(&self) -> Duration {
+        self.session_timeout
+    }
+
+    pub fn errors(&self) -> Result<BTreeMap<ErrorCode, u64>, Error> {
+        self.errors
+            .lock()
+            .map(|errors| errors.clone())
+            .map_err(Into::into)
+    }
+}
+
 impl GroupConsumer {
     const ASSIGNORS: &[Assignor] = &[
         Assignor::Range,
@@ -411,7 +586,9 @@ impl GroupConsumer {
                 .version(
                     member_assignment
                         .as_ref()
-                        .map_or(3, |member_assignment| member_assignment.version),
+                        .map_or(ConsumerProtocolSubscription::V3, |member_assignment| {
+                            member_assignment.version
+                        }),
                 )
                 .subscription(
                     ConsumerProtocolSubscription::default()
@@ -498,6 +675,10 @@ impl GroupConsumer {
                 },
                 Some(Body::JoinGroupResponse(JoinGroupResponse { error_code, .. })),
             ) if i16::from(ErrorCode::NotCoordinator) == error_code => {
+                self.errors
+                    .lock()
+                    .map(|mut errors| *errors.entry(ErrorCode::NotCoordinator).or_default() += 1)?;
+
                 let generation_id = *generation_id;
                 let member_id = member_id.clone();
                 let member_assignment = member_assignment.clone();
@@ -519,6 +700,10 @@ impl GroupConsumer {
                     ..
                 })),
             ) if error_code == i16::from(ErrorCode::MemberIdRequired) => {
+                self.errors.lock().map(|mut errors| {
+                    *errors.entry(ErrorCode::MemberIdRequired).or_default() += 1
+                })?;
+
                 _ = generation_id.replace(current_generation_id);
                 _ = member_id.replace(required_member_id);
 
@@ -548,6 +733,10 @@ impl GroupConsumer {
                     ..
                 })),
             ) if error_code == i16::from(ErrorCode::None) && leader == member_id => {
+                self.errors
+                    .lock()
+                    .map(|mut errors| *errors.entry(ErrorCode::None).or_default() += 1)?;
+
                 self.member_state = MemberState::Leader {
                     generation_id,
                     member_id,
@@ -597,6 +786,10 @@ impl GroupConsumer {
                     ..
                 })),
             ) if i16::from(ErrorCode::None) == error_code => {
+                self.errors
+                    .lock()
+                    .map(|mut errors| *errors.entry(ErrorCode::None).or_default() += 1)?;
+
                 self.member_state = MemberState::Follower {
                     generation_id,
                     member_id: member_id.clone(),
@@ -634,14 +827,68 @@ impl GroupConsumer {
                     ..
                 })),
             ) if i16::from(ErrorCode::None) == error_code => {
-                _ = member_assignment
-                    .replace(MemberAssignment::try_from(assignment).inspect(|ma| warn!(%ma))?);
+                self.errors
+                    .lock()
+                    .map(|mut errors| *errors.entry(ErrorCode::None).or_default() += 1)?;
+
+                assert!(!assignment.is_empty(), "member: {member_id}");
+
+                let ma = MemberAssignment::try_from(assignment).inspect(|ma| debug!(%ma))?;
+                _ = member_assignment.replace(ma.clone());
+
+                if let Some(on_assignment) = self.on_assignment.as_ref() {
+                    on_assignment(self.group_id.clone(), ma)
+                }
 
                 Ok(HeartbeatRequest::default()
                     .group_id(self.group_id.clone())
                     .generation_id(*generation_id)
                     .member_id(member_id.clone())
                     .into())
+            }
+
+            (
+                MemberState::Leader {
+                    generation_id,
+                    member_id,
+                    member_assignment,
+                    ..
+                }
+                | MemberState::Follower {
+                    generation_id,
+                    member_id,
+                    member_assignment,
+                    ..
+                },
+                Some(Body::SyncGroupResponse(SyncGroupResponse {
+                    error_code,
+                    assignment,
+                    ..
+                })),
+            ) if error_code == i16::from(ErrorCode::RebalanceInProgress) => {
+                self.errors.lock().map(|mut errors| {
+                    *errors.entry(ErrorCode::RebalanceInProgress).or_default() += 1
+                })?;
+
+                assert!(assignment.is_empty());
+
+                let generation_id = None;
+                let member_id = Some(member_id.to_owned());
+                let member_assignment = member_assignment.to_owned();
+
+                self.member_state = MemberState::Outsider {
+                    generation_id,
+                    member_id: member_id.clone(),
+                    member_assignment: member_assignment.clone(),
+                };
+
+                self.join_request(
+                    generation_id,
+                    member_id,
+                    member_assignment,
+                    "join after sync with rebalance",
+                )
+                .map(Into::into)
             }
 
             // Heartbeat
@@ -659,6 +906,10 @@ impl GroupConsumer {
                 },
                 Some(Body::HeartbeatResponse(HeartbeatResponse { error_code, .. })),
             ) if error_code == i16::from(ErrorCode::UnknownMemberId) => {
+                self.errors.lock().map(|mut errors| {
+                    *errors.entry(ErrorCode::UnknownMemberId).or_default() += 1
+                })?;
+
                 let generation_id = None;
                 let member_id = None;
                 let member_assignment = None;
@@ -691,12 +942,16 @@ impl GroupConsumer {
                 },
                 Some(Body::HeartbeatResponse(HeartbeatResponse { error_code, .. })),
             ) if error_code == i16::from(ErrorCode::RebalanceInProgress) => {
+                self.errors.lock().map(|mut errors| {
+                    *errors.entry(ErrorCode::RebalanceInProgress).or_default() += 1
+                })?;
+
                 let generation_id = Some(generation_id.to_owned());
                 let member_id = Some(member_id.to_owned());
                 let member_assignment = member_assignment.to_owned();
 
                 self.member_state = MemberState::Outsider {
-                    generation_id: generation_id.clone(),
+                    generation_id,
                     member_id: member_id.clone(),
                     member_assignment: member_assignment.clone(),
                 };
@@ -711,467 +966,32 @@ impl GroupConsumer {
             }
 
             (
-                MemberState::Follower {
-                    generation_id,
-                    member_id,
-                    ..
-                },
-                Some(Body::HeartbeatResponse(HeartbeatResponse { error_code, .. })),
-            ) if error_code == i16::from(ErrorCode::None) => Ok(HeartbeatRequest::default()
-                .group_id(self.group_id.clone())
-                .generation_id(*generation_id)
-                .member_id(member_id.clone())
-                .into()),
-
-            (
                 MemberState::Leader {
                     generation_id,
                     member_id,
                     ..
+                }
+                | MemberState::Follower {
+                    generation_id,
+                    member_id,
+                    ..
                 },
                 Some(Body::HeartbeatResponse(HeartbeatResponse { error_code, .. })),
-            ) if error_code == i16::from(ErrorCode::None) => Ok(HeartbeatRequest::default()
-                .group_id(self.group_id.clone())
-                .generation_id(*generation_id)
-                .member_id(member_id.clone())
-                .into()),
+            ) if error_code == i16::from(ErrorCode::None) => {
+                self.errors
+                    .lock()
+                    .map(|mut errors| *errors.entry(ErrorCode::None).or_default() += 1)?;
+
+                Ok(HeartbeatRequest::default()
+                    .group_id(self.group_id.clone())
+                    .generation_id(*generation_id)
+                    .member_id(member_id.clone())
+                    .into())
+            }
 
             // Fall through
             //
             (state, input) => todo!("state: {state:?}, input: {input:?}"),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn build_cpa() -> Result<(), Error> {
-        let user_data = Bytes::from_static(b"abc");
-
-        let abc = TopicPartition::default().topic("pqr").partitions(0..3);
-
-        let cpa =
-            ConsumerProtocolAssignment::default().user_data(Some(user_data.clone()).into_iter());
-
-        assert_eq!(Some(user_data), cpa.user_data);
-
-        Ok(())
-    }
-
-    #[test]
-    fn metadata_from_bytes_001() -> Result<(), Error> {
-        let expected = MemberMetadata {
-            version: 3,
-            subscription: ConsumerProtocolSubscription {
-                topics: ["test-topic".into()].into(),
-                user_data: Some(Bytes::from_static(
-                    b"\0\0\0\x01\0\ntest-topic\0\0\0\x01\0\0\0\x02\0\0\0\x11",
-                )),
-                owned_partitions: Some(
-                    [TopicPartition {
-                        topic: "test-topic".into(),
-                        partitions: [2].into(),
-                    }]
-                    .into(),
-                ),
-                generation_id: Some(17),
-                rack_id: None,
-            },
-        };
-
-        let decoded = MemberMetadata::try_from(Bytes::from_static(b"\0\x03\0\0\0\x01\0\ntest-topic\0\0\0\x1c\0\0\0\x01\0\ntest-topic\0\0\0\x01\0\0\0\x02\0\0\0\x11\0\0\0\x01\0\ntest-topic\0\0\0\x01\0\0\0\x02\0\0\0\x11\xff\xff"))?;
-
-        assert_eq!(expected, decoded);
-        Ok(())
-    }
-
-    #[test]
-    fn metadata_from_bytes_002() -> Result<(), Error> {
-        let expected = MemberMetadata {
-            version: 3,
-            subscription: ConsumerProtocolSubscription {
-                topics: ["test-topic".into()].into(),
-                user_data: Some(Bytes::from_static(
-                    b"\0\0\0\x01\0\ntest-topic\0\0\0\x01\0\0\0\x02\0\0\0\x0e",
-                )),
-                owned_partitions: Some(
-                    [TopicPartition {
-                        topic: "test-topic".into(),
-                        partitions: [2].into(),
-                    }]
-                    .into(),
-                ),
-                generation_id: Some(14),
-                rack_id: None,
-            },
-        };
-
-        let decoded = MemberMetadata::try_from(Bytes::from_static(b"\0\x03\0\0\0\x01\0\ntest-topic\0\0\0\x1c\0\0\0\x01\0\ntest-topic\0\0\0\x01\0\0\0\x02\0\0\0\x0e\0\0\0\x01\0\ntest-topic\0\0\0\x01\0\0\0\x02\0\0\0\x0e\xff\xff"))?;
-
-        assert_eq!(expected, decoded);
-        Ok(())
-    }
-
-    fn make_metadata(topics: &[(&str, i32)]) -> MetadataResponse {
-        use crate::metadata_response::{MetadataResponsePartition, MetadataResponseTopic};
-        MetadataResponse::default().topics(Some(
-            topics
-                .iter()
-                .map(|(name, count)| {
-                    MetadataResponseTopic::default()
-                        .name(Some((*name).to_string()))
-                        .partitions(Some(
-                            (0..*count)
-                                .map(|p| MetadataResponsePartition::default().partition_index(p))
-                                .collect(),
-                        ))
-                })
-                .collect(),
-        ))
-    }
-
-    fn member_meta(topics: &[&str]) -> Result<Bytes, Error> {
-        Bytes::try_from(&MemberMetadata::default().version(3).subscription(
-            ConsumerProtocolSubscription::default().topics(topics.iter().map(|t| t.to_string())),
-        ))
-    }
-
-    #[test]
-    fn initial_state() -> Result<(), Error> {
-        let group = "g1";
-        let topic = "t";
-        let consumer = GroupConsumer::builder(group)
-            .topics([topic])
-            .metadata(make_metadata(&[(topic, 3)]))
-            .build();
-
-        assert_eq!(group, consumer.group_id);
-
-        assert!(matches!(
-            consumer.member_state,
-            MemberState::Outsider {
-                generation_id: None,
-                member_id: None,
-                member_assignment: None
-            }
-        ));
-
-        let x
-
-        let q = consumer
-            .topics
-            .iter()
-            .map(|topic| topic.as_str())
-            .collect::<Vec<_>>()
-            .contains(&topic);
-
-        assert_eq!(1, consumer.topics.len());
-        assert!(consumer.topics.contains(topic));
-
-        Ok(())
-    }
-
-    #[test]
-    fn outsider_sends_join_request() -> Result<(), Error> {
-        let mut consumer = GroupConsumer::new("g1", vec!["t".into()], make_metadata(&[("t", 3)]));
-
-        let Body::JoinGroupRequest(req) = consumer.next_action(None)? else {
-            panic!("expected JoinGroupRequest");
-        };
-
-        assert_eq!("g1", req.group_id);
-        assert_eq!("", req.member_id);
-        assert_eq!(CONSUMER, req.protocol_type);
-
-        let names: Vec<&str> = req
-            .protocols
-            .as_deref()
-            .unwrap_or_default()
-            .iter()
-            .map(|p| p.name.as_str())
-            .collect();
-        assert_eq!(4, names.len(), "all four assignors must be advertised");
-        assert!(names.contains(&Assignor::RANGE));
-        assert!(names.contains(&Assignor::ROUND_ROBIN));
-        assert!(names.contains(&Assignor::UNIFORM));
-        assert!(names.contains(&Assignor::COOPERATIVE_STICKY));
-
-        Ok(())
-    }
-
-    #[test]
-    fn outsider_member_id_required_rejoins_with_assigned_id() -> Result<(), Error> {
-        let mut consumer = GroupConsumer::new("g1", vec!["t".into()], make_metadata(&[("t", 1)]));
-
-        let Body::JoinGroupRequest(req) =
-            consumer.next_action(Some(Body::JoinGroupResponse(JoinGroupResponse {
-                error_code: i16::from(ErrorCode::MemberIdRequired),
-                member_id: "consumer-abc-123".into(),
-                ..JoinGroupResponse::default()
-            })))?
-        else {
-            panic!("expected JoinGroupRequest");
-        };
-
-        assert_eq!("consumer-abc-123", req.member_id);
-
-        Ok(())
-    }
-
-    #[test]
-    fn outsider_becomes_follower() -> Result<(), Error> {
-        let mut consumer = GroupConsumer::new("g1", vec!["t".into()], make_metadata(&[("t", 2)]));
-
-        let Body::SyncGroupRequest(req) =
-            consumer.next_action(Some(Body::JoinGroupResponse(JoinGroupResponse {
-                error_code: i16::from(ErrorCode::None),
-                generation_id: 3,
-                member_id: "me".into(),
-                leader: "leader".into(),
-                protocol_name: Some(Assignor::RANGE.into()),
-                protocol_type: Some(CONSUMER.into()),
-                ..JoinGroupResponse::default()
-            })))?
-        else {
-            panic!("expected SyncGroupRequest");
-        };
-
-        assert_eq!("g1", req.group_id);
-        assert_eq!("me", req.member_id);
-        assert_eq!(3, req.generation_id);
-        assert_eq!(Some(vec![]), req.assignments);
-
-        Ok(())
-    }
-
-    #[test]
-    fn outsider_becomes_leader_range() -> Result<(), Error> {
-        let mut consumer = GroupConsumer::new("g1", vec!["t".into()], make_metadata(&[("t", 4)]));
-
-        let meta = member_meta(&["t"])?;
-        let Body::SyncGroupRequest(req) =
-            consumer.next_action(Some(Body::JoinGroupResponse(JoinGroupResponse {
-                error_code: i16::from(ErrorCode::None),
-                generation_id: 2,
-                member_id: "C0".into(),
-                leader: "C0".into(),
-                protocol_name: Some(Assignor::RANGE.into()),
-                protocol_type: Some(CONSUMER.into()),
-                members: Some(vec![
-                    JoinGroupResponseMember::default()
-                        .member_id("C0".into())
-                        .metadata(meta.clone()),
-                    JoinGroupResponseMember::default()
-                        .member_id("C1".into())
-                        .metadata(meta),
-                ]),
-                ..JoinGroupResponse::default()
-            })))?
-        else {
-            panic!("expected SyncGroupRequest");
-        };
-
-        assert_eq!("C0", req.member_id);
-        assert_eq!(2, req.generation_id);
-        assert_eq!(Some(Assignor::RANGE.to_string()), req.protocol_name);
-
-        let assignments = req.assignments.unwrap();
-        assert_eq!(2, assignments.len());
-
-        let c0 = MemberAssignment::try_from(
-            assignments
-                .iter()
-                .find(|a| a.member_id == "C0")
-                .unwrap()
-                .assignment
-                .clone(),
-        )?;
-        assert_eq!(
-            vec![TopicPartition {
-                topic: "t".into(),
-                partitions: vec![0, 1],
-            }],
-            c0.assignment.assigned_partitions
-        );
-
-        let c1 = MemberAssignment::try_from(
-            assignments
-                .iter()
-                .find(|a| a.member_id == "C1")
-                .unwrap()
-                .assignment
-                .clone(),
-        )?;
-        assert_eq!(
-            vec![TopicPartition {
-                topic: "t".into(),
-                partitions: vec![2, 3],
-            }],
-            c1.assignment.assigned_partitions
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn leader_uses_protocol_from_join_response() -> Result<(), Error> {
-        // With 2 members and topic "t" with 4 partitions:
-        // range    → C0:[0,1], C1:[2,3]
-        // roundrobin → C0:[0,2], C1:[1,3]
-        // Passing protocol_name="roundrobin" verifies dispatch ignores self.assignor.
-        let mut consumer = GroupConsumer::new("g1", vec!["t".into()], make_metadata(&[("t", 4)]));
-
-        let meta = member_meta(&["t"])?;
-        let Body::SyncGroupRequest(req) =
-            consumer.next_action(Some(Body::JoinGroupResponse(JoinGroupResponse {
-                error_code: i16::from(ErrorCode::None),
-                generation_id: 1,
-                member_id: "C0".into(),
-                leader: "C0".into(),
-                protocol_name: Some(Assignor::ROUND_ROBIN.into()),
-                protocol_type: Some(CONSUMER.into()),
-                members: Some(vec![
-                    JoinGroupResponseMember::default()
-                        .member_id("C0".into())
-                        .metadata(meta.clone()),
-                    JoinGroupResponseMember::default()
-                        .member_id("C1".into())
-                        .metadata(meta),
-                ]),
-                ..JoinGroupResponse::default()
-            })))?
-        else {
-            panic!("expected SyncGroupRequest");
-        };
-
-        let assignments = req.assignments.unwrap();
-        let c0 = MemberAssignment::try_from(
-            assignments
-                .iter()
-                .find(|a| a.member_id == "C0")
-                .unwrap()
-                .assignment
-                .clone(),
-        )?;
-        // roundrobin: t/0→C0, t/1→C1, t/2→C0, t/3→C1 → C0 gets [0,2]
-        assert_eq!(
-            vec![TopicPartition {
-                topic: "t".into(),
-                partitions: vec![0, 2],
-            }],
-            c0.assignment.assigned_partitions
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn leader_sync_response_yields_heartbeat() -> Result<(), Error> {
-        let mut consumer = GroupConsumer::new("g1", vec!["t".into()], make_metadata(&[("t", 1)]));
-
-        let meta = member_meta(&["t"])?;
-        _ = consumer.next_action(Some(Body::JoinGroupResponse(JoinGroupResponse {
-            error_code: i16::from(ErrorCode::None),
-            generation_id: 5,
-            member_id: "me".into(),
-            leader: "me".into(),
-            protocol_name: Some(Assignor::RANGE.into()),
-            protocol_type: Some(CONSUMER.into()),
-            members: Some(vec![
-                JoinGroupResponseMember::default()
-                    .member_id("me".into())
-                    .metadata(meta),
-            ]),
-            ..JoinGroupResponse::default()
-        })))?;
-
-        let assignment = Bytes::try_from(
-            &MemberAssignment::default().version(3).assignment(
-                ConsumerProtocolAssignment::default().assigned_partitions(
-                    [TopicPartition {
-                        topic: "t".into(),
-                        partitions: vec![0],
-                    }]
-                    .into_iter(),
-                ),
-            ),
-        )?;
-
-        let Body::HeartbeatRequest(req) =
-            consumer.next_action(Some(Body::SyncGroupResponse(SyncGroupResponse {
-                error_code: i16::from(ErrorCode::None),
-                assignment,
-                ..SyncGroupResponse::default()
-            })))?
-        else {
-            panic!("expected HeartbeatRequest");
-        };
-
-        assert_eq!("g1", req.group_id);
-        assert_eq!("me", req.member_id);
-        assert_eq!(5, req.generation_id);
-
-        Ok(())
-    }
-
-    #[test]
-    fn follower_heartbeat_ok_yields_heartbeat() -> Result<(), Error> {
-        let mut consumer = GroupConsumer::new("g1", vec!["t".into()], make_metadata(&[("t", 2)]));
-
-        _ = consumer.next_action(Some(Body::JoinGroupResponse(JoinGroupResponse {
-            error_code: i16::from(ErrorCode::None),
-            generation_id: 3,
-            member_id: "me".into(),
-            leader: "leader".into(),
-            protocol_name: Some(Assignor::RANGE.into()),
-            protocol_type: Some(CONSUMER.into()),
-            ..JoinGroupResponse::default()
-        })))?;
-
-        let Body::HeartbeatRequest(req) =
-            consumer.next_action(Some(Body::HeartbeatResponse(HeartbeatResponse {
-                error_code: i16::from(ErrorCode::None),
-                ..HeartbeatResponse::default()
-            })))?
-        else {
-            panic!("expected HeartbeatRequest");
-        };
-
-        assert_eq!("me", req.member_id);
-        assert_eq!(3, req.generation_id);
-
-        Ok(())
-    }
-
-    #[test]
-    fn follower_rebalance_in_progress_yields_heartbeat() -> Result<(), Error> {
-        let mut consumer = GroupConsumer::new("g1", vec!["t".into()], make_metadata(&[("t", 2)]));
-
-        _ = consumer.next_action(Some(Body::JoinGroupResponse(JoinGroupResponse {
-            error_code: i16::from(ErrorCode::None),
-            generation_id: 4,
-            member_id: "me".into(),
-            leader: "leader".into(),
-            protocol_name: Some(Assignor::RANGE.into()),
-            protocol_type: Some(CONSUMER.into()),
-            ..JoinGroupResponse::default()
-        })))?;
-
-        let Body::HeartbeatRequest(req) =
-            consumer.next_action(Some(Body::HeartbeatResponse(HeartbeatResponse {
-                error_code: i16::from(ErrorCode::RebalanceInProgress),
-                ..HeartbeatResponse::default()
-            })))?
-        else {
-            panic!("expected HeartbeatRequest");
-        };
-
-        assert_eq!("me", req.member_id);
-        assert_eq!(4, req.generation_id);
-
-        Ok(())
     }
 }

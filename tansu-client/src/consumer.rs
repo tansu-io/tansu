@@ -15,21 +15,18 @@
 use std::{
     fmt,
     sync::{Arc, Mutex, MutexGuard, PoisonError},
-    time::Duration,
 };
 
 use rama::{Context, Layer, Service};
 use tansu_sans_io::{
-    ApiKey, Frame, Header, HeartbeatResponse, MetadataResponse, RootMessageMeta,
-    consumer::GroupConsumer,
+    Frame, Header, MetadataResponse, RootMessageMeta,
+    consumer::{GroupConsumer, MemberAssignment},
 };
-use tokio::time::sleep;
 use tracing::debug;
 
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ConsumerGroupLayer {
     group_id: String,
-    heartbeat_interval: Duration,
     topics: Vec<String>,
     metadata: MetadataResponse,
 }
@@ -37,14 +34,13 @@ pub struct ConsumerGroupLayer {
 impl ConsumerGroupLayer {
     pub fn new(
         group_id: impl Into<String>,
-        topics: impl IntoIterator<Item = String>,
+        topics: impl IntoIterator<Item = impl Into<String>>,
         metadata: MetadataResponse,
     ) -> Self {
         Self {
             group_id: group_id.into(),
-            topics: topics.into_iter().collect(),
+            topics: topics.into_iter().map(Into::into).collect(),
             metadata,
-            heartbeat_interval: Duration::from_secs(3),
         }
     }
 }
@@ -53,19 +49,17 @@ impl<S> Layer<S> for ConsumerGroupLayer {
     type Service = ConsumerGroupService<S>;
 
     fn layer(&self, inner: S) -> Self::Service {
-        let consumer = Arc::new(Mutex::new(GroupConsumer::new(
-            self.group_id.clone(),
-            self.topics.clone(),
-            self.metadata.clone(),
-        )));
+        let consumer = Arc::new(Mutex::new(
+            GroupConsumer::builder(self.group_id.clone())
+                .topics(self.topics.clone())
+                .metadata(self.metadata.clone())
+                .on_assignment(Some(Arc::new(
+                    |group: String, assignment: MemberAssignment| debug!(group, %assignment),
+                )))
+                .build(),
+        ));
 
-        let heartbeat_interval = self.heartbeat_interval;
-
-        Self::Service {
-            inner,
-            consumer,
-            heartbeat_interval,
-        }
+        Self::Service { inner, consumer }
     }
 }
 
@@ -73,14 +67,11 @@ impl<S> Layer<S> for ConsumerGroupLayer {
 pub struct ConsumerGroupService<S> {
     inner: S,
     consumer: Arc<Mutex<GroupConsumer>>,
-    heartbeat_interval: Duration,
 }
 
 impl<S> fmt::Debug for ConsumerGroupService<S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct(stringify!(ConsumerGroupService))
-            .field("heartbeat", &self.heartbeat_interval)
-            .finish_non_exhaustive()
+        f.debug_struct(stringify!(ConsumerGroupService)).finish()
     }
 }
 
@@ -137,13 +128,6 @@ where
                 .map(|frame| frame.body)
                 .inspect(|input| debug!(input.api_name = input.api_name()))
                 .map(Some)?;
-
-            if input
-                .as_ref()
-                .is_some_and(|input| input.api_key() == HeartbeatResponse::KEY)
-            {
-                sleep(self.heartbeat_interval).await
-            }
         }
     }
 }

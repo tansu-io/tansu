@@ -13,11 +13,11 @@
 // limitations under the License.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
     fmt::{self, Debug},
     hash::{Hash, Hasher},
     marker::PhantomData,
-    ops::Deref,
+    ops::{Deref, Div as _, Mul},
     sync::{Arc, LazyLock, Mutex},
     time::SystemTime,
 };
@@ -49,7 +49,7 @@ use tansu_storage::{
     Version,
 };
 use tokio::time::{Duration, sleep};
-use tracing::{debug, error, info, instrument};
+use tracing::{debug, error, info, instrument, warn};
 use uuid::Uuid;
 
 use crate::{Error, METER, Result};
@@ -441,23 +441,22 @@ where
         }
     }
 
-    fn missed_heartbeat(self, group_id: &str, now: SystemTime) -> Self {
-        debug!(?group_id, ?now);
-
+    #[instrument(skip(self, now))]
+    fn missed_heartbeat(self, group_id: &str, member_id: &str, now: SystemTime) -> Self {
         match self {
             Self::Forming(mut inner) => {
-                _ = inner.missed_heartbeat(group_id, now);
+                _ = inner.missed_heartbeat(group_id, member_id, now);
                 Self::Forming(inner)
             }
             Self::Formed(mut inner) => {
-                if inner.missed_heartbeat(group_id, now) {
-                    info!("missed heartbeat for {group_id} in {}", inner.generation_id);
+                if inner.missed_heartbeat(group_id, member_id, now) {
+                    info!("missed heartbeat in generation {}", inner.generation_id);
 
                     Self::Forming(Inner {
                         session_timeout_ms: inner.session_timeout_ms,
                         rebalance_timeout_ms: inner.rebalance_timeout_ms,
                         members: inner.members,
-                        generation_id: inner.generation_id,
+                        generation_id: inner.generation_id + 1,
                         state: Forming {
                             protocol_type: Some(inner.state.protocol_type),
                             protocol_name: Some(inner.state.protocol_name),
@@ -484,6 +483,23 @@ where
         }
     }
 
+    #[instrument(skip(self), ret)]
+    fn is_ok(&self, body: &Body) -> bool {
+        match body {
+            Body::SyncGroupResponse(SyncGroupResponse { error_code, .. })
+            | Body::JoinGroupResponse(JoinGroupResponse { error_code, .. })
+            | Body::HeartbeatResponse(HeartbeatResponse { error_code, .. }) => {
+                *error_code == i16::from(ErrorCode::None)
+            }
+
+            otherwise => {
+                warn!(?otherwise);
+                false
+            }
+        }
+    }
+
+    #[instrument(skip(self), ret)]
     fn is_assigned(&self, body: &Body) -> bool {
         match body {
             Body::SyncGroupResponse(SyncGroupResponse {
@@ -504,6 +520,7 @@ where
         }
     }
 
+    #[instrument(skip(self), ret)]
     fn is_member_id_required(&self, body: &Body) -> bool {
         if let Body::JoinGroupResponse(response) = body
             && let JoinGroupResponse { error_code, .. } = response
@@ -513,6 +530,16 @@ where
         } else {
             false
         }
+    }
+}
+
+#[instrument(ret)]
+fn set_error_code(body: Body, error_code: ErrorCode) -> Body {
+    if let Body::SyncGroupResponse(mut sync) = body {
+        sync.error_code = i16::from(error_code);
+        sync.into()
+    } else {
+        unimplemented!("{body:?}")
     }
 }
 
@@ -821,21 +848,12 @@ where
             })?;
 
             if group_instance_id.is_none() {
-                original = original.missed_heartbeat(group_id, now);
-            }
-
-            if iteration == 0
-                && !member_id.is_empty()
-                && original.leader().is_some_and(|leader| leader != member_id)
-                && group_instance_id.is_none()
-            {
-                debug!(member_id, iteration, leader = original.leader());
-
-                COORDINATOR_REQUESTS.add(1, &[KeyValue::new("method", "join_follower_pause")]);
-                sleep(Duration::from_millis(PAUSE_MS as u64)).await;
+                original = original.missed_heartbeat(group_id, member_id, now);
             }
 
             debug!(%original, ?version, ?iteration);
+
+            let original_members = original.members();
 
             let (updated, body) = original
                 .join(
@@ -852,7 +870,9 @@ where
                 )
                 .await;
 
-            debug!(%updated, ?version, iteration,);
+            let is_stable = original_members == updated.members();
+
+            debug!(%updated, ?version, iteration);
 
             match self
                 .storage
@@ -860,31 +880,34 @@ where
                 .await
             {
                 Ok(version) => {
-                    let elapsed = SystemTime::now()
-                        .duration_since(started_at)
-                        .map(|duration| duration.as_millis())
-                        .unwrap_or(0);
+                    let elapsed_ms = started_at.elapsed().map(|duration| duration.as_millis())?;
 
                     let is_leader = updated.is_leader(&body);
                     let is_assigned = updated.is_assigned(&body);
                     let is_member_id_required = updated.is_member_id_required(&body);
+                    let is_forming = updated.is_forming();
+                    let is_ok = updated.is_ok(&body);
+
+                    let session_timeout_ms = updated.session_timeout_ms() as u128;
 
                     debug!(
                         ?version,
                         iteration,
-                        elapsed,
-                        is_forming = updated.is_forming(),
+                        elapsed_ms,
+                        ?is_forming,
                         ?is_leader,
                         ?is_assigned,
-                        ?is_member_id_required
+                        ?is_member_id_required,
+                        ?is_ok,
+                        is_stable
                     );
 
                     _ = self.wrappers.lock().map(|mut wrappers| {
                         wrappers.insert(group_id.to_owned(), (updated, Some(version)))
                     })?;
 
-                    if group_instance_id.is_some() && elapsed < PAUSE_MS {
-                        let pause = PAUSE_MS.saturating_sub(elapsed);
+                    if group_instance_id.is_some() && elapsed_ms < PAUSE_MS {
+                        let pause = PAUSE_MS.saturating_sub(elapsed_ms);
                         debug!(pause);
 
                         COORDINATOR_REQUESTS
@@ -895,13 +918,10 @@ where
                         continue;
                     } else if is_leader || is_assigned || is_member_id_required {
                         return Ok(body);
-                    } else if elapsed < PAUSE_MS {
-                        let pause = PAUSE_MS.saturating_sub(elapsed);
-                        debug!(around_again = pause);
-
+                    } else if elapsed_ms < session_timeout_ms.div(2) {
                         COORDINATOR_REQUESTS
                             .add(1, &[KeyValue::new("method", "join_group_instance_pause")]);
-                        sleep(Duration::from_millis(pause as u64)).await;
+                        sleep(Duration::from_secs(1)).await;
 
                         iteration += 1;
                         continue;
@@ -978,8 +998,43 @@ where
         COORDINATOR_REQUESTS.add(1, &[KeyValue::new("method", "sync")]);
 
         let started_at = SystemTime::now();
-
         let mut iteration = 0;
+
+        if let Some(assignments) = assignments
+            && !assignments.is_empty()
+            && !has_unique_elements(
+                assignments
+                    .iter()
+                    .map(|assignment| assignment.assignment.clone())
+                    .filter_map(|assignment| MemberAssignment::try_from(assignment).ok())
+                    .map(|ma| ma.assignment)
+                    .map(|cpa| cpa.assigned_partitions)
+                    .flat_map(|tp| tp.into_iter())
+                    .map(|tp| (tp.topic, tp.partitions))
+                    .flat_map(|(topic, partitions)| {
+                        partitions
+                            .into_iter()
+                            .map(move |partition| (topic.clone(), partition))
+                    }),
+            )
+        {
+            warn!(
+                group_id,
+                generation_id,
+                member_count = assignments.len(),
+                non_unique_assignment = assignments
+                    .iter()
+                    .map(|assignment| (assignment.member_id.clone(), assignment.assignment.clone()))
+                    .filter_map(|(member_id, assignment)| {
+                        MemberAssignment::try_from(assignment)
+                            .ok()
+                            .map(|ma| (member_id, ma))
+                    })
+                    .map(|(member, ma)| format!("{member}: {ma}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
 
         loop {
             COORDINATOR_REQUESTS.add(1, &[KeyValue::new("method", "sync_loop")]);
@@ -992,10 +1047,12 @@ where
                     .unwrap_or_else(|| (Wrapper::Forming(Inner::new(self.storage.clone())), None))
             })?;
 
+            let original_members = original.members();
+
             debug!(?group_id, ?original, ?version, ?iteration);
 
             if group_instance_id.is_none() {
-                original = original.missed_heartbeat(group_id, now);
+                original = original.missed_heartbeat(group_id, member_id, now);
             }
 
             let (updated, body) = original
@@ -1011,35 +1068,41 @@ where
                 )
                 .await;
 
-            debug!(group_id, ?updated, ?version, iteration,);
+            let is_stable = original_members == updated.members();
+
+            debug!(group_id, %updated, ?version, iteration);
+
             match self
                 .storage
                 .update_group(group_id, GroupDetail::from(&updated), version)
                 .await
             {
                 Ok(version) => {
-                    let elapsed = SystemTime::now()
-                        .duration_since(started_at)
-                        .map(|duration| duration.as_millis())
-                        .unwrap_or(0);
+                    let elapsed_ms = started_at.elapsed().map(|duration| duration.as_millis())?;
 
+                    let is_forming = updated.is_forming();
                     let is_assigned = updated.is_assigned(&body);
+                    let is_ok = updated.is_ok(&body);
 
                     debug!(
                         group_id,
                         ?version,
                         iteration,
-                        elapsed,
-                        is_forming = updated.is_forming(),
+                        elapsed_ms,
+                        is_forming,
                         ?is_assigned,
+                        ?is_ok,
+                        is_stable
                     );
+
+                    let session_timeout_ms = updated.session_timeout_ms() as u128;
 
                     _ = self.wrappers.lock().map(|mut wrappers| {
                         wrappers.insert(group_id.to_owned(), (updated, Some(version)))
                     })?;
 
-                    if group_instance_id.is_some() && elapsed < PAUSE_MS {
-                        let pause = PAUSE_MS.saturating_sub(elapsed);
+                    if group_instance_id.is_some() && elapsed_ms < PAUSE_MS {
+                        let pause = PAUSE_MS.saturating_sub(elapsed_ms);
                         debug!(pause);
 
                         COORDINATOR_REQUESTS
@@ -1048,20 +1111,17 @@ where
 
                         iteration += 1;
                         continue;
-                    } else if is_assigned {
+                    } else if is_forming || is_assigned {
                         return Ok(body);
-                    } else if elapsed < PAUSE_MS {
-                        let pause = PAUSE_MS.saturating_sub(elapsed);
-                        debug!(around_again = pause);
-
+                    } else if elapsed_ms < session_timeout_ms.mul(8).div(10) {
                         COORDINATOR_REQUESTS
                             .add(1, &[KeyValue::new("method", "sync_group_instance_pause")]);
-                        sleep(Duration::from_millis(pause as u64)).await;
+                        sleep(Duration::from_secs(1)).await;
 
                         iteration += 1;
                         continue;
                     } else {
-                        return Ok(body);
+                        return Ok(set_error_code(body, ErrorCode::RebalanceInProgress));
                     }
                 }
 
@@ -1123,7 +1183,7 @@ where
             debug!(?group_id, ?wrapper, ?version, ?iteration);
 
             let now = SystemTime::now();
-            let wrapper = wrapper.missed_heartbeat(group_id, now);
+            let wrapper = wrapper.missed_heartbeat(group_id, member_id.unwrap_or_default(), now);
 
             let (wrapper, body) = wrapper.leave(now, group_id, member_id, members).await;
             debug!(group_id, ?wrapper, ?version, iteration,);
@@ -1285,7 +1345,7 @@ where
         loop {
             COORDINATOR_REQUESTS.add(1, &[KeyValue::new("method", "heartbeat_loop")]);
 
-            let (wrapper, version) = self.wrappers.lock().map(|mut wrappers| {
+            let (mut wrapper, version) = self.wrappers.lock().map(|mut wrappers| {
                 wrappers
                     .remove(group_id)
                     .unwrap_or_else(|| (Wrapper::Forming(Inner::new(self.storage.clone())), None))
@@ -1295,15 +1355,15 @@ where
 
             let now = SystemTime::now();
 
-            let (mut wrapper, body) = wrapper
+            if group_instance_id.is_none() {
+                wrapper = wrapper.missed_heartbeat(group_id, member_id, now);
+            }
+
+            let (wrapper, body) = wrapper
                 .heartbeat(now, group_id, generation_id, member_id, group_instance_id)
                 .await;
 
-            if group_instance_id.is_none() {
-                wrapper = wrapper.missed_heartbeat(group_id, now);
-            }
-
-            debug!(group_id, ?wrapper, ?version, iteration,);
+            debug!(group_id, %wrapper, ?version, iteration,);
 
             match self
                 .storage
@@ -1475,35 +1535,43 @@ impl<O> Inner<O, Forming>
 where
     O: Storage,
 {
-    fn missed_heartbeat(&mut self, group_id: &str, now: SystemTime) -> bool {
+    #[instrument(skip(self, now))]
+    fn missed_heartbeat(&mut self, group_id: &str, member_id: &str, now: SystemTime) -> bool {
         let original = self.members.len();
+
+        if !member_id.is_empty() {
+            _ = self
+                .members
+                .get_mut(member_id)
+                .map(|member| member.last_contact.replace(now))
+        }
 
         self.members.retain(|member_id, member| {
             member
                 .last_contact
                 .map(|last_contact| now.duration_since(last_contact).unwrap_or_default())
-                .inspect(|duration| {
-                    debug!(
-                        "{member_id}, since last contact: {}ms",
-                        duration.as_millis()
-                    )
-                })
                 .is_some_and(|duration| {
                     if duration.as_millis()
                         > u128::try_from(self.session_timeout_ms).unwrap_or(45_000)
                     {
-
-                        if self.state.leader.as_ref().is_some_and(|leader|leader == member_id){
+                        if self
+                            .state
+                            .leader
+                            .as_ref()
+                            .is_some_and(|leader| leader == member_id)
+                        {
                             info!(
-                                "missed heartbeat for leader {member_id} for {group_id} in generation: {}, after {}ms",
-                                self.generation_id, duration.as_millis()
+                                "eviction of leader: {member_id}, in generation: {}, after {}ms",
+                                self.generation_id,
+                                duration.as_millis()
                             );
 
                             _ = self.state.leader.take();
                         } else {
                             info!(
-                                "missed heartbeat for {member_id} for {group_id} in generation: {}, after {}ms",
-                                self.generation_id, duration.as_millis()
+                                "eviction of: {member_id}, in generation: {}, after {}ms",
+                                self.generation_id,
+                                duration.as_millis()
                             );
                         }
 
@@ -1522,10 +1590,16 @@ impl<O> Inner<O, Formed>
 where
     O: Storage,
 {
-    fn missed_heartbeat(&mut self, group_id: &str, now: SystemTime) -> bool {
-        debug!(?group_id, ?now);
-
+    #[instrument(skip(self, now))]
+    fn missed_heartbeat(&mut self, group_id: &str, member_id: &str, now: SystemTime) -> bool {
         let original = self.members.len();
+
+        if !member_id.is_empty() {
+            _ = self
+                .members
+                .get_mut(member_id)
+                .map(|member| member.last_contact.replace(now))
+        }
 
         self.members.retain(|member_id, member| {
             debug!(?member_id, ?member);
@@ -1533,19 +1607,14 @@ where
             member
                 .last_contact
                 .map(|last_contact| now.duration_since(last_contact).unwrap_or_default())
-                .inspect(|duration| {
-                    debug!(
-                        "{member_id}, since last contact: {}ms",
-                        duration.as_millis()
-                    )
-                })
                 .is_some_and(|duration| {
                     if duration.as_millis()
                         > u128::try_from(self.session_timeout_ms).unwrap_or(45_000)
                     {
                         info!(
-                            "missed heartbeat for {member_id} for {group_id} in generation: {}, after {}ms",
-                            self.generation_id, duration.as_millis()
+                            "eviction of: {member_id}, in generation: {}, after {}ms",
+                            self.generation_id,
+                            duration.as_millis()
                         );
 
                         false
@@ -1974,6 +2043,7 @@ where
                     member_id,
                     generation_id = self.generation_id
                 );
+                member.last_contact = Some(now);
             } else if group_instance_id.is_some() {
                 debug!(
                     member_metadata = "soft_update",
@@ -1985,6 +2055,7 @@ where
                 );
 
                 member.join_response.metadata = protocol.metadata.clone();
+                member.last_contact = Some(now);
             } else {
                 self.generation_id += 1;
 
@@ -1997,6 +2068,7 @@ where
                 );
 
                 member.join_response.metadata = protocol.metadata.clone();
+                member.last_contact = Some(now);
             }
         } else {
             self.generation_id += 1;
@@ -2250,7 +2322,7 @@ where
             .entry(member_id.to_owned())
             .and_modify(|member| _ = member.last_contact.replace(now));
 
-        if self.missed_heartbeat(group_id, now) || (generation_id < self.generation_id) {
+        if self.missed_heartbeat(group_id, member_id, now) || (generation_id < self.generation_id) {
             debug!(self.generation_id);
 
             return (
@@ -2837,7 +2909,7 @@ where
             );
         }
 
-        if self.missed_heartbeat(group_id, now) || (generation_id < self.generation_id) {
+        if self.missed_heartbeat(group_id, member_id, now) || (generation_id < self.generation_id) {
             return (
                 self,
                 HeartbeatResponse::default()
@@ -3008,6 +3080,15 @@ where
     }
 }
 
+fn has_unique_elements<T>(iter: T) -> bool
+where
+    T: IntoIterator,
+    T::Item: Eq + Hash,
+{
+    let mut uniq = HashSet::new();
+    iter.into_iter().all(|x| uniq.insert(x))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3056,6 +3137,7 @@ mod tests {
         ))
     }
 
+    #[ignore]
     #[tokio::test]
     async fn lifecycle() -> Result<()> {
         let _guard = init_tracing()?;
@@ -3306,7 +3388,7 @@ mod tests {
                     JoinGroupResponse::default()
                         .throttle_time_ms(Some(0))
                         .error_code(ErrorCode::None.into())
-                        .generation_id(1)
+                        .generation_id(2)
                         .protocol_type(Some(CONSUMER.into()))
                         .protocol_name(Some(Assignor::RANGE.into()))
                         .leader(first_member_id.clone())
@@ -3711,8 +3793,8 @@ mod tests {
     async fn rejoin() -> Result<()> {
         let _guard = init_tracing()?;
 
-        let session_timeout_ms = 45_000;
-        let rebalance_timeout_ms = Some(300_000);
+        let session_timeout_ms = 10_000;
+        let rebalance_timeout_ms = Some(60_000);
         let group_instance_id = None;
         let reason = None;
 

@@ -250,6 +250,7 @@ use url::Url;
 
 mod api;
 mod channel;
+mod consumer;
 mod frame;
 mod stream;
 
@@ -259,6 +260,8 @@ pub use channel::{
     ChannelFrameLayer, ChannelFrameService, FrameChannelService, FrameReceiver, FrameSender,
     bounded_channel,
 };
+
+pub use consumer::{ConsumerGroupLayer, ConsumerGroupService};
 
 pub use frame::{
     BodyRequestLayer, BytesFrameLayer, BytesFrameService, FrameApiKeyMatcher, FrameBodyLayer,
@@ -441,7 +444,7 @@ impl LatencyIntroducingLayer {
         Self { seed, ..self }
     }
 
-    pub fn with_latency(self, latency: Range<u64>) -> Self {
+    pub fn with_latency_millis(self, latency: Range<u64>) -> Self {
         Self { latency, ..self }
     }
 }

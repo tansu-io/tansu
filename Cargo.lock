@@ -8323,6 +8323,7 @@ dependencies = [
 name = "tansu-broker"
 version = "0.6.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "bytes",
  "clap",

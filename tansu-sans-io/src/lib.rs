@@ -141,7 +141,7 @@ use std::{
     process::{ExitCode, Termination},
     str::{self, FromStr},
     string,
-    sync::{Arc, OnceLock},
+    sync::{Arc, OnceLock, PoisonError},
     time::{Duration, SystemTime, SystemTimeError},
 };
 use tansu_model::{MessageKind, MessageMeta};
@@ -342,6 +342,7 @@ pub enum Error {
     Overflow,
     ParseFilter(Arc<ParseError>),
     ParseScram(String),
+    Poison,
     ResponseFrame,
     Snap(#[from] snap::Error),
     StringWithoutApiVersion,
@@ -368,6 +369,12 @@ impl Display for Error {
             Error::Message(e) => f.write_str(e),
             e => write!(f, "{e:?}"),
         }
+    }
+}
+
+impl<T> From<PoisonError<T>> for Error {
+    fn from(_value: PoisonError<T>) -> Self {
+        Self::Poison
     }
 }
 

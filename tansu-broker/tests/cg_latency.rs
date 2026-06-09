@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
+
 use common::init_tracing;
 use rama::{Context, Layer, Service};
 use tansu_broker::{
@@ -56,7 +58,7 @@ async fn stack() -> Result<(), Error> {
 
     let latency_introducing = LatencyIntroducingLayer::default()
         .with_seed(seed)
-        .with_latency(latency);
+        .with_latency_millis(latency);
 
     let sut = (
         RequestFrameLayer,
@@ -82,11 +84,17 @@ async fn stack() -> Result<(), Error> {
         .into(),
     ));
 
-    let mut consumer = GroupConsumer::new(group_id, [topic.into()].into(), metadata);
+    let mut consumer = GroupConsumer::builder(group_id)
+        .topics([topic])
+        .metadata(metadata)
+        .on_assignment(Some(Arc::new(
+            |group: String, assignment: MemberAssignment| debug!(group, %assignment),
+        )))
+        .build();
 
     let initial = consumer
         .next_action(None)
-        .and_then(|body| JoinGroupRequest::try_from(body))?;
+        .and_then(JoinGroupRequest::try_from)?;
     assert!(initial.member_id.is_empty());
 
     let context = Context::default();

@@ -194,10 +194,10 @@ pub(crate) enum ConsumerProtocolSubscription {
 impl AsRef<i16> for ConsumerProtocolSubscription {
     fn as_ref(&self) -> &i16 {
         match self {
-            ConsumerProtocolSubscription::V0(_) => &0,
-            ConsumerProtocolSubscription::V1(_) => &1,
-            ConsumerProtocolSubscription::V2(_) => &2,
-            ConsumerProtocolSubscription::V3(_) => &3,
+            ConsumerProtocolSubscription::V0(_) => &super::ConsumerProtocolSubscription::V0,
+            ConsumerProtocolSubscription::V1(_) => &super::ConsumerProtocolSubscription::V1,
+            ConsumerProtocolSubscription::V2(_) => &super::ConsumerProtocolSubscription::V2,
+            ConsumerProtocolSubscription::V3(_) => &super::ConsumerProtocolSubscription::V3,
         }
     }
 }
