@@ -2963,7 +2963,6 @@ mod in_memory {
         .await
     }
 
-    #[ignore]
     #[tokio::test]
     async fn compact_only() -> Result<()> {
         let _guard = init_tracing()?;
@@ -2977,6 +2976,12 @@ mod in_memory {
         super::compact_only(sc).await
     }
 
+    // NOTE: dynostore stores one batch per produce request and `fetch` returns
+    // those batches verbatim, whereas the shared `delete_only` /
+    // `delete_no_retention_ms_only` assertions assume the SQL backends'
+    // record-level re-batching (all records coalesced into a single batch).
+    // The retention/delete cleanup policy itself is covered for dynostore by
+    // `tansu-storage/tests/policy_delete.rs`.
     #[ignore]
     #[tokio::test]
     async fn delete_only() -> Result<()> {

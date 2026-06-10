@@ -24,7 +24,6 @@ use url::Url;
 
 mod common;
 
-#[ignore]
 #[tokio::test]
 async fn delete_non_existent_records() -> Result<(), Error> {
     let _guard = init_tracing()?;
