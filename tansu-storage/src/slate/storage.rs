@@ -62,8 +62,9 @@ use crate::{
 use super::engine::Engine;
 use super::types::{
     BatchKey, BatchKeyPrefix, BrokerInfo, Brokers, GroupDetailVersion, GroupKey, GroupKeyPrefix,
-    OffsetCommitKey, OffsetCommitKeyPrefix, OffsetCommitValue, Producers, TopicMetadata, Topics,
-    Transactions, Txn, TxnCommitOffset, TxnDetail, TxnProduceOffset, Watermark, WatermarkKey,
+    OffsetCommitKey, OffsetCommitKeyPrefix, OffsetCommitValue, Producers, StoredScramCredential,
+    TopicMetadata, Topics, Transactions, Txn, TxnCommitOffset, TxnDetail, TxnProduceOffset,
+    UserScramCredentialKey, Watermark, WatermarkKey,
 };
 
 #[async_trait]
@@ -1007,22 +1008,19 @@ impl Storage for Engine {
 
             let response = match list_offset {
                 ListOffset::Earliest => {
-                    if let Some((ts, off)) = watermark
+                    // The log start offset is the low watermark, advanced by
+                    // delete_records; timestamps below it are pruned there.
+                    let offset = watermark.low.unwrap_or(0);
+                    let timestamp = watermark
                         .timestamps
                         .as_ref()
-                        .and_then(|ts| ts.first_key_value())
-                    {
-                        ListOffsetResponse {
-                            error_code: ErrorCode::None,
-                            offset: Some(*off),
-                            timestamp: to_system_time(*ts).ok(),
-                        }
-                    } else {
-                        ListOffsetResponse {
-                            error_code: ErrorCode::None,
-                            offset: Some(0),
-                            timestamp: None,
-                        }
+                        .and_then(|ts| ts.iter().find(|(_, off)| **off >= offset))
+                        .and_then(|(ts, _)| to_system_time(*ts).ok());
+
+                    ListOffsetResponse {
+                        error_code: ErrorCode::None,
+                        offset: Some(offset),
+                        timestamp,
                     }
                 }
                 ListOffset::Latest => {
@@ -1518,23 +1516,20 @@ impl Storage for Engine {
         let key = postcard::to_stdvec(&GroupKey::new(group_id))
             .map_err(|err| UpdateError::Error(Error::Postcard(err)))?;
 
-        // Try to load existing group
-        let current_group: Option<GroupDetailVersion> = self
+        // Load the existing group; a missing key yields the default detail
+        // and version, so a caller providing a version for an unknown group
+        // is told it is outdated rather than silently overwriting.
+        let current: GroupDetailVersion = self
             .load_metadata(&tx, &key)
             .await
-            .map(Some)
-            .or_else(|_| Ok::<_, Error>(None))
             .map_err(UpdateError::Error)?;
 
-        if let Some(current) = current_group {
-            // Check version if provided
-            if version.is_some_and(|v| v != current.version) {
-                tx.rollback();
-                return Err(UpdateError::Outdated {
-                    current: Box::new(current.detail),
-                    version: current.version,
-                });
-            }
+        if version.is_some_and(|v| v != current.version) {
+            tx.rollback();
+            return Err(UpdateError::Outdated {
+                current: Box::new(current.detail),
+                version: current.version,
+            });
         }
 
         let updated_version = Version::from(&Uuid::now_v7());
@@ -1766,22 +1761,34 @@ impl Storage for Engine {
         }
     }
 
+    /// Validate that a transaction may commit offsets for a consumer group.
+    ///
+    /// The group itself is recorded when the offsets arrive via
+    /// `txn_offset_commit`, so this only validates the transaction and
+    /// producer, matching the PG and object store engines.
     async fn txn_add_offsets(
         &self,
-        _transaction_id: &str,
-        _producer_id: i64,
-        _producer_epoch: i16,
-        _group_id: &str,
+        transaction_id: &str,
+        producer_id: i64,
+        producer_epoch: i16,
+        group_id: &str,
     ) -> Result<ErrorCode> {
-        // TODO: Implement txn_add_offsets
-        //
-        // This should:
-        // 1. Validate the transaction exists and matches producer_id/epoch
-        // 2. Add the group_id to the transaction's offset commit set
-        // 3. This enables the transaction to commit offsets for this consumer group
-        //
-        // Currently returns an error to indicate unimplemented status
-        Err(Error::Api(ErrorCode::UnknownServerError))
+        debug!(transaction_id, producer_id, producer_epoch, group_id);
+
+        let transactions = self.get_transactions().await?;
+
+        let Some(transaction) = transactions.get(transaction_id) else {
+            return Ok(ErrorCode::TransactionalIdNotFound);
+        };
+
+        if transaction.producer != producer_id {
+            return Ok(ErrorCode::UnknownProducerId);
+        }
+
+        match transaction.epochs.last_key_value() {
+            Some((current_epoch, _)) if *current_epoch == producer_epoch => Ok(ErrorCode::None),
+            _ => Ok(ErrorCode::ProducerFenced),
+        }
     }
 
     async fn txn_add_partitions(
@@ -2377,27 +2384,44 @@ impl Storage for Engine {
 
     async fn delete_user_scram_credential(
         &self,
-        _user: &str,
-        _mechanism: ScramMechanism,
+        user: &str,
+        mechanism: ScramMechanism,
     ) -> Result<()> {
-        Ok(())
+        let key = postcard::to_stdvec(&UserScramCredentialKey::new(user, mechanism))?;
+        self.db.delete(key).await.map_err(Into::into)
     }
 
     async fn upsert_user_scram_credential(
         &self,
-        _user: &str,
-        _mechanism: ScramMechanism,
-        _credential: ScramCredential,
+        user: &str,
+        mechanism: ScramMechanism,
+        credential: ScramCredential,
     ) -> Result<()> {
-        Ok(())
+        let key = postcard::to_stdvec(&UserScramCredentialKey::new(user, mechanism))?;
+        let value = postcard::to_stdvec(&StoredScramCredential::from(credential))?;
+        self.db.put(key, value).await.map_err(Into::into)
     }
 
     async fn user_scram_credential(
         &self,
-        _user: &str,
-        _mechanism: ScramMechanism,
+        user: &str,
+        mechanism: ScramMechanism,
     ) -> Result<Option<ScramCredential>> {
-        Ok(None)
+        let key = postcard::to_stdvec(&UserScramCredentialKey::new(user, mechanism))?;
+
+        self.db
+            .get(&key)
+            .await
+            .map_err(Error::from)
+            .and_then(|maybe| {
+                maybe
+                    .map(|encoded| {
+                        postcard::from_bytes::<StoredScramCredential>(&encoded)
+                            .map(ScramCredential::from)
+                            .map_err(Into::into)
+                    })
+                    .transpose()
+            })
     }
 
     async fn ping(&self) -> Result<()> {

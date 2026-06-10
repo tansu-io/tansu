@@ -798,6 +798,210 @@ async fn test_produce_multiple_partitions() {
     }
 }
 
+// ========== Transactional Offset Tests ==========
+
+#[tokio::test]
+async fn test_txn_add_offsets() {
+    let engine = create_test_engine().await;
+
+    let producer = engine
+        .init_producer(Some("add-offsets-txn"), 60000, Some(-1), Some(-1))
+        .await
+        .unwrap();
+
+    let error_code = engine
+        .txn_add_offsets("add-offsets-txn", producer.id, producer.epoch, "group-1")
+        .await
+        .unwrap();
+    assert_eq!(ErrorCode::None, error_code);
+}
+
+#[tokio::test]
+async fn test_txn_add_offsets_unknown_txn() {
+    let engine = create_test_engine().await;
+
+    let error_code = engine
+        .txn_add_offsets("unknown-txn", 1, 0, "group-1")
+        .await
+        .unwrap();
+    assert_eq!(ErrorCode::TransactionalIdNotFound, error_code);
+}
+
+#[tokio::test]
+async fn test_txn_add_offsets_wrong_producer() {
+    let engine = create_test_engine().await;
+
+    let producer = engine
+        .init_producer(Some("add-offsets-wrong-prod"), 60000, Some(-1), Some(-1))
+        .await
+        .unwrap();
+
+    let error_code = engine
+        .txn_add_offsets("add-offsets-wrong-prod", 9999, producer.epoch, "group-1")
+        .await
+        .unwrap();
+    assert_eq!(ErrorCode::UnknownProducerId, error_code);
+}
+
+#[tokio::test]
+async fn test_txn_add_offsets_wrong_epoch() {
+    let engine = create_test_engine().await;
+
+    let producer = engine
+        .init_producer(Some("add-offsets-wrong-epoch"), 60000, Some(-1), Some(-1))
+        .await
+        .unwrap();
+
+    let error_code = engine
+        .txn_add_offsets("add-offsets-wrong-epoch", producer.id, 99, "group-1")
+        .await
+        .unwrap();
+    assert_eq!(ErrorCode::ProducerFenced, error_code);
+}
+
+// ========== SCRAM Credential Tests ==========
+
+#[tokio::test]
+async fn test_scram_credential_lifecycle() {
+    use tansu_sans_io::ScramMechanism;
+
+    use crate::ScramCredential;
+
+    let engine = create_test_engine().await;
+
+    // No credential stored yet
+    let found = engine
+        .user_scram_credential("alice", ScramMechanism::Scram256)
+        .await
+        .unwrap();
+    assert!(found.is_none());
+
+    let credential = ScramCredential {
+        salt: Bytes::from_static(b"salt"),
+        iterations: 4096,
+        stored_key: Bytes::from_static(b"stored-key"),
+        server_key: Bytes::from_static(b"server-key"),
+    };
+
+    engine
+        .upsert_user_scram_credential("alice", ScramMechanism::Scram256, credential.clone())
+        .await
+        .unwrap();
+
+    // Credential round-trips
+    let found = engine
+        .user_scram_credential("alice", ScramMechanism::Scram256)
+        .await
+        .unwrap();
+    assert_eq!(Some(credential.clone()), found);
+
+    // Different mechanism and user are distinct keys
+    assert!(
+        engine
+            .user_scram_credential("alice", ScramMechanism::Scram512)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        engine
+            .user_scram_credential("bob", ScramMechanism::Scram256)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    engine
+        .delete_user_scram_credential("alice", ScramMechanism::Scram256)
+        .await
+        .unwrap();
+
+    let found = engine
+        .user_scram_credential("alice", ScramMechanism::Scram256)
+        .await
+        .unwrap();
+    assert!(found.is_none());
+}
+
+// ========== List Offsets Tests ==========
+
+#[tokio::test]
+async fn test_list_offsets_earliest_after_delete_records() {
+    use tansu_sans_io::delete_records_request::{DeleteRecordsPartition, DeleteRecordsTopic};
+    use tansu_sans_io::{IsolationLevel, ListOffset};
+
+    let engine = create_test_engine().await;
+
+    let topic = CreatableTopic::default()
+        .name("earliest-topic".into())
+        .num_partitions(1)
+        .replication_factor(1);
+    let _ = engine.create_topic(topic, false).await.unwrap();
+
+    let topition = Topition::new("earliest-topic", 0);
+
+    let batch = Batch {
+        base_offset: 0,
+        batch_length: 0,
+        partition_leader_epoch: 0,
+        magic: 2,
+        crc: 0,
+        attributes: 0,
+        last_offset_delta: 0,
+        base_timestamp: 1000,
+        max_timestamp: 1000,
+        producer_id: -1,
+        producer_epoch: -1,
+        base_sequence: -1,
+        record_count: 1,
+        record_data: Bytes::new(),
+    };
+
+    for _ in 0..5 {
+        let _ = engine
+            .produce(None, &topition, batch.clone())
+            .await
+            .unwrap();
+    }
+
+    // Before deletion, earliest is 0
+    let responses = engine
+        .list_offsets(
+            IsolationLevel::ReadUncommitted,
+            &[(topition.clone(), ListOffset::Earliest)],
+        )
+        .await
+        .unwrap();
+    assert_eq!(Some(0), responses[0].1.offset);
+
+    // Delete records up to offset 3
+    let delete_request = vec![
+        DeleteRecordsTopic::default()
+            .name("earliest-topic".into())
+            .partitions(Some(vec![
+                DeleteRecordsPartition::default()
+                    .partition_index(0)
+                    .offset(3),
+            ])),
+    ];
+    let _ = engine.delete_records(&delete_request).await.unwrap();
+
+    // Earliest now reflects the advanced log start offset
+    let responses = engine
+        .list_offsets(
+            IsolationLevel::ReadUncommitted,
+            &[
+                (topition.clone(), ListOffset::Earliest),
+                (topition.clone(), ListOffset::Latest),
+            ],
+        )
+        .await
+        .unwrap();
+    assert_eq!(ErrorCode::None, responses[0].1.error_code);
+    assert_eq!(Some(3), responses[0].1.offset);
+    assert_eq!(Some(5), responses[1].1.offset);
+}
+
 // ========== Builder Pattern Tests ==========
 
 #[tokio::test]

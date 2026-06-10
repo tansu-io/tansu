@@ -29,6 +29,7 @@
 //! | `b/` | Batch data | `b/{topic_uuid}/{partition:be32}/{offset:be64}` |
 //! | `c/` | Consumer group commits | `c/{group}/{topic}/{partition:be32}` |
 //! | `g/` | Group state | `g/{group_id}` |
+//! | `u/` | SCRAM credentials | `u/{user}/{mechanism:be32}` |
 //! | `w/` | Watermarks | `w/{topic_uuid}/{partition:be32}` |
 //!
 //! ## Design Principles
@@ -46,11 +47,12 @@
 
 use std::{collections::BTreeMap, time::SystemTime};
 
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
-use tansu_sans_io::create_topics_request::CreatableTopic;
+use tansu_sans_io::{ScramMechanism, create_topics_request::CreatableTopic};
 use uuid::Uuid;
 
-use crate::{GroupDetail, TxnState, Version};
+use crate::{GroupDetail, ScramCredential, TxnState, Version};
 
 // Type aliases
 pub(super) type Group = String;
@@ -379,4 +381,57 @@ pub(super) struct BrokerInfo {
     pub host: String,
     pub port: i32,
     pub rack: Option<String>,
+}
+
+/// Key for storing SASL/SCRAM credentials: `u/{user}/{mechanism:be32}`
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+pub(super) struct UserScramCredentialKey {
+    /// Type prefix 'u' for user credential
+    pub prefix: char,
+    /// SASL user name
+    pub user: String,
+    /// SCRAM mechanism (big-endian for correct ordering)
+    #[serde(with = "postcard::fixint::be")]
+    pub mechanism: i32,
+}
+
+impl UserScramCredentialKey {
+    pub(super) fn new(user: impl Into<String>, mechanism: ScramMechanism) -> Self {
+        Self {
+            prefix: 'u',
+            user: user.into(),
+            mechanism: i32::from(mechanism),
+        }
+    }
+}
+
+/// Value stored for SASL/SCRAM credentials
+#[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+pub(super) struct StoredScramCredential {
+    pub salt: Vec<u8>,
+    pub iterations: i32,
+    pub stored_key: Vec<u8>,
+    pub server_key: Vec<u8>,
+}
+
+impl From<ScramCredential> for StoredScramCredential {
+    fn from(credential: ScramCredential) -> Self {
+        Self {
+            salt: credential.salt.to_vec(),
+            iterations: credential.iterations,
+            stored_key: credential.stored_key.to_vec(),
+            server_key: credential.server_key.to_vec(),
+        }
+    }
+}
+
+impl From<StoredScramCredential> for ScramCredential {
+    fn from(stored: StoredScramCredential) -> Self {
+        Self {
+            salt: Bytes::from(stored.salt),
+            iterations: stored.iterations,
+            stored_key: Bytes::from(stored.stored_key),
+            server_key: Bytes::from(stored.server_key),
+        }
+    }
 }
