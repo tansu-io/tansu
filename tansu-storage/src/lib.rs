@@ -205,10 +205,15 @@ mod dynostore;
 #[cfg(feature = "postgres")]
 mod pg;
 
+#[cfg(feature = "dynostore")]
 mod batch;
 mod latency;
+
 mod null;
+
+#[cfg(feature = "libsql")]
 mod proxy;
+
 mod service;
 
 pub use latency::LatencyIntroducingStorage;

@@ -222,6 +222,16 @@ impl Batch {
             })
     }
 
+    /// Compact this batch, retaining only the most recent record per key.
+    ///
+    /// `head` contains the keys of records in newer batches: a record whose
+    /// key is in `head` is dropped, as is a record whose key reappears later
+    /// in this batch. Records without a key are always retained. The batch
+    /// structure (base offset, offset deltas, timestamps) is preserved, so
+    /// compaction leaves gaps in the offsets, as in Apache Kafka.
+    ///
+    /// The returned [`Compaction`] holds the compacted batch and the number
+    /// of records that were removed.
     pub fn compact(mut self, head: &BTreeSet<Bytes>) -> Result<Compaction> {
         let mut last_delta_offset_for_key = BTreeMap::new();
         let mut records = 0;
@@ -249,8 +259,9 @@ impl Batch {
                 last_delta_offset_for_key.into_values().collect();
             debug!(?delta_offsets_to_retain);
 
-            self.records
-                .retain(|record| delta_offsets_to_retain.contains(&record.offset_delta));
+            self.records.retain(|record| {
+                record.key().is_none() || delta_offsets_to_retain.contains(&record.offset_delta)
+            });
 
             self.into_builder()
                 .build()
@@ -624,6 +635,136 @@ mod tests {
 
         let batch = builder.build()?;
         assert_eq!(indexes.len(), batch.records.len());
+
+        Ok(())
+    }
+
+    fn keyed(offset_delta: i32, key: &'static [u8], value: &'static [u8]) -> super::super::Builder {
+        Record::builder()
+            .offset_delta(offset_delta)
+            .key(Some(Bytes::from_static(key)))
+            .value(Some(Bytes::from_static(value)))
+    }
+
+    #[test]
+    fn compact_noop_without_duplicates() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let batch = Batch::builder()
+            .record(keyed(0, b"k1", b"v1"))
+            .record(keyed(1, b"k2", b"v2"))
+            .last_offset_delta(1)
+            .build()?;
+
+        let compaction = batch.clone().compact(&BTreeSet::new())?;
+
+        assert_eq!(0, compaction.records);
+        assert_eq!(batch, compaction.batch);
+
+        Ok(())
+    }
+
+    #[test]
+    fn compact_within_batch_keeps_last_occurrence_per_key() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let batch = Batch::builder()
+            .base_offset(5)
+            .record(keyed(0, b"k1", b"v1"))
+            .record(keyed(1, b"k2", b"v2"))
+            .record(keyed(2, b"k1", b"v3"))
+            .last_offset_delta(2)
+            .build()?;
+
+        let compaction = batch.compact(&BTreeSet::new())?;
+
+        assert_eq!(1, compaction.records);
+
+        let records = &compaction.batch.records;
+        assert_eq!(2, records.len());
+        assert_eq!(1, records[0].offset_delta);
+        assert_eq!(Some(Bytes::from_static(b"k2")), records[0].key);
+        assert_eq!(2, records[1].offset_delta);
+        assert_eq!(Some(Bytes::from_static(b"v3")), records[1].value);
+
+        // batch structure is preserved so offsets keep their gaps
+        assert_eq!(5, compaction.batch.base_offset);
+        assert_eq!(2, compaction.batch.last_offset_delta);
+
+        Ok(())
+    }
+
+    #[test]
+    fn compact_drops_keys_in_head() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let batch = Batch::builder()
+            .record(keyed(0, b"k1", b"v1"))
+            .record(keyed(1, b"k2", b"v2"))
+            .last_offset_delta(1)
+            .build()?;
+
+        let head = BTreeSet::from([Bytes::from_static(b"k1"), Bytes::from_static(b"k2")]);
+        let compaction = batch.compact(&head)?;
+
+        assert_eq!(2, compaction.records);
+        assert!(compaction.batch.records.is_empty());
+
+        Ok(())
+    }
+
+    #[test]
+    fn compact_retains_keyless_records() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let batch = Batch::builder()
+            .record(
+                Record::builder()
+                    .offset_delta(0)
+                    .value(Some(Bytes::from_static(b"v0"))),
+            )
+            .record(keyed(1, b"k1", b"v1"))
+            .record(keyed(2, b"k1", b"v2"))
+            .last_offset_delta(2)
+            .build()?;
+
+        let compaction = batch.compact(&BTreeSet::new())?;
+
+        assert_eq!(1, compaction.records);
+
+        let records = &compaction.batch.records;
+        assert_eq!(2, records.len());
+        assert_eq!(0, records[0].offset_delta);
+        assert_eq!(None, records[0].key);
+        assert_eq!(2, records[1].offset_delta);
+        assert_eq!(Some(Bytes::from_static(b"k1")), records[1].key);
+
+        Ok(())
+    }
+
+    #[test]
+    fn compact_retains_keyless_when_all_keyed_records_drop() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let batch = Batch::builder()
+            .record(
+                Record::builder()
+                    .offset_delta(0)
+                    .value(Some(Bytes::from_static(b"v0"))),
+            )
+            .record(keyed(1, b"k1", b"v1"))
+            .last_offset_delta(1)
+            .build()?;
+
+        let head = BTreeSet::from([Bytes::from_static(b"k1")]);
+        let compaction = batch.compact(&head)?;
+
+        assert_eq!(1, compaction.records);
+
+        let records = &compaction.batch.records;
+        assert_eq!(1, records.len());
+        assert_eq!(0, records[0].offset_delta);
+        assert_eq!(None, records[0].key);
 
         Ok(())
     }

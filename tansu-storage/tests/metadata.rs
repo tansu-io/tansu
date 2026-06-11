@@ -14,11 +14,25 @@
 
 use crate::common::{Error, init_tracing};
 use rama::{Context, Layer as _, Service, layer::MapStateLayer};
-use tansu_sans_io::MetadataRequest;
-use tansu_storage::{MetadataService, StorageContainer};
+use std::sync::Arc;
+use tansu_sans_io::{
+    ErrorCode, MetadataRequest, NULL_TOPIC_ID, metadata_request::MetadataRequestTopic,
+};
+use tansu_storage::{MetadataService, Storage, StorageContainer};
 use url::Url;
 
 mod common;
+
+async fn storage() -> Result<Arc<Box<dyn Storage>>, Error> {
+    StorageContainer::builder()
+        .cluster_id("tansu")
+        .node_id(111)
+        .advertised_listener(Url::parse("tcp://localhost:9092")?)
+        .storage(Url::parse("memory://tansu/")?)
+        .build()
+        .await
+        .map_err(Into::into)
+}
 
 #[tokio::test]
 async fn req() -> Result<(), Error> {
@@ -55,6 +69,96 @@ async fn req() -> Result<(), Error> {
     assert_eq!(PORT, brokers[0].port);
     assert_eq!(NODE_ID, brokers[0].node_id);
     assert!(brokers[0].rack.is_none());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn auto_create_topic() -> Result<(), Error> {
+    let _guard = init_tracing()?;
+
+    let storage = storage().await?;
+    let service = MapStateLayer::new(|_| storage).into_layer(MetadataService);
+
+    let name = "auto-created";
+
+    let response = service
+        .serve(
+            Context::default(),
+            MetadataRequest::default()
+                .allow_auto_topic_creation(Some(true))
+                .topics(Some(vec![
+                    MetadataRequestTopic::default().name(Some(name.into())),
+                ])),
+        )
+        .await?;
+
+    let topics = response.topics.unwrap_or_default();
+    assert_eq!(1, topics.len());
+    assert_eq!(ErrorCode::None, ErrorCode::try_from(topics[0].error_code)?);
+    assert_eq!(Some(name.into()), topics[0].name);
+    assert_ne!(Some(NULL_TOPIC_ID), topics[0].topic_id);
+    assert_eq!(4, topics[0].partitions.as_deref().unwrap_or_default().len());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn auto_create_topic_invalid_name() -> Result<(), Error> {
+    let _guard = init_tracing()?;
+
+    let storage = storage().await?;
+    let service = MapStateLayer::new(|_| storage).into_layer(MetadataService);
+
+    let name = "not a valid topic name";
+
+    let response = service
+        .serve(
+            Context::default(),
+            MetadataRequest::default()
+                .allow_auto_topic_creation(Some(true))
+                .topics(Some(vec![
+                    MetadataRequestTopic::default().name(Some(name.into())),
+                ])),
+        )
+        .await?;
+
+    let topics = response.topics.unwrap_or_default();
+    assert_eq!(1, topics.len());
+    assert_eq!(
+        ErrorCode::InvalidTopicException,
+        ErrorCode::try_from(topics[0].error_code)?
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn auto_create_topic_not_allowed() -> Result<(), Error> {
+    let _guard = init_tracing()?;
+
+    let storage = storage().await?;
+    let service = MapStateLayer::new(|_| storage).into_layer(MetadataService);
+
+    let name = "not-auto-created";
+
+    let response = service
+        .serve(
+            Context::default(),
+            MetadataRequest::default()
+                .allow_auto_topic_creation(Some(false))
+                .topics(Some(vec![
+                    MetadataRequestTopic::default().name(Some(name.into())),
+                ])),
+        )
+        .await?;
+
+    let topics = response.topics.unwrap_or_default();
+    assert_eq!(1, topics.len());
+    assert_eq!(
+        ErrorCode::UnknownTopicOrPartition,
+        ErrorCode::try_from(topics[0].error_code)?
+    );
 
     Ok(())
 }

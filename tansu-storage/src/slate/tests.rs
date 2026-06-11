@@ -798,6 +798,472 @@ async fn test_produce_multiple_partitions() {
     }
 }
 
+// ========== Transactional Offset Tests ==========
+
+#[tokio::test]
+async fn test_txn_add_offsets() {
+    let engine = create_test_engine().await;
+
+    let producer = engine
+        .init_producer(Some("add-offsets-txn"), 60000, Some(-1), Some(-1))
+        .await
+        .unwrap();
+
+    let error_code = engine
+        .txn_add_offsets("add-offsets-txn", producer.id, producer.epoch, "group-1")
+        .await
+        .unwrap();
+    assert_eq!(ErrorCode::None, error_code);
+}
+
+#[tokio::test]
+async fn test_txn_add_offsets_unknown_txn() {
+    let engine = create_test_engine().await;
+
+    let error_code = engine
+        .txn_add_offsets("unknown-txn", 1, 0, "group-1")
+        .await
+        .unwrap();
+    assert_eq!(ErrorCode::TransactionalIdNotFound, error_code);
+}
+
+#[tokio::test]
+async fn test_txn_add_offsets_wrong_producer() {
+    let engine = create_test_engine().await;
+
+    let producer = engine
+        .init_producer(Some("add-offsets-wrong-prod"), 60000, Some(-1), Some(-1))
+        .await
+        .unwrap();
+
+    let error_code = engine
+        .txn_add_offsets("add-offsets-wrong-prod", 9999, producer.epoch, "group-1")
+        .await
+        .unwrap();
+    assert_eq!(ErrorCode::UnknownProducerId, error_code);
+}
+
+#[tokio::test]
+async fn test_txn_add_offsets_wrong_epoch() {
+    let engine = create_test_engine().await;
+
+    let producer = engine
+        .init_producer(Some("add-offsets-wrong-epoch"), 60000, Some(-1), Some(-1))
+        .await
+        .unwrap();
+
+    let error_code = engine
+        .txn_add_offsets("add-offsets-wrong-epoch", producer.id, 99, "group-1")
+        .await
+        .unwrap();
+    assert_eq!(ErrorCode::ProducerFenced, error_code);
+}
+
+// ========== SCRAM Credential Tests ==========
+
+#[tokio::test]
+async fn test_scram_credential_lifecycle() {
+    use tansu_sans_io::ScramMechanism;
+
+    use crate::ScramCredential;
+
+    let engine = create_test_engine().await;
+
+    // No credential stored yet
+    let found = engine
+        .user_scram_credential("alice", ScramMechanism::Scram256)
+        .await
+        .unwrap();
+    assert!(found.is_none());
+
+    let credential = ScramCredential {
+        salt: Bytes::from_static(b"salt"),
+        iterations: 4096,
+        stored_key: Bytes::from_static(b"stored-key"),
+        server_key: Bytes::from_static(b"server-key"),
+    };
+
+    engine
+        .upsert_user_scram_credential("alice", ScramMechanism::Scram256, credential.clone())
+        .await
+        .unwrap();
+
+    // Credential round-trips
+    let found = engine
+        .user_scram_credential("alice", ScramMechanism::Scram256)
+        .await
+        .unwrap();
+    assert_eq!(Some(credential.clone()), found);
+
+    // Different mechanism and user are distinct keys
+    assert!(
+        engine
+            .user_scram_credential("alice", ScramMechanism::Scram512)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        engine
+            .user_scram_credential("bob", ScramMechanism::Scram256)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    engine
+        .delete_user_scram_credential("alice", ScramMechanism::Scram256)
+        .await
+        .unwrap();
+
+    let found = engine
+        .user_scram_credential("alice", ScramMechanism::Scram256)
+        .await
+        .unwrap();
+    assert!(found.is_none());
+}
+
+// ========== List Offsets Tests ==========
+
+#[tokio::test]
+async fn test_list_offsets_earliest_after_delete_records() {
+    use tansu_sans_io::delete_records_request::{DeleteRecordsPartition, DeleteRecordsTopic};
+    use tansu_sans_io::{IsolationLevel, ListOffset};
+
+    let engine = create_test_engine().await;
+
+    let topic = CreatableTopic::default()
+        .name("earliest-topic".into())
+        .num_partitions(1)
+        .replication_factor(1);
+    let _ = engine.create_topic(topic, false).await.unwrap();
+
+    let topition = Topition::new("earliest-topic", 0);
+
+    let batch = Batch {
+        base_offset: 0,
+        batch_length: 0,
+        partition_leader_epoch: 0,
+        magic: 2,
+        crc: 0,
+        attributes: 0,
+        last_offset_delta: 0,
+        base_timestamp: 1000,
+        max_timestamp: 1000,
+        producer_id: -1,
+        producer_epoch: -1,
+        base_sequence: -1,
+        record_count: 1,
+        record_data: Bytes::new(),
+    };
+
+    for _ in 0..5 {
+        let _ = engine
+            .produce(None, &topition, batch.clone())
+            .await
+            .unwrap();
+    }
+
+    // Before deletion, earliest is 0
+    let responses = engine
+        .list_offsets(
+            IsolationLevel::ReadUncommitted,
+            &[(topition.clone(), ListOffset::Earliest)],
+        )
+        .await
+        .unwrap();
+    assert_eq!(Some(0), responses[0].1.offset);
+
+    // Delete records up to offset 3
+    let delete_request = vec![
+        DeleteRecordsTopic::default()
+            .name("earliest-topic".into())
+            .partitions(Some(vec![
+                DeleteRecordsPartition::default()
+                    .partition_index(0)
+                    .offset(3),
+            ])),
+    ];
+    let _ = engine.delete_records(&delete_request).await.unwrap();
+
+    // Earliest now reflects the advanced log start offset
+    let responses = engine
+        .list_offsets(
+            IsolationLevel::ReadUncommitted,
+            &[
+                (topition.clone(), ListOffset::Earliest),
+                (topition.clone(), ListOffset::Latest),
+            ],
+        )
+        .await
+        .unwrap();
+    assert_eq!(ErrorCode::None, responses[0].1.error_code);
+    assert_eq!(Some(3), responses[0].1.offset);
+    assert_eq!(Some(5), responses[1].1.offset);
+}
+
+// ========== Cleanup Policy Tests ==========
+
+mod cleanup_policy {
+    use std::time::{Duration, SystemTime};
+
+    use tansu_sans_io::{
+        IsolationLevel,
+        create_topics_request::CreatableTopicConfig,
+        record::{Record, inflated},
+    };
+
+    use super::*;
+
+    async fn topic_with_policy(engine: &Engine, name: &str, configs: &[(&str, &str)]) -> Topition {
+        let topic = CreatableTopic::default()
+            .name(name.into())
+            .num_partitions(1)
+            .replication_factor(1)
+            .configs(Some(
+                configs
+                    .iter()
+                    .map(|(name, value)| {
+                        CreatableTopicConfig::default()
+                            .name((*name).into())
+                            .value(Some((*value).into()))
+                    })
+                    .collect(),
+            ));
+
+        let _ = engine.create_topic(topic, false).await.unwrap();
+
+        Topition::new(name, 0)
+    }
+
+    fn keyed_batch(key: &'static [u8], value: &'static [u8], timestamp: Option<i64>) -> Batch {
+        let mut builder = inflated::Batch::builder().record(
+            Record::builder()
+                .key(Some(Bytes::from_static(key)))
+                .value(Some(Bytes::from_static(value))),
+        );
+
+        if let Some(timestamp) = timestamp {
+            builder = builder.base_timestamp(timestamp).max_timestamp(timestamp);
+        }
+
+        builder.build().and_then(Batch::try_from).unwrap()
+    }
+
+    async fn fetch_all(engine: &Engine, topition: &Topition) -> Vec<Batch> {
+        engine
+            .fetch(
+                topition,
+                0,
+                1,
+                1024 * 1024,
+                IsolationLevel::ReadUncommitted,
+                Duration::ZERO,
+            )
+            .await
+            .unwrap()
+    }
+
+    fn now_millis() -> i64 {
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|since_epoch| since_epoch.as_millis() as i64)
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn compact_keeps_latest_record_per_key() {
+        let engine = create_test_engine().await;
+        let topition =
+            topic_with_policy(&engine, "policy-compact", &[("cleanup.policy", "compact")]).await;
+
+        for batch in [
+            keyed_batch(b"a", b"one", None),
+            keyed_batch(b"b", b"first", None),
+            keyed_batch(b"a", b"two", None),
+        ] {
+            let _ = engine.produce(None, &topition, batch).await.unwrap();
+        }
+
+        engine.maintain(SystemTime::now()).await.unwrap();
+
+        // The batch at offset 0 (key "a", superseded at offset 2) is removed
+        let stage = engine.offset_stage(&topition).await.unwrap();
+        assert_eq!(1, stage.log_start);
+        assert_eq!(3, stage.high_watermark);
+
+        let batches = fetch_all(&engine, &topition).await;
+        assert_eq!(2, batches.len());
+        assert_eq!(1, batches[0].base_offset);
+        assert_eq!(2, batches[1].base_offset);
+
+        let records = inflated::Batch::try_from(batches[1].clone())
+            .unwrap()
+            .records;
+        assert_eq!(1, records.len());
+        assert_eq!(Some(Bytes::from_static(b"two")), records[0].value);
+
+        // Compaction is idempotent
+        engine.maintain(SystemTime::now()).await.unwrap();
+        assert_eq!(2, fetch_all(&engine, &topition).await.len());
+    }
+
+    #[tokio::test]
+    async fn compact_rewrites_partial_batch() {
+        let engine = create_test_engine().await;
+        let topition = topic_with_policy(
+            &engine,
+            "policy-compact-partial",
+            &[("cleanup.policy", "compact")],
+        )
+        .await;
+
+        // One batch with two records, then key "a" is superseded
+        let batch = inflated::Batch::builder()
+            .record(
+                Record::builder()
+                    .key(Some(Bytes::from_static(b"a")))
+                    .value(Some(Bytes::from_static(b"one"))),
+            )
+            .record(
+                Record::builder()
+                    .key(Some(Bytes::from_static(b"b")))
+                    .value(Some(Bytes::from_static(b"first")))
+                    .offset_delta(1),
+            )
+            .last_offset_delta(1)
+            .build()
+            .and_then(Batch::try_from)
+            .unwrap();
+
+        let _ = engine.produce(None, &topition, batch).await.unwrap();
+        let _ = engine
+            .produce(None, &topition, keyed_batch(b"a", b"two", None))
+            .await
+            .unwrap();
+
+        engine.maintain(SystemTime::now()).await.unwrap();
+
+        // The first batch survives with only the record for key "b"
+        let stage = engine.offset_stage(&topition).await.unwrap();
+        assert_eq!(0, stage.log_start);
+        assert_eq!(3, stage.high_watermark);
+
+        let batches = fetch_all(&engine, &topition).await;
+        assert_eq!(2, batches.len());
+        assert_eq!(0, batches[0].base_offset);
+
+        let records = inflated::Batch::try_from(batches[0].clone())
+            .unwrap()
+            .records;
+        assert_eq!(1, records.len());
+        assert_eq!(Some(Bytes::from_static(b"b")), records[0].key);
+        assert_eq!(Some(Bytes::from_static(b"first")), records[0].value);
+        assert_eq!(1, records[0].offset_delta);
+    }
+
+    #[tokio::test]
+    async fn delete_removes_expired_prefix() {
+        let engine = create_test_engine().await;
+        let topition = topic_with_policy(
+            &engine,
+            "policy-delete",
+            &[("cleanup.policy", "delete"), ("retention.ms", "60000")],
+        )
+        .await;
+
+        let now = now_millis();
+        let expired = now - Duration::from_mins(5).as_millis() as i64;
+
+        for batch in [
+            keyed_batch(b"a", b"one", Some(expired)),
+            keyed_batch(b"a", b"two", Some(expired + 1)),
+            keyed_batch(b"a", b"three", Some(now)),
+        ] {
+            let _ = engine.produce(None, &topition, batch).await.unwrap();
+        }
+
+        engine.maintain(SystemTime::now()).await.unwrap();
+
+        let stage = engine.offset_stage(&topition).await.unwrap();
+        assert_eq!(2, stage.log_start);
+        assert_eq!(3, stage.high_watermark);
+
+        let batches = fetch_all(&engine, &topition).await;
+        assert_eq!(1, batches.len());
+        assert_eq!(2, batches[0].base_offset);
+    }
+
+    #[tokio::test]
+    async fn delete_whole_partition_meets_high_watermark() {
+        use tansu_sans_io::ListOffset;
+
+        let engine = create_test_engine().await;
+        let topition = topic_with_policy(
+            &engine,
+            "policy-delete-all",
+            &[("cleanup.policy", "delete"), ("retention.ms", "60000")],
+        )
+        .await;
+
+        let expired = now_millis() - Duration::from_mins(5).as_millis() as i64;
+
+        for batch in [
+            keyed_batch(b"a", b"one", Some(expired)),
+            keyed_batch(b"a", b"two", Some(expired + 1)),
+        ] {
+            let _ = engine.produce(None, &topition, batch).await.unwrap();
+        }
+
+        engine.maintain(SystemTime::now()).await.unwrap();
+
+        // The log start meets the high watermark: offsets are never reused
+        let stage = engine.offset_stage(&topition).await.unwrap();
+        assert_eq!(2, stage.log_start);
+        assert_eq!(2, stage.high_watermark);
+
+        assert!(fetch_all(&engine, &topition).await.is_empty());
+
+        let responses = engine
+            .list_offsets(
+                IsolationLevel::ReadUncommitted,
+                &[(topition.clone(), ListOffset::Earliest)],
+            )
+            .await
+            .unwrap();
+        assert_eq!(Some(2), responses[0].1.offset);
+
+        // The next produce continues from the high watermark
+        let offset = engine
+            .produce(None, &topition, keyed_batch(b"a", b"three", None))
+            .await
+            .unwrap();
+        assert_eq!(2, offset);
+    }
+
+    #[tokio::test]
+    async fn no_policy_is_untouched() {
+        let engine = create_test_engine().await;
+        let topition = topic_with_policy(&engine, "policy-none", &[]).await;
+
+        let expired = now_millis() - Duration::from_hours(30 * 24).as_millis() as i64;
+
+        for batch in [
+            keyed_batch(b"a", b"one", Some(expired)),
+            keyed_batch(b"a", b"two", Some(expired + 1)),
+        ] {
+            let _ = engine.produce(None, &topition, batch).await.unwrap();
+        }
+
+        engine.maintain(SystemTime::now()).await.unwrap();
+
+        let stage = engine.offset_stage(&topition).await.unwrap();
+        assert_eq!(0, stage.log_start);
+        assert_eq!(2, stage.high_watermark);
+        assert_eq!(2, fetch_all(&engine, &topition).await.len());
+    }
+}
+
 // ========== Builder Pattern Tests ==========
 
 #[tokio::test]

@@ -25,7 +25,7 @@
 //!
 //! ### Design Principles
 //!
-//! 1. **Type prefix first**: Each key type has a single-char prefix (`b/`, `c/`, `g/`, `w/`)
+//! 1. **Type prefix first**: Each key type has a single-char prefix (`b/`, `c/`, `g/`, `u/`, `w/`)
 //!    - Enables bloom filter to skip irrelevant SSTable blocks
 //!    - Groups related data together during compaction
 //!    - Allows efficient type-specific range scans
@@ -52,6 +52,7 @@
 //! | `b` | `b/{topic:uuid}/{partition:be32}/{offset:be64}` | Batch | Sequential read by offset |
 //! | `c` | `c/{group}/{topic}/{partition:be32}` | OffsetCommitValue | Per-group offset lookup |
 //! | `g` | `g/{group_id}` | GroupDetailVersion | Group state management |
+//! | `u` | `u/{user}/{mechanism:be32}` | StoredScramCredential | SASL/SCRAM lookup per user |
 //! | `w` | `w/{topic:uuid}/{partition:be32}` | Watermark | Watermark per partition |
 //!
 //! ### Key Ordering Example

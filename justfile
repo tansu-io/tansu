@@ -281,14 +281,14 @@ search-duckdb-parquet: (duckdb-parquet "search")
 tansu-server:
     target/debug/tansu broker --schema-registry file://./etc/schema 2>&1 | tee broker.log
 
-kafka-proxy:
-    docker run -d -p 19092:9092 apache/kafka:3.9.0
-
 kafka39:
-    docker run --rm -p 9092:9092 apache/kafka:3.9.0
+    docker run --d -p 9092:9092 apache/kafka:3.9.0
 
-kafka41:
-    docker run --rm -p 9092:9092 apache/kafka:4.1.0
+proxy-kafka39:
+    docker run --rm -p 19092:9092 apache/kafka:3.9.0
+
+proxy-kafka41:
+    docker run --rm -p 19092:9092 apache/kafka:4.1.0
 
 codespace-create:
     gh codespace create \
@@ -433,6 +433,16 @@ customer-topic-generator *args: (generator "customer" args)
 customer-duckdb-delta: (duckdb "\"select * from delta_scan('s3://lake/tansu.customer');\"")
 
 broker-memory profile="profiling": (build profile "dynostore") (tansu-broker profile "--storage-engine=memory://")
+
+# run the librdkafka integration test suite against a memory:// broker
+compat-librdkafka: (build "dev" "dynostore")
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ./target/debug/tansu broker --storage-engine=memory:// \
+        --advertised-listener-url=tcp://127.0.0.1:9092 &
+    broker=$!
+    trap 'kill ${broker}' EXIT
+    ./compat/librdkafka/run.sh
 
 broker-null profile="profiling": (build profile "default") (tansu-broker profile "--storage-engine=null://")
 
