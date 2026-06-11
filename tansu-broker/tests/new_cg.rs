@@ -488,13 +488,13 @@ async fn group_consumer_next_action(consumers: Range<i32>) -> Result<()> {
     let iterations = 5..10;
 
     let (tx, rx) = channel(consumers.len());
-    let simulation_complete = CancellationToken::new();
+    let simulation = CancellationToken::new();
 
     let is_transient = |id| id % 2 == 0;
 
     for (id, consumer) in consumers.clone().into_iter().enumerate() {
         let tx = tx.clone();
-        let simulation_complete = simulation_complete.clone();
+        let simulation = simulation.clone();
 
         let consumer_iterations = if is_transient(id) {
             let mut rng = SmallRng::seed_from_u64(id as u64);
@@ -511,7 +511,7 @@ async fn group_consumer_next_action(consumers: Range<i32>) -> Result<()> {
                 consumer_iterations,
                 consumer_iterations > iterations.end,
                 tx,
-                simulation_complete,
+                simulation,
                 &consumer,
             )
             .await
@@ -523,14 +523,14 @@ async fn group_consumer_next_action(consumers: Range<i32>) -> Result<()> {
     _ = tasks.spawn(transient_wave_complete(
         rx,
         notify.clone(),
-        simulation_complete.clone(),
+        simulation.clone(),
         consumers.clone(),
         is_transient,
     ));
 
     _ = tasks.spawn(stability_check(
         notify,
-        simulation_complete.clone(),
+        simulation.clone(),
         consumers.clone(),
         is_transient,
     ));
