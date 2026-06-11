@@ -430,6 +430,16 @@ customer-duckdb-delta: (duckdb "\"select * from delta_scan('s3://lake/tansu.cust
 
 broker-memory profile="profiling": (build profile "dynostore") (tansu-broker profile "--storage-engine=memory://")
 
+# run the librdkafka integration test suite against a memory:// broker
+compat-librdkafka: (build "dev" "dynostore")
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ./target/debug/tansu broker --storage-engine=memory:// \
+        --advertised-listener-url=tcp://127.0.0.1:9092 &
+    broker=$!
+    trap 'kill ${broker}' EXIT
+    ./compat/librdkafka/run.sh
+
 broker-null profile="profiling": (build profile "default") (tansu-broker profile "--storage-engine=null://")
 
 clean-tansu-db:

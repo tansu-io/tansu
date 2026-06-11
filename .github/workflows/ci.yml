@@ -165,6 +165,23 @@ jobs:
           cache: false
       - run: sudo apt-get install -y libclang-dev libkrb5-dev
       - run: cargo build --features ${{matrix.storage}} --features ${{matrix.lake}}
+  compat-librdkafka:
+    runs-on: ${{matrix.os}}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+    env:
+      RUST_BACKTRACE: 1
+      RUST_LOG: warn,tansu_broker=info,tansu_storage=info
+    steps:
+      - uses: actions/checkout@v6
+      - uses: extractions/setup-just@v3
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
+      - run: just compat-librdkafka
   cargo-publish-dry-run:
     runs-on: ${{matrix.os}}
     strategy:

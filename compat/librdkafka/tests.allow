@@ -1,0 +1,24 @@
+# librdkafka tests known to pass against tansu (run by run.sh).
+#
+# Only tests that create their topics through the Admin API are candidates:
+# tansu does not implement automatic topic creation on MetadataRequest, so
+# tests relying on auto.create.topics.enable=true cannot run yet.
+0019 # list_groups
+0022 # consume_batch
+0026 # consume_pause
+0043 # no_connection
+0045 # subscribe_update
+0055 # producer_latency
+0084 # destroy_flags
+0086 # purge
+0089 # max_poll_interval
+0090 # idempotence
+0102 # static_group_rebalance
+# 0103 transactions: do_test_misuse_txn expects INVALID_TRANSACTION_TIMEOUT
+# when transaction.timeout.ms exceeds transaction.max.timeout.ms; tansu does
+# not validate the timeout in InitProducerId
+0113 # cooperative_rebalance
+0125 # immediate_flush
+0132 # strategy_ordering
+0137 # barrier_batch_consume
+0150 # telemetry
