@@ -26,8 +26,10 @@ release-sqlite: (cargo-build "--release" "--bin" "tansu" "--no-default-features"
 
 test: test-workspace test-doc
 
-test-workspace *args:
-    cargo nextest run --workspace --all-targets --all-features --no-fail-fast --exclude fuzz {{ args }}
+test-workspace *args: (nextest "run" "--workspace" "--all-targets" "--all-features" "--no-fail-fast" "--exclude" "fuzz" args)
+
+nextest *args:
+    cargo nextest {{ args }}
 
 test-doc:
     cargo test --workspace --doc --all-features
@@ -39,6 +41,8 @@ cargo-fuzz +args:
     cargo +nightly fuzz {{ args }}
 
 fuzz-request-decode: (cargo-fuzz "run" "fuzz_request_decode" "--" "-max_total_time=60")
+
+fuzz-member-metadata: (cargo-fuzz "run" "fuzz_member_metadata" "--" "-max_total_time=60")
 
 fuzz-generate-seed: (cargo-fuzz "run" "--package" "fuzz" "--bin" "generate_seeds")
 
@@ -625,3 +629,6 @@ telemetry-vrm-consume vrm="SK06 YPM":
 
 postgres-local:
     LC_ALL="en_US.UTF-8" /opt/homebrew/opt/postgresql@18/bin/postgres -D /opt/homebrew/var/postgresql@18
+
+group-consumer-example topics="test":
+    cargo run --package tansu-client --example group_consumer -- --topics {{ topics }}

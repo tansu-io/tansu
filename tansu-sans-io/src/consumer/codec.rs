@@ -194,10 +194,10 @@ pub(crate) enum ConsumerProtocolSubscription {
 impl AsRef<i16> for ConsumerProtocolSubscription {
     fn as_ref(&self) -> &i16 {
         match self {
-            ConsumerProtocolSubscription::V0(_) => &0,
-            ConsumerProtocolSubscription::V1(_) => &1,
-            ConsumerProtocolSubscription::V2(_) => &2,
-            ConsumerProtocolSubscription::V3(_) => &3,
+            ConsumerProtocolSubscription::V0(_) => &super::ConsumerProtocolSubscription::V0,
+            ConsumerProtocolSubscription::V1(_) => &super::ConsumerProtocolSubscription::V1,
+            ConsumerProtocolSubscription::V2(_) => &super::ConsumerProtocolSubscription::V2,
+            ConsumerProtocolSubscription::V3(_) => &super::ConsumerProtocolSubscription::V3,
         }
     }
 }
@@ -438,27 +438,36 @@ where
                     .ok_or_else(|| <A::Error as de::Error>::custom("length"))
                     .inspect(|length| debug!("length: {length}"))
                     .and_then(|length| {
-                        (0..length).try_fold(
-                            Vec::with_capacity(length.try_into().map_err(|e| {
-                                <A::Error as de::Error>::custom(format!(
-                                    "length: {length}, caused: {e:?}"
-                                ))
-                            })?),
-                            |mut acc, _| {
-                                seq.next_element::<T>()?
-                                    .ok_or_else(|| <A::Error as de::Error>::custom("item"))
-                                    .map(|t| {
-                                        acc.push(t);
-                                        acc
-                                    })
-                            },
-                        )
+                        if length > 1024 {
+                            Err(<A::Error as de::Error>::custom(format!(
+                                "consumer maximum array length: {}",
+                                length
+                            )))
+                        } else {
+                            (0..length).try_fold(
+                                Vec::with_capacity(length.try_into().map_err(|e| {
+                                    <A::Error as de::Error>::custom(format!(
+                                        "length: {length}, caused: {e:?}"
+                                    ))
+                                })?),
+                                |mut acc, _| {
+                                    seq.next_element::<T>()?
+                                        .ok_or_else(|| <A::Error as de::Error>::custom("item"))
+                                        .map(|t| {
+                                            acc.push(t);
+                                            acc
+                                        })
+                                },
+                            )
+                        }
                     })
                     .map(Sequence)
             }
         }
 
-        deserializer.deserialize_seq(V(PhantomData))
+        deserializer
+            .deserialize_seq(V(PhantomData))
+            .inspect_err(|err| debug!(?err))
     }
 }
 
@@ -518,13 +527,20 @@ impl<'de> Deserialize<'de> for U16String {
                     .ok_or_else(|| de::Error::custom("length"))
                     .inspect(|length| debug!(length))
                     .and_then(|length| {
-                        (0..length)
-                            .map(|_| {
-                                seq.next_element::<u8>().and_then(|byte| {
-                                    byte.ok_or_else(|| <A::Error as de::Error>::custom("byte"))
+                        if length > 4096 {
+                            Err(<A::Error as de::Error>::custom(format!(
+                                "maximum string size: {}",
+                                length
+                            )))
+                        } else {
+                            (0..length)
+                                .map(|_| {
+                                    seq.next_element::<u8>().and_then(|byte| {
+                                        byte.ok_or_else(|| <A::Error as de::Error>::custom("byte"))
+                                    })
                                 })
-                            })
-                            .collect::<Result<Vec<_>, _>>()
+                                .collect::<Result<Vec<_>, _>>()
+                        }
                     })
                     .and_then(|bytes| {
                         String::from_utf8(bytes)
@@ -586,8 +602,15 @@ impl<'de> Deserialize<'de> for NullableU16String {
                     .ok_or_else(|| de::Error::custom("length"))
                     .inspect(|length| debug!(length))
                     .and_then(|length| {
+                        let q = i16::MAX;
+
                         if length == -1 {
                             Ok(None)
+                        } else if length > 4096 {
+                            Err(<A::Error as de::Error>::custom(format!(
+                                "maximum string size: {}",
+                                length
+                            )))
                         } else {
                             (0..length)
                                 .map(|_| {

@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -231,8 +231,9 @@
 use std::{
     fmt, io,
     net::SocketAddr,
-    sync::{Arc, LazyLock},
-    time::SystemTime,
+    ops::Range,
+    sync::{Arc, LazyLock, Mutex, PoisonError},
+    time::{Duration, SystemTime},
 };
 
 use opentelemetry::{
@@ -240,13 +241,16 @@ use opentelemetry::{
     metrics::{Counter, Histogram, Meter},
 };
 use opentelemetry_semantic_conventions::SCHEMA_URL;
+use rama::{Context, Layer, Service};
+use rand::{prelude::*, rngs::SmallRng};
 use tansu_sans_io::{Body, Frame};
-use tokio::{net::lookup_host, sync::oneshot, task::JoinError};
-use tracing::debug;
+use tokio::{net::lookup_host, sync::oneshot, task::JoinError, time::sleep};
+use tracing::{debug, instrument};
 use url::Url;
 
 mod api;
 mod channel;
+mod consumer;
 mod frame;
 mod stream;
 
@@ -256,6 +260,8 @@ pub use channel::{
     ChannelFrameLayer, ChannelFrameService, FrameChannelService, FrameReceiver, FrameSender,
     bounded_channel,
 };
+
+pub use consumer::{ConsumerGroupLayer, ConsumerGroupService};
 
 pub use frame::{
     BodyRequestLayer, BytesFrameLayer, BytesFrameService, FrameApiKeyMatcher, FrameBodyLayer,
@@ -277,6 +283,7 @@ pub enum Error {
     Join(Arc<JoinError>),
     Message(String),
     OneshotRecv(oneshot::error::RecvError),
+    Poison,
     Parse(#[from] url::ParseError),
     Protocol(#[from] tansu_sans_io::Error),
     UnableToSend(Box<Frame>),
@@ -300,6 +307,12 @@ impl From<JoinError> for Error {
 impl From<io::Error> for Error {
     fn from(value: io::Error) -> Self {
         Self::Io(Arc::new(value))
+    }
+}
+
+impl<T> From<PoisonError<T>> for Error {
+    fn from(_value: PoisonError<T>) -> Self {
+        Self::Poison
     }
 }
 
@@ -419,3 +432,99 @@ pub(crate) static BYTES_RECEIVED: LazyLock<Counter<u64>> = LazyLock::new(|| {
         .with_description("The number of bytes received")
         .build()
 });
+
+#[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
+pub struct LatencyIntroducingLayer {
+    seed: u64,
+    latency: Range<u64>,
+}
+
+impl LatencyIntroducingLayer {
+    pub fn with_seed(self, seed: u64) -> Self {
+        Self { seed, ..self }
+    }
+
+    pub fn with_latency_millis(self, latency: Range<u64>) -> Self {
+        Self { latency, ..self }
+    }
+}
+
+impl<S> Layer<S> for LatencyIntroducingLayer {
+    type Service = LatencyIntroducingService<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        Self::Service::new(inner)
+            .with_seed(self.seed)
+            .with_latency(self.latency.clone())
+    }
+}
+
+#[derive(Clone)]
+pub struct LatencyIntroducingService<S> {
+    inner: S,
+    rng: Arc<Mutex<SmallRng>>,
+    latency: Range<u64>,
+}
+
+impl<S> fmt::Debug for LatencyIntroducingService<S> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct(stringify!(LatencyIntroducingService))
+            .field("latency", &self.latency)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<S> LatencyIntroducingService<S> {
+    pub fn new(inner: S) -> Self {
+        Self {
+            inner,
+            rng: Arc::new(Mutex::new(SmallRng::seed_from_u64(0))),
+            latency: 50..150,
+        }
+    }
+
+    pub fn with_seed(self, seed: u64) -> Self {
+        Self {
+            rng: Arc::new(Mutex::new(SmallRng::seed_from_u64(seed))),
+            ..self
+        }
+    }
+
+    pub fn with_latency(self, latency: Range<u64>) -> Self {
+        Self { latency, ..self }
+    }
+
+    #[instrument(skip_all)]
+    async fn introduce_latency(&self) -> Result<(), Error> {
+        let latency = self
+            .rng
+            .lock()
+            .map(|mut rng| rng.random_range(self.latency.clone()))
+            .map(Duration::from_millis)
+            .inspect(|latency| debug!(?latency))?;
+
+        sleep(latency).await;
+
+        Ok(())
+    }
+}
+
+impl<S, Q, State> Service<State, Q> for LatencyIntroducingService<S>
+where
+    S: Service<State, Q>,
+    Q: Send + 'static,
+    S::Error: From<Error>,
+    State: Send + Sync + 'static,
+{
+    type Response = S::Response;
+
+    type Error = S::Error;
+
+    #[instrument(skip(ctx, req))]
+    async fn serve(&self, ctx: Context<State>, req: Q) -> Result<Self::Response, Self::Error> {
+        self.introduce_latency().await?;
+        let result = self.inner.serve(ctx, req).await;
+        self.introduce_latency().await?;
+        result
+    }
+}

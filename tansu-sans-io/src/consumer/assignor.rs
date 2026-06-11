@@ -16,9 +16,15 @@ use std::collections::BTreeSet;
 
 use crate::MetadataResponse;
 
+mod cooperative_sticky;
 mod range;
+mod round_robin;
+mod uniform;
 
+pub use cooperative_sticky::CooperativeStickyAssignor;
 pub use range::RangeAssignor;
+pub use round_robin::RoundRobinAssignor;
+pub use uniform::UniformAssignor;
 
 #[derive(Clone, Default, Eq, Hash, Debug, Ord, PartialEq, PartialOrd)]
 struct Topition {

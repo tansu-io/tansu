@@ -8323,6 +8323,7 @@ dependencies = [
 name = "tansu-broker"
 version = "0.6.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "bytes",
  "clap",
@@ -8429,11 +8430,13 @@ dependencies = [
 name = "tansu-client"
 version = "0.6.0"
 dependencies = [
+ "anyhow",
  "backoff",
  "bytes",
  "clap",
  "deadpool",
  "dotenv",
+ "humantime",
  "opentelemetry",
  "opentelemetry-semantic-conventions",
  "rama",
@@ -8644,6 +8647,7 @@ dependencies = [
  "opentelemetry",
  "opentelemetry-semantic-conventions",
  "rama",
+ "rand 0.10.1",
  "rsasl",
  "tansu-auth",
  "tansu-sans-io",
