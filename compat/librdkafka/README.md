@@ -39,12 +39,8 @@ DYLD_LIBRARY_PATH=../src:../src-cpp TESTS=0019 TEST_DEBUG=broker,protocol \
 
 ## The allowlist
 
-`tests.allow` lists tests known to pass. Most of the suite cannot run yet
-because tansu does not implement automatic topic creation on
-MetadataRequest (`auto.create.topics.enable`), which the librdkafka test
-framework assumes. Only tests that create their topics explicitly through
-the Admin API are candidates for the allowlist.
-
-When broker compatibility improves, re-sweep the candidate tests and grow
-the allowlist. `FINDINGS.md` records the compatibility gaps found in the
-initial sweep.
+`tests.allow` lists tests known to pass. When broker compatibility
+improves, re-sweep the excluded tests and grow the allowlist.
+`FINDINGS.md` records the gaps behind the tests that are still excluded,
+and the ones already fixed (automatic topic creation on MetadataRequest,
+which most of the suite assumes, was implemented 2026-06-11).

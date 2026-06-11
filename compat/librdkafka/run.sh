@@ -41,6 +41,14 @@ fi
 printf 'bootstrap.servers=%s\n' "${BOOTSTRAP_SERVERS}" \
        > "${SRC_DIR}/tests/test.conf"
 
+for _ in $(seq 1 100); do
+    if (exec 3<> "/dev/tcp/${BOOTSTRAP_SERVERS%:*}/${BOOTSTRAP_SERVERS##*:}") \
+           2> /dev/null; then
+        break
+    fi
+    sleep 0.1
+done
+
 export DYLD_LIBRARY_PATH="${SRC_DIR}/src:${SRC_DIR}/src-cpp"
 export LD_LIBRARY_PATH="${DYLD_LIBRARY_PATH}"
 

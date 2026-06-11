@@ -216,20 +216,45 @@ impl Meta {
                 .unwrap_or_default()
                 .iter()
                 .fold(BTreeMap::new(), |mut acc, item| {
-                    _ = acc.insert(item.name.as_str(), item.value.as_deref());
+                    _ = acc.insert(item.name.clone(), item.value.clone());
                     acc
                 });
 
             for change in changes {
                 match OpType::try_from(change.config_operation)? {
                     OpType::Set => {
-                        _ = configuration.insert(change.name.as_str(), change.value.as_deref());
+                        _ = configuration.insert(change.name.clone(), change.value.clone());
                     }
                     OpType::Delete => {
                         _ = configuration.remove(change.name.as_str());
                     }
-                    OpType::Append => todo!(),
-                    OpType::Subtract => todo!(),
+                    // append to, or subtract from, a comma separated list
+                    OpType::Append => {
+                        let appended = change.value.as_deref().unwrap_or_default();
+
+                        _ = configuration
+                            .entry(change.name.clone())
+                            .and_modify(|value| match value {
+                                Some(current) if !current.is_empty() => {
+                                    if !current.split(',').any(|item| item == appended) {
+                                        *current = format!("{current},{appended}");
+                                    }
+                                }
+                                _ => *value = Some(appended.to_owned()),
+                            })
+                            .or_insert_with(|| Some(appended.to_owned()));
+                    }
+                    OpType::Subtract => {
+                        let subtracted = change.value.as_deref().unwrap_or_default();
+
+                        if let Some(Some(current)) = configuration.get_mut(change.name.as_str()) {
+                            *current = current
+                                .split(',')
+                                .filter(|item| *item != subtracted)
+                                .collect::<Vec<_>>()
+                                .join(",");
+                        }
+                    }
                 }
             }
 
@@ -240,11 +265,7 @@ impl Meta {
                     configuration
                         .into_iter()
                         .fold(Vec::new(), |mut acc, (key, value)| {
-                            acc.push(
-                                CreatableTopicConfig::default()
-                                    .name(key.to_owned())
-                                    .value(value.map(|value| value.to_owned())),
-                            );
+                            acc.push(CreatableTopicConfig::default().name(key).value(value));
                             acc
                         }),
                 );
