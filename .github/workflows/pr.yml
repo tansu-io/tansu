@@ -1,0 +1,133 @@
+---
+name: pr
+
+on:
+  pull_request:
+    branches:
+      - main
+
+env:
+  CLICOLOR: 1
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: extractions/setup-just@v3
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: clippy, rustfmt
+          cache: false
+      - run: just check
+
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: extractions/setup-just@v3
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: clippy, rustfmt
+          cache: false
+      - run: just fmt
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: extractions/setup-just@v3
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: clippy, rustfmt
+          cache: false
+      - run: just clippy
+
+  build-storage:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        storage:
+          - dynostore
+          - libsql
+          - postgres
+          - slatedb
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: clippy, rustfmt
+          cache: false
+      - run: sudo apt-get install -y libclang-dev libkrb5-dev
+      - run: cargo build --features ${{ matrix.storage }}
+
+  build-storage-lake:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        storage:
+          - dynostore
+          - libsql
+          - postgres
+          - slatedb
+        lake:
+          - delta
+          - iceberg
+          - parquet
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: clippy, rustfmt
+          cache: false
+      - run: sudo apt-get install -y libclang-dev libkrb5-dev
+      - run: cargo build --features ${{ matrix.storage }} --features ${{ matrix.lake }}
+
+  test:
+    needs: [check, fmt, clippy, build-storage, build-storage-lake]
+    runs-on: ubuntu-latest
+    env:
+      ADVERTISED_LISTENER_URL: tcp://localhost:9092
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_ALLOW_HTTP: true
+      AWS_DEFAULT_REGION: eu-west-2
+      AWS_ENDPOINT: http://localhost:9000
+      AWS_SECRET_ACCESS_KEY: minioadmin
+      CARGO_BUILD_BUILD_DIR: /mnt/build
+      CLUSTER_ID: tansu-ci
+      DATA_LAKE: s3://lake
+      ICEBERG_CATALOG: http://localhost:8181/catalog
+      ICEBERG_WAREHOUSE: tansu
+      LAKEKEEPER_IMAGE: quay.io/lakekeeper/catalog:v0.8.5
+      POSTGRES_IMAGE: postgres:17
+      PROMETHEUS_LISTENER_URL: tcp://[::]:9100
+      RUST_BACKTRACE: 1
+      RUST_LOG: debug,tansu_sans_io=warn,tansu_model=warn
+      SCHEMA_REGISTRY: file://./etc/schema
+      STORAGE_ENGINE: s3://tansu/
+    steps:
+      - run: sudo mkdir /mnt/build
+      - run: sudo chmod a+rwxt /mnt/build
+      - run: df -h
+      - uses: actions/checkout@v6
+      - uses: extractions/setup-just@v3
+      - run: just ci
+      - run: sudo apt-get install -y libclang-dev libkrb5-dev
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: clippy, rustfmt
+          cache: false
+      - run: cargo install cargo-nextest --locked
+      - run: just test
+      - run: df -h
+        if: always()
+      - run: tar --create --verbose --gzip --file=logs.tar.gz logs
+        if: always()
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: logs
+          path: logs.tar.gz
+          if-no-files-found: error
