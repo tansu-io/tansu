@@ -140,7 +140,7 @@ jobs:
           components: clippy, rustfmt
           cache: false
       - run: sudo apt-get install -y libclang-dev libkrb5-dev
-      - run: cargo build --features ${{matrix.storage}}
+      - run: cargo build  --no-default-features --features ${{matrix.storage}}
   build-storage-lake:
     runs-on: ${{matrix.os}}
     strategy:

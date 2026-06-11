@@ -209,7 +209,10 @@ mod pg;
 mod batch;
 
 mod null;
+
+#[cfg(feature = "libsql")]
 mod proxy;
+
 mod service;
 
 pub use service::{
