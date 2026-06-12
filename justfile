@@ -440,6 +440,16 @@ compat-librdkafka: (build "dev" "dynostore")
     trap 'kill ${broker}' EXIT
     ./compat/librdkafka/run.sh
 
+# run the franz-go integration test suite against a memory:// broker
+compat-franz-go: (build "dev" "dynostore")
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ./target/debug/tansu broker --storage-engine=memory:// \
+        --advertised-listener-url=tcp://127.0.0.1:9092 &
+    broker=$!
+    trap 'kill ${broker}' EXIT
+    ./compat/franz-go/run.sh
+
 broker-null profile="profiling": (build profile "default") (tansu-broker profile "--storage-engine=null://")
 
 clean-tansu-db:
