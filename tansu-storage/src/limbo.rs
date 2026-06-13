@@ -1444,6 +1444,18 @@ impl Storage for Engine {
             let offset_delta = 0;
             let timestamp_delta = 0;
 
+            let base_offset = row
+                .get_value(0)
+                .map_err(Into::into)
+                .and_then(|value| {
+                    value
+                        .as_integer()
+                        .copied()
+                        .ok_or(Error::UnexpectedValue(value))
+                })
+                .inspect(|base_offset| debug!(base_offset))
+                .inspect_err(|err| error!(?err))?;
+
             let record_builder = {
                 let mut record_builder = Record::builder()
                     .offset_delta(offset_delta)
@@ -1468,7 +1480,7 @@ impl Storage for Engine {
                             self.cluster.as_str(),
                             topition.topic(),
                             topition.partition(),
-                            offset,
+                            base_offset,
                         ),
                     )
                     .await?;
@@ -1499,18 +1511,7 @@ impl Storage for Engine {
             };
 
             let mut batch_builder = inflated::Batch::builder()
-                .base_offset(
-                    row.get_value(0)
-                        .map_err(Into::into)
-                        .and_then(|value| {
-                            value
-                                .as_integer()
-                                .copied()
-                                .ok_or(Error::UnexpectedValue(value))
-                        })
-                        .inspect(|base_offset| debug!(base_offset))
-                        .inspect_err(|err| error!(?err))?,
-                )
+                .base_offset(base_offset)
                 .attributes(
                     row.get_value(1)
                         .map(|value| {

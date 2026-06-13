@@ -2734,6 +2734,11 @@ impl Storage for Delegate {
             let offset_delta = 0;
             let timestamp_delta = 0;
 
+            let base_offset = row
+                .get::<i64>(0)
+                .inspect(|base_offset| debug!(base_offset))
+                .inspect_err(|err| error!(?err))?;
+
             let record_builder = {
                 let mut record_builder = Record::builder()
                     .offset_delta(offset_delta)
@@ -2758,7 +2763,7 @@ impl Storage for Delegate {
                             self.cluster.as_str(),
                             topition.topic(),
                             topition.partition(),
-                            offset,
+                            base_offset,
                         ),
                     )
                     .await?;
@@ -2787,11 +2792,7 @@ impl Storage for Delegate {
             };
 
             let mut batch_builder = inflated::Batch::builder()
-                .base_offset(
-                    row.get::<i64>(0)
-                        .inspect(|base_offset| debug!(base_offset))
-                        .inspect_err(|err| error!(?err))?,
-                )
+                .base_offset(base_offset)
                 .attributes(
                     row.get::<Option<i32>>(1)
                         .map(|attributes| attributes.unwrap_or(0))

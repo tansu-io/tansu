@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::BTreeMap;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    time::SystemTime,
+};
 
 use bytes::Bytes;
 use common::{StorageType, alphanumeric_string, init_tracing, register_broker};
@@ -20,10 +23,10 @@ use rama::{Context, Service};
 use rand::{prelude::*, rng};
 use tansu_broker::Result;
 use tansu_sans_io::{
-    ErrorCode, FetchRequest, IsolationLevel, ListOffset, NULL_TOPIC_ID,
-    create_topics_request::CreatableTopic,
+    ErrorCode, FetchRequest, FetchResponse, IsolationLevel, ListOffset, NULL_TOPIC_ID,
+    create_topics_request::{CreatableTopic, CreatableTopicConfig},
     fetch_request::{FetchPartition, FetchTopic},
-    record::{Record, inflated},
+    record::{Header, Record, inflated},
 };
 use tansu_storage::{FetchService, ListOffsetResponse, Storage, Topition};
 use tracing::{debug, error};
@@ -140,6 +143,339 @@ where
     Ok(())
 }
 
+pub async fn kv_header(
+    cluster_id: impl Into<String>,
+    broker_id: i32,
+    sc: impl Storage + Clone,
+) -> Result<()> {
+    register_broker(cluster_id, broker_id, sc.clone()).await?;
+
+    let topic_name: String = alphanumeric_string(15);
+    debug!(?topic_name);
+
+    let num_partitions = 6;
+    let replication_factor = 0;
+    let assignments = Some([].into());
+    let configs = Some([].into());
+
+    let topic_id = sc
+        .create_topic(
+            CreatableTopic::default()
+                .name(topic_name.clone())
+                .num_partitions(num_partitions)
+                .replication_factor(replication_factor)
+                .assignments(assignments.clone())
+                .configs(configs.clone()),
+            false,
+        )
+        .await?;
+    debug!(?topic_id);
+
+    let partition_index = rng().random_range(0..num_partitions);
+    let topition = Topition::new(topic_name.clone(), partition_index);
+
+    let record_count = 6;
+    let header_count = 3;
+
+    let mut messages = BTreeMap::new();
+
+    let random_data = || Bytes::copy_from_slice(alphanumeric_string(15).as_bytes());
+
+    for n in 0..record_count {
+        let message_key = random_data();
+        let message_value = random_data();
+
+        let headers = (0..header_count)
+            .map(|_| (random_data(), random_data()))
+            .collect::<Vec<_>>();
+
+        let batch = inflated::Batch::builder()
+            .record(
+                headers.iter().cloned().fold(
+                    Record::builder()
+                        .key(message_key.clone().into())
+                        .value(message_value.clone().into()),
+                    |builder, (key, value)| builder.header(Header::builder().key(key).value(value)),
+                ),
+            )
+            .producer_id(-1)
+            .producer_epoch(-1)
+            .build()
+            .and_then(TryInto::try_into)
+            .inspect(|deflated| debug!(?deflated))?;
+
+        debug!(n, ?batch);
+
+        let offset = sc
+            .produce(None, &topition, batch)
+            .await
+            .inspect(|offset| debug!(?offset))?;
+
+        debug!(offset);
+
+        assert_eq!(
+            None,
+            messages.insert(
+                offset,
+                FullFatRecord {
+                    key: Some(message_key),
+                    value: Some(message_value),
+                    headers: headers
+                        .iter()
+                        .cloned()
+                        .map(|(key, value)| Header::builder().key(key).value(value).build())
+                        .collect(),
+                }
+            )
+        );
+    }
+
+    let max_wait_ms = 500;
+    let min_bytes = 1;
+    let max_bytes = Some(50 * 1024);
+    let isolation_level = &IsolationLevel::ReadUncommitted;
+    let fetch_offset = 0;
+
+    let topics = [FetchTopic::default()
+        .topic(Some(topition.topic().to_string()))
+        .topic_id(Some(NULL_TOPIC_ID))
+        .partitions(Some(
+            [FetchPartition::default()
+                .partition(topition.partition())
+                .current_leader_epoch(Some(-1))
+                .fetch_offset(fetch_offset)
+                .last_fetched_epoch(Some(-1))
+                .log_start_offset(Some(-1))
+                .partition_max_bytes(50 * 1024)
+                .replica_directory_id(None)]
+            .into(),
+        ))];
+
+    let ctx = Context::with_state(sc);
+
+    let fetched = FetchService
+        .serve(
+            ctx,
+            FetchRequest::default()
+                .max_wait_ms(max_wait_ms)
+                .min_bytes(min_bytes)
+                .max_bytes(max_bytes)
+                .isolation_level(Some(isolation_level.into()))
+                .topics(Some(topics.into())),
+        )
+        .await
+        .map(records)?;
+
+    assert_eq!(messages.len(), fetched.len());
+
+    for (offset, record) in fetched {
+        assert_eq!(
+            messages
+                .get(&offset)
+                .and_then(|message| message.key.clone())
+                .unwrap_or_default(),
+            record.key.clone().unwrap_or_default()
+        );
+
+        assert_eq!(
+            messages
+                .get(&offset)
+                .and_then(|message| message.value.clone())
+                .unwrap_or_default(),
+            record.value.clone().unwrap_or_default()
+        );
+
+        assert_eq!(
+            messages
+                .get(&offset)
+                .map(|message| message.headers.clone())
+                .unwrap_or_default()
+                .iter()
+                .collect::<BTreeSet<_>>(),
+            record.headers.clone().iter().collect::<BTreeSet<_>>()
+        );
+    }
+
+    Ok(())
+}
+
+impl From<Record> for FullFatRecord {
+    fn from(record: Record) -> Self {
+        Self {
+            key: record.key,
+            value: record.value,
+            headers: record.headers,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+struct FullFatRecord {
+    key: Option<Bytes>,
+    value: Option<Bytes>,
+    headers: Vec<Header>,
+}
+
+fn records(fetch: FetchResponse) -> BTreeMap<i64, FullFatRecord> {
+    fetch
+        .responses
+        .unwrap_or_default()
+        .into_iter()
+        .flat_map(|topic| {
+            topic
+                .partitions
+                .unwrap_or_default()
+                .into_iter()
+                .flat_map(|partition| {
+                    partition
+                        .records
+                        .map(|records| records.batches)
+                        .unwrap_or_default()
+                })
+        })
+        .filter_map(|deflated| inflated::Batch::try_from(deflated).ok())
+        .flat_map(|batch| {
+            batch.records.into_iter().map(move |record| {
+                (
+                    batch.base_offset + (record.offset_delta as i64),
+                    record.into(),
+                )
+            })
+        })
+        .collect()
+}
+
+// regression test for headers being attached to the wrong record when the
+// first record visible to a fetch is not the record at the requested fetch
+// offset (here because an earlier record sharing the same key has been
+// removed by `cleanup.policy=compact`)
+pub async fn compacted_header(
+    cluster_id: impl Into<String>,
+    broker_id: i32,
+    sc: impl Storage + Clone,
+) -> Result<()> {
+    register_broker(cluster_id, broker_id, sc.clone()).await?;
+
+    let topic_name: String = alphanumeric_string(15);
+    debug!(?topic_name);
+
+    let num_partitions = 1;
+    let replication_factor = 0;
+    let assignments = Some([].into());
+    let configs = Some(
+        [CreatableTopicConfig::default()
+            .name("cleanup.policy".into())
+            .value(Some("compact".into()))]
+        .into(),
+    );
+
+    let topic_id = sc
+        .create_topic(
+            CreatableTopic::default()
+                .name(topic_name.clone())
+                .num_partitions(num_partitions)
+                .replication_factor(replication_factor)
+                .assignments(assignments)
+                .configs(configs),
+            false,
+        )
+        .await?;
+    debug!(?topic_id);
+
+    let topition = Topition::new(topic_name.clone(), 0);
+
+    let key = Bytes::copy_from_slice(alphanumeric_string(15).as_bytes());
+
+    let compacted_away = vec![
+        Header::builder()
+            .key(Bytes::from_static(b"version"))
+            .value(Bytes::from_static(b"compacted-away"))
+            .build(),
+    ];
+
+    let retained = vec![
+        Header::builder()
+            .key(Bytes::from_static(b"version"))
+            .value(Bytes::from_static(b"retained"))
+            .build(),
+    ];
+
+    // two records sharing the same key: the first (offset 0) is removed by
+    // compaction, leaving only the second (offset 1)
+    for (value, headers) in [
+        (Bytes::from_static(b"older"), &compacted_away),
+        (Bytes::from_static(b"newer"), &retained),
+    ] {
+        let batch = inflated::Batch::builder()
+            .record(headers.iter().cloned().fold(
+                Record::builder().key(Some(key.clone())).value(Some(value)),
+                |builder, header| builder.header(header.into()),
+            ))
+            .producer_id(-1)
+            .producer_epoch(-1)
+            .build()
+            .and_then(TryInto::try_into)
+            .inspect(|deflated| debug!(?deflated))?;
+
+        _ = sc
+            .produce(None, &topition, batch)
+            .await
+            .inspect(|offset| debug!(?offset))?;
+    }
+
+    sc.maintain(SystemTime::now())
+        .await
+        .inspect_err(|err| error!(?err))?;
+
+    let max_wait_ms = 500;
+    let min_bytes = 1;
+    let max_bytes = Some(50 * 1024);
+    let isolation_level = &IsolationLevel::ReadUncommitted;
+    let fetch_offset = 0;
+
+    let topics = [FetchTopic::default()
+        .topic(Some(topition.topic().to_string()))
+        .topic_id(Some(NULL_TOPIC_ID))
+        .partitions(Some(
+            [FetchPartition::default()
+                .partition(topition.partition())
+                .current_leader_epoch(Some(-1))
+                .fetch_offset(fetch_offset)
+                .last_fetched_epoch(Some(-1))
+                .log_start_offset(Some(-1))
+                .partition_max_bytes(50 * 1024)
+                .replica_directory_id(None)]
+            .into(),
+        ))];
+
+    let ctx = Context::with_state(sc);
+
+    let fetched = FetchService
+        .serve(
+            ctx,
+            FetchRequest::default()
+                .max_wait_ms(max_wait_ms)
+                .min_bytes(min_bytes)
+                .max_bytes(max_bytes)
+                .isolation_level(Some(isolation_level.into()))
+                .topics(Some(topics.into())),
+        )
+        .await
+        .map(records)?;
+
+    // the record at offset 0 has been compacted away, leaving only the
+    // record at offset 1, which must be fetched with its own headers
+    assert_eq!(1, fetched.len());
+
+    let (offset, record) = fetched.into_iter().next().expect("single record");
+    assert_eq!(1, offset);
+    assert_eq!(Some(key), record.key);
+    assert_eq!(Some(Bytes::from_static(b"newer")), record.value);
+    assert_eq!(retained, record.headers);
+
+    Ok(())
+}
+
 pub async fn simple_non_txn<C, G>(cluster_id: C, broker_id: i32, sc: G) -> Result<()>
 where
     C: Into<String>,
@@ -251,16 +587,17 @@ where
     let topics = [FetchTopic::default()
         .topic(Some(topition.topic().to_string()))
         .topic_id(Some(NULL_TOPIC_ID))
-        .partitions(Some(vec![
-            FetchPartition::default()
+        .partitions(Some(
+            [FetchPartition::default()
                 .partition(topition.partition())
                 .current_leader_epoch(Some(-1))
                 .fetch_offset(0)
                 .last_fetched_epoch(Some(-1))
                 .log_start_offset(Some(-1))
                 .partition_max_bytes(50 * 1024)
-                .replica_directory_id(None),
-        ]))];
+                .replica_directory_id(None)]
+            .into(),
+        ))];
 
     let ctx = Context::with_state(sc);
 
@@ -332,6 +669,21 @@ mod pg {
     }
 
     #[tokio::test]
+    async fn kv_header() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        super::kv_header(
+            cluster_id,
+            broker_id,
+            storage_container(cluster_id, broker_id).await?,
+        )
+        .await
+    }
+
+    #[tokio::test]
     async fn empty_topic() -> Result<()> {
         let _guard = init_tracing()?;
 
@@ -378,6 +730,21 @@ mod in_memory {
             node,
             Url::parse("tcp://127.0.0.1/")?,
             None,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn kv_header() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        super::kv_header(
+            cluster_id,
+            broker_id,
+            storage_container(cluster_id, broker_id).await?,
         )
         .await
     }
@@ -434,6 +801,36 @@ mod lite {
     }
 
     #[tokio::test]
+    async fn kv_header() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        super::kv_header(
+            cluster_id,
+            broker_id,
+            storage_container(cluster_id, broker_id).await?,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn compacted_header() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        super::compacted_header(
+            cluster_id,
+            broker_id,
+            storage_container(cluster_id, broker_id).await?,
+        )
+        .await
+    }
+
+    #[tokio::test]
     async fn empty_topic() -> Result<()> {
         let _guard = init_tracing()?;
 
@@ -480,6 +877,21 @@ mod slatedb {
             node,
             Url::parse("tcp://127.0.0.1/")?,
             None,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn kv_header() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        super::kv_header(
+            cluster_id,
+            broker_id,
+            storage_container(cluster_id, broker_id).await?,
         )
         .await
     }
