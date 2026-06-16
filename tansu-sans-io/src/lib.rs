@@ -525,6 +525,7 @@ pub struct Frame {
 }
 
 impl MaximumAllocationSize for Frame {
+    #[instrument(skip_all, ret)]
     fn maximum_allocation_size(&self) -> Result<usize> {
         Ok(self.size.maximum_allocation_size()?
             + self.header.maximum_allocation_size()?
@@ -563,7 +564,7 @@ impl Frame {
                 .map(BytesMut::with_capacity)?,
         );
         frame.serialize(&mut serializer)?;
-        fix_length(BytesMut::from(serializer))
+        fix_length(BytesMut::from(serializer)).inspect(|encoded| debug!(encoded = ?&encoded[..]))
     }
 
     /// deserialize bytes into an API request frame
@@ -594,7 +595,7 @@ impl Frame {
             api_version,
         );
         frame.serialize(&mut encoder)?;
-        fix_length(BytesMut::from(encoder))
+        fix_length(BytesMut::from(encoder)).inspect(|encoded| debug!(encoded = ?&encoded[..]))
     }
 
     /// deserialize bytes into an API response frame

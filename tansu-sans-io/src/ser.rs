@@ -27,7 +27,7 @@ use serde::{
     },
 };
 use tansu_model::{FieldMeta, MessageMeta};
-use tracing::{debug, instrument};
+use tracing::{debug, instrument, warn};
 
 use crate::{Encode, Error, Result, RootMessageMeta, primitive::varint::UnsignedVarInt};
 
@@ -519,15 +519,20 @@ impl Serializer for &mut Encoder {
         if self.field.is_some_and(|field| field == "tag_buffer") && !self.is_flexible() {
             Ok(())
         } else if self.is_records() {
-            debug!(
-                working_capacity = self.working.capacity(),
-                working_len = self.working.len()
-            );
+            if self.working.len() > self.working.capacity() {
+                warn!(
+                    working_capacity = self.working.capacity(),
+                    working_len = self.working.len()
+                );
+            } else {
+                debug!(
+                    working_capacity = self.working.capacity(),
+                    working_len = self.working.len()
+                );
+            }
 
             let records = {
-                let records = self
-                    .working
-                    .split_off(self.working.len() + size_of::<u32>());
+                let records = self.working.split_off(self.working.len());
                 debug!(
                     records_capacity = records.capacity(),
                     records_len = records.len(),

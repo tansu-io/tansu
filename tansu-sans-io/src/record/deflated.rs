@@ -31,19 +31,21 @@ pub struct Frame {
 }
 
 impl ByteSize for Frame {
+    #[instrument(skip_all, ret)]
     fn size_in_bytes(&self) -> Result<usize> {
-        Ok(self
-            .batches
-            .iter()
-            .map(|batch| {
-                // base_offset
-                size_of::<i64>()
+        Ok(size_of::<i32>()
+            + self
+                .batches
+                .iter()
+                .map(|batch| {
+                    // base_offset
+                    size_of::<i64>()
                 // batch length
                 + size_of::<i32>()
                 + FIXED_BATCH_LENGTH
                 + batch.record_data.len()
-            })
-            .sum())
+                })
+                .sum::<usize>())
     }
 }
 
@@ -337,7 +339,9 @@ fn into_record_data(records: &[Record], compression: Compression) -> Result<Byte
         Compression::None => records.encode(),
 
         Compression::Gzip => {
-            let uncompressed = records.encode()?;
+            let uncompressed = records
+                .encode()
+                .inspect(|inflated| debug!(inflated_len = inflated.len()))?;
 
             let mut gz = GzEncoder::new(
                 BytesMut::with_capacity(uncompressed.len()).writer(),
@@ -349,6 +353,7 @@ fn into_record_data(records: &[Record], compression: Compression) -> Result<Byte
             gz.finish()
                 .map(|w| w.into_inner())
                 .map(Bytes::from)
+                .inspect(|deflated| debug!(deflated_len = deflated.len()))
                 .map_err(Into::into)
         }
 

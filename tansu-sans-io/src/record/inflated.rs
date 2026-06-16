@@ -487,7 +487,7 @@ mod tests {
     use tracing_subscriber::EnvFilter;
 
     use super::*;
-    use crate::{Result, de::BatchDecoder};
+    use crate::{MaximumAllocationSize, Result, de::BatchDecoder};
 
     fn init_tracing() -> Result<DefaultGuard> {
         use std::{fs::File, sync::Arc, thread};
@@ -512,6 +512,21 @@ mod tests {
                 )
                 .finish(),
         ))
+    }
+
+    #[test]
+    fn record_maximum_allocation() -> Result<()> {
+        let record = Record::builder()
+            .value(Some(Bytes::from_static(&[100, 101, 102])))
+            .build()?;
+
+        let mut encoder = RecordBatchEncoder::new(BytesMut::new());
+        record.serialize(&mut encoder)?;
+
+        let encoded = BytesMut::from(encoder);
+        assert_eq!(record.maximum_allocation_size()?, encoded.len());
+
+        Ok(())
     }
 
     #[test]
