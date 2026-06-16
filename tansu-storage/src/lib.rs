@@ -228,7 +228,7 @@ pub use service::{
     ListGroupsService, ListOffsetsService, ListPartitionReassignmentsService, MetadataService,
     ProduceService, Request, RequestChannelService, RequestLayer, RequestReceiver, RequestSender,
     RequestService, RequestStorageService, Response, TxnAddOffsetsService, TxnAddPartitionService,
-    TxnOffsetCommitService, bounded_channel,
+    TxnEndService, TxnOffsetCommitService, bounded_channel,
 };
 
 #[cfg(feature = "slatedb")]

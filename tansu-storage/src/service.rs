@@ -93,6 +93,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, instrument};
 pub use txn::add_offsets::AddOffsetsService as TxnAddOffsetsService;
 pub use txn::add_partitions::AddPartitionService as TxnAddPartitionService;
+pub use txn::end::EndService as TxnEndService;
 pub use txn::offset_commit::OffsetCommitService as TxnOffsetCommitService;
 use url::Url;
 use uuid::Uuid;

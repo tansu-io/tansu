@@ -14,4 +14,5 @@
 
 pub(crate) mod add_offsets;
 pub(crate) mod add_partitions;
+pub(crate) mod end;
 pub(crate) mod offset_commit;

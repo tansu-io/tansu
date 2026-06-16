@@ -14,7 +14,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    time::SystemTime,
+    time::{Duration, SystemTime},
 };
 
 use bytes::Bytes;
@@ -648,6 +648,138 @@ where
     Ok(())
 }
 
+/// A fetch offset falling inside a batch returns that batch whole, as
+/// Kafka does: the client skips the records below the fetch offset. Only
+/// batches ending before the fetch offset may be omitted.
+pub async fn mid_batch<C, G>(cluster_id: C, broker_id: i32, sc: G) -> Result<()>
+where
+    C: Into<String>,
+    G: Storage + Clone,
+{
+    register_broker(cluster_id, broker_id, sc.clone()).await?;
+
+    let topic_name: String = alphanumeric_string(15);
+    debug!(?topic_name);
+
+    let topic_id = sc
+        .create_topic(
+            CreatableTopic::default()
+                .name(topic_name.clone())
+                .num_partitions(1)
+                .replication_factor(0)
+                .assignments(Some([].into()))
+                .configs(Some([].into())),
+            false,
+        )
+        .await?;
+    debug!(?topic_id);
+
+    let topition = Topition::new(topic_name.clone(), 0);
+
+    let values: Vec<Bytes> = (0..6)
+        .map(|_| Bytes::copy_from_slice(alphanumeric_string(15).as_bytes()))
+        .collect();
+
+    // two batches of three records: offsets 0..=2 and 3..=5
+    for batch_values in values.chunks(3) {
+        let producer = sc.init_producer(None, 10_000, Some(-1), Some(-1)).await?;
+
+        let mut builder = inflated::Batch::builder()
+            .producer_id(producer.id)
+            .producer_epoch(producer.epoch)
+            .last_offset_delta(batch_values.len() as i32 - 1);
+
+        for (delta, value) in batch_values.iter().enumerate() {
+            builder = builder.record(
+                Record::builder()
+                    .offset_delta(delta as i32)
+                    .value(Some(value.clone())),
+            );
+        }
+
+        let batch = builder.build().and_then(TryInto::try_into)?;
+
+        _ = sc
+            .produce(None, &topition, batch)
+            .await
+            .inspect(|offset| debug!(offset))?;
+    }
+
+    let min_bytes = 1;
+    let max_bytes = 50 * 1024;
+    let isolation = IsolationLevel::ReadUncommitted;
+    let max_wait = Duration::from_millis(500);
+
+    let high_watermark = values.len() as i64;
+
+    for fetch_offset in 0..=high_watermark {
+        let batches = sc
+            .fetch(
+                &topition,
+                fetch_offset,
+                min_bytes,
+                max_bytes,
+                isolation,
+                max_wait,
+            )
+            .await
+            .inspect_err(|err| error!(?err, fetch_offset))?
+            .into_iter()
+            .try_fold(Vec::new(), |mut acc, batch| {
+                inflated::Batch::try_from(batch)
+                    .map(|inflated| {
+                        acc.push(inflated);
+                        acc
+                    })
+                    .map_err(tansu_broker::Error::from)
+            })?;
+
+        // every record from the fetch offset to the high watermark is
+        // returned, in order, and no returned batch ends before the
+        // fetch offset
+        let mut expected = fetch_offset;
+
+        for batch in &batches {
+            // the pg and lite engines return an empty placeholder batch
+            // when there are no records to fetch
+            if batch.records.is_empty() {
+                continue;
+            }
+
+            assert!(
+                batch.base_offset + i64::from(batch.last_offset_delta) >= fetch_offset,
+                "fetch at {fetch_offset} returned a batch ending before it"
+            );
+
+            for record in &batch.records {
+                let offset = batch.base_offset + i64::from(record.offset_delta);
+
+                // a whole batch can begin before the fetch offset: the
+                // client skips the records below it
+                if offset < fetch_offset {
+                    continue;
+                }
+
+                assert_eq!(expected, offset, "fetch at {fetch_offset}");
+                assert_eq!(
+                    values.get(offset as usize).cloned(),
+                    record.value(),
+                    "fetch at {fetch_offset}, record at {offset}"
+                );
+
+                expected += 1;
+            }
+        }
+
+        assert_eq!(
+            high_watermark, expected,
+            "fetch at {fetch_offset} is missing records"
+        );
+    }
+
+    Ok(())
+}
+
 #[cfg(feature = "postgres")]
 mod pg {
     use std::sync::Arc;
@@ -706,6 +838,21 @@ mod pg {
         let broker_id = rng().random_range(0..i32::MAX);
 
         super::simple_non_txn(
+            cluster_id,
+            broker_id,
+            storage_container(cluster_id, broker_id).await?,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn mid_batch() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        super::mid_batch(
             cluster_id,
             broker_id,
             storage_container(cluster_id, broker_id).await?,
@@ -772,6 +919,21 @@ mod in_memory {
         let broker_id = rng().random_range(0..i32::MAX);
 
         super::simple_non_txn(
+            cluster_id,
+            broker_id,
+            storage_container(cluster_id, broker_id).await?,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn mid_batch() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        super::mid_batch(
             cluster_id,
             broker_id,
             storage_container(cluster_id, broker_id).await?,
@@ -859,6 +1021,21 @@ mod lite {
         )
         .await
     }
+
+    #[tokio::test]
+    async fn mid_batch() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        super::mid_batch(
+            cluster_id,
+            broker_id,
+            storage_container(cluster_id, broker_id).await?,
+        )
+        .await
+    }
 }
 
 #[cfg(feature = "slatedb")]
@@ -919,6 +1096,21 @@ mod slatedb {
         let broker_id = rng().random_range(0..i32::MAX);
 
         super::simple_non_txn(
+            cluster_id,
+            broker_id,
+            storage_container(cluster_id, broker_id).await?,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn mid_batch() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        super::mid_batch(
             cluster_id,
             broker_id,
             storage_container(cluster_id, broker_id).await?,

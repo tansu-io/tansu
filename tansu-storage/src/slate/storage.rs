@@ -108,6 +108,58 @@ impl Engine {
             })
     }
 
+    /// The least batch base offset at or after `probe` within a partition,
+    /// or `None` when no batch starts at or after it.
+    async fn batch_base_at_or_after(
+        &self,
+        prefix: &[u8],
+        topic: Uuid,
+        partition: i32,
+        probe: i64,
+    ) -> Result<Option<i64>> {
+        let from = postcard::to_stdvec(&BatchKey::scan_from(topic, partition, probe))?;
+
+        let mut i = self.db.scan(from..).await?;
+
+        Ok(match i.next().await? {
+            Some(kv) if kv.key.starts_with(prefix) => {
+                Some(postcard::from_bytes::<BatchKey>(&kv.key)?.offset)
+            }
+            _ => None,
+        })
+    }
+
+    /// The greatest batch base offset at or before `offset` within a
+    /// partition. SlateDB has forward-only iteration, so this is a binary
+    /// search over [`Self::batch_base_at_or_after`] successor probes.
+    async fn batch_base_at_or_before(
+        &self,
+        prefix: &[u8],
+        topic: Uuid,
+        partition: i32,
+        offset: i64,
+    ) -> Result<Option<i64>> {
+        let mut floor = None;
+        let (mut lo, mut hi) = (0, offset);
+
+        while lo <= hi {
+            let mid = lo + (hi - lo) / 2;
+
+            match self
+                .batch_base_at_or_after(prefix, topic, partition, mid)
+                .await?
+            {
+                Some(base) if base <= offset => {
+                    floor = Some(base);
+                    lo = base + 1;
+                }
+                _ => hi = mid - 1,
+            }
+        }
+
+        Ok(floor)
+    }
+
     /// Apply the `delete` cleanup policy: remove the prefix of each partition
     /// where every batch is older than the topic's `retention.ms`.
     async fn policy_delete(&self, now: SystemTime) -> Result<u64> {
@@ -939,14 +991,32 @@ impl Storage for Engine {
             return Err(Error::Api(ErrorCode::UnknownTopicOrPartition));
         }
 
+        if offset >= high_watermark {
+            return Ok(vec![]);
+        }
+
         let prefix = postcard::to_stdvec(&BatchKeyPrefix::new(metadata.id, topition.partition))?;
 
+        // Batch keys hold base offsets, but the fetch offset can fall inside
+        // a batch that starts before it; Kafka returns that batch whole,
+        // leaving the client to skip the records below the fetch offset.
+        // When no batch starts exactly at the fetch offset, scan from the
+        // greatest base offset before it; the loop below drops a batch that
+        // ends before the fetch offset.
+        let start = match self
+            .batch_base_at_or_after(&prefix, metadata.id, topition.partition, offset)
+            .await?
+        {
+            Some(base) if base == offset => offset,
+            _ => self
+                .batch_base_at_or_before(&prefix, metadata.id, topition.partition, offset)
+                .await?
+                .unwrap_or(offset),
+        };
+
         let mut i = {
-            let from = postcard::to_stdvec(&BatchKey::scan_from(
-                metadata.id,
-                topition.partition,
-                offset,
-            ))?;
+            let from =
+                postcard::to_stdvec(&BatchKey::scan_from(metadata.id, topition.partition, start))?;
 
             self.db.scan(from..).await?
         };
@@ -976,6 +1046,12 @@ impl Storage for Engine {
             // For scanning/filtering, we should only decode the header or use a lightweight check.
             let mut batch = self.decode(kv.value)?;
             batch.base_offset = key.offset;
+
+            // only the batch at the scan start can precede the fetch offset
+            if key.offset + i64::from(batch.last_offset_delta) < offset {
+                continue;
+            }
+
             batches.push(batch);
             total_bytes += size;
 
