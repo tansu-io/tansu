@@ -14,6 +14,8 @@ clean-workspace:
 license:
     cargo about generate about.hbs > license.html
 
+build-all profile="dev" features="delta,dynostore,iceberg,libsql,parquet,postgres,slatedb": (cargo-build "--profile" profile "--timings" "--no-default-features" "--features" features)
+
 build profile="dev" features="delta,dynostore,iceberg,libsql,parquet,postgres,slatedb" bin="tansu": (cargo-build "--profile" profile "--timings" "--bin" bin "--no-default-features" "--features" features)
 
 build-storage: clean-workspace (build "dev" "libsql") (build "dev" "postgres") (build "dev" "slatedb")
@@ -432,7 +434,7 @@ customer-topic-generator *args: (generator "customer" args)
 
 customer-duckdb-delta: (duckdb "\"select * from delta_scan('s3://lake/tansu.customer');\"")
 
-broker-memory profile="profiling": (build profile "dynostore") (tansu-broker profile "--storage-engine=memory://")
+broker-memory profile="profiling": (build profile "dynostore") (tansu-broker profile "--storage-engine=memory://" "--advertised-listener-url=tcp://127.0.0.1:9092/" "--silent")
 
 # run the librdkafka integration test suite against a memory:// broker
 compat-librdkafka: (build "dev" "dynostore")
@@ -453,6 +455,13 @@ compat-franz-go: (build "dev" "dynostore")
     broker=$!
     trap 'kill ${broker}' EXIT
     ./compat/franz-go/run.sh
+
+compat-franz-go-test tests timeout="120s" count="1":
+    #!/usr/bin/env bash
+    cd target/compat/franz-go/pkg/kgo
+    export KGO_TEST_RF=1
+    export KGO_LOG_LEVEL=debug
+    go test -count={{ count }} -timeout {{ timeout }} -v -run {{ tests }} .
 
 broker-null profile="profiling": (build profile "default") (tansu-broker profile "--storage-engine=null://")
 
@@ -642,3 +651,6 @@ postgres-local:
 
 group-consumer-example topics="test":
     cargo run --package tansu-client --example group_consumer -- --topics {{ topics }}
+
+la profile="dev" *args:
+    target/{{ replace(profile, "dev", "debug") }}/la {{ args }}

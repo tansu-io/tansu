@@ -42,7 +42,7 @@ done
 tests=$(grep -Ev '^[[:space:]]*(#|$)' "${COMPAT_DIR}/tests.allow" |
             awk '{print $1}' | paste -s -d '|' -)
 
-count=$(grep -Ev '^[[:space:]]*(#|$)' "${COMPAT_DIR}/tests.allow" | wc -l)
+count=$(grep -cEv '^[[:space:]]*(#|$)' "${COMPAT_DIR}/tests.allow")
 echo "running ${count// /} franz-go test(s) against ${BOOTSTRAP_SERVERS}"
 
 cd "${SRC_DIR}/pkg/kgo"

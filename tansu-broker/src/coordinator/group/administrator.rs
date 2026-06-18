@@ -452,6 +452,9 @@ where
                 if inner.missed_heartbeat(group_id, member_id, now) {
                     info!("missed heartbeat in generation {}", inner.generation_id);
 
+                    let leader = (inner.members.contains_key(inner.state.leader.as_str()))
+                        .then_some(inner.state.leader);
+
                     Self::Forming(Inner {
                         session_timeout_ms: inner.session_timeout_ms,
                         rebalance_timeout_ms: inner.rebalance_timeout_ms,
@@ -460,7 +463,7 @@ where
                         state: Forming {
                             protocol_type: Some(inner.state.protocol_type),
                             protocol_name: Some(inner.state.protocol_name),
-                            leader: None,
+                            leader,
                         },
                         storage: inner.storage,
                         skip_assignment: inner.skip_assignment,
@@ -1252,12 +1255,12 @@ where
                     .unwrap_or_else(|| (Wrapper::Forming(Inner::new(self.storage.clone())), None))
             })?;
 
-            debug!(?group_id, ?wrapper, ?version, ?iteration);
+            debug!(?group_id, %wrapper, ?version, ?iteration);
 
             let now = SystemTime::now();
 
             let (wrapper, body) = wrapper.offset_commit(now, &offset_commit).await;
-            debug!(group_id, ?wrapper, ?version, iteration,);
+            debug!(group_id, %wrapper, ?version, iteration,);
 
             match self
                 .storage
@@ -1537,14 +1540,9 @@ where
 {
     #[instrument(skip(self, now))]
     fn missed_heartbeat(&mut self, group_id: &str, member_id: &str, now: SystemTime) -> bool {
-        let original = self.members.len();
+        self.update_last_contact(member_id, now);
 
-        if !member_id.is_empty() {
-            _ = self
-                .members
-                .get_mut(member_id)
-                .map(|member| member.last_contact.replace(now))
-        }
+        let original = self.members.len();
 
         self.members.retain(|member_id, member| {
             member
@@ -1592,14 +1590,9 @@ where
 {
     #[instrument(skip(self, now))]
     fn missed_heartbeat(&mut self, group_id: &str, member_id: &str, now: SystemTime) -> bool {
-        let original = self.members.len();
+        self.update_last_contact(member_id, now);
 
-        if !member_id.is_empty() {
-            _ = self
-                .members
-                .get_mut(member_id)
-                .map(|member| member.last_contact.replace(now))
-        }
+        let original = self.members.len();
 
         self.members.retain(|member_id, member| {
             debug!(?member_id, ?member);
@@ -1797,6 +1790,57 @@ where
             .error_code(Some(ErrorCode::None.into()))
             .groups(groups)
             .into())
+    }
+
+    #[instrument(skip(self, now))]
+    fn update_last_contact(&mut self, member_id: &str, now: SystemTime) {
+        if !member_id.is_empty() {
+            _ = self
+                .members
+                .entry(member_id.to_owned())
+                .and_modify(|member| _ = member.last_contact.replace(now))
+        }
+    }
+
+    /// Fence an offset commit as Kafka does: a generation-less commit
+    /// (simple consumer or admin) is only accepted while the group has no
+    /// members, a commit carrying a member id must name a current member,
+    /// and the generation cannot be newer than the group's. While forming,
+    /// a member may commit at an older generation (revoked partitions are
+    /// committed while the rebalance that bumped the generation is still in
+    /// progress); once formed, the generation must match exactly so that a
+    /// fenced member cannot move offsets owned by its successor.
+    #[instrument(skip(self, now, detail), fields(generation_id = detail.generation_id_or_member_epoch, member_id = detail.member_id))]
+    fn offset_commit_fence(
+        &mut self,
+        now: SystemTime,
+        detail: &OffsetCommit<'_>,
+        generation_must_match: bool,
+    ) -> Option<ErrorCode> {
+        let generation_id = detail.generation_id_or_member_epoch.unwrap_or(-1);
+        let member_id = detail.member_id.unwrap_or_default();
+
+        if generation_id < 0 && member_id.is_empty() {
+            return if self.members.is_empty() {
+                None
+            } else {
+                Some(ErrorCode::UnknownMemberId)
+            };
+        }
+
+        let Some(member) = self.members.get_mut(member_id) else {
+            return Some(ErrorCode::UnknownMemberId);
+        };
+
+        _ = member.last_contact.replace(now);
+
+        if generation_id > self.generation_id
+            || (generation_must_match && generation_id != self.generation_id)
+        {
+            return Some(ErrorCode::IllegalGeneration);
+        }
+
+        None
     }
 
     async fn commit_offset(&mut self, detail: &OffsetCommit<'_>) -> Result<Body> {
@@ -2404,13 +2448,18 @@ where
         (self, body)
     }
 
+    #[instrument(skip(self, now, detail), fields(generation_id = detail.generation_id_or_member_epoch, member_id = detail.member_id))]
     async fn offset_commit(
         mut self,
         now: SystemTime,
         detail: &OffsetCommit<'_>,
     ) -> (Self::OffsetCommitState, Body) {
-        let _ = now;
-        debug!(?detail);
+        if let Some(error_code) = self.offset_commit_fence(now, detail, false) {
+            debug!(offset_commit_outcome = ?error_code);
+
+            let body = offset_commit_response(detail, error_code);
+            return (self, body);
+        }
 
         match self.commit_offset(detail).await {
             Ok(body) => (self, body),
@@ -2418,31 +2467,7 @@ where
                 debug!(?reason);
                 (
                     self,
-                    OffsetCommitResponse::default()
-                        .throttle_time_ms(Some(0))
-                        .topics(detail.topics.map(|topics| {
-                            topics
-                                .as_ref()
-                                .iter()
-                                .map(|topic| {
-                                    OffsetCommitResponseTopic::default()
-                                        .name(topic.name.clone())
-                                        .partitions(topic.partitions.as_ref().map(|partitions| {
-                                            partitions
-                                                .iter()
-                                                .map(|partition| {
-                                                    OffsetCommitResponsePartition::default()
-                                                        .partition_index(partition.partition_index)
-                                                        .error_code(
-                                                            ErrorCode::UnknownMemberId.into(),
-                                                        )
-                                                })
-                                                .collect()
-                                        }))
-                                })
-                                .collect()
-                        }))
-                        .into(),
+                    offset_commit_response(detail, ErrorCode::UnknownMemberId),
                 )
             }
         }
@@ -3014,12 +3039,18 @@ where
         (state, body)
     }
 
+    #[instrument(skip(self, now, detail), fields(generation_id = detail.generation_id_or_member_epoch, member_id = detail.member_id))]
     async fn offset_commit(
         mut self,
         now: SystemTime,
         detail: &OffsetCommit<'_>,
     ) -> (Self::OffsetCommitState, Body) {
-        let _ = now;
+        if let Some(error_code) = self.offset_commit_fence(now, detail, true) {
+            debug!(offset_commit_outcome = ?error_code);
+
+            let body = offset_commit_response(detail, error_code);
+            return (self, body);
+        }
 
         match self.commit_offset(detail).await {
             Ok(body) => (self, body),
@@ -3027,31 +3058,7 @@ where
                 debug!(?reason);
                 (
                     self,
-                    OffsetCommitResponse::default()
-                        .throttle_time_ms(Some(0))
-                        .topics(detail.topics.map(|topics| {
-                            topics
-                                .as_ref()
-                                .iter()
-                                .map(|topic| {
-                                    OffsetCommitResponseTopic::default()
-                                        .name(topic.name.clone())
-                                        .partitions(topic.partitions.as_ref().map(|partitions| {
-                                            partitions
-                                                .iter()
-                                                .map(|partition| {
-                                                    OffsetCommitResponsePartition::default()
-                                                        .partition_index(partition.partition_index)
-                                                        .error_code(
-                                                            ErrorCode::UnknownMemberId.into(),
-                                                        )
-                                                })
-                                                .collect()
-                                        }))
-                                })
-                                .collect()
-                        }))
-                        .into(),
+                    offset_commit_response(detail, ErrorCode::UnknownMemberId),
                 )
             }
         }
@@ -3087,6 +3094,31 @@ where
 {
     let mut uniq = HashSet::new();
     iter.into_iter().all(|x| uniq.insert(x))
+}
+
+fn offset_commit_response(detail: &OffsetCommit<'_>, error_code: ErrorCode) -> Body {
+    OffsetCommitResponse::default()
+        .throttle_time_ms(Some(0))
+        .topics(detail.topics.map(|topics| {
+            topics
+                .iter()
+                .map(|topic| {
+                    OffsetCommitResponseTopic::default()
+                        .name(topic.name.clone())
+                        .partitions(topic.partitions.as_ref().map(|partitions| {
+                            partitions
+                                .iter()
+                                .map(|partition| {
+                                    OffsetCommitResponsePartition::default()
+                                        .partition_index(partition.partition_index)
+                                        .error_code(error_code.into())
+                                })
+                                .collect()
+                        }))
+                })
+                .collect()
+        }))
+        .into()
 }
 
 #[cfg(test)]
