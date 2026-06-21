@@ -966,9 +966,9 @@ impl Default for GroupDetail {
     fn default() -> Self {
         Self {
             session_timeout_ms: 45_000,
-            rebalance_timeout_ms: None,
-            members: BTreeMap::new(),
-            generation_id: -1,
+            rebalance_timeout_ms: Default::default(),
+            members: Default::default(),
+            generation_id: Default::default(),
             skip_assignment: Some(false),
             inception: SystemTime::now(),
             state: GroupState::default(),

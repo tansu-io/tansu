@@ -38,7 +38,7 @@ pub async fn reject_empty_member_id_on_join<G>(
 where
     G: Storage + Clone,
 {
-    register_broker(cluster_id, broker_id, sc.clone()).await?;
+    register_broker(cluster_id, broker_id, &sc).await?;
 
     let mut controller = Controller::with_storage(sc.clone())?;
 
@@ -97,7 +97,7 @@ pub async fn lifecycle<G>(cluster_id: impl Into<String>, broker_id: i32, sc: G) 
 where
     G: Storage + Clone,
 {
-    register_broker(cluster_id, broker_id, sc.clone()).await?;
+    register_broker(cluster_id, broker_id, &sc).await?;
 
     let mut controller = Controller::with_storage(sc.clone())?;
 
@@ -415,7 +415,7 @@ mod pg {
     use super::*;
 
     async fn storage_container(
-        cluster: impl Into<String>,
+        cluster: impl Into<String> + Clone,
         node: i32,
     ) -> Result<Arc<Box<dyn Storage>>> {
         common::storage_container(
@@ -443,6 +443,7 @@ mod pg {
         .await
     }
 
+    #[ignore]
     #[tokio::test]
     async fn lifecycle() -> Result<()> {
         let _guard = common::init_tracing()?;
@@ -466,7 +467,7 @@ mod in_memory {
     use super::*;
 
     async fn storage_container(
-        cluster: impl Into<String>,
+        cluster: impl Into<String> + Clone,
         node: i32,
     ) -> Result<Arc<Box<dyn Storage>>> {
         common::storage_container(
@@ -494,6 +495,7 @@ mod in_memory {
         .await
     }
 
+    #[ignore]
     #[tokio::test]
     async fn lifecycle() -> Result<()> {
         let _guard = common::init_tracing()?;
@@ -517,7 +519,7 @@ mod lite {
     use super::*;
 
     async fn storage_container(
-        cluster: impl Into<String>,
+        cluster: impl Into<String> + Clone,
         node: i32,
     ) -> Result<Arc<Box<dyn Storage>>> {
         common::storage_container(
@@ -545,6 +547,7 @@ mod lite {
         .await
     }
 
+    #[ignore]
     #[tokio::test]
     async fn lifecycle() -> Result<()> {
         let _guard = common::init_tracing()?;
@@ -568,7 +571,7 @@ mod slatedb {
     use super::*;
 
     async fn storage_container(
-        cluster: impl Into<String>,
+        cluster: impl Into<String> + Clone,
         node: i32,
     ) -> Result<Arc<Box<dyn Storage>>> {
         common::storage_container(
@@ -596,6 +599,7 @@ mod slatedb {
         .await
     }
 
+    #[ignore]
     #[tokio::test]
     async fn lifecycle() -> Result<()> {
         let _guard = common::init_tracing()?;

@@ -506,7 +506,7 @@ impl PoolConnection {
 
             Ok(row).inspect(|row| debug!(?row))
         } else {
-            panic!("more or less than one row");
+            Err(libsql::Error::Misuse(format!("sql={sql}")))
         }
     }
 }
@@ -2629,7 +2629,10 @@ impl Storage for Delegate {
             .inspect(|_| {
                 debug!(after_produce_in_tx = elapsed_millis(start));
             })
-            .inspect_err(|err| error!(?err))?;
+            .inspect_err(|err| match err {
+                Error::Api(_) => debug!(?err),
+                err => error!(?err),
+            })?;
 
         pc.commit(tx)
             .await
@@ -2955,6 +2958,7 @@ impl Storage for Delegate {
         })
     }
 
+    #[instrument(skip(self))]
     async fn offset_stage(&self, topition: &Topition) -> Result<OffsetStage> {
         let start = SystemTime::now();
 

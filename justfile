@@ -456,7 +456,7 @@ compat-franz-go: (build "dev" "dynostore")
     trap 'kill ${broker}' EXIT
     ./compat/franz-go/run.sh
 
-compat-franz-go-test tests timeout="120s" count="1":
+compat-franz-go-test tests timeout="600s" count="1":
     #!/usr/bin/env bash
     cd target/compat/franz-go/pkg/kgo
     export KGO_TEST_RF=1

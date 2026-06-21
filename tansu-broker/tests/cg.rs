@@ -29,7 +29,7 @@ pub async fn offset_commit<G>(cluster_id: impl Into<String>, broker_id: i32, sc:
 where
     G: Storage + Clone,
 {
-    register_broker(cluster_id, broker_id, sc.clone()).await?;
+    register_broker(cluster_id, broker_id, &sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -98,7 +98,7 @@ pub async fn topic_delete_cascade_to_offset_commit<G>(
 where
     G: Storage + Clone,
 {
-    register_broker(cluster_id, broker_id, sc.clone()).await?;
+    register_broker(cluster_id, broker_id, &sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -167,7 +167,7 @@ pub async fn consumer_group_delete_cascade_to_offset_commit<G>(
 where
     G: Storage + Clone,
 {
-    register_broker(cluster_id, broker_id, sc.clone()).await?;
+    register_broker(cluster_id, broker_id, &sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -239,7 +239,7 @@ pub async fn delete_unknown_consumer_group<G>(
 where
     G: Storage + Clone,
 {
-    register_broker(cluster_id, broker_id, sc.clone()).await?;
+    register_broker(cluster_id, broker_id, &sc).await?;
 
     let group_id: String = alphanumeric_string(15);
 
@@ -262,7 +262,7 @@ pub async fn offset_commit_unknown_topition<G>(
 where
     G: Storage + Clone,
 {
-    register_broker(cluster_id, broker_id, sc.clone()).await?;
+    register_broker(cluster_id, broker_id, &sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -310,7 +310,7 @@ pub async fn offset_fetch_unknown_topition<G>(
 where
     G: Storage + Clone,
 {
-    register_broker(cluster_id, broker_id, sc.clone()).await?;
+    register_broker(cluster_id, broker_id, &sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -338,7 +338,7 @@ pub async fn list_groups_none<G>(cluster_id: impl Into<String>, broker_id: i32, 
 where
     G: Storage + Clone,
 {
-    register_broker(cluster_id, broker_id, sc.clone()).await?;
+    register_broker(cluster_id, broker_id, &sc).await?;
 
     let groups = sc.list_groups(None).await?;
     assert_eq!(0, groups.len());
@@ -353,7 +353,7 @@ mod pg {
     use super::*;
 
     async fn storage_container(
-        cluster: impl Into<String>,
+        cluster: impl Into<String> + Clone,
         node: i32,
     ) -> Result<Arc<Box<dyn Storage>>> {
         common::storage_container(
@@ -479,7 +479,7 @@ mod in_memory {
     use super::*;
 
     async fn storage_container(
-        cluster: impl Into<String>,
+        cluster: impl Into<String> + Clone,
         node: i32,
     ) -> Result<Arc<Box<dyn Storage>>> {
         common::storage_container(
@@ -606,7 +606,7 @@ mod lite {
     use super::*;
 
     async fn storage_container(
-        cluster: impl Into<String>,
+        cluster: impl Into<String> + Clone,
         node: i32,
     ) -> Result<Arc<Box<dyn Storage>>> {
         common::storage_container(
@@ -733,7 +733,7 @@ mod slatedb {
     use super::*;
 
     async fn storage_container(
-        cluster: impl Into<String>,
+        cluster: impl Into<String> + Clone,
         node: i32,
     ) -> Result<Arc<Box<dyn Storage>>> {
         common::storage_container(

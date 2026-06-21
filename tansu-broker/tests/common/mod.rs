@@ -77,36 +77,35 @@ pub(crate) enum StorageType {
     Turso,
 }
 
-pub(crate) async fn storage_container<C>(
+pub(crate) async fn storage_container(
     storage_type: StorageType,
-    cluster: C,
+    cluster: impl Into<String> + Clone,
     node: i32,
     advertised_listener: Url,
     schemas: Option<Registry>,
-) -> Result<Arc<Box<dyn Storage>>>
-where
-    C: Into<String>,
-{
-    match storage_type {
-        StorageType::Postgres => StorageContainer::builder()
-            .cluster_id(cluster)
-            .node_id(node)
-            .advertised_listener(advertised_listener)
-            .schema_registry(schemas)
-            .storage(Url::parse("postgres://postgres:postgres@localhost")?)
-            .build()
-            .await
-            .map_err(Into::into),
+) -> Result<Arc<Box<dyn Storage>>> {
+    let storage = match storage_type {
+        StorageType::Postgres => {
+            StorageContainer::builder()
+                .cluster_id(cluster.clone())
+                .node_id(node)
+                .advertised_listener(advertised_listener)
+                .schema_registry(schemas)
+                .storage(Url::parse("postgres://postgres:postgres@localhost")?)
+                .build()
+                .await
+        }
 
-        StorageType::InMemory => StorageContainer::builder()
-            .cluster_id(cluster)
-            .node_id(node)
-            .advertised_listener(advertised_listener)
-            .schema_registry(schemas)
-            .storage(Url::parse("memory://")?)
-            .build()
-            .await
-            .map_err(Into::into),
+        StorageType::InMemory => {
+            StorageContainer::builder()
+                .cluster_id(cluster.clone())
+                .node_id(node)
+                .advertised_listener(advertised_listener)
+                .schema_registry(schemas)
+                .storage(Url::parse("memory://")?)
+                .build()
+                .await
+        }
 
         StorageType::Lite => {
             let relative = thread::current()
@@ -131,7 +130,7 @@ where
             }?;
 
             StorageContainer::builder()
-                .cluster_id(cluster)
+                .cluster_id(cluster.clone())
                 .node_id(node)
                 .advertised_listener(advertised_listener)
                 .schema_registry(schemas)
@@ -151,7 +150,6 @@ where
                 )
                 .build()
                 .await
-                .map_err(Into::into)
         }
 
         StorageType::Turso => {
@@ -183,7 +181,7 @@ where
             }
 
             StorageContainer::builder()
-                .cluster_id(cluster)
+                .cluster_id(cluster.clone())
                 .node_id(node)
                 .advertised_listener(advertised_listener)
                 .schema_registry(schemas)
@@ -203,20 +201,24 @@ where
                 )
                 .build()
                 .await
-                .map_err(Into::into)
         }
 
         // Uses slatedb://memory for in-memory testing, no external S3 needed
-        StorageType::SlateDb => StorageContainer::builder()
-            .cluster_id(cluster)
-            .node_id(node)
-            .advertised_listener(advertised_listener)
-            .schema_registry(schemas)
-            .storage(Url::parse("slatedb://memory")?)
-            .build()
-            .await
-            .map_err(Into::into),
-    }
+        StorageType::SlateDb => {
+            StorageContainer::builder()
+                .cluster_id(cluster.clone())
+                .node_id(node)
+                .advertised_listener(advertised_listener)
+                .schema_registry(schemas)
+                .storage(Url::parse("slatedb://memory")?)
+                .build()
+                .await
+        }
+    }?;
+
+    register_broker(cluster, node, &storage).await?;
+
+    Ok(storage)
 }
 
 pub(crate) fn alphanumeric_string(length: usize) -> String {
@@ -503,11 +505,11 @@ where
     }
 }
 
-pub(crate) async fn register_broker<C, G>(cluster_id: C, broker_id: i32, sc: G) -> Result<()>
-where
-    C: Into<String>,
-    G: Storage,
-{
+pub(crate) async fn register_broker(
+    cluster_id: impl Into<String>,
+    broker_id: i32,
+    sc: &impl Storage,
+) -> Result<()> {
     let incarnation_id = Uuid::now_v7();
 
     // debug!(?cluster_id, ?broker_id, ?incarnation_id);

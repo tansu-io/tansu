@@ -39,7 +39,7 @@ pub async fn empty_topic<G>(cluster_id: Uuid, broker_id: i32, sc: G) -> Result<(
 where
     G: Storage + Clone,
 {
-    register_broker(cluster_id, broker_id, sc.clone()).await?;
+    register_broker(cluster_id, broker_id, &sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -148,7 +148,7 @@ pub async fn kv_header(
     broker_id: i32,
     sc: impl Storage + Clone,
 ) -> Result<()> {
-    register_broker(cluster_id, broker_id, sc.clone()).await?;
+    register_broker(cluster_id, broker_id, &sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -354,7 +354,7 @@ pub async fn compacted_header(
     broker_id: i32,
     sc: impl Storage + Clone,
 ) -> Result<()> {
-    register_broker(cluster_id, broker_id, sc.clone()).await?;
+    register_broker(cluster_id, broker_id, &sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -481,7 +481,7 @@ where
     C: Into<String>,
     G: Storage + Clone,
 {
-    register_broker(cluster_id, broker_id, sc.clone()).await?;
+    register_broker(cluster_id, broker_id, &sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -656,7 +656,7 @@ where
     C: Into<String>,
     G: Storage + Clone,
 {
-    register_broker(cluster_id, broker_id, sc.clone()).await?;
+    register_broker(cluster_id, broker_id, &sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -787,7 +787,7 @@ mod pg {
     use super::*;
 
     async fn storage_container(
-        cluster: impl Into<String>,
+        cluster: impl Into<String> + Clone,
         node: i32,
     ) -> Result<Arc<Box<dyn Storage>>> {
         common::storage_container(
@@ -868,7 +868,7 @@ mod in_memory {
     use super::*;
 
     async fn storage_container(
-        cluster: impl Into<String>,
+        cluster: impl Into<String> + Clone,
         node: i32,
     ) -> Result<Arc<Box<dyn Storage>>> {
         common::storage_container(
@@ -949,7 +949,7 @@ mod lite {
     use super::*;
 
     async fn storage_container(
-        cluster: impl Into<String>,
+        cluster: impl Into<String> + Clone,
         node: i32,
     ) -> Result<Arc<Box<dyn Storage>>> {
         common::storage_container(
@@ -1045,7 +1045,7 @@ mod slatedb {
     use super::*;
 
     async fn storage_container(
-        cluster: impl Into<String>,
+        cluster: impl Into<String> + Clone,
         node: i32,
     ) -> Result<Arc<Box<dyn Storage>>> {
         common::storage_container(

@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::time::SystemTime;
+use std::{cmp::min, time::SystemTime};
 
 use rama::{Context, Service};
 use tansu_sans_io::{
@@ -255,6 +255,7 @@ impl FetchService {
         max_bytes: &mut u32,
         isolation: IsolationLevel,
         fetch: &FetchTopic,
+        is_first_non_empty: &mut bool,
     ) -> Result<FetchableTopicResponse>
     where
         G: Storage,
@@ -272,6 +273,15 @@ impl FetchService {
             let mut partitions = Vec::new();
 
             for fetch_partition in fetch.partitions.as_ref().unwrap_or(&Vec::new()) {
+                let partition_max_bytes = if *is_first_non_empty {
+                    *max_bytes
+                } else {
+                    min(fetch_partition.partition_max_bytes as u32, *max_bytes)
+                };
+
+                let mut partition_bytes = partition_max_bytes;
+                debug!(partition_bytes, is_first_non_empty);
+
                 let remaining = max_wait.saturating_sub(started_at.elapsed());
 
                 let partition = self
@@ -279,12 +289,23 @@ impl FetchService {
                         ctx,
                         remaining,
                         min_bytes,
-                        max_bytes,
+                        &mut partition_bytes,
                         isolation,
                         name,
                         fetch_partition,
                     )
                     .await?;
+
+                *is_first_non_empty = *is_first_non_empty
+                    && partition
+                        .records
+                        .as_ref()
+                        .is_some_and(|records| records.batches.is_empty());
+
+                debug!(partition_bytes, is_first_non_empty);
+
+                *max_bytes =
+                    max_bytes.saturating_sub(partition_max_bytes.saturating_sub(partition_bytes));
 
                 partitions.push(partition);
             }
@@ -320,6 +341,7 @@ impl FetchService {
             let mut responses = vec![];
             let mut iteration = 0;
             let mut bytes = 0;
+            let mut is_first_non_empty = true;
 
             while !max_wait.saturating_sub(started_at.elapsed()?).is_zero() && bytes <= min_bytes {
                 debug!(?bytes, remaining = ?max_wait.saturating_sub(started_at.elapsed()?));
@@ -336,6 +358,7 @@ impl FetchService {
                             max_bytes,
                             isolation,
                             fetch,
+                            &mut is_first_non_empty,
                         )
                         .await?;
 

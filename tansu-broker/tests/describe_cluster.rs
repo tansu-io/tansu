@@ -37,7 +37,7 @@ where
     G: Storage + Clone,
 {
     debug!(broker_id, %advertised_listener);
-    register_broker(cluster_id, broker_id, sc.clone()).await?;
+    register_broker(cluster_id, broker_id, &sc).await?;
 
     let include_cluster_authorized_operations = true;
     let endpoint_type = Some(6);
@@ -90,7 +90,7 @@ mod pg {
     use super::*;
 
     async fn storage_container(
-        cluster: impl Into<String>,
+        cluster: impl Into<String> + Clone,
         node: i32,
         advertised_listener: Url,
     ) -> Result<Arc<Box<dyn Storage>>> {
@@ -132,7 +132,7 @@ mod in_memory {
     use super::*;
 
     async fn storage_container(
-        cluster: impl Into<String>,
+        cluster: impl Into<String> + Clone,
         node: i32,
         advertised_listener: Url,
     ) -> Result<Arc<Box<dyn Storage>>> {
@@ -174,7 +174,7 @@ mod lite {
     use super::*;
 
     async fn storage_container(
-        cluster: impl Into<String>,
+        cluster: impl Into<String> + Clone,
         node: i32,
         advertised_listener: Url,
     ) -> Result<Arc<Box<dyn Storage>>> {
@@ -209,7 +209,7 @@ mod slatedb {
     use super::*;
 
     async fn storage_container(
-        cluster: impl Into<String>,
+        cluster: impl Into<String> + Clone,
         node: i32,
         advertised_listener: Url,
     ) -> Result<Arc<Box<dyn Storage>>> {
