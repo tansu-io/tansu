@@ -37,7 +37,7 @@ use tansu_service::{
     BytesFrameLayer, ConsumerGroupLayer, ConsumerGroupService, FrameBytesLayer, FrameRouteService,
     LatencyIntroducingLayer,
 };
-use tansu_storage::StorageContainer;
+use tansu_storage::{Storage, StorageContainer};
 use tokio::{
     sync::{
         Notify,
@@ -50,15 +50,14 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, instrument, warn};
 use url::Url;
 
-use crate::common::init_tracing;
+use crate::common::{alphanumeric_string, init_tracing};
 
 pub mod common;
 
-#[tokio::test(start_paused = true)]
-pub async fn one_consumer_session_delay_after_initial_join() -> Result<()> {
-    let _guard = init_tracing()?;
-
-    let group = "g1";
+pub async fn one_consumer_session_delay_after_initial_join(
+    storage: impl Storage + Clone,
+) -> Result<()> {
+    let group: String = alphanumeric_string(15);
 
     let tp = [("t", 0..3)];
 
@@ -82,17 +81,6 @@ pub async fn one_consumer_session_delay_after_initial_join() -> Result<()> {
 
     let latency_ms = 50..150;
     let seed = 0;
-
-    let cluster = "tansu";
-
-    let storage = StorageContainer::builder()
-        .cluster_id(cluster)
-        .node_id(NODE_ID)
-        .advertised_listener(Url::parse("tcp://127.0.0.1:9092/")?)
-        .schema_registry(None)
-        .storage(Url::parse("memory://")?)
-        .build()
-        .await?;
 
     let coordinator = Controller::with_storage(storage)?;
 
@@ -181,11 +169,8 @@ pub async fn one_consumer_session_delay_after_initial_join() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-pub async fn one_consumer_next_action() -> Result<()> {
-    let _guard = init_tracing()?;
-
-    let group = "g1";
+pub async fn one_consumer_next_action(storage: impl Storage + Clone) -> Result<()> {
+    let group: String = alphanumeric_string(15);
 
     let tp = [("t", 0..3)];
 
@@ -209,17 +194,6 @@ pub async fn one_consumer_next_action() -> Result<()> {
 
     let latency_ms = 50..150;
     let seed = 0;
-
-    let cluster = "tansu";
-
-    let storage = StorageContainer::builder()
-        .cluster_id(cluster)
-        .node_id(NODE_ID)
-        .advertised_listener(Url::parse("tcp://127.0.0.1:9092/")?)
-        .schema_registry(None)
-        .storage(Url::parse("memory://")?)
-        .build()
-        .await?;
 
     let coordinator = Controller::with_storage(storage)?;
 
@@ -265,11 +239,8 @@ pub async fn one_consumer_next_action() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-pub async fn two_consumer_next_action() -> Result<()> {
-    let _guard = init_tracing()?;
-
-    let group = "g1";
+pub async fn two_consumer_next_action(storage: impl Storage + Clone) -> Result<()> {
+    let group: String = alphanumeric_string(15);
 
     let tp = [("t", 0..3)];
 
@@ -293,17 +264,6 @@ pub async fn two_consumer_next_action() -> Result<()> {
 
     let latency_ms = 50..150;
 
-    let cluster = "tansu";
-
-    let storage = StorageContainer::builder()
-        .cluster_id(cluster)
-        .node_id(NODE_ID)
-        .advertised_listener(Url::parse("tcp://127.0.0.1:9092/")?)
-        .schema_registry(None)
-        .storage(Url::parse("memory://")?)
-        .build()
-        .await?;
-
     let coordinator = Controller::with_storage(storage)?;
 
     let route = services(
@@ -314,7 +274,7 @@ pub async fn two_consumer_next_action() -> Result<()> {
 
     let c0 = (
         ConsumerGroupLayer::new(
-            group,
+            group.clone(),
             tp.iter().map(|(topic, _partitions)| *topic),
             metadata.clone(),
         )
@@ -329,7 +289,7 @@ pub async fn two_consumer_next_action() -> Result<()> {
 
     let c1 = (
         ConsumerGroupLayer::new(
-            group,
+            group.clone(),
             tp.iter().map(|(topic, _partitions)| *topic),
             metadata,
         )
@@ -411,36 +371,11 @@ pub async fn two_consumer_next_action() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-pub async fn consumer_next_action_08c() -> Result<()> {
-    let _guard = init_tracing()?;
-
-    group_consumer_next_action(0..8).await
-}
-
-#[tokio::test]
-pub async fn consumer_next_action_16c() -> Result<()> {
-    let _guard = init_tracing()?;
-
-    group_consumer_next_action(0..16).await
-}
-
-#[tokio::test]
-pub async fn consumer_next_action_24c() -> Result<()> {
-    let _guard = init_tracing()?;
-
-    group_consumer_next_action(0..24).await
-}
-
-#[tokio::test]
-pub async fn consumer_next_action_32c() -> Result<()> {
-    let _guard = init_tracing()?;
-
-    group_consumer_next_action(0..32).await
-}
-
-async fn group_consumer_next_action(consumers: Range<i32>) -> Result<()> {
-    let group = "g1";
+async fn group_consumer_next_action(
+    storage: impl Storage + Clone,
+    consumers: Range<i32>,
+) -> Result<()> {
+    let group: String = alphanumeric_string(15);
 
     let partitions = 0..32;
 
@@ -449,17 +384,6 @@ async fn group_consumer_next_action(consumers: Range<i32>) -> Result<()> {
     let metadata = metadata(tp.iter());
 
     let latency_ms = 10..150;
-
-    let cluster = "tansu";
-
-    let storage = StorageContainer::builder()
-        .cluster_id(cluster)
-        .node_id(NODE_ID)
-        .advertised_listener(Url::parse("tcp://127.0.0.1:9092/")?)
-        .schema_registry(None)
-        .storage(Url::parse("memory://")?)
-        .build()
-        .await?;
 
     let coordinator = Controller::with_storage(storage)?;
 
@@ -475,7 +399,7 @@ async fn group_consumer_next_action(consumers: Range<i32>) -> Result<()> {
         .into_iter()
         .map(|id| {
             consumer(
-                group,
+                group.as_str(),
                 id as u64,
                 tp.iter().map(|(topic, _partitions)| *topic),
                 route.clone(),
@@ -577,9 +501,7 @@ async fn group_consumer_next_action(consumers: Range<i32>) -> Result<()> {
 
 #[tokio::test]
 pub async fn two_consumer_interleave_join() -> Result<()> {
-    let _guard = init_tracing()?;
-
-    let group = "g1";
+    let group: String = alphanumeric_string(15);
 
     let tp = [("t", 0..3)];
 
@@ -625,7 +547,7 @@ pub async fn two_consumer_interleave_join() -> Result<()> {
 
     let c0 = (
         ConsumerGroupLayer::new(
-            group,
+            group.clone(),
             tp.iter().map(|(topic, _partitions)| *topic),
             metadata.clone(),
         ),
@@ -704,7 +626,7 @@ pub async fn two_consumer_interleave_join() -> Result<()> {
         .inspect(|c1_next_action| debug!(?c1_next_action))?;
 
     assert_eq!(i16::from(ErrorCode::None), c1_next_action.error_code);
-    assert_eq!(1, c1_next_action.generation_id);
+    assert_eq!(0, c1_next_action.generation_id);
     assert_eq!(c1_member_id, c1_next_action.leader);
     assert!(
         c1_next_action
@@ -730,7 +652,7 @@ pub async fn two_consumer_interleave_join() -> Result<()> {
         .inspect(|c0_next_action| debug!(?c0_next_action))?;
 
     assert_eq!(i16::from(ErrorCode::None), c0_next_action.error_code);
-    assert_eq!(1, c0_next_action.generation_id);
+    assert_eq!(0, c0_next_action.generation_id);
     assert_eq!(c1_member_id, c0_next_action.leader);
     assert!(
         c0_next_action
@@ -1143,5 +1065,511 @@ where
         Ok(heartbeat)
     } else {
         Err(anyhow!("expecting heartbeat response: {next_action:?}"))
+    }
+}
+
+#[cfg(feature = "postgres")]
+mod pg {
+    use std::sync::Arc;
+
+    use rand::rng;
+    use tansu_storage::Storage;
+    use uuid::Uuid;
+
+    use crate::common::StorageType;
+
+    use super::*;
+
+    async fn storage_container(
+        cluster: impl Into<String> + Clone,
+        node: i32,
+    ) -> Result<Arc<Box<dyn Storage>>> {
+        common::storage_container(
+            StorageType::Postgres,
+            cluster,
+            node,
+            Url::parse("tcp://127.0.0.1/")?,
+            None,
+        )
+        .await
+        .map_err(Into::into)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn one_consumer_session_delay_after_initial_join() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        let storage = storage_container(cluster_id, broker_id).await?;
+
+        super::one_consumer_session_delay_after_initial_join(storage).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn one_consumer_next_action() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        let storage = storage_container(cluster_id, broker_id).await?;
+
+        super::one_consumer_next_action(storage).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn two_consumer_next_action() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        let storage = storage_container(cluster_id, broker_id).await?;
+
+        super::two_consumer_next_action(storage).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn consumer_next_action_08c() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        let storage = storage_container(cluster_id, broker_id).await?;
+
+        group_consumer_next_action(storage, 0..8).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn consumer_next_action_16c() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        let storage = storage_container(cluster_id, broker_id).await?;
+
+        group_consumer_next_action(storage, 0..16).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn consumer_next_action_24c() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        let storage = storage_container(cluster_id, broker_id).await?;
+
+        group_consumer_next_action(storage, 0..24).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn consumer_next_action_32c() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        let storage = storage_container(cluster_id, broker_id).await?;
+
+        group_consumer_next_action(storage, 0..32).await?;
+
+        Ok(())
+    }
+}
+
+#[cfg(feature = "dynostore")]
+mod in_memory {
+    use std::sync::Arc;
+
+    use rand::rng;
+    use tansu_storage::Storage;
+    use uuid::Uuid;
+
+    use crate::common::StorageType;
+
+    use super::*;
+
+    async fn storage_container(
+        cluster: impl Into<String> + Clone,
+        node: i32,
+    ) -> Result<Arc<Box<dyn Storage>>> {
+        common::storage_container(
+            StorageType::InMemory,
+            cluster.clone(),
+            node,
+            Url::parse("tcp://127.0.0.1/")?,
+            None,
+        )
+        .await
+        .map_err(Into::into)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn one_consumer_session_delay_after_initial_join() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        let storage = storage_container(cluster_id, broker_id).await?;
+
+        super::one_consumer_session_delay_after_initial_join(storage).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn one_consumer_next_action() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        let storage = storage_container(cluster_id, broker_id).await?;
+
+        super::one_consumer_next_action(storage).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn two_consumer_next_action() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        let storage = storage_container(cluster_id, broker_id).await?;
+
+        super::two_consumer_next_action(storage).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn consumer_next_action_08c() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        let storage = storage_container(cluster_id, broker_id).await?;
+
+        group_consumer_next_action(storage, 0..8).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn consumer_next_action_16c() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        let storage = storage_container(cluster_id, broker_id).await?;
+
+        group_consumer_next_action(storage, 0..16).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn consumer_next_action_24c() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        let storage = storage_container(cluster_id, broker_id).await?;
+
+        group_consumer_next_action(storage, 0..24).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn consumer_next_action_32c() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        let storage = storage_container(cluster_id, broker_id).await?;
+
+        group_consumer_next_action(storage, 0..32).await?;
+
+        Ok(())
+    }
+}
+
+#[cfg(feature = "libsql")]
+mod lite {
+    use std::sync::Arc;
+
+    use rand::rng;
+    use uuid::Uuid;
+
+    use crate::common::StorageType;
+
+    use super::*;
+
+    async fn storage_container(
+        cluster: impl Into<String> + Clone,
+        node: i32,
+    ) -> Result<Arc<Box<dyn Storage>>> {
+        common::storage_container(
+            StorageType::Lite,
+            cluster,
+            node,
+            Url::parse("tcp://127.0.0.1/")?,
+            None,
+        )
+        .await
+        .map_err(Into::into)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn one_consumer_session_delay_after_initial_join() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        let storage = storage_container(cluster_id, broker_id).await?;
+
+        super::one_consumer_session_delay_after_initial_join(storage).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn one_consumer_next_action() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        let storage = storage_container(cluster_id, broker_id).await?;
+
+        super::one_consumer_next_action(storage).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn two_consumer_next_action() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        let storage = storage_container(cluster_id, broker_id).await?;
+
+        super::two_consumer_next_action(storage).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn consumer_next_action_08c() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        let storage = storage_container(cluster_id, broker_id).await?;
+
+        group_consumer_next_action(storage, 0..8).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn consumer_next_action_16c() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        let storage = storage_container(cluster_id, broker_id).await?;
+
+        group_consumer_next_action(storage, 0..16).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn consumer_next_action_24c() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        let storage = storage_container(cluster_id, broker_id).await?;
+
+        group_consumer_next_action(storage, 0..24).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn consumer_next_action_32c() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        let storage = storage_container(cluster_id, broker_id).await?;
+
+        group_consumer_next_action(storage, 0..32).await?;
+
+        Ok(())
+    }
+}
+
+#[cfg(feature = "slatedb")]
+mod slatedb {
+    use std::sync::Arc;
+
+    use rand::rng;
+    use uuid::Uuid;
+
+    use crate::common::StorageType;
+
+    use super::*;
+
+    async fn storage_container(
+        cluster: impl Into<String> + Clone,
+        node: i32,
+    ) -> Result<Arc<Box<dyn Storage>>> {
+        common::storage_container(
+            StorageType::SlateDb,
+            cluster,
+            node,
+            Url::parse("tcp://127.0.0.1/")?,
+            None,
+        )
+        .await
+        .map_err(Into::into)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn one_consumer_session_delay_after_initial_join() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        let storage = storage_container(cluster_id, broker_id).await?;
+
+        super::one_consumer_session_delay_after_initial_join(storage).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn one_consumer_next_action() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        let storage = storage_container(cluster_id, broker_id).await?;
+
+        super::one_consumer_next_action(storage).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn two_consumer_next_action() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        let storage = storage_container(cluster_id, broker_id).await?;
+
+        super::two_consumer_next_action(storage).await?;
+
+        Ok(())
+    }
+
+    #[ignore]
+    #[tokio::test]
+    async fn consumer_next_action_08c() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        let storage = storage_container(cluster_id, broker_id).await?;
+
+        group_consumer_next_action(storage, 0..8).await?;
+
+        Ok(())
+    }
+
+    #[ignore]
+    #[tokio::test]
+    async fn consumer_next_action_16c() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        let storage = storage_container(cluster_id, broker_id).await?;
+
+        group_consumer_next_action(storage, 0..16).await?;
+
+        Ok(())
+    }
+
+    #[ignore]
+    #[tokio::test]
+    async fn consumer_next_action_24c() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        let storage = storage_container(cluster_id, broker_id).await?;
+
+        group_consumer_next_action(storage, 0..24).await?;
+
+        Ok(())
+    }
+
+    #[ignore]
+    #[tokio::test]
+    async fn consumer_next_action_32c() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        let storage = storage_container(cluster_id, broker_id).await?;
+
+        group_consumer_next_action(storage, 0..32).await?;
+
+        Ok(())
     }
 }

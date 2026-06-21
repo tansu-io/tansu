@@ -32,7 +32,7 @@ pub async fn person_valid<G>(cluster_id: impl Into<String>, broker_id: i32, sc: 
 where
     G: Storage + Clone,
 {
-    register_broker(cluster_id, broker_id, sc.clone()).await?;
+    register_broker(cluster_id, broker_id, &sc).await?;
 
     let topic_name = "person";
     debug!(?topic_name);
@@ -89,7 +89,7 @@ pub async fn person_invalid<G>(cluster_id: impl Into<String>, broker_id: i32, sc
 where
     G: Storage + Clone,
 {
-    register_broker(cluster_id, broker_id, sc.clone()).await?;
+    register_broker(cluster_id, broker_id, &sc).await?;
 
     let topic_name = "person";
     debug!(?topic_name);
@@ -157,7 +157,7 @@ mod pg {
     use super::*;
 
     async fn storage_container(
-        cluster: impl Into<String>,
+        cluster: impl Into<String> + Clone,
         node: i32,
     ) -> Result<Arc<Box<dyn Storage>>> {
         let current_dir = env::current_dir()?;
@@ -225,7 +225,7 @@ mod in_memory {
     use super::*;
 
     async fn storage_container(
-        cluster: impl Into<String>,
+        cluster: impl Into<String> + Clone,
         node: i32,
     ) -> Result<Arc<Box<dyn Storage>>> {
         let current_dir = env::current_dir()?;
@@ -293,7 +293,7 @@ mod lite {
     use super::*;
 
     async fn storage_container(
-        cluster: impl Into<String>,
+        cluster: impl Into<String> + Clone,
         node: i32,
     ) -> Result<Arc<Box<dyn Storage>>> {
         let current_dir = env::current_dir()?;
@@ -361,7 +361,7 @@ mod slatedb {
     use super::*;
 
     async fn storage_container(
-        cluster: impl Into<String>,
+        cluster: impl Into<String> + Clone,
         node: i32,
     ) -> Result<Arc<Box<dyn Storage>>> {
         let current_dir = env::current_dir()?;

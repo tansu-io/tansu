@@ -1075,23 +1075,37 @@ impl Storage for DynoStore {
             }
         }
 
+        let mut wanted = offsets.split_off(&offset);
+
+        // The fetch offset can fall inside a batch that starts before it;
+        // Kafka returns that batch whole, leaving the client to skip the
+        // records below the fetch offset. The preceding batch is dropped
+        // after decoding if it ends before the fetch offset.
+        if wanted.first().copied() != Some(offset)
+            && let Some(preceding) = offsets.pop_last()
+        {
+            _ = wanted.insert(preceding);
+        }
+
         let mut batches = vec![];
 
         let mut bytes = max_bytes as u64;
 
-        for offset in offsets.split_off(&offset) {
-            debug!(?offset);
+        for base_offset in wanted {
+            debug!(?base_offset);
 
             let location = Path::from(format!(
                 "clusters/{}/topics/{}/partitions/{:0>10}/records/{:0>20}.batch",
-                self.cluster, topition.topic, topition.partition, offset,
+                self.cluster, topition.topic, topition.partition, base_offset,
             ));
 
             let get_result = self
                 .object_store
                 .get(&location)
                 .await
-                .inspect_err(|error| error!(?error, ?topition, ?offset, ?min_bytes, ?max_bytes))
+                .inspect_err(|error| {
+                    error!(?error, ?topition, ?base_offset, ?min_bytes, ?max_bytes)
+                })
                 .map_err(|_| Error::Api(ErrorCode::UnknownServerError))?;
 
             let size = get_result.meta.size;
@@ -1102,13 +1116,20 @@ impl Storage for DynoStore {
                 .inspect_err(|error| error!(?error, %location))
                 .map_err(|_| Error::Api(ErrorCode::UnknownServerError))
                 .and_then(|encoded| self.decode(encoded))?;
-            batch.base_offset = offset;
-            batches.push(batch);
+            batch.base_offset = base_offset;
 
-            if size > bytes || has_deadline_expired() {
-                break;
-            } else {
+            if base_offset + i64::from(batch.last_offset_delta) >= offset {
+                batches.push(batch);
+
+                if size > bytes {
+                    break;
+                }
+
                 bytes = bytes.saturating_sub(size);
+            }
+
+            if has_deadline_expired() {
+                break;
             }
         }
 

@@ -32,7 +32,7 @@ where
     G: Storage + Clone,
 {
     debug!(broker_id, %advertised_listener);
-    register_broker(cluster_id, broker_id, sc.clone()).await?;
+    register_broker(cluster_id, broker_id, &sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -144,7 +144,7 @@ where
     G: Storage + Clone,
 {
     debug!(broker_id, %advertised_listener);
-    register_broker(cluster_id, broker_id, sc.clone()).await?;
+    register_broker(cluster_id, broker_id, &sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -256,7 +256,7 @@ where
     G: Storage + Clone,
 {
     debug!(broker_id, %advertised_listener);
-    register_broker(cluster_id, broker_id, sc.clone()).await?;
+    register_broker(cluster_id, broker_id, &sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -368,7 +368,7 @@ where
     G: Storage + Clone,
 {
     debug!(broker_id, %advertised_listener);
-    register_broker(cluster_id, broker_id, sc.clone()).await?;
+    register_broker(cluster_id, broker_id, &sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -410,7 +410,7 @@ where
     G: Storage + Clone,
 {
     debug!(broker_id, %advertised_listener);
-    register_broker(cluster_id, broker_id, sc.clone()).await?;
+    register_broker(cluster_id, broker_id, &sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
     debug!(?topic_name);
@@ -522,7 +522,7 @@ where
     G: Storage + Clone,
 {
     debug!(broker_id, %advertised_listener);
-    register_broker(cluster_id, broker_id, sc.clone()).await?;
+    register_broker(cluster_id, broker_id, &sc).await?;
 
     let id = Uuid::new_v4();
 
@@ -563,7 +563,7 @@ mod pg {
     use super::*;
 
     async fn storage_container(
-        cluster: impl Into<String>,
+        cluster: impl Into<String> + Clone,
         node: i32,
         advertised_listener: Url,
     ) -> Result<Arc<Box<dyn Storage>>> {
@@ -690,7 +690,7 @@ mod in_memory {
     use super::*;
 
     async fn storage_container(
-        cluster: impl Into<String>,
+        cluster: impl Into<String> + Clone,
         node: i32,
         advertised_listener: Url,
     ) -> Result<Arc<Box<dyn Storage>>> {
@@ -817,7 +817,7 @@ mod lite {
     use super::*;
 
     async fn storage_container(
-        cluster: impl Into<String>,
+        cluster: impl Into<String> + Clone,
         node: i32,
         advertised_listener: Url,
     ) -> Result<Arc<Box<dyn Storage>>> {
@@ -937,7 +937,7 @@ mod slatedb {
     use super::*;
 
     async fn storage_container(
-        cluster: impl Into<String>,
+        cluster: impl Into<String> + Clone,
         node: i32,
         advertised_listener: Url,
     ) -> Result<Arc<Box<dyn Storage>>> {

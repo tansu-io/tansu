@@ -32,7 +32,7 @@ pub async fn join_with_empty_member_id<G>(
 where
     G: Storage + Clone,
 {
-    register_broker(cluster_id, broker_id, sc.clone()).await?;
+    register_broker(cluster_id, broker_id, &sc).await?;
 
     let mut controller = Controller::with_storage(sc)?;
 
@@ -103,7 +103,7 @@ pub async fn rejoin_with_empty_member_id<G>(
 where
     G: Storage + Clone,
 {
-    register_broker(cluster_id, broker_id, sc.clone()).await?;
+    register_broker(cluster_id, broker_id, &sc).await?;
 
     let mut controller = Controller::with_storage(sc.clone())?;
 

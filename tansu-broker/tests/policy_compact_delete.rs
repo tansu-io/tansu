@@ -2865,7 +2865,7 @@ mod pg {
     use super::*;
 
     async fn storage_container(
-        cluster: impl Into<String>,
+        cluster: impl Into<String> + Clone,
         node: i32,
     ) -> Result<Arc<Box<dyn Storage>>> {
         common::storage_container(
@@ -2886,7 +2886,7 @@ mod pg {
         let broker_id = rng().random_range(0..i32::MAX);
 
         let sc = storage_container(cluster_id, broker_id).await?;
-        register_broker(cluster_id, broker_id, sc.clone()).await?;
+        register_broker(cluster_id, broker_id, &sc).await?;
 
         super::compact_only(sc).await
     }
@@ -2899,7 +2899,7 @@ mod pg {
         let broker_id = rng().random_range(0..i32::MAX);
 
         let sc = storage_container(cluster_id, broker_id).await?;
-        register_broker(cluster_id, broker_id, sc.clone()).await?;
+        register_broker(cluster_id, broker_id, &sc).await?;
 
         super::delete_only(sc).await
     }
@@ -2912,7 +2912,7 @@ mod pg {
         let broker_id = rng().random_range(0..i32::MAX);
 
         let sc = storage_container(cluster_id, broker_id).await?;
-        register_broker(cluster_id, broker_id, sc.clone()).await?;
+        register_broker(cluster_id, broker_id, &sc).await?;
 
         super::delete_no_retention_ms_only(sc).await
     }
@@ -2925,7 +2925,7 @@ mod pg {
         let broker_id = rng().random_range(0..i32::MAX);
 
         let sc = storage_container(cluster_id, broker_id).await?;
-        register_broker(cluster_id, broker_id, sc.clone()).await?;
+        register_broker(cluster_id, broker_id, &sc).await?;
 
         super::compact_delete_001(sc).await
     }
@@ -2938,7 +2938,7 @@ mod pg {
         let broker_id = rng().random_range(0..i32::MAX);
 
         let sc = storage_container(cluster_id, broker_id).await?;
-        register_broker(cluster_id, broker_id, sc.clone()).await?;
+        register_broker(cluster_id, broker_id, &sc).await?;
 
         super::compact_delete_002(sc).await
     }
@@ -2950,7 +2950,7 @@ mod in_memory {
     use super::*;
 
     async fn storage_container(
-        cluster: impl Into<String>,
+        cluster: impl Into<String> + Clone,
         node: i32,
     ) -> Result<Arc<Box<dyn Storage>>> {
         common::storage_container(
@@ -2972,7 +2972,7 @@ mod in_memory {
         let broker_id = rng().random_range(0..i32::MAX);
 
         let sc = storage_container(cluster_id, broker_id).await?;
-        register_broker(cluster_id, broker_id, sc.clone()).await?;
+        register_broker(cluster_id, broker_id, &sc).await?;
 
         super::compact_only(sc).await
     }
@@ -2986,7 +2986,7 @@ mod in_memory {
         let broker_id = rng().random_range(0..i32::MAX);
 
         let sc = storage_container(cluster_id, broker_id).await?;
-        register_broker(cluster_id, broker_id, sc.clone()).await?;
+        register_broker(cluster_id, broker_id, &sc).await?;
 
         super::delete_only(sc).await
     }
@@ -3000,7 +3000,7 @@ mod in_memory {
         let broker_id = rng().random_range(0..i32::MAX);
 
         let sc = storage_container(cluster_id, broker_id).await?;
-        register_broker(cluster_id, broker_id, sc.clone()).await?;
+        register_broker(cluster_id, broker_id, &sc).await?;
 
         super::delete_no_retention_ms_only(sc).await
     }
@@ -3014,7 +3014,7 @@ mod in_memory {
         let broker_id = rng().random_range(0..i32::MAX);
 
         let sc = storage_container(cluster_id, broker_id).await?;
-        register_broker(cluster_id, broker_id, sc.clone()).await?;
+        register_broker(cluster_id, broker_id, &sc).await?;
 
         super::compact_delete_001(sc).await
     }
@@ -3028,7 +3028,7 @@ mod in_memory {
         let broker_id = rng().random_range(0..i32::MAX);
 
         let sc = storage_container(cluster_id, broker_id).await?;
-        register_broker(cluster_id, broker_id, sc.clone()).await?;
+        register_broker(cluster_id, broker_id, &sc).await?;
 
         super::compact_delete_002(sc).await
     }
@@ -3041,7 +3041,7 @@ mod lite {
     use super::*;
 
     async fn storage_container(
-        cluster: impl Into<String>,
+        cluster: impl Into<String> + Clone,
         node: i32,
     ) -> Result<Arc<Box<dyn Storage>>> {
         common::storage_container(
@@ -3062,7 +3062,7 @@ mod lite {
         let broker_id = rng().random_range(0..i32::MAX);
 
         let sc = storage_container(cluster_id, broker_id).await?;
-        register_broker(cluster_id, broker_id, sc.clone()).await?;
+        register_broker(cluster_id, broker_id, &sc).await?;
 
         super::compact_only(sc).await
     }
@@ -3075,7 +3075,7 @@ mod lite {
         let broker_id = rng().random_range(0..i32::MAX);
 
         let sc = storage_container(cluster_id, broker_id).await?;
-        register_broker(cluster_id, broker_id, sc.clone()).await?;
+        register_broker(cluster_id, broker_id, &sc).await?;
 
         super::delete_only(sc).await
     }
@@ -3088,7 +3088,7 @@ mod lite {
         let broker_id = rng().random_range(0..i32::MAX);
 
         let sc = storage_container(cluster_id, broker_id).await?;
-        register_broker(cluster_id, broker_id, sc.clone()).await?;
+        register_broker(cluster_id, broker_id, &sc).await?;
 
         super::delete_no_retention_ms_only(sc).await
     }
@@ -3101,7 +3101,7 @@ mod lite {
         let broker_id = rng().random_range(0..i32::MAX);
 
         let sc = storage_container(cluster_id, broker_id).await?;
-        register_broker(cluster_id, broker_id, sc.clone()).await?;
+        register_broker(cluster_id, broker_id, &sc).await?;
 
         super::compact_delete_001(sc).await
     }
@@ -3114,7 +3114,7 @@ mod lite {
         let broker_id = rng().random_range(0..i32::MAX);
 
         let sc = storage_container(cluster_id, broker_id).await?;
-        register_broker(cluster_id, broker_id, sc.clone()).await?;
+        register_broker(cluster_id, broker_id, &sc).await?;
 
         super::compact_delete_002(sc).await
     }

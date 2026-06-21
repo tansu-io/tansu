@@ -649,6 +649,14 @@ impl Frame {
             Err(Error::ResponseFrame)
         }
     }
+
+    pub fn is_request(&self) -> bool {
+        matches!(self.header, Header::Request { .. })
+    }
+
+    pub fn is_response(&self) -> bool {
+        matches!(self.header, Header::Response { .. })
+    }
 }
 
 /// A Kafka API request or response header.
