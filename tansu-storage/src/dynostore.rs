@@ -872,7 +872,13 @@ impl Storage for DynoStore {
                 })
                 .await
                 .inspect(|outcome| debug!(transaction_id, ?topition, ?outcome))
-                .inspect_err(|err| error!(?err, transaction_id, ?topition))?;
+                .inspect_err(|err| {
+                    if matches!(err, Error::Api(ErrorCode::OutOfOrderSequenceNumber) | Error::Api(ErrorCode::DuplicateSequenceNumber)) {
+                        return
+                    }
+
+                    error!(?err, transaction_id, ?topition);
+                })?;
             }
 
             if let Some(ref registry) = self.schemas {
