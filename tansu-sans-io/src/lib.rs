@@ -321,6 +321,10 @@ pub trait Response:
     type Request: Request;
 }
 
+pub trait IntoVersion {
+    fn into_version(self, api_version: i16) -> Self;
+}
+
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum Error {
     ApiError(ErrorCode),
@@ -524,6 +528,16 @@ pub struct Frame {
     pub body: Body,
 }
 
+impl IntoVersion for Frame {
+    fn into_version(self, api_version: i16) -> Self {
+        Self {
+            header: self.header.into_version(api_version),
+            body: self.body.into_version(api_version),
+            ..self
+        }
+    }
+}
+
 impl MaximumAllocationSize for Frame {
     #[instrument(skip_all, ret)]
     fn maximum_allocation_size(&self) -> Result<usize> {
@@ -552,10 +566,14 @@ impl Frame {
     /// serialize an API request into a frame of bytes
     #[instrument(skip_all)]
     pub fn request(header: Header, body: Body) -> Result<Bytes> {
+        let Header::Request { api_version, .. } = header else {
+            return Err(Error::ResponseFrame);
+        };
+
         let frame = Frame {
             size: 0,
-            header,
-            body,
+            header: header.into_version(api_version),
+            body: body.into_version(api_version),
         };
 
         let mut serializer = Encoder::request(
@@ -583,8 +601,8 @@ impl Frame {
     pub fn response(header: Header, body: Body, api_key: i16, api_version: i16) -> Result<Bytes> {
         let frame = Frame {
             size: 0,
-            header,
-            body,
+            header: header.into_version(api_version),
+            body: body.into_version(api_version),
         };
 
         let mut encoder = Encoder::response(
@@ -684,6 +702,12 @@ pub enum Header {
         /// The correlation ID for the corresponding request.
         correlation_id: i32,
     },
+}
+
+impl IntoVersion for Header {
+    fn into_version(self, _api_version: i16) -> Self {
+        self
+    }
 }
 
 impl MaximumAllocationSize for Header {

@@ -183,7 +183,11 @@ impl TagBuffer {
 
     pub fn encode(tags: &[(u32, impl Serialize)]) -> Result<Self> {
         tags.iter()
-            .map(|(tag, field)| ser::Encoder::encode(field).map(|encoded| TagField(*tag, encoded)))
+            .map(|(tag, field)| {
+                ser::Encoder::encode(field)
+                    .map(|encoded| TagField(*tag, encoded))
+                    .inspect(|tag_field| debug!(?tag_field))
+            })
             .collect::<Result<Vec<_>>>()
             .map(Self)
     }
@@ -233,6 +237,7 @@ impl ByteSize for TagBuffer {
 }
 
 impl Serialize for TagBuffer {
+    #[instrument(skip_all)]
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,

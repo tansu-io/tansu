@@ -199,6 +199,29 @@ fn tag_kind(
     }
 }
 
+fn body_into_version(messages: &[Message]) -> TokenStream {
+    let variants = messages
+        .iter()
+        .map(|message| {
+            let name = message.type_name();
+
+            quote! {
+                Self::#name(message) => message.into_version(api_version).into(),
+            }
+        })
+        .collect::<Vec<_>>();
+
+    quote! {
+        impl crate::IntoVersion for Body {
+            fn into_version(self, api_version: i16) -> Self {
+                match self {
+                    #(#variants)*
+                }
+            }
+        }
+    }
+}
+
 #[allow(clippy::too_many_lines)]
 fn body_enum(messages: &[Message], include_tag: bool) -> TokenStream {
     let variants = messages.iter().map(|message| {
@@ -376,6 +399,39 @@ fn root_message_struct(message: &Message, include_tag: bool) -> TokenStream {
         quote! {
             pub mod #module {
                 #tokens
+            }
+        }
+    }
+}
+
+fn message_struct_into_version(name: &Type, fields: &[Field]) -> TokenStream {
+    if fields.iter().any(|f| f.tag().is_some()) {
+        let none = fields.iter().filter(|f| f.tag().is_some()).map(|field| {
+            let f = field.ident();
+            let start = field.versions().start;
+            let end = field.versions().end;
+
+            quote! {
+                if !(#start ..= #end).contains(&api_version) {
+                    self.#f = None;
+                }
+            }
+        });
+
+        quote! {
+            impl crate::IntoVersion for #name {
+                fn into_version(mut self, api_version: i16) -> Self {
+                    #(#none)*
+                    self
+                }
+            }
+        }
+    } else {
+        quote! {
+            impl crate::IntoVersion for #name {
+                fn into_version(self, _api_version: i16) -> Self {
+                    self
+                }
             }
         }
     }
@@ -571,6 +627,8 @@ fn message_struct(
             }
         };
 
+        let into_version = message_struct_into_version(name, fields);
+
         quote! {
             #[non_exhaustive]
             #derived
@@ -581,6 +639,8 @@ fn message_struct(
             #from_mezzanine
 
             #maximum_allocation_size
+
+            #into_version
 
             impl #name {
                 #(#builders)*
@@ -1129,6 +1189,8 @@ fn process(messages: &[Message], include_tag: bool) -> TokenStream {
             })
             .collect::<Vec<_>>();
 
+        let api_versions = body_into_version(messages);
+
         quote! {
             #(#root)*
 
@@ -1161,6 +1223,8 @@ fn process(messages: &[Message], include_tag: bool) -> TokenStream {
                     }
                 }
             }
+
+            #api_versions
         }
     } else {
         quote! {

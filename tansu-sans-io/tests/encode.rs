@@ -24,6 +24,7 @@ use tansu_sans_io::{
     JoinGroupRequest, JoinGroupResponse, ListGroupsRequest, ListOffsetsResponse,
     ListPartitionReassignmentsRequest, MaximumAllocationSize, MetadataRequest, MetadataResponse,
     OffsetFetchRequest, OffsetForLeaderEpochRequest, ProduceRequest, ProduceResponse, Result,
+    fetch_response::NodeEndpoint,
     join_group_request::JoinGroupRequestProtocol,
     join_group_response::JoinGroupResponseMember,
     record::{
@@ -2437,6 +2438,94 @@ fn fetch_response_v12_000() -> Result<()> {
             .into(),
         ))
         .node_endpoints(None)
+        .into();
+
+    let expected = vec![
+        0, 0, 0, 135, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 52, 239, 167, 250, 2, 5, 116, 101, 115, 116,
+        4, 0, 0, 0, 1, 0, 3, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 1, 255, 255, 255, 255, 1, 0, 0, 0, 0, 0,
+        0, 3, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+        255, 255, 255, 255, 255, 255, 255, 1, 255, 255, 255, 255, 1, 0, 0, 0, 0, 2, 0, 3, 255, 255,
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+        255, 255, 255, 255, 1, 255, 255, 255, 255, 1, 0, 0, 0,
+    ];
+
+    assert_eq!(
+        expected,
+        Frame::response(header, body, api_key, api_version)?
+    );
+    Ok(())
+}
+
+#[test]
+fn fetch_response_v12_000_with_node_endpoints() -> Result<()> {
+    use tansu_sans_io::fetch_response::{FetchableTopicResponse, PartitionData};
+
+    let _guard = init_tracing()?;
+
+    let api_key = 1;
+    let api_version = 12;
+
+    let header = Header::Response { correlation_id: 8 };
+    let body = FetchResponse::default()
+        .throttle_time_ms(Some(0))
+        .error_code(Some(0))
+        .session_id(Some(888121338))
+        .responses(Some(
+            [FetchableTopicResponse::default()
+                .topic(Some("test".into()))
+                .topic_id(None)
+                .partitions(Some(
+                    [
+                        PartitionData::default()
+                            .partition_index(1)
+                            .error_code(3)
+                            .high_watermark(-1)
+                            .last_stable_offset(Some(-1))
+                            .log_start_offset(Some(-1))
+                            .diverging_epoch(None)
+                            .current_leader(None)
+                            .snapshot_id(None)
+                            .aborted_transactions(Some([].into()))
+                            .preferred_read_replica(Some(-1))
+                            .records(None),
+                        PartitionData::default()
+                            .partition_index(0)
+                            .error_code(3)
+                            .high_watermark(-1)
+                            .last_stable_offset(Some(-1))
+                            .log_start_offset(Some(-1))
+                            .diverging_epoch(None)
+                            .current_leader(None)
+                            .snapshot_id(None)
+                            .aborted_transactions(Some([].into()))
+                            .preferred_read_replica(Some(-1))
+                            .records(None),
+                        PartitionData::default()
+                            .partition_index(2)
+                            .error_code(3)
+                            .high_watermark(-1)
+                            .last_stable_offset(Some(-1))
+                            .log_start_offset(Some(-1))
+                            .diverging_epoch(None)
+                            .current_leader(None)
+                            .snapshot_id(None)
+                            .aborted_transactions(Some([].into()))
+                            .preferred_read_replica(Some(-1))
+                            .records(None),
+                    ]
+                    .into(),
+                ))]
+            .into(),
+        ))
+        .node_endpoints(Some(
+            [NodeEndpoint::default()
+                .host("abc".into())
+                .node_id(12321)
+                .port(32123)
+                .rack(Some("production-A".into()))]
+            .into(),
+        ))
         .into();
 
     let expected = vec![
