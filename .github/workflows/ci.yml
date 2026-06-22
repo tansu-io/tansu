@@ -189,6 +189,11 @@ jobs:
       matrix:
         os:
           - ubuntu-latest
+        storage:
+          - engine: memory://
+            features: dynostore
+          - engine: sqlite://tansu.db
+            features: libsql
     env:
       RUST_BACKTRACE: 1
       RUST_LOG: warn
@@ -201,7 +206,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: stable
-      - run: just compat-franz-go
+      - run: just compat-franz-go '${{matrix.storage.engine}}' '${{matrix.storage.features}}'
   cargo-publish-dry-run:
     runs-on: ${{matrix.os}}
     strategy:
