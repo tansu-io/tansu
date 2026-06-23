@@ -2989,7 +2989,7 @@ impl Storage for Delegate {
             .unwrap_or_default();
 
         let last_stable = row
-            .get::<Option<i64>>(1)
+            .get::<Option<i64>>(2)
             .inspect_err(|err| error!(?topition, ?err))?
             .unwrap_or(high_watermark);
 
@@ -5476,5 +5476,120 @@ mod tests {
                     env!("CARGO_CRATE_NAME")
                 )
             })
+    }
+
+    fn txn_batch(producer_id: i64) -> deflated::Batch {
+        inflated::Batch::builder()
+            .record(Record::builder().value(Bytes::from_static(b"x").into()))
+            .attributes(BatchAttribute::default().transaction(true).into())
+            .producer_id(producer_id)
+            .producer_epoch(0)
+            .base_sequence(0)
+            .last_offset_delta(0)
+            .build()
+            .and_then(TryInto::try_into)
+            .expect("deflated txn batch")
+    }
+
+    /// An open (uncommitted) transaction must pin the read_committed last stable
+    /// offset below the high watermark. Regressed when `offset_stage` read the
+    /// high-watermark column instead of the stable-offset column, so
+    /// `read_committed` consumers saw uncommitted records.
+    #[tokio::test]
+    async fn read_committed_last_stable_offset_pinned_by_open_transaction() -> Result<()> {
+        use tansu_sans_io::add_partitions_to_txn_request::AddPartitionsToTxnTopic;
+
+        let _guard = init_tracing()?;
+
+        // lite's build() resolves the URL path relative to the crate dir (it
+        // strips the leading "/" and pushes onto cwd), so use a crate-local db
+        // file. A tempdir won't work here. The guard removes the file (and its
+        // WAL/SHM sidecars) on drop -- including on panic -- so no artifacts are
+        // left behind, while the up-front removal keeps re-runs deterministic.
+        struct DbFileGuard(&'static str);
+        impl Drop for DbFileGuard {
+            fn drop(&mut self) {
+                for suffix in ["", "-wal", "-shm"] {
+                    let _ = std::fs::remove_file(format!("{}{suffix}", self.0));
+                }
+            }
+        }
+
+        let db_file = "read-committed-last-stable-offset-test.db";
+        let _db_file_guard = DbFileGuard(db_file);
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{db_file}{suffix}"));
+        }
+        let storage = Url::parse(&format!("file:///{db_file}"))?;
+        let cluster = "tansu";
+        let node = 12321;
+
+        let engine = Engine::builder()
+            .advertised_listener(Url::parse("tcp://127.0.0.1:9092")?)
+            .cluster(cluster.to_owned())
+            .storage(storage)
+            .node(node)
+            .build()
+            .await?;
+
+        engine
+            .register_broker(BrokerRegistrationRequest {
+                broker_id: node,
+                cluster_id: cluster.to_owned(),
+                incarnation_id: Uuid::new_v4(),
+                rack: None,
+            })
+            .await?;
+
+        _ = engine
+            .create_topic(
+                CreatableTopic::default()
+                    .name("t".into())
+                    .num_partitions(1)
+                    .replication_factor(1)
+                    .assignments(Some([].into()))
+                    .configs(Some([].into())),
+                false,
+            )
+            .await?;
+
+        // a transactional producer begins a transaction and produces, never commits
+        let producer = engine
+            .init_producer(Some("tx"), 0, Some(-1), Some(-1))
+            .await?;
+        let pid = producer.id;
+
+        _ = engine
+            .txn_add_partitions(TxnAddPartitionsRequest::VersionZeroToThree {
+                transaction_id: "tx".into(),
+                producer_id: pid,
+                producer_epoch: 0,
+                topics: vec![
+                    AddPartitionsToTxnTopic::default()
+                        .name("t".into())
+                        .partitions(Some(vec![0])),
+                ],
+            })
+            .await?;
+
+        _ = engine
+            .produce(Some("tx"), &Topition::new("t", 0), txn_batch(pid))
+            .await?;
+
+        let stage = engine.offset_stage(&Topition::new("t", 0)).await?;
+
+        assert!(
+            stage.high_watermark > 0,
+            "the uncommitted record should advance the high watermark"
+        );
+        assert!(
+            stage.last_stable < stage.high_watermark,
+            "an open transaction must pin last_stable below the high watermark \
+             (last_stable={}, high_watermark={})",
+            stage.last_stable,
+            stage.high_watermark,
+        );
+
+        Ok(())
     }
 }

@@ -1743,7 +1743,7 @@ impl Storage for Engine {
             .unwrap_or_default();
 
         let last_stable = row
-            .get_value(1)
+            .get_value(2)
             .map(|value| value.as_integer().copied())
             .inspect_err(|err| error!(?topition, ?err))?
             .unwrap_or(high_watermark);
@@ -4217,6 +4217,105 @@ mod tests {
             .create_topic(creatable_topic, false)
             .await
             .inspect(|uuid| debug!(?uuid))?;
+
+        Ok(())
+    }
+
+    /// An open (uncommitted) transaction must pin the read_committed last stable
+    /// offset below the high watermark. Regressed when `offset_stage` read the
+    /// high-watermark column instead of the stable-offset column, so
+    /// `read_committed` consumers saw uncommitted records.
+    ///
+    /// `#[ignore]`d like every other engine-level test here: turso/limbo cannot
+    /// yet run the full produce flow in CI. Run manually against turso with
+    /// `cargo nextest run --features turso -- --ignored`.
+    #[ignore]
+    #[tokio::test]
+    async fn read_committed_last_stable_offset_pinned_by_open_transaction() -> Result<()> {
+        use tansu_sans_io::add_partitions_to_txn_request::AddPartitionsToTxnTopic;
+
+        let _guard = init_tracing()?;
+
+        let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
+        let file_path = temp_dir.path().join("tansu.db");
+
+        let storage = Url::parse(&format!("file://{}", file_path.display()))?;
+        let cluster = "tansu";
+        let node = 12321;
+
+        let engine = Engine::builder()
+            .advertised_listener(Url::parse("tcp://127.0.0.1:9092")?)
+            .cluster(cluster.to_owned())
+            .storage(storage)
+            .node(node)
+            .build()
+            .await?;
+
+        engine
+            .register_broker(BrokerRegistrationRequest {
+                broker_id: node,
+                cluster_id: cluster.to_owned(),
+                incarnation_id: Uuid::new_v4(),
+                rack: None,
+            })
+            .await?;
+
+        _ = engine
+            .create_topic(
+                CreatableTopic::default()
+                    .name("t".into())
+                    .num_partitions(1)
+                    .replication_factor(1)
+                    .assignments(Some([].into()))
+                    .configs(Some([].into())),
+                false,
+            )
+            .await?;
+
+        let topition = Topition::new("t", 0);
+
+        // a transactional producer begins a transaction and produces, never commits
+        let producer = engine
+            .init_producer(Some("tx"), 10_000, Some(-1), Some(-1))
+            .await?;
+
+        _ = engine
+            .txn_add_partitions(TxnAddPartitionsRequest::VersionZeroToThree {
+                transaction_id: "tx".into(),
+                producer_id: producer.id,
+                producer_epoch: producer.epoch,
+                topics: vec![
+                    AddPartitionsToTxnTopic::default()
+                        .name("t".into())
+                        .partitions(Some(vec![0])),
+                ],
+            })
+            .await?;
+
+        let batch = inflated::Batch::builder()
+            .record(Record::builder().value(Bytes::from_static(b"uncommitted").into()))
+            .attributes(BatchAttribute::default().transaction(true).into())
+            .producer_id(producer.id)
+            .producer_epoch(producer.epoch)
+            .base_sequence(0)
+            .build()
+            .and_then(TryInto::try_into)?;
+
+        _ = engine.produce(Some("tx"), &topition, batch).await?;
+
+        let stage = engine.offset_stage(&topition).await?;
+
+        assert!(
+            stage.high_watermark > 0,
+            "the uncommitted record should advance the high watermark"
+        );
+        assert!(
+            stage.last_stable < stage.high_watermark,
+            "an open transaction must pin last_stable below the high watermark \
+             (last_stable={}, high_watermark={})",
+            stage.last_stable,
+            stage.high_watermark,
+        );
 
         Ok(())
     }

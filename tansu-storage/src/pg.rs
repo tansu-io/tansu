@@ -2086,7 +2086,7 @@ impl Storage for Postgres {
             .unwrap_or_default();
 
         let last_stable = row
-            .try_get::<_, Option<i64>>(1)
+            .try_get::<_, Option<i64>>(2)
             .inspect_err(|err| error!(?topition, ?err))?
             .unwrap_or(high_watermark);
 
@@ -3775,3 +3775,118 @@ static SQL_ERROR: LazyLock<Counter<u64>> = LazyLock::new(|| {
         .with_description("The SQL error count")
         .build()
 });
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rand::distr::Alphanumeric;
+    use tansu_sans_io::add_partitions_to_txn_request::AddPartitionsToTxnTopic;
+
+    // mirrors tansu-broker/tests/common/mod.rs storage_container(StorageType::Postgres)
+    const CONNECTION: &str = "postgres://postgres:postgres@localhost";
+
+    fn alphanumeric_string(length: usize) -> String {
+        rng()
+            .sample_iter(&Alphanumeric)
+            .take(length)
+            .map(char::from)
+            .collect()
+    }
+
+    /// An open (uncommitted) transaction must pin the read_committed last stable
+    /// offset below the high watermark. Regressed when `offset_stage` read the
+    /// high-watermark column instead of the stable-offset column, so
+    /// `read_committed` consumers saw uncommitted records.
+    #[tokio::test]
+    async fn read_committed_last_stable_offset_pinned_by_open_transaction() -> Result<()> {
+        let cluster = alphanumeric_string(15);
+
+        let storage = Postgres::builder(CONNECTION)?
+            .cluster(cluster.as_str())
+            .node(rng().random_range(0..i32::MAX))
+            .build();
+
+        // Probe connectivity explicitly: only a genuinely unreachable postgres
+        // should skip. Any later schema/query error must fail the test.
+        if let Err(err) = storage.connection().await {
+            eprintln!(
+                "skipping read_committed_last_stable_offset_pinned_by_open_transaction: {err:?}"
+            );
+            return Ok(());
+        }
+
+        storage
+            .register_broker(BrokerRegistrationRequest {
+                broker_id: 111,
+                cluster_id: cluster.clone(),
+                incarnation_id: Uuid::now_v7(),
+                rack: None,
+            })
+            .await?;
+
+        let topic_name = alphanumeric_string(15);
+        let num_partitions = 1;
+
+        _ = storage
+            .create_topic(
+                CreatableTopic::default()
+                    .name(topic_name.clone())
+                    .num_partitions(num_partitions)
+                    .replication_factor(0)
+                    .assignments(Some([].into()))
+                    .configs(Some([].into())),
+                false,
+            )
+            .await?;
+
+        let topition = Topition::new(topic_name.clone(), 0);
+
+        // a transactional producer begins a transaction and produces, never commits
+        let transaction_id = alphanumeric_string(10);
+        let producer = storage
+            .init_producer(Some(transaction_id.as_str()), 10_000, Some(-1), Some(-1))
+            .await?;
+
+        _ = storage
+            .txn_add_partitions(TxnAddPartitionsRequest::VersionZeroToThree {
+                transaction_id: transaction_id.clone(),
+                producer_id: producer.id,
+                producer_epoch: producer.epoch,
+                topics: vec![
+                    AddPartitionsToTxnTopic::default()
+                        .name(topic_name.clone())
+                        .partitions(Some((0..num_partitions).collect())),
+                ],
+            })
+            .await?;
+
+        let batch = Batch::builder()
+            .record(Record::builder().value(Bytes::from_static(b"uncommitted").into()))
+            .attributes(BatchAttribute::default().transaction(true).into())
+            .producer_id(producer.id)
+            .producer_epoch(producer.epoch)
+            .base_sequence(0)
+            .build()
+            .and_then(TryInto::try_into)?;
+
+        _ = storage
+            .produce(Some(transaction_id.as_str()), &topition, batch)
+            .await?;
+
+        let stage = storage.offset_stage(&topition).await?;
+
+        assert!(
+            stage.high_watermark > 0,
+            "the uncommitted record should advance the high watermark"
+        );
+        assert!(
+            stage.last_stable < stage.high_watermark,
+            "an open transaction must pin last_stable below the high watermark \
+             (last_stable={}, high_watermark={})",
+            stage.last_stable,
+            stage.high_watermark,
+        );
+
+        Ok(())
+    }
+}
