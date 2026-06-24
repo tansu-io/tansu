@@ -497,6 +497,89 @@ impl DynoStore {
         }
     }
 
+    /// The metadata for the least batch at or after `probe` in the partition,
+    /// or `None` when no batch starts at or after it. Record objects are keyed
+    /// by zero-padded base offset, so a prefix listing that starts just before
+    /// `probe` yields the next base offset first.
+    async fn batch_meta_at_or_after(
+        &self,
+        topition: &Topition,
+        probe: i64,
+    ) -> Result<Option<ObjectMeta>> {
+        let location = Path::from(format!(
+            "clusters/{}/topics/{}/partitions/{:0>10}/records/",
+            self.cluster, topition.topic, topition.partition,
+        ));
+
+        let mut list_stream = if probe > 0 {
+            let start_after = Path::from(format!(
+                "clusters/{}/topics/{}/partitions/{:0>10}/records/{:0>20}.batch",
+                self.cluster,
+                topition.topic,
+                topition.partition,
+                probe - 1,
+            ));
+
+            self.object_store
+                .list_with_offset(Some(&location), &start_after)
+        } else {
+            self.object_store.list(Some(&location))
+        };
+
+        list_stream
+            .next()
+            .await
+            .transpose()
+            .inspect_err(|error| error!(?error, ?topition, probe))
+            .map_err(|_| Error::Api(ErrorCode::UnknownServerError))
+    }
+
+    /// The base offset encoded in a record object's key, or `None` when the key
+    /// has no terminal segment.
+    fn batch_base_offset(meta: &ObjectMeta) -> Result<Option<i64>> {
+        meta.location
+            .parts()
+            .next_back()
+            .map(|base| i64::from_str(&base.as_ref()[0..20]))
+            .transpose()
+            .map_err(Into::into)
+    }
+
+    /// The least batch base offset at or after `probe` in the partition, or
+    /// `None` when no batch starts at or after it.
+    async fn batch_base_at_or_after(&self, topition: &Topition, probe: i64) -> Result<Option<i64>> {
+        match self.batch_meta_at_or_after(topition, probe).await? {
+            Some(meta) => Self::batch_base_offset(&meta),
+            None => Ok(None),
+        }
+    }
+
+    /// The greatest batch base offset at or before `offset` in the partition.
+    /// Object listing is forward-only, so this is a binary search over
+    /// [`Self::batch_base_at_or_after`] successor probes.
+    async fn batch_base_at_or_before(
+        &self,
+        topition: &Topition,
+        offset: i64,
+    ) -> Result<Option<i64>> {
+        let mut floor = None;
+        let (mut lo, mut hi) = (0, offset);
+
+        while lo <= hi {
+            let mid = lo + (hi - lo) / 2;
+
+            match self.batch_base_at_or_after(topition, mid).await? {
+                Some(base) if base <= offset => {
+                    floor = Some(base);
+                    lo = base + 1;
+                }
+                _ => hi = mid - 1,
+            }
+        }
+
+        Ok(floor)
+    }
+
     fn txn_offset_commit_response_error(
         offsets: &TxnOffsetCommitRequest,
         error_code: ErrorCode,
@@ -1051,7 +1134,28 @@ impl Storage for DynoStore {
                 self.cluster, topition.topic, topition.partition
             ));
 
-            let mut list_stream = self.object_store.list(Some(&location));
+            // Binary search to the batch containing `offset` (its base may be
+            // below `offset`) and list forward from there, rather than scanning
+            // every record object in the partition.
+            let floor = self
+                .batch_base_at_or_before(topition, offset)
+                .await?
+                .unwrap_or(offset);
+
+            let mut list_stream = if floor > 0 {
+                let start_after = Path::from(format!(
+                    "clusters/{}/topics/{}/partitions/{:0>10}/records/{:0>20}.batch",
+                    self.cluster,
+                    topition.topic,
+                    topition.partition,
+                    floor - 1,
+                ));
+
+                self.object_store
+                    .list_with_offset(Some(&location), &start_after)
+            } else {
+                self.object_store.list(Some(&location))
+            };
 
             while let Some(meta) = list_stream
                 .next()
@@ -1255,15 +1359,41 @@ impl Storage for DynoStore {
 
             let mut list_stream = self.object_store.list(Some(&location));
 
-            let mut candidate: Option<ObjectMeta> = None;
+            // Earliest and (transaction-free) Latest are monotonic in the
+            // record object key, so binary search straight to them; Timestamp
+            // and Latest under an in-flight transaction still scan.
+            let mut candidate: Option<ObjectMeta> = match offset_request {
+                ListOffset::Earliest => self.batch_meta_at_or_after(topition, 0).await?,
 
-            while let Some(meta) = list_stream
-                .next()
-                .await
-                .inspect(|meta| debug!(?meta))
-                .transpose()
-                .inspect_err(|error| error!(?error))
-                .map_err(|_| Error::Api(ErrorCode::UnknownServerError))?
+                ListOffset::Latest if !stable.contains_key(topition) => {
+                    // bound the search by the high watermark so it runs in
+                    // ~log2(N) probes rather than searching the whole i64
+                    // offset space (~63 probes, one S3 round-trip each)
+                    let high_watermark = self.offset_stage(topition).await?.high_watermark;
+
+                    match self
+                        .batch_base_at_or_before(topition, high_watermark)
+                        .await?
+                    {
+                        Some(base) => self.batch_meta_at_or_after(topition, base).await?,
+                        None => None,
+                    }
+                }
+
+                _ => None,
+            };
+
+            let scan = matches!(offset_request, ListOffset::Timestamp(_))
+                || (offset_request == &ListOffset::Latest && stable.contains_key(topition));
+
+            while scan
+                && let Some(meta) = list_stream
+                    .next()
+                    .await
+                    .inspect(|meta| debug!(?meta))
+                    .transpose()
+                    .inspect_err(|error| error!(?error))
+                    .map_err(|_| Error::Api(ErrorCode::UnknownServerError))?
             {
                 if let Some(last) = stable.get(topition)
                     && offset_request == &ListOffset::Latest
@@ -1337,7 +1467,10 @@ impl Storage for DynoStore {
                             ListOffset::Latest => offset + 1,
                             _ => offset,
                         }),
-                        timestamp: Some(found.last_modified.into()),
+                        timestamp: match offset_request {
+                            ListOffset::Timestamp(_) => Some(found.last_modified.into()),
+                            _ => None,
+                        },
                     },
                 ))
             } else {
@@ -2918,6 +3051,16 @@ where
         debug!(?prefix);
 
         self.object_store.list(prefix)
+    }
+
+    fn list_with_offset(
+        &self,
+        prefix: Option<&Path>,
+        offset: &Path,
+    ) -> BoxStream<'static, Result<ObjectMeta, object_store::Error>> {
+        debug!(?prefix, ?offset);
+
+        self.object_store.list_with_offset(prefix, offset)
     }
 
     async fn list_with_delimiter(
