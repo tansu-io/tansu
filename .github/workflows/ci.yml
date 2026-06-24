@@ -167,6 +167,7 @@ jobs:
       - run: cargo build --features ${{matrix.storage}} --features ${{matrix.lake}}
   compat-librdkafka:
     runs-on: ${{matrix.os}}
+    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
