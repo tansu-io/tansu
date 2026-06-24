@@ -24,6 +24,14 @@ WORK_DIR="${WORK_DIR:-${COMPAT_DIR}/../../target/compat}"
 SRC_DIR="${WORK_DIR}/librdkafka"
 JOBS="$(getconf _NPROCESSORS_ONLN)"
 
+# when set, a "test,PASS|FAIL" line is appended for every test, so CI can
+# build a report card across storage engines
+RESULTS_FILE="${RESULTS_FILE:-}"
+if [[ -n "${RESULTS_FILE}" ]]; then
+    mkdir -p "$(dirname "${RESULTS_FILE}")"
+    : > "${RESULTS_FILE}"
+fi
+
 mkdir -p "${WORK_DIR}"
 
 if [[ ! -d "${SRC_DIR}" ]]; then
@@ -67,9 +75,14 @@ failed=""
 for test in ${tests}; do
     count=$((count + 1))
     echo "=== ${test} ==="
+    status="PASS"
     if ! (cd "${SRC_DIR}/tests" &&
               TESTS="${test}" ${timeout} ./test-runner -p1 -Q -E); then
+        status="FAIL"
         failed="${failed} ${test}"
+    fi
+    if [[ -n "${RESULTS_FILE}" ]]; then
+        printf '%s,%s\n' "${test}" "${status}" >> "${RESULTS_FILE}"
     fi
 done
 

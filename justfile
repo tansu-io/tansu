@@ -377,6 +377,9 @@ lldb: (cargo-build "--bin" "tansu") docker-compose-down db-up minio-up minio-rea
 
 ci: docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket minio-lake-bucket lakehouse-catalog-up lakehouse-accept-terms-of-use lakehouse-create-warehouse
 
+# bring up postgres and minio (with the tansu bucket), without the lakehouse catalog
+compat-infra-up: docker-compose-down db-up minio-up minio-ready-local minio-local-alias minio-tansu-bucket
+
 # produce etc/data/observations.json with schema etc/schema/observation.avsc
 observation-produce: (cat-produce "observation" "etc/data/observations.json")
 
@@ -436,11 +439,11 @@ customer-duckdb-delta: (duckdb "\"select * from delta_scan('s3://lake/tansu.cust
 
 broker-memory profile="profiling": (build profile "dynostore") (tansu-broker profile "--storage-engine=memory://" "--advertised-listener-url=tcp://127.0.0.1:9092/" "--silent")
 
-# run the librdkafka integration test suite against a memory:// broker
-compat-librdkafka: (build "dev" "dynostore")
+# run the librdkafka integration test suite against the given storage engine
+compat-librdkafka storage="memory://" features="dynostore": clean-tansu-db (build "dev" features)
     #!/usr/bin/env bash
     set -euo pipefail
-    ./target/debug/tansu broker --storage-engine=memory:// \
+    ./target/debug/tansu broker --storage-engine={{ storage }} \
         --advertised-listener-url=tcp://127.0.0.1:9092 &
     broker=$!
     trap 'kill ${broker}' EXIT
@@ -475,7 +478,7 @@ broker-sqlite-parquet profile="dev": clean-tansu-db clean-lake-dir (build profil
 
 broker-sqlite-delta profile="profiling": docker-compose-down minio-up minio-ready-local minio-local-alias minio-lake-bucket clean-tansu-db (build profile "libsql,delta") (tansu-broker profile "--storage-engine=sqlite://tansu.db" "delta")
 
-broker-sqlite profile="profiling": clean-tansu-db (build profile "libsql") (tansu-broker profile "--silent" "--storage-engine=sqlite://tansu.db")
+broker-sqlite profile="profiling": clean-tansu-db (build profile "libsql") (tansu-broker profile "--silent" "--storage-engine=sqlite://tansu.db" "--advertised-listener-url=tcp://127.0.0.1:9092")
 
 broker-sqlite-existing profile="profiling": (build profile "libsql") (tansu-broker profile "--silent" "--storage-engine=sqlite://tansu.db")
 
@@ -489,9 +492,9 @@ broker-sqlite-vacuum-into profile="profiling": clean-tansu-db (build profile "li
 
 s3-up: docker-compose-down minio-up minio-ready-local minio-local-alias minio-tansu-bucket
 
-broker-s3 profile="profiling": (build profile "dynostore") s3-up (tansu-broker profile "--storage-engine=s3://tansu/")
+broker-s3 profile="profiling": (build profile "dynostore") s3-up (tansu-broker profile "--storage-engine=s3://tansu/" "--silent" "--advertised-listener-url=tcp://127.0.0.1:9092")
 
-broker-postgres profile="profiling": (build profile "postgres") docker-compose-down db-up (tansu-broker profile "--storage-engine=postgres://postgres:postgres@localhost")
+broker-postgres profile="profiling": (build profile "postgres") docker-compose-down db-up (tansu-broker profile "--storage-engine=postgres://postgres:postgres@localhost" "--silent" "--advertised-listener-url=tcp://127.0.0.1:9092")
 
 broker-postgres-existing profile="profiling": (build profile "postgres") (tansu-broker profile "--silent" "--storage-engine=postgres://postgres:postgres@localhost")
 

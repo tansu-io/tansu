@@ -172,17 +172,67 @@ jobs:
       matrix:
         os:
           - ubuntu-latest
+        storage:
+          - name: s3
+            engine: s3://tansu/
+            features: dynostore
+          - name: postgres
+            engine: postgres://postgres:postgres@localhost
+            features: postgres
+          - name: sqlite
+            engine: sqlite://tansu.db
+            features: libsql
     env:
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_ALLOW_HTTP: true
+      AWS_DEFAULT_REGION: eu-west-2
+      AWS_ENDPOINT: http://localhost:9000
+      AWS_SECRET_ACCESS_KEY: minioadmin
+      RESULTS_FILE: results-${{matrix.storage.name}}.csv
       RUST_BACKTRACE: 1
       RUST_LOG: warn
     steps:
       - uses: actions/checkout@v6
       - uses: extractions/setup-just@v3
+      - run: sudo apt-get install -y libclang-dev libkrb5-dev
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           cache: false
-      - run: just compat-librdkafka
+      - run: just compat-infra-up
+      - run: just compat-librdkafka '${{matrix.storage.engine}}' '${{matrix.storage.features}}'
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: compat-librdkafka-results-${{matrix.storage.name}}
+          path: ${{env.RESULTS_FILE}}
+          if-no-files-found: warn
+  compat-librdkafka-report:
+    if: always()
+    needs: [compat-librdkafka]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: compat-librdkafka-results-*
+          path: results
+          merge-multiple: true
+      - run: |
+          {
+            echo "## librdkafka compatibility report card"
+            echo
+            echo "| storage engine | test | result |"
+            echo "|---|---|---|"
+          } >> "${GITHUB_STEP_SUMMARY}"
+          for f in results/results-*.csv; do
+            [[ -e "${f}" ]] || continue
+            storage="$(basename "${f}" .csv)"
+            storage="${storage#results-}"
+            awk -F, -v s="${storage}" \
+                '{printf "| %s | %s | %s |\n", s, $1, ($2 == "PASS" ? "✅ PASS" : "❌ FAIL")}' \
+                "${f}"
+          done | sort >> "${GITHUB_STEP_SUMMARY}"
   compat-franz-go:
+    if: false
     runs-on: ${{matrix.os}}
     strategy:
       fail-fast: false
