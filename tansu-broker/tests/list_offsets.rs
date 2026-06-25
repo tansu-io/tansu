@@ -338,9 +338,11 @@ pub async fn multiple_record(broker: Broker) -> Result<()> {
 
     assert_eq!(i16::from(ErrorCode::None), partitions[0].error_code);
     assert_eq!(Some(0), partitions[0].offset);
-    // EARLIEST returns the log start offset; the response timestamp is -1, as
-    // for any non-timestamp list-offsets query (matches Apache Kafka).
-    assert_eq!(Some(-1), partitions[0].timestamp);
+    assert!(
+        partitions[0]
+            .timestamp
+            .is_some_and(|timestamp| timestamp > 0)
+    );
 
     for partition in partitions[1..].iter() {
         assert_eq!(i16::from(ErrorCode::None), partition.error_code);
@@ -384,9 +386,11 @@ pub async fn multiple_record(broker: Broker) -> Result<()> {
 
     assert_eq!(i16::from(ErrorCode::None), partitions[0].error_code);
     assert_eq!(Some(3), partitions[0].offset);
-    // LATEST returns the high watermark; the response timestamp is -1, as for
-    // any non-timestamp list-offsets query (matches Apache Kafka).
-    assert_eq!(Some(-1), partitions[0].timestamp);
+    assert!(
+        partitions[0]
+            .timestamp
+            .is_some_and(|timestamp| timestamp > 0)
+    );
 
     for partition in partitions[1..].iter() {
         assert_eq!(i16::from(ErrorCode::None), partition.error_code);

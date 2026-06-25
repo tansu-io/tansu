@@ -1467,10 +1467,7 @@ impl Storage for DynoStore {
                             ListOffset::Latest => offset + 1,
                             _ => offset,
                         }),
-                        timestamp: match offset_request {
-                            ListOffset::Timestamp(_) => Some(found.last_modified.into()),
-                            _ => None,
-                        },
+                        timestamp: Some(found.last_modified.into()),
                     },
                 ))
             } else {
