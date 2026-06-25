@@ -174,6 +174,9 @@ jobs:
         os:
           - ubuntu-latest
         storage:
+          - name: memory
+            engine: memory://
+            features: dynostore
           - name: s3
             engine: s3://tansu/
             features: dynostore
@@ -249,13 +252,29 @@ jobs:
           - name: memory
             engine: memory://
             features: dynostore
+          - name: s3
+            engine: s3://tansu/
+            features: dynostore
+          - name: postgres
+            engine: postgres://postgres:postgres@localhost
+            features: postgres
           - name: sqlite
             engine: sqlite://tansu.db
             features: libsql
     env:
+      ADVERTISED_LISTENER_URL: tcp://localhost:9092
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_ALLOW_HTTP: true
+      AWS_DEFAULT_REGION: eu-west-2
+      AWS_ENDPOINT: http://localhost:9000
+      AWS_SECRET_ACCESS_KEY: minioadmin
+      CLUSTER_ID: librdkafka-integration
+      LAKEKEEPER_IMAGE: unused
       RESULTS_FILE: results-${{matrix.storage.name}}.csv
       RUST_BACKTRACE: 1
       RUST_LOG: warn
+      STORAGE_ENGINE: ${{matrix.storage.engine}}
+      TANSU_IMAGE: hello-world
     steps:
       - uses: actions/checkout@v6
       - uses: extractions/setup-just@v3
